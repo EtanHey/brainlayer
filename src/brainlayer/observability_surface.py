@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
@@ -17,6 +19,9 @@ from .pipeline.secret_scrub import scrub_secrets
 
 # fmt: off
 WINDOW_HOURS = 24
+# One budget for opening the DB and all aggregate scans, including Python work.
+DB_QUERY_TIMEOUT_SECONDS = 20
+DB_SECTIONS = ("stores", "emitters", "author_unknown")
 DERIVATION_NOTE = "metadata.attributionAgent is absent in the 2026-09-13 census; emitter derives from source, then sender, then source_file, or the section is unmeasurable"
 CENSUS_NOTE = "never_classified = 476,679 of 731,153 live (65.2%); both-NULL = 65,017; classified_unknown literal not observed on the copy"
 def _iso_utc(value: datetime) -> str:
@@ -25,7 +30,7 @@ def _parse_time(value: str) -> datetime:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 class InputRecorder:
-    def __init__(self, *, root: Path | None, trace_path: Path | None, now: datetime) -> None:
+    def __init__(self, *, root: Path | None, trace_path: Path | None, now: datetime | None) -> None:
         self.root, self.trace_path, self.now = root.resolve() if root else None, trace_path, now
         self.trace: list[str] = []
         self.section_inputs: list[dict[str, Any]] = []
@@ -64,7 +69,7 @@ class InputRecorder:
             effective_status = status
             if resolved.is_file() and stat.st_size == 0:
                 effective_status = "empty"
-            elif status == "read" and datetime.fromtimestamp(stat.st_mtime, UTC) > self.now:
+            elif status == "read" and datetime.fromtimestamp(stat.st_mtime, UTC) > (self.now or datetime.now(UTC)):
                 effective_status = "future"
             digest = None
             if resolved.is_file() and resolved.suffix not in {".sqlite", ".db"}:
@@ -90,7 +95,7 @@ class InputRecorder:
         except ValueError:
             displayed = str(absolute)
         self.trace.append(displayed)
-        if status == "read" and metadata is not None and datetime.fromtimestamp(metadata.st_mtime, UTC) > (observed_at or self.now) + timedelta(seconds=future_skew_seconds):
+        if status == "read" and metadata is not None and datetime.fromtimestamp(metadata.st_mtime, UTC) > (observed_at or self.now or datetime.now(UTC)) + timedelta(seconds=future_skew_seconds):
             status = "future"
         item = _input(displayed, status, _iso_utc(datetime.fromtimestamp(metadata.st_mtime, UTC)) if metadata else None,
                       len(data) if data is not None else None,
@@ -211,51 +216,77 @@ def build_document(*, env: Mapping[str, str] = os.environ, emit_alerts: bool = F
     now = _parse_time(env.get("BRAINLAYER_OBSERVABILITY_NOW", datetime.now(UTC).isoformat()))
     root = Path(env["BRAINLAYER_OBSERVABILITY_INPUT_ROOT"]).expanduser() if env.get("BRAINLAYER_OBSERVABILITY_INPUT_ROOT") else None
     trace_path = Path(env["BRAINLAYER_OBSERVABILITY_TRACE_PATH"]).expanduser() if env.get("BRAINLAYER_OBSERVABILITY_TRACE_PATH") else None
-    recorder = InputRecorder(root=root, trace_path=trace_path, now=now)
+    recorder = InputRecorder(root=root, trace_path=trace_path, now=now if env.get("BRAINLAYER_OBSERVABILITY_NOW") else None)
     try:
         return _build_document(env=env, now=now, recorder=recorder, emit_alerts=emit_alerts)
     finally:
         recorder.write_trace()
-def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRecorder, emit_alerts: bool = False) -> tuple[dict[str, Any], InputRecorder]:
-    db_path = (Path(env["BRAINLAYER_DB"]).expanduser().resolve() if env.get("BRAINLAYER_DB") else get_db_path())
+def _collect_db_sections(db_path: Path, now: datetime) -> dict[str, Any]:
+    """Runs only in the disposable read-only DB worker; never reads other inputs."""
     connection: sqlite3.Connection | None = None
-    db_status, db_rows, failure = "read", None, None
+    db_status, db_rows, skipped, failure = "read", None, 0, None
+    sections: dict[str, Any] = {}
     try:
         connection = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
         connection.execute("PRAGMA query_only=ON")
         db_rows = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         columns = {row[1] for row in connection.execute("PRAGMA table_info(chunks)")}
-    except (OSError, sqlite3.Error) as exc:
-        db_status = "missing" if not db_path.exists() else "malformed"
-        columns, failure = set(), f"database unreadable: {exc}"
-    db_input = recorder(db_path, status=db_status, rows_or_bytes=db_rows)
-    if db_input["status"] in {"missing", "malformed", "empty", "future"}:
-        failure = failure or f"database input status: {db_input['status']}"
-    if failure or connection is None:
-        stores = emitters = author_unknown = _unmeasurable(failure or "database unavailable", db_input)
-    else:
-        skipped = (
-            connection.execute(
+        if "created_at" in columns:
+            skipped = connection.execute(
                 "SELECT COUNT(*) FROM chunks WHERE created_at IS NULL OR datetime(created_at) IS NULL"
             ).fetchone()[0]
-            if "created_at" in columns
-            else 0
+        for name, builder in zip(DB_SECTIONS, (_stores, _emitters, _author_unknown)):
+            try:
+                sections[name] = builder(connection, columns, {}, now)
+            except Exception as exc:
+                sections[name] = _builder_failure(name, exc, {})
+    except (OSError, sqlite3.Error) as exc:
+        db_status = "missing" if not db_path.exists() else "malformed"
+        failure = f"database unreadable: {exc}"
+    finally:
+        if connection is not None:
+            connection.close()
+    return {"status": db_status, "rows": db_rows, "skipped": skipped,
+            "failure": failure, "sections": sections}
+def _db_worker_main() -> None:
+    request = json.load(sys.stdin)
+    print(json.dumps(_collect_db_sections(Path(request["db_path"]), _parse_time(request["now"]))))
+def _bounded_db_sections(db_path: Path, now: datetime) -> dict[str, Any]:
+    # A VM progress handler/busy_timeout cannot bound filesystem stalls or Python
+    # iteration. run() kills and reaps this isolated reader on timeout; no live
+    # connection/thread can outlast the budget and pin a WAL snapshot in this process.
+    worker_env = dict(os.environ)
+    worker_env["PYTHONPATH"] = os.pathsep.join(filter(None, (
+        str(Path(__file__).resolve().parents[1]), worker_env.get("PYTHONPATH"))))
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-m", "brainlayer.observability_surface", "--db-sections"],
+            input=json.dumps({"db_path": str(db_path), "now": now.isoformat()}),
+            capture_output=True, text=True, check=True, env=worker_env,
+            timeout=DB_QUERY_TIMEOUT_SECONDS,
         )
-        db_input["skipped_lines"] = skipped
-        try:
-            stores = _stores(connection, columns, db_input, now)
-        except Exception as exc:
-            stores = _builder_failure("stores", exc, db_input)
-        try:
-            emitters = _emitters(connection, columns, db_input, now)
-        except Exception as exc:
-            emitters = _builder_failure("emitters", exc, db_input)
-        try:
-            author_unknown = _author_unknown(connection, columns, db_input, now)
-        except Exception as exc:
-            author_unknown = _builder_failure("author_unknown", exc, db_input)
-    if connection is not None:
-        connection.close()
+        return json.loads(completed.stdout)
+    except subprocess.TimeoutExpired:
+        failure = f"database query deadline exceeded ({DB_QUERY_TIMEOUT_SECONDS}s budget)"
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        failure = f"database worker failed: {type(exc).__name__}: {exc}"
+    return {"status": "read", "rows": None, "skipped": 0, "failure": failure, "sections": {}}
+def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRecorder, emit_alerts: bool = False) -> tuple[dict[str, Any], InputRecorder]:
+    db_path = (Path(env["BRAINLAYER_DB"]).expanduser().resolve() if env.get("BRAINLAYER_DB") else get_db_path())
+    result = _bounded_db_sections(db_path, now)
+    # Sample live mtime against the observation clock, after collection; an
+    # explicit fixture clock remains authoritative, including true future data.
+    db_input = recorder(db_path, status=result["status"], rows_or_bytes=result["rows"])
+    db_input["skipped_lines"] = result["skipped"]
+    failure = result["failure"]
+    if db_input["status"] in {"missing", "malformed", "empty", "future"}:
+        failure = failure or f"database input status: {db_input['status']}"
+    if failure:
+        stores = emitters = author_unknown = _unmeasurable(failure or "database unavailable", db_input)
+    else:
+        for section in result["sections"].values():
+            section["inputs"] = [db_input]
+        stores, emitters, author_unknown = (result["sections"][name] for name in DB_SECTIONS)
     try:
         from .observability_transport import build_transport_section, report_transport_alert
         # An explicit fixture clock stays frozen; live transport is sampled after its FD read.
@@ -298,5 +329,8 @@ def main() -> int:
     write_document()
     return 0
 if __name__ == "__main__":
-    raise SystemExit(main())
+    if sys.argv[1:] == ["--db-sections"]:
+        _db_worker_main()
+    else:
+        raise SystemExit(main())
 # fmt: on

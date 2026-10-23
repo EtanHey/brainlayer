@@ -41,6 +41,7 @@
     "hotlane_running",
     "backlog_batch",
     "missing_vectors",
+    "missing_embedding_scan",
     "previous_missing_vectors",
     "stalled_ticks",
     "lock_holder",

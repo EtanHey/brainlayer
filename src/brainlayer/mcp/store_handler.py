@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import apsw
 from mcp.types import CallToolResult, TextContent
 
+from ..queue_io import PublishedQueueSyncError
 from ._format import STORE_OUTCOMES, format_digest_result, format_store_result
 from ._shared import (
     _auto_importance,
@@ -496,6 +497,8 @@ def _queue_store(item: dict):
         from ..queue_io import enqueue_store
 
         return enqueue_store(**item, source="mcp")
+    except PublishedQueueSyncError:
+        raise
     except Exception:
         logger.debug("Unified queue write failed; falling back to pending-stores.jsonl", exc_info=True)
 
@@ -1113,6 +1116,10 @@ async def _store(
             structured["superseded"] = supersedes if superseded_ok else None
         return ([TextContent(type="text", text=formatted)], structured)
 
+    except PublishedQueueSyncError:
+        # Replay may already have consumed the visible intent. Propagate the
+        # uncertain outcome without a retry or a false nothing-written receipt.
+        raise
     except StoreRejected as e:
         # A pre-write gate refused it: nothing was written and nothing queued,
         # so REJECTED's "nothing was stored / do NOT retry" is literally true.

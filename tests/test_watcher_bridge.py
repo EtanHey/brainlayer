@@ -15,6 +15,7 @@ import sqlite3
 import time
 
 import apsw
+import pytest
 
 from brainlayer.dedupe import normalized_exact_hash
 from brainlayer.vector_store import VectorStore
@@ -964,3 +965,40 @@ class TestRewindDetection:
 
         assert len(rewind_calls) == 1
         assert rewind_calls[0][0] == "abc12345"
+
+
+def test_watcher_stage_timings_use_fake_clock(tmp_path, monkeypatch):
+    import brainlayer.watcher_bridge as bridge
+    import brainlayer.writer_telemetry as telemetry
+
+    log_path = tmp_path / "writer-telemetry.jsonl"
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+    clock = [0.0]
+    monkeypatch.setattr(telemetry, "_MONOTONIC", lambda: clock[0])
+    classify, chunk, publish = bridge.classify_content, bridge.chunk_content, bridge.enqueue_watcher_chunk
+
+    def timed(fn, seconds):
+        def run(*args, **kwargs):
+            clock[0] += seconds
+            return fn(*args, **kwargs)
+
+        return run
+
+    monkeypatch.setattr(bridge, "classify_content", timed(classify, 0.02))
+    monkeypatch.setattr(bridge, "chunk_content", timed(chunk, 0.03))
+    monkeypatch.setattr(bridge, "enqueue_watcher_chunk", timed(publish, 0.04))
+    monkeypatch.setattr(bridge, "resolve_t3_sources", timed(lambda _path: [], 0.01))
+    monkeypatch.setattr(bridge, "scrub_secrets", timed(bridge.scrub_secrets, 0.05))
+    entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant")
+    entry["_source_file"] = str(tmp_path / "session.jsonl")
+    assert create_flush_callback(tmp_path / "unused.db", arbitrated=True)([entry]) == 1
+    result = [
+        json.loads(line) for line in log_path.read_text().splitlines() if json.loads(line).get("producer") == "watcher"
+    ][-1]
+    assert result["classify_ms"] == pytest.approx(20)
+    assert result["chunk_ms"] == pytest.approx(30)
+    assert result["publish_ms"] == pytest.approx(40)
+    assert result["provenance_ms"] == pytest.approx(10)
+    assert result["scrub_ms"] == pytest.approx(50)
+    assert result["encode_ms"] == 0
+    assert result.get("committed_at") is None  # publishing work is not a DB commit

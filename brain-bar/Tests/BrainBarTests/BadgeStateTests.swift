@@ -22,6 +22,77 @@ final class BadgeStateTests: XCTestCase {
             .appendingPathComponent("tests/fixtures/badge-state/" + name)
     }
 
+    @MainActor
+    func testWarningRemainsListedWithoutRedDotAndAfterJobReconciliation() throws {
+        let url = try mutatedFixture {
+            var alerts = try XCTUnwrap($0["alerts"] as? [String: Any])
+            alerts["badge_on"] = true
+            alerts["active"] = [
+                ["code": "missing_embeddings_climbing", "severity": "warning", "message": "New arrivals"],
+                ["code": "job_alert_index", "severity": "critical", "message": "Index failed"],
+            ]
+            $0["alerts"] = alerts
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
+        let raw = BadgeStateReader.read(url: url, now: now, cadence: .known(300))
+        let recovered = raw.reconciled(with: BrainBarJobAlerts(active: [:]))
+        XCTAssertFalse(recovered.badgeOn)
+        XCTAssertEqual(recovered.activeCodes, ["missing_embeddings_climbing"])
+        XCTAssertEqual(recovered.activeMessages, ["New arrivals"])
+        let warningURL = try mutatedFixture {
+            var alerts = try XCTUnwrap($0["alerts"] as? [String: Any])
+            alerts["badge_on"] = false
+            alerts["active"] = [["code": "missing_embeddings_climbing", "severity": "warning", "message": "New arrivals"]]
+            $0["alerts"] = alerts
+        }
+        defer { try? FileManager.default.removeItem(at: warningURL) }
+        let warning = BadgeStateReader.read(url: warningURL, now: now, cadence: .known(300))
+        XCTAssertFalse(warning.badgeOn)
+        XCTAssertEqual(warning.activeMessages, ["New arrivals"])
+        XCTAssertEqual(BrainBarStatusPopoverController.statusLineTitle(for: warning), "Info: New arrivals")
+    }
+
+    func testOwnedSnapshotSuppressionExpiresWithoutAnotherProducerRun() throws {
+        let url = fixtureURL(named: "badge-state-episode-v1.json")
+        XCTAssertFalse(BadgeStateReader.read(url: url, now: now, cadence: .known(300)).badgeOn)
+        let expired = BadgeStateReader.read(url: url, now: now.addingTimeInterval(300), cadence: .known(300))
+        XCTAssertTrue(expired.badgeOn)
+        XCTAssertEqual(expired.activeCodes, ["brain_search_canary_failed"])
+    }
+
+    func testInvalidSnapshotEvidenceFailsVisible() throws {
+        let changes: [[String: Any]] = [
+            ["owner": " "], ["episode_id": ""], ["kind": "recovering"],
+            ["observed_at": "2026-09-15T07:54:59Z"], ["observed_at": "2026-09-15T08:00:01Z"],
+            ["deadline": "2026-09-16T08:00:00Z"], ["expected_codes": ["queue_backed_up"]],
+        ]
+        for change in changes {
+            let url = try mutatedFixture(source: fixtureURL(named: "badge-state-episode-v1.json")) {
+                var alerts = try XCTUnwrap($0["alerts"] as? [String: Any])
+                var suppressed = try XCTUnwrap(alerts["suppressed"] as? [[String: Any]])
+                var episode = try XCTUnwrap(suppressed[0]["episode"] as? [String: Any])
+                episode.merge(change) { _, new in new }
+                suppressed[0]["episode"] = episode
+                alerts["suppressed"] = suppressed
+                $0["alerts"] = alerts
+            }
+            defer { try? FileManager.default.removeItem(at: url) }
+            XCTAssertTrue(BadgeStateReader.read(url: url, now: now, cadence: .known(300)).badgeOn, "\(change)")
+        }
+    }
+
+    func testLegacyBlanketSuppressionWithoutEvidenceFailsVisible() throws {
+        let url = try mutatedFixture {
+            var alerts = try XCTUnwrap($0["alerts"] as? [String: Any])
+            alerts["badge_on"] = false
+            alerts["active"] = []
+            alerts["suppressed"] = [["code": "queue_backed_up", "severity": "critical", "message": "count=685 oldest_age=1847"]]
+            $0["alerts"] = alerts
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
+        XCTAssertTrue(BadgeStateReader.read(url: url, now: now, cadence: .known(300)).badgeOn)
+    }
+
     func testMissingBadgeStateWithoutPendingMarkerFailsVisibleWithBadgeOn() throws {
         let url = try mutatedFixture(source: pendingFixtureURL) { _ in }
         try FileManager.default.removeItem(at: url)

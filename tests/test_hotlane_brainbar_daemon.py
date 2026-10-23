@@ -1785,3 +1785,45 @@ def test_hotlane_split_cycle_does_not_open_writer_when_no_embedding_or_enrichmen
 
     assert result == hotlane.CycleResult()
     assert events == [("open", True), ("close", None)]
+
+
+def test_hotlane_stage_timings_use_fake_clock(tmp_path, monkeypatch):
+    import json
+
+    import brainlayer.writer_telemetry as telemetry
+
+    hotlane = _load_hotlane_module()
+    clock = [0.0]
+    monkeypatch.setattr(telemetry, "_MONOTONIC", lambda: clock[0])
+    db_path = tmp_path / "unused.db"
+
+    def candidates(*args, **kwargs):
+        clock[0] += 0.02
+        return [hotlane.EmbedCandidate("fixture", "private encoder fixture")]
+
+    def encode(_text):
+        clock[0] += 0.03
+        return [0.0]
+
+    def write(*args):
+        clock[0] += 0.04
+        return 1
+
+    hotlane._run_split_cycle(
+        db_path=db_path,
+        vector_store_cls=lambda *args, **kwargs: SimpleNamespace(close=lambda: None),
+        embed_fn=encode,
+        recent_limit=1,
+        backlog_batch=0,
+        enrich_limit=0,
+        enrich_since_hours=0,
+        candidate_rows_fn=candidates,
+        write_vectors_fn=write,
+    )
+    text = (tmp_path / "writer-telemetry.jsonl").read_text()
+    event = [json.loads(line) for line in text.splitlines() if json.loads(line).get("event") == "ingest_finished"][-1]
+    assert event["candidate_ms"] == pytest.approx(20)
+    assert event["encode_ms"] == pytest.approx(30)
+    assert event["write_ms"] == pytest.approx(40)
+    assert event.get("committed_at") is None  # actual vector commits are measured in the writer, not here
+    assert "private encoder fixture" not in text

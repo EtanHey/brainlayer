@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,7 +37,14 @@ def _result(*issues: HealthIssue) -> HealthCheckResult:
 
 
 def _run_minimal_health_check(
-    tmp_path: Path, badge_state_path: Path, *, job_opt_path: Path | None = None, heal: bool = False
+    tmp_path: Path,
+    badge_state_path: Path,
+    *,
+    job_opt_path: Path | None = None,
+    job_alert_path: Path | None = None,
+    heal: bool = False,
+    canary_response: dict | None = None,
+    now_fn=lambda: datetime.now(UTC),
 ) -> HealthCheckResult:
     db_path = tmp_path / "brainlayer.db"
     with sqlite3.connect(db_path) as connection:
@@ -65,6 +72,13 @@ def _run_minimal_health_check(
             db_path=db_path,
             state_path=tmp_path / "health-state.json",
             badge_state_path=badge_state_path,
+            job_alert_path=job_alert_path if job_alert_path is not None else tmp_path / "job-alerts.json",
+            pending_stores_path=tmp_path / "pending-stores.jsonl",
+            pause_sentinel_path=tmp_path / "pause.sentinel",
+            job_plist_dir=tmp_path / "LaunchAgents",
+            watch_plist_path=tmp_path / "watch.plist",
+            drain_plist_path=tmp_path / "drain.plist",
+            health_check_plist_path=tmp_path / "health-check.plist",
             job_opt_path=job_opt_path,
             heal=heal,
             source_jsonl_globs=[],
@@ -76,8 +90,11 @@ def _run_minimal_health_check(
             jsonl_backup_log_path=tmp_path / "backup.log",
         ),
         ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4",
-        socket_request_fn=lambda *_args: {"result": {"content": [{"type": "text", "text": "1 of 1 shown"}]}},
+        socket_request_fn=lambda *_args: (
+            canary_response or {"result": {"content": [{"type": "text", "text": "1 of 1 shown"}]}}
+        ),
         command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="state = running", stderr=""),
+        now_fn=now_fn,
     )
 
 
@@ -241,13 +258,125 @@ def test_data_loss_codes_are_structurally_unsuppressible_even_when_marker_lists_
         assert [item["code"] for item in document["alerts"]["active"]] == [code]
 
 
-def test_only_in_code_suppressible_allow_list_can_hide_critical_issue() -> None:
-    code = next(iter(SUPPRESSIBLE_CODES))
-    document = build_badge_state_document(_result(HealthIssue(code, "critical", "known noisy condition")))
+def test_queue_685_oldest_1847_without_progress_is_badged() -> None:
+    document = build_badge_state_document(
+        _result(HealthIssue("queue_backed_up", "critical", "count=685 oldest_age=1847"))
+    )
+    assert document["alerts"]["badge_on"] is True
+    assert document["alerts"]["suppressed"] == []
 
+
+def _snapshot_episode() -> dict:
+    return {
+        "kind": "snapshot",
+        "owner": "backup-daily:pid-123:start-456",
+        "episode_id": "snapshot-1",
+        "started_at": "2026-09-15T07:59:00Z",
+        "observed_at": "2026-09-15T08:00:00Z",
+        "deadline": "2026-09-15T08:05:00Z",
+        "expected_codes": ["brain_search_canary_failed"],
+    }
+
+
+def test_owned_snapshot_suppresses_canary_only_until_deadline() -> None:
+    episode = _snapshot_episode()
+    result = _result(
+        HealthIssue("brain_search_canary_failed", "critical", "snapshot refusal", expected_episode=episode)
+    )
+    document = build_badge_state_document(result)
     assert document["alerts"]["badge_on"] is False
-    assert document["alerts"]["active"] == []
-    assert [item["code"] for item in document["alerts"]["suppressed"]] == [code]
+    assert document["alerts"]["suppressed"][0]["episode"] == episode
+    assert document == json.loads(FIXTURE.with_name("badge-state-episode-v1.json").read_text())
+    result.checked_at = episode["deadline"]
+    assert build_badge_state_document(result)["alerts"]["badge_on"] is True
+
+
+def test_health_check_carries_owned_canary_episode_to_badge(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    episode = _snapshot_episode() | {
+        "started_at": (now - timedelta(seconds=60)).isoformat(),
+        "observed_at": (now + timedelta(seconds=30)).isoformat(),
+        "deadline": (now + timedelta(seconds=120)).isoformat(),
+    }
+    badge_path = tmp_path / "badge-state.json"
+    response = {"error": {"code": -32000, "message": "snapshot refusal", "data": {"expected_episode": episode}}}
+    clock = iter((now, now + timedelta(seconds=60)))
+    result = _run_minimal_health_check(tmp_path, badge_path, canary_response=response, now_fn=lambda: next(clock))
+    suppressed = json.loads(badge_path.read_text())["alerts"]["suppressed"]
+    assert [issue["code"] for issue in suppressed] == ["brain_search_canary_failed"]
+    assert suppressed[0]["episode"] == episode
+    assert any(issue.code == "brain_search_canary_failed" for issue in result.issues)
+
+
+def test_healthy_fixture_has_zero_alerts(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 15, 8, tzinfo=UTC)
+    (tmp_path / "backup.log").write_text(
+        json.dumps({"attempted_at": now.isoformat(), "status": "no-op", "verified": True}) + "\n"
+    )
+    badge_path = tmp_path / "badge-state.json"
+    result = _run_minimal_health_check(tmp_path, badge_path, now_fn=lambda: now)
+    assert result.issues == []
+    assert result.canary_ok and result.hotlane_running and result.missing_vectors == 0
+    alerts = json.loads(badge_path.read_text())["alerts"]
+    assert alerts["active"] == alerts["suppressed"] == []
+    assert alerts["badge_on"] is False
+
+
+def test_warning_stays_visible_without_red_dot() -> None:
+    issue = HealthIssue("missing_embeddings_climbing", "warning", "arrivals exceeded completions this tick")
+    alerts = build_badge_state_document(_result(issue))["alerts"]
+    assert alerts["active"] == [{"code": issue.code, "severity": issue.severity, "message": issue.message}]
+    assert alerts["badge_on"] is False
+
+
+def test_every_formerly_suppressed_critical_requires_evidence() -> None:
+    for code in (
+        "brain_search_canary_failed",
+        "drain_no_progress",
+        "drain_unloaded",
+        "health_check_unloaded",
+        "hotlane_backlog_disabled",
+        "hotlane_dead",
+        "lock_holder_wedge",
+        "missing_embeddings_climbing",
+        "missing_embeddings_not_draining",
+        "observability_unloaded",
+        "pause_sentinel_stale",
+        "queue_backed_up",
+        "watch_unloaded",
+        "watcher_stalled",
+    ):
+        alerts = build_badge_state_document(_result(HealthIssue(code, "critical", "real fault")))["alerts"]
+        assert alerts["badge_on"] is True, code
+        assert alerts["suppressed"] == []
+
+
+def test_invalid_or_unrelated_snapshot_evidence_fails_visible() -> None:
+    invalid = [
+        {"owner": ""},
+        {"owner": "   "},
+        {"observed_at": "2026-09-15T08:00:00"},
+        {"episode_id": ""},
+        {"kind": "recovering"},
+        {"observed_at": "2026-09-15T07:54:59Z"},
+        {"observed_at": "2026-09-15T08:00:01Z"},
+        {"started_at": "2026-09-15T08:00:01Z"},
+        {"deadline": "2026-09-16T08:00:00Z"},
+        {"deadline": "invalid"},
+        {"expected_codes": ["queue_backed_up"]},
+    ]
+    for change in invalid:
+        episode = _snapshot_episode() | change
+        assert build_badge_state_document(
+            _result(
+                HealthIssue("brain_search_canary_failed", "critical", "search unavailable", expected_episode=episode)
+            )
+        )["alerts"]["badge_on"]
+    for code in (*DATA_LOSS_CODES, "queue_backed_up", "watcher_stalled", "lock_holder_wedge"):
+        episode = _snapshot_episode() | {"expected_codes": [code]}
+        assert build_badge_state_document(
+            _result(HealthIssue(code, "critical", "fault during snapshot", expected_episode=episode))
+        )["alerts"]["badge_on"]
 
 
 def test_unknown_critical_issue_fails_visible() -> None:

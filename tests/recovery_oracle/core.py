@@ -192,9 +192,15 @@ class Universe:
         spans = [json.loads(line) for line in (self.root / "writer.jsonl").read_text().splitlines()]
         held = []
         for span in spans:
-            if span.get("producer") != "drain" or span.get("outcome") != "commit":
+            if (
+                span.get("event") != "txn_finished"
+                or span.get("producer") != "drain"
+                or span.get("outcome") != "commit"
+            ):
                 continue
+            assert "statements" in span, "missing committed drain statement telemetry"
             statements = {s["normalized_sql"]: s for s in span["statements"]}
+            assert {"BEGIN IMMEDIATE", "COMMIT"} <= statements.keys(), "missing drain lock boundary statements"
             begin, commit = statements["BEGIN IMMEDIATE"], statements["COMMIT"]
             elapsed = (
                 datetime.fromisoformat(commit["started_at"]) - datetime.fromisoformat(begin["started_at"])

@@ -45,7 +45,8 @@ def test_calendar_opens_with_existing_bounded_busy_context(tmp_path, monkeypatch
     monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", lambda *a, **kw: 1)
     result = CliRunner().invoke(cli.app, ["index", str(source)])
     assert result.exit_code == 0, result.output
-    assert captured == [(1000, 107.0)]
+    # The short 7s pass reserves half for finalization; busy_timeout stays 1s.
+    assert captured == [(1000, 103.5)]
     assert storage._write_busy_deadline() is None
 
 

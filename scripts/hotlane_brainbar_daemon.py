@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import json
 import logging
 import os
 import signal
@@ -27,7 +28,7 @@ from brainlayer.embeddings import get_embedding_model
 from brainlayer.paths import get_db_path
 from brainlayer.store import embed_hot_chunk, embed_pending_chunks
 from brainlayer.vector_store import VectorStore
-from brainlayer.writer_telemetry import start_writer_span
+from brainlayer.writer_telemetry import IngestMetrics, start_writer_span
 
 LOGGER = logging.getLogger("brainlayer.hotlane_brainbar")
 STOP = False
@@ -619,6 +620,7 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
     count = 0
     try:
         for vector_index, (chunk_id, content, embedding) in enumerate(vectors):
+            metrics = IngestMetrics("hotlane", "vector")
             transaction_started = False
             telemetry_span = start_writer_span(
                 cursor.connection if hasattr(cursor, "connection") else (conn or store.conn),
@@ -629,11 +631,13 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
                 rows_planned=1,
             )
             try:
-                cursor.execute("BEGIN IMMEDIATE")
+                metrics.run("begin", cursor.execute, "BEGIN IMMEDIATE")
                 transaction_started = True
-                still_eligible = cursor.execute(
+                still_eligible = metrics.run(
+                    "apply",
+                    cursor.execute,
                     """
-                    SELECT 1
+                    SELECT 1, c.metadata
                     FROM chunks c
                     LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
                     WHERE c.id = ?
@@ -649,10 +653,18 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
                 ).fetchone()
                 rows_touched = 0
                 if still_eligible:
-                    upsert_chunk_vector(cursor, chunk_id, embedding)
+                    metrics.run("apply", upsert_chunk_vector, cursor, chunk_id, embedding)
                     rows_touched = 1
-                cursor.execute("COMMIT")
+                metrics.run("commit", cursor.execute, "COMMIT")
                 transaction_started = False
+                if rows_touched:
+                    try:
+                        metadata = json.loads(still_eligible[1]) if len(still_eligible) > 1 else {}
+                    except (TypeError, ValueError):
+                        metadata = {}
+                    metadata = metadata if isinstance(metadata, dict) else {}
+                    metrics.committed([{"queued_at": metadata.get("ingest_queued_at"), "metadata": metadata}])
+                metrics.finish("commit")
                 count += rows_touched
                 telemetry_span.finish("commit", rows_touched=rows_touched)
                 if vector_index < len(vectors) - 1:
@@ -660,6 +672,7 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
             except Exception as exc:
                 if transaction_started:
                     cursor.execute("ROLLBACK")
+                metrics.finish("error")
                 telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
                 if isinstance(exc, (apsw.BusyError, apsw.LockedError)):
                     raise
@@ -739,6 +752,7 @@ def _run_split_cycle(
     pending_rows_fn: Callable[..., list[EmbedCandidate]] = _pending_chunk_rows_with_resume,
     write_vectors_fn: Callable[..., int] = _write_embedded_vectors,
 ) -> CycleResult:
+    metrics = IngestMetrics("hotlane", "hotlane")
     embedded = 0
     hot_rows: list[EmbedCandidate] = []
     pending_rows: list[EmbedCandidate] = []
@@ -756,19 +770,21 @@ def _run_split_cycle(
         read_store = _open_store(vector_store_cls, db_path, readonly=True)
         try:
             if recent_limit > 0:
-                hot_rows = candidate_rows_fn(read_store, limit=recent_limit)
+                hot_rows = metrics.run("candidate", candidate_rows_fn, read_store, limit=recent_limit)
             if backlog_batch > 0:
-                pending_rows = pending_rows_fn(read_store, limit=backlog_batch)
+                pending_rows = metrics.run("candidate", pending_rows_fn, read_store, limit=backlog_batch)
         finally:
             read_store.close()
 
     seen_hot_ids = {candidate.chunk_id for candidate in hot_rows}
     pending_rows = [candidate for candidate in pending_rows if candidate.chunk_id not in seen_hot_ids]
-    vectors = _embed_candidates(hot_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn)
-    vectors.extend(_embed_candidates(pending_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn))
+    vectors = metrics.run("encode", _embed_candidates, hot_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn)
+    vectors.extend(
+        metrics.run("encode", _embed_candidates, pending_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn)
+    )
     if vectors:
         try:
-            embedded += write_vectors_fn(db_path, vectors)
+            embedded += metrics.run("write", write_vectors_fn, db_path, vectors)
         except Exception as exc:
             is_lock_error = isinstance(exc, (apsw.BusyError, apsw.LockedError))
             if is_lock_error and pending_scan_checkpoint is not None and pending_scan_state is not None:
@@ -782,9 +798,11 @@ def _run_split_cycle(
                     [candidate.chunk_id for candidate in pending_rows],
                     type(exc).__name__,
                 )
+            metrics.finish("error")
             raise
 
     _warn_retired_enrichment(enrich_limit, enrich_since_hours, enrich_fn)
+    metrics.finish()
     return CycleResult(embedded=embedded)
 
 

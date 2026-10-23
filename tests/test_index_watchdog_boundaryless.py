@@ -16,6 +16,7 @@ the phase named, and it alarms *before* the stuck phase unwinds.
 Fakes only -- no embedding model, no canonical DB.
 """
 
+import sys
 import threading
 import time
 from pathlib import Path
@@ -194,22 +195,77 @@ def test_cap_alarm_is_emitted_while_the_phase_is_still_stuck(tmp_path, monkeypat
 def test_a_long_phase_heartbeats_instead_of_going_silent(tmp_path, monkeypatch):
     """The 12h-silent stdout log is the other half of the defect: report while stuck."""
     source = _prepare_index_source(tmp_path, monkeypatch)
-    store = _StallingRuntimeStore(ceiling_s=2.0)
+    store = _StallingRuntimeStore()
     alarms: list[BrainLayerAlarm] = []
     _install(monkeypatch, store, alarms)
-    # Cap well past the stall so the run ends by completing, not by the cap: the heartbeat
+    # Cap well past the observation ceiling so the run completes within budget: the heartbeat
     # has to work on its own, not as a side effect of the alarm.
     monkeypatch.setenv("BRAINLAYER_INDEX_MAX_RUNTIME_S", "600")
     monkeypatch.setenv("BRAINLAYER_INDEX_HEARTBEAT_S", "0.25")
 
-    result = CliRunner().invoke(app, ["index", str(source)])
+    embed_entered = threading.Event()
+    release_embed = threading.Event()
+    embed_exited = threading.Event()
+    embed_heartbeat = threading.Event()
+    held_heartbeats: list[str] = []
+    observer_errors: list[Exception] = []
+    real_watchdog = index_watchdog.IndexWatchdog
 
+    def observe_heartbeat(line):
+        # Keep the real watchdog's formatted output visible to the CLI caller.
+        print(line, file=sys.stderr, flush=True)
+        if (
+            "phase=embed_and_upsert:session.jsonl" in line
+            and embed_entered.is_set()
+            and not release_embed.is_set()
+            and not embed_exited.is_set()
+        ):
+            held_heartbeats.append(line)
+            embed_heartbeat.set()
+
+    def make_watchdog(**kwargs):
+        return real_watchdog(**kwargs, heartbeat_sink=observe_heartbeat)
+
+    def held_embed(_chunks, **_kwargs):
+        embed_entered.set()
+        try:
+            assert release_embed.wait(CEILING_S), "observer never released the held embed"
+            return 5
+        finally:
+            embed_exited.set()
+
+    def observe_then_release():
+        try:
+            assert embed_heartbeat.wait(CEILING_S), "no heartbeat arrived while embed was held"
+            assert embed_entered.is_set()
+            assert not release_embed.is_set()
+            assert not embed_exited.is_set(), "embed returned before its heartbeat was observed"
+        except Exception as exc:
+            observer_errors.append(exc)
+        finally:
+            release_embed.set()
+
+    monkeypatch.setattr(index_watchdog, "IndexWatchdog", make_watchdog)
+    monkeypatch.setattr(index_new, "index_chunks_to_sqlite", held_embed)
+    observer = threading.Thread(target=observe_then_release, name="held-embed-heartbeat-observer")
+    observer.start()
+    try:
+        # The CLI stays on the main thread, including its signal handling.
+        result = CliRunner().invoke(app, ["index", str(source)])
+    finally:
+        release_embed.set()
+        observer.join(timeout=CEILING_S + 1.0)
+
+    assert not observer.is_alive(), "heartbeat observer did not join"
+    assert observer_errors == [], observer_errors
+    assert embed_exited.is_set()
     assert result.exit_code == 0, result.output
     assert store.interrupt_calls == 0, "a run inside its cap must never be interrupted"
     heartbeats = [line for line in result.stderr.splitlines() if line.startswith("BRAINLAYER_INDEX_HEARTBEAT")]
-    assert heartbeats, f"a {store.ceiling_s}s phase produced no heartbeat: {result.stderr!r}"
-    assert "phase=embed_and_upsert:session.jsonl" in heartbeats[-1]
-    assert "last_progress_age_s=" in heartbeats[-1]
+    assert held_heartbeats, f"no heartbeat observed during the held embed: {result.stderr!r}"
+    assert all(line in heartbeats for line in held_heartbeats)
+    assert all("phase=embed_and_upsert:session.jsonl" in line for line in held_heartbeats)
+    assert all("last_progress_age_s=" in line for line in held_heartbeats)
     assert alarms == []
 
 

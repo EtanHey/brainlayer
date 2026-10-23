@@ -262,6 +262,9 @@ def test_trace_is_written_when_build_fails(monkeypatch: pytest.MonkeyPatch, tmp_
     case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
     db, trace = _stage_db(case, tmp_path), tmp_path / "trace.json"
     monkeypatch.setattr(surface, "_stores", lambda *_: (_ for _ in ()).throw(RuntimeError("boom")))
+    # Exercise builder failure and trace handling in-process; the deadline tests
+    # below exercise the real subprocess boundary.
+    monkeypatch.setattr(surface, "_bounded_db_sections", surface._collect_db_sections)
     document, _ = surface.build_document(env={"BRAINLAYER_DB": str(db), "BRAINLAYER_OBSERVABILITY_INPUT_ROOT": str(tmp_path / "inputs"), "BRAINLAYER_OBSERVABILITY_TRACE_PATH": str(trace), "BRAINLAYER_OBSERVABILITY_NOW": str(case["generated_at"])})  # fmt: skip
     assert document["stores"] == {
         "state": "unmeasurable",
@@ -400,3 +403,156 @@ def test_transport_failure_still_writes_fresh_unmeasurable_document(tmp_path, mo
     assert "denied" in document["transport"]["reason"]
     assert "counts" not in document["transport"]
     assert document["stores"]["state"] == "measured"
+
+
+def _producer_env(tmp_path: Path) -> dict[str, str]:
+    case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
+    env = {
+        "BRAINLAYER_DB": str(_stage_db(case, tmp_path)),
+        "BRAINLAYER_OBSERVABILITY_PATH": str(tmp_path / "observability.json"),
+        "BRAINLAYER_OBSERVABILITY_NOW": str(case["generated_at"]),
+        "BRAINLAYER_OBSERVABILITY_INPUT_ROOT": str(tmp_path / "inputs"),
+    }
+    for key in ("jsonl_backup_log", "backup_daily_log", "launchd_output", "disabled_dir"):
+        relative = str(case["inputs"][key])
+        source, staged = FIXTURES / relative, tmp_path / "inputs" / relative
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, staged)
+        else:
+            shutil.copy2(source, staged)
+        fixed = datetime.fromisoformat(str(case["generated_at"]).replace("Z", "+00:00")).timestamp()
+        os.utime(staged, (fixed, fixed))
+        env[f"BRAINLAYER_OBSERVABILITY_{key.upper()}"] = str(staged)
+    return env
+
+
+@pytest.mark.parametrize("blocked_stage", ["connect", "aggregate"])
+def test_db_query_deadline_still_publishes_backups_transport_and_reason(tmp_path, monkeypatch, blocked_stage):
+    import jsonschema
+
+    import brainlayer.observability_surface as surface
+    import brainlayer.observability_transport as transport
+
+    env = _producer_env(tmp_path)
+    baseline, _ = surface.build_document(env=env)
+    assert baseline["backups"]["state"] == "measured"
+    output = Path(env["BRAINLAYER_OBSERVABILITY_PATH"])
+    output.write_text('{"stale": true}')
+    independent = {"state": "measured", "reason": "", "inputs": [], "sentinel": "transport intact"}
+    monkeypatch.setattr(transport, "build_transport_section", lambda **_: independent)
+    monkeypatch.setattr(transport, "report_transport_alert", lambda *_, **__: None)
+    real_run = subprocess.run
+    calls = []
+    blocked = tmp_path / "query-blocked"
+
+    def blocked_query(argv, **kwargs):
+        if "--db-sections" in argv:
+            calls.append(argv)
+            # Exercise kill/reap for SQLite blocked outside VM progress callbacks.
+            script = (
+                "import time, sqlite3; from pathlib import Path; "
+                "from brainlayer import observability_surface as s; "
+                "c=sqlite3.connect(':memory:'); "
+                f"c.create_function('blocked', 0, lambda: (Path({str(blocked)!r}).touch(), time.sleep(60))[1]); "
+            )
+            if blocked_stage == "connect":
+                script += "s.sqlite3.connect=lambda *a, **kw: c.execute('SELECT blocked()'); "
+            else:
+                script += "s._stores=lambda *a: c.execute('SELECT blocked()').fetchone(); "
+            return real_run([sys.executable, "-c", script + "s._db_worker_main()"], **kwargs)
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", blocked_query)
+    monkeypatch.setattr(surface, "DB_QUERY_TIMEOUT_SECONDS", 1, raising=False)
+    document = surface.write_document(env=env)
+    assert json.loads(output.read_text()) == document
+    assert "stale" not in document
+    assert document["generated_at"] == env["BRAINLAYER_OBSERVABILITY_NOW"]
+    for section in OWNED_SECTIONS:
+        assert document[section]["state"] == "unmeasurable"
+        assert "deadline" in document[section]["reason"].lower()
+        assert set(document[section]) == {"state", "reason", "inputs"}
+    assert len(calls) == 1
+    assert blocked.exists(), "worker must reach the blocked SQLite call before timing out"
+    assert document["transport"] == independent
+    assert document["backups"] == baseline["backups"]
+    v1 = {key: value for key, value in document.items() if key != "transport"}
+    v1["schema_version"] = 1
+    jsonschema.validate(v1, json.loads((FIXTURES / "observability-schema.v1.json").read_text()))
+
+
+def test_malformed_db_still_publishes_explicit_fault(tmp_path):
+    from brainlayer.observability_surface import write_document
+
+    env = _producer_env(tmp_path)
+    Path(env["BRAINLAYER_DB"]).write_bytes(b"not a SQLite database")
+    document = write_document(env=env, stdout=True)
+    for section in OWNED_SECTIONS:
+        assert document[section]["state"] == "unmeasurable"
+        assert "database unreadable" in document[section]["reason"]
+        assert "not a database" in document[section]["reason"]
+        assert document[section]["inputs"][0]["status"] == "malformed"
+    assert document["backups"]["state"] == "measured"
+
+
+def test_live_db_checkpoint_during_query_is_not_future(tmp_path, monkeypatch):
+    from datetime import UTC, timedelta
+
+    import brainlayer.observability_surface as surface
+
+    env = _producer_env(tmp_path)
+    del env["BRAINLAYER_OBSERVABILITY_NOW"]
+    start = datetime(2026, 10, 22, 0, 0, tzinfo=UTC)
+    observed = start + timedelta(seconds=5)
+    clock = [start]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+
+    def checkpoint():
+        stamp = (observed - timedelta(seconds=1)).timestamp()
+        os.utime(env["BRAINLAYER_DB"], (stamp, stamp))
+        clock[0] = observed
+
+    real_connect, real_run = sqlite3.connect, subprocess.run
+
+    class CheckpointConnection(sqlite3.Connection):
+        def execute(self, sql, *args, **kwargs):
+            result = super().execute(sql, *args, **kwargs)
+            if sql.startswith("SELECT COUNT"):
+                checkpoint()
+            return result
+
+    # Cover both the legacy collector (red) and bounded worker path (green).
+    monkeypatch.setattr(sqlite3, "connect", lambda *a, **kw: real_connect(*a, **kw, factory=CheckpointConnection))
+
+    def query(argv, **kwargs):
+        result = real_run(argv, **kwargs)
+        if "--db-sections" in argv:
+            checkpoint()
+        return result
+
+    monkeypatch.setattr(subprocess, "run", query)
+    monkeypatch.setattr(surface, "datetime", Clock)
+    document, _ = surface.build_document(env=env)
+    for section in OWNED_SECTIONS:
+        assert document[section]["state"] == "measured"
+        assert document[section]["inputs"][0]["status"] == "read"
+
+
+def test_genuinely_future_fixture_remains_unmeasurable(tmp_path):
+    from datetime import timedelta
+
+    from brainlayer.observability_surface import build_document
+
+    env = _producer_env(tmp_path)
+    future = datetime.fromisoformat(env["BRAINLAYER_OBSERVABILITY_NOW"].replace("Z", "+00:00")) + timedelta(seconds=5)
+    os.utime(env["BRAINLAYER_DB"], (future.timestamp(), future.timestamp()))
+    document, _ = build_document(env=env)
+    for section in OWNED_SECTIONS:
+        assert document[section]["state"] == "unmeasurable"
+        assert document[section]["reason"] == "database input status: future"
+        assert set(document[section]) == {"state", "reason", "inputs"}

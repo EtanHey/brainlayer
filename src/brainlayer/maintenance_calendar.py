@@ -7,7 +7,7 @@ import math
 import os
 import signal
 import time
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
@@ -25,6 +25,7 @@ from .index_budget import CALENDAR_INDEX_UNWIND_S, calendar_index_budget_s
 from .job_alerts import report
 from .maintenance_control import MaintenanceHold
 from .supervisor_guard import Custody, gated_spawn, guard_lease, launch_guard, start_time, stop_group
+from .supervisor_jobs import TRANSCRIPT_RECOVERY_EXIT_TIMEOUT, TRANSCRIPT_RECOVERY_RUN_TIMEOUT
 
 NAMES = tuple(
     "index,backup-daily,maintenance-nightly,jsonl-backup,p0-counter,wal-checkpoint,maintenance-weekly,decay,repair-fts,backup-snapshot".split(
@@ -351,6 +352,63 @@ def _transcripts_fresh(now):
         return False
 
 
+async def _admit_calendar(steps, directory, date, transcript_recovery, guard_timeout, shutdown_timeout, sleep_fn):
+    """Reserve a full invocation before retrying custody, never retry already-started work."""
+    leases = ExitStack()
+    full = isinstance(steps, CalendarPlan) and not transcript_recovery
+    try:
+        if full or transcript_recovery:
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if full:
+            # Only full invocations touch this singleton: a recovery's short admission
+            # probe must never make a scheduled full invocation look like a duplicate.
+            leases.enter_context(Custody(directory / "full-calendar", reset_previous_boot=False))
+        deadline = maintenance_control.hold_clock()
+        if full:
+            recovery = [step for step in steps.candidates if step.name == "jsonl-backup"]
+            if len(recovery) != 1:
+                raise ValueError("full calendar admission requires one bounded transcript step")
+            # Cover the actual step bound, the supervisor backstop and its exit grace,
+            # plus guard startup/expiry and group/guard shutdown. The suspend-aware
+            # elapsed clock cannot be extended by a wall-clock change or sleep.
+            deadline += (
+                max(recovery[0].timeout, TRANSCRIPT_RECOVERY_RUN_TIMEOUT)
+                + TRANSCRIPT_RECOVERY_EXIT_TIMEOUT
+                + guard_timeout
+                + 2 * shutdown_timeout
+                + 30
+            )
+        waiting, admission = False, None
+        while True:
+            if full and maintenance_control.hold_clock() >= deadline:
+                record(directory, event="calendar-admission-timeout", scheduled_date=date.isoformat())
+                leases.close()
+                return None, 1
+            try:
+                if (full or transcript_recovery) and admission is None:
+                    admission = leases.enter_context(
+                        Custody(directory / "recovery-admission", reset_previous_boot=False)
+                    )
+                custody = leases.enter_context(Custody(directory))
+                if transcript_recovery:
+                    admission.__exit__(None, None, None)
+                return leases, custody
+            except BlockingIOError:
+                if not full:
+                    raise
+                if not waiting:
+                    record(directory, event="calendar-admission-wait", scheduled_date=date.isoformat())
+                    waiting = True
+                await sleep_fn(min(1, max(0, deadline - maintenance_control.hold_clock())))
+    except BlockingIOError:
+        leases.close()
+        record(directory, event="already-running", scheduled_date=date.isoformat())
+        return None, 0
+    except BaseException:
+        leases.close()
+        raise
+
+
 async def run_calendar(
     steps,
     directory,
@@ -368,12 +426,11 @@ async def run_calendar(
     if not all(math.isfinite(v) and v > 0 for v in (guard_timeout, shutdown_timeout)) or defer_after < 1:
         raise ValueError("invalid calendar timing")
     date = steps.scheduled_date if isinstance(steps, CalendarPlan) else scheduled_date or local_backup_date(now_fn())
-    custody = Custody(directory)
-    try:
-        custody.__enter__()
-    except BlockingIOError:
-        record(directory, event="already-running", scheduled_date=date.isoformat())
-        return 0
+    leases, custody = await _admit_calendar(
+        steps, directory, date, transcript_recovery, guard_timeout, shutdown_timeout, sleep_fn
+    )
+    if leases is None:
+        return custody
     stop, heartbeat_stop, handlers, results = asyncio.Event(), asyncio.Event(), {}, {}
     guard, heartbeat = None, None
     active_step, runner_failed = None, 0
@@ -558,4 +615,4 @@ async def run_calendar(
                     deferred=sum(v == "deferred" for v in results.values()),
                 )
             finally:
-                custody.__exit__(None, None, None)
+                leases.close()

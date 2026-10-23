@@ -80,6 +80,17 @@ receipts and retry on a later interval; recovery does not replace nightly covera
 in the calendar journal. Reinstall/restart the consolidated daemon after upgrading
 to activate this component; an unchanged manifest needs no rewrite.
 
+Full calendar invocations reserve priority before acquiring custody. If recovery
+is already running, the full invocation waits for its bounded runtime and shutdown
+instead of losing that scheduled opportunity. Further recovery attempts and duplicate
+full invocations cannot pass the reservation. Waiting happens before any calendar
+step starts, so it never replays completed indexing, maintenance or backups.
+The wait uses a suspend-aware elapsed deadline derived from the transcript step
+and the recovery supervisor's runtime/exit bounds, plus guard startup/shutdown.
+An exhausted wait records `calendar-admission-timeout` and exits nonzero without
+starting workers; unresolved custody never permits concurrent work. This follows
+the actual calendar invocation without assuming a particular launchd schedule.
+
 
 BrainBar cask recovery is a formula-supervised `brainbar-activation` interval worker.
 The cask upgrade stops BrainBar; the supervisor re-activates it automatically after brew exits.

@@ -81,6 +81,16 @@ MISSING_EMBEDDINGS_SQL = """
       AND c.aggregated_into IS NULL
 """
 
+# Bound candidates before probing the vector ID index; never materialize all IDs.
+MISSING_EMBEDDINGS_PAGE_SQL = """
+    SELECT c.rowid,
+           c.content IS NOT NULL AND c.content != ''
+           AND c.archived_at IS NULL AND c.superseded_by IS NULL
+           AND c.aggregated_into IS NULL
+           AND NOT EXISTS (SELECT 1 FROM chunk_vectors_rowids v WHERE v.id = c.id)
+    FROM chunks c WHERE c.rowid >= ? ORDER BY c.rowid LIMIT ?
+"""
+
 
 class HealthCheckDeadlineExceeded(RuntimeError):
     """Raised when a read-only health query consumes the check's time budget."""
@@ -102,6 +112,7 @@ class HealthIssue:
     code: str
     severity: str
     message: str
+    expected_episode: dict[str, Any] | None = None
 
 
 @dataclass
@@ -173,6 +184,9 @@ class HealthCheckConfig:
     queue_page_bytes: int = 2 * 1024 * 1024 * 1024
     heal_circuit_breaker_limit: int = DEFAULT_HEAL_CIRCUIT_BREAKER_LIMIT
     max_duration_seconds: float = DEFAULT_MAX_DURATION_SECONDS
+    missing_embedding_page_size: int = 256
+    missing_embedding_max_pages: int = 16
+    missing_embedding_instruction_limit: int = 100_000
     heal: bool = False
     socket_timeout_seconds: float = 5.0
     max_stalled_ticks: int = 2
@@ -214,6 +228,17 @@ class JsonlBackupHealth:
     detail: str | None = None
 
 
+@dataclass(frozen=True)
+class MissingEmbeddingScan:
+    completeness: str = "unknown"
+    missing: int | None = None
+    scanned: int = 0
+    cursor: int | None = None
+    measured_at: str | None = None
+    age_seconds: float | None = None
+    reason: str = "not_measured"
+
+
 @dataclass
 class HealthCheckResult:
     checked_at: str
@@ -223,6 +248,7 @@ class HealthCheckResult:
     hotlane_running: bool = False
     backlog_batch: int | None = None
     missing_vectors: int | None = None
+    missing_embedding_scan: MissingEmbeddingScan = field(default_factory=MissingEmbeddingScan)
     previous_missing_vectors: int | None = None
     stalled_ticks: int = 0
     lock_holder: LockHolder | None = None
@@ -582,12 +608,85 @@ def count_missing_embeddings(
     deadline_at: float | None = None,
     monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> int:
+    """Exact corpus count for doctor; scheduled health uses bounded sampling."""
     return _read_only_count(
         db_path,
         MISSING_EMBEDDINGS_SQL,
         stage="missing_embeddings",
         deadline_at=deadline_at,
         monotonic_fn=monotonic_fn,
+    )
+
+
+def sample_missing_embeddings(
+    db_path: Path,
+    *,
+    now: datetime,
+    cursor: int | None = None,
+    page_size: int = 256,
+    max_pages: int = 16,
+    instruction_limit: int = 100_000,
+    deadline_at: float | None = None,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> MissingEmbeddingScan:
+    """One bounded snapshot/window, never a sum of counts from different ticks."""
+    started = monotonic_fn()
+    deadline_at = min(deadline_at if deadline_at is not None else started + 1, started + 1)
+    initial_cursor = cursor
+    scanned = missing = instructions = 0
+    reason = "page_limit"
+
+    def stop() -> int:
+        nonlocal instructions, reason
+        instructions += 100
+        if instructions >= max(1, instruction_limit):
+            reason = "instruction_limit"
+            return 1
+        if monotonic_fn() >= deadline_at:
+            reason = "time_limit"
+            return 1
+        return 0
+
+    complete = False
+    if monotonic_fn() >= deadline_at:
+        return MissingEmbeddingScan(cursor=cursor, reason="time_limit")
+    conn = sqlite3.connect(f"file:{db_path.expanduser()}?mode=ro", uri=True, timeout=0.05)
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        conn.set_progress_handler(stop, 100)
+        conn.execute("BEGIN")  # Keep every page in this tick on the same read snapshot.
+        for _ in range(max(1, max_pages)):
+            if monotonic_fn() >= deadline_at:
+                reason = "time_limit"
+                break
+            rows = 0
+            # >= last+1 also includes negative rowids on the first page.
+            lower = cursor + 1 if cursor is not None else -(2**63)
+            page = () if lower > 2**63 - 1 else conn.execute(MISSING_EMBEDDINGS_PAGE_SQL, (lower, max(1, page_size)))
+            for rowid, absent in page:
+                cursor = rowid
+                rows += 1
+                scanned += 1
+                missing += int(absent)
+            if rows < max(1, page_size):
+                complete = initial_cursor is None
+                cursor = None  # Next tick starts a fresh sweep; no stale counts accumulate.
+                reason = "" if complete else "window_end"
+                break
+    except sqlite3.OperationalError as exc:
+        if "interrupted" not in str(exc).lower():
+            raise
+    finally:
+        conn.close()
+    measured = scanned > 0 or complete
+    return MissingEmbeddingScan(
+        completeness="complete" if complete else "partial" if measured else "unknown",
+        missing=missing if measured else None,
+        scanned=scanned,
+        cursor=cursor,
+        measured_at=now.isoformat() if measured else None,
+        age_seconds=max(0, monotonic_fn() - started) if measured else None,
+        reason=reason,
     )
 
 
@@ -1305,8 +1404,8 @@ def _run_health_check_locked(
     heal_issue_labels: dict[str, tuple[str, Path]] = {}
     heal_issue_details: dict[str, dict[str, Any]] = {}
 
-    def add_issue(code: str, severity: str, message: str) -> None:
-        result.issues.append(HealthIssue(code, severity, message))
+    def add_issue(code: str, severity: str, message: str, *, expected_episode: dict[str, Any] | None = None) -> None:
+        result.issues.append(HealthIssue(code, severity, message, expected_episode=expected_episode))
         _emit_heal_event(
             {
                 "_type": "health_issue_detected",
@@ -1366,7 +1465,7 @@ def _run_health_check_locked(
         from .badge_state import build_badge_state_document, write_badge_state
 
         try:
-            write_badge_state(config.badge_state_path, build_badge_state_document(result))
+            write_badge_state(config.badge_state_path, build_badge_state_document(result, now=now_fn()))
         except (OSError, ValueError) as exc:
             add_issue("badge_state_write_failed", "critical", f"badge state write failed: {exc}")
             try:
@@ -1455,29 +1554,50 @@ def _run_health_check_locked(
         previous_missing if type(previous_missing) is int and previous_missing >= 0 else None
     )
     try:
-        result.missing_vectors = count_missing_embeddings(
+        prior_scan = state.get("missing_embedding_scan", {})
+        cursor = prior_scan.get("cursor") if isinstance(prior_scan, dict) else None
+        cursor = cursor if type(cursor) is int and -(2**63) <= cursor < 2**63 else None
+        result.missing_embedding_scan = sample_missing_embeddings(
             config.db_path,
-            deadline_at=deadline_at,
+            now=now,
+            cursor=cursor,
+            page_size=config.missing_embedding_page_size,
+            max_pages=config.missing_embedding_max_pages,
+            instruction_limit=config.missing_embedding_instruction_limit,
+            # Leave the canary its timeout plus finalization headroom.
+            deadline_at=deadline_at - config.socket_timeout_seconds - 1,
             monotonic_fn=monotonic_fn,
         )
-    except HealthCheckDeadlineExceeded as exc:
-        return finish_slow("missing_embeddings", str(exc))
+        if result.missing_embedding_scan.completeness == "complete":
+            result.missing_vectors = result.missing_embedding_scan.missing
     except sqlite3.OperationalError as exc:
-        if "interrupted" in str(exc).lower():
-            return finish_slow("missing_embeddings", "health-check deadline interrupted missing_embeddings")
+        result.missing_embedding_scan = MissingEmbeddingScan(reason=str(exc))
         add_issue(
             "missing_embeddings_count_failed",
             "warning" if _text_has_sqlite_busy_signal(exc) else "critical",
             f"could not count missing embeddings: {exc}",
         )
     except Exception as exc:
+        result.missing_embedding_scan = MissingEmbeddingScan(reason=str(exc))
         add_issue(
             "missing_embeddings_count_failed",
             "critical",
             f"could not count missing embeddings: {exc}",
         )
-    if slow_result := deadline_reached("missing_embeddings"):
-        return slow_result
+    scan = result.missing_embedding_scan
+    state["missing_embedding_scan"] = asdict(scan)
+    if scan.completeness != "complete":
+        add_issue(
+            "missing_embeddings_scan_incomplete",
+            "warning",
+            f"missing embeddings {scan.completeness}: scanned {scan.scanned} rows ({scan.reason}); not an exact count",
+        )
+        if scan.missing:
+            add_issue(
+                "missing_embeddings_backlog",
+                "warning",
+                f"at least {scan.missing} missing embeddings in {scan.scanned} sampled rows",
+            )
 
     hotlane_sample_advanced, hotlane_progressed = _hotlane_progress_sample(state, result.missing_vectors, now)
     if hotlane_progressed:
@@ -1537,10 +1657,14 @@ def _run_health_check_locked(
         else:
             result.canary_ok = False
             result.canary_status = "retrieval_failed"
+            error = response.get("error") if isinstance(response, dict) else None
+            data = error.get("data") if isinstance(error, dict) else None
+            episode = data.get("expected_episode") if isinstance(data, dict) else None
             add_issue(
                 "brain_search_canary_failed",
                 "critical",
                 f"BrainBar brain_search canary retrieval failed: {text[:240]}",
+                expected_episode=episode if isinstance(episode, dict) else None,
             )
             heal_issue_labels["brain_search_canary_failed"] = (
                 config.brainbar_daemon_label,

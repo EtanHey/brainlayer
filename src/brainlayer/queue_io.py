@@ -1,14 +1,29 @@
-"""Durable JSONL queue for BrainLayer write arbitration."""
+"""JSONL queue for BrainLayer write arbitration.
+
+POSIX publication syncs file data and directory entries; Darwin also flushes the
+device cache. Windows runtimes without directory handles warn that directory-entry
+durability is unavailable, while still syncing file data before atomic rename.
+"""
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import uuid
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+class PublishedQueueSyncError(OSError):
+    """An intent is visible, but its directory barrier did not confirm durability."""
+
+    def __init__(self, published_path: Path, error: Exception):
+        self.published_path = published_path
+        super().__init__(f"{error}; queue intent published at {published_path}; durability unconfirmed, do not retry")
 
 
 def _safe_source_name(source: str) -> str:
@@ -25,12 +40,64 @@ def get_queue_dir() -> Path:
     return _guard_test_runtime_path(Path.home() / ".brainlayer" / "queue", source="canonical queue path")
 
 
+def _sync_queue_fd(fd: int) -> None:
+    os.fsync(fd)
+    if sys.platform == "darwin":
+        # fsync only reaches the drive cache; ask Darwin to flush it to media.
+        import fcntl
+
+        fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+
+
+def _sync_directory(directory: Path) -> None:
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if directory_flag is None:
+        if sys.platform != "win32":
+            raise OSError("Queue directory sync requires os.O_DIRECTORY on this platform")
+        warnings.warn(
+            "Windows queue directory-entry durability is unavailable without os.O_DIRECTORY; "
+            "file data is still synced before atomic rename",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return
+    fd = os.open(directory, os.O_RDONLY | directory_flag)
+    try:
+        _sync_queue_fd(fd)
+    finally:
+        os.close(fd)
+
+
+def _mkdir_durable(directory: Path) -> None:
+    directory = directory.absolute()
+    # Existence cannot prove another creator (or a failed attempt) synced the
+    # parent entry. Recheck each ancestor, with the filesystem root as anchor.
+    if directory.parent == directory:
+        return
+    _mkdir_durable(directory.parent)
+    if not directory.is_dir():
+        directory.mkdir(exist_ok=True)
+    _sync_directory(directory.parent)
+
+
+def _write_synced_queue_file(path: Path, text: str) -> None:
+    handle = path.open("x", encoding="utf-8")
+    try:
+        with handle:
+            handle.write(text)
+            handle.flush()
+            _sync_queue_fd(handle.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+
+
 def enqueue_jsonl_batch(events: list[dict[str, Any]], *, source: str, queue_dir: Path | None = None) -> Path:
     """Atomically append one or more write intents as a JSONL file."""
     if not events:
         raise ValueError("enqueue_jsonl_batch requires at least one event")
     resolved_dir = queue_dir or get_queue_dir()
-    resolved_dir.mkdir(parents=True, exist_ok=True)
+    _mkdir_durable(resolved_dir)
     now_ms = int(time.time() * 1000)
     queued_at = time.time()
     safe_source = _safe_source_name(source)
@@ -47,8 +114,18 @@ def enqueue_jsonl_batch(events: list[dict[str, Any]], *, source: str, queue_dir:
     ]
     final_path = resolved_dir / f"{safe_source}-{now_ms}-{uuid.uuid4().hex}.jsonl"
     tmp_path = final_path.with_suffix(".tmp")
-    tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    tmp_path.replace(final_path)
+    _write_synced_queue_file(tmp_path, "\n".join(lines) + "\n")
+    try:
+        tmp_path.replace(final_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    try:
+        _sync_directory(resolved_dir)
+    except Exception as error:
+        # Preserve the visible intent. Callers must neither acknowledge durable
+        # publication nor create a second fallback copy after this boundary.
+        raise PublishedQueueSyncError(final_path, error) from error
     return final_path
 
 

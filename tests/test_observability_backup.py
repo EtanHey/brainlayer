@@ -430,10 +430,15 @@ def test_producer_without_observability_wiring_measures_all_sections(
     disabled.mkdir(parents=True)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     launchd_text = (FIXTURES / "launchd" / "healthy-dev.txt").read_text(encoding="utf-8")
+    real_run = subprocess.run
     monkeypatch.setattr(
         observability_backup.subprocess,
         "run",
-        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, launchd_text.encode(), b""),
+        lambda argv, **kwargs: (
+            subprocess.CompletedProcess(argv, 0, launchd_text.encode(), b"")
+            if argv[0] == "launchctl"
+            else real_run(argv, **kwargs)
+        ),
     )
 
     document, _ = observability_surface.build_document(env={"BRAINLAYER_DB": str(db)})
@@ -519,10 +524,15 @@ def test_subprocess_error_keeps_document_measured_except_for_backups(
     disabled = tmp_path / "Library" / "LaunchAgents" / ".disabled-retention-P0"
     disabled.mkdir(parents=True)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    real_run = subprocess.run
     monkeypatch.setattr(
         observability_backup.subprocess,
         "run",
-        lambda *args, **kwargs: (_ for _ in ()).throw(subprocess.SubprocessError("synthetic command failure")),
+        lambda argv, **kwargs: (
+            (_ for _ in ()).throw(subprocess.SubprocessError("synthetic command failure"))
+            if argv[0] == "launchctl"
+            else real_run(argv, **kwargs)
+        ),
     )
 
     document, _ = observability_surface.build_document(env={"BRAINLAYER_DB": str(db)})

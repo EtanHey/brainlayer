@@ -20,6 +20,10 @@ from typing import Any
 import apsw
 
 _MONOTONIC = time.monotonic
+_WALL_TIME = time.time
+_INGEST_STAGES = (
+    "encode open prepare begin apply commit checkpoint candidate write provenance classify chunk scrub publish".split()
+)
 _FALSE_VALUES = {"0", "false", "no", "off"}
 _DEFAULT_MAX_BYTES = 10 * 1024 * 1024
 _DEFAULT_BACKUPS = 3
@@ -110,8 +114,9 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
     Histograms use power-of-two upper bounds in ms (last bucket overflows).
     The caller holds the sink's cross-process lock; no raw SQL/identities survive.
     """
+    kind = event.get("event")
     finished_at = event.get("finished_at")
-    if event.get("event") != "txn_finished" or not isinstance(finished_at, str):
+    if kind not in {"txn_finished", "ingest_committed", "ingest_finished"} or not isinstance(finished_at, str):
         return
     try:
         day = datetime.fromisoformat(finished_at).astimezone(UTC).date()
@@ -137,13 +142,24 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
     summary.setdefault("schema_version", 1)
     groups = summary["groups"]
     key = "|".join(str(event.get(field) or "unknown")[:64] for field in ("producer", "lane", "outcome"))
+    if kind != "txn_finished":
+        key += f"|{kind}"
     if key not in groups and len(groups) >= 63:
         key = "overflow"
     group = groups.get(key)
     if not isinstance(group, dict) or type(group.get("count")) is not int or group["count"] < 0:
         group = groups[key] = {"count": 0}
     group["count"] += 1
-    for field in ("duration_ms", "queue_wait_ms", "lock_wait_ms", "lock_held_ms", "queue_to_commit_ms"):
+    for field in (
+        "duration_ms",
+        "queue_wait_ms",
+        "lock_wait_ms",
+        "lock_held_ms",
+        "queue_to_commit_ms",
+        "observed_to_commit_ms",
+        "rows_committed",
+        *(f"{stage}_ms" for stage in _INGEST_STAGES),
+    ):
         value = event.get(field)
         if type(value) not in (int, float) or not 0 <= value <= sys.float_info.max:
             continue
@@ -164,6 +180,11 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
         metric["max"] = max(metric["max"], value)
         bucket = str(min(31, math.ceil(math.log2(max(1, value)))))
         metric["histogram"][bucket] = metric["histogram"].get(bucket, 0) + 1
+    for field in ("committed_at", "oldest_ingest_observed_at", "oldest_queued_at"):
+        value = event.get(field)
+        if isinstance(value, (int, float)) and math.isfinite(value):
+            watermarks = group.setdefault("watermarks", {})
+            watermarks[field] = (max if field == "committed_at" else min)(watermarks.get(field, value), value)
     if not _atomic_write_json(target, summary):
         raise OSError("writer summary write failed")
     dated = {}
@@ -275,6 +296,67 @@ def summarize_event_lines(raw_lines: list[str]) -> dict[str, Any]:
 
 def summarize_events(path: Path | None = None, *, lines: int = 1000) -> dict[str, Any]:
     return summarize_event_lines(tail_event_lines(path, lines=lines))
+
+
+class IngestMetrics:
+    """Bounded stage totals and observed completion watermarks, without identities."""
+
+    def __init__(self, producer: str, lane: str, events=()):
+        self.producer, self.lane = producer, lane
+        self.started, self.admitted_at = _MONOTONIC(), _WALL_TIME()
+        self.fields = {f"{stage}_ms": 0.0 for stage in _INGEST_STAGES}
+        self.set_events(events)
+
+    def set_events(self, events):
+        queued = self.origins(events, "queued_at")
+        self.fields["queue_wait_ms"] = (self.admitted_at - min(queued)) * 1000 if queued else None
+
+    @staticmethod
+    def origins(events, key):
+        """Return origins only when every member has a valid epoch for this field."""
+        values = []
+        for event in events:
+            if not isinstance(event, dict):
+                return []
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
+            metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+            value = payload.get(key, metadata.get(key))
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                return []
+            values.append(float(value))
+        return values
+
+    def run(self, stage, function, *args, **kwargs):
+        started = _MONOTONIC()
+        try:
+            return function(*args, **kwargs)
+        finally:
+            self.fields[f"{stage}_ms"] += max(0, (_MONOTONIC() - started) * 1000)
+
+    def committed(self, events=()):
+        now = _WALL_TIME()
+        self.fields.update(committed_at=now, rows_committed=len(events))
+        for source, metric in (("queued_at", "queue_to_commit_ms"), ("ingest_observed_at", "observed_to_commit_ms")):
+            origins = self.origins(events, source)
+            self.fields[f"oldest_{source}"] = min(origins) if origins else None
+            self.fields[metric] = (now - min(origins)) * 1000 if origins else None
+        self.emit("ingest_committed", "commit")
+
+    def emit(self, event, outcome):
+        append_event(
+            {
+                "event": event,
+                "producer": self.producer,
+                "lane": self.lane,
+                "outcome": outcome,
+                "finished_at": _utc_now(),
+                "duration_ms": max(0, (_MONOTONIC() - self.started) * 1000),
+                **self.fields,
+            }
+        )
+
+    def finish(self, outcome="completed"):
+        self.emit("ingest_finished", outcome)
 
 
 def _db_page_size(db_path: Path) -> int:

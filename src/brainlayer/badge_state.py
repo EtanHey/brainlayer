@@ -28,27 +28,12 @@ DATA_LOSS_CODES = frozenset(
     }
 )
 
-# This is the only badge-suppression gate. The interim marker is deliberately
-# absent from this module and retires when the badge ships. Data-loss codes are
-# excluded structurally, so no configuration file can silence them.
-SUPPRESSIBLE_CODES = frozenset(
-    {
-        "brain_search_canary_failed",
-        "drain_no_progress",
-        "drain_unloaded",
-        "health_check_unloaded",
-        "hotlane_backlog_disabled",
-        "hotlane_dead",
-        "lock_holder_wedge",
-        "missing_embeddings_climbing",
-        "missing_embeddings_not_draining",
-        "observability_unloaded",
-        "pause_sentinel_stale",
-        "queue_backed_up",
-        "watch_unloaded",
-        "watcher_stalled",
-    }
-)
+# Eligibility alone never suppresses an issue. A trusted producer must attach a
+# current owned episode with a fixed deadline. Backlog/age and data-loss faults
+# cannot be excused by snapshot activity or by positive throughput alone.
+SUPPRESSIBLE_CODES = frozenset({"brain_search_canary_failed"})
+EPISODE_MAX_SECONDS = 3600
+EPISODE_FRESH_SECONDS = 300
 
 if DATA_LOSS_CODES & SUPPRESSIBLE_CODES:
     raise RuntimeError("data-loss badge codes must never be suppressible")
@@ -73,12 +58,51 @@ def _issue_payload(issue: HealthIssue) -> dict[str, str]:
     return {"code": issue.code, "severity": issue.severity, "message": issue.message}
 
 
-def build_badge_state_document(result: HealthCheckResult) -> dict[str, Any]:
-    """Build schema v1 from one completed health-check result."""
+def _episode_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("episode timestamps require a timezone")
+    return parsed
 
-    critical = [issue for issue in result.issues if issue.severity == "critical"]
-    active = [_issue_payload(issue) for issue in critical if issue.code not in SUPPRESSIBLE_CODES]
-    suppressed = [_issue_payload(issue) for issue in critical if issue.code in SUPPRESSIBLE_CODES]
+
+def _expected_episode(issue: HealthIssue, now: datetime) -> dict[str, Any] | None:
+    episode = issue.expected_episode
+    if issue.severity != "critical" or issue.code not in SUPPRESSIBLE_CODES or not isinstance(episode, dict):
+        return None
+    try:
+        started, observed, deadline = (_episode_time(episode[key]) for key in ("started_at", "observed_at", "deadline"))
+        valid = (
+            episode["kind"] in ("snapshot", "maintenance")
+            and all(isinstance(episode[key], str) and episode[key].strip() for key in ("owner", "episode_id"))
+            and isinstance(episode["expected_codes"], list)
+            and issue.code in episode["expected_codes"]
+            and started <= observed <= now < deadline
+            and (deadline - started).total_seconds() <= EPISODE_MAX_SECONDS
+            and (now - observed).total_seconds() <= EPISODE_FRESH_SECONDS
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    if not valid:
+        return None
+    return {
+        key: episode[key]
+        for key in ("kind", "owner", "episode_id", "started_at", "observed_at", "deadline", "expected_codes")
+    }
+
+
+def build_badge_state_document(result: HealthCheckResult, *, now: datetime | None = None) -> dict[str, Any]:
+    """Keep all alerts; only explicit bounded evidence can excuse a critical."""
+
+    now = now or datetime.fromisoformat(result.checked_at.replace("Z", "+00:00"))
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    active, suppressed = [], []
+    for issue in result.issues:
+        payload = _issue_payload(issue)
+        if episode := _expected_episode(issue, now):
+            suppressed.append({**payload, "episode": episode})
+        else:
+            active.append(payload)
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": _iso_utc(result.checked_at),
@@ -86,7 +110,7 @@ def build_badge_state_document(result: HealthCheckResult) -> dict[str, Any]:
             "state": "measured",
             "reason": "",
             "inputs": [],
-            "badge_on": bool(active),
+            "badge_on": any(issue["severity"] != "warning" for issue in active),
             "active": active,
             "suppressed": suppressed,
         },

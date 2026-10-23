@@ -643,6 +643,127 @@ def test_missing_embeddings_not_draining_after_two_ticks(tmp_path):
     assert saved["stalled_ticks"] == 2
 
 
+def test_missing_embedding_scan_yields_bounded_lower_bound_and_runs_canary(tmp_path):
+    db = tmp_path / "bounded.db"
+    _make_db(db, total=40, vector_rows=8)
+    config, state_path, _queue, _pause = _queue_backlog_config(tmp_path, heal=True)
+    config = replace(
+        config,
+        db_path=db,
+        missing_embedding_page_size=8,
+        missing_embedding_max_pages=1,
+        missing_embedding_instruction_limit=10_000,
+    )
+    heal_key = "com.brainlayer.hotlane-brainbar:missing_embeddings_not_draining"
+    history = {
+        "missing_vectors": 1,
+        "stalled_ticks": 8,
+        "hotlane_missing_vectors": 1,
+        "hotlane_stalled_ticks": 8,
+        "hotlane_sample_at": "2026-09-08T11:00:00+00:00",
+        "heal_failures": {heal_key: 1},
+        "heal_tripped": [heal_key],
+    }
+    state_path.write_text(json.dumps(history))
+    # Page one has no missing rows; the next page proves a real backlog.
+    for tick, expected_missing in enumerate((0, 8, 8)):
+        commands = []
+        result = _run_queue_backlog_health(
+            config,
+            _loaded_launchd_runner(commands),
+            now=datetime(2026, 9, 8, 11, 30, tzinfo=UTC) + timedelta(minutes=5 * tick),
+        )
+        scan = result.missing_embedding_scan
+        assert scan.completeness == "partial"
+        assert scan.missing == expected_missing
+        assert scan.scanned == 8
+        assert scan.cursor == 8 * (tick + 1)
+        assert scan.age_seconds >= 0
+        assert result.missing_vectors is None  # Never an exact zero from an unfinished window.
+        assert result.canary_ok and not result.slow_check
+        codes = {issue.code for issue in result.issues}
+        assert "missing_embeddings_scan_incomplete" in codes
+        assert ("missing_embeddings_backlog" in codes) == bool(expected_missing)
+        assert not codes & {"missing_embeddings_climbing", "missing_embeddings_not_draining"}
+        assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
+        saved = json.loads(state_path.read_text())
+        for key, value in history.items():
+            assert saved[key] == value
+        assert saved["missing_embedding_scan"]["completeness"] == "partial"
+    assert health_check.count_missing_embeddings(db) == 32  # Doctor remains exact.
+
+
+@pytest.mark.parametrize("instruction_limit", [1, 100_000])
+def test_missing_embedding_scan_instruction_cap_and_complete_truth(tmp_path, instruction_limit):
+    db = tmp_path / "scan.db"
+    _make_db(db, total=400, vector_rows=8)
+    scan = health_check.sample_missing_embeddings(
+        db,
+        page_size=8,
+        max_pages=100,
+        instruction_limit=instruction_limit,
+        now=datetime(2026, 10, 22, tzinfo=UTC),
+    )
+    if instruction_limit == 1:
+        assert scan.completeness in {"unknown", "partial"}
+        assert scan.reason == "instruction_limit"
+        assert scan.scanned < 16
+    else:
+        assert scan.completeness == "complete"
+        assert scan.missing == 392
+        assert scan.scanned == 400
+        assert scan.cursor is None
+
+
+def test_missing_embedding_scan_wraps_without_accumulating_stale_counts(tmp_path):
+    db = tmp_path / "wrap.db"
+    _make_db(db, total=3, vector_rows=0)
+    now = datetime(2026, 10, 22, tzinfo=UTC)
+    first = health_check.sample_missing_embeddings(db, max_pages=1, page_size=2, now=now)
+    with sqlite3.connect(db) as conn:
+        conn.execute("INSERT INTO chunk_vectors_rowids (id) SELECT id FROM chunks")
+    tail = health_check.sample_missing_embeddings(db, cursor=first.cursor, now=now)
+    assert tail.completeness == "partial" and tail.missing == 0 and tail.cursor is None
+    fresh = health_check.sample_missing_embeddings(db, cursor=tail.cursor, now=now)
+    assert fresh.completeness == "complete" and fresh.missing == 0
+
+
+def test_missing_embedding_scan_instruction_cap_keeps_canary_reachable(tmp_path):
+    config, _state, _queue, _pause = _queue_backlog_config(tmp_path, heal=True)
+    db = tmp_path / "instruction-cap.db"
+    _make_db(db, total=400, vector_rows=0)
+    result = _run_queue_backlog_health(
+        replace(config, db_path=db, missing_embedding_instruction_limit=1), _loaded_launchd_runner([])
+    )
+    assert result.missing_embedding_scan.completeness in {"unknown", "partial"}
+    assert result.missing_embedding_scan.reason == "instruction_limit"
+    assert result.missing_vectors is None
+    assert result.canary_ok and not result.slow_check
+
+
+def test_missing_embedding_scan_time_limit_and_lifecycle_truth(tmp_path):
+    db = tmp_path / "lifecycle.db"
+    _make_db(db, total=8, vector_rows=0)
+    with sqlite3.connect(db) as conn:
+        for index, (column, value) in enumerate(
+            [
+                ("content", None),
+                ("content", ""),
+                ("archived_at", "now"),
+                ("superseded_by", "other"),
+                ("aggregated_into", "other"),
+            ]
+        ):
+            conn.execute(f"UPDATE chunks SET {column} = ? WHERE rowid = ?", (value, index + 1))
+    now = datetime(2026, 10, 22, tzinfo=UTC)
+    scan = health_check.sample_missing_embeddings(db, now=now)
+    assert scan.completeness == "complete"
+    assert scan.missing == health_check.count_missing_embeddings(db) == 3
+    expired = health_check.sample_missing_embeddings(db, now=now, deadline_at=1, monotonic_fn=lambda: 2)
+    assert expired.completeness == "unknown" and expired.missing is None
+    assert expired.reason == "time_limit" and expired.age_seconds is None
+
+
 def test_missing_embedding_query_scans_covering_id_indexes_before_chunk_payloads(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     _make_db(db_path, total=5, vector_rows=3)
@@ -654,9 +775,19 @@ def test_missing_embedding_query_scans_covering_id_indexes_before_chunk_payloads
     assert any("chunks USING COVERING INDEX" in detail for detail in details)
     assert any("chunk_vectors_rowids USING COVERING INDEX" in detail for detail in details)
     assert "SCAN c" not in details
+    with sqlite3.connect(db_path) as conn:
+        page_plan = conn.execute(
+            "EXPLAIN QUERY PLAN " + health_check.MISSING_EMBEDDINGS_PAGE_SQL, (-(2**63), 8)
+        ).fetchall()
+    page_details = [str(row[-1]) for row in page_plan]
+    assert any("SEARCH c USING INTEGER PRIMARY KEY" in detail for detail in page_details)
+    assert any("SEARCH v USING COVERING INDEX" in detail for detail in page_details)
+    assert not any("SCAN" in detail or "TEMP B-TREE" in detail for detail in page_details)
 
 
-def test_interrupted_missing_embedding_count_writes_slow_state_and_returns_early(tmp_path, monkeypatch):
+def test_interrupted_missing_embedding_scan_preserves_job_alert_and_runs_canary(tmp_path, monkeypatch):
+    from brainlayer.job_lifecycle_health import JobTick
+
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
     _make_db(db_path, total=1, vector_rows=1)
@@ -684,10 +815,15 @@ def test_interrupted_missing_embedding_count_writes_slow_state_and_returns_early
         canary_called = True
         return _ok_canary(*_args)
 
-    monkeypatch.setattr(health_check, "count_missing_embeddings", interrupted_count)
+    monkeypatch.setattr(health_check, "sample_missing_embeddings", interrupted_count)
+    monkeypatch.setattr(
+        health_check,
+        "scan_job_lifecycle",
+        lambda _plists, _opt, previous, **_kwargs: JobTick(previous, [], health_check.job_escalations(previous)),
+    )
 
     result = run_health_check(
-        HealthCheckConfig(db_path=db_path, state_path=state_path, max_duration_seconds=45),
+        HealthCheckConfig(db_path=db_path, state_path=state_path, job_opt_path=tmp_path, max_duration_seconds=45),
         ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n",
         socket_request_fn=canary,
         command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
@@ -695,13 +831,14 @@ def test_interrupted_missing_embedding_count_writes_slow_state_and_returns_early
     )
 
     saved = json.loads(state_path.read_text(encoding="utf-8"))
-    assert result.slow_check is True
-    assert result.slow_check_stage == "missing_embeddings"
+    assert result.slow_check is False
+    assert result.missing_embedding_scan.completeness == "unknown"
+    assert result.missing_vectors is None
     assert any(issue.code == "job_failure" and "3 failed runs" in issue.message for issue in result.issues)
-    assert saved["slow_check"] is True
-    assert saved["slow_check_stage"] == "missing_embeddings"
+    assert saved["slow_check"] is False
+    assert saved["missing_embedding_scan"]["completeness"] == "unknown"
     assert saved["ts"] == "2026-07-13T09:00:00+00:00"
-    assert canary_called is False
+    assert canary_called is True
 
 
 def test_missing_embedding_count_interrupts_at_internal_deadline(tmp_path, monkeypatch):
@@ -1939,7 +2076,7 @@ def test_hotlane_restart_uses_missing_progress_not_drain_vectors(tmp_path, missi
 def test_alternating_rise_flat_stall_heals_even_with_transient_query_failures(tmp_path, monkeypatch, intermittent_busy):
     config, state_path, _queue, _pause = _queue_backlog_config(tmp_path, heal=True)
     config.heal_min_consecutive_failures = 2
-    real_count = health_check.count_missing_embeddings
+    real_scan = health_check.sample_missing_embeddings
     outcomes = []
     for tick, missing in enumerate([3, 5, 5, 7, 7, 9, 9, 11, 11, 13]):
         db = tmp_path / f"alternating-{tick}.db"
@@ -1952,7 +2089,7 @@ def test_alternating_rise_flat_stall_heals_even_with_transient_query_failures(tm
                 def busy_count(*_args, **_kwargs):
                     raise sqlite3.OperationalError("database is locked")
 
-                patch.setattr(health_check, "count_missing_embeddings", busy_count)
+                patch.setattr(health_check, "sample_missing_embeddings", busy_count)
                 result = _run_queue_backlog_health(config, _loaded_launchd_runner([]), now=now - timedelta(minutes=5))
             issue = next(issue for issue in result.issues if issue.code == "missing_embeddings_count_failed")
             assert issue.severity == "warning"
@@ -1965,7 +2102,7 @@ def test_alternating_rise_flat_stall_heals_even_with_transient_query_failures(tm
                 "heal_failures",
             ):
                 assert after[key] == before[key]
-        assert health_check.count_missing_embeddings is real_count
+        assert health_check.sample_missing_embeddings is real_scan
         commands = []
         _run_queue_backlog_health(replace(config, db_path=db), _loaded_launchd_runner(commands), now=now)
         if any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands):
