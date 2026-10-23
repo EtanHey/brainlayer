@@ -45,7 +45,7 @@ final class BrainBarBackupSourcesTests: XCTestCase {
 
         XCTAssertEqual(rows.map(\.title), ["Database", "Transcripts", "Weekly maintenance"])
         XCTAssertEqual(rows[0].cadence, "daily at 03:17")
-        XCTAssertEqual(rows[0].lastRun, "Last run 2026-09-29T03:17:06Z · verified")
+        XCTAssertEqual(rows[0].lastRun, "Last attempt 2026-09-29T03:17:06Z · verified · backup-daily.log")
         XCTAssertEqual(rows[0].nextRun, "Next run 2026-09-30T03:17:00Z")
         XCTAssertEqual(rows[0].localCopy?.path, "/data/backups/2026-09-29.db.gz")
         XCTAssertEqual(rows[1].cadence, "Schedule unknown — no LaunchAgent installed at /LA/com.brainlayer.jsonl-backup.plist")
@@ -137,7 +137,7 @@ final class BrainBarBackupSourcesTests: XCTestCase {
         let weekly = sources.rows(now: date("2026-09-29T10:00:00Z"), calendar: calendar("UTC"), formatDate: { ISO8601DateFormatter().string(from: $0) })[2]
         XCTAssertEqual(
             weekly.lastRun,
-            "Last run 2026-08-30T02:23:03Z · last attempt 2026-09-27T01:40:00Z not completed: backup unavailable, VACUUM skipped"
+            "Last run 2026-08-30T02:23:03Z · maintenance.log · last attempt 2026-09-27T01:40:00Z not completed: backup unavailable, VACUUM skipped"
         )
     }
 

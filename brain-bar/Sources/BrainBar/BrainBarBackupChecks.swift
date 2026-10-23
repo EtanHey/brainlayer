@@ -29,13 +29,20 @@ struct BrainBarBackupChecks: Equatable, Sendable {
     /// red check, then a red alert.
     let attentionSentence: String?
     var scheduleUnknown = false
+    var statusNotice: String? = nil
+
+    var verdictTone: ObservabilityStatusTone {
+        if alertTone == .red || checks.contains(where: { $0.tone == .red }) { return .red }
+        return statusNotice != nil || scheduleUnknown || checks.contains(where: { $0.tone == .neutral }) ? .neutral : .green
+    }
 
     static func derive(
         _ backups: ObservabilityDocument.Backups,
         now: Date,
         locale: Locale = .current,
         jobStatus: ObservabilityStatusLine? = nil,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        statusNotice: String? = nil
     ) -> Self {
         let lines = ObservabilityPresentation.backupStatus(for: backups, locale: locale, jobStatus: jobStatus, now: now, calendar: calendar)
         let rel = { (date: Date) in relative(date, now: now, locale: locale) }
@@ -80,7 +87,9 @@ struct BrainBarBackupChecks: Equatable, Sendable {
             checks.insert(.init(id: "snapshot-upload", title: "Local database snapshot", value: annotation.text, tone: annotation.tone), at: 2)
         }
         let failing = checks.filter { $0.tone == .red }.count
-        let summary: String = if failing == 0 && lines.uploadInProgress { lines.uploadQueued ? "Upload queued" : "Upload in progress" }
+        let summary: String = if failing == 0 && lines.error?.tone == .red { "Backup alert needs attention" }
+            else if failing == 0 && statusNotice != nil { "Backup status needs a fresh check" }
+            else if failing == 0 && lines.uploadInProgress { lines.uploadQueued ? "Upload queued" : "Upload in progress" }
             else if failing == 0 && idle { "Idle — no new transcripts" }
             else if jobStatus?.tone == .neutral { jobStatus?.text.hasPrefix("Skipped") == true ? "Skipped"
             : jobStatus?.text.hasPrefix("Deferred") == true ? "Deferred" : "Job schedule unknown" } else { switch failing {
@@ -98,7 +107,7 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         return .init(
             summary: summary, checks: checks, alert: alert, alertTone: alertTone,
             details: details(backups, lines: lines, locale: locale, calendar: calendar, jobStatus: jobStatus),
-            attentionSentence: attention, scheduleUnknown: jobStatus?.tone == .neutral
+            attentionSentence: attention, scheduleUnknown: jobStatus?.tone == .neutral, statusNotice: statusNotice
         )
     }
 
@@ -143,11 +152,11 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         var rows: [Detail] = []
         if let upload = backups.lastVerifiedUpload {
             rows.append(.init(label: "Drive file ID — latest transcript archive", value: upload.archiveId))
-            rows.append(.init(label: "Last transcript upload", value: exact(upload.at)))
+            rows.append(.init(label: "Transcript upload receipt — attempt time", value: exact(upload.at)))
         }
         if let snapshot = backups.dbSnapshot {
             rows.append(.init(label: "Database copy file", value: snapshot.destination))
-            rows.append(.init(label: "Last database copy", value: exact(snapshot.lastAt)))
+            rows.append(.init(label: "Offsite database snapshot — created", value: exact(snapshot.lastAt)))
         }
         if let local = backups.localSnapshot {
             if let destination = local.destination { rows.append(.init(label: "Local database snapshot", value: destination)) }
@@ -196,8 +205,7 @@ struct BrainBarBackupChecksCard: View {
     }
 
     var body: some View {
-        let failing = checks.checks.contains { $0.tone == .red }
-        let verdictTone: ObservabilityStatusTone = failing ? .red : checks.scheduleUnknown || checks.checks.contains { $0.tone == .neutral } ? .neutral : .green
+        let verdictTone = checks.verdictTone
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Recovery checks").font(.system(size: 13, weight: .semibold))
@@ -209,6 +217,10 @@ struct BrainBarBackupChecksCard: View {
             Text("Whether each copy exists, is recent, and was verified.")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.brainBarTextMuted)
+            if let notice = checks.statusNotice {
+                Label(notice, systemImage: "info.circle")
+                    .font(.system(size: 11)).foregroundStyle(Color.brainBarTextMuted)
+            }
             if let alert = checks.alert, alert != hiddenAlert, let tone = checks.alertTone {
                 Label(alert, systemImage: Self.symbol(tone))
                     .font(.system(size: 11, weight: .medium))

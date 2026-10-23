@@ -217,7 +217,8 @@ struct BrainBarBackupSources: Sendable {
         let logData = readFile(log)
         let completed = BackupLogReader.lastRun(kind, log: logData).map { receipt in
             let verification = receipt.verified.map { $0 ? " · verified" : " · NOT verified" } ?? ""
-            return "Last run \(formatDate(receipt.at))\(verification)"
+            let event = kind == .weeklyMaintenance ? "Last run" : "Last attempt"
+            return "\(event) \(formatDate(receipt.at))\(verification) · \(log.lastPathComponent)"
         } ?? "No run recorded in \(log.lastPathComponent)"
         // An aborted pass never becomes the last run; a newer one is shown beside it.
         let lastRun = BackupLogReader.lastIncompleteAttempt(kind, log: logData).map { attempt in

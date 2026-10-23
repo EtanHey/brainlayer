@@ -562,7 +562,7 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
         refreshOnLoad: Bool = false,
         watcherReads: PendingSettingsSamples<WatcherHealthFileRead>? = nil,
         initialWatcherHealth: WatcherHealthFileRead? = nil,
-        now: Date = Date(),
+        now: Date = BrainBarDashboardFixture.fetchedAt,
         watchEnabled: Bool = true,
         indexEnabled: Bool = true
     ) throws -> (URL, BrainBarSettingsViewModel) {

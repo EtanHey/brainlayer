@@ -158,7 +158,7 @@ final class BrainBarDashboardHeroTests: XCTestCase {
         )
         let sharedBackupStatus = ObservabilityPresentation.backupStatus(
             for: backups,
-            locale: Locale(identifier: "en_US")
+            locale: Locale(identifier: "en_US"), now: BrainBarDashboardFixture.fetchedAt
         )
 
         let hero = BrainBarHeroPresentation.derive(
@@ -313,7 +313,7 @@ final class BrainBarDashboardHeroTests: XCTestCase {
             generatedAt: generatedAt,
             backups: measuredBackups(at: generatedAt)
         )
-        let now = document.generatedAt.addingTimeInterval(3 * 24 * 60 * 60)
+        let now = document.generatedAt.addingTimeInterval(20 * 60)
         let truth = BrainBarHeroBackupTruth.derive(
             from: .readable(document),
             now: now,
@@ -326,7 +326,7 @@ final class BrainBarDashboardHeroTests: XCTestCase {
         )
 
         XCTAssertEqual(hero.healthTone, .amber)
-        XCTAssertTrue(hero.healthReason.contains("4320m old"))
+        XCTAssertTrue(hero.healthReason.contains("20m old"))
     }
 
     @MainActor
