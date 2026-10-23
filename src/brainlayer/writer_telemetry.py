@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import sys
 import threading
 import time
 import uuid
@@ -141,8 +142,7 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
             and type(metric.get("count")) is int
             and metric["count"] >= 0
             and all(
-                type(metric.get(k)) in (int, float) and math.isfinite(metric[k]) and metric[k] >= 0
-                for k in ("sum", "max")
+                type(metric.get(k)) in (int, float) and 0 <= metric[k] <= sys.float_info.max for k in ("sum", "max")
             )
             and isinstance(metric.get("histogram"), dict)
             and all(isinstance(k, str) and type(v) is int and v >= 0 for k, v in metric["histogram"].items())

@@ -401,3 +401,44 @@ def test_rollup_preserves_unsupported_summary_schema(tmp_path, monkeypatch):
     target.write_text(original)
     assert append_event({"event": "txn_finished", "finished_at": "2026-10-23T12:00:00+00:00"})
     assert target.read_text() == original
+
+
+@pytest.mark.parametrize("field", ["sum", "max"])
+@pytest.mark.parametrize("oversized", [10**400, -(10**400)], ids=["positive", "negative"])
+def test_rollup_rebuilds_oversized_stored_numbers_and_keeps_raw_append_truth(tmp_path, monkeypatch, field, oversized):
+    from brainlayer.writer_telemetry import append_event
+
+    log, _ = _configure_paths(monkeypatch, tmp_path)
+    log.parent.mkdir(parents=True)
+    target = log.with_name("writer-telemetry-summary-2026-10-23.json")
+    metric = {"count": 1, "sum": 10, "max": 10, "histogram": {"4": 1}}
+    metric[field] = oversized
+    target.write_text(
+        json.dumps({"schema_version": 1, "groups": {"drain|realtime|commit": {"count": 1, "duration_ms": metric}}})
+    )
+    event = {
+        "event": "txn_finished",
+        "finished_at": "2026-10-23T12:00:00+00:00",
+        "producer": "drain",
+        "lane": "realtime",
+        "outcome": "commit",
+        "duration_ms": 10,
+    }
+    first = append_event(event)
+    assert len(_events(log)) == 1
+    assert _events(log)[0]["duration_ms"] == 10
+    assert first is True
+    assert json.loads(target.read_text())["groups"]["drain|realtime|commit"]["duration_ms"] == {
+        "count": 1,
+        "sum": 10,
+        "max": 10,
+        "histogram": {"4": 1},
+    }
+    assert append_event(event) is True
+    assert len(_events(log)) == 2
+    assert json.loads(target.read_text())["groups"]["drain|realtime|commit"]["duration_ms"] == {
+        "count": 2,
+        "sum": 20,
+        "max": 10,
+        "histogram": {"4": 2},
+    }
