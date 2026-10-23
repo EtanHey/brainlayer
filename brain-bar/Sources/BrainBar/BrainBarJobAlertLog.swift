@@ -1,14 +1,17 @@
 import Foundation
 
-/// What Show log did, so every surface can say it (Codex #1062 r1 B1): a missing log is named,
-/// never a silent folder reveal.
+/// The acknowledged result shared by the menu, Dashboard, and Backups page.
 enum BrainBarJobAlertLogResult: Equatable, Sendable {
     case opened(URL)
-    /// No log file yet (or a job BrainBar has no log for); the logs folder is revealed if it exists.
+    /// No log file yet; the message says whether its folder opened.
     case missing(message: String)
+    case failed(message: String)
 
     var message: String? {
-        if case let .missing(message) = self { message } else { nil }
+        switch self {
+        case .opened: nil
+        case let .missing(message), let .failed(message): message
+        }
     }
 }
 
@@ -36,26 +39,35 @@ extension BrainBarJobAlerts {
         case let key? where key.hasPrefix("maintenance-"): "No maintenance log yet; it's written on the next run."
         case "backup-daily": "No database backup log yet; it's written on the next run."
         case "jsonl-backup": "No transcript backup log yet; it's written on the next run."
-        default: "BrainBar doesn't know this job's log; showing the logs folder."
+        default: "BrainBar doesn't know this job's log."
         }
     }
 
-    /// Show log: open the job's log in its default app (Console). With no log file yet, or an
-    /// unknown job, reveal the logs folder when it exists and return the sentence to show.
+    /// Open the log, or its existing parent directory. Never claim success on workspace refusal.
     @discardableResult
     static func showLog(
         forKey key: String?,
         paths: BrainBarBackupSources.Paths,
         workspace: any BrainBarWorkspaceActing,
-        fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
-    ) -> BrainBarJobAlertLogResult {
-        if let log = logURL(forKey: key, paths: paths), fileExists(log) {
-            workspace.open(log)
-            return .opened(log)
+        fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) },
+        directoryExists: (URL) -> Bool = {
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: $0.path, isDirectory: &isDirectory) && isDirectory.boolValue
         }
-        let folder = (logURL(forKey: key, paths: paths) ?? paths.maintenanceLog).deletingLastPathComponent()
-        if fileExists(folder) { workspace.reveal(folder) }
-        return .missing(message: missingLogMessage(forKey: key))
+    ) -> BrainBarJobAlertLogResult {
+        let log = logURL(forKey: key, paths: paths)
+        if let log, fileExists(log) {
+            return workspace.openLog(log) ? .opened(log) : .failed(message: "Could not open log: \(log.path)")
+        }
+        let folder = (log ?? paths.maintenanceLog).deletingLastPathComponent()
+        let missing = missingLogMessage(forKey: key)
+        guard directoryExists(folder) else {
+            return .missing(message: "\(missing) The logs folder does not exist: \(folder.path)")
+        }
+        guard workspace.openLog(folder) else {
+            return .failed(message: "\(missing) Could not open the logs folder: \(folder.path)")
+        }
+        return .missing(message: "\(missing) Opened the logs folder.")
     }
 
     /// Show log for the job alert in `document`: the job key is looked up on the raw reason in the
