@@ -215,11 +215,11 @@ final class BackupVacuumIdentityTests: XCTestCase {
     func testInMemoryConnectionCannotPublishAnUnboundBackup() throws {
         db.close()
         db = BrainDatabase(path: ":memory:")
-        router.setDatabase(db)
         let target = directory.appendingPathComponent("in-memory.db")
-        let result = vacuum(target: target, expected: nil)
         XCTAssertNil(db.openedFileIdentity)
-        XCTAssertEqual(result["isError"] as? Bool, true, text(result))
+        XCTAssertThrowsError(try db.vacuumInto(targetPath: target.path)) { error in
+            XCTAssertTrue(String(describing: error).contains("BrainBar database identity mismatch"), "\(error)")
+        }
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.path + ".complete"))
     }
