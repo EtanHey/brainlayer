@@ -1633,7 +1633,8 @@ class TestFlushPendingStores:
 
         assert _get_pending_store_path() == active_db.parent / "pending-stores.jsonl"
 
-    def test_flush_rewrites_remaining_legacy_queue_via_atomic_replace(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("interleave_heartbeat", [False, True])
+    def test_flush_rewrites_remaining_legacy_queue_via_atomic_replace(self, tmp_path, monkeypatch, interleave_heartbeat):
         pending_path = tmp_path / "pending-stores.jsonl"
         pending_path.write_text(
             json.dumps({"content": "good", "memory_type": "note"})
@@ -1645,8 +1646,9 @@ class TestFlushPendingStores:
         original_replace = type(pending_path).replace
 
         def track_replace(self, target):
-            replaced["source"] = self
-            replaced["target"] = target
+            if target == pending_path:
+                replaced["source"] = self
+                replaced["target"] = target
             return original_replace(self, target)
 
         def side_effect(**kwargs):
@@ -1658,6 +1660,13 @@ class TestFlushPendingStores:
         with patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path):
             with patch("brainlayer.store.store_memory", side_effect=side_effect):
                 flushed = _flush_pending_stores(MagicMock(), MagicMock())
+
+        if interleave_heartbeat:
+            from brainlayer.writer_telemetry import _atomic_write_json
+
+            heartbeat_path = tmp_path / "writer-heartbeats" / "writer-txn-unrelated.json"
+            assert _atomic_write_json(heartbeat_path, {"active_transactions": []})
+            assert json.loads(heartbeat_path.read_text()) == {"active_transactions": []}
 
         assert flushed == 1
         assert replaced["source"] == pending_path.with_suffix(".jsonl.tmp")
