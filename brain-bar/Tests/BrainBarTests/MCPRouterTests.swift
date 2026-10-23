@@ -2400,6 +2400,76 @@ No results found.
         XCTAssertTrue(queuedText.contains(chunkID))
     }
 
+    func testDeferredLifecycleEmitsOneQueuedAndOneCommittedIdentity() throws {
+        for restart in [false, true] {
+            let dir = makeTempTestDirectory()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let restore = setPendingStoreQueuePath(dir.appendingPathComponent("pending-stores.jsonl"))
+            defer { restore() }
+            let log = dir.appendingPathComponent("deferred.jsonl")
+            let old = ProcessInfo.processInfo.environment["BRAINLAYER_DEFERRED_TELEMETRY_PATH"]
+            setenv("BRAINLAYER_DEFERRED_TELEMETRY_PATH", log.path, 1)
+            defer {
+                if let old { setenv("BRAINLAYER_DEFERRED_TELEMETRY_PATH", old, 1) }
+                else { unsetenv("BRAINLAYER_DEFERRED_TELEMETRY_PATH") }
+            }
+            let path = dir.appendingPathComponent("test.db").path
+            var db = BrainDatabase(path: path)
+            defer { db.close() }
+            var lock: OpaquePointer?
+            XCTAssertEqual(sqlite3_open(path, &lock), SQLITE_OK)
+            defer { sqlite3_close(lock) }
+            XCTAssertEqual(sqlite3_exec(lock, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
+            defer { sqlite3_exec(lock, "ROLLBACK", nil, nil, nil) }
+            var router: MCPRouter? = MCPRouter(profile: "full")
+            router?.setDatabase(db)
+            let content = "private lifecycle content must never reach telemetry"
+            let response = try XCTUnwrap(router?.handle(toolCall(id: 220, name: "brain_store", arguments: [
+                "content": content, "tags": ["private-tag"], "project": "private-project"
+            ])))
+            let receipt = try XCTUnwrap(response["result"] as? [String: Any])
+            XCTAssertEqual(receipt["status"] as? String, "DEFERRED")
+            if restart {
+                router = nil
+                db.close()
+            }
+            Thread.sleep(forTimeInterval: 0.06)
+            XCTAssertEqual(sqlite3_exec(lock, "ROLLBACK", nil, nil, nil), SQLITE_OK)
+            if restart {
+                db = BrainDatabase(path: path)
+                router = MCPRouter(profile: "full")
+                router?.setDatabase(db)
+            }
+            let deadline = Date().addingTimeInterval(4)
+            var events: [[String: Any]] = []
+            repeat {
+                let text = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+                events = text.split(separator: "\n").compactMap {
+                    (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any]
+                }
+                if events.contains(where: { $0["event"] as? String == "committed" }) { break }
+                Thread.sleep(forTimeInterval: 0.02)
+            } while Date() < deadline
+            XCTAssertEqual(events.compactMap { $0["event"] as? String }, ["queued", "committed"])
+            for event in events {
+                XCTAssertEqual(event["queue_id"] as? String, receipt["queue_id"] as? String)
+                XCTAssertEqual(event["chunk_id"] as? String, receipt["chunk_id"] as? String)
+            }
+            XCTAssertGreaterThanOrEqual(events.last?["queue_to_commit_ms"] as? Double ?? -1, 60)
+            XCTAssertNotNil(events.first?["queued_at_epoch"])
+            XCTAssertEqual(events.first?["queued_at_epoch"] as? Double, events.last?["queued_at_epoch"] as? Double)
+            DeferredStoreTelemetry.waitForWritesForTesting()
+            let summaryPath = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: dir,
+                includingPropertiesForKeys: nil).first { $0.lastPathComponent.hasPrefix("deferred-summary-") })
+            let summary = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: summaryPath)) as? [String: Any])
+            XCTAssertEqual((summary["queued|DB_BUSY"] as? [String: Any])?["count"] as? Int, 1)
+            XCTAssertEqual((summary["committed|DB_BUSY"] as? [String: Any])?["count"] as? Int, 1)
+            let text = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+            for secret in [content, "private-tag", "private-project"] { XCTAssertFalse(text.contains(secret)) }
+            router = nil
+        }
+    }
+
     func testDeferredBrainStoreRetryReusesQueuedChunkInsteadOfCreatingSecondRow() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }

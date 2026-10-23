@@ -545,6 +545,13 @@ def _rollback_failed_merge(cursor: Any, savepoint: str, original: Exception) -> 
     return True
 
 
+def _invalidate_merged_vectors(cursor: Any, chunk_id: str) -> None:
+    """A changed canonical body needs a new embedding, within the merge savepoint."""
+    for table in ("chunk_vectors", "chunk_vectors_binary"):
+        if cursor.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone():
+            cursor.execute(f"DELETE FROM {table} WHERE chunk_id = ?", (chunk_id,))
+
+
 def merge_duplicate_chunk(
     conn: Any,
     *,
@@ -614,6 +621,8 @@ def merge_duplicate_chunk(
         cursor.execute("SAVEPOINT dedupe_merge")
         try:
             cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), canonical_id])
+            if content_changed:
+                _invalidate_merged_vectors(cursor, canonical_id)
             if archive_existing_duplicate:
                 retarget_aliases(conn, old_canonical_chunk_id=duplicate_id, new_canonical_chunk_id=canonical_id)
             write_alias(conn, old_chunk_id=duplicate_id, canonical_chunk_id=canonical_id)
@@ -810,6 +819,8 @@ def merge_existing_chunk_content(
         cursor.execute("SAVEPOINT dedupe_same_id_content")
         try:
             cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
+            if content_changed:
+                _invalidate_merged_vectors(cursor, chunk_id)
             record_dedupe_audit(
                 conn,
                 dropped_id=chunk_id,

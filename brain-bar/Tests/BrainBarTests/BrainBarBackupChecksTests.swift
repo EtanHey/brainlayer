@@ -16,6 +16,7 @@ final class BrainBarBackupChecksTests: XCTestCase {
         archives: Int? = 3,
         errorType: String? = nil,
         uploadVerified: Bool? = true,
+        uploadAgeHours: Double = 1,
         snapshotVerified: Bool? = true,
         bootstrapped: Bool = true,
         parked: Bool = false
@@ -25,7 +26,7 @@ final class BrainBarBackupChecksTests: XCTestCase {
             freshness: freshness, thresholdHours: 36, retentionInvariant: retention,
             survivingArchives30D: archives, errorType: errorType,
             lastVerifiedUpload: uploadVerified.map { verified in
-                .init(at: now.addingTimeInterval(-3_600), ageHours: 1, archiveId: archiveID, verified: verified)
+                .init(at: now.addingTimeInterval(-uploadAgeHours * 3_600), ageHours: uploadAgeHours, archiveId: archiveID, verified: verified)
             },
             dbSnapshot: snapshotVerified.map { verified in
                 .init(lastAt: now.addingTimeInterval(-2 * 3_600), destination: "2026-09-30.db.gz", verified: verified)
@@ -116,6 +117,63 @@ final class BrainBarBackupChecksTests: XCTestCase {
         XCTAssertEqual(unknown.checks[3].value, "Unknown")
         XCTAssertEqual(unknown.checks[4].value, "Unknown")
         XCTAssertEqual(unknown.checks[5].value, "Unknown")
+    }
+
+    func test_stale_verified_transcript_upload_keeps_receipt_status_without_claiming_a_failed_attempt() {
+        for (code, age) in [("jsonl_backup_attempt_stale", 40.0), ("jsonl_backup_attempt_absent_multiple_nights", 72.0)] {
+            let state = backups(freshness: "stale", errorType: code, uploadAgeHours: age)
+            let lines = ObservabilityPresentation.backupStatus(for: state, locale: locale, now: now)
+            let result = checks(state)
+            XCTAssertEqual(state.lastVerifiedUpload?.verified, true)
+            XCTAssertEqual(result.alert, lines.error?.text, code)
+            XCTAssertFalse(result.alert?.contains("reported an error") == true, code)
+            XCTAssertEqual(result.alertTone, .red, code)
+            XCTAssertEqual(result.checks.first { $0.id == "freshness" }?.tone, .red, code)
+            XCTAssertEqual(result.checks.first { $0.id == "freshness" }?.value, "A copy is older than 36 hours", code)
+            XCTAssertNotNil(result.attentionSentence, code)
+            XCTAssertFalse(result.summary.contains("checks pass"), code)
+            XCTAssertEqual(result.details.first { $0.label == "Error code" }?.value, code)
+        }
+    }
+
+    func test_missing_and_invalid_transcript_receipts_keep_their_status_without_claiming_a_failed_attempt() {
+        for code in ["jsonl_backup_attempt_missing", "jsonl_backup_attempt_invalid"] {
+            let state = backups(freshness: nil, errorType: code, uploadVerified: nil)
+            let lines = ObservabilityPresentation.backupStatus(for: state, locale: locale, now: now)
+            let result = checks(state)
+            XCTAssertEqual(result.alert, lines.error?.text, code)
+            XCTAssertFalse(result.alert?.contains("reported an error") == true, code)
+            XCTAssertEqual(result.alertTone, .red, code)
+            XCTAssertEqual(result.checks.first { $0.id == "upload" }?.value, "No verified upload yet", code)
+            XCTAssertEqual(result.checks.first { $0.id == "freshness" }?.tone, .red, code)
+            XCTAssertNotNil(result.attentionSentence, code)
+            XCTAssertFalse(result.summary.contains("checks pass"), code)
+        }
+    }
+
+    func test_failed_transcript_attempt_still_reports_an_error() {
+        let result = checks(backups(freshness: "stale", errorType: "jsonl_backup_attempt_failed"))
+        XCTAssertEqual(result.alert, "The last transcript backup reported an error.")
+        XCTAssertEqual(result.alertTone, .red)
+        XCTAssertNotNil(result.attentionSentence)
+    }
+
+    func test_fresh_verified_upload_and_no_op_keep_their_existing_verdicts() {
+        let uploaded = checks(backups())
+        XCTAssertEqual(uploaded.summary, "All 6 checks pass")
+        XCTAssertEqual(uploaded.checks.first { $0.id == "upload" }?.value, "Verified 1 hour ago")
+        XCTAssertNil(uploaded.alert)
+        XCTAssertNil(uploaded.attentionSentence)
+
+        var idle = backups(archives: 0, uploadVerified: nil)
+        idle.transcriptAttempt = .init(at: now.addingTimeInterval(-3_600), status: "no-op", verified: true, uploaded: false)
+        let result = checks(idle)
+        XCTAssertEqual(result.summary, "Idle — no new transcripts")
+        XCTAssertEqual(result.checks.first { $0.id == "upload" }?.tone, .neutral)
+        XCTAssertTrue(result.checks.first { $0.id == "upload" }?.value.hasPrefix("No new transcripts") == true)
+        XCTAssertEqual(result.checks.first { $0.id == "archives" }?.tone, .neutral)
+        XCTAssertNil(result.alert)
+        XCTAssertNil(result.attentionSentence)
     }
 
     /// #1029 B1 still holds: each check's tone is the tone of the status line it replaces, so

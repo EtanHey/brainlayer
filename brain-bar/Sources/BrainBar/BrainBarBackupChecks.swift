@@ -112,6 +112,9 @@ struct BrainBarBackupChecks: Equatable, Sendable {
     /// sentence here; the raw code moves to Technical details.
     private static func alertText(_ errorType: String?, statusLine: ObservabilityStatusLine?) -> String? {
         guard let errorType, let statusLine else { return nil }
+        if errorType.hasPrefix("jsonl_backup_attempt_"), errorType != "jsonl_backup_attempt_failed" {
+            return statusLine.text
+        }
         let known = ["drive_credentials_restored_backup_pending", "drive_credentials_missing", "FileNotFoundError"]
         guard !errorType.hasPrefix("job_alert:"), !known.contains(errorType),
               ObservabilityPresentation.dbSnapshotSentence(errorType, thresholdHours: nil) == nil
