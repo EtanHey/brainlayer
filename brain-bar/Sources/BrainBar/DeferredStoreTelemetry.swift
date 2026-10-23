@@ -56,7 +56,7 @@ enum DeferredStoreTelemetry {
         let fd = open(path.path + ".lock", O_CREAT | O_RDWR, 0o600)
         guard fd >= 0 else { throw CocoaError(.fileWriteUnknown) }
         defer { Darwin.close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { throw CocoaError(.fileWriteUnknown) }
         defer { flock(fd, LOCK_UN) }
         let encoder = JSONEncoder()
         var data = try encoder.encode(item)
@@ -90,8 +90,17 @@ enum DeferredStoreTelemetry {
         }
         summary[key] = totals
         try encoder.encode(summary).write(to: summaryPath, options: .atomic)
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withFullDate]
+        dateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
         let files = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix(prefix) && $0.pathExtension == "json" }.sorted { $0.path < $1.path }
+            .filter { file in
+                let name = file.deletingPathExtension().lastPathComponent
+                guard file.pathExtension == "json", name.hasPrefix(prefix) else { return false }
+                let suffix = String(name.dropFirst(prefix.count))
+                guard suffix.count == 10, let day = dateFormatter.date(from: suffix) else { return false }
+                return dateFormatter.string(from: day) == suffix
+            }.sorted { $0.path < $1.path }
         for file in files.dropLast(8) { try fm.removeItem(at: file) }
     }
 }
