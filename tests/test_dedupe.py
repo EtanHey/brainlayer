@@ -213,6 +213,90 @@ def test_unchanged_duplicate_merge_avoids_fts_writes_at_scale(indexed_merge_stor
         conn.set_update_hook(None)
 
 
+@pytest.mark.parametrize("merge_kind", ["duplicate", "content"], ids=["cross-id", "same-id"])
+@pytest.mark.parametrize("fingerprint_state", ["missing", "stale", "valid"])
+def test_unchanged_merge_repairs_fingerprints_for_later_duplicate_lookup(
+    indexed_merge_store, merge_kind, fingerprint_state
+):
+    """Repair lookup metadata without rebuilding retrieval or changing peer rows."""
+    from brainlayer.dedupe import (
+        compute_dedupe_fields,
+        find_duplicate,
+        hamming_distance,
+        merge_duplicate_chunk,
+        merge_existing_chunk_content,
+    )
+
+    conn = indexed_merge_store.conn
+    chunk_id = "knowledge-canonical"
+    created_at = "2026-10-22T01:00:00Z"
+    words = [f"token{index}" for index in range(100)]
+    content = " ".join(words)
+    near_content = " ".join(["changed0", *words[1:]])
+    expected = compute_dedupe_fields(content, created_at)
+    near_fields = compute_dedupe_fields(near_content, created_at)
+    # The second lookup must exercise band selection and SimHash, not exact hash.
+    assert near_fields.dedupe_hash != expected.dedupe_hash
+    assert hamming_distance(expected.simhash, near_fields.simhash) <= 3
+    assert any(left == right for left, right in zip(expected.bands, near_fields.bands))
+    expected_values = (expected.dedupe_hash, expected.simhash, *expected.bands)
+    stored_values = expected_values
+    if fingerprint_state == "missing":
+        stored_values = (None,) * 6
+    elif fingerprint_state == "stale":
+        stale_simhash = f"{int(expected.simhash, 16) ^ ((1 << 64) - 1):016x}"
+        stored_values = ("stale-exact-hash", stale_simhash, *(stale_simhash[i : i + 4] for i in range(0, 16, 4)))
+    conn.execute(
+        """UPDATE chunks SET content = ?, char_count = ?, dedupe_hash = ?, simhash = ?,
+           simhash_band_0 = ?, simhash_band_1 = ?, simhash_band_2 = ?, simhash_band_3 = ? WHERE id = ?""",
+        (content, len(content), *stored_values, chunk_id),
+    )
+    before_fts = _fts_snapshot(conn)
+    peers = conn.execute("SELECT * FROM chunks WHERE id != ? ORDER BY id", (chunk_id,)).fetchall()
+    incoming = {"content": content, "tags": ["zebra", "amber"], "created_at": "2026-10-22T02:00:00Z"}
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if merge_kind == "duplicate":
+            changed = merge_duplicate_chunk(
+                conn,
+                canonical_id=chunk_id,
+                duplicate_id="fingerprint-duplicate",
+                incoming=incoming,
+                mechanism="sha256",
+                hamming_distance_value=0,
+                ensure_schema=False,
+            )
+        else:
+            changed = merge_existing_chunk_content(conn, chunk_id=chunk_id, incoming=incoming, ensure_schema=False)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+    assert changed is False
+    assert _fts_snapshot(conn) == before_fts
+    assert conn.execute("SELECT * FROM chunks WHERE id != ? ORDER BY id", (chunk_id,)).fetchall() == peers
+    for probe_content, mechanism in ((content, "sha256"), (near_content, "simhash")):
+        hit, _ = find_duplicate(conn, chunk_id="later-probe", content=probe_content, created_at=created_at)
+        assert hit is not None
+        assert hit.canonical_chunk_id == chunk_id
+        assert hit.mechanism == mechanism
+    assert (
+        conn.execute(
+            """SELECT dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3
+           FROM chunks WHERE id = ?""",
+            (chunk_id,),
+        ).fetchone()
+        == expected_values
+    )
+    assert conn.execute("SELECT content, tags, seen_count FROM chunks WHERE id = ?", (chunk_id,)).fetchone() == (
+        content,
+        '["amber", "zebra"]',
+        2,
+    )
+
+
 def test_normalized_exact_hash_preserves_timestamps_but_ignores_stopwords_and_whitespace():
     from brainlayer.dedupe import normalized_exact_hash
 
