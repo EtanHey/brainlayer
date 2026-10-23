@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from pathlib import Path
 
@@ -434,6 +435,47 @@ def test_rollup_preserves_unsupported_summary_schema(tmp_path, monkeypatch):
     target.write_text(original)
     assert append_event({"event": "txn_finished", "finished_at": "2026-10-23T12:00:00+00:00"})
     assert target.read_text() == original
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_rollup_preserves_undecodable_integer_summary_and_raw_append_truth(tmp_path, monkeypatch, schema_version):
+    from brainlayer.writer_telemetry import append_event
+
+    limit = sys.get_int_max_str_digits()
+    assert limit > 0, "this regression requires the interpreter's actual finite integer digit limit"
+    digits = "1" + "0" * limit
+    print(f"integer_digit_limit={limit} fixture_digits={len(digits)} schema_version={schema_version}")
+    stored = (
+        '{"schema_version":'
+        + str(schema_version)
+        + ',"groups":{"drain|realtime|commit":{"count":1,"duration_ms":{"count":1,"sum":'
+        + digits
+        + ',"max":10,"histogram":{"4":1}}}}}'
+    )
+    with pytest.raises(ValueError) as error:
+        json.loads(stored)
+    assert not isinstance(error.value, json.JSONDecodeError)
+    log, _ = _configure_paths(monkeypatch, tmp_path)
+    log.parent.mkdir(parents=True)
+    target = log.with_name("writer-telemetry-summary-2026-10-23.json")
+    target.write_text(stored)
+    event = {
+        "event": "txn_finished",
+        "finished_at": "2026-10-23T12:00:00+00:00",
+        "producer": "drain",
+        "lane": "realtime",
+        "outcome": "commit",
+        "duration_ms": 10,
+    }
+    results = []
+    for count in (1, 2):
+        results.append(append_event(event))
+        raw = _events(log)
+        assert len(raw) == count
+        assert all(item["duration_ms"] == 10 for item in raw)
+        assert target.read_bytes() == stored.encode()
+    assert results == [True, True]
+    assert sys.get_int_max_str_digits() == limit
 
 
 @pytest.mark.parametrize("field", ["sum", "max"])

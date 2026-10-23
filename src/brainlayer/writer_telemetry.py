@@ -120,9 +120,16 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
     prefix = f"{path.stem}-summary-"
     target = path.with_name(f"{prefix}{day}.json")
     try:
-        summary = json.loads(target.read_text())
-    except (FileNotFoundError, json.JSONDecodeError, UnicodeError):
+        stored = target.read_text()
+    except (FileNotFoundError, UnicodeError):
         summary = None
+    else:
+        try:
+            summary = json.loads(stored)
+        except json.JSONDecodeError:
+            summary = None
+        except ValueError:
+            return  # Numeric decoding failed; the schema and safe replacement are unknown.
     if isinstance(summary, dict) and summary.get("schema_version", 1) != 1:
         return
     if not isinstance(summary, dict) or not isinstance(summary.get("groups"), dict):
