@@ -91,6 +91,17 @@ final class EntityCache: @unchecked Sendable {
         refreshTimer = nil
     }
 
+#if DEBUG
+    func enqueueWorkForTesting(_ work: @escaping @Sendable () -> Void) {
+        queue.async(execute: work)
+    }
+
+    func stopAndDrainForTesting(deadline: DispatchTime) -> FixtureShutdownResult {
+        stopRefreshTimer()
+        return drainFixtureQueueForTesting(queue, deadline: deadline, flags: .barrier)
+    }
+#endif
+
     /// Detect known entity names in a search query.
     /// Returns detected entities ordered by match priority (multi-word first, then single-word).
     func detectEntities(in query: String) -> [DetectedEntity] {

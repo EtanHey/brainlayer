@@ -1,5 +1,21 @@
 import Foundation
 import XCTest
+@testable import BrainBar
+
+typealias BrainBarFixtureCleanupResult = FixtureShutdownResult
+
+@discardableResult
+func finishBrainBarSocketFixture(
+    _ server: BrainBarServer,
+    database: BrainDatabase,
+    path: String,
+    deadline: DispatchTime = .now() + 5
+) -> BrainBarFixtureCleanupResult {
+    guard server.stopAndDrainForTesting(deadline: deadline) == .finished else { return .timedOut }
+    database.close()
+    removeBrainBarTestDatabase(path)
+    return .finished
+}
 
 /// Darwin Foundation can ignore TMPDIR; use the runner's explicit suite-owned root.
 func brainBarTestTemporaryDirectory() -> URL {

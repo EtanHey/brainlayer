@@ -22,6 +22,14 @@
         "target": "socket.socket"
       }
     },
+    "0107e6e15995a69d138fde768e6695d45b98b24d337167e49faf44e39d2baf44": {
+      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
+      "site": {
+        "body_sha256": "566786590c97ee347d95c420a7771a91b1f73e3a1b2ee6441d6955a04067e0bc",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
+      }
+    },
     "023bc7f48ec39203f7c49485cbc91883b773b21fce8b463c84242679e345bd70": {
       "non_cloud_purpose": "Read only the local per-boot session identity for maintenance hold generations: Darwin libc sysctlbyname kern.bootsessionuuid (string buffer), or Linux boot_id file. No subprocess/network/model sender.",
       "site": {
@@ -3524,14 +3532,6 @@
         "target": "subprocess.run"
       }
     },
-    "9ddbf5601184ea1b2158d21f9174b78be4d20a513f1725bba07bf6360333d785": {
-      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. The lead-ruled PR4 change counts currently live age-qualified sockets for a payload-free restart baseline in the mode0600 sidecar. Constructor-injected transport time keeps default release clocks real; the approved private clock-file adapter is DEBUG-only and release CI proves absence and no runtime effect. No client identity, initialization replay, new outbound transport, TCP/cloud endpoint or model sender.",
-      "site": {
-        "body_sha256": "e558ca8c2fd3fe3eacfb3d16f6a74c514c98182e89d674c5c140cde36843ce94",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
-      }
-    },
     "9e87eef5434c6c0016c89467c88999480208496d6a0062660b9441dde772329f": {
       "non_cloud_purpose": "Owner-only local Unix supervisor status and token-owned pause/resume for an inherited maintenance writer lease; subprocess only reads operator launchctl disabled state. No model sender.",
       "site": {
@@ -4350,6 +4350,14 @@
         "target": "subprocess.CompletedProcess"
       }
     },
+    "bba6265c8c2f7a4c8363c205499984bcb23f7d892513bad37f8835f43d8afde5": {
+      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
+      "site": {
+        "body_sha256": "566786590c97ee347d95c420a7771a91b1f73e3a1b2ee6441d6955a04067e0bc",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
+      }
+    },
     "bbec38baa32ca5b4db5f7cab488e4c331dd9a059bb5c5568415d1a25fcbc56d0": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/fallback_replay.py <module>._git_root_uncached subprocess.CalledProcessError.",
       "site": {
@@ -4948,14 +4956,6 @@
         "owner": "<module>._git",
         "path": "scripts/ci_ratchet_table.py",
         "target": "subprocess.run"
-      }
-    },
-    "d49484651446d4a08e8968508741128efdcec79773e4bc0c9228bb856589cedb": {
-      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. The lead-ruled PR4 change counts currently live age-qualified sockets for a payload-free restart baseline in the mode0600 sidecar. Constructor-injected transport time keeps default release clocks real; the approved private clock-file adapter is DEBUG-only and release CI proves absence and no runtime effect. No client identity, initialization replay, new outbound transport, TCP/cloud endpoint or model sender.",
-      "site": {
-        "body_sha256": "e558ca8c2fd3fe3eacfb3d16f6a74c514c98182e89d674c5c140cde36843ce94",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
       }
     },
     "d4de14cf71d304c604f13e2dfb94f500d3be6cf153c4a336d3da0e7990123c6d": {

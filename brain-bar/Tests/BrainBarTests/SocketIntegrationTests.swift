@@ -44,6 +44,37 @@ private final class BrainDatabaseCapture: @unchecked Sendable {
     }
 }
 
+private final class FixtureCleanupAttempt: @unchecked Sendable {
+    private let done = DispatchGroup()
+    private let lock = NSLock()
+    private var capturedResult: BrainBarFixtureCleanupResult?
+
+    convenience init(server: BrainBarServer, database: BrainDatabase, path: String, deadline: DispatchTime) {
+        self.init { finishBrainBarSocketFixture(server, database: database, path: path, deadline: deadline) }
+    }
+
+    init(_ work: @escaping @Sendable () -> BrainBarFixtureCleanupResult) {
+        done.enter()
+        DispatchQueue.global().async {
+            let result = work()
+            self.lock.lock()
+            self.capturedResult = result
+            self.lock.unlock()
+            self.done.leave()
+        }
+    }
+
+    func wait(until deadline: DispatchTime) -> Bool {
+        done.wait(timeout: deadline) == .success
+    }
+
+    var result: BrainBarFixtureCleanupResult? {
+        lock.lock()
+        defer { lock.unlock() }
+        return capturedResult
+    }
+}
+
 private final class ClientLifecycleCapture: @unchecked Sendable {
     private let condition = NSCondition()
     private var acceptedFDs: [Int32] = []
@@ -95,9 +126,11 @@ final class SocketIntegrationTests: XCTestCase {
     var db: BrainDatabase!
     var tempDBPath: String!
     var originalMCPProfile: String?
+    var fixtureCleanupAllowed = true
 
     override func setUp() {
         super.setUp()
+        fixtureCleanupAllowed = true
         BrainBarSignalSafety.ignoreSIGPIPE()
         originalMCPProfile = ProcessInfo.processInfo.environment["BRAINLAYER_MCP_PROFILE"]
         setenv("BRAINLAYER_MCP_PROFILE", "full", 1)
@@ -115,11 +148,11 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     override func tearDown() {
-        server.stop()
-        db.close()
-        try? FileManager.default.removeItem(atPath: tempDBPath)
-        try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
-        try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
+        if fixtureCleanupAllowed {
+            XCTAssertEqual(finishBrainBarSocketFixture(server, database: db, path: tempDBPath), .finished)
+        } else {
+            XCTFail("Fixture join failed; retain the still-owned database and paths for diagnosis")
+        }
         if let originalMCPProfile {
             setenv("BRAINLAYER_MCP_PROFILE", originalMCPProfile, 1)
         } else {
@@ -129,6 +162,154 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     // MARK: - Connection
+
+    func testFixtureShutdownDeadlineRetainsHeldInitialRequestBeforeReplacement() throws {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let requestFinished = DispatchGroup()
+        requestFinished.enter()
+        server.enqueueOnRequestQueue {
+            entered.signal()
+            release.wait()
+            requestFinished.leave()
+        }
+        var attempt: FixtureCleanupAttempt?
+        defer {
+            release.signal()
+            let requestJoined = requestFinished.wait(timeout: .now() + 5) == .success
+            let cleanupJoined = attempt?.wait(until: .now() + 5) ?? true
+            fixtureCleanupAllowed = fixtureCleanupAllowed && requestJoined && cleanupJoined
+            XCTAssertTrue(requestJoined, "Release and join the initial fixture's held request")
+            XCTAssertTrue(cleanupJoined, "The test-owned cleanup caller must also finish")
+        }
+        XCTAssertEqual(entered.wait(timeout: .now() + 5), .success)
+        let ownedPaths = existingFixtureDatabasePaths()
+        XCTAssertTrue(ownedPaths.contains(tempDBPath))
+        attempt = FixtureCleanupAttempt(server: server, database: db, path: tempDBPath, deadline: .now() + 0.2)
+        let cleanup = try XCTUnwrap(attempt)
+
+        XCTAssertTrue(cleanup.wait(until: .now() + 2), "Shutdown must return a failure while the request stays held")
+        XCTAssertEqual(cleanup.result, .timedOut)
+        XCTAssertTrue(db.isOpen, "A timed-out drain still owns the provided database")
+        for path in ownedPaths {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: path), "Retain unfinished fixture: \(path)")
+        }
+
+        release.signal()
+        let requestJoined = requestFinished.wait(timeout: .now() + 5) == .success
+        let cleanupJoined = cleanup.wait(until: .now() + 5)
+        fixtureCleanupAllowed = requestJoined && cleanupJoined
+        guard fixtureCleanupAllowed else { return }
+        try finishReleasedFixture()
+    }
+
+    func testFixtureShutdownDeadlineRetainsHeldOpenerThenJoinsDescriptors() throws {
+        // Drain the initial provided-DB fixture before replacing it. Ordinary
+        // stop()/close() would leave its router/cache work outside the join.
+        try finishReleasedFixture()
+        db = BrainDatabase(path: tempDBPath)
+        let ownedPaths = existingFixtureDatabasePaths()
+        XCTAssertTrue(ownedPaths.contains(tempDBPath))
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        var attempt: FixtureCleanupAttempt?
+        defer {
+            release.signal()
+            if let attempt {
+                let joined = attempt.wait(until: .now() + 5)
+                fixtureCleanupAllowed = fixtureCleanupAllowed && joined
+                XCTAssertTrue(joined, "Release and join the held opener's cleanup caller")
+            }
+        }
+        let openingServer = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath,
+                                          enableHybridSearchHelper: false)
+        openingServer.beforeDatabaseOpenForTesting = { entered.signal(); release.wait() }
+        let lifecycle = ClientLifecycleCapture()
+        openingServer.onClientAccepted = { lifecycle.recordAccepted($0) }
+        openingServer.onClientDescriptorClosed = { lifecycle.recordClosed($0) }
+        server = openingServer
+        server.start()
+        XCTAssertEqual(entered.wait(timeout: .now() + 5), .success)
+        let client = try connectClient()
+        defer { close(client) }
+        let accepted = try XCTUnwrap(lifecycle.waitForAccepted(at: 0))
+        attempt = FixtureCleanupAttempt(server: openingServer, database: db, path: tempDBPath, deadline: .now() + 0.2)
+        let cleanup = try XCTUnwrap(attempt)
+
+        // The gate remains held throughout observation. An omitted join cannot
+        // pass by winning a scheduling race against opener completion.
+        XCTAssertTrue(cleanup.wait(until: .now() + 2), "Shutdown must return a failure while the opener stays held")
+        XCTAssertEqual(cleanup.result, .timedOut)
+        XCTAssertTrue(db.isOpen, "A timed-out opener still owns the fixture database")
+        for path in ownedPaths {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: path), "Retain unfinished fixture: \(path)")
+        }
+        release.signal()
+        let joined = cleanup.wait(until: .now() + 5)
+        fixtureCleanupAllowed = joined
+        guard joined else { return }
+        try finishReleasedFixture()
+        XCTAssertTrue(lifecycle.waitForClosed(accepted, timeout: 0))
+    }
+
+    private func existingFixtureDatabasePaths() -> [String] {
+        ["", "-wal", "-shm"].map { tempDBPath + $0 }.filter { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    func testFixtureShutdownDeadlineBoundsReplayAndCacheDrains() throws {
+        let replay = DispatchQueue(label: "fixture-held-replay")
+        let router = MCPRouter(pendingStoreDrainQueue: replay)
+        try assertBoundedFixtureDrain(enqueue: { replay.async(execute: $0) },
+                                    finish: { router.finishOwnedWorkForTesting(deadline: $0) })
+        try assertBoundedFixtureDrain(enqueue: { router.entityCache.enqueueWorkForTesting($0) },
+                                    finish: { router.entityCache.stopAndDrainForTesting(deadline: $0) })
+    }
+
+    private func assertBoundedFixtureDrain(
+        enqueue: (@escaping @Sendable () -> Void) -> Void,
+        finish: @escaping @Sendable (DispatchTime) -> FixtureShutdownResult
+    ) throws {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let heldWork = DispatchGroup()
+        heldWork.enter()
+        enqueue { entered.signal(); release.wait(); heldWork.leave() }
+        var attempt: FixtureCleanupAttempt?
+        defer {
+            release.signal()
+            XCTAssertEqual(heldWork.wait(timeout: .now() + 5), .success)
+            if let attempt { XCTAssertTrue(attempt.wait(until: .now() + 5)) }
+        }
+        XCTAssertEqual(entered.wait(timeout: .now() + 5), .success)
+        attempt = FixtureCleanupAttempt { finish(.now() + 0.2) }
+        let cleanup = try XCTUnwrap(attempt)
+        XCTAssertTrue(cleanup.wait(until: .now() + 2))
+        XCTAssertEqual(cleanup.result, .timedOut)
+        release.signal()
+        XCTAssertEqual(heldWork.wait(timeout: .now() + 5), .success)
+        XCTAssertTrue(cleanup.wait(until: .now() + 5))
+        let retry = FixtureCleanupAttempt { finish(.now() + 3) }
+        XCTAssertTrue(retry.wait(until: .now() + 5))
+        XCTAssertEqual(retry.result, .finished)
+        XCTAssertEqual(finish(.now()), .timedOut, "An expired absolute budget cannot restart at the next stage")
+    }
+
+    private func finishReleasedFixture() throws {
+        let cleanup = FixtureCleanupAttempt(server: server, database: db, path: tempDBPath, deadline: .now() + 3)
+        let joined = cleanup.wait(until: .now() + 5)
+        fixtureCleanupAllowed = fixtureCleanupAllowed && joined
+        XCTAssertTrue(joined, "Join all fixture work before replacing the server or removing files")
+        guard joined else { throw NSError(domain: "FixtureShutdownJoin", code: 1) }
+        XCTAssertEqual(cleanup.result, .finished)
+        guard cleanup.result == .finished else {
+            fixtureCleanupAllowed = false
+            throw NSError(domain: "FixtureShutdownIncomplete", code: 1)
+        }
+        for suffix in ["", "-wal", "-shm"] {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: tempDBPath + suffix),
+                           "Owned work must finish before fixture removal: \(suffix)")
+        }
+    }
 
     func testConnectsToSocket() throws {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)

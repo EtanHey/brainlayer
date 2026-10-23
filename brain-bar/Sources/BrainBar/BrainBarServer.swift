@@ -9,6 +9,23 @@
 import BrainBarLifecycle
 import Foundation
 
+#if DEBUG
+enum FixtureShutdownResult: Equatable, Sendable {
+    case finished
+    case timedOut
+}
+
+func drainFixtureQueueForTesting(
+    _ queue: DispatchQueue, deadline: DispatchTime,
+    flags: DispatchWorkItemFlags = [], work: @escaping @Sendable () -> Void = {}
+) -> FixtureShutdownResult {
+    guard DispatchTime.now() < deadline else { return .timedOut }
+    let completion = DispatchGroup()
+    queue.async(group: completion, flags: flags, execute: work)
+    return completion.wait(timeout: deadline) == .success ? .finished : .timedOut
+}
+#endif
+
 final class BrainBarServer: @unchecked Sendable {
     static let requestQueueLabel = "com.brainlayer.brainbar.server"
     static let daemonHeartbeatQueueLabel = "com.brainlayer.brainbar.daemon-heartbeat"
@@ -139,6 +156,30 @@ final class BrainBarServer: @unchecked Sendable {
     var onDeferredBackupResponseDropped: (@Sendable (_ descriptorWasReused: Bool) -> Void)?
     var onClientAccepted: (@Sendable (Int32) -> Void)?
     var onClientDescriptorClosed: (@Sendable (Int32) -> Void)?
+#if DEBUG
+    private let fixtureWork = DispatchGroup()
+    private var fixtureStopping = false
+    var beforeDatabaseOpenForTesting: (@Sendable () -> Void)?
+    var onFixtureDrainStartedForTesting: (@Sendable () -> Void)?
+
+    /// A timeout retains every unfinished DB owner; callers must not remove files.
+    func stopAndDrainForTesting(deadline: DispatchTime = .now() + 5) -> FixtureShutdownResult {
+        guard drainFixtureQueueForTesting(queue, deadline: deadline, work: {
+            self.fixtureStopping = true
+            self.stopSources()
+            self.onFixtureDrainStartedForTesting?()
+        }) == .finished else { return .timedOut }
+        guard drainFixtureQueueForTesting(backupToolQueue, deadline: deadline) == .finished,
+              (router?.finishOwnedWorkForTesting(deadline: deadline) ?? .finished) == .finished,
+              fixtureWork.wait(timeout: deadline) == .success else { return .timedOut }
+        // Only drained owners can reach handle closure. A timed-out caller still
+        // retains its files if this finalizer finishes after the caller returns.
+        return drainFixtureQueueForTesting(queue, deadline: deadline) {
+            self.finishCleanup()
+            self.router = nil
+        }
+    }
+#endif
     /// Maximum EAGAIN retries before disconnecting a stalled client.
     /// Each retry sleeps 1ms; 50 retries keeps false-positive disconnects
     /// below the UI budget while still bounding serial-queue stalls.
@@ -398,10 +439,17 @@ final class BrainBarServer: @unchecked Sendable {
         listenFD = fd
 
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+#if DEBUG
+        let fixtureWork = self.fixtureWork
+        fixtureWork.enter()
+#endif
         source.setEventHandler { [weak self] in
             self?.acceptClient()
         }
         source.setCancelHandler { [weak self] in
+#if DEBUG
+            defer { fixtureWork.leave() }
+#endif
             guard let self else { return }
             close(fd)
             listenFD = -1
@@ -440,6 +488,9 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func attemptDatabaseOpen() {
+#if DEBUG
+        guard !fixtureStopping else { return }
+#endif
         guard database == nil, !databaseOpenInProgress else { return }
 
         if let providedDatabase {
@@ -450,7 +501,14 @@ final class BrainBarServer: @unchecked Sendable {
         databaseOpenInProgress = true
         let dbPath = self.dbPath
         let busyTimeoutMillis = databaseRecoveryPolicy.busyTimeoutMillis
+#if DEBUG
+        let fixtureWork = self.fixtureWork
+        fixtureWork.enter()
+#endif
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+#if DEBUG
+            self?.beforeDatabaseOpenForTesting?()
+#endif
             let db = BrainDatabase(
                 path: dbPath,
                 openConfiguration: .init(
@@ -468,6 +526,9 @@ final class BrainBarServer: @unchecked Sendable {
                 )
                 : nil
             self?.queue.async { [weak self] in
+#if DEBUG
+                defer { fixtureWork.leave() }
+#endif
                 self?.databaseOpenInProgress = false
                 self?.finishDatabaseOpen(db, readDatabase: readDB)
             }
@@ -536,6 +597,9 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func acceptClient() {
+#if DEBUG
+        guard !fixtureStopping else { return }
+#endif
         let clientFD = accept(listenFD, nil, nil)
         guard clientFD >= 0 else {
             if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR { transportHealth?.record(.acceptErrors) }
@@ -552,10 +616,17 @@ final class BrainBarServer: @unchecked Sendable {
         }
 
         let readSource = DispatchSource.makeReadSource(fileDescriptor: clientFD, queue: queue)
+#if DEBUG
+        let fixtureWork = self.fixtureWork
+        fixtureWork.enter()
+#endif
         readSource.setEventHandler { [weak self] in
             self?.readFromClient(fd: clientFD)
         }
         readSource.setCancelHandler { [weak self] in
+#if DEBUG
+            defer { fixtureWork.leave() }
+#endif
             close(clientFD)
             self?.onClientDescriptorClosed?(clientFD)
         }
@@ -574,6 +645,9 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func readFromClient(fd: Int32) {
+#if DEBUG
+        guard !fixtureStopping else { return }
+#endif
         var buf = [UInt8](repeating: 0, count: 65536)
         let n = read(fd, &buf, buf.count)
 
@@ -1103,6 +1177,14 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func cleanup() {
+        stopSources()
+        // The backup runs off the request queue so protocol traffic stays live.
+        // Drain it before closing the shared SQLite connection during shutdown.
+        backupToolQueue.sync {}
+        finishCleanup()
+    }
+
+    private func stopSources() {
         let persistent = persistentConnectionCount
         transportHealthTimer?.cancel()
         transportHealthTimer = nil
@@ -1128,9 +1210,9 @@ final class BrainBarServer: @unchecked Sendable {
         transportHealth = nil
         if listenFD >= 0 { listenFD = -1 }
         unlink(socketPath)
-        // The backup runs off the request queue so protocol traffic stays live.
-        // Drain it before closing the shared SQLite connection during shutdown.
-        backupToolQueue.sync {}
+    }
+
+    private func finishCleanup() {
         flushDeferredSubscriberDisconnects()
         let writeDatabase = database
         if providedDatabase == nil {

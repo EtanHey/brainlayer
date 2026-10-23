@@ -167,6 +167,7 @@ final class MCPRouter: @unchecked Sendable {
         let onFlushed: (@Sendable ([BrainDatabase.FlushedPendingStore]) -> Void)?
 #if DEBUG
         var onUnreadableTargetRetryForTesting: (@Sendable (String) -> Void)?
+        var stoppedForTesting = false // Accessed only on queue.
 #endif
 
         init(
@@ -286,6 +287,14 @@ final class MCPRouter: @unchecked Sendable {
 
 #if DEBUG
     var receiptPersistenceEnabledForTesting: Bool { receiptStore.isPersistent }
+
+    func finishOwnedWorkForTesting(deadline: DispatchTime) -> FixtureShutdownResult {
+        let scheduler = pendingStoreDrainScheduler
+        guard drainFixtureQueueForTesting(scheduler.queue, deadline: deadline, work: {
+            scheduler.stoppedForTesting = true
+        }) == .finished else { return .timedOut }
+        return entityCache.stopAndDrainForTesting(deadline: deadline)
+    }
 
     // Configure before releasing the injected drain queue in a synthetic test.
     func observeUnreadablePendingStoreRetryForTesting(_ observer: @escaping @Sendable (String) -> Void) {
@@ -439,6 +448,9 @@ final class MCPRouter: @unchecked Sendable {
     ) {
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db, db.isOpen else { return }
+#if DEBUG
+            guard !scheduler.stoppedForTesting else { return }
+#endif
             scheduler.backupGate.withDrain {
                 guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else {
                     scheduleExistingPendingStoreScan(
@@ -482,6 +494,9 @@ final class MCPRouter: @unchecked Sendable {
     ) {
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db, db.isOpen else { return }
+#if DEBUG
+            guard !scheduler.stoppedForTesting else { return }
+#endif
             scheduler.backupGate.withDrain {
                 let flushedStores = db.flushPendingStores(
                     busyTimeoutMillis: mcpStoreBusyTimeoutMillis,
@@ -1147,6 +1162,9 @@ final class MCPRouter: @unchecked Sendable {
 
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db else { return }
+#if DEBUG
+            guard !scheduler.stoppedForTesting else { return }
+#endif
             scheduler.backupGate.withDrain {
                 drainPendingStoreTarget(
                     scheduler: scheduler,
@@ -1237,6 +1255,9 @@ final class MCPRouter: @unchecked Sendable {
             : min(pendingStoreDrainMaxDelay, max(pendingStoreDrainInitialDelay, delay * 2.0))
         scheduler.queue.asyncAfter(deadline: .now() + nextDelay) { [weak scheduler, weak db] in
             guard let scheduler, let db else { return }
+#if DEBUG
+            guard !scheduler.stoppedForTesting else { return }
+#endif
             scheduler.backupGate.withDrain {
                 drainPendingStoreTarget(
                     scheduler: scheduler,
