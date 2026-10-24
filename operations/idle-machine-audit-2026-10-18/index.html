@@ -1,0 +1,1418 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Persistent memory for AI agents — search, think, recall across every conversation">
+      
+      
+      
+        <link rel="canonical" href="https://etanhey.github.io/brainlayer/operations/idle-machine-audit-2026-10-18/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Idle-machine health audit — 2026-10-18 - BrainLayer</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#idle-machine-health-audit-2026-10-18" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="BrainLayer" class="md-header__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BrainLayer
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Idle-machine health audit — 2026-10-18
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="BrainLayer" class="md-nav__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    BrainLayer
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retired Enrichment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kg-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    KG Specification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../data-locations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Locations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retired Enrichment Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../local-models-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0000-template/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Template
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-sqlite-vec-over-dedicated-vector-db/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: sqlite-vec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-reciprocal-rank-fusion-for-hybrid-search/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: RRF Hybrid Search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#current-state-and-beforeafter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current state and before/after
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#check-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Check inventory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#changes-and-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changes and verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="idle-machine-health-audit-2026-10-18">Idle-machine health audit — 2026-10-18</h1>
+<p>Scope: base <code>02416a53</code>, Python producers and BrainBar consumers. Read-only runtime
+samples on MBP and M1 at <strong>18:24–18:27 UTC</strong>. No production DB opened, launchctl
+invoked, lifecycle action taken, or live state written. Eight installed Python
+module SHA-256 hashes match this base on both Macs: health_check, doctor,
+observability_surface, observability_backup, job_alerts, job_lifecycle_health,
+service_supervisor and watcher. Swift conclusions are source review, not native
+visual proof. <code>No</code> below means no matching reason in the sampled files; doctor
+was deliberately not executed because its checks open a database.</p>
+<h2 id="current-state-and-beforeafter">Current state and before/after</h2>
+<ul>
+<li>M1: zero transcript/watcher flow; watcher polls <strong>110 → 113</strong>, no alert reasons;
+  drain cycles <strong>4763 → 4897</strong>, zero drained writes; queue empty. Observability
+  records zero CLI/subagent chunks in 24h and eight total stores (operational
+  probes/backups). A completely zero-store window is covered by synthetic tests.</li>
+<li>M1's <strong>only badge and job alert</strong> is <code>maintenance-full</code>: “BrainLayer
+  maintenance-weekly: quiet window missed”. Backups are fresh, retention PASS,
+  seven archives in the last 30d. This scheduled-job failure stays red before
+  and after this PR; no live alert was cleared.</li>
+<li>MBP: watcher polls <strong>77 → 80</strong>, no watcher alerts, drain cycles <strong>3807 → 3924</strong>.
+  Badge/job reasons: backup-daily failure, activation monitor process-scan timeout,
+  missed weekly window, plus T3 indexing failure in the badge. These failures
+  remain unchanged; none derives merely from old transcript/store timestamps.</li>
+<li>Both supervisors report healthy watch/drain/hotlane processes and successful
+  observability/T3/throughput runs. Both health-check components last exited 1;
+  Tier-0 also last exited 1 and its durable log says <code>label_unloaded</code>, despite
+  supervised health-check status and recent state files. This is an ownership
+  check discrepancy, not inactivity; escalated separately to the lead.</li>
+</ul>
+<h2 id="check-inventory">Check inventory</h2>
+<p>Paths in the Python rows are under <code>src/brainlayer/</code>; native rows under
+<code>brain-bar/Sources/BrainBar/</code>. “Integrity” is neither activity nor heartbeat: it
+measures existing data/configuration, and remains actionable on an idle machine.</p>
+<table>
+<thead>
+<tr>
+<th>Check / attention trigger</th>
+<th>File:line</th>
+<th>Activity or liveness basis</th>
+<th>Red on idle M1 today?</th>
+<th>Fix / disposition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Supervisor unavailable; invalid health state; hold recovery failure</td>
+<td>health_check.py:1335</td>
+<td>Liveness / control integrity</td>
+<td>No matching badge reason</td>
+<td>Keep failures</td>
+</tr>
+<tr>
+<td>Persisted job alerts (any job, including notifications)</td>
+<td>health_check.py:1360; job_alerts.py:61</td>
+<td>Actual producer failures, not time since a store</td>
+<td><strong>Yes: maintenance-full</strong></td>
+<td>Preserve; next successful job clears it</td>
+</tr>
+<tr>
+<td>Badge publication/invalidation failure; state lock; check deadline</td>
+<td>health_check.py:1274,1371,1385</td>
+<td>Liveness / I/O</td>
+<td>No matching badge reason</td>
+<td>Keep failures</td>
+</tr>
+<tr>
+<td>Missing/malformed backup receipt</td>
+<td>health_check.py:913</td>
+<td>Job execution / evidence integrity</td>
+<td>No</td>
+<td>Keep failures</td>
+</tr>
+<tr>
+<td>No backup attempt for 36h / multiple nights</td>
+<td>health_check.py:968,975</td>
+<td>Job liveness, not archive creation</td>
+<td>No</td>
+<td>Keep; fresh verified no-op accepted at :977</td>
+</tr>
+<tr>
+<td>Failed/unverified backup result</td>
+<td>health_check.py:989</td>
+<td>Actual job failure</td>
+<td>No</td>
+<td>Keep red</td>
+</tr>
+<tr>
+<td>T3 reader/index failure</td>
+<td>health_check.py:992</td>
+<td>Actual adapter failure</td>
+<td>No</td>
+<td>Keep red; zero ingest is not failure</td>
+</tr>
+<tr>
+<td>Hotlane absent / backlog disabled</td>
+<td>health_check.py:1439,1447</td>
+<td>Process/configuration liveness</td>
+<td>No matching badge reason; supervisor PID present</td>
+<td>Keep failures</td>
+</tr>
+<tr>
+<td>Missing-vector query failure / missing count rising or flat</td>
+<td>health_check.py:1468,1496,1505,1518</td>
+<td>Existing unembedded work / query failure</td>
+<td>No matching badge reason</td>
+<td>Keep; zero missing vectors cannot stall</td>
+</tr>
+<tr>
+<td>Canary retrieval/transport failure</td>
+<td>health_check.py:1540,1552</td>
+<td>Request liveness</td>
+<td>No; canary status <code>empty</code></td>
+<td>Empty successful results remain healthy</td>
+</tr>
+<tr>
+<td>Unloaded/retired service; expired pause</td>
+<td>health_check.py:1582,1590,1596</td>
+<td>Process/configuration liveness</td>
+<td>No matching badge reason</td>
+<td>Keep failures</td>
+</tr>
+<tr>
+<td>Pending-store read failure / queue backlog</td>
+<td>health_check.py:1629,1637</td>
+<td>Existing durable work / I/O</td>
+<td>No; queue 0</td>
+<td>Keep failures</td>
+</tr>
+<tr>
+<td>Watcher poll/offset stall with recent input</td>
+<td>health_check.py:1667</td>
+<td>Liveness with work precondition</td>
+<td>No</td>
+<td>Old offsets alone do not fail; canonical-heartbeat policy belongs to watcher-alarm lane</td>
+</tr>
+<tr>
+<td>Drain heartbeat/progress / flat drained_total</td>
+<td>drain_liveness.py:49; health_check.py:1710</td>
+<td>Liveness / existing queued work</td>
+<td>No</td>
+<td>Flat write count only fails with backlog</td>
+</tr>
+<tr>
+<td>Writer lock wedge</td>
+<td>health_check.py:1732</td>
+<td>Blocked existing work / lock ownership</td>
+<td>No matching badge reason</td>
+<td>Keep failures</td>
+</tr>
+<tr>
+<td>Job scan failure / repeated failed runs or heals</td>
+<td>job_lifecycle_health.py:145,242; health_check.py:1825</td>
+<td>Job completion / runtime identity</td>
+<td>Maintenance exit 1 recorded, not yet failed-heals escalation</td>
+<td>Keep failures</td>
+</tr>
+<tr>
+<td>Watcher coverage drop</td>
+<td>watcher.py:403</td>
+<td><strong>Work</strong>: accepted input without writes</td>
+<td>No; input/output rates 0</td>
+<td>Idle does not start coverage timer</td>
+</tr>
+<tr>
+<td>Watcher offset lag / ingestion errors / quarantine / DB probe</td>
+<td>watcher.py:414,1748,1760</td>
+<td>Existing work / real ingestion or read failure</td>
+<td>No</td>
+<td>Keep failures</td>
+</tr>
+<tr>
+<td>Throughput watchdog stalled counters</td>
+<td>scripts/launchd/throughput-watchdog.py:619</td>
+<td>Liveness or pending work; no pending input gives idle</td>
+<td>No; action <code>progress</code>, pending 0</td>
+<td>Drain cycles prove liveness without writes</td>
+</tr>
+<tr>
+<td>Tier-0 missing label/state, stale state, slow check</td>
+<td>scripts/tier0-watchdog.sh:144,169,176</td>
+<td>Health-job liveness</td>
+<td><strong>Yes: label_unloaded</strong> in log / supervisor failure</td>
+<td>Separate ownership issue; not idle suppression</td>
+</tr>
+<tr>
+<td>Fleet watchdog absent service / invalid pause state</td>
+<td>scripts/launchd/fleet-watchdog.sh:53,137</td>
+<td>Service/control liveness</td>
+<td>No current failure in supervisor status</td>
+<td>Keep; not based on transcript age</td>
+</tr>
+<tr>
+<td>Doctor CLI/version/Spotlight/MCP/DB config findings</td>
+<td>doctor.py:710</td>
+<td>Configuration integrity</td>
+<td>Not run (DB opens forbidden)</td>
+<td>Keep; no activity clock</td>
+</tr>
+<tr>
+<td>Doctor zero <strong>total</strong> corpus / FTS desync / DB unreadable</td>
+<td>doctor.py:744,749,757</td>
+<td>Corpus integrity, not zero indexed <strong>today</strong></td>
+<td>Not run</td>
+<td>Keep; do not equate daily zero with total-empty DB</td>
+</tr>
+<tr>
+<td>Doctor unembedded rows / lexical gaps / phantom/orphan vectors / roundtrip</td>
+<td>doctor.py:770,782,808,814,823,836,849</td>
+<td>Existing data integrity</td>
+<td>Not run</td>
+<td>Keep; no absence-of-new-data test</td>
+</tr>
+<tr>
+<td>Doctor missing process / loaded label / deploy identity</td>
+<td>doctor.py:858,879</td>
+<td>Process/runtime liveness</td>
+<td>Not run</td>
+<td>Keep failures</td>
+</tr>
+<tr>
+<td>Doctor stalled / growing queue</td>
+<td>doctor.py:958,980,988</td>
+<td>Existing queued work</td>
+<td>Not run</td>
+<td>Empty queue has no progress obligation</td>
+</tr>
+<tr>
+<td>Observability stores, emitters, unknown-author census</td>
+<td>observability_surface.py:132,158,176</td>
+<td>Activity metrics, <strong>not health gates</strong></td>
+<td>No; measured zero agent activity</td>
+<td>Keep zero and old latest timestamps measured</td>
+</tr>
+<tr>
+<td>Observability unreadable input / stale document</td>
+<td>observability_surface.py:219; Dashboard/ObservabilityView.swift:380</td>
+<td>Measurement liveness / integrity</td>
+<td>No; document refreshed at 18:20 UTC</td>
+<td>Keep missing/stale producer evidence visible</td>
+</tr>
+<tr>
+<td>Backup attempt freshness / daily backup errors / retention</td>
+<td>observability_backup.py:317,337</td>
+<td>Job/evidence integrity</td>
+<td>No freshness/retention failure; job alert overlays maintenance failure</td>
+<td>Fresh verified no-op stays fresh; no fake upload</td>
+</tr>
+<tr>
+<td>Transport missing/stale evidence; drops/I/O storm/reconnect deficit</td>
+<td>observability_transport.py:103,258,271</td>
+<td>Request/receipt liveness and actual failures</td>
+<td>No; measured transport</td>
+<td>Idle zero counters never trigger storm</td>
+</tr>
+<tr>
+<td>Dashboard indexed today / store count / last-store receipt</td>
+<td>BrainBarWindowRootView.swift:591,1315,1405; BrainBarOperationReceipts.swift:30</td>
+<td>Activity display, <strong>not red gates</strong></td>
+<td>No activity-triggered reason in producer files</td>
+<td>Zero/old remain informational; live pixels not inspected</td>
+</tr>
+<tr>
+<td>Pipeline ingress and agent lanes</td>
+<td>Dashboard/PipelineState.swift:432,774,882</td>
+<td>Activity display → idle</td>
+<td>No source-level idle red</td>
+<td>Already neutral idle</td>
+</tr>
+<tr>
+<td>Watcher stopped/missing/stale heartbeat / reported errors</td>
+<td>Dashboard/WatcherHealthStatus.swift:76,127</td>
+<td>Process/poll liveness</td>
+<td>No source-derived failure from fresh heartbeat</td>
+<td>Keep actual failures; no-flow is idle at PipelineState.swift:834</td>
+</tr>
+<tr>
+<td>Daemon down/unreadable process evidence</td>
+<td>Dashboard/DaemonHealthMonitor.swift:434</td>
+<td>Process liveness</td>
+<td>No native probe run</td>
+<td>Keep failures; old last-answer text alone is not attention</td>
+</tr>
+<tr>
+<td>Jobs exit failure/unloaded/paused/unknown ownership</td>
+<td>BrainLayerLaunchdActivity.swift:285</td>
+<td>Job/process liveness</td>
+<td>Maintenance job failure in durable files</td>
+<td>Keep failures; configured-off/skipped states neutral</td>
+</tr>
+<tr>
+<td>Weekly completion over 8d / absent completion</td>
+<td>BrainLayerLaunchdActivity.swift:418</td>
+<td>Required scheduled work, not transcripts</td>
+<td>Existing weekly failure; native verdict not sampled</td>
+<td>Keep operational failure</td>
+</tr>
+<tr>
+<td>Drive missing/revoked/expiring consent</td>
+<td>BrainBarDriveAuth.swift:106</td>
+<td>External capability expiry, not user activity</td>
+<td>Not independently probed</td>
+<td>Keep actual expiry; no credential/token reads</td>
+</tr>
+<tr>
+<td>Backup missing upload / zero archives in 30d</td>
+<td>Dashboard/ObservabilityView.swift:480,518; BrainBarWindowRootView.swift:579</td>
+<td><strong>Activity-based red</strong>, even after a verified no-op</td>
+<td><strong>No today</strong>; upload exists, 7 archives</td>
+<td><strong>Follow-up #1396</strong>: neutral proven-idle state, retain true history</td>
+</tr>
+<tr>
+<td>Backup freshness wording claims both copies recent</td>
+<td>BrainBarBackupChecks.swift:58</td>
+<td>Activity-age claim mislabels no-op attempt freshness</td>
+<td>Not red today</td>
+<td><strong>#1396</strong>: describe verified no-op truthfully</td>
+</tr>
+<tr>
+<td>Backup attention aggregation / menu badge</td>
+<td>BrainLayerLaunchdActivity.swift:530; Dashboard/ObservabilityView.swift:62; BrainBarStatusPopoverController.swift:224</td>
+<td>Underlying status lines / health producer freshness</td>
+<td><strong>Yes maintenance alert</strong> in badge</td>
+<td>Preserve actual failures; #1396 fixes backup activity lines</td>
+</tr>
+</tbody>
+</table>
+<h2 id="changes-and-verification">Changes and verification</h2>
+<p>No Python producer activity-only false red was found, so this PR changes no
+runtime health policy. Six regression cases cover a 49h-old corpus, repeated idle
+health ticks with an empty successful search, actual backup/job failures retained
+in the badge, and verified no-op attempts without an upload or with &gt;30d history.
+The six tests pass on the baseline behavior. The first fixture run exposed a
+WAL-copy setup mistake, corrected by staging committed DELETE-journal bytes; it
+was not a production defect. Follow-up: <a href="https://github.com/EtanHey/brainlayer/issues/1396">#1396</a>.</p>
+<p>Local targeted pytest: <strong>477 passed</strong>. Ruff checks pass. CI and native visual
+verification remain separate review/deploy gates. No production data changed.</p>
+<p>Surface sweep: Entry points — health CLI, observability job, watchdogs and doctor
+reviewed; Clients — Dashboard, Jobs, Backups and menu consumers reviewed;
+Providers — local Python/Swift, both installed Macs sampled; Contracts — JSON
+health/badge/observability shapes unchanged; Reverse states — empty, no-op,
+failed backup and failed job covered; Connection modes — local MBP and SSH M1
+read-only, supervisor status only; Docs — health guide's obsolete empty-canary
+failure claims corrected. No release/install or UI behavior change is claimed.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+  <div class="ecosystem-links">
+    <a href="https://brainlayer.etanheyman.com">BrainLayer</a>
+    <span class="sep">/</span>
+    <a href="https://voicelayer.etanheyman.com">VoiceLayer</a>
+    <span class="sep">/</span>
+    <a href="https://cmuxlayer.etanheyman.com">cmuxLayer</a>
+    <span class="sep">/</span>
+    <a href="https://github.com/EtanHey">Golems</a>
+  </div>
+  
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  <script>
+    // Inject back-to-site link into the header, after the title
+    (function() {
+      var title = document.querySelector('.md-header__title');
+      if (!title) return;
+      var link = document.createElement('a');
+      link.href = 'https://brainlayer.etanheyman.com';
+      link.className = 'header-back';
+      link.innerHTML = '&larr; Site';
+      title.after(link);
+    })();
+  </script>
+
+  </body>
+</html>
