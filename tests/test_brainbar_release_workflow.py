@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -234,3 +236,167 @@ def test_release_workflow_with_signing_skip_fails_contract() -> None:
 
     with pytest.raises(AssertionError, match="unsigned app zips"):
         _assert_gatekeeper_ready_release_contract(job)
+
+
+# This simulates ticket delivery, not Apple's network or PF itself. PATH contains only owned
+# fakes (plus mkdir/rm for the private extraction directory); no host sudo/PF can be reached.
+_FAKE_RELEASE_COMMAND = r"""
+import os
+import sys
+from pathlib import Path
+
+root = Path(os.environ["FAKE_ROOT"])
+command = Path(sys.argv[0]).name
+args = sys.argv[1:]
+if command == "sudo":
+    assert args in (["pfctl", "-f", "-"], ["pfctl", "-E"]), args
+    os.execv(str(root / "bin" / "pfctl"), args)
+if command == "ditto":
+    if args[0] == "-c":
+        Path(args[-1]).write_text("fake signed app archive")
+    else:
+        assert args[:3] == ["-x", "-k", "dist/BrainBar.zip"], args
+        (Path(args[-1]) / "BrainBar.app").mkdir()
+    sys.exit(0)
+if command in ("ls", "stat"):
+    print("21")
+    sys.exit(0)
+
+packaged = args[-1] != "dist/BrainBar.app"
+if command == "xcrun":
+    if args[:2] == ["notarytool", "submit"]:
+        stage = "notary"
+    else:
+        assert args[:2] in (["stapler", "staple"], ["stapler", "validate"]), args
+        stage = args[1] if not packaged else "packaged-validate"
+elif command == "pfctl":
+    assert (root / "notary").exists(), "PF must follow accepted notary"
+    assert not (root / "staple").exists(), "PF must precede stapling"
+    if args == ["-f", "-"]:
+        assert sys.stdin.read() == "block return out quick proto udp from any to any port 443\n"
+        stage = "pf-config"
+    else:
+        assert args == ["-E"] and (root / "pf-config").exists(), args
+        stage = "pf-enable"
+elif command == "codesign":
+    if "--force" in args:
+        stage = "sign"
+    elif "--verify" not in args:
+        sys.exit(0)
+    else:
+        stage = "signature" if (root / "notary").exists() else "initial-signature"
+        if packaged:
+            stage = "packaged-signature"
+else:
+    assert command == "spctl", command
+    stage = "packaged-gatekeeper" if packaged else "gatekeeper"
+with (root / "commands.log").open("a") as log:
+    log.write(stage + "\n")
+if stage == os.environ["FAIL_STAGE"]:
+    print("status: Invalid" if stage == "notary" else "simulated " + stage + " failure")
+    sys.exit(68 if stage == "staple" else 23)
+if stage == "staple" and not (root / "pf-enable").exists():
+    print("simulated ticket delivery: network -1005; stapler Error 68")
+    sys.exit(68)
+(root / stage).touch()
+if stage == "notary":
+    print("status: Accepted")
+"""
+
+
+def _run_fake_release(tmp_path: Path, fail_stage: str = "") -> tuple[int, list[str], str, str]:
+    job = _release_job(_load_workflow())
+    steps = job["steps"]
+    start = next(i for i, step in enumerate(steps) if step.get("name") == "Sign BrainBar.app")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for command in ("xcrun", "sudo", "pfctl", "ditto", "codesign", "spctl", "ls", "stat"):
+        path = fake_bin / command
+        path.write_text(f"#!{sys.executable}\n" + _FAKE_RELEASE_COMMAND, encoding="utf-8")
+        path.chmod(0o700)
+    for command in ("mkdir", "rm"):
+        (fake_bin / command).symlink_to(f"/bin/{command}")
+    (tmp_path / "dist" / "BrainBar.app").mkdir(parents=True)
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    github_env = tmp_path / "github-env"
+    github_env.touch()
+    env = {
+        "PATH": str(fake_bin),
+        "FAKE_ROOT": str(tmp_path),
+        "FAIL_STAGE": fail_stage,
+        "RUNNER_TEMP": str(runner_temp),
+        "GITHUB_ENV": str(github_env),
+        "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+        "BRAINBAR_SIGNING_IDENTITY": "fake signing identity",
+        "BRAINBAR_NOTARY_APPLE_ID": "fake@example.invalid",
+        "BRAINBAR_NOTARY_PASSWORD": "fake-password",
+        "BRAINBAR_NOTARY_TEAM_ID": "FAKE-TEAM",
+    }
+    output = ""
+    returncode = 0
+    for index, step in enumerate(steps[start:], start):
+        # These are the GitHub default-success semantics modeled by this runner.
+        # Reject overrides rather than silently simulating a safer workflow than YAML declares.
+        assert not step.get("continue-on-error")
+        if index > start + 1:
+            assert "if" not in step
+        else:
+            assert step.get("if") == "steps.signing.outputs.signed == 'true'"
+        if _is_release_step(step):
+            with (tmp_path / "commands.log").open("a") as log:
+                log.write("release\n")  # Reachability sentinel; no GitHub action is executed.
+            break
+        script = tmp_path / f"step-{index}.bash"
+        script.write_text(_step_run(step), encoding="utf-8")
+        result = subprocess.run(
+            ["/bin/bash", "--noprofile", "--norc", "-e", "-o", "pipefail", str(script)],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        output += result.stdout + result.stderr
+        returncode = result.returncode
+        if returncode:
+            break
+    (tmp_path / "output.log").write_text(output, encoding="utf-8")
+    events = (tmp_path / "commands.log").read_text(encoding="utf-8").splitlines()
+    return returncode, events, github_env.read_text(encoding="utf-8"), output
+
+
+_RELEASE_EVENTS = [
+    "sign",
+    "initial-signature",
+    "notary",
+    "pf-config",
+    "pf-enable",
+    "staple",
+    "validate",
+    "signature",
+    "gatekeeper",
+    "packaged-signature",
+    "packaged-validate",
+    "packaged-gatekeeper",
+    "release",
+]
+
+
+def test_ticket_transport_fallback_before_stapling(tmp_path: Path) -> None:
+    returncode, events, github_env, output = _run_fake_release(tmp_path)
+
+    assert returncode == 0, output
+    assert events == _RELEASE_EVENTS
+    assert github_env == "BRAINBAR_NOTARIZATION_STATUS=notarized and stapled\n"
+
+
+@pytest.mark.parametrize("fail_stage", _RELEASE_EVENTS[:-1])
+def test_release_aborts_at_each_failed_gate(tmp_path: Path, fail_stage: str) -> None:
+    returncode, events, github_env, output = _run_fake_release(tmp_path, fail_stage)
+
+    assert returncode == (68 if fail_stage == "staple" else 23), output
+    assert events == _RELEASE_EVENTS[: _RELEASE_EVENTS.index(fail_stage) + 1]
+    if not fail_stage.startswith("packaged-"):
+        assert "BRAINBAR_NOTARIZATION_STATUS" not in github_env
+    assert "release" not in events
