@@ -25,6 +25,15 @@ def backend(request, monkeypatch):
     )
     monkeypatch.setattr(native_tests, "BOOT", code)
     process, initial, _ = start()
+
+    def ready():
+        nonlocal initial
+        assert process.poll() is None
+        initial = request()["components"]
+        return all(value["pid"] is not None for value in initial.values() if value["configured"])
+
+    # The native file markers do not cover the hotlane added by this fixture.
+    native_tests.eventually(ready)
     commands, disabled = [], {"output": "disabled services = {}", "code": 0}
 
     def fallback(args):
@@ -74,6 +83,50 @@ def test_managed_healer_cannot_kickstart_parent_supervisor(backend, program, opt
     assert commands == []  # Never escape to the real launchctl runner.
     current = request()["components"]
     assert all(current[name]["pid"] == value["pid"] for name, value in initial.items())
+
+
+def test_parent_restart_refusal_after_delayed_hotlane_start(request, monkeypatch):
+    # Hold the added component until native.start() has captured its early snapshot.
+    scheduled_start = """
+import json
+hotlane_release=asyncio.Event()
+class ScheduledSupervisor(Supervisor):
+ async def _start_pending(self, child):
+  if child is self.components['hotlane']: await hotlane_release.wait()
+  await super()._start_pending(child)
+ async def _control(self, reader, writer):
+  if hotlane_release.is_set():
+   await self._wait_start(self.components['hotlane'])
+  else:
+   (p/'before-hotlane.json').write_text(json.dumps(self.status()))
+  await super()._control(reader, writer)
+  hotlane_release.set()
+"""
+    monkeypatch.setattr(
+        native_tests, "BOOT", native_tests.BOOT.replace("s=Supervisor(", scheduled_start + "\ns=ScheduledSupervisor(")
+    )
+    backend = request.getfixturevalue("backend")
+    client, path, status, initial, _, _ = backend
+    before = json.loads((path / "before-hotlane.json").read_text())["components"]
+    assert before["hotlane"]["pid"] is None and before["hotlane"]["starts"] == 0
+    current = status()["components"]
+    print(
+        json.dumps(
+            {
+                phase: {name: {key: value[key] for key in ("pid", "starts")} for name, value in states.items()}
+                for phase, states in (("before_hotlane", before), ("initial", initial), ("current", current))
+            },
+            sort_keys=True,
+        )
+    )
+    assert current["hotlane"]["pid"] is not None and current["hotlane"]["starts"] == 1
+
+    def forbidden_control(*args, **kwargs):
+        pytest.fail("parent restart refusal must not contact supervisor control")
+
+    monkeypatch.setattr(client, "request", forbidden_control)
+    test_managed_healer_cannot_kickstart_parent_supervisor(backend, "/bin/launchctl", ["-k"])
+    assert all(value["starts"] == 1 for value in initial.values() if value["configured"])
 
 
 def test_parent_restart_refusal_survives_control_outage_and_keeps_unmanaged_jobs(tmp_path):
