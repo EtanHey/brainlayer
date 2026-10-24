@@ -369,12 +369,82 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         try assertStoppedBackupControl(on: .jobs)
     }
 
+    func testR1MenuRoutesToEnabledFailureAndHandlesReverseRecoveryAndAlertPrecedence() throws {
+        let root = brainBarTestTemporaryDirectory().appendingPathComponent("brainbar-r1-menu-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = BrainBarBackupSources.Paths(launchAgents: root, databaseLog: root.appendingPathComponent("backup.log"),
+            archiveLog: root.appendingPathComponent("archive.log"), maintenanceLog: root.appendingPathComponent("maintenance.log"),
+            snapshotDirectory: root, archiveDirectory: root)
+        for log in [paths.databaseLog, paths.archiveLog, paths.maintenanceLog] { try Data("private fixture".utf8).write(to: log) }
+        let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("fixture.env"))
+        let workspace = D1Workspace()
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+        let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
+            dashboardPanelController: panel, statusBar: TestStatusItemHost())
+        defer { controller.stop() }
+        controller.setLogPathsForTesting(paths)
+        controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []),
+            alertsURL: root.appendingPathComponent("absent-alerts.json"))
+        let menu = controller.contextMenuForTesting
+        let action = try XCTUnwrap(menu.items.first { $0.action == NSSelectorFromString("showJobAlertLog:") })
+        let dailyReason = "Daily stopped", jsonlReason = "JSONL stopped"
+        let clock = Date(timeIntervalSince1970: 1_792_814_400)
+        func install(daily: Bool, jsonl: Bool, recovered: Bool = false) throws {
+            var config = BrainLayerConfig.defaultConfig
+            config.launchdJobs[.backupDaily]?.enabled = daily
+            config.launchdJobs[.jsonlBackup]?.enabled = jsonl
+            try store.save(config)
+            let states: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [
+                .backupDaily: .failed(dailyReason), .jsonlBackup: recovered ? .loaded : .failed(jsonlReason)]
+            let model = BrainBarSettingsViewModel(workspace: workspace, store: store,
+                launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: states),
+                embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
+                initialLaunchdStates: states, refreshStatusOnLoad: false, now: { clock })
+            XCTAssertTrue(model.reloadConfigFromDisk(), "reload must retain the sampled failure alongside desired OFF")
+            runtime.jobsModel = model
+            controller.menuNeedsUpdate(menu)
+        }
+        func click(expected: URL, warning: String) throws {
+            XCTAssertEqual(menu.items.first?.toolTip, warning)
+            XCTAssertFalse(action.isHidden)
+            XCTAssertTrue(action.isEnabled)
+            let count = workspace.opened.count
+            XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
+            XCTAssertEqual(workspace.opened.count, count + 1)
+            XCTAssertEqual(workspace.opened.last, expected)
+        }
+        try install(daily: false, jsonl: true)
+        try click(expected: paths.archiveLog, warning: jsonlReason)
+        try install(daily: true, jsonl: false)
+        try click(expected: paths.databaseLog, warning: dailyReason)
+        try install(daily: true, jsonl: true)
+        try click(expected: paths.databaseLog, warning: dailyReason)
+        for recovered in [false, true] {
+            try install(daily: false, jsonl: recovered, recovered: recovered)
+            XCTAssertTrue(action.isHidden, "disabled history and recovered enabled jobs must not offer a menu action")
+            let count = workspace.opened.count
+            XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
+            XCTAssertEqual(workspace.opened.count, count, "a stale action must not open a historical failure")
+        }
+        try install(daily: false, jsonl: true)
+        try click(expected: paths.archiveLog, warning: jsonlReason)
+        controller.setBadgeForTesting(.init(badgeOn: true, reason: "Maintenance stopped", activeCodes: ["job_alert_maintenance-light"]),
+            alertsURL: root.appendingPathComponent("absent-alerts.json"))
+        controller.menuNeedsUpdate(menu)
+        try click(expected: paths.maintenanceLog, warning: "Maintenance stopped")
+    }
+
     func testBackupLogTargetsUseTypedIdentityAndExcludeNonfailures() {
         var config = BrainLayerConfig.defaultConfig
         config.launchdJobs[.backupDaily]?.loadState = .failed("mentions jsonl-backup but belongs to daily")
         config.launchdJobs[.jsonlBackup]?.loadState = .failed("private failure")
         config.launchdJobs[.index]?.loadState = .failed("backup-daily")
         XCTAssertEqual(BrainBarBackupLogTarget.failures(in: config).map(\.key), ["backup-daily", "jsonl-backup"])
+        config.launchdJobs[.backupDaily]?.enabled = false
+        XCTAssertEqual(BrainBarBackupLogTarget.failures(in: config).map(\.key), ["backup-daily", "jsonl-backup"],
+            "named screen controls retain historical failures even when the single menu target excludes them")
         for state in [BrainLayerLaunchdLoadState.loaded, .running, .paused, .unknown, .probeError("backup-daily")] {
             config.launchdJobs[.backupDaily]?.loadState = state
             config.launchdJobs[.jsonlBackup]?.loadState = state
@@ -440,6 +510,10 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         }
         try click()
         XCTAssertEqual(workspace.opened.last?.path, root.path)
+        model.config.launchdJobs[.backupDaily]?.enabled = false
+        try click()
+        XCTAssertEqual(workspace.opened.last?.path, root.path, "a named historical control remains diagnostic")
+        model.config.launchdJobs[.backupDaily]?.enabled = true
         try Data("private fixture".utf8).write(to: paths.databaseLog)
         try click()
         XCTAssertEqual(workspace.opened.last, paths.databaseLog)

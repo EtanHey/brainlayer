@@ -304,7 +304,10 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         for item in backupReceiptItems { menu.removeItem(item) }
         backupReceiptItems.removeAll()
         if let model = runtime.jobsModel {
-            if activeLogKey == nil, let failure = BrainBarBackupLogTarget.failures(in: model.config).first {
+            // The single menu action follows desired-ON attention; named screen rows retain history.
+            if activeLogKey == nil, let failure = BrainBarBackupLogTarget.failures(in: model.config).first(where: {
+                model.config.launchdJobs[$0.job]?.enabled != false
+            }) {
                 activeLogKey = failure.key
                 activeLogReason = failure.reason
             }
