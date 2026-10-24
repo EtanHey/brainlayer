@@ -7,6 +7,7 @@ import math
 import os
 import signal
 import time
+import uuid
 from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -14,6 +15,7 @@ from pathlib import Path
 
 from . import maintenance_control
 from .backup_daily import (
+    BACKUP_INVOCATION_ENV,
     DEFAULT_SNAPSHOT_TIMEOUT_SECONDS,
     SNAPSHOT_RECEIPT_RESERVE_SECONDS,
     default_snapshot_timeout_seconds,
@@ -222,7 +224,12 @@ async def _execute_step(
             raise RuntimeError("calendar child birth unknown")
         custody.record(child.pid, birth)
         os.write(guard.stdin.fileno(), f"+{child.pid}\n".encode())
-        record(directory, event="spawn", step=step.name, pid=child.pid)
+        identity = (
+            {"backup_invocation_id": env[BACKUP_INVOCATION_ENV]}
+            if step.name == "backup-daily" and env.get(BACKUP_INVOCATION_ENV)
+            else {}
+        )
+        record(directory, event="spawn", step=step.name, pid=child.pid, **identity)
         os.write(gate, b"R")
         budget, held, clock = backup_deadline(step), False, time.monotonic
         if deadline is not None:
@@ -264,9 +271,26 @@ async def _window(directory, step, now_fn, sleep_fn, stop):
     return not stop.is_set() and 4 <= now_fn().hour < 6
 
 
-def finish(directory, state, step, code, date, defer_after, missed=False, stopped=False, *, reason=None, replaces=None):
+def finish(
+    directory,
+    state,
+    step,
+    code,
+    date,
+    defer_after,
+    missed=False,
+    stopped=False,
+    *,
+    reason=None,
+    replaces=None,
+    backup_invocation_id=None,
+):
     status = "stopped" if stopped else "deferred" if code == 75 else "ok" if code == 0 else "failed"
-    detail = {key: value for key, value in dict(reason=reason, replaces=replaces).items() if value is not None}
+    detail = {
+        key: value
+        for key, value in dict(reason=reason, replaces=replaces, backup_invocation_id=backup_invocation_id).items()
+        if value is not None
+    }
     record(directory, event="finished", step=step.name, status=status, returncode=code, **detail)
     key = KEYS.get(step.name)
     notice = None
@@ -478,12 +502,14 @@ async def run_calendar(
             BRAINLAYER_SUPERVISOR_SOCKET=str(client.path),
         )
         env.pop("BRAINLAYER_BACKUP_SUPERVISED_CHILD", None)
+        env.pop(BACKUP_INVOCATION_ENV, None)
         for step in steps:
             active_step = step.name
             if stop.is_set():
                 record(directory, event="finished", step=step.name, status="skipped", returncode=None)
                 continue
             code, missed, reason, step_failed = 1, False, None, False
+            invocation = uuid.uuid4().hex if step.name == "backup-daily" else None
             try:
                 bounded = step
                 if step.name == "index":
@@ -511,6 +537,7 @@ async def run_calendar(
                                 BRAINLAYER_LAUNCHD_SERVICE=_service_name(step),
                                 XPC_SERVICE_NAME=f"com.brainlayer.{_service_name(step)}",
                             )
+                            | ({BACKUP_INVOCATION_ENV: invocation} if invocation else {})
                         )
                         try:
                             async with step_hold(client, guard, child_env, step, now_fn) as held_env:
@@ -567,6 +594,7 @@ async def run_calendar(
                 stopped,
                 reason=reason,
                 replaces="maintenance-nightly" if weekly_substitution and step.name == "maintenance-weekly" else None,
+                backup_invocation_id=invocation,
             )
         active_step = None
         if all(results.get(n) == "ok" for n in ("maintenance-weekly", "decay", "repair-fts")):

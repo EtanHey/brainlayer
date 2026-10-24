@@ -792,6 +792,14 @@
             "sha256_first_64kb": null,
             "skipped_lines": 0,
             "status": "read"
+          },
+          {
+            "mtime": null,
+            "path": "synthetic/runs.jsonl",
+            "rows_or_bytes": null,
+            "sha256_first_64kb": null,
+            "skipped_lines": 0,
+            "status": "missing"
           }
         ],
         "last_verified_upload": null,
@@ -1143,6 +1151,14 @@
             "sha256_first_64kb": null,
             "skipped_lines": 0,
             "status": "read"
+          },
+          {
+            "mtime": null,
+            "path": "synthetic/runs.jsonl",
+            "rows_or_bytes": null,
+            "sha256_first_64kb": null,
+            "skipped_lines": 0,
+            "status": "missing"
           }
         ],
         "last_verified_upload": null,
@@ -3233,6 +3249,14 @@
             "sha256_first_64kb": null,
             "skipped_lines": 0,
             "status": "read"
+          },
+          {
+            "mtime": null,
+            "path": "synthetic/runs.jsonl",
+            "rows_or_bytes": null,
+            "sha256_first_64kb": null,
+            "skipped_lines": 0,
+            "status": "missing"
           }
         ],
         "last_verified_upload": null,
@@ -4176,5 +4200,364 @@
       "window_hours": 24
     },
     "name": "verified_bundle"
+  },
+  {
+    "document": {
+      "author_unknown": {
+        "census_2026_09_13": "never_classified = 476,679 of 731,153 live (65.2%); both-NULL = 65,017; classified_unknown literal not observed on the copy",
+        "classified_unknown": {
+          "count": 2,
+          "definition": "provenance_class = 'unknown', archived_at IS NULL",
+          "share": 0.076923
+        },
+        "inputs": [
+          {
+            "mtime": "2026-09-13T12:00:00Z",
+            "path": "db/healthy-dev.sqlite",
+            "rows_or_bytes": 27,
+            "sha256_first_64kb": null,
+            "skipped_lines": 2,
+            "status": "read"
+          }
+        ],
+        "never_classified": {
+          "count": 6,
+          "definition": "provenance_class IS NULL OR source_class IS NULL, archived_at IS NULL",
+          "share": 0.230769
+        },
+        "reason": "",
+        "state": "measured",
+        "top_source_files": [
+          {
+            "count": 4,
+            "source_file": "brainbar-store"
+          },
+          {
+            "count": 4,
+            "source_file": "realtime-hook"
+          }
+        ],
+        "trend_7d": [
+          {
+            "classified_unknown": 0,
+            "day": "2026-09-07",
+            "never_classified": 1
+          },
+          {
+            "classified_unknown": 1,
+            "day": "2026-09-08",
+            "never_classified": 1
+          },
+          {
+            "classified_unknown": 0,
+            "day": "2026-09-09",
+            "never_classified": 0
+          },
+          {
+            "classified_unknown": 0,
+            "day": "2026-09-10",
+            "never_classified": 0
+          },
+          {
+            "classified_unknown": 0,
+            "day": "2026-09-11",
+            "never_classified": 0
+          },
+          {
+            "classified_unknown": 0,
+            "day": "2026-09-12",
+            "never_classified": 0
+          },
+          {
+            "classified_unknown": 1,
+            "day": "2026-09-13",
+            "never_classified": 2
+          }
+        ]
+      },
+      "backups": {
+        "db_snapshot": {
+          "destination": "previous.db.gz",
+          "last_at": "2026-09-12T12:00:00Z",
+          "verified": true
+        },
+        "error_type": null,
+        "freshness": "fresh",
+        "inputs": [
+          {
+            "mtime": null,
+            "path": "synthetic/jsonl-backup.log",
+            "rows_or_bytes": null,
+            "sha256_first_64kb": null,
+            "skipped_lines": 0,
+            "status": "read"
+          },
+          {
+            "mtime": null,
+            "path": "synthetic/backup-daily.log",
+            "rows_or_bytes": null,
+            "sha256_first_64kb": null,
+            "skipped_lines": 0,
+            "status": "read"
+          },
+          {
+            "mtime": null,
+            "path": "synthetic/launchd.txt",
+            "rows_or_bytes": null,
+            "sha256_first_64kb": null,
+            "skipped_lines": 0,
+            "status": "read"
+          },
+          {
+            "mtime": null,
+            "path": "synthetic/runs.jsonl",
+            "rows_or_bytes": null,
+            "sha256_first_64kb": null,
+            "skipped_lines": 0,
+            "status": "read"
+          }
+        ],
+        "last_verified_upload": null,
+        "launchd": {
+          "bootstrapped": true,
+          "disabled_dir_present": false,
+          "label": "com.brainlayer.jsonl-backup"
+        },
+        "local_snapshot": {
+          "destination": "local.db.gz",
+          "last_at": "2026-09-13T10:00:00Z",
+          "local_integrity": "ok",
+          "local_integrity_pragma": "integrity_check",
+          "local_verified": true,
+          "upload_error": "Backup daily stopped, exit 143; upload incomplete (no verified completion receipt)",
+          "upload_state": "failed",
+          "uploaded": false
+        },
+        "reason": "",
+        "retention_invariant": "PASS",
+        "state": "measured",
+        "surviving_archives_30d": 0,
+        "threshold_hours": 36,
+        "transcript_attempt": {
+          "at": "2026-09-13T10:00:00Z",
+          "status": "no-op",
+          "uploaded": false,
+          "verified": true
+        }
+      },
+      "db_path": "db/healthy-dev.sqlite",
+      "emitters": {
+        "by_emitter": [
+          {
+            "count_in_window": 2,
+            "derived_from": "sender",
+            "emitter": "assistant"
+          },
+          {
+            "count_in_window": 2,
+            "derived_from": "source",
+            "emitter": "claude_code"
+          },
+          {
+            "count_in_window": 2,
+            "derived_from": "source",
+            "emitter": "codex_cli"
+          },
+          {
+            "count_in_window": 2,
+            "derived_from": "source",
+            "emitter": "mcp"
+          },
+          {
+            "count_in_window": 2,
+            "derived_from": "source_file",
+            "emitter": "realtime-hook"
+          },
+          {
+            "count_in_window": 2,
+            "derived_from": "source",
+            "emitter": "realtime_watcher"
+          }
+        ],
+        "by_source_class": [
+          {
+            "count": 2,
+            "in_window": 1,
+            "source_class": "brain-worker"
+          },
+          {
+            "count": 9,
+            "in_window": 4,
+            "source_class": "cli-agent"
+          },
+          {
+            "count": 4,
+            "in_window": 2,
+            "source_class": "desktop"
+          },
+          {
+            "count": 4,
+            "in_window": 2,
+            "source_class": "fleet-coordination"
+          },
+          {
+            "count": 2,
+            "in_window": 1,
+            "source_class": "subagent"
+          },
+          {
+            "count": 6,
+            "in_window": 2,
+            "source_class": null
+          }
+        ],
+        "derivation_note": "metadata.attributionAgent is absent in the 2026-09-13 census; emitter derives from source, then sender, then source_file, or the section is unmeasurable",
+        "hidden_from_default_search": 6,
+        "inputs": [
+          {
+            "mtime": "2026-09-13T12:00:00Z",
+            "path": "db/healthy-dev.sqlite",
+            "rows_or_bytes": 27,
+            "sha256_first_64kb": null,
+            "skipped_lines": 2,
+            "status": "read"
+          }
+        ],
+        "reason": "",
+        "state": "measured"
+      },
+      "generated_at": "2026-09-13T12:00:00Z",
+      "schema_version": 2,
+      "stores": {
+        "by_content_class": [
+          {
+            "content_class": "decision",
+            "count": 6
+          },
+          {
+            "content_class": "knowledge",
+            "count": 9
+          },
+          {
+            "content_class": "operational",
+            "count": 6
+          },
+          {
+            "content_class": "test",
+            "count": 6
+          }
+        ],
+        "in_window": {
+          "by_hour": [
+            {
+              "count": 1,
+              "hour": "2026-09-13T01:00:00Z"
+            },
+            {
+              "count": 1,
+              "hour": "2026-09-13T02:00:00Z"
+            },
+            {
+              "count": 1,
+              "hour": "2026-09-13T03:00:00Z"
+            },
+            {
+              "count": 1,
+              "hour": "2026-09-13T04:00:00Z"
+            },
+            {
+              "count": 1,
+              "hour": "2026-09-13T05:00:00Z"
+            },
+            {
+              "count": 1,
+              "hour": "2026-09-13T06:00:00Z"
+            },
+            {
+              "count": 1,
+              "hour": "2026-09-13T07:00:00Z"
+            },
+            {
+              "count": 1,
+              "hour": "2026-09-13T08:00:00Z"
+            },
+            {
+              "count": 1,
+              "hour": "2026-09-13T09:00:00Z"
+            },
+            {
+              "count": 1,
+              "hour": "2026-09-13T10:00:00Z"
+            },
+            {
+              "count": 1,
+              "hour": "2026-09-13T11:00:00Z"
+            },
+            {
+              "count": 1,
+              "hour": "2026-09-13T12:00:00Z"
+            }
+          ],
+          "count": 12
+        },
+        "inputs": [
+          {
+            "mtime": "2026-09-13T12:00:00Z",
+            "path": "db/healthy-dev.sqlite",
+            "rows_or_bytes": 27,
+            "sha256_first_64kb": null,
+            "skipped_lines": 2,
+            "status": "read"
+          }
+        ],
+        "latest": [
+          {
+            "chunk_id": "synthetic-00",
+            "emitter": "realtime_watcher",
+            "preview": "Synthetic observability fixture row 00",
+            "source_class": "cli-agent",
+            "stored_at": "2026-09-13T12:00:00Z"
+          },
+          {
+            "chunk_id": "synthetic-01",
+            "emitter": "claude_code",
+            "preview": "Synthetic observability fixture row 01",
+            "source_class": "cli-agent",
+            "stored_at": "2026-09-13T11:00:00Z"
+          },
+          {
+            "chunk_id": "synthetic-02",
+            "emitter": "codex_cli",
+            "preview": "Synthetic observability fixture row 02",
+            "source_class": "cli-agent",
+            "stored_at": "2026-09-13T10:00:00Z"
+          },
+          {
+            "chunk_id": "synthetic-03",
+            "emitter": "mcp",
+            "preview": "Synthetic observability fixture row 03",
+            "source_class": "fleet-coordination",
+            "stored_at": "2026-09-13T09:00:00Z"
+          },
+          {
+            "chunk_id": "synthetic-04",
+            "emitter": "assistant",
+            "preview": "Synthetic observability fixture row 04",
+            "source_class": "cli-agent",
+            "stored_at": "2026-09-13T08:00:00Z"
+          }
+        ],
+        "reason": "",
+        "state": "measured",
+        "total_chunks": 27
+      },
+      "transport": {
+        "inputs": [],
+        "reason": "Synthetic fixture; no live transport sampled",
+        "state": "unmeasurable"
+      },
+      "window_hours": 24
+    },
+    "name": "stopped"
   }
 ]

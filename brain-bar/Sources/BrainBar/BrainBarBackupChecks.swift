@@ -91,6 +91,7 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         let failing = checks.filter { $0.tone == .red }.count
         let summary: String = if failing == 0 && lines.error?.tone == .red { "Backup alert needs attention" }
             else if failing == 0 && statusNotice != nil { "Backup status needs a fresh check" }
+            else if failing == 0 && lines.uploadUnconfirmed { "Upload activity unknown" }
             else if failing == 0 && lines.uploadInProgress { lines.uploadQueued ? "Upload queued" : "Upload in progress" }
             else if failing == 0 && idle { "Idle — no new transcripts" }
             else if jobStatus?.tone == .neutral { jobStatus?.text.hasPrefix("Skipped") == true ? "Skipped"

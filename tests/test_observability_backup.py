@@ -16,6 +16,136 @@ FIXTURES = Path(__file__).parent / "fixtures/observability"
 NOW = datetime(2026, 9, 13, 12, tzinfo=UTC)
 
 
+@pytest.mark.parametrize("state", ["pending", "in_progress"])
+@pytest.mark.parametrize(("status", "code"), [("stopped", 143), ("failed", 1), ("ok", 0)])
+@pytest.mark.parametrize("tail", ["", '{"event":', "bad complete row\n"])
+def test_terminal_calendar_result_revokes_unfinished_upload_progress(tmp_path, state, status, code, tail):
+    attempt = "2026-09-13T01:00:01+00:00"
+    receipt = {
+        "attempted_at": attempt,
+        "snapshot_created_at": attempt,
+        "snapshot": "/synthetic/2026-09-13.db.zst",
+        "local_verified": True,
+        "uploaded": False,
+        "verified": False,
+        "upload_state": state,
+        "backup_invocation_id": "a" * 32,
+    }
+    env, recorder = _two_copy_env(
+        tmp_path,
+        transcript_at=attempt,
+        daily=[
+            _db_receipt("2026-09-12T12:00:00+00:00", "old.db.zst"),
+            receipt,
+        ],
+    )
+    env["BRAINLAYER_SUPERVISOR_SOCKET"] = str(tmp_path / "control.sock")
+    calendar = tmp_path / "calendar" / "runs.jsonl"
+    calendar.parent.mkdir()
+    start = datetime.fromisoformat(attempt).timestamp() - 1
+    rows = [
+        {"event": "spawn", "step": "backup-daily", "ts": start, "backup_invocation_id": "a" * 32},
+        {
+            "event": "finished",
+            "step": "backup-daily",
+            "ts": start + 60,
+            "status": status,
+            "returncode": code,
+            "backup_invocation_id": "a" * 32,
+        },
+        # Later successful transcript recovery is not database upload success.
+        {"event": "finished", "step": "jsonl-backup", "ts": start + 70, "status": "ok", "returncode": 0},
+    ]
+    calendar.write_text("".join(json.dumps(row) + "\n" for row in rows) + tail)
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+    assert result["local_snapshot"]["upload_state"] == "failed"
+    assert result["local_snapshot"]["upload_error"] == (
+        f"Backup daily {status}, exit {code}; upload incomplete (no verified completion receipt)"
+    )
+    assert result["db_snapshot"]["destination"] == "old.db.zst"
+    assert result["local_snapshot"]["local_verified"] is True
+    assert str(calendar) in [item["path"] for item in result["inputs"]]
+    assert next(item for item in result["inputs"] if item["path"] == str(calendar))["skipped_lines"] == bool(tail)
+    schema = json.loads((FIXTURES / "observability-schema.v2.json").read_text())
+    jsonschema.validate(result, {"$defs": schema["$defs"], "$ref": "#/$defs/backups"})
+    # A new upload attempt must not inherit a previous run's terminal result.
+    log = Path(env["BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG"])
+    log.write_text(
+        log.read_text()
+        + json.dumps(
+            {
+                **receipt,
+                "backup_log_provenance": "real",
+                "attempted_at": "2026-09-13T02:00:00Z",
+                "backup_invocation_id": "b" * 32,
+            }
+        )
+        + "\n"
+    )
+    resumed = build_backups_section(env=env, record_input=recorder, now=NOW)
+    assert resumed["local_snapshot"]["upload_state"] == state
+    assert resumed["local_snapshot"]["upload_error"] is None
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [],
+        [{"event": "finished", "step": "backup-daily", "ts": 2, "status": "stopped", "returncode": 143}],
+        [{"event": "spawn", "step": "backup-daily", "ts": 1}],
+        [
+            {"event": "spawn", "step": "backup-daily", "ts": 3},
+            {"event": "finished", "step": "backup-daily", "ts": 1, "status": "stopped", "returncode": 143},
+        ],
+        [
+            {"event": "spawn", "step": "backup-snapshot", "ts": 1},
+            {"event": "finished", "step": "backup-snapshot", "ts": 3, "status": "ok", "returncode": 0},
+        ],
+        [
+            {"event": "spawn", "step": "backup-daily", "ts": 1},
+            {"event": "runner"},
+            {"event": "finished", "step": "backup-daily", "ts": 3, "status": "stopped", "returncode": 143},
+        ],
+    ],
+)
+def test_unrelated_or_unbound_calendar_result_cannot_fail_an_upload(rows):
+    assert observability_backup._terminal_upload_error({"attempted_at": "1970-01-01T00:00:02Z"}, rows) is None
+
+
+@pytest.mark.parametrize(
+    "variant", ["legacy", "other-owner", "duplicate-spawn", "duplicate-finish", "interior-gap", "runner-reset"]
+)
+def test_invocation_proof_fails_closed_for_ambiguous_or_missing_ownership(variant):
+    local = {"backup_invocation_id": "a" * 32}
+    spawn = {"event": "spawn", "step": "backup-daily", "ts": 0, **local}
+    finish = {"event": "finished", "step": "backup-daily", "ts": 3, "status": "stopped", "returncode": 143, **local}
+    rows = [spawn, finish]
+    if variant == "legacy":
+        local = {"attempted_at": "1970-01-01T00:00:01Z"}
+    elif variant == "other-owner":
+        local = {"backup_invocation_id": "b" * 32}
+    elif variant == "duplicate-spawn":
+        rows.insert(1, spawn)
+    elif variant == "duplicate-finish":
+        rows.append(finish)
+    else:
+        rows.insert(1, {"event": "journal-gap" if variant == "interior-gap" else "runner"})
+    assert observability_backup._terminal_upload_error(local, rows) is None
+
+
+def test_live_calendar_keeps_complete_prefix_across_non_utf8_tail(tmp_path):
+    identity = {"backup_invocation_id": "a" * 32, "step": "backup-daily"}
+    rows = [
+        {**identity, "event": "spawn", "ts": 0},
+        {**identity, "event": "finished", "ts": 3, "status": "stopped", "returncode": 143},
+    ]
+    path = tmp_path / "runs.jsonl"
+    path.write_bytes(b"".join(json.dumps(row).encode() + b"\n" for row in rows) + b"\xff\n")
+    records, status, skipped = observability_backup._read_calendar(path)
+    assert (status, skipped) == ("read", 1)
+    assert observability_backup._terminal_upload_error(identity, records) is not None
+
+
 def _env(case: str) -> dict[str, str]:
     return {
         "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG": str(FIXTURES / f"logs/{case}/jsonl-backup.log"),
@@ -931,3 +1061,50 @@ def test_stale_db_copy_keeps_an_earlier_error_type(tmp_path: Path) -> None:
 
     assert result["freshness"] == "stale"
     assert result["error_type"] == "job_alert:Database backup failed; check the backup log"
+
+
+def test_calendar_lock_loser_does_not_own_manual_upload(tmp_path):
+    # Calendar wrapper spawned first, but a manual normal run acquires the
+    # nonblocking staging lock before the wrapper enters run_backup.
+    attempt = "2026-09-13T01:00:01Z"
+    env, recorder = _two_copy_env(
+        tmp_path,
+        transcript_at=attempt,
+        daily=[
+            _db_receipt("2026-09-12T12:00:00Z", "old.db.zst"),
+            {
+                "attempted_at": attempt,
+                "snapshot_created_at": attempt,
+                "snapshot": "/synthetic/manual.db.zst",
+                "local_verified": True,
+                "uploaded": False,
+                "verified": False,
+                "upload_state": "in_progress",
+            },
+            {
+                "attempted_at": "2026-09-13T01:00:02Z",
+                "error_type": "BackupAlreadyRunningError",
+                "error": "Another backup is running",
+            },
+        ],
+    )
+    env["BRAINLAYER_DB"] = str(tmp_path / "unused-synthetic.db")
+    env["BRAINLAYER_SUPERVISOR_SOCKET"] = str(tmp_path / "control.sock")
+    calendar = tmp_path / "calendar/runs.jsonl"
+    calendar.parent.mkdir()
+    start = datetime(2026, 9, 13, 1, tzinfo=UTC).timestamp()
+    calendar.write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in [
+                {"event": "runner", "ts": start - 1},
+                {"event": "spawn", "step": "backup-daily", "ts": start},
+                {"event": "finished", "step": "backup-daily", "ts": start + 3, "status": "failed", "returncode": 1},
+            ]
+        )
+    )
+    actual = build_backups_section(env=env, record_input=recorder, now=NOW)
+    print(json.dumps(actual["local_snapshot"], sort_keys=True))
+    assert actual["local_snapshot"]["upload_state"] == "in_progress", (
+        "The calendar lock loser has no owning relationship to the manual receipt"
+    )

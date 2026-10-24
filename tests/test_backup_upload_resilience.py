@@ -77,6 +77,21 @@ def stalled(lane):
     return json.loads(lane.log.read_text().splitlines()[-1])
 
 
+def test_only_admitted_body_carries_invocation_and_retry_replaces_old_identity(lane, monkeypatch):
+    monkeypatch.setenv(backup.BACKUP_INVOCATION_ENV, "a" * 32)
+    assert stalled(lane)["backup_invocation_id"] == "a" * 32
+    with (lane.root / ".backup.lock").open("a+b") as lock:
+        backup.fcntl.flock(lock, backup.fcntl.LOCK_EX | backup.fcntl.LOCK_NB)
+        monkeypatch.setenv(backup.BACKUP_INVOCATION_ENV, "b" * 32)
+        with pytest.raises(backup.BackupAlreadyRunningError):
+            lane.run()
+    loser = json.loads(lane.log.read_text().splitlines()[-1])
+    assert loser["error_type"] == "BackupAlreadyRunningError"
+    assert "backup_invocation_id" not in loser
+    lane.outcomes.extend([_DriveResponse(308), _DriveResponse(200, payload={"id": "done"})])
+    assert lane.run(phase="upload")["backup_invocation_id"] == "b" * 32
+
+
 def test_six_minute_dns_outage_recovers_within_default_budget(lane, monkeypatch):
     monkeypatch.delenv("BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS")
     clock = [0.0]
