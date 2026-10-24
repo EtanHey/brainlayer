@@ -29,7 +29,8 @@ preserved; they are not evidence against the independent R1 counterexample.
 The replacement model has two sequential calendar invocations and an independent
 manual contender. Spawn, staging-lock admission/loss, snapshot/checkpoint,
 uploaded-before-verification, verification, death and calendar finish are separate
-actions. Receipt owner is independent ground truth. A receipt copies its admitted
+actions. Death releases the admitted body lock before calendar finish, so another
+actor can acquire it in that gap. Receipt owner is independent ground truth. A receipt copies its admitted
 actor's inherited nonce; the binding algorithm must discover the owner from
 journal evidence. Missing legacy IDs, an interior journal gap, a damaged later
 append, duplicate IDs, stale receipts and a later retry are represented. Pause /
@@ -61,10 +62,10 @@ java -XX:+UseParallelGC -Xmx512m -cp "$TLA2TOOLS" tlc2.TLC -workers 1 -seed 123 
 
 Actual TLC2 2.19 (08 August2024, revision5a47802), Java17.0.19, one worker:
 
-- Old timestamp rule: exit12,2165 generated/834 distinct, depth7. Calendar spawns;
+- Old timestamp rule: exit12,2177 generated/849 distinct, depth7. Calendar spawns;
   manual wins lock; calendar loses and finishes failed; manual receipt is falsely
   bound to that failed contender. Manual still owns the staging lock.
-- Exact in_progress variant: exit12,6797 generated/2402 distinct, depth8. Adds
+- Exact in_progress variant: exit12,6969 generated/2487 distinct, depth8. Adds
   the manual checkpoint; the unrelated calendar failure revokes its progress.
-- Corrected binding: exit0,5380117 generated/734466 distinct, depth28, empty
+- Corrected binding: exit0,9943909 generated/1201546 distinct, depth29, empty
   queue; no invariant violation. These are bounded source-model results only.

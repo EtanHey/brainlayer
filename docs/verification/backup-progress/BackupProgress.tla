@@ -48,7 +48,8 @@ Advance(a, before, after) ==
                    receiptSpan, terminal, gap, ambiguous, tail, paused>>
 Death(a) ==
     /\ phase[a] = "active" /\ phase' = [phase EXCEPT ![a] = "dead"]
-    /\ UNCHANGED <<lock, nonce, bodySpan, receiptOwner, receiptNonce, receiptSpan,
+    /\ lock' = IF lock = a THEN 0 ELSE lock  \* OS releases the body lock before calendar finish.
+    /\ UNCHANGED <<nonce, bodySpan, receiptOwner, receiptNonce, receiptSpan,
                    receipt, terminal, gap, ambiguous, tail, verifiedHistory, paused>>
 Finish(a, status) ==
     /\ phase[a] \in {"active", "lost", "dead"}
