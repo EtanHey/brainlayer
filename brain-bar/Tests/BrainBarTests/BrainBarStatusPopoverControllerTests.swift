@@ -1,4 +1,6 @@
 import AppKit
+import SwiftUI
+import Vision
 import XCTest
 @testable import BrainBar
 
@@ -310,6 +312,220 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+    }
+
+    func testStoppedCalendarBackupWithoutJobAlertHasReachableAcknowledgedLogAction() throws {
+        let root = brainBarTestTemporaryDirectory().appendingPathComponent("brainbar-stopped-log-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = BrainBarBackupSources.Paths(launchAgents: root, databaseLog: root.appendingPathComponent("backup.log"),
+            archiveLog: root.appendingPathComponent("archive.log"), maintenanceLog: root.appendingPathComponent("maintenance.log"),
+            snapshotDirectory: root, archiveDirectory: root)
+        let workspace = D1Workspace()
+        let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("fixture.env"))
+        try store.save(.defaultConfig)
+        let reason = "Backup Daily: calendar result stopped, exit 143"
+        let clock = Date(timeIntervalSince1970: 1_792_814_400)
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        runtime.jobsModel = BrainBarSettingsViewModel(workspace: workspace, store: store,
+            initialLaunchdStates: [.backupDaily: .failed(reason)], refreshStatusOnLoad: false, now: { clock })
+        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+        let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
+            dashboardPanelController: panel, statusBar: TestStatusItemHost())
+        defer { controller.stop() }
+        controller.setLogPathsForTesting(paths)
+        controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []),
+            alertsURL: root.appendingPathComponent("absent-alerts.json"))
+        let menu = controller.contextMenuForTesting
+        controller.menuNeedsUpdate(menu)
+        XCTAssertEqual(menu.items.first?.toolTip, reason)
+        let action = try XCTUnwrap(menu.items.first {
+            !$0.isHidden && $0.isEnabled && $0.action == NSSelectorFromString("showJobAlertLog:")
+        }, "The actual stopped-backup menu must expose a log action without a job-alert badge")
+        func click() throws {
+            XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
+        }
+        XCTAssertEqual(action.title, "Open logs folder")
+        try click()
+        XCTAssertEqual(workspace.opened.last?.path, root.path)
+        XCTAssertTrue(menu.items.contains { !$0.isHidden && $0.title.contains("Opened the logs folder") })
+        try Data("private fixture".utf8).write(to: paths.databaseLog)
+        controller.menuNeedsUpdate(menu)
+        XCTAssertEqual(action.title, "Show log")
+        try click()
+        XCTAssertEqual(workspace.opened.last, paths.databaseLog)
+        workspace.acceptsOpen = false
+        try click()
+        XCTAssertTrue(menu.items.contains { !$0.isHidden && $0.title.contains("Could not open log") })
+        workspace.acceptsOpen = true
+        try click()
+        XCTAssertFalse(menu.items.contains { !$0.isHidden && $0.title.contains("Could not open") })
+        runtime.jobsModel?.config.launchdJobs[.backupDaily]?.loadState = .loaded
+        controller.menuNeedsUpdate(menu)
+        XCTAssertTrue(action.isHidden)
+    }
+
+    func testJobsExposeStoppedBackupControlWithoutJobAlert() throws {
+        try assertStoppedBackupControl(on: .jobs)
+    }
+
+    func testR1MenuRoutesToEnabledFailureAndHandlesReverseRecoveryAndAlertPrecedence() throws {
+        let root = brainBarTestTemporaryDirectory().appendingPathComponent("brainbar-r1-menu-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = BrainBarBackupSources.Paths(launchAgents: root, databaseLog: root.appendingPathComponent("backup.log"),
+            archiveLog: root.appendingPathComponent("archive.log"), maintenanceLog: root.appendingPathComponent("maintenance.log"),
+            snapshotDirectory: root, archiveDirectory: root)
+        for log in [paths.databaseLog, paths.archiveLog, paths.maintenanceLog] { try Data("private fixture".utf8).write(to: log) }
+        let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("fixture.env"))
+        let workspace = D1Workspace()
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+        let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
+            dashboardPanelController: panel, statusBar: TestStatusItemHost())
+        defer { controller.stop() }
+        controller.setLogPathsForTesting(paths)
+        controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []),
+            alertsURL: root.appendingPathComponent("absent-alerts.json"))
+        let menu = controller.contextMenuForTesting
+        let action = try XCTUnwrap(menu.items.first { $0.action == NSSelectorFromString("showJobAlertLog:") })
+        let dailyReason = "Daily stopped", jsonlReason = "JSONL stopped"
+        let clock = Date(timeIntervalSince1970: 1_792_814_400)
+        func install(daily: Bool, jsonl: Bool, recovered: Bool = false) throws {
+            var config = BrainLayerConfig.defaultConfig
+            config.launchdJobs[.backupDaily]?.enabled = daily
+            config.launchdJobs[.jsonlBackup]?.enabled = jsonl
+            try store.save(config)
+            let states: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [
+                .backupDaily: .failed(dailyReason), .jsonlBackup: recovered ? .loaded : .failed(jsonlReason)]
+            let model = BrainBarSettingsViewModel(workspace: workspace, store: store,
+                launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: states),
+                embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
+                initialLaunchdStates: states, refreshStatusOnLoad: false, now: { clock })
+            XCTAssertTrue(model.reloadConfigFromDisk(), "reload must retain the sampled failure alongside desired OFF")
+            runtime.jobsModel = model
+            controller.menuNeedsUpdate(menu)
+        }
+        func click(expected: URL, warning: String) throws {
+            XCTAssertEqual(menu.items.first?.toolTip, warning)
+            XCTAssertFalse(action.isHidden)
+            XCTAssertTrue(action.isEnabled)
+            let count = workspace.opened.count
+            XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
+            XCTAssertEqual(workspace.opened.count, count + 1)
+            XCTAssertEqual(workspace.opened.last, expected)
+        }
+        try install(daily: false, jsonl: true)
+        try click(expected: paths.archiveLog, warning: jsonlReason)
+        try install(daily: true, jsonl: false)
+        try click(expected: paths.databaseLog, warning: dailyReason)
+        try install(daily: true, jsonl: true)
+        try click(expected: paths.databaseLog, warning: dailyReason)
+        for recovered in [false, true] {
+            try install(daily: false, jsonl: recovered, recovered: recovered)
+            XCTAssertTrue(action.isHidden, "disabled history and recovered enabled jobs must not offer a menu action")
+            let count = workspace.opened.count
+            XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
+            XCTAssertEqual(workspace.opened.count, count, "a stale action must not open a historical failure")
+        }
+        try install(daily: false, jsonl: true)
+        try click(expected: paths.archiveLog, warning: jsonlReason)
+        controller.setBadgeForTesting(.init(badgeOn: true, reason: "Maintenance stopped", activeCodes: ["job_alert_maintenance-light"]),
+            alertsURL: root.appendingPathComponent("absent-alerts.json"))
+        controller.menuNeedsUpdate(menu)
+        try click(expected: paths.maintenanceLog, warning: "Maintenance stopped")
+    }
+
+    func testBackupLogTargetsUseTypedIdentityAndExcludeNonfailures() {
+        var config = BrainLayerConfig.defaultConfig
+        config.launchdJobs[.backupDaily]?.loadState = .failed("mentions jsonl-backup but belongs to daily")
+        config.launchdJobs[.jsonlBackup]?.loadState = .failed("private failure")
+        config.launchdJobs[.index]?.loadState = .failed("backup-daily")
+        XCTAssertEqual(BrainBarBackupLogTarget.failures(in: config).map(\.key), ["backup-daily", "jsonl-backup"])
+        config.launchdJobs[.backupDaily]?.enabled = false
+        XCTAssertEqual(BrainBarBackupLogTarget.failures(in: config).map(\.key), ["backup-daily", "jsonl-backup"],
+            "named screen controls retain historical failures even when the single menu target excludes them")
+        for state in [BrainLayerLaunchdLoadState.loaded, .running, .paused, .unknown, .probeError("backup-daily")] {
+            config.launchdJobs[.backupDaily]?.loadState = state
+            config.launchdJobs[.jsonlBackup]?.loadState = state
+            XCTAssertTrue(BrainBarBackupLogTarget.failures(in: config).isEmpty)
+        }
+    }
+
+    func testBackupsExposeStoppedBackupControlWithoutJobAlert() throws {
+        try assertStoppedBackupControl(on: .backups)
+    }
+
+    private func assertStoppedBackupControl(on section: BrainBarSettingsSection) throws {
+        let root = brainBarTestTemporaryDirectory().appendingPathComponent("brainbar-backup-control-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = BrainBarBackupSources.Paths(launchAgents: root, databaseLog: root.appendingPathComponent("backup.log"),
+            archiveLog: root.appendingPathComponent("archive.log"), maintenanceLog: root.appendingPathComponent("maintenance.log"),
+            snapshotDirectory: root, archiveDirectory: root)
+        let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("fixture.env"))
+        try store.save(.defaultConfig)
+        let reason = "Backup Daily: calendar result stopped, exit 143"
+        let clock = Date(timeIntervalSince1970: 1_792_814_400)
+        let workspace = D1Workspace()
+        let model = BrainBarSettingsViewModel(workspace: workspace, store: store,
+            launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [.backupDaily: .failed(reason)]),
+            embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
+            initialLaunchdStates: [.backupDaily: .failed(reason)], refreshStatusOnLoad: false, now: { clock },
+            backupSources: .init(paths: paths, readFile: { _ in nil }, listDirectory: { _ in [] }, isRegularFile: { _ in false }))
+        XCTAssertNil(model.jobAlert, "A calendar failure needs no unrelated job-alert entry")
+        let host = NSHostingView(rootView: BrainBarSettingsView(viewModel: model, initialSection: section))
+        host.frame = NSRect(x: 0, y: 0, width: 900, height: 1000)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        func text() throws -> [VNRecognizedTextObservation] {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesCPUOnly = true
+            try VNImageRequestHandler(cgImage: XCTUnwrap(bitmap.cgImage), options: [:]).perform([request])
+            return request.results ?? []
+        }
+        func buttons() -> [NSButton] {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            func walk(_ view: NSView) -> [NSButton] {
+                (view as? NSButton).map { [$0] } ?? [] + view.subviews.flatMap(walk)
+            }
+            return walk(host).filter { $0.accessibilityIdentifier() == "brainbar.backup.log.backupDaily" }
+        }
+        func click() throws {
+            let button = try XCTUnwrap(buttons().first, "\(section) must expose an actual stopped-backup control")
+            XCTAssertTrue(button.isEnabled)
+            XCTAssertFalse(button.isHiddenOrHasHiddenAncestor)
+            XCTAssertEqual(button.title, "Show log")
+            XCTAssertNotNil(button.action)
+            button.performClick(nil)
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+        try click()
+        XCTAssertEqual(workspace.opened.last?.path, root.path)
+        model.config.launchdJobs[.backupDaily]?.enabled = false
+        try click()
+        XCTAssertEqual(workspace.opened.last?.path, root.path, "a named historical control remains diagnostic")
+        model.config.launchdJobs[.backupDaily]?.enabled = true
+        try Data("private fixture".utf8).write(to: paths.databaseLog)
+        try click()
+        XCTAssertEqual(workspace.opened.last, paths.databaseLog)
+        workspace.acceptsOpen = false
+        try click()
+        XCTAssertTrue(try text().contains { $0.topCandidates(1).first?.string.contains("Could not open log") == true })
+        workspace.acceptsOpen = true
+        try click()
+        XCTAssertFalse(try text().contains { $0.topCandidates(1).first?.string.contains("Could not open log") == true })
+        model.config.launchdJobs[.backupDaily]?.loadState = .loaded
+        XCTAssertTrue(buttons().isEmpty)
+        try FileManager.default.removeItem(at: paths.databaseLog)
     }
 }
 
