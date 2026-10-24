@@ -26,6 +26,7 @@ def producer_documents(root: Path) -> list[dict]:
         "BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT": str(launchd),
         "BRAINLAYER_OBSERVABILITY_DISABLED_DIR": str(root / "absent-disabled"),
         "BRAINLAYER_JOB_ALERT_PATH": str(root / "absent-alerts.json"),
+        "BRAINLAYER_SUPERVISOR_SOCKET": str(root / "control.sock"),
     }
     prior = {
         "backup_log_provenance": "real",
@@ -50,6 +51,7 @@ def producer_documents(root: Path) -> list[dict]:
         "stale_offsite",
         "m1_weekly_alert",
         "verified_bundle",
+        "stopped",
     ):
         attempts = [{"attempted_at": "2026-09-13T10:00:00Z", "status": "no-op", "verified": True, "uploaded": False}]
         if name == "idle_old_upload":
@@ -94,7 +96,7 @@ def producer_documents(root: Path) -> list[dict]:
                 "uploaded": name in {"verified", "verified_bundle"},
                 "verified": name in {"verified", "verified_bundle"},
                 "upload_state": "in_progress"
-                if name == "stale_offsite"
+                if name in {"stale_offsite", "stopped"}
                 else "verified"
                 if name == "verified_bundle"
                 else name,
@@ -106,6 +108,26 @@ def producer_documents(root: Path) -> list[dict]:
             if name in {"failed", "abandoned"}:
                 local.update(error_type="SyntheticUploadFailure", error="Synthetic Drive rejected upload")
             receipts.append(local)
+        if name == "stopped":
+            local["attempted_at"] = "2026-09-13T09:59:01Z"
+            calendar = root / "calendar" / "runs.jsonl"
+            calendar.parent.mkdir()
+            start = datetime(2026, 9, 13, 9, 59, tzinfo=UTC).timestamp()
+            calendar.write_text(
+                "".join(
+                    json.dumps(row) + "\n"
+                    for row in [
+                        {"event": "spawn", "step": "backup-daily", "ts": start},
+                        {
+                            "event": "finished",
+                            "step": "backup-daily",
+                            "ts": start + 120,
+                            "status": "stopped",
+                            "returncode": 143,
+                        },
+                    ]
+                )
+            )
         daily.write_text("".join(json.dumps(row) + "\n" for row in receipts))
 
         def record(path, **kwargs):

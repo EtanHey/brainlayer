@@ -16,6 +16,91 @@ FIXTURES = Path(__file__).parent / "fixtures/observability"
 NOW = datetime(2026, 9, 13, 12, tzinfo=UTC)
 
 
+@pytest.mark.parametrize("state", ["pending", "in_progress"])
+@pytest.mark.parametrize(("status", "code"), [("stopped", 143), ("failed", 1), ("ok", 0)])
+def test_terminal_calendar_result_revokes_unfinished_upload_progress(tmp_path, state, status, code):
+    attempt = "2026-09-13T01:00:01+00:00"
+    receipt = {
+        "attempted_at": attempt,
+        "snapshot_created_at": attempt,
+        "snapshot": "/synthetic/2026-09-13.db.zst",
+        "local_verified": True,
+        "uploaded": False,
+        "verified": False,
+        "upload_state": state,
+    }
+    env, recorder = _two_copy_env(
+        tmp_path,
+        transcript_at=attempt,
+        daily=[
+            _db_receipt("2026-09-12T12:00:00+00:00", "old.db.zst"),
+            receipt,
+        ],
+    )
+    env["BRAINLAYER_SUPERVISOR_SOCKET"] = str(tmp_path / "control.sock")
+    calendar = tmp_path / "calendar" / "runs.jsonl"
+    calendar.parent.mkdir()
+    start = datetime.fromisoformat(attempt).timestamp() - 1
+    rows = [
+        {"event": "spawn", "step": "backup-daily", "ts": start},
+        {"event": "finished", "step": "backup-daily", "ts": start + 60, "status": status, "returncode": code},
+        # Later successful transcript recovery is not database upload success.
+        {"event": "finished", "step": "jsonl-backup", "ts": start + 70, "status": "ok", "returncode": 0},
+    ]
+    calendar.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+    assert result["local_snapshot"]["upload_state"] == "failed"
+    assert result["local_snapshot"]["upload_error"] == (
+        f"Backup daily {status}, exit {code}; upload incomplete (no verified completion receipt)"
+    )
+    assert result["db_snapshot"]["destination"] == "old.db.zst"
+    assert result["local_snapshot"]["local_verified"] is True
+    assert str(calendar) in [item["path"] for item in result["inputs"]]
+    schema = json.loads((FIXTURES / "observability-schema.v2.json").read_text())
+    jsonschema.validate(result, {"$defs": schema["$defs"], "$ref": "#/$defs/backups"})
+    # A new upload attempt must not inherit a previous run's terminal result.
+    log = Path(env["BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG"])
+    log.write_text(
+        log.read_text()
+        + json.dumps(
+            {
+                **receipt,
+                "backup_log_provenance": "real",
+                "attempted_at": "2026-09-13T02:00:00Z",
+            }
+        )
+        + "\n"
+    )
+    resumed = build_backups_section(env=env, record_input=recorder, now=NOW)
+    assert resumed["local_snapshot"]["upload_state"] == state
+    assert resumed["local_snapshot"]["upload_error"] is None
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [],
+        [{"event": "finished", "step": "backup-daily", "ts": 2, "status": "stopped", "returncode": 143}],
+        [{"event": "spawn", "step": "backup-daily", "ts": 1}],
+        [
+            {"event": "spawn", "step": "backup-daily", "ts": 3},
+            {"event": "finished", "step": "backup-daily", "ts": 1, "status": "stopped", "returncode": 143},
+        ],
+        [
+            {"event": "spawn", "step": "backup-snapshot", "ts": 1},
+            {"event": "finished", "step": "backup-snapshot", "ts": 3, "status": "ok", "returncode": 0},
+        ],
+        [
+            {"event": "spawn", "step": "backup-daily", "ts": 1},
+            {"event": "runner"},
+            {"event": "finished", "step": "backup-daily", "ts": 3, "status": "stopped", "returncode": 143},
+        ],
+    ],
+)
+def test_unrelated_or_unbound_calendar_result_cannot_fail_an_upload(rows):
+    assert observability_backup._terminal_upload_error({"attempted_at": "1970-01-01T00:00:02Z"}, rows) is None
+
+
 def _env(case: str) -> dict[str, str]:
     return {
         "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG": str(FIXTURES / f"logs/{case}/jsonl-backup.log"),

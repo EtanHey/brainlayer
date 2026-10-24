@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from brainlayer import backup_daily, jsonl_backup
 from brainlayer.backup_daily import _backup_log_path
@@ -173,7 +174,41 @@ def _db_snapshot_freshness(snapshot: dict[str, Any] | None, now: datetime) -> tu
     return "fresh", None
 
 
-def _local_snapshot(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _terminal_upload_error(local: dict[str, Any], calendar: Sequence[dict[str, Any]]) -> str | None:
+    """A durable checkpoint is not liveness after its owning calendar step ends."""
+    try:
+        attempt = datetime.fromisoformat(local["attempted_at"].replace("Z", "+00:00"))
+        if attempt.tzinfo is None:
+            return None
+        attempted_at = attempt.timestamp()
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+        return None
+    started = None
+    outcome = None
+    for row in calendar:
+        if row.get("event") == "runner":
+            started = None
+        if row.get("step") != "backup-daily":
+            continue
+        ts = row.get("ts")
+        if type(ts) not in (int, float) or not math.isfinite(ts):
+            continue
+        if row.get("event") == "spawn":
+            started = ts
+        elif row.get("event") == "finished":
+            status, code = row.get("status"), row.get("returncode")
+            if (
+                started is not None
+                and started <= attempted_at <= ts
+                and status in {"stopped", "failed", "ok"}
+                and type(code) is int
+            ):
+                outcome = f"Backup daily {status}, exit {code}; upload incomplete (no verified completion receipt)"
+            started = None
+    return outcome
+
+
+def _local_snapshot(records: list[dict[str, Any]], *, calendar: Sequence[dict[str, Any]] = ()) -> dict[str, Any] | None:
     real = [r for r in records if r.get("backup_log_provenance") == "real"]
     latest = {r["snapshot"]: r for r in real if isinstance(r.get("snapshot"), str)}
     # Cleanup receipts for older copies cannot replace the newest snapshot's display.
@@ -188,14 +223,19 @@ def _local_snapshot(records: list[dict[str, Any]]) -> dict[str, Any] | None:
         (r for r in reversed(list(latest.values())) if r.get("upload_state") in {"failed", "abandoned"}), None
     )
     error = failed or (real[-1] if real and (real[-1].get("error") or real[-1].get("verification_error")) else {})
+    terminal_error = (
+        _terminal_upload_error(local, calendar)
+        if local.get("upload_state") in {"pending", "in_progress"} and not local.get("uploaded")
+        else None
+    )
     created = backup_daily._snapshot_created_time(local)
     return {
         "last_at": created.astimezone(UTC).isoformat().replace("+00:00", "Z") if created else None,
         "destination": Path(local["snapshot"]).name,
         "local_verified": local.get("local_verified") is True,
         "uploaded": local.get("uploaded") is True,
-        "upload_state": local.get("upload_state", "pending"),
-        "upload_error": error.get("error") or error.get("verification_error"),
+        "upload_state": "failed" if terminal_error else local.get("upload_state", "pending"),
+        "upload_error": terminal_error or error.get("error") or error.get("verification_error"),
         "local_integrity": local.get("local_integrity"),
         "local_integrity_pragma": local.get("local_integrity_pragma"),
     }
@@ -379,6 +419,19 @@ def build_backups_section(
         max_age_seconds=DEFAULT_JSONL_BACKUP_MAX_AGE_SECONDS,
     )
     snapshot, error_type, all_daily_errors = _daily_snapshot(daily_records)
+    local_snapshot = _local_snapshot(daily_records)
+    if local_snapshot is not None and local_snapshot["upload_state"] in {"pending", "in_progress"}:
+        control = Path(
+            env.get("BRAINLAYER_SUPERVISOR_SOCKET") or Path.home() / ".local/share/brainlayer/supervisor/control.sock"
+        ).expanduser()
+        calendar_path = control.parent / "calendar/runs.jsonl"
+        calendar, calendar_status, _ = _read_json_lines(calendar_path, mixed=False)
+        calendar_input = record_input(calendar_path, status=calendar_status, rows_or_bytes=None)
+        inputs.append(calendar_input)
+        if calendar_input.get("status") == "future":
+            return _unmeasurable(f"input mtime is later than generated_at: {calendar_input['path']}", inputs)
+        if calendar_status == "read":
+            local_snapshot = _local_snapshot(daily_records, calendar=calendar)
     if error_type == "drive_credentials_missing" and _drive_token_is_usable(backup_daily.DEFAULT_TOKEN_PATH):
         error_type = "drive_credentials_restored_backup_pending"
     if error_type is None and health_issue is not None and health.state in {"invalid", "stale", "failed"}:
@@ -446,6 +499,6 @@ def build_backups_section(
             "disabled_dir_present": disabled_present,
         },
         "db_snapshot": snapshot,
-        **({"local_snapshot": _local_snapshot(daily_records)} if _local_snapshot(daily_records) is not None else {}),
+        **({"local_snapshot": local_snapshot} if local_snapshot is not None else {}),
         "error_type": error_type,
     }
