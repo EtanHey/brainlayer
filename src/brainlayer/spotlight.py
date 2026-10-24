@@ -1,6 +1,7 @@
 """Lightweight Spotlight exclusion layout preflight."""
 
 import os
+import stat
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
@@ -26,7 +27,6 @@ _UNSUPPORTED_RUNTIME_PATH_OVERRIDES = (
     "BRAINLAYER_DRAIN_LOG_PATH",
     "BRAINLAYER_ENRICH_COST_DIR",
     "BRAINLAYER_JSONL_BACKUP_LOG_PATH",
-    "BRAINLAYER_JSONL_BACKUP_STAGING_DIR",
     "BRAINLAYER_JSONL_BACKUP_STATE_PATH",
     "BRAINLAYER_LOG_DIR",
     "BRAINLAYER_OFFSETS_PATH",
@@ -87,6 +87,52 @@ def _validate_disjoint_roots(roots: Tuple[Path, ...]) -> None:
                 raise RuntimeError(f"Spotlight exclusion roots must not overlap: {other} and {root}")
 
 
+def _validate_jsonl_staging_override(
+    env_file: Optional[Path], data_roots: Tuple[Path, ...], *, ismount: Callable[[Path], bool]
+) -> None:
+    from .config import configured_brainlayer_env_value
+
+    name = "BRAINLAYER_JSONL_BACKUP_STAGING_DIR"
+    configured = configured_brainlayer_env_value(name, env_file) if env_file is not None else None
+    # Validate both launchd's selected file and the current CLI's process-first value.
+    for value in dict.fromkeys((configured, os.environ.get(name, configured))):
+        if value in (None, ""):
+            continue
+        stage = Path(value)
+        if not stage.is_absolute() or ".." in stage.parts:
+            raise RuntimeError(f"{name} must be an absolute path without parent traversal: {stage}")
+        root = next(
+            (root for root in data_roots if root / "jsonl-backups" in stage.parents),
+            None,
+        )
+        if root is None:
+            raise RuntimeError(f"{name} must be a dedicated descendant of a managed jsonl-backups directory: {stage}")
+        for component in (*reversed(stage.parents), stage):
+            try:
+                info = component.lstat()
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISDIR(info.st_mode):
+                raise RuntimeError(f"{name} ancestor must be a directory, never a symbolic link: {component}")
+            if info.st_uid not in (0, os.geteuid()) or info.st_mode & 0o022:
+                raise RuntimeError(f"{name} has an unsafe ancestor owner or mode: {component}")
+            if (component == root or root in component.parents) and ismount(component):
+                raise RuntimeError(f"{name} must not cross a mount boundary: {component}")
+            if component == stage and (info.st_uid != os.geteuid() or info.st_mode & 0o077):
+                raise RuntimeError(f"{name} must be a private directory owned by the current user: {stage}")
+        marker = root / SPOTLIGHT_EXCLUSION_MARKER
+        try:
+            marker_info = marker.lstat()
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"{name} requires a marker-backed managed data root: {root}") from exc
+        if (
+            not stat.S_ISREG(marker_info.st_mode)
+            or marker_info.st_uid not in (0, os.geteuid())
+            or marker_info.st_mode & 0o022
+        ):
+            raise RuntimeError(f"{name} requires a safe regular exclusion marker: {marker}")
+
+
 def _ensure_spotlight_excluded_root(root: Path, children: Tuple[str, ...] = ()) -> Path:
     resolved = root.expanduser()
     resolved.mkdir(parents=True, exist_ok=True)
@@ -145,6 +191,7 @@ def ensure_spotlight_excluded_layout(
         if root.is_dir() and not marker.is_file() and next(root.iterdir(), None) is not None:
             raise RuntimeError(f"existing runtime tree {root} requires the Spotlight exclusion migration runbook")
 
+    _validate_jsonl_staging_override(env_file, tuple(resolved_roots[: len(data_roots)]), ismount=ismount_fn)
     data_root_count = len(data_roots)
     return (
         *(_ensure_spotlight_excluded_root(root, _DATA_CHILDREN) for root in resolved_roots[:data_root_count]),
