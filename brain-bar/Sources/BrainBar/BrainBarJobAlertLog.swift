@@ -1,4 +1,82 @@
 import Foundation
+import SwiftUI
+
+/// Diagnostic identity comes from the typed job state, never from its displayed error text.
+struct BrainBarBackupLogTarget: Equatable, Identifiable {
+    let job: BrainLayerLaunchdJob
+    let key: String
+    let reason: String
+    var id: BrainLayerLaunchdJob { job }
+
+    static func failures(in config: BrainLayerConfig) -> [Self] {
+        BrainLayerLaunchdJobGroup.backups.jobs.compactMap { job in
+            guard case let .failed(reason) = config.launchdJobs[job]?.loadState else { return nil }
+            let key: String
+            switch job {
+            case .backupDaily: key = "backup-daily"
+            case .jsonlBackup: key = "jsonl-backup"
+            default: return nil
+            }
+            return Self(job: job, key: key, reason: reason)
+        }
+    }
+}
+
+/// Shared by Jobs and Backups, including calendar failures with no job-alert entry.
+struct BrainBarBackupFailureLogs: View {
+    @ObservedObject var model: BrainBarSettingsViewModel
+
+    var body: some View {
+        ForEach(BrainBarBackupLogTarget.failures(in: model.config)) { target in
+            BrainBarBackupFailureLogRow(model: model, target: target)
+        }
+    }
+}
+
+private struct BrainBarBackupFailureLogRow: View {
+    @ObservedObject var model: BrainBarSettingsViewModel
+    let target: BrainBarBackupLogTarget
+    @State private var note: BrainBarJobAlertLogNote?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(target.job.title).font(.system(size: 12, weight: .semibold))
+                Spacer()
+                BrainBarBackupLogButton(job: target.job) {
+                    note = .init(reason: target.reason, message: model.showBackupLog(target).message)
+                }
+                .fixedSize()
+            }
+            if let note, note.reason == target.reason {
+                Text(note.message).font(.system(size: 11)).textSelection(.enabled)
+            }
+        }
+    }
+}
+
+/// A native action control, shared by both failure surfaces.
+private struct BrainBarBackupLogButton: NSViewRepresentable {
+    let job: BrainLayerLaunchdJob
+    let action: @MainActor () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(title: "Show log", target: context.coordinator, action: #selector(Coordinator.press))
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.setAccessibilityIdentifier("brainbar.backup.log.\(job.rawValue)")
+        button.sizeToFit()
+        return button
+    }
+    func updateNSView(_ button: NSButton, context: Context) { context.coordinator.action = action }
+
+    @MainActor final class Coordinator: NSObject {
+        var action: @MainActor () -> Void
+        init(action: @escaping @MainActor () -> Void) { self.action = action }
+        @objc func press() { action() }
+    }
+}
 
 /// The acknowledged result shared by the menu, Dashboard, and Backups page.
 enum BrainBarJobAlertLogResult: Equatable, Sendable {
