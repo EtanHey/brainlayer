@@ -432,6 +432,17 @@ final class BrainBarSettingsViewModel: ObservableObject {
         jobAlertLogNote = BrainBarJobAlertLogNote(reason: BrainBarJobAlerts.rawReason(document), message: message)
     }
 
+    func showBackupLog(_ target: BrainBarBackupLogTarget) -> BrainBarJobAlertLogResult {
+        guard BrainBarBackupLogTarget.failures(in: config).contains(target) else {
+            return .failed(message: "Backup failure changed; check its current status.")
+        }
+        let dbPath: String
+        if case let .readable(document) = observabilityResult { dbPath = document.dbPath }
+        else { dbPath = BrainBarServer.defaultDBPath() }
+        return BrainBarJobAlerts.showLog(forKey: target.key,
+            paths: backupSources?.paths ?? .live(databasePath: dbPath), workspace: workspace)
+    }
+
     /// The note's sentence, only while its alert is still the current one (Macroscope #1062).
     var jobAlertLogMessage: String? {
         guard let note = jobAlertLogNote, case let .readable(document) = observabilityResult,
@@ -1053,10 +1064,12 @@ struct BrainBarSettingsView: View {
         switch navigation.selected {
         case .jobs:
             VStack(alignment: .leading, spacing: 16) {
+                BrainBarBackupFailureLogs(model: viewModel)
                 jobsGrid
             }
         case .backups:
             VStack(alignment: .leading, spacing: 16) {
+                BrainBarBackupFailureLogs(model: viewModel)
                 if let alert = viewModel.jobAlert {
                     BrainBarJobAlertCard(alert: alert, logMessage: viewModel.jobAlertLogMessage) { viewModel.showJobAlertLog() }
                 }

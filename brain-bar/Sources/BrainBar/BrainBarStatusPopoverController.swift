@@ -53,6 +53,8 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #if BRAINBAR_UI
     private var logPathsOverride: BrainBarBackupSources.Paths?
     private var logNote: (key: String, reason: String, message: String)?
+    private var activeLogKey: String?
+    private var activeLogReason = ""
     private let logNoteItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var backupReceiptItems: [NSMenuItem] = []
     private var logPaths: BrainBarBackupSources.Paths {
@@ -75,7 +77,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private var latestStats: BrainDatabase.DashboardStats?
     private var latestState: PipelineState?
     private let statusLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    /// Shown under the status line only while a job alert is active.
+    /// Shown for a job alert or a structured backup failure.
     private let showLogItem = NSMenuItem(title: BrainBarStatusPopoverController.showLogTitle, action: nil, keyEquivalent: "")
 
     init(
@@ -138,6 +140,13 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
     ) -> String? {
         guard let key = jobAlertKey(for: badge) else { return nil }
+        return showLogItemTitle(forKey: key, paths: paths, fileExists: fileExists)
+    }
+
+    private static func showLogItemTitle(
+        forKey key: String, paths: BrainBarBackupSources.Paths,
+        fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
+    ) -> String {
         if let log = BrainBarJobAlerts.logURL(forKey: key, paths: paths), fileExists(log) { return showLogTitle }
         return "Open logs folder"
     }
@@ -290,9 +299,15 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         }
         var menuBadge = badgePresentation
 #if BRAINBAR_UI
+        activeLogKey = Self.jobAlertKey(for: badgePresentation)
+        activeLogReason = badgePresentation.reason
         for item in backupReceiptItems { menu.removeItem(item) }
         backupReceiptItems.removeAll()
         if let model = runtime.jobsModel {
+            if activeLogKey == nil, let failure = BrainBarBackupLogTarget.failures(in: model.config).first {
+                activeLogKey = failure.key
+                activeLogReason = failure.reason
+            }
             let drive = DriveAuthPresentation.derive(status: runtime.driveAuth.status,
                 isReconnecting: runtime.driveAuth.isReconnecting, lastOutcome: runtime.driveAuth.lastOutcome,
                 now: model.observabilityNow, formatDate: BrainBarDriveAuthFormat.date)
@@ -322,15 +337,15 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #endif
         statusLineItem.title = Self.statusLineTitle(for: menuBadge)
         statusLineItem.toolTip = menuBadge.reason.isEmpty ? nil : menuBadge.reason
-        showLogItem.isHidden = Self.jobAlertKey(for: badgePresentation) == nil
 #if BRAINBAR_UI
-        let key = Self.jobAlertKey(for: badgePresentation)
-        if let key, let title = Self.showLogItemTitle(for: badgePresentation, paths: logPaths) {
-            showLogItem.title = title
+        let key = activeLogKey
+        showLogItem.isHidden = key == nil
+        if let key {
+            showLogItem.title = Self.showLogItemTitle(forKey: key, paths: logPaths)
             showLogItem.isEnabled = true
-            showLogItem.toolTip = title == Self.showLogTitle ? nil : BrainBarJobAlerts.missingLogMessage(forKey: key)
+            showLogItem.toolTip = showLogItem.title == Self.showLogTitle ? nil : BrainBarJobAlerts.missingLogMessage(forKey: key)
         }
-        if logNote?.key != key || logNote?.reason != badgePresentation.reason { logNote = nil }
+        if logNote?.key != key || logNote?.reason != activeLogReason { logNote = nil }
         logNoteItem.title = logNote?.message ?? ""
         logNoteItem.toolTip = logNote?.message
         logNoteItem.isHidden = logNote == nil
@@ -395,9 +410,10 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
 #if BRAINBAR_UI
     @objc private func showJobAlertLog(_ sender: Any?) {
-        guard let key = Self.jobAlertKey(for: badgePresentation) else { return }
+        menuNeedsUpdate(contextMenuForTesting)
+        guard let key = activeLogKey else { return }
         let result = BrainBarJobAlerts.showLog(forKey: key, paths: logPaths, workspace: workspace)
-        logNote = result.message.map { (key, badgePresentation.reason, $0) }
+        logNote = result.message.map { (key, activeLogReason, $0) }
         menuNeedsUpdate(contextMenuForTesting)
     }
 #endif
