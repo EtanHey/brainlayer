@@ -577,6 +577,7 @@ struct BrainBarBackupsHealth: Equatable, Sendable {
         case .attention, .connected, nil: break
         }
         if job.health == .healthy || job.health == .awaitingRun {
+            if status?.uploadUnconfirmed == true { return .init(badge: .unknown, reason: status?.snapshotUpload?.text) }
             if status?.uploadInProgress == true { return .init(badge: status?.uploadQueued == true ? .queued : .uploading, reason: status?.snapshotUpload?.text) }
             if status?.upload.tone == .neutral { return .init(badge: .idle, reason: status?.upload.text) }
         }

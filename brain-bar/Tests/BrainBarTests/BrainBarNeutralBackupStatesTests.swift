@@ -78,10 +78,21 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
             let checks = BrainBarBackupChecks.derive(b, now: now)
             XCTAssertEqual(checks.checks[1].tone, .green)
             XCTAssertEqual(checks.checks[2].tone, .neutral)
-            XCTAssertEqual(checks.checks[2].value, state == "pending" ? "Upload queued" : "Upload in progress")
+            XCTAssertEqual(checks.checks[2].value, state == "pending" ? "Upload queued" : "Upload checkpoint saved; current activity unknown")
             XCTAssertNil(checks.attentionSentence)
             XCTAssertTrue(checks.details.contains { $0.value.contains("previous.db.gz") })
         }
+    }
+
+    func testCheckpointWithoutLivenessProofIsUnknownAndCannotHideStoppedJob() throws {
+        let b = try document(attempt: true, pending: "in_progress").backups
+        let status = ObservabilityPresentation.backupStatus(for: b, now: now)
+        XCTAssertFalse(status.uploadInProgress)
+        XCTAssertEqual(status.snapshotUpload?.text, "Upload checkpoint saved; current activity unknown")
+        XCTAssertEqual(BrainBarBackupChecks.derive(b, now: now).summary, "Upload activity unknown")
+        let stopped = ObservabilityStatusLine(text: "Backup Daily: calendar result stopped, exit 143", tone: .red)
+        let failure = ObservabilityPresentation.backupStatus(for: b, jobStatus: stopped, now: now)
+        XCTAssertEqual(failure.attentionLine?.text, stopped.text)
     }
 
     func testFailedUploadShowsActualReason() throws {
@@ -212,7 +223,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
                 XCTAssertNotNil(checks.attentionSentence)
             case "pending", "in_progress":
                 XCTAssertEqual(status.snapshotUpload?.tone, .neutral, name)
-                XCTAssertEqual(status.snapshotUpload?.text, name == "pending" ? "Upload queued" : "Upload in progress")
+                XCTAssertEqual(status.snapshotUpload?.text, name == "pending" ? "Upload queued" : "Upload checkpoint saved; current activity unknown")
                 XCTAssertEqual(doc.backups.dbSnapshot?.destination, "previous.db.gz")
                 XCTAssertNil(checks.attentionSentence)
             case "failed", "abandoned":
@@ -253,7 +264,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
             let lines = ObservabilityPresentation.backupStatus(for: doc.backups, now: now)
             let healthy = BrainLayerLaunchdGroupStatus(health: .healthy, attentionReason: nil, lastRunText: "", nextRunText: "")
             let badge = BrainBarBackupsHealth.derive(job: healthy, drive: nil, status: lines, statusUnavailableReason: "missing")
-            XCTAssertEqual(badge.badge, state == nil ? .idle : state == "pending" ? .queued : .uploading)
+            XCTAssertEqual(badge.badge, state == nil ? .idle : state == "pending" ? .queued : .unknown)
             let failed = BrainLayerLaunchdGroupStatus(health: .unhealthy,
                 attentionReason: "Weekly maintenance missed its quiet window", lastRunText: "", nextRunText: "")
             XCTAssertEqual(BrainBarBackupsHealth.derive(job: failed, drive: nil, status: lines, statusUnavailableReason: "").badge, .attention)

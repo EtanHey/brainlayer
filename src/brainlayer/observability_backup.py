@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -174,42 +175,69 @@ def _db_snapshot_freshness(snapshot: dict[str, Any] | None, now: datetime) -> tu
     return "fresh", None
 
 
-def _terminal_upload_error(local: dict[str, Any], calendar: Sequence[dict[str, Any]]) -> str | None:
-    """A durable checkpoint is not liveness after its owning calendar step ends."""
+def _read_calendar(path: Path) -> tuple[list[dict[str, Any]], str, int]:
+    """Retain complete evidence; a damaged append is a barrier, never an invisible join."""
     try:
-        attempt = datetime.fromisoformat(local["attempted_at"].replace("Z", "+00:00"))
-        if attempt.tzinfo is None:
-            return None
-        attempted_at = attempt.timestamp()
-    except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
-        return None
-    started = None
+        lines = path.read_bytes().splitlines(keepends=True)
+    except FileNotFoundError:
+        return [], "missing", 0
+    except OSError:
+        return [], "malformed", 0
+    records, skipped = [], 0
+    for line in lines:
+        try:
+            row = json.loads(line)
+            if not line.endswith(b"\n") or not isinstance(row, dict):
+                raise ValueError("incomplete calendar record")
+        except ValueError:
+            records.append({"event": "journal-gap"})
+            skipped += 1
+        else:
+            records.append(row)
+    return records, "read" if len(records) > skipped else "malformed" if lines else "empty", skipped
+
+
+def _terminal_upload_error(local: dict[str, Any], calendar: Sequence[dict[str, Any]]) -> str | None:
+    """Only an admitted receipt's unique invocation can bind a terminal result."""
+    invocation = local.get("backup_invocation_id")
+    if not isinstance(invocation, str) or not re.fullmatch(r"[0-9a-f]{32}", invocation):
+        return None  # Legacy timestamps prove no ownership, including lock-losing contenders.
+    started, seen = None, False
     outcome = None
     for row in calendar:
-        if row.get("event") == "runner":
-            started = None
-        if row.get("step") != "backup-daily":
+        if row.get("event") in {"runner", "journal-gap"} and started is not None and outcome is None:
+            return None
+        if row.get("backup_invocation_id") != invocation:
             continue
+        if row.get("step") != "backup-daily":
+            return None
         ts = row.get("ts")
         if type(ts) not in (int, float) or not math.isfinite(ts):
-            continue
+            return None
         if row.get("event") == "spawn":
-            started = ts
+            if seen:
+                return None
+            started, seen = ts, True
         elif row.get("event") == "finished":
             status, code = row.get("status"), row.get("returncode")
             if (
-                started is not None
-                and started <= attempted_at <= ts
-                and status in {"stopped", "failed", "ok"}
-                and type(code) is int
+                started is None
+                or outcome is not None
+                or ts < started
+                or status not in {"stopped", "failed", "ok"}
+                or type(code) is not int
             ):
-                outcome = f"Backup daily {status}, exit {code}; upload incomplete (no verified completion receipt)"
-            started = None
+                return None
+            outcome = f"Backup daily {status}, exit {code}; upload incomplete (no verified completion receipt)"
     return outcome
 
 
 def _local_snapshot(records: list[dict[str, Any]], *, calendar: Sequence[dict[str, Any]] = ()) -> dict[str, Any] | None:
-    real = [r for r in records if r.get("backup_log_provenance") == "real"]
+    real = [
+        r
+        for r in records
+        if r.get("backup_log_provenance") == "real" and r.get("error_type") != "BackupAlreadyRunningError"
+    ]
     latest = {r["snapshot"]: r for r in real if isinstance(r.get("snapshot"), str)}
     # Cleanup receipts for older copies cannot replace the newest snapshot's display.
     local = max(
@@ -425,8 +453,8 @@ def build_backups_section(
             env.get("BRAINLAYER_SUPERVISOR_SOCKET") or Path.home() / ".local/share/brainlayer/supervisor/control.sock"
         ).expanduser()
         calendar_path = control.parent / "calendar/runs.jsonl"
-        calendar, calendar_status, _ = _read_json_lines(calendar_path, mixed=False)
-        calendar_input = record_input(calendar_path, status=calendar_status, rows_or_bytes=None)
+        calendar, calendar_status, skipped = _read_calendar(calendar_path)
+        calendar_input = record_input(calendar_path, status=calendar_status, rows_or_bytes=None, skipped_lines=skipped)
         inputs.append(calendar_input)
         if calendar_input.get("status") == "future":
             return _unmeasurable(f"input mtime is later than generated_at: {calendar_input['path']}", inputs)

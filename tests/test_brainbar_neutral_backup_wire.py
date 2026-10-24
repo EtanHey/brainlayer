@@ -110,6 +110,7 @@ def producer_documents(root: Path) -> list[dict]:
             receipts.append(local)
         if name == "stopped":
             local["attempted_at"] = "2026-09-13T09:59:01Z"
+            local["backup_invocation_id"] = "a" * 32
             calendar = root / "calendar" / "runs.jsonl"
             calendar.parent.mkdir()
             start = datetime(2026, 9, 13, 9, 59, tzinfo=UTC).timestamp()
@@ -117,13 +118,14 @@ def producer_documents(root: Path) -> list[dict]:
                 "".join(
                     json.dumps(row) + "\n"
                     for row in [
-                        {"event": "spawn", "step": "backup-daily", "ts": start},
+                        {"event": "spawn", "step": "backup-daily", "ts": start, "backup_invocation_id": "a" * 32},
                         {
                             "event": "finished",
                             "step": "backup-daily",
                             "ts": start + 120,
                             "status": "stopped",
                             "returncode": 143,
+                            "backup_invocation_id": "a" * 32,
                         },
                     ]
                 )

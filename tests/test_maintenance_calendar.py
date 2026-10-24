@@ -14,6 +14,37 @@ from brainlayer.maintenance_calendar import calendar_steps, run_calendar
 from tests.test_maintenance_control import control, native  # noqa: F401
 
 
+def test_calendar_invocation_is_fresh_and_reaches_actual_child_and_terminal(tmp_path, monkeypatch):
+    from brainlayer import maintenance_calendar as calendar
+
+    (tmp_path / "fixture.env").write_text("")
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "fixture.env"))
+    monkeypatch.setenv(calendar.BACKUP_INVOCATION_ENV, "f" * 32)
+    monkeypatch.setattr(calendar, "report", lambda *_args: None)
+    monkeypatch.setattr(
+        calendar.maintenance_control,
+        "control_client",
+        lambda: SimpleNamespace(path=tmp_path / "unused.sock", request=lambda: {}, _disabled=lambda *_a, **_k: set()),
+    )
+    step = calendar.Step(
+        "backup-daily",
+        (sys.executable, "-c", f"import os; print(os.environ[{calendar.BACKUP_INVOCATION_ENV!r}])"),
+        5,
+        {calendar.BACKUP_INVOCATION_ENV: "f" * 32},
+    )
+    directory, logs = tmp_path / "calendar", tmp_path / "logs"
+    for _ in range(2):
+        assert (
+            asyncio.run(calendar.run_calendar([step], directory, logs, now_fn=lambda: dt.datetime(2026, 10, 24, 5)))
+            == 0
+        )
+    rows = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
+    spawned = [r["backup_invocation_id"] for r in rows if r["event"] == "spawn"]
+    finished = [r["backup_invocation_id"] for r in rows if r["event"] == "finished"]
+    assert spawned == finished == (logs / "backup-daily.out.log").read_text().splitlines()
+    assert len(set(spawned)) == 2 and "f" * 32 not in spawned
+
+
 @pytest.mark.parametrize("first,at,code", [("index", 3, 124), ("index", 4, 75), ("backup-snapshot", 6, 75)])
 @pytest.mark.parametrize(
     "notification_error",

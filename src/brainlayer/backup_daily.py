@@ -86,6 +86,7 @@ SNAPSHOT_RECEIPT_RESERVE_SECONDS = 60
 BACKUP_LOCAL_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS"
 BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
+BACKUP_INVOCATION_ENV = "BRAINLAYER_BACKUP_INVOCATION_ID"
 BACKUP_SQLITE_CHECK_TIMEOUT_ENV = "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS"
 BACKUP_DRIVE_RETENTION_ENV = "BRAINLAYER_BACKUP_DRIVE_RETENTION"
 DRIVE_UPLOAD_DEADLINE_FLOOR_ENV = "BRAINLAYER_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS"
@@ -2924,6 +2925,9 @@ def run_backup(
         "retention_deleted": [],
         "local_gzip_retention_deleted": [],
     }
+    invocation = os.environ.get(BACKUP_INVOCATION_ENV, "")
+    if re.fullmatch(r"[0-9a-f]{32}", invocation):
+        result["backup_invocation_id"] = invocation  # This body runs only after staging-lock admission.
 
     def record_reclamation_status(status: str, error: str | None) -> None:
         result["attempt_reclamation"] = status

@@ -438,6 +438,7 @@ struct ObservabilityBackupStatus: Equatable, Sendable {
     var snapshotUpload: ObservabilityStatusLine? = nil
     var uploadInProgress = false
     var uploadQueued = false
+    var uploadUnconfirmed = false
     var freshnessCheckTitle = "Up to date"
     var freshnessCheckValue = "Unknown"
 
@@ -620,7 +621,7 @@ enum ObservabilityPresentation {
             } else if pendingState && staleOffsite {
                 snapshotUpload = .init(text: staleText, tone: .red)
             } else if backups.localUploadPending(now: now) {
-                snapshotUpload = .init(text: value.uploadState == "pending" ? "Upload queued" : "Upload in progress", tone: .neutral)
+                snapshotUpload = .init(text: value.uploadState == "pending" ? "Upload queued" : "Upload checkpoint saved; current activity unknown", tone: .neutral)
             } else if !value.localVerified || value.lastAt.map({ !backups.isRecent($0, now: now) }) != false ||
                         !value.uploaded || value.uploadState != "verified" {
                 snapshotUpload = .init(text: "Local DB snapshot missing verification or stale", tone: .red)
@@ -710,8 +711,9 @@ enum ObservabilityPresentation {
         return .init(
             upload: upload, snapshot: snapshot, job: job, freshness: freshness,
             retention: retention, archives: archives, error: error,
-            errorIsJobAlert: backups.errorType?.hasPrefix(jobAlertPrefix) == true, snapshotUpload: snapshotUpload, uploadInProgress: backups.localUploadPending(now: now),
+            errorIsJobAlert: backups.errorType?.hasPrefix(jobAlertPrefix) == true, snapshotUpload: snapshotUpload, uploadInProgress: backups.localUploadPending(now: now) && backups.localSnapshot?.uploadState == "pending",
             uploadQueued: backups.localSnapshot?.uploadState == "pending",
+            uploadUnconfirmed: backups.localUploadPending(now: now) && backups.localSnapshot?.uploadState == "in_progress",
             freshnessCheckTitle: freshnessCheckTitle, freshnessCheckValue: freshnessCheckValue
         )
     }
