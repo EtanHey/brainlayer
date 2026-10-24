@@ -67,8 +67,9 @@ Duplicate(c) == /\ c \in Completed /\ ambiguous' = ambiguous \cup {c}
                 /\ UNCHANGED <<phase, lock, nonce, bodySpan, receiptOwner, receiptNonce,
                                receiptSpan, receipt, terminal, gap, tail, verifiedHistory, paused>>
 BadTail == /\ Completed # {} /\ tail' = TRUE
+           /\ gap' = gap \cup OpenCalendars
            /\ UNCHANGED <<phase, lock, nonce, bodySpan, receiptOwner, receiptNonce,
-                          receiptSpan, receipt, terminal, gap, ambiguous, verifiedHistory, paused>>
+                          receiptSpan, receipt, terminal, ambiguous, verifiedHistory, paused>>
 PauseResume == /\ paused' = ~paused
                /\ UNCHANGED <<phase, lock, nonce, bodySpan, receiptOwner, receiptNonce,
                               receiptSpan, receipt, terminal, gap, ambiguous, tail, verifiedHistory>>

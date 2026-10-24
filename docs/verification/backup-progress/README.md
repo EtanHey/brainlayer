@@ -60,7 +60,7 @@ java -XX:+UseParallelGC -Xmx512m -cp "$TLA2TOOLS" tlc2.TLC -workers 1 -seed 123 
 java -XX:+UseParallelGC -Xmx512m -cp "$TLA2TOOLS" tlc2.TLC -workers 1 -seed 123 -fp 0 -metadir .build.noindex/tlc-owner-corrected -config docs/verification/backup-progress/corrected.cfg docs/verification/backup-progress/BackupProgress.tla
 ```
 
-Actual TLC2 2.19 (08 August2024, revision5a47802), Java17.0.19, one worker:
+Historical e26 TLC2 2.19 (08 August2024, revision5a47802), Java17.0.19, one worker:
 
 - Old timestamp rule: exit12,2177 generated/849 distinct, depth7. Calendar spawns;
   manual wins lock; calendar loses and finishes failed; manual receipt is falsely
@@ -69,3 +69,32 @@ Actual TLC2 2.19 (08 August2024, revision5a47802), Java17.0.19, one worker:
   the manual checkpoint; the unrelated calendar failure revokes its progress.
 - Corrected binding: exit0,9943909 generated/1201546 distinct, depth29, empty
   queue; no invariant violation. These are bounded source-model results only.
+
+
+## R2 damaged-tail fidelity correction
+
+R2 remains historically CHANGES at e26: the full 1201546-state green run above
+missed a damaged tail during a later open invocation. BadTail set only tail,
+leaving the interrupted pair eligible. That run did not validate this boundary.
+BadTail now also adds OpenCalendars to gap. Its guard and actor schedule are
+unchanged: a complete earlier pair survives, while every open pair is interrupted.
+
+The reviewer's exact nine-action replay reached ten states and failed
+InterruptedPairDeclined before this fix (exit12); the unchanged replay now passes
+(exit0,10 generated/10 distinct,depth10). InterruptedTailRegression.tla imports
+the actual model and retains that schedule. Its second invariant re-evaluates
+actual imported Bound with receiptNonce=1 to check earlier completed evidence;
+it does not copy or redefine the binder. Both invariants pass at the terminal
+state; the regression also failed before the transition fix. Run it with:
+
+```sh
+java -XX:+UseParallelGC -Xmx256m -cp "$TLA2TOOLS" tlc2.TLC -workers 1 -seed 123 -fp 0 -metadir .build.noindex/tlc-interrupted-tail -config docs/verification/backup-progress/InterruptedTailRegression.cfg docs/verification/backup-progress/InterruptedTailRegression.tla
+```
+
+Same full actors/bounds/configs, one worker,seed123/fp0, TLC2 2.19/Java17.0.19:
+corrected exit0,9943909 generated/1201546 distinct,depth28,queue0; old rule
+exit12,2231 generated/891 distinct,depth7; old in_progress rule exit12,7335
+generated/2667 distinct,depth8. Original logs/results remain preserved.
+Production source/test trees are frozen to e26. R2 source closures are retained;
+this narrow model delta awaits parent acceptance and does not establish installed
+backup delivery or authorize recovery. No generic R3 is requested.
