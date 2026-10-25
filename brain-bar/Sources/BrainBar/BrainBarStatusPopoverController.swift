@@ -66,6 +66,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private let dashboardPanelController: BrainBarDashboardPanelController
     private let statusBar: any BrainBarStatusItemHosting
     private var isStopped = false
+    private var isMenuTracking = false
     private var runtimeCancellables: Set<AnyCancellable> = []
     private var collectorCancellables: Set<AnyCancellable> = []
     private let badgeReadQueue = DispatchQueue(label: "com.brainlayer.brainbar.badge-read", qos: .utility)
@@ -170,6 +171,8 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         runtimeCancellables.removeAll()
         collectorCancellables.removeAll()
         badgeReadGeneration = UUID()
+        contextMenuForTesting.cancelTracking()
+        isMenuTracking = false
         close(nil)
         dashboardPanelController.statusItemButton = nil
         contextMenuForTesting.delegate = nil
@@ -252,6 +255,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
     private func renderStatusIcon(stats: BrainDatabase.DashboardStats, state _: PipelineState) {
+        // Setting NSStatusBarButton.image relayouts its variable-length status item.
+        // Keep AppKit's tracking anchor stable; collectors still cache the latest state.
+        guard !isStopped, !isMenuTracking else { return }
         let badge = badgePresentation
         // Three overlapping pipeline lines (Agent stores / JSONL watcher / Enrichment)
         // with an always-visible baseline so the icon stays legible on a dark
@@ -270,6 +276,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
     private func updateTooltip() {
+        guard !isStopped, !isMenuTracking else { return }
         statusItemForTesting.button?.toolTip = badgePresentation.badgeOn
             ? "BrainBar — needs attention: \(badgePresentation.reason)"
             : "BrainBar"
@@ -285,6 +292,26 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         jobAlertsURL = alertsURL
     }
 #endif
+
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === contextMenuForTesting, !isStopped else { return }
+        isMenuTracking = true
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === contextMenuForTesting, isMenuTracking else { return }
+        isMenuTracking = false
+        // menuDidClose is still inside AppKit's tracking teardown. Apply only after
+        // it returns, and never flush a prior close into an immediately reopened menu.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isStopped, !self.isMenuTracking else { return }
+            if let stats = self.latestStats, let state = self.latestState {
+                self.renderStatusIcon(stats: stats, state: state)
+            } else {
+                self.updateTooltip()
+            }
+        }
+    }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         // The alert file can clear between badge reads; the open menu reads it now.
