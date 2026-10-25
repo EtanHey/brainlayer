@@ -116,19 +116,32 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
         defer { fixture.stop() }
         fixture.pump()
         let menu = fixture.controller.contextMenuForTesting
-        let delegate = TrackingDelegate(forwarding: try XCTUnwrap(menu.delegate))
+        let delegate = TrackingDelegate(forwarding: try XCTUnwrap(menu.delegate), button: fixture.host.button)
         menu.delegate = delegate
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 120, height: 80),
             styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
         let view = try XCTUnwrap(window.contentView)
+        let begin = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification,
+            object: menu, queue: nil) { _ in
+            MainActor.assumeIsolated {
+                delegate.beginWrites = fixture.host.button.imageWrites
+                delegate.beginTooltipWrites = fixture.host.button.tooltipWrites
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(begin) }
         let observer = NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification,
             object: menu, queue: nil) { _ in
-            MainActor.assumeIsolated { delegate.ends += 1 }
+            MainActor.assumeIsolated {
+                delegate.ends += 1
+                delegate.nativeWrites.append(fixture.host.button.imageWrites - delegate.beginWrites)
+                XCTAssertEqual(fixture.host.button.tooltipWrites, delegate.beginTooltipWrites)
+            }
         }
         defer { NotificationCenter.default.removeObserver(observer) }
         for cycle in 1...3 {
+            try fixture.prepareJobAlert(currentReason: cycle == 2 ? "Changed failure" : nil)
             let watchdog = Timer(timeInterval: 2, repeats: false) { _ in
                 MainActor.assumeIsolated {
                     delegate.watchdogFired = true
@@ -139,6 +152,8 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
             let timer = Timer(timeInterval: 0.05, repeats: false) { _ in
                 MainActor.assumeIsolated {
                     XCTAssertEqual(delegate.opens, cycle, "AppKit must invoke the real menuWillOpen callback")
+                    XCTAssertEqual(fixture.controller.contextMenuForTesting.items.first?.title,
+                        cycle == 2 ? "Needs attention: Changed failure" : "Nothing needs attention")
                     let writes = fixture.host.button.imageWrites
                     fixture.provider.value = 40 + cycle
                     fixture.collector.refresh(force: true)
@@ -170,6 +185,43 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
             XCTAssertEqual(delegate.writesDuringTracking, 0)
             fixture.pump()
         }
+        print("PRE_OPEN_WRITES=\(delegate.preOpenWrites) NATIVE_WRITES=\(delegate.nativeWrites)")
+        XCTAssertEqual(delegate.preOpenWrites, [0, 0, 0])
+        XCTAssertEqual(delegate.nativeWrites, [0, 0, 0])
+        XCTAssertEqual(fixture.host.removals, 1)
+    }
+
+    func testNontrackingShowLogReconcilesChangedAndRecoveredAlertsAndStoppedNotificationsAreIgnored() throws {
+        let fixture = try Fixture()
+        defer { fixture.stop() }
+        fixture.pump()
+        let menu = fixture.controller.contextMenuForTesting
+        fixture.controller.setLogPathsForTesting(.init(launchAgents: fixture.root,
+            databaseLog: fixture.root.appendingPathComponent("missing.log"), archiveLog: fixture.root,
+            maintenanceLog: fixture.root, snapshotDirectory: fixture.root, archiveDirectory: fixture.root))
+        for reason in ["Changed failure", "Another failure"] {
+            try fixture.prepareJobAlert(currentReason: reason)
+            let writes = fixture.host.button.imageWrites
+            NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: NSMenu(title: "Unrelated"))
+            menu.delegate?.menuNeedsUpdate?(menu)
+            XCTAssertEqual(fixture.host.button.imageWrites, writes + 1)
+            let index = try XCTUnwrap(menu.items.firstIndex { $0.title == "Open logs folder" })
+            menu.performActionForItem(at: index)
+            XCTAssertEqual(fixture.host.button.toolTip, "BrainBar — needs attention: \(reason)")
+        }
+        XCTAssertEqual(fixture.workspace.recorded.count, 2)
+        try fixture.prepareJobAlert(currentReason: nil)
+        let writes = fixture.host.button.imageWrites
+        menu.performActionForItem(at: try XCTUnwrap(menu.items.firstIndex { $0.title == "Open logs folder" }))
+        XCTAssertEqual(fixture.host.button.imageWrites, writes + 1)
+        XCTAssertEqual(fixture.host.button.toolTip, "BrainBar")
+        XCTAssertEqual(fixture.workspace.recorded.count, 2, "Recovered action must not open stale logs")
+        fixture.controller.stop()
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: menu)
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: menu)
+        fixture.pump()
+        XCTAssertEqual(fixture.host.button.imageWrites, writes + 1)
+        XCTAssertNil(menu.delegate)
         XCTAssertEqual(fixture.host.removals, 1)
     }
 
@@ -181,14 +233,25 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
         var ends = 0
         var writesDuringTracking = 0
         var watchdogFired = false
-        init(forwarding: any NSMenuDelegate) { self.forwarding = forwarding }
+        let button: Button
+        var beginWrites = 0
+        var beginTooltipWrites = 0
+        var preOpenWrites: [Int] = []
+        var nativeWrites: [Int] = []
+        init(forwarding: any NSMenuDelegate, button: Button) { self.forwarding = forwarding; self.button = button }
         func menuNeedsUpdate(_ menu: NSMenu) { forwarding.menuNeedsUpdate?(menu) }
-        func menuWillOpen(_ menu: NSMenu) { opens += 1; forwarding.menuWillOpen?(menu) }
+        func menuWillOpen(_ menu: NSMenu) {
+            preOpenWrites.append(button.imageWrites - beginWrites)
+            opens += 1
+            forwarding.menuWillOpen?(menu)
+        }
         func menuDidClose(_ menu: NSMenu) { closes += 1; forwarding.menuDidClose?(menu) }
     }
 
     private final class Button: NSButton {
         var imageWrites = 0
+        var tooltipWrites = 0
+        override var toolTip: String? { didSet { tooltipWrites += 1 } }
         override var image: NSImage? {
             didSet { imageWrites += 1 }
         }
@@ -255,6 +318,13 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
             while !condition() && Date() < deadline
             XCTAssertTrue(condition(), "Collector must publish within the bounded wait")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+        func prepareJobAlert(currentReason: String?) throws {
+            let alerts = root.appendingPathComponent("job-alerts.json")
+            let map: [String: String] = currentReason.map { ["backupDaily": $0] } ?? [:]
+            try JSONSerialization.data(withJSONObject: map).write(to: alerts)
+            controller.setBadgeForTesting(.init(badgeOn: true, reason: "Stopped with exit 143",
+                activeCodes: ["job_alert_backupDaily"], activeMessages: ["Stopped with exit 143"]), alertsURL: alerts)
         }
         func stop() {
             controller.stop()

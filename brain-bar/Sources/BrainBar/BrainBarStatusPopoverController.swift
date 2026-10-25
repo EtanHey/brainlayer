@@ -171,6 +171,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         runtimeCancellables.removeAll()
         collectorCancellables.removeAll()
         badgeReadGeneration = UUID()
+        NotificationCenter.default.removeObserver(self, name: NSMenu.didBeginTrackingNotification, object: contextMenuForTesting)
         contextMenuForTesting.cancelTracking()
         isMenuTracking = false
         close(nil)
@@ -293,6 +294,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 #endif
 
+    @objc private func menuTrackingDidBegin(_ notification: Notification) {
+        guard let menu = notification.object as? NSMenu else { return }
+        menuWillOpen(menu)
+    }
+
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === contextMenuForTesting, !isStopped else { return }
         isMenuTracking = true
@@ -384,6 +390,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     private func configureContextMenu() {
         contextMenuForTesting.delegate = self
+        // Native tracking begins before menuNeedsUpdate reconciles badge/job alerts.
+        NotificationCenter.default.addObserver(self, selector: #selector(menuTrackingDidBegin(_:)),
+            name: NSMenu.didBeginTrackingNotification, object: contextMenuForTesting)
         contextMenuForTesting.autoenablesItems = false
         statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
         statusLineItem.toolTip = badgePresentation.reason.isEmpty ? nil : badgePresentation.reason
