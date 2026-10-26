@@ -110,13 +110,19 @@ final class BrainBarSettingsEntryTests: XCTestCase {
                 initialLaunchdObservations: configuredOff ? [:] : observations, refreshStatusOnLoad: false,
                 initialWatcherHealth: .readable(.init(updatedAt: now, pollCount: 50)),
                 initialMaintenanceEvidence: .init(weeklyCompletion: .completed(now), runRecords: [:]))
-            XCTAssertEqual(model.dashboardJobAttentionReasons.isEmpty, configuredOff)
+            // S5 dot policy: an operationally disabled job is visible text on its group, not a dot;
+            // its copies' age (36 h) or the weekly's 8-day rule is what turns it into one.
+            XCTAssertTrue(model.dashboardJobAttentionReasons.isEmpty)
+            let group = BrainLayerLaunchdJobGroup.allCases.first { $0.jobs.contains(job) }!
+            XCTAssertEqual(model.groupStatus(group).attentionReason?.contains("is disabled") == true, !configuredOff)
             model.refreshLaunchdStatus()
-            XCTAssertEqual(model.dashboardJobAttentionReasons.isEmpty, configuredOff, "Refreshing must retain measured attention")
+            XCTAssertEqual(model.groupStatus(group).attentionReason?.contains("is disabled") == true, !configuredOff,
+                           "Refreshing must retain the measured notice")
             await settle { !model.isRefreshingLaunchdStatus }
             XCTAssertFalse(model.isRefreshingLaunchdStatus)
             XCTAssertTrue(model.hasCompletedLaunchdSample)
-            XCTAssertEqual(model.dashboardJobAttentionReasons.isEmpty, configuredOff)
+            XCTAssertTrue(model.dashboardJobAttentionReasons.isEmpty)
+            XCTAssertEqual(model.groupStatus(group).attentionReason?.contains("is disabled") == true, !configuredOff)
         }
     }
 

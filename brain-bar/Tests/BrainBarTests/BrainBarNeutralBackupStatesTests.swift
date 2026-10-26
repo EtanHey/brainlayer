@@ -353,4 +353,30 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
         XCTAssertGreaterThan(png.count, 10_000)
         try png.write(to: url)
     }
+
+    // MARK: S5 — first run is neutral; a malformed configuration is a dot
+
+    @MainActor
+    func testFirstRunAfterMigrationIsNeutralButMalformedConfigurationIsADot() {
+        var inputs = BrainBarStatusSnapshotTests.healthy()
+        for job in [BrainLayerLaunchdJob.index, .backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly] {
+            var value = BrainLayerLaunchdJobObservation(loadState: .loaded, runs: 0, lastExitCode: nil, lastRunAt: nil,
+                                                        nextRunAt: BrainBarStatusSnapshotTests.nextRun, isContinuous: false)
+            value.ownership = .supervisor
+            value.ownerNote = "com.brainlayer.maintenance · Scheduled, not yet run under the supervisor"
+            inputs.observations?[job] = value
+        }
+        let (snapshot, surfaces) = BrainBarStatusSnapshotTests.assertAgree(inputs, dot: false, "first run")
+        XCTAssertFalse(snapshot.notices.isEmpty, "first run is a visible notice")
+        XCTAssertNotEqual(surfaces.dashboard.headline, "All good")
+        XCTAssertTrue(surfaces.jobs[.maintenance]?.lastRunText.contains("Awaiting first scheduled run") == true,
+                      surfaces.jobs[.maintenance]?.lastRunText ?? "")
+        XCTAssertFalse(surfaces.jobs[.maintenance]?.lastRunText.contains("Not yet run under the supervisor") == true)
+
+        for job in [BrainLayerLaunchdJob.index, .backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly] {
+            inputs.observations?[job]?.calendarScheduleProblem = "com.brainlayer.maintenance.plist is malformed: not a property-list dictionary"
+        }
+        BrainBarStatusSnapshotTests.assertAgree(inputs, dot: true, "malformed configuration")
+    }
+
 }

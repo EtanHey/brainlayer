@@ -594,4 +594,39 @@ final class WatcherHealthStatusTests: XCTestCase {
         XCTAssertEqual(parsed.quarantinedRecordCount, 1)
         XCTAssertEqual(parsed.earliestQuarantinedRecordAt!.timeIntervalSince1970, 1_790_715_600.5, accuracy: 0.01)
     }
+
+    // MARK: S5 — the shared snapshot dots at 301 s, not 300 s
+
+    @MainActor
+    func testSharedSnapshotDotsOnlyPastThe300SecondThreshold() {
+        let now = BrainBarStatusSnapshotTests.now
+        for (age, dot) in [(300.0, false), (301.0, true)] {
+            let file = WatcherHealthFileRead.readable(WatcherHealthFile(updatedAt: now.addingTimeInterval(-age), pollCount: 72))
+            var inputs = BrainBarStatusSnapshotTests.healthy()
+            inputs.watcher = WatcherHealthStatus.derive(launchd: .running, file: file, now: now)
+            inputs.watcherHeartbeatAt = now.addingTimeInterval(-age)
+            let (snapshot, surfaces) = BrainBarStatusSnapshotTests.assertAgree(inputs, dot: dot, "heartbeat \(Int(age)) s")
+            XCTAssertEqual(surfaces.jobs[.ingest]?.health == .unhealthy, dot)
+            if dot { XCTAssertEqual(snapshot.attention.first?.component, .watcher) }
+        }
+    }
+
+    @MainActor
+    func testWatcherAlertsWithAFreshHeartbeatAndAPausedWatcherAreNotADot() {
+        let now = BrainBarStatusSnapshotTests.now
+        var inputs = BrainBarStatusSnapshotTests.healthy()
+        inputs.watcher = WatcherHealthStatus.derive(launchd: .running,
+            file: .readable(WatcherHealthFile(updatedAt: now.addingTimeInterval(-60), pollCount: 72, alertReasons: ["offset_lag"],
+                                              maxOffsetLagBytes: 4_000_000)), now: now)
+        BrainBarStatusSnapshotTests.assertAgree(inputs, dot: false, "offset lag")
+        inputs.watcher = .stopped(reason: "Watcher is not running (Supervisor watcher is paused)")
+        inputs.watcherHeartbeatAt = now.addingTimeInterval(-900)
+        var paused = BrainLayerLaunchdJobObservation.stateOnly(.paused)
+        paused.ownership = .supervisor
+        inputs.observations?[.watch] = paused
+        BrainBarStatusSnapshotTests.assertAgree(inputs, dot: false, "paused watcher")
+        inputs.observations?[.watch] = .stateOnly(.failed("exit 1"))
+        BrainBarStatusSnapshotTests.assertAgree(inputs, dot: true, "stopped watcher, stale heartbeat")
+    }
+
 }

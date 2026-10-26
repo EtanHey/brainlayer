@@ -311,7 +311,9 @@ final class BrainBarSettingsPlainPathsTests: XCTestCase {
         )
         let (viewModel, _) = try makeViewModel(observability: .readable(document))
         let health = viewModel.backupsHealth(drive: nil)
-        XCTAssertEqual(health.badge, .attention)
+        // S5 dot policy: a deliberate safety stop is visible text, not a dot; the copies' own
+        // 36 h threshold is what turns a long pause into one.
+        XCTAssertEqual(health.badge, .unknown)
         XCTAssertEqual(health.reason, "Daily transcript backup: Paused by a safety stop")
         XCTAssertEqual(viewModel.backupChecks?.attentionSentence, health.reason)
     }
