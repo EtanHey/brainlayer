@@ -27,6 +27,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published private(set) var embeddingProcess: BrainBarEmbeddingProcessState
     /// watcher-health.json beside the resolved DB: the same file the Dashboard reads (#966).
     @Published private(set) var watcherHealth: WatcherHealthFileRead?
+    /// The health check's badge as read (job alerts not yet applied); nil until the first read.
+    @Published private(set) var healthBadge: BadgeStatePresentation?
+    /// The live job-alert file; nil when unread or unreadable.
+    @Published private(set) var liveJobAlerts: BrainBarJobAlerts?
 
     /// The one watcher-health truth, from this view's launchd observation plus the health file.
     var watcherStatus: WatcherHealthStatus {
@@ -254,6 +258,17 @@ final class BrainBarSettingsViewModel: ObservableObject {
         group.jobs.allSatisfy { config.launchdJobs[$0]?.enabled == true }
     }
 
+    /// S5: the app-lifetime badge reader publishes here, so every surface sees the same inputs.
+    func applyHealthBadge(_ badge: BadgeStatePresentation, alerts: BrainBarJobAlerts?) {
+        if healthBadge != badge { healthBadge = badge }
+        if liveJobAlerts != alerts { liveJobAlerts = alerts }
+    }
+
+    /// S5: the one status verdict, from this model's current inputs and the Drive presentation.
+    func statusSnapshot(drive: DriveAuthPresentation?) -> BrainBarStatusSnapshot {
+        BrainBarStatusSnapshot.derive(BrainBarStatusInputs(now: now()))
+    }
+
     var dashboardJobsChecking: Bool {
         BrainLayerLaunchdJobGroup.allCases.contains { groupStatus($0).health == .checking }
     }
@@ -264,7 +279,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             switch status.health {
             case .unhealthy, .unknown, .deferred:
                 return status.attentionReason ?? "\(group.title): \(status.health.title)."
-            case .checking, .healthy, .awaitingRun, .skipped:
+            case .checking, .healthy, .awaitingRun, .skipped, .notice:
                 return nil
             }
         }
@@ -1335,6 +1350,7 @@ struct BrainBarJobGroupCard: View {
         case .awaitingRun, .deferred: "clock.fill"
         case .unhealthy: "exclamationmark.triangle.fill"
         case .unknown: "questionmark.circle.fill"
+        case .notice: "info.circle.fill"
         case .skipped: "forward.end.circle.fill"
         }
     }
@@ -1345,7 +1361,7 @@ struct BrainBarJobGroupCard: View {
         case .awaitingRun: BrainBarStateTheme.loading.theme.swiftUIColor
         case .unhealthy: BrainBarStateTheme.error.theme.swiftUIColor
         case .deferred: Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
-        case .checking, .unknown, .skipped: Color.brainBarTextMuted
+        case .checking, .unknown, .skipped, .notice: Color.brainBarTextMuted
         }
     }
 

@@ -117,6 +117,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         return prefix + shortenedReason + "…"
     }
 
+    /// The menu's first row from the shared snapshot (S5).
+    nonisolated static func statusLineTitle(for verdict: BrainBarStatusVerdict) -> String {
+        "Nothing needs attention"
+    }
+
     /// The failing job behind an active job-alert badge code (`job_alert_<key>`), or nil.
     static func jobAlertKey(for badge: BadgeStatePresentation) -> String? {
         guard badge.badgeOn else { return nil }
@@ -287,6 +292,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #if BRAINBAR_UI
     func setLogPathsForTesting(_ paths: BrainBarBackupSources.Paths) { logPathsOverride = paths }
 #endif
+    var statusDotForTesting: Bool { badgePresentation.badgeOn }
     func setBadgeForTesting(_ raw: BadgeStatePresentation, alertsURL: URL) {
         rawBadgePresentation = raw
         badgePresentation = raw

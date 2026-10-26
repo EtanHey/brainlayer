@@ -26,6 +26,12 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
     var calendarDeferralRecord: BrainLayerMaintenanceEvidence.RunRecord? = nil
     var calendarMissedWindowReason: String? = nil
     var calendarIndexDeferralReason: String? = nil
+    /// S5: failed calendar runs of this step in a row, newest first (deferrals neither count nor reset).
+    var calendarConsecutiveFailures: Int? = nil
+    /// S5: the schedule or parent probe could not be read; the known run above still stands.
+    var calendarScheduleUncertainty: String? = nil
+    /// S5: the installed calendar LaunchAgent exists but is not a usable schedule (malformed config).
+    var calendarScheduleProblem: String? = nil
 
     var backupScheduleLine: ObservabilityStatusLine? {
         guard ownership != .legacy else { return nil }
@@ -84,6 +90,9 @@ enum BrainLayerLaunchdGroupHealth: Equatable, Sendable {
     /// A maintenance safety gate deferred the last run (exit 75): the gate did its job. Neutral.
     case skipped
     case deferred
+    /// S5: a known non-urgent fault (a single failed run that retries, an unreadable schedule).
+    /// Visible text, never the dot.
+    case notice
 
     var title: String {
         switch self {
@@ -94,6 +103,7 @@ enum BrainLayerLaunchdGroupHealth: Equatable, Sendable {
         case .unknown: "Status unknown"
         case .skipped: "Skipped"
         case .deferred: "Deferred"
+        case .notice: "No action needed"
         }
     }
 }
@@ -588,7 +598,7 @@ struct BrainBarBackupsHealth: Equatable, Sendable {
         // A positively verified calendar gate is neutral across all job groups.
         case .skipped: .init(badge: .skipped, reason: job.attentionReason)
         case .deferred: .init(badge: .deferred, reason: job.attentionReason)
-        case .unknown: .init(badge: .unknown, reason: job.attentionReason)
+        case .unknown, .notice: .init(badge: .unknown, reason: job.attentionReason)
         case .unhealthy: .init(badge: .attention, reason: job.attentionReason)
         }
     }

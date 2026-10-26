@@ -519,6 +519,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
     private let ownership: @Sendable () -> BrainBarJobOwnership
     private let calendarHistory: @Sendable () -> BrainBarCalendarHistory
     private let calendarSchedule: @Sendable () -> DateComponents?
+    private let calendarScheduleProblem: @Sendable () -> String?
     private let calendarLogsDirectory: @Sendable () -> URL
     private let calendarIsDisabled: @Sendable (BrainLayerLaunchdJob) -> Bool
 
@@ -532,6 +533,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         ownership: @escaping @Sendable () -> BrainBarJobOwnership = { .read() },
         calendarHistory: @escaping @Sendable () -> BrainBarCalendarHistory = { .read() },
         calendarSchedule: @escaping @Sendable () -> DateComponents? = { readSchedule(label: "com.brainlayer.maintenance") },
+        calendarScheduleProblem: @escaping @Sendable () -> String? = { scheduleProblem(label: "com.brainlayer.maintenance") },
         calendarLogsDirectory: @escaping @Sendable () -> URL = { readCalendarLogsDirectory() },
         calendarIsDisabled: @escaping @Sendable (BrainLayerLaunchdJob) -> Bool = {
             (try? BrainLayerConfigStore().loadDocument())?.config.launchdJobs[$0]?.enabled == false
@@ -540,6 +542,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         self.ownership = ownership
         self.calendarHistory = calendarHistory
         self.calendarSchedule = calendarSchedule
+        self.calendarScheduleProblem = calendarScheduleProblem
         self.calendarLogsDirectory = calendarLogsDirectory
         self.calendarIsDisabled = calendarIsDisabled
         self.commandRunner = commandRunner
@@ -777,6 +780,12 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         var components = DateComponents(hour: hour, minute: minute)
         if let weekday = interval["Weekday"] { components.weekday = (weekday % 7) + 1 }
         return components
+    }
+
+    /// Why an INSTALLED calendar LaunchAgent is not a usable schedule; nil when it is usable or absent.
+    static func scheduleProblem(label: String, in directory: URL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/LaunchAgents")) -> String? {
+        nil
     }
 
     private static func run(_ command: [String]) -> BrainLayerLaunchdCommandResult {

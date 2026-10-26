@@ -323,7 +323,8 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
         flow: DashboardFlowSummary,
         stats: DashboardStats,
         backupTruth: BrainBarHeroBackupTruth,
-        locale: Locale = .current
+        locale: Locale = .current,
+        statusVerdict: BrainBarStatusVerdict? = nil
     ) -> Self {
         let dbBackup: ObservabilityStatusLine
         let transcriptBackup: ObservabilityStatusLine
@@ -494,7 +495,8 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         calendar: Calendar = .current,
         locale: Locale = .current,
         observabilityCadence: ObservabilityCadence = ObservabilityReader.installedHealthCheckCadence,
-        backupNow: Date? = nil
+        backupNow: Date? = nil,
+        statusVerdict: BrainBarStatusVerdict? = nil
     ) -> Self {
         let snapshotIsLive: Bool = if case .live = snapshotFreshness { true } else { false }
         let otherLiveHeroAttention = snapshotIsLive

@@ -95,6 +95,8 @@ struct BrainBarCalendarHistory: Sendable {
         var scheduledDate: String? = nil
         // Position in this journal snapshot; wall-clock timestamps can move backwards.
         var journalOrdinal: Int? = nil
+        /// Failed runs of this step in a row, ending with this one (S5).
+        var consecutiveFailures = 0
     }
     var runs: [String: Run] = [:]
     var error: String? = nil
