@@ -487,3 +487,61 @@ def test_supervisor_idle_interval_and_down_component_are_distinct(
         },
     )
     assert health_check._launchd_label_loaded("com.brainlayer.watch", client) is loaded
+
+
+@pytest.mark.parametrize("outcome", ["disabled-state-unavailable", "restart-refused", "restarted"])
+def test_dead_watch_heal_never_pauses_and_only_reports_verified_restart(tmp_path, monkeypatch, outcome):
+    _migrated_journal()
+    config, _, _, _ = _queue_backlog_config(tmp_path, heal=True)
+    config.job_opt_path = None
+    states = {
+        name: dict(configured=True, paused=False, pid=4242, starts=1, exit_timeout=1, interval=0)
+        for name in ("watch", "drain", "hotlane", "health-check", "observability")
+    }
+    watch = states["watch"]
+    watch["pid"] = None
+    requests, commands = [], []
+
+    def control(self, action="status", component="*", **kwargs):
+        requests.append((action, component))
+        if action == "pause":
+            states[component].update(paused=True, pid=None)
+        elif action == "resume" and states[component]["paused"]:
+            states[component].update(paused=False, pid=4243)
+        elif action == "restart":
+            if outcome == "restart-refused":
+                raise RuntimeError("restart did not start every component")
+            states[component].update(pid=4243, starts=2)
+        return states
+
+    def fallback(args):
+        commands.append(args)
+        if args[:2] == ["launchctl", "print-disabled"]:
+            return subprocess.CompletedProcess(
+                args, int(outcome == "disabled-state-unavailable"), "disabled services = {}", ""
+            )
+        raise AssertionError(f"legacy command escaped adapter: {args}")
+
+    monkeypatch.setattr(SupervisorCommands, "request", control)
+    result = _run_queue_backlog_health(config, fallback)
+    assert watch["paused"] is False
+    assert not any(action == "pause" for action, _ in requests)
+    client = SupervisorCommands(tmp_path / "unused.sock", fallback)
+    loaded = health_check._launchd_label_loaded(config.watch_label, client)
+    watch_issues = [issue for issue in result.issues if issue.code == "watch_unloaded"]
+    if outcome == "restarted":
+        assert ("restart", "watch") in requests
+        assert watch["pid"] == 4243 and loaded is True
+        assert f"bootstrap:{config.watch_label}" in result.actions
+        assert not watch_issues
+    else:
+        assert loaded is False and watch["pid"] is None
+        assert f"bootstrap:{config.watch_label}" not in result.actions
+        assert f"bootstrap_failed:{config.watch_label}" in result.actions
+        assert [issue.severity for issue in watch_issues] == ["critical"]
+        assert result.ok is False
+        if outcome == "restart-refused":
+            assert ("restart", "watch") in requests
+        else:
+            assert all(action == "status" for action, _ in requests)
+    assert commands

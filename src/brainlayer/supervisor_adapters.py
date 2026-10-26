@@ -236,8 +236,13 @@ class SupervisorCommands:
                 if verb == "bootstrap":
                     if args[2] != self.domain:
                         raise PermissionError("wrong launchd domain")
-                    action = "resume"
+                    state = states[name]
+                    # Resume only selects paused children. Heal an already-unpaused
+                    # dead worker directly, without creating an owner-less pause.
+                    action = "restart" if state["configured"] and not state["paused"] and not state["pid"] else "resume"
                 elif verb == "bootout":
+                    if not states[name]["pid"]:
+                        return result()
                     action = "pause"
                 elif verb == "kickstart":
                     action = "restart"
