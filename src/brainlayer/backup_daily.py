@@ -1383,12 +1383,13 @@ def create_sqlite_backup_artifact(
     if space.free_now_bytes < required_bytes <= space.available_bytes:
         for urgency in (3, 4):
             request_bytes = required_bytes - space.free_now_bytes + COPY_CHUNK_BYTES
+            purge_error = None
             try:
                 _request_macos_purge(output_dir, request_bytes, urgency)
             except RuntimeError as exc:
                 purge_error = _redact_upload_secrets(str(exc))
             space = disk_space.measure_disk_space(output_dir)
-            for _ in range(60):
+            for _ in range(60 if purge_error is None else 0):
                 if space.free_now_bytes >= required_bytes:
                     break
                 time.sleep(POST_PURGE_POLL_SECONDS)
@@ -1434,8 +1435,11 @@ def create_sqlite_backup_artifact(
                 growth += db_size  # Not visible yet: the request may still write all of D.
         peak, detail = describe_phases({**phase_peaks, "raw_copy": growth + db_size})
         retry_required = peak + MIN_RAW_FREE_BYTES + COPY_CHUNK_BYTES + surviving_attempt_growth_reserve_bytes
-        space = disk_space.measure_disk_space(output_dir)
+        space = disk_space.measure_disk_space(output_dir, include_available=False)
         raw = space.free_now_bytes
+        if raw < retry_required:
+            space = disk_space.measure_disk_space(output_dir)
+            raw = space.free_now_bytes
         if raw < retry_required:
             raise RuntimeError(
                 f"Insufficient free space for backup retry in {output_dir}: raw={raw} required={retry_required} "

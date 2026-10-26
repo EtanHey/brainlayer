@@ -46,6 +46,8 @@ def _important_usage_capacity_bytes(path: Path) -> int | None:
             timeout=5,
         ).stdout.strip()
         return int(output) if output.isdecimal() else None
+    except TimeoutError:
+        raise
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
 
@@ -62,6 +64,8 @@ def measure_disk_space(path: Path, *, include_available: bool = True) -> DiskSpa
     if include_available and sys.platform == "darwin":
         try:
             important = _important_usage_capacity_bytes(path)
+        except TimeoutError:
+            raise
         except (OSError, RuntimeError, ValueError):
             pass
     source = (
@@ -73,5 +77,5 @@ def measure_disk_space(path: Path, *, include_available: bool = True) -> DiskSpa
         if important is None
         else "macos_important_usage"
     )
-    available = important if important is not None else free
+    available = max(important, free) if important is not None else free
     return DiskSpace(available, free, max(0, available - free), source, datetime.now(UTC).isoformat())

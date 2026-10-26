@@ -27,7 +27,9 @@ def test_disk_cli_json_contract(tmp_path, monkeypatch):
     assert "Available 131.3 GB = 13.5 GB free now + 117.8 GB purgeable" in human.output
 
 
-@pytest.mark.parametrize("important,expected", [(131_300_000_000, 131_300_000_000), (1, 1), (None, 13_500_000_000)])
+@pytest.mark.parametrize(
+    "important,expected", [(131_300_000_000, 131_300_000_000), (1, 13_500_000_000), (None, 13_500_000_000)]
+)
 def test_macos_disk_truth(tmp_path, monkeypatch, important, expected):
     from brainlayer import disk_space
 
@@ -36,6 +38,7 @@ def test_macos_disk_truth(tmp_path, monkeypatch, important, expected):
     monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda _path: important)
     value = disk_space.measure_disk_space(tmp_path)
     assert value.available_bytes == expected
+    assert value.available_bytes == value.free_now_bytes + value.purgeable_bytes
     assert value.free_now_bytes == 13_500_000_000
     assert value.purgeable_bytes == max(0, expected - value.free_now_bytes)
     assert value.source == ("macos_important_usage" if important else "statfs_macos_available_unavailable")
@@ -114,3 +117,49 @@ def test_purge_passes_urgency_to_isolated_helper(tmp_path, monkeypatch, urgency)
     monkeypatch.setattr(backup_daily.subprocess, "run", run)
     backup_daily._request_macos_purge(tmp_path, 123, urgency)
     assert commands[0][-3:] == [str(tmp_path), "123", str(urgency)]
+
+
+@pytest.mark.parametrize("failure_site", ["subprocess", "probe"])
+def test_disk_probe_preserves_backup_deadline(tmp_path, monkeypatch, failure_site):
+    from brainlayer import backup_daily, disk_space
+
+    monkeypatch.setattr(disk_space.sys, "platform", "darwin")
+
+    def deadline(*_args, **_kwargs):
+        raise backup_daily.BackupTimeoutError("backup deadline")
+
+    if failure_site == "subprocess":
+        monkeypatch.setattr(disk_space.subprocess, "run", deadline)
+    else:
+        monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", deadline)
+    with pytest.raises(backup_daily.BackupTimeoutError, match="backup deadline"):
+        disk_space.measure_disk_space(tmp_path)
+
+
+@pytest.mark.parametrize("last_fails", [False, True])
+def test_purge_last_outcome_and_failed_helper_polling(tmp_path, monkeypatch, last_fails):
+    from brainlayer import backup_daily, disk_space
+    from tests.test_backup_daily import _create_source_db
+
+    source = tmp_path / "source.db"
+    _create_source_db(source)
+    monkeypatch.setattr(disk_space.sys, "platform", "darwin")
+    monkeypatch.setattr(disk_space.shutil, "disk_usage", lambda _path: SimpleNamespace(free=1))
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda _path: 10**12)
+    monkeypatch.setattr(backup_daily, "_brainbar_writer_started_at", lambda _path: None)
+    monkeypatch.setattr(backup_daily, "request_brainbar_vacuum_into", lambda *_a, **_kw: pytest.fail("writer reached"))
+    requests, sleeps = [], []
+
+    def purge(_path, _amount, urgency):
+        requests.append(urgency)
+        if urgency == 3 or last_fails:
+            raise RuntimeError(f"urgency {urgency} failed")
+
+    monkeypatch.setattr(backup_daily, "_request_macos_purge", purge)
+    monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: sleeps.append(seconds))
+    with pytest.raises(RuntimeError) as error:
+        backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
+    assert requests == [3, 4]
+    assert "urgency 3 failed" not in str(error.value)
+    assert ("urgency 4 failed" if last_fails else "macOS reclaimed too little purgeable space") in str(error.value)
+    assert len(sleeps) == (0 if last_fails else 60)

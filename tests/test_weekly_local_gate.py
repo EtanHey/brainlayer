@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from brainlayer import backup_daily as backup
-from brainlayer import maintenance, maintenance_calendar
+from brainlayer import disk_space, maintenance, maintenance_calendar
 from tests.test_maintenance_routine import _config
 
 
@@ -17,7 +17,7 @@ def local_lane(tmp_path, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PROVENANCE", "real")
     monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
     monkeypatch.setattr(backup, "_should_run_full_verify", lambda _: False)
-    monkeypatch.setattr(backup, "_important_usage_capacity_bytes", lambda _: None)
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda _: None)
     monkeypatch.setattr(backup, "_brainbar_writer_started_at", lambda _: 0)
     db = tmp_path / "source.db"
     with sqlite3.connect(db) as conn:
