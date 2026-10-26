@@ -68,13 +68,23 @@ def lane(tmp_path, monkeypatch):
     )
 
 
+def _last_run_receipt(log, *, snapshot=True):
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    receipt = next(row for row in reversed(rows) if row.get("event") != "local_sweep")
+    assert "attempted_at" in receipt
+    assert receipt.get("event") != "local_sweep"
+    if snapshot:
+        assert "snapshot" in receipt
+    return receipt
+
+
 def stalled(lane):
     lane.outcomes.extend(
         [ConnectionError("offline"), _DriveResponse(308), ConnectionError("offline"), _DriveResponse(308)]
     )
     with pytest.raises(backup.DriveUploadStalledError):
         lane.run()
-    return json.loads(lane.log.read_text().splitlines()[-1])
+    return _last_run_receipt(lane.log)
 
 
 def test_only_admitted_body_carries_invocation_and_retry_replaces_old_identity(lane, monkeypatch):
@@ -85,7 +95,7 @@ def test_only_admitted_body_carries_invocation_and_retry_replaces_old_identity(l
         monkeypatch.setenv(backup.BACKUP_INVOCATION_ENV, "b" * 32)
         with pytest.raises(backup.BackupAlreadyRunningError):
             lane.run()
-    loser = json.loads(lane.log.read_text().splitlines()[-1])
+    loser = _last_run_receipt(lane.log, snapshot=False)
     assert loser["error_type"] == "BackupAlreadyRunningError"
     assert "backup_invocation_id" not in loser
     lane.outcomes.extend([_DriveResponse(308), _DriveResponse(200, payload={"id": "done"})])
@@ -212,7 +222,7 @@ def test_configured_network_budget_expires_and_saves_resume_state(lane, monkeypa
     with pytest.raises(backup.DriveUploadStalledError):
         lane.run()
     assert sum(sleeps) == pytest.approx(90, abs=0.01)
-    assert json.loads(lane.log.read_text().splitlines()[-1])["resumable_upload"]["url"] == URL
+    assert _last_run_receipt(lane.log)["resumable_upload"]["url"] == URL
 
 
 def test_mutation_during_stall_cannot_rebind_session_to_different_bytes(lane):
@@ -336,7 +346,7 @@ def test_r1_stalled_copy_survives_until_newer_drive_copy_verifies(lane, monkeypa
         with pytest.raises(RuntimeError):
             lane.run("2026-10-18")
     assert lane.snapshot.read_bytes() == b"abcdef"
-    receipt = json.loads(lane.log.read_text().splitlines()[-1])
+    receipt = _last_run_receipt(lane.log)
     assert not receipt.get("superseded_stalled_deleted")
     if failure == "capacity":
         assert lane.snapshot.name in receipt["error_type"]
@@ -430,7 +440,7 @@ def test_r1_every_prefix_interruption_retains_private_resume_state(lane, interru
     lane.outcomes.append(error)
     with pytest.raises(type(error)):
         lane.run()
-    receipt = json.loads(lane.log.read_text().splitlines()[-1])
+    receipt = _last_run_receipt(lane.log)
     assert receipt["resumable_upload"]["url"] == URL
     assert receipt["bytes_confirmed"] == 3
     assert lane.log.stat().st_mode & 0o077 == 0
@@ -443,7 +453,7 @@ def test_r1_every_prefix_interruption_retains_private_resume_state(lane, interru
 
 def test_r1_session_is_durable_before_first_chunk_for_supervisor_exit(lane, monkeypatch):
     def interrupted(*args, **kwargs):
-        receipt = json.loads(lane.log.read_text().splitlines()[-1])
+        receipt = _last_run_receipt(lane.log)
         assert receipt["resumable_upload"]["url"] == URL
         raise backup.BackupTimeoutError("supervisor exit")
 
@@ -487,7 +497,7 @@ def test_r1_recovery_budget_reserves_receipt_time_before_run_deadline(lane, monk
     with pytest.raises((backup.BackupTimeoutError, backup.DriveUploadStalledError)):
         lane.run()
     assert sum(sleeps) <= 15
-    assert json.loads(lane.log.read_text().splitlines()[-1])["resumable_upload"]["url"] == URL
+    assert _last_run_receipt(lane.log)["resumable_upload"]["url"] == URL
 
 
 def test_r1_http_error_and_receipt_redact_session_credentials(lane):
@@ -499,7 +509,7 @@ def test_r1_http_error_and_receipt_redact_session_credentials(lane):
         lane.run()
     assert URL not in str(error.value)
     assert "upload_id=test" not in str(error.value)
-    receipt = json.loads(lane.log.read_text().splitlines()[-1])
+    receipt = _last_run_receipt(lane.log)
     assert "upload_id=test" not in receipt["error"]
     assert receipt["resumable_upload"]["url"] == URL
 
@@ -595,8 +605,7 @@ def test_r1_truncated_final_receipt_preserves_last_durable_session(lane):
     assert lane.run("2026-10-18")["verified"]
     assert len(lane.posts) == 1
     # Appending after the crash tail must preserve independently parseable JSONL.
-    receipts = [json.loads(line) for line in lane.log.read_text().splitlines()]
-    assert receipts[-1]["verified"]
+    assert _last_run_receipt(lane.log)["verified"]
 
 
 def test_r1_missing_range_after_confirmed_prefix_probes_without_rewinding(lane):
@@ -682,6 +691,9 @@ def test_r1_weekly_snapshot_expiring_during_upload_cannot_authorize_vacuum(lane,
     assert result["uploaded"]
     assert result["verified"] is False
     assert "snapshot" in result["verification_error"]
+    assert result["snapshot"] == str(lane.snapshot)
+    assert result["snapshot_created_at"] == created
+    assert len(lane.creations) == 1
     assert lane.snapshot.exists()
 
 
@@ -737,7 +749,7 @@ def test_r2_completed_upload_is_not_an_interrupted_session(lane, monkeypatch, fa
         "bare_local_verify": "local backup verification failed",
     }[failure]
     assert reason in result["verification_error"]
-    receipt = json.loads(lane.log.read_text().splitlines()[-1])
+    receipt = _last_run_receipt(lane.log)
     assert "resumable_upload" not in receipt and URL not in json.dumps(receipt)
     assert receipt.get("error_code") != "drive_upload_interrupted"
     assert reason in receipt["verification_error"]
@@ -751,7 +763,8 @@ def test_r2_completed_upload_is_not_an_interrupted_session(lane, monkeypatch, fa
 
 def test_r2_truncated_verification_receipt_cannot_revive_completed_session(lane, monkeypatch):
     _r2_completed_with_failed_verification(lane, monkeypatch, "local_verify")
-    lines = lane.log.read_text().splitlines()
+    lines = [line for line in lane.log.read_text().splitlines() if json.loads(line).get("event") != "local_sweep"]
+    assert json.loads(lines[-1]) == _last_run_receipt(lane.log)
     lane.log.write_text("\n".join(lines[:-1]) + '\n{"uploaded":')
     monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", lambda *a, **kw: {"verified": True})
     lane.outcomes.append(_DriveResponse(200, payload={"id": "new"}))
@@ -776,7 +789,7 @@ def test_r2_malformed_weekly_age_preserves_upload_and_denies_vacuum(lane, monkey
     assert result["verified"] is False
     assert "invalid BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS" in result["verification_error"]
     assert "resumable_upload" not in result and result.get("error_code") != "drive_upload_interrupted"
-    receipt = json.loads(lane.log.read_text().splitlines()[-1])
+    receipt = _last_run_receipt(lane.log)
     assert receipt["uploaded"] is True and receipt["verified"] is False
     assert receipt["drive_file"]["id"] == "completed"
     assert "invalid BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS" in receipt["verification_error"]
@@ -795,7 +808,7 @@ def test_r2_raw_floor_failure_names_retained_stalled_backup(lane, monkeypatch, f
     monkeypatch.setattr(backup, "create_sqlite_backup_artifact", floor_during_snapshot)
     with pytest.raises(backup.RetainedStalledBackupCapacityError):
         lane.run("2026-10-18")
-    receipt = json.loads(lane.log.read_text().splitlines()[-1])
+    receipt = _last_run_receipt(lane.log)
     assert lane.snapshot.name in receipt["error_type"]
     assert lane.snapshot.name in receipt["error"]
     assert "raw free space floor breached" in receipt["error"]
