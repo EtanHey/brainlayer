@@ -7,9 +7,11 @@ from typer.testing import CliRunner
 
 
 def test_disk_cli_json_contract(tmp_path, monkeypatch):
+    from brainlayer import disk_space
     from brainlayer.cli import app
 
-    # Keep the red test executable before the shared module/command exists.
+    monkeypatch.setattr(disk_space.sys, "platform", "darwin")
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda _path: 131_300_000_000)
     monkeypatch.setattr("shutil.disk_usage", lambda _path: SimpleNamespace(free=13_500_000_000))
     result = CliRunner().invoke(app, ["disk", "--path", str(tmp_path), "--json"])
     assert result.exit_code == 0, result.output
@@ -17,10 +19,15 @@ def test_disk_cli_json_contract(tmp_path, monkeypatch):
     assert set(value) == {"available_bytes", "free_now_bytes", "purgeable_bytes", "source", "measured_at"}
     assert value["free_now_bytes"] == 13_500_000_000
     assert value["available_bytes"] == value["free_now_bytes"] + value["purgeable_bytes"]
+    assert value["available_bytes"] == 131_300_000_000
+    assert value["source"] == "macos_important_usage"
     datetime.fromisoformat(value["measured_at"])
+    human = CliRunner().invoke(app, ["disk", "--path", str(tmp_path)])
+    assert human.exit_code == 0
+    assert "Available 131.3 GB = 13.5 GB free now + 117.8 GB purgeable" in human.output
 
 
-@pytest.mark.parametrize("important,expected", [(131_300_000_000, 131_300_000_000), (None, 13_500_000_000)])
+@pytest.mark.parametrize("important,expected", [(131_300_000_000, 131_300_000_000), (1, 1), (None, 13_500_000_000)])
 def test_macos_disk_truth(tmp_path, monkeypatch, important, expected):
     from brainlayer import disk_space
 
@@ -30,7 +37,7 @@ def test_macos_disk_truth(tmp_path, monkeypatch, important, expected):
     value = disk_space.measure_disk_space(tmp_path)
     assert value.available_bytes == expected
     assert value.free_now_bytes == 13_500_000_000
-    assert value.purgeable_bytes == expected - value.free_now_bytes
+    assert value.purgeable_bytes == max(0, expected - value.free_now_bytes)
     assert value.source == ("macos_important_usage" if important else "statfs_macos_available_unavailable")
 
 
@@ -91,3 +98,19 @@ def test_backup_escalates_purge_and_keeps_raw_gate(tmp_path, monkeypatch, final_
     else:
         assert "needs 33.1 GB; macOS Available 131.3 GB = 20.8 GB free now + 110.5 GB purgeable" in str(error.value)
         assert "purge freed 7.3 GB" in str(error.value)
+
+
+@pytest.mark.parametrize("urgency", [3, 4])
+def test_purge_passes_urgency_to_isolated_helper(tmp_path, monkeypatch, urgency):
+    from brainlayer import backup_daily
+
+    monkeypatch.setattr(backup_daily.sys, "platform", "darwin")
+    commands = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(backup_daily.subprocess, "run", run)
+    backup_daily._request_macos_purge(tmp_path, 123, urgency)
+    assert commands[0][-3:] == [str(tmp_path), "123", str(urgency)]
