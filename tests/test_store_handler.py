@@ -1145,11 +1145,14 @@ async def test_store_preassigns_same_chunk_id_across_busy_retry(tmp_path, monkey
         return {"id": kwargs.get("chunk_id") or "store-generated-id", "related": []}
 
     with (
+        # Freeze only the handler's clock; asyncio still needs its real clock for sleep.
+        patch("brainlayer.mcp.store_handler.time", wraps=time) as store_time,
         patch("brainlayer.mcp.store_handler._get_vector_store"),
         patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
         patch("brainlayer.store.store_memory", side_effect=flaky_store_memory),
         patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
     ):
+        store_time.monotonic.return_value = 0.0
         monkeypatch.setattr("brainlayer.mcp.store_handler._retry_delay", 0.001)
         texts, structured = await _store(
             content="retry should keep promised id",
