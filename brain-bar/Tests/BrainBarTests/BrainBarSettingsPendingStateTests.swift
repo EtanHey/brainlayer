@@ -45,14 +45,17 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
         launchd.release(0)
         try await waitUntil { !model.isRefreshingLaunchdStatus }
         XCTAssertTrue(model.hasCompletedLaunchdSample)
-        XCTAssertEqual(model.groupStatus(.maintenance).health, .unhealthy)
+        // S5 dot policy: an empty sample is unmeasured — visible "Status unknown", never the dot.
+        XCTAssertEqual(model.groupStatus(.maintenance).health, .unknown)
+        XCTAssertEqual(model.groupStatus(.maintenance).attentionReason, "Nightly status is unavailable.")
         XCTAssertEqual(model.launchdStatusTitle(.hotlane), "Unknown")
-        XCTAssertEqual(model.backupsHealth(drive: nil).badge, .attention,
-                       "A completed job failure stays visible even while backup checks are pending")
+        XCTAssertEqual(model.backupsHealth(drive: nil).badge, .checking,
+                       "An unmeasured job is not a failure; the backup checks are still pending")
         reads.release(0)
         try await waitUntil { !model.isRefreshingObservabilityStatus }
         XCTAssertEqual(model.backupStatusReason, "Read failed")
-        XCTAssertEqual(model.backupsHealth(drive: nil).badge, .attention)
+        XCTAssertEqual(model.backupsHealth(drive: nil).badge, .unknown)
+        XCTAssertFalse(model.publishedStatus.needsAttention)
     }
 
     func testKnownErrorsRemainVisibleThroughoutRefreshAndReload() async throws {
@@ -69,7 +72,7 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
         try await waitUntil { launchd.calls == 1 && reads.calls == 1 }
         XCTAssertEqual(model.groupStatus(.maintenance), before)
         XCTAssertEqual(model.backupStatusReason, "Still failed")
-        XCTAssertEqual(model.backupsHealth(drive: nil).badge, .attention)
+        XCTAssertEqual(model.backupsHealth(drive: nil).badge, .unknown, "S5: unreadable is neutral, still visible")
         XCTAssertEqual(model.launchdStatusTitle(.backupDaily), "Unloaded")
         launchd.release(0)
         reads.release(0)
@@ -95,7 +98,7 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
             try await waitUntil { !model.isRefreshingObservabilityStatus }
             XCTAssertEqual(model.groupStatus(.backups).health, .healthy)
             XCTAssertTrue(model.hasCompletedObservabilityRead)
-            XCTAssertEqual(model.backupsHealth(drive: nil).badge, .attention)
+            XCTAssertEqual(model.backupsHealth(drive: nil).badge, .unknown, "S5: unmeasured is neutral, still visible")
             XCTAssertNotNil(model.backupStatusReason)
             XCTAssertEqual(model.backupsHealth(drive: nil).reason, model.backupStatusReason)
         }
@@ -111,13 +114,13 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
                                            initialResult: .unreadable("Measured failure"))
         let (freshRoot, fresh) = try makeModel(launchd: freshLaunchd, reads: freshReads, refreshOnLoad: true)
         defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: freshRoot) }
-        XCTAssertEqual(shared.backupsHealth(drive: nil).badge, .attention)
+        XCTAssertEqual(shared.backupsHealth(drive: nil).badge, .unknown)
         XCTAssertEqual(fresh.backupsHealth(drive: nil).badge, .checking)
         freshLaunchd.release(0)
         freshReads.release(0)
         try await waitUntil { !fresh.isRefreshingLaunchdStatus && !fresh.isRefreshingObservabilityStatus }
         XCTAssertEqual(fresh.backupsHealth(drive: nil).badge, .healthy)
-        XCTAssertEqual(shared.backupsHealth(drive: nil).badge, .attention)
+        XCTAssertEqual(shared.backupsHealth(drive: nil).badge, .unknown)
     }
 
     func testHealthyStateSurvivesReentryThenPublishesFailureAndRecovery() async throws {
@@ -142,13 +145,13 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
         launchd.release(0)
         reads.release(0)
         try await waitUntil { !model.isRefreshingLaunchdStatus && !model.isRefreshingObservabilityStatus }
-        XCTAssertEqual(model.groupStatus(.maintenance).health, .unhealthy)
+        XCTAssertEqual(model.groupStatus(.maintenance).health, .unknown, "S5: an empty sample is unmeasured")
         XCTAssertEqual(model.backupStatusReason, "New failure")
         XCTAssertEqual(model.launchdStatusTitle(.hotlane), "Unknown", "An empty completed sample must clear prior active state")
 
         model.refreshAllStatus()
         try await waitUntil { launchd.calls == 2 && reads.calls == 2 }
-        XCTAssertEqual(model.backupsHealth(drive: nil).badge, .attention)
+        XCTAssertEqual(model.backupsHealth(drive: nil).badge, .unknown)
         XCTAssertEqual(model.backupStatusReason, "New failure")
         launchd.release(1)
         reads.release(1)
@@ -250,7 +253,9 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
             XCTAssertTrue(model.watcherStatus.needsAttention)
             let reason = try XCTUnwrap(model.watcherStatus.reasonText(now: now))
             XCTAssertTrue(reason.contains("2 transcript files could not be ingested"))
+            // L2: a fresh heartbeat is not recovery from a DB-read failure.
             XCTAssertEqual(model.groupStatus(.ingest).health, .unhealthy)
+            XCTAssertTrue(model.publishedStatus.needsAttention)
             XCTAssertEqual(model.groupStatus(.ingest).attentionReason, reason)
             XCTAssertEqual(model.footerPresentation.state, .watcher(model.watcherStatus))
             XCTAssertEqual(model.footerPresentation.detail, reason)
@@ -280,7 +285,7 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
             XCTAssertFalse(model.hasCompletedLaunchdSample)
             let failed = health == degraded
             XCTAssertEqual(model.watcherStatus.needsAttention, failed)
-            XCTAssertEqual(model.groupStatus(.ingest).health, failed ? .unhealthy : .checking)
+            XCTAssertEqual(model.groupStatus(.ingest).health, failed ? .unhealthy : .checking, "L2: DB-read failure")
             XCTAssertEqual(model.footerPresentation.state, failed ? .watcher(model.watcherStatus) : .checking)
             XCTAssertEqual(model.groupStatus(.ingest).attentionReason, failed ? model.watcherStatus.reasonText(now: now) : nil)
             XCTAssertEqual(model.footerPresentation.detail, failed ? model.watcherStatus.reasonText(now: now) : nil)
@@ -375,7 +380,10 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
                     if watcherFirst && !attention {
                         assertPendingConfiguredIngest(model, configuration: configuration)
                     } else {
-                        XCTAssertEqual(model.groupStatus(.ingest).health, attention ? .unhealthy : sampledIngestHealth(configuration))
+                        // S5 + L2: a stale heartbeat or a DB-read failure on a desired-ON watcher is the dot.
+                        let dot = configuration.watch
+                        XCTAssertEqual(model.groupStatus(.ingest).health,
+                                       attention ? (dot ? .unhealthy : .notice) : sampledIngestHealth(configuration))
                         XCTAssertEqual(model.groupStatus(.ingest).attentionReason, reason)
                         XCTAssertEqual(model.footerPresentation.state, .watcher(model.watcherStatus))
                         XCTAssertEqual(model.footerPresentation.detail, reason)
@@ -390,7 +398,9 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
                     let completedAttention = health != healthy
                     let completedReason = model.watcherStatus.reasonText(now: now)
                     XCTAssertEqual(model.watcherStatus.needsAttention, completedAttention)
-                    XCTAssertEqual(model.groupStatus(.ingest).health, completedAttention ? .unhealthy : sampledIngestHealth(configuration))
+                    let completedDot = configuration.watch
+                    XCTAssertEqual(model.groupStatus(.ingest).health,
+                                   completedAttention ? (completedDot ? .unhealthy : .notice) : sampledIngestHealth(configuration))
                     XCTAssertEqual(model.groupStatus(.ingest).attentionReason, completedReason)
                     XCTAssertEqual(model.footerPresentation.state, .watcher(model.watcherStatus))
                     XCTAssertEqual(model.footerPresentation.detail, completedReason)
@@ -401,11 +411,13 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
                     let runtime = model.watcherStatus
                     model.setGroup(.ingest, enabled: false)
                     XCTAssertEqual(model.watcherStatus, runtime)
-                    XCTAssertEqual(model.groupStatus(.ingest).health, completedAttention ? .unhealthy : .skipped)
+                    XCTAssertEqual(model.groupStatus(.ingest).health, completedAttention ? .notice : .skipped,
+                                   "a configured-OFF watcher is not a dot")
                     XCTAssertEqual(model.groupStatus(.ingest).note, "Configured OFF: Watcher, Index.")
                     model.setGroup(.ingest, enabled: true)
                     XCTAssertEqual(model.watcherStatus, runtime)
-                    XCTAssertEqual(model.groupStatus(.ingest).health, completedAttention ? .unhealthy : .healthy)
+                    XCTAssertEqual(model.groupStatus(.ingest).health,
+                                   completedAttention ? .unhealthy : .healthy)
                     XCTAssertEqual(model.groupStatus(.ingest).attentionReason, completedReason)
                     XCTAssertNil(model.groupStatus(.ingest).note)
                 }
@@ -503,7 +515,9 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
         XCTAssertFalse(model.hasCompletedLaunchdSample, file: file, line: line)
         let status = model.groupStatus(.ingest)
         if model.watcherStatus.needsAttention {
-            XCTAssertEqual(status.health, .unhealthy, file: file, line: line)
+            // S5 + L2: these pending fixtures carry a fresh heartbeat but `dbProbeFailed` — a DB-read
+            // failure is the dot while the watcher should run, neutral text when it is configured OFF.
+            XCTAssertEqual(status.health, configuration.watch ? .unhealthy : .notice, file: file, line: line)
             XCTAssertEqual(status.attentionReason, model.watcherStatus.reasonText(now: BrainBarDashboardFixture.fetchedAt),
                            file: file, line: line)
             XCTAssertEqual(status.note, configuration.note, file: file, line: line)

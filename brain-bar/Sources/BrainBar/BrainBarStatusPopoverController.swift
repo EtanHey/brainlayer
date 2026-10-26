@@ -69,6 +69,8 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private var isMenuTracking = false
     private var runtimeCancellables: Set<AnyCancellable> = []
     private var collectorCancellables: Set<AnyCancellable> = []
+    /// S5: the shared status model's changes, which re-render the icon and tooltip.
+    private var statusModelCancellables: Set<AnyCancellable> = []
     private let badgeReadQueue = DispatchQueue(label: "com.brainlayer.brainbar.badge-read", qos: .utility)
     private var badgeReadGeneration = UUID()
     private var badgePresentation = BadgeStatePresentation.failVisible("Badge state has not been read yet.")
@@ -76,6 +78,15 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private var rawBadgePresentation: BadgeStatePresentation?
     private var jobAlertsURL: URL?
     private var latestStats: BrainDatabase.DashboardStats?
+    /// The icon's full render identity: buckets, dot, and the appearance it is drawn for (R2-1).
+    private struct RenderedIcon: Equatable {
+        let agent: [Int], watcher: [Int], badgeOn: Bool
+        /// The button's appearance, and the app's (SwiftUI resolves the icon's colors from it).
+        let appearance: NSAppearance.Name?, appAppearance: NSAppearance.Name?, increaseContrast: Bool
+    }
+    private var lastRenderedIcon: RenderedIcon?
+    private var appearanceObservation: NSKeyValueObservation?
+    private var appAppearanceObservation: NSKeyValueObservation?
     private var latestState: PipelineState?
     private let statusLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     /// Shown for a job alert or a structured backup failure.
@@ -102,10 +113,10 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
     /// Includes the attention prefix and ellipsis, so long errors cannot widen the menu.
-    private static let statusLineTitleMaxCharacters = 60
+    nonisolated private static let statusLineTitleMaxCharacters = 60
 
     /// The menu's first, informational row; its tooltip retains the full reason.
-    static func statusLineTitle(for badge: BadgeStatePresentation) -> String {
+    nonisolated static func statusLineTitle(for badge: BadgeStatePresentation) -> String {
         guard badge.badgeOn || !badge.activeMessages.isEmpty else { return "Nothing needs attention" }
         let prefix = badge.badgeOn ? "Needs attention: " : "Info: "
         let title = prefix + badge.reason
@@ -115,6 +126,20 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         let boundary = reasonPrefix.lastIndex(where: { $0.isWhitespace }) ?? reasonPrefix.endIndex
         let shortenedReason = String(reasonPrefix[..<boundary]).trimmingCharacters(in: .whitespacesAndNewlines)
         return prefix + shortenedReason + "…"
+    }
+
+    /// The menu's first row from the shared snapshot (S5).
+    nonisolated static func statusLineTitle(for verdict: BrainBarStatusVerdict) -> String {
+        if verdict.needsAttention {
+            let reason = verdict.attention.joined(separator: "; ")
+            return statusLineTitle(for: BadgeStatePresentation(badgeOn: true, reason: reason, activeCodes: []))
+        }
+        if !verdict.notices.isEmpty {
+            let reason = verdict.notices.joined(separator: "; ")
+            return statusLineTitle(for: BadgeStatePresentation(badgeOn: false, reason: reason, activeCodes: [],
+                                                               activeMessages: verdict.notices))
+        }
+        return verdict.isChecking ? "Checking status…" : "Nothing needs attention"
     }
 
     /// The failing job behind an active job-alert badge code (`job_alert_<key>`), or nil.
@@ -170,7 +195,14 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         isStopped = true
         runtimeCancellables.removeAll()
         collectorCancellables.removeAll()
+        statusModelCancellables.removeAll()
         badgeReadGeneration = UUID()
+        appearanceObservation?.invalidate()
+        appearanceObservation = nil
+        appAppearanceObservation?.invalidate()
+        appAppearanceObservation = nil
+        NSWorkspace.shared.notificationCenter.removeObserver(self,
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         NotificationCenter.default.removeObserver(self, name: NSMenu.didBeginTrackingNotification, object: contextMenuForTesting)
         contextMenuForTesting.cancelTracking()
         isMenuTracking = false
@@ -186,6 +218,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         guard let button = statusItemForTesting.button else { return }
         button.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "BrainBar")
         button.toolTip = "BrainBar"
+        observeAppearance(of: button)
     }
 
     private func bindRuntime() {
@@ -195,6 +228,47 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
                 self?.bindCollector(collector)
             }
             .store(in: &runtimeCancellables)
+#if BRAINBAR_UI
+        runtime.$jobsModel
+            .receive(on: RunLoop.main)
+            .sink { [weak self] model in
+                self?.bindStatusModel(model)
+            }
+            .store(in: &runtimeCancellables)
+#endif
+    }
+
+#if BRAINBAR_UI
+    /// S5: the icon and its tooltip follow the one shared snapshot, refreshed whenever the model
+    /// publishes, whether or not the Dashboard is open.
+    private func bindStatusModel(_ model: BrainBarSettingsViewModel?) {
+        guard !isStopped else { return }
+        statusModelCancellables.removeAll()
+        // B6: the binding consumes the published snapshot; it never reads a file itself.
+        model?.$publishedStatus
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.renderCurrentStatus() }
+            .store(in: &statusModelCancellables)
+        renderCurrentStatus()
+    }
+#endif
+
+    /// The verdict every surface shares; without the app model (daemon target), the badge alone.
+    private var currentVerdict: BrainBarStatusVerdict {
+#if BRAINBAR_UI
+        if let model = runtime.jobsModel { return model.publishedStatus.verdict }
+#endif
+        let badge = badgePresentation
+        return badge.badgeOn ? .init(attention: [badge.reason], notices: [], isChecking: false)
+            : .init(attention: [], notices: badge.activeMessages, isChecking: false)
+    }
+
+    private func renderCurrentStatus() {
+        if let stats = latestStats, let state = latestState {
+            renderStatusIcon(stats: stats, state: state)
+        } else {
+            updateTooltip()
+        }
     }
 
     private func bindCollector(_ collector: StatsCollector?) {
@@ -240,17 +314,20 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         history: BadgeReadHistory,
         generation: UUID
     ) {
+#if BRAINBAR_UI
+        // B6: in the app, the model's one sampler reads the badge and alerts; no second timer read.
+        guard runtime.jobsModel == nil else { return }
+#endif
         badgeReadQueue.async { [weak self] in
             let raw = BadgeStateReader.read(url: url, now: Date(), cadence: cadence, history: history)
             // B2: a recovered job alert clears here exactly as on Backups and the Dashboard.
-            let badge = raw.reconciled(with: BrainBarJobAlerts.read(url: alertsURL))
+            let alerts = BrainBarJobAlerts.read(url: alertsURL)
+            let badge = raw.reconciled(with: alerts)
             Task { @MainActor [weak self] in
                 guard let self, self.badgeReadGeneration == generation else { return }
                 self.rawBadgePresentation = raw
                 self.badgePresentation = badge
-                if let stats = self.latestStats, let state = self.latestState {
-                    self.renderStatusIcon(stats: stats, state: state)
-                }
+                self.renderCurrentStatus()
             }
         }
     }
@@ -259,13 +336,29 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         // Setting NSStatusBarButton.image relayouts its variable-length status item.
         // Keep AppKit's tracking anchor stable; collectors still cache the latest state.
         guard !isStopped, !isMenuTracking else { return }
-        let badge = badgePresentation
         // Three overlapping pipeline lines (Agent stores / JSONL watcher / Enrichment)
         // with an always-visible baseline so the icon stays legible on a dark
         // fullscreen menu bar instead of the old single gray line that vanished.
-        statusItemForTesting.button?.image = Self.statusIconImage(stats: stats, badgeOn: badge.badgeOn)
+        // Coalesce by content: late collector/badge deliveries after a menu closes must not relayout
+        // the status item again when the icon they would draw is identical.
+        let appearance = statusItemForTesting.button?.effectiveAppearance ?? NSAppearance.currentDrawing()
+        let icon = RenderedIcon(agent: stats.recentAgentWriteBuckets, watcher: stats.recentWatcherWriteBuckets,
+                                badgeOn: currentVerdict.needsAttention,
+                                appearance: appearance.bestMatch(from: Self.iconAppearances),
+                                appAppearance: NSApplication.shared.effectiveAppearance.bestMatch(from: Self.iconAppearances),
+                                increaseContrast: Self.increaseContrast())
+        if icon != lastRenderedIcon || statusItemForTesting.button?.image == nil {
+            statusItemForTesting.button?.image = Self.statusIconImage(stats: stats, badgeOn: icon.badgeOn)
+            lastRenderedIcon = icon
+        }
         updateTooltip()
     }
+
+    /// The system Increase Contrast setting (High Contrast reaches the icon through it).
+    nonisolated(unsafe) static var increaseContrast: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast }
+
+    static let iconAppearances: [NSAppearance.Name] = [.aqua, .darkAqua, .accessibilityHighContrastAqua,
+                                                       .accessibilityHighContrastDarkAqua]
 
     static func statusIconImage(stats: BrainDatabase.DashboardStats, badgeOn: Bool) -> NSImage {
         return SparklineRenderer.renderStatusBarIcon(
@@ -276,21 +369,40 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         )
     }
 
+    /// R2-1: an appearance or contrast change re-renders (after tracking ends, via the guard).
+    private func observeAppearance(of button: NSButton) {
+        appearanceObservation = button.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.renderCurrentStatus() }
+        }
+        // System-wide changes (dark mode, Increase Contrast) also arrive as the app's appearance.
+        appAppearanceObservation = NSApplication.shared.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.renderCurrentStatus() }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(accessibilityDisplayOptionsDidChange(_:)),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+    }
+
+    @objc private func accessibilityDisplayOptionsDidChange(_: Notification) {
+        renderCurrentStatus()
+    }
+
     private func updateTooltip() {
         guard !isStopped, !isMenuTracking else { return }
-        statusItemForTesting.button?.toolTip = badgePresentation.badgeOn
-            ? "BrainBar — needs attention: \(badgePresentation.reason)"
-            : "BrainBar"
+        statusItemForTesting.button?.toolTip = currentVerdict.tooltip
     }
 
 #if DEBUG
 #if BRAINBAR_UI
     func setLogPathsForTesting(_ paths: BrainBarBackupSources.Paths) { logPathsOverride = paths }
 #endif
+    var statusDotForTesting: Bool { currentVerdict.needsAttention }
     func setBadgeForTesting(_ raw: BadgeStatePresentation, alertsURL: URL) {
         rawBadgePresentation = raw
         badgePresentation = raw
         jobAlertsURL = alertsURL
+#if BRAINBAR_UI
+        runtime.jobsModel?.applyHealthBadge(raw, alertsRead: BrainBarJobAlerts.readResult(url: alertsURL))
+#endif
     }
 #endif
 
@@ -311,47 +423,46 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         // it returns, and never flush a prior close into an immediately reopened menu.
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.isStopped, !self.isMenuTracking else { return }
-            if let stats = self.latestStats, let state = self.latestState {
-                self.renderStatusIcon(stats: stats, state: state)
-            } else {
-                self.updateTooltip()
-            }
+            // Flush the latest shared verdict now that the tracking anchor is released.
+            self.renderCurrentStatus()
         }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        // The alert file can clear between badge reads; the open menu reads it now.
-        if let raw = rawBadgePresentation, let jobAlertsURL {
-            let reconciled = raw.reconciled(with: BrainBarJobAlerts.read(url: jobAlertsURL))
-            if reconciled != badgePresentation {
-                badgePresentation = reconciled
-                // The icon and its tooltip follow the menu (Macroscope #1062), not the next read.
-                if let stats = latestStats, let state = latestState { renderStatusIcon(stats: stats, state: state) }
-                updateTooltip()
-            }
+#if BRAINBAR_UI
+        if let model = runtime.jobsModel {
+            // B6: opening the menu reads no file. It shows the sampler's cached inputs, and only
+            // re-publishes from them (e.g. a Drive change that landed since the last tick).
+            if let raw = model.healthBadge { badgePresentation = raw.reconciled(with: model.liveJobAlerts) }
+            model.republishStatus()
+            renderCurrentStatus()
+        } else {
+            reconcileBadgeFromAlertFile()
         }
-        var menuBadge = badgePresentation
+#else
+        reconcileBadgeFromAlertFile()
+#endif
+        // S5: the menu text is the shared verdict, the same one the icon and Dashboard render.
+        let verdict = currentVerdict
 #if BRAINBAR_UI
         activeLogKey = Self.jobAlertKey(for: badgePresentation)
         activeLogReason = badgePresentation.reason
         for item in backupReceiptItems { menu.removeItem(item) }
         backupReceiptItems.removeAll()
         if let model = runtime.jobsModel {
+            let snapshot = model.publishedStatus
+            // A job alert the badge has not caught up with yet still offers its log.
+            if activeLogKey == nil, let issue = snapshot.attention.first(where: { $0.alertKey != nil }),
+               let key = issue.alertKey {
+                activeLogKey = key
+                activeLogReason = issue.text
+            }
             // The single menu action follows desired-ON attention; named screen rows retain history.
             if activeLogKey == nil, let failure = BrainBarBackupLogTarget.failures(in: model.config).first(where: {
                 model.config.launchdJobs[$0.job]?.enabled != false
             }) {
                 activeLogKey = failure.key
                 activeLogReason = failure.reason
-            }
-            let drive = DriveAuthPresentation.derive(status: runtime.driveAuth.status,
-                isReconnecting: runtime.driveAuth.isReconnecting, lastOutcome: runtime.driveAuth.lastOutcome,
-                now: model.observabilityNow, formatDate: BrainBarDriveAuthFormat.date)
-            let health = model.backupsHealth(drive: drive)
-            if !menuBadge.badgeOn, let reason = health.reason,
-               health.badge == .attention || menuBadge.activeMessages.isEmpty {
-                menuBadge = health.badge == .attention ? .failVisible(reason)
-                    : .init(badgeOn: false, reason: reason, activeCodes: [], activeMessages: [reason])
             }
             // This property derives from the published document AND observabilityNow shared
             // with Dashboard and Backups. Opening the menu never starts another receipt read.
@@ -371,8 +482,10 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
             }
         }
 #endif
-        statusLineItem.title = Self.statusLineTitle(for: menuBadge)
-        statusLineItem.toolTip = menuBadge.reason.isEmpty ? nil : menuBadge.reason
+        statusLineItem.title = Self.statusLineTitle(for: verdict)
+        // The row's tooltip keeps every current reason: dot issues first, then neutral notices.
+        let fullReason = (verdict.attention + verdict.notices).joined(separator: "; ")
+        statusLineItem.toolTip = fullReason.isEmpty ? nil : fullReason
 #if BRAINBAR_UI
         let key = activeLogKey
         showLogItem.isHidden = key == nil
@@ -386,6 +499,14 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         logNoteItem.toolTip = logNote?.message
         logNoteItem.isHidden = logNote == nil
 #endif
+    }
+
+    /// Without the app model (the daemon target), the menu reconciles the badge with the alert file.
+    private func reconcileBadgeFromAlertFile() {
+        guard let raw = rawBadgePresentation, let jobAlertsURL else { return }
+        badgePresentation = raw.reconciled(with: BrainBarJobAlerts.read(url: jobAlertsURL))
+        // The icon and its tooltip follow the menu (Macroscope #1062), not the next read.
+        renderCurrentStatus()
     }
 
     private func configureContextMenu() {

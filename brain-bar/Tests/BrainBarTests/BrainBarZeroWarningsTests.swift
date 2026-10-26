@@ -229,11 +229,18 @@ final class BrainBarZeroWarningsTests: XCTestCase {
         XCTAssertEqual(maintenance.health, .unhealthy, file: file, line: line)
         XCTAssertEqual(maintenance.noteTone, .warning, file: file, line: line)
         XCTAssertEqual(maintenance.attentionReason, expected, file: file, line: line)
+        // S5: the raw group still names the failure; the shared snapshot shows a single failed
+        // nightly as neutral text that retries, never hidden and never "covered".
         XCTAssertFalse(maintenance.lastRunText.contains("Covered by weekly"), file: file, line: line)
         let model = try settingsModel(observations)
         let schedule = try XCTUnwrap(model.presentedBackupSchedules.first { $0.title == "Nightly maintenance" })
         XCTAssertFalse(schedule.lastRun.contains("Covered by weekly"), file: file, line: line)
-        XCTAssertTrue(model.dashboardJobAttentionReasons.contains(expected), file: file, line: line)
+        // L1: a single failed nightly is a visible deferral notice, never hidden and never "covered".
+        XCTAssertEqual(model.groupStatus(.maintenance).health, .deferred, file: file, line: line)
+        XCTAssertTrue(model.groupStatus(.maintenance).attentionReason?.hasPrefix("Nightly maintenance deferred — ") == true,
+                      file: file, line: line)
+        XCTAssertTrue(model.publishedStatus.verdict.notices.contains { $0.hasPrefix("Nightly maintenance deferred — ") },
+                      file: file, line: line)
     }
 
     func testWeeklyCoverageExpiresAfterALaterScheduledNightWithoutNightly() throws {
@@ -299,7 +306,8 @@ final class BrainBarZeroWarningsTests: XCTestCase {
         let ticks = seen.values
         XCTAssertEqual(ticks.count, 2)
         XCTAssertTrue(ticks[0].contains("Backup Daily: calendar result failed, exit 1"), "\(ticks[0])")
-        XCTAssertTrue(ticks[0].contains { $0.contains("exit 76") }, "\(ticks[0])")
+        // L1: one weekly exit 76 is a deferral notice, not a "thing that needs you".
+        XCTAssertFalse(ticks[0].contains { $0.contains("exit 76") }, "\(ticks[0])")
         XCTAssertEqual(ticks[1], [], "A newer ok sample must clear the reasons on the next tick")
     }
 
@@ -313,7 +321,13 @@ final class BrainBarZeroWarningsTests: XCTestCase {
         let end = try XCTUnwrap(source.range(of: "\n}\n", range: start.upperBound..<source.endIndex))
         let body = source[start.lowerBound..<end.upperBound]
         XCTAssertFalse(body.contains("Timer.publish"), String(body))
-        XCTAssertTrue(body.contains("monitorLaunchdStatus"), String(body))
+        // S5: the one cadence is owned for the app's lifetime, not by a mounted view.
+        XCTAssertFalse(body.contains("monitorLaunchdStatus"), String(body))
+        let app = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/BrainBar/BrainBarApp.swift"), encoding: .utf8)
+        XCTAssertTrue(app.contains("statusSamplingTask = Task { await jobsModel.monitorStatus() }"))
+        XCTAssertTrue(app.contains("statusSamplingTask?.cancel()"))
     }
 
     // MARK: Helpers

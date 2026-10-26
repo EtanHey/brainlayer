@@ -542,4 +542,166 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
             if section == .advanced { XCTAssertTrue(text.contains("4242"), text) }
         }
     }
+
+    // MARK: S5 — a schedule or probe error never erases known history
+
+    private func weeklyTwice76(_ directory: URL) throws -> BrainBarCalendarHistory {
+        try Data("""
+        {"event":"finished","step":"maintenance-weekly","ts":1784379600,"status":"failed","returncode":76,"replaces":"maintenance-nightly"}
+        {"event":"finished","step":"backup-daily","ts":1784380000,"status":"ok","returncode":0}
+        {"event":"finished","step":"maintenance-weekly","ts":1784466000,"status":"failed","returncode":76,"replaces":"maintenance-nightly"}
+        {"event":"finished","step":"index","ts":1784466050,"status":"failed","returncode":1}
+        {"event":"finished","step":"index","ts":1784466060,"status":"deferred","returncode":75}
+        {"event":"finished","step":"jsonl-backup","ts":1784466070,"status":"failed","returncode":1}
+        {"event":"finished","step":"jsonl-backup","ts":1784466080,"status":"ok","returncode":0}
+
+        """.utf8).write(to: directory.appendingPathComponent("runs.jsonl"))
+        return BrainBarCalendarHistory.read(directory: directory)
+    }
+
+    private func provider(history: BrainBarCalendarHistory, parentStatus: Int32 = 0,
+                          schedule: DateComponents? = nil, problem: String? = nil) -> BrainLayerLaunchdStatusProvider {
+        BrainLayerLaunchdStatusProvider(commandRunner: { command in
+            if command.first == "/bin/launchctl" {
+                return .init(terminationStatus: command.contains("print") ? parentStatus : 0, output: "runs = 1")
+            }
+            return .init(terminationStatus: 0, output: """
+            {"source":"supervisor","runtime":{"configured":true,"paused":false,"pid":4242,
+            "starts":3,"failures":0,"last_exit_code":0,"last_run_at":1784466000}}
+            """)
+        }, now: { Date(timeIntervalSince1970: 1784466100) }, ownership: { .supervisor },
+        calendarHistory: { history }, calendarSchedule: { schedule }, calendarScheduleProblem: { problem },
+        calendarIsDisabled: { _ in false })
+    }
+
+    func testCalendarHistoryCountsConsecutiveFailuresPerStepAndDeferralsDoNotReset() throws {
+        let history = try weeklyTwice76(try journal("migrated").deletingLastPathComponent())
+        XCTAssertEqual(history.runs["maintenance-weekly"]?.consecutiveFailures, 2)
+        XCTAssertEqual(history.runs["backup-daily"]?.consecutiveFailures, 0)
+        XCTAssertEqual(history.runs["index"]?.consecutiveFailures, 1, "exit 75 is a deferral, not a run that reset the streak")
+        XCTAssertEqual(history.runs["jsonl-backup"]?.consecutiveFailures, 0, "a clean run resets the streak")
+    }
+
+    func testMissingScheduleKeepsExit76HistoryInsteadOfClaimingNoRun() throws {
+        let history = try weeklyTwice76(try journal("migrated").deletingLastPathComponent())
+        let weekly = provider(history: history, schedule: nil).sampleActivity()[.maintenanceWeekly]
+        XCTAssertEqual(weekly?.lastExitCode, 76)
+        XCTAssertEqual(weekly?.lastRunAt, Date(timeIntervalSince1970: 1784466000))
+        XCTAssertNil(weekly?.nextRunAt)
+        XCTAssertEqual(weekly?.calendarConsecutiveFailures, 2)
+        XCTAssertEqual(weekly?.calendarScheduleUncertainty, "Maintenance calendar schedule unavailable")
+        guard case .failed = weekly?.loadState else { return XCTFail("exit 76 must stay a failure: \(String(describing: weekly))") }
+        XCTAssertFalse(weekly?.ownerNote?.contains("not yet run") == true, weekly?.ownerNote ?? "")
+        let observations = provider(history: history, schedule: nil).sampleActivity()
+        let status = BrainLayerLaunchdJobGroup.maintenance.status(settings: [:], observations: observations,
+            formatDate: { _ in "Oct 26 02:00" })
+        XCTAssertFalse(status.lastRunText.contains("Not yet run under the supervisor"), status.lastRunText)
+        XCTAssertFalse(status.lastRunText.contains("Awaiting first scheduled run"), status.lastRunText)
+        XCTAssertTrue(status.lastRunText.contains("Weekly Oct 26 02:00"), status.lastRunText)
+    }
+
+    func testParentProbeFailureKeepsHistoryAndAttachesUncertainty() throws {
+        let history = try weeklyTwice76(try journal("migrated").deletingLastPathComponent())
+        let observations = provider(history: history, parentStatus: 1, schedule: DateComponents(hour: 3, minute: 15)).sampleActivity()
+        XCTAssertEqual(observations[.maintenanceWeekly]?.lastExitCode, 76)
+        XCTAssertEqual(observations[.backupDaily]?.lastExitCode, 0)
+        XCTAssertEqual(observations[.backupDaily]?.calendarScheduleUncertainty, "Maintenance calendar status unavailable")
+        XCTAssertEqual(observations[.backupDaily]?.loadState, .loaded)
+    }
+
+    func testStepWithoutHistoryAndUnreadableScheduleIsUnknownNotFirstRun() throws {
+        let history = try weeklyTwice76(try journal("migrated").deletingLastPathComponent())
+        let observations = provider(history: history, schedule: nil).sampleActivity()
+        guard case .probeError = observations[.maintenanceNightly]?.loadState else {
+            return XCTFail("no run + no schedule is unknown: \(String(describing: observations[.maintenanceNightly]))")
+        }
+        let status = BrainLayerLaunchdJobGroup.maintenance.status(settings: [:], observations: observations,
+            formatDate: { _ in "date" })
+        XCTAssertTrue(status.lastRunText.contains("Nightly Last run unavailable"), status.lastRunText)
+    }
+
+    func testJSONArrayMaintenancePlistIsMalformedConfigurationAndMissingIsNot() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        let plist = directory.appendingPathComponent("com.brainlayer.maintenance.plist")
+        XCTAssertNil(BrainLayerLaunchdStatusProvider.scheduleProblem(label: "com.brainlayer.maintenance", in: directory),
+                     "a missing plist is not a malformed one")
+        try Data(#"["/Users/x/.local/lib/brainlayer/BrainLayer Maintenance","-m","brainlayer","maintenance-calendar"]"#.utf8)
+            .write(to: plist)
+        let problem = try XCTUnwrap(BrainLayerLaunchdStatusProvider.scheduleProblem(label: "com.brainlayer.maintenance", in: directory))
+        XCTAssertTrue(problem.contains("com.brainlayer.maintenance.plist"), problem)
+        let valid: [String: Any] = ["Label": "com.brainlayer.maintenance", "StartCalendarInterval": ["Hour": 3, "Minute": 15]]
+        try PropertyListSerialization.data(fromPropertyList: valid, format: .xml, options: 0).write(to: plist)
+        XCTAssertNil(BrainLayerLaunchdStatusProvider.scheduleProblem(label: "com.brainlayer.maintenance", in: directory))
+
+        let history = try weeklyTwice76(directory)
+        let observations = provider(history: history, schedule: nil, problem: problem).sampleActivity()
+        for job in [BrainLayerLaunchdJob.index, .backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly] {
+            XCTAssertEqual(observations[job]?.calendarScheduleProblem, problem, "\(job)")
+        }
+        var inputs = BrainBarStatusSnapshotTests.healthy()
+        inputs.observations = observations
+        let snapshot = BrainBarStatusSnapshot.derive(inputs)
+        XCTAssertTrue(snapshot.needsAttention)
+        XCTAssertTrue(snapshot.attention.contains { $0.component == .configuration }, "\(snapshot.attention)")
+    }
+
+
+    // MARK: R2-2 — an earned failure streak survives a deferral until a proven success
+
+    private func snapshot(_ lines: [String], in directory: URL) throws -> BrainBarStatusSnapshot {
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: directory.appendingPathComponent("runs.jsonl"))
+        let history = BrainBarCalendarHistory.read(directory: directory)
+        XCTAssertNil(history.error)
+        var inputs = BrainBarStatusSnapshotTests.healthy()
+        let sampled = Self.supervised(history: history).sampleActivity()
+        for job in [BrainLayerLaunchdJob.index, .backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly] {
+            inputs.observations?[job] = sampled[job]
+        }
+        return BrainBarStatusSnapshot.derive(inputs)
+    }
+
+    private func finished(_ step: String, _ offset: Int, _ status: String, _ code: Int, replaces: String? = nil) -> String {
+        let extra = replaces.map { #","replaces":"\#($0)""# } ?? ""
+        return #"{"event":"finished","step":"\#(step)","ts":\#(1784466000 - 1000 + offset),"status":"\#(status)","returncode":\#(code)\#(extra)}"#
+    }
+
+    func testEarnedMaintenanceAlarmSurvivesADeferralUntilASuccess() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        for step in ["maintenance-weekly", "maintenance-nightly"] {
+            var lines = (1...3).map { finished(step, $0, "failed", 76) }
+            XCTAssertTrue(try snapshot(lines, in: directory).needsAttention, "\(step) ×3")
+            lines.append(finished(step, 4, "deferred", 75))
+            let deferred = try snapshot(lines, in: directory)
+            XCTAssertTrue(deferred.needsAttention, "\(step): a deferral does not earn back the alarm: \(deferred.issues)")
+            let text = try XCTUnwrap(deferred.attention.first { $0.component == .maintenance }?.text)
+            XCTAssertTrue(text.contains("3 consecutive") && text.contains("deferred"), text)
+            XCTAssertFalse(text.contains("4 consecutive"), "exit 75 is not another failed attempt: \(text)")
+            lines.append(finished(step, 5, "ok", 0))
+            XCTAssertFalse(try snapshot(lines, in: directory).needsAttention, "\(step): a proven success clears it")
+        }
+    }
+
+    func testEarnedIndexAlarmSurvivesADeferralUntilASuccess() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        var lines = [finished("index", 1, "failed", 1), finished("index", 2, "failed", 1), finished("index", 3, "deferred", 75)]
+        let deferred = try snapshot(lines, in: directory)
+        XCTAssertTrue(deferred.needsAttention, "\(deferred.issues)")
+        XCTAssertEqual(deferred.attention.first?.jobs, [.index])
+        lines.append(finished("index", 4, "ok", 0))
+        XCTAssertFalse(try snapshot(lines, in: directory).needsAttention)
+    }
+
+    func testSingleDeferralTwoExit76AndWeeklyCoverageStayNeutral() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        XCTAssertFalse(try snapshot([finished("maintenance-weekly", 1, "deferred", 75)], in: directory).needsAttention)
+        XCTAssertFalse(try snapshot([finished("maintenance-weekly", 1, "failed", 76), finished("maintenance-weekly", 2, "failed", 76)],
+                                    in: directory).needsAttention, "the original two-exit-76 case")
+        let covered = (1...3).map { finished("maintenance-nightly", $0, "failed", 1) } + [
+            #"{"event":"runner","ts":1784465100,"scheduled_date":"2026-07-19"}"#,
+            #"{"event":"spawn","step":"maintenance-weekly","ts":1784465110,"pid":4242}"#,
+            finished("maintenance-weekly", 120, "ok", 0, replaces: "maintenance-nightly"),
+        ]
+        let snapshot = try snapshot(covered, in: directory)
+        XCTAssertFalse(snapshot.needsAttention, "a successful weekly that covered the nightly resolves it: \(snapshot.issues)")
+    }
 }

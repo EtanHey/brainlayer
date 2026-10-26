@@ -14,7 +14,10 @@ final class BrainBarRuntime: ObservableObject {
     private(set) var databasePath: String?
 
     #if BRAINBAR_UI
-    @Published var jobsModel: BrainBarSettingsViewModel?
+    /// The app's one status model; it reads the Drive auth state at each publication.
+    @Published var jobsModel: BrainBarSettingsViewModel? {
+        didSet { jobsModel?.attachDriveAuth(driveAuth) }
+    }
     #endif
 
     var onToggleRequested: (() -> Void)?

@@ -190,7 +190,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let renderStart = try XCTUnwrap(source.range(of: "private func renderStatusIcon"))
         let renderEnd = try XCTUnwrap(source.range(of: "func menuNeedsUpdate", range: renderStart.upperBound..<source.endIndex))
         let render = String(source[renderStart.lowerBound..<renderEnd.lowerBound])
-        XCTAssertTrue(render.contains("let badge = badgePresentation"))
+        XCTAssertTrue(render.contains("currentVerdict.needsAttention"), "S5: the icon renders the shared verdict")
         XCTAssertFalse(render.contains("BadgeStateReader.read"), "UI emissions must not perform badge file I/O.")
     }
 
@@ -338,7 +338,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
             alertsURL: root.appendingPathComponent("absent-alerts.json"))
         let menu = controller.contextMenuForTesting
         controller.menuNeedsUpdate(menu)
-        XCTAssertEqual(menu.items.first?.toolTip, reason)
+        // S5: the tooltip lists every reason, the dot reason first.
+        XCTAssertTrue(menu.items.first?.toolTip?.hasPrefix(reason) == true, menu.items.first?.toolTip ?? "nil")
         let action = try XCTUnwrap(menu.items.first {
             !$0.isHidden && $0.isEnabled && $0.action == NSSelectorFromString("showJobAlertLog:")
         }, "The actual stopped-backup menu must expose a log action without a job-alert badge")
@@ -407,7 +408,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
             controller.menuNeedsUpdate(menu)
         }
         func click(expected: URL, warning: String) throws {
-            XCTAssertEqual(menu.items.first?.toolTip, warning)
+            // S5: the status row's tooltip lists every current reason, including the routed one.
+            XCTAssertTrue(menu.items.first?.toolTip?.contains(warning) == true, menu.items.first?.toolTip ?? "nil")
             XCTAssertFalse(action.isHidden)
             XCTAssertTrue(action.isEnabled)
             let count = workspace.opened.count

@@ -29,6 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var uiHeartbeatTimer: DispatchSourceTimer?
     private var daemonWatchdog: BrainBarLifecycleWatchdog?
     private var driveAuthTimer: Timer?
+    /// S5: the shared status snapshot's one sampling cadence, for the app's lifetime.
+    private var statusSamplingTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSAppleEventManager.shared().setEventHandler(
@@ -81,10 +83,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.collector = collector
         BrainBarAppSupport.wireRuntime(runtime, dbPath: dbPath, collector: collector)
 
-        runtime.jobsModel = BrainBarSettingsViewModel(workspace: workspace,
+        let jobsModel = BrainBarSettingsViewModel(workspace: workspace,
             observabilityURL: BrainBarSettingsView.observabilityURL(databasePath: dbPath),
             watcherHealthURL: WatcherHealthReader.resolvedURL(),
-            backupSources: .live(databasePath: dbPath))
+            backupSources: .live(databasePath: dbPath),
+            healthBadgeURL: BadgeStateReader.url(dbPath: dbPath),
+            jobAlertsURL: BrainBarJobAlerts.producerURL(dbPath: dbPath, producerLabel: BrainBarJobAlerts.badgeProducerLabel))
+        runtime.jobsModel = jobsModel
+        // S5: one app-lifetime sampler feeds the icon, menu, Dashboard, Jobs and Backups, whether or
+        // not a window is open; the views no longer start their own readers.
+        statusSamplingTask = Task { await jobsModel.monitorStatus() }
 
         flushPendingBrainBarURLs()
 
@@ -112,6 +120,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         daemonWatchdog = nil
         driveAuthTimer?.invalidate()
         driveAuthTimer = nil
+        statusSamplingTask?.cancel()
+        statusSamplingTask = nil
         hotkeyFileWatcher?.cancel()
         toggleHotkey?.stop()
         collector?.stop()
