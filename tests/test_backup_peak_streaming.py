@@ -2,10 +2,12 @@
 
 import dataclasses
 import gzip
+import hashlib
 import json
 import os
 import sqlite3
 import subprocess
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -344,10 +346,10 @@ def test_snapshot_pins_volume_space_despite_file_block_drop(punch_lane, monkeypa
     free = 10**12
 
     def punch(fd, offset, length):
-        nonlocal punched, free
+        nonlocal punched
         real_punch(fd, offset, length)
         punched += length
-        free -= length  # No physical reclaim: volume free falls as the archive grows.
+        # A real APFS pin drops the file's blocks but frees approximately zero volume bytes.
 
     monkeypatch.setattr(backup, "_punch_raw_hole", punch)
     monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=free))
@@ -355,6 +357,29 @@ def test_snapshot_pins_volume_space_despite_file_block_drop(punch_lane, monkeypa
         backup.create_sqlite_backup_artifact(source, output, "2026-10-26")
     assert punched <= 2 * backup.RECLAIM_CHUNK_BYTES
     assert list(output.iterdir()) == []
+
+
+@pytest.mark.parametrize("compressor", ["gzip", "zstd"])
+def test_short_final_chunk_tolerates_volume_accounting_deficit(punch_lane, reclaim_volume, monkeypatch, compressor):
+    _, output = punch_lane
+    data = os.urandom(backup.RECLAIM_CHUNK_BYTES + 8192)
+    raw, archive = output / "tail.db", output / "tail.archive"
+    raw.write_bytes(data)
+    real_punch = backup._punch_raw_hole
+    lengths = []
+
+    def punch(fd, offset, length):
+        real_punch(fd, offset, length)
+        lengths.append(length)
+        if length < backup.RECLAIM_CHUNK_BYTES:
+            reclaim_volume.released -= 12 * 1024
+
+    monkeypatch.setattr(backup, "_punch_raw_hole", punch)
+    raw_hash = backup._compress_reclaiming_raw(
+        raw, archive, zstd_binary=backup._require_zstd() if compressor == "zstd" else None
+    )
+    assert lengths == [backup.RECLAIM_CHUNK_BYTES, 8192]
+    assert raw_hash == hashlib.sha256(data).hexdigest()
 
 
 @pytest.mark.parametrize("compressor", ["gzip", "zstd"])
@@ -452,3 +477,49 @@ def test_stream_download_chunk_size_and_bounded_retry(monkeypatch):
     with pytest.raises(RuntimeError, match="after 2 attempts"):
         backup._download_drive_to_stream(service, file_id="test", sink=io.BytesIO())
     assert len(calls) == 2
+
+
+def test_decoder_closing_early_does_not_retry_drive_download(monkeypatch):
+    from googleapiclient.http import HttpRequest
+    from httplib2 import Response
+
+    requested = threading.Event()
+    calls, sleeps, download_errors = [], [], []
+    decoder_error = ValueError("decoder rejected archive")
+
+    class HTTP:
+        def request(self, uri, method, *, headers):
+            calls.append(headers["range"])
+            requested.set()
+            # Larger than the pipe buffer: the write must reach the closed reader.
+            payload = b"x" * (1024 * 1024)
+            return Response({"status": "200", "content-length": str(len(payload))}), payload
+
+    service = SimpleNamespace(
+        files=lambda: SimpleNamespace(get_media=lambda **kw: HttpRequest(HTTP(), lambda *a: None, "https://test/"))
+    )
+    real_download = backup._download_drive_to_stream
+
+    def download(*args, **kwargs):
+        try:
+            return real_download(*args, **kwargs)
+        except Exception as exc:
+            download_errors.append(exc)
+            raise
+
+    def decode(reader, *, zstd):
+        assert requested.wait(timeout=5), "download never started"
+        raise decoder_error
+
+    monkeypatch.setattr(backup, "_sleep", sleeps.append)
+    monkeypatch.setenv(backup.DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV, "3")
+    monkeypatch.setattr(backup, "_download_drive_to_stream", download)
+    monkeypatch.setattr(backup, "_archive_stream_sha256", decode)
+    with pytest.raises(ValueError) as error:
+        backup._drive_stream_hashes(service, file_id="test", zstd=False)
+    assert error.value is decoder_error
+    assert len(calls) == 1
+    assert sleeps == []
+    assert len(download_errors) == 1
+    assert type(download_errors[0]).__name__ == "_DriveStreamReaderClosed"
+    assert isinstance(download_errors[0].__cause__, BrokenPipeError)
