@@ -190,7 +190,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let renderStart = try XCTUnwrap(source.range(of: "private func renderStatusIcon"))
         let renderEnd = try XCTUnwrap(source.range(of: "func menuNeedsUpdate", range: renderStart.upperBound..<source.endIndex))
         let render = String(source[renderStart.lowerBound..<renderEnd.lowerBound])
-        XCTAssertTrue(render.contains("let badge = badgePresentation"))
+        XCTAssertTrue(render.contains("currentVerdict.needsAttention"), "S5: the icon renders the shared verdict")
         XCTAssertFalse(render.contains("BadgeStateReader.read"), "UI emissions must not perform badge file I/O.")
     }
 
@@ -407,7 +407,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
             controller.menuNeedsUpdate(menu)
         }
         func click(expected: URL, warning: String) throws {
-            XCTAssertEqual(menu.items.first?.toolTip, warning)
+            // S5: the status row's tooltip lists every current reason, including the routed one.
+            XCTAssertTrue(menu.items.first?.toolTip?.contains(warning) == true, menu.items.first?.toolTip ?? "nil")
             XCTAssertFalse(action.isHidden)
             XCTAssertTrue(action.isEnabled)
             let count = workspace.opened.count

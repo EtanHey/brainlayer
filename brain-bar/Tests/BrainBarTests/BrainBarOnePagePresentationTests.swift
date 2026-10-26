@@ -344,12 +344,26 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
                 embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
                 initialLaunchdObservations: observations, refreshStatusOnLoad: false, now: { now },
                 initialWatcherHealth: .readable(.init(updatedAt: now, pollCount: 50)))
+            let snapshot = model.statusSnapshot(drive: nil)
             let presentation = try makePresentation(result: BrainBarOnePageTestFixture.healthyResult(),
-                now: now, jobAttentionReasons: model.dashboardJobAttentionReasons)
-            XCTAssertEqual(presentation.status.headline, "1 thing needs you")
-            XCTAssertEqual(presentation.status.reason, model.groupStatus(group).attentionReason)
-            XCTAssertEqual(presentation.attentionItems, [try XCTUnwrap(model.groupStatus(group).attentionReason)])
-            XCTAssertEqual(presentation.status.tone, .amber)
+                now: now, statusVerdict: snapshot.verdict)
+            let reason = try XCTUnwrap(model.groupStatus(group).attentionReason)
+            // S5 dot policy: a failed backup with no newer verified copy is a dot; a single failed
+            // Index or maintenance run is visible neutral text. Neither is ever "All good".
+            XCTAssertNotEqual(presentation.status.headline, "All good")
+            if group == .backups {
+                XCTAssertEqual(presentation.status.headline, "1 thing needs you")
+                XCTAssertEqual(presentation.status.reason, reason)
+                XCTAssertEqual(presentation.attentionItems, [reason])
+                XCTAssertEqual(presentation.status.tone, .amber)
+                XCTAssertEqual(model.groupStatus(group).health, .unhealthy)
+            } else {
+                XCTAssertEqual(presentation.status.headline, "No action needed")
+                XCTAssertEqual(presentation.attentionItems, [])
+                XCTAssertEqual(presentation.status.tone, .neutral)
+                XCTAssertTrue(snapshot.verdict.notices.contains(reason), "\(snapshot.verdict.notices)")
+                XCTAssertEqual(model.groupStatus(group).health, .notice)
+            }
         }
     }
 
@@ -415,7 +429,8 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         collector providedCollector: StatsCollector? = nil,
         jobAttentionReasons: [String] = [],
         heroResult: ObservabilityReadResult? = nil,
-        jobsChecking: Bool = false
+        jobsChecking: Bool = false,
+        statusVerdict: BrainBarStatusVerdict? = nil
     ) throws -> BrainBarOnePagePresentation {
         let collector = providedCollector ?? BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: now)
         let flow = DashboardFlowSummary.derive(
@@ -444,7 +459,8 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             jobsChecking: jobsChecking,
             calendar: BrainBarOnePageTestFixture.calendar,
             locale: Locale(identifier: "en_US"),
-            observabilityCadence: .known(300)
+            observabilityCadence: .known(300),
+            statusVerdict: statusVerdict
         )
     }
 }

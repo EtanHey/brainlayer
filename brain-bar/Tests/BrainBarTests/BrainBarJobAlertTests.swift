@@ -312,6 +312,7 @@ final class BrainBarJobAlertTests: XCTestCase {
 
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         runtime.jobsModel = model
+        runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: now.addingTimeInterval(30 * 86_400)))
         let workspace = BrainBarRecordingWorkspace()
         let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
         let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,

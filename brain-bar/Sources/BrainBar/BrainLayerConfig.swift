@@ -580,11 +580,19 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
                     .map { text.substring(with: $0.range(at: 1)) })
             }()
             let next = nextRun(components: calendarSchedule())
+            let problem = calendarScheduleProblem()
             return Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { job in
-                var result = job.isContinuous ? component(job) : calendarStep(job, parent: parent, history: history, next: next)
+                var result = job.isContinuous ? component(job)
+                    : calendarStep(job, parent: parent, history: history, next: next, problem: problem)
                 if !job.isContinuous {
                     if disabledResult.terminationStatus != 0 {
-                        result = .stateOnly(.probeError("Calendar disabled state unavailable"))
+                        // S5: an unreadable disabled list is uncertainty, never a reason to forget a run.
+                        if result.lastRunAt == nil, result.calendarCoveredByWeeklyAt == nil {
+                            result = .stateOnly(.probeError("Calendar disabled state unavailable"))
+                            result.calendarScheduleProblem = problem
+                        } else {
+                            result.calendarScheduleUncertainty = result.calendarScheduleUncertainty ?? "Calendar disabled state unavailable"
+                        }
                     } else {
                         result.calendarDisabled = result.calendarDisabled || disabledLabels.contains(job.launchdLabel)
                             || disabledLabels.contains("com.brainlayer.maintenance")
@@ -643,14 +651,33 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
     }
 
     private func calendarStep(_ job: BrainLayerLaunchdJob, parent: BrainLayerLaunchdCommandResult,
-                              history: BrainBarCalendarHistory, next: Date?) -> BrainLayerLaunchdJobObservation {
-        guard parent.terminationStatus == 0 else {
-            return .stateOnly(.probeError("Maintenance calendar status unavailable"))
-        }
+                              history: BrainBarCalendarHistory, next: Date?, problem: String?) -> BrainLayerLaunchdJobObservation {
+        var observation = calendarStepHistory(job, parent: parent, history: history, next: next)
+        observation.calendarScheduleProblem = problem
+        return observation
+    }
+
+    /// S5 (R2 §5.B): the run history is read BEFORE the schedule. A parent-probe or schedule error
+    /// attaches uncertainty to a known run; it only stands alone when this step has no run at all.
+    private func calendarStepHistory(_ job: BrainLayerLaunchdJob, parent: BrainLayerLaunchdCommandResult,
+                                     history: BrainBarCalendarHistory, next: Date?) -> BrainLayerLaunchdJobObservation {
         if let error = history.error { return .stateOnly(.probeError(error)) }
-        guard next != nil else { return .stateOnly(.probeError("Maintenance calendar schedule unavailable")) }
         let name = job.launchdLabel.replacingOccurrences(of: "com.brainlayer.", with: "")
         let run = history.runs[name]
+        let uncertainty: String? = parent.terminationStatus != 0 ? "Maintenance calendar status unavailable"
+            : next == nil ? "Maintenance calendar schedule unavailable" : nil
+        var observation = calendarStepObservation(job, run: run, history: history, next: next)
+        if run == nil, observation.calendarCoveredByWeeklyAt == nil, let uncertainty {
+            // Nothing known about this step: unknown, never "awaiting first run".
+            return .stateOnly(.probeError(uncertainty))
+        }
+        observation.calendarScheduleUncertainty = uncertainty
+        observation.calendarConsecutiveFailures = run?.consecutiveFailures
+        return observation
+    }
+
+    private func calendarStepObservation(_ job: BrainLayerLaunchdJob, run: BrainBarCalendarHistory.Run?,
+                                         history: BrainBarCalendarHistory, next: Date?) -> BrainLayerLaunchdJobObservation {
         // Coverage belongs to the replacing runner's scheduled night. A later runner without a
         // nightly result must fall back to the nightly's own history, even if the weekly was ok.
         // Only journal order proves replacement; missing order must preserve the real result.
@@ -785,7 +812,18 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
     /// Why an INSTALLED calendar LaunchAgent is not a usable schedule; nil when it is usable or absent.
     static func scheduleProblem(label: String, in directory: URL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/LaunchAgents")) -> String? {
-        nil
+        let name = "\(label).plist"
+        let path = directory.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: path.path) else { return nil }
+        guard let data = try? Data(contentsOf: path) else { return "\(name) is unreadable" }
+        guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            return "\(name) is malformed: not a property-list dictionary"
+        }
+        guard let interval = plist["StartCalendarInterval"] as? [String: Int],
+              interval["Hour"] != nil, interval["Minute"] != nil else {
+            return "\(name) is malformed: no StartCalendarInterval Hour and Minute"
+        }
+        return nil
     }
 
     private static func run(_ command: [String]) -> BrainLayerLaunchdCommandResult {

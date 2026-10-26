@@ -56,6 +56,15 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
         }
     }
 
+    /// S5: what the last-run cell says with no dated run. "Awaiting first scheduled run" only for a
+    /// readable step with no history; an unreadable one says so instead of claiming it never ran.
+    var lastRunNeverText: String {
+        switch loadState {
+        case .probeError, .unknown, .ownerUnknown: return "Last run unavailable"
+        default: return ownership == .supervisor ? "Awaiting first scheduled run" : "No run recorded"
+        }
+    }
+
     /// The last-run cell on Jobs and Backups: a covered nightly names the weekly that covered it.
     func lastRunText(formatDate: (Date) -> String, never: String) -> String {
         if let calendarCoveredByWeeklyAt { return "Covered by weekly · " + formatDate(calendarCoveredByWeeklyAt) }
@@ -320,7 +329,7 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
             // The unified watcher verdict already accounts for missing/error launchd evidence.
             if job == .watch, ingestWatcher != nil { return nil }
             // Ingest configuration is desired state; toggling it does not stop loaded jobs.
-            guard let observation = observations[job] else { return "\(job.humanGroupLabel) status is unavailable." }
+            guard let observation = observations[job] else { return nil }
             switch observation.loadState {
             case .running:
                 return nil
@@ -352,7 +361,7 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
             case .paused:
                 return "\(job.humanGroupLabel) is paused under the supervisor."
             case .unknown, .probeError:
-                return "\(job.humanGroupLabel) status is unavailable."
+                return nil // S5: an unmeasured job is neutral text (unknownReason), never Needs attention.
             }
         }.first
         let calendarAttention = jobs.compactMap { job -> String? in
@@ -370,7 +379,16 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
             if case let .ownerUnknown(reason) = observations[job]?.loadState { return reason }
             return nil
         }.first
-        let unknownReason = ownerUnknown ?? watcherUnknown ?? deferralUnknown
+        let unmeasured = jobs.compactMap { job -> String? in
+            guard settings[job]?.enabled != false, job != .watch || ingestWatcher == nil else { return nil }
+            guard let observation = observations[job] else { return "\(job.humanGroupLabel) status is unavailable." }
+            switch observation.loadState {
+            case let .probeError(reason): return "\(job.humanGroupLabel) status is unavailable (\(reason))."
+            case .unknown: return "\(job.humanGroupLabel) status is unavailable."
+            default: return nil
+            }
+        }.first
+        let unknownReason = ownerUnknown ?? watcherUnknown ?? deferralUnknown ?? unmeasured
         let awaitingRun = jobs.contains { job in
             guard settings[job]?.enabled != false, let observation = observations[job],
                   observation.calendarCoveredByWeeklyAt == nil else { return false }
@@ -409,7 +427,7 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
             health: health,
             attentionReason: reason ?? calendarAttention ?? unknownReason ?? (skips.isEmpty ? nil : skips.joined(separator: " ")),
             lastRunText: jobs.map { job in
-                let never = observations[job]?.ownership == .supervisor ? "Not yet run under the supervisor" : "No run recorded"
+                let never = observations[job]?.lastRunNeverText ?? "No run recorded"
                 return "\(job.humanGroupLabel) \(observations[job]?.lastRunText(formatDate: formatDate, never: never) ?? never)"
             }.joined(separator: " · "),
             nextRunText: jobs.map { job in
@@ -537,6 +555,8 @@ extension WatcherLaunchdEvidence {
 struct BrainBarBackupsHealth: Equatable, Sendable {
     enum Badge: Equatable, Sendable {
         case checking, healthy, awaitingRun, expiring, attention, unknown, skipped, deferred, idle, queued, uploading
+        /// S5: a known non-urgent backup fact (e.g. a failed run with a newer verified copy).
+        case notice
 
         var title: String {
             switch self {
@@ -551,6 +571,7 @@ struct BrainBarBackupsHealth: Equatable, Sendable {
             case .unknown: "Status unknown"
             case .skipped: "Skipped"
             case .deferred: "Deferred"
+            case .notice: "No action needed"
             }
         }
     }
@@ -598,7 +619,8 @@ struct BrainBarBackupsHealth: Equatable, Sendable {
         // A positively verified calendar gate is neutral across all job groups.
         case .skipped: .init(badge: .skipped, reason: job.attentionReason)
         case .deferred: .init(badge: .deferred, reason: job.attentionReason)
-        case .unknown, .notice: .init(badge: .unknown, reason: job.attentionReason)
+        case .unknown: .init(badge: .unknown, reason: job.attentionReason)
+        case .notice: .init(badge: .notice, reason: job.attentionReason)
         case .unhealthy: .init(badge: .attention, reason: job.attentionReason)
         }
     }

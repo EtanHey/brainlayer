@@ -12,7 +12,19 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
 
     var needsAttention: Bool { !attention.isEmpty }
 
+    /// The Dashboard headline: a count only for dot issues; notices are neutral; "All good" only
+    /// when everything was measured and nothing is pending.
     var dashboardStatus: BrainBarOnePageStatus {
-        .init(headline: "All good", reason: nil, tone: .green)
+        if let first = attention.first {
+            return .init(headline: attention.count == 1 ? "1 thing needs you" : "\(attention.count) things need you",
+                         reason: first, tone: .amber)
+        }
+        if let first = notices.first { return .init(headline: "No action needed", reason: first, tone: .neutral) }
+        if isChecking { return .init(headline: "Checking…", reason: nil, tone: .neutral) }
+        return .init(headline: "All good", reason: nil, tone: .green)
+    }
+
+    var tooltip: String {
+        needsAttention ? "BrainBar — needs attention: " + attention.joined(separator: "; ") : "BrainBar"
     }
 }

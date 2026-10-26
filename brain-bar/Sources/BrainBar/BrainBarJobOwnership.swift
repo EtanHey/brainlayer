@@ -110,6 +110,7 @@ struct BrainBarCalendarHistory: Sendable {
             ) else { return .empty }
             var result = Self()
             var starts: [String: Date] = [:]
+            var streaks: [String: Int] = [:]
             for (ordinal, line) in String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).enumerated() {
                 guard let row = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
                 else { throw CocoaError(.fileReadCorruptFile) }
@@ -131,9 +132,16 @@ struct BrainBarCalendarHistory: Sendable {
                 guard let code = row["returncode"] as? Int32,
                       ["ok", "failed", "deferred", "stopped"].contains(status)
                 else { throw CocoaError(.fileReadCorruptFile) }
+                // A deferral (exit 75) did not run the step: it neither extends nor resets the streak.
+                if status == "failed" || status == "stopped" || (code != 0 && code != 75) {
+                    streaks[step, default: 0] += 1
+                } else if status == "ok" {
+                    streaks[step] = 0
+                }
                 result.runs[step] = Run(at: Date(timeIntervalSince1970: ts), code: code, status: status,
                     startedAt: startedAt, reason: row["reason"] as? String, replaces: row["replaces"] as? String,
-                    scheduledDate: result.latestScheduledDate, journalOrdinal: ordinal)
+                    scheduledDate: result.latestScheduledDate, journalOrdinal: ordinal,
+                    consecutiveFailures: streaks[step] ?? 0)
             }
             return result
         } catch { return Self(error: "Maintenance calendar history is unreadable") }

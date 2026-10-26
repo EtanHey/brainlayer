@@ -223,13 +223,17 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
                 initialLaunchdStates: Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, .running) }),
                 refreshStatusOnLoad: false, now: { now },
                 initialObservabilityResult: .readable(document), observabilityCadence: .known(300))
+            // S5 dot policy: a future-dated receipt is clock skew (unknown) — red on the receipt line,
+            // neutral text on the badge and menu, never the dot.
+            let futureDated = (b.lastVerifiedUpload.map { $0.at > now } ?? false) || (b.dbSnapshot.map { $0.lastAt > now } ?? false)
+            let dot = needsAttention && !futureDated
             if b.verifiedIdle(now: now) {
                 let health = model.backupsHealth(drive: drive(expiresIn: 5 * 86400))
-                XCTAssertEqual(health.badge, needsAttention ? .attention : .idle)
-                XCTAssertEqual(health.badge.title, needsAttention ? "Needs attention" : "Idle — no new transcripts")
-                XCTAssertEqual(model.backupsHealth(drive: nil).badge, needsAttention ? .attention : .idle)
+                XCTAssertEqual(health.badge, dot ? .attention : futureDated ? .notice : .idle)
+                XCTAssertEqual(health.badge.title, dot ? "Needs attention" : futureDated ? "No action needed" : "Idle — no new transcripts")
+                XCTAssertEqual(model.backupsHealth(drive: nil).badge, dot ? .attention : futureDated ? .notice : .idle)
                 XCTAssertEqual(model.backupChecks?.verdictTone, needsAttention ? .red : .neutral)
-                if needsAttention { XCTAssertEqual(health.reason, model.backupChecks?.attentionSentence) }
+                if dot { XCTAssertEqual(health.reason, model.backupChecks?.attentionSentence) }
                 let collector = BrainBarDashboardFixture.makeCollector()
                 let hero = BrainBarHeroPresentation.derive(
                     flow: DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: now),
@@ -252,8 +256,8 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             XCTAssertEqual(receipts.map(\.title), model.backupReceiptLines?.map(\.text))
             XCTAssertTrue(receipts.allSatisfy { !$0.isEnabled && $0.action == nil })
             XCTAssertTrue(receipts.allSatisfy { $0.toolTip?.contains("observability.json") == true })
-            XCTAssertEqual(menu.items.first?.title.hasPrefix("Needs attention:"), needsAttention)
-            if !needsAttention { XCTAssertTrue(menu.items.first?.title.hasPrefix("Info:") == true) }
+            XCTAssertEqual(menu.items.first?.title.hasPrefix("Needs attention:"), dot)
+            if !dot { XCTAssertTrue(menu.items.first?.title.hasPrefix("Info:") == true) }
             for (item, line) in zip(receipts, model.backupReceiptLines ?? []) where line.tone == .red {
                 XCTAssertEqual(item.attributedTitle?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
                                BrainBarDesignTokens.Colors.statusError)
@@ -391,7 +395,9 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             menu.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []), alertsURL: URL(fileURLWithPath: "/fixture/absent-alerts"))
             menu.menuNeedsUpdate(menu.contextMenuForTesting)
             XCTAssertTrue(menu.contextMenuForTesting.items.first?.title.hasPrefix("Info:") == true)
-            XCTAssertEqual(menu.contextMenuForTesting.items.first?.toolTip, model.backupsHealth(drive: drive(expiresIn: 5 * 86400)).reason)
+            // S5: the row's tooltip lists every notice; the backup one is among them.
+            XCTAssertTrue(menu.contextMenuForTesting.items.first?.toolTip?.contains(
+                try XCTUnwrap(model.backupsHealth(drive: drive(expiresIn: 5 * 86400)).reason)) == true)
             XCTAssertEqual(model.backupsHealth(drive: drive(.invalid)).badge, .attention)
             model.setObservabilityResultForTesting(.readable(document.replacingBackupsErrorType("job_alert:Fixture failure")))
             XCTAssertEqual(model.backupsHealth(drive: drive()).badge, .attention)

@@ -208,6 +208,8 @@ private struct BrainBarDashboardContent: View {
     var panelState: BrainBarDashboardPanelState? = nil
     var jobAttentionReasons: [String] = []
     var jobsChecking: Bool = false
+    /// S5: the shared status snapshot's verdict; nil only for the standalone fallback dashboard.
+    var statusVerdict: BrainBarStatusVerdict? = nil
 
     var body: some View {
         if collector.snapshotFreshnessState.isLoading {
@@ -223,6 +225,7 @@ private struct BrainBarDashboardContent: View {
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: observabilityResult,
             referenceNow: referenceNow, backupReferenceNow: backupReferenceNow, calendar: calendar, locale: locale,
             jobAttentionReasons: jobAttentionReasons, jobsChecking: jobsChecking,
+            statusVerdict: statusVerdict,
             panelState: panelState ?? standalonePanelState
         )
         view.observabilityCadenceOverride = observabilityCadence
@@ -239,15 +242,20 @@ private struct BrainBarJobsDashboardContent: View {
     let hotkeyStatus: String
     let dbPath: String?
     let panelState: BrainBarDashboardPanelState
+    @Environment(\.brainBarDriveAuth) private var driveAuth
 
     var body: some View {
+        // S5: the headline and attention list are the app-lifetime snapshot the menu-bar icon
+        // renders. Its sampling loop is owned by the app (BrainBarStatusSampler), not this view.
+        let drive = driveAuth.map {
+            DriveAuthPresentation.derive(status: $0.status, isReconnecting: $0.isReconnecting,
+                lastOutcome: $0.lastOutcome, now: model.observabilityNow, formatDate: BrainBarDriveAuthFormat.date)
+        }
         BrainBarDashboardContent(collector: collector, workspace: workspace,
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: model.dashboardObservabilityResult,
             observabilityCadence: model.observabilityCadence, backupReferenceNow: model.observabilityNow, panelState: panelState,
-            jobAttentionReasons: model.dashboardJobAttentionReasons, jobsChecking: model.dashboardJobsChecking)
-            // One cadence for the view's lifetime: samples on appear, then every 60 s.
-            .task { await model.monitorLaunchdStatus() }
-            .task { await model.monitorObservabilityStatus() }
+            jobAttentionReasons: model.dashboardJobAttentionReasons, jobsChecking: model.dashboardJobsChecking,
+            statusVerdict: model.statusSnapshot(drive: drive).verdict)
             .onChange(of: collector.isManualRefreshInProgress) { _, refreshing in
                 if refreshing {
                     model.refreshLaunchdStatus()
@@ -361,8 +369,19 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
         // Watcher health comes from the one WatcherHealthStatus (#966): the same title and
         // reason line the watcher lane, Settings footer and Ingest group show.
         let watcherReason = flow.watcherStatusReason ?? flow.watcherStatus.title
-        let health: (String, String, BrainBarHeroHealthTone)
-        if flow.watcherStatus.needsAttention {
+        var health: (String, String, BrainBarHeroHealthTone)
+        if let statusVerdict, let first = statusVerdict.attention.first {
+            // S5: the Health tile names the shared snapshot's first dot issue.
+            health = ("Needs attention", first, .red)
+        } else if let statusVerdict, let first = statusVerdict.notices.first {
+            health = ("Check health", first, .amber)
+        } else if let statusVerdict, statusVerdict.isChecking {
+            health = ("Checking health", "Reading BrainLayer status…", .amber)
+        } else if statusVerdict != nil, flow.watcherStatus.needsAttention || flow.ingress.status == .unavailable
+                    || backupFailure != nil || checkingReason != nil || staleBackupNotice != nil {
+            // The shared snapshot found nothing to say about these; flow is the only local fact left.
+            health = ("Healthy", "Watcher is running; DB and transcript backups are verified.", .green)
+        } else if flow.watcherStatus.needsAttention {
             health = ("Needs attention", watcherReason, .red)
         } else if flow.ingress.status == .unavailable {
             health = ("Needs attention", "Ingest health is unavailable.", .red)
@@ -395,7 +414,7 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
             healthVerdict: health.0,
             healthReason: health.1,
             healthTone: health.2,
-            backupFailureReason: backupFailure,
+            backupFailureReason: statusVerdict == nil ? backupFailure : nil,
             dbBackup: dbBackup,
             transcriptBackup: transcriptBackup,
             indexedInWindow: "\(DashboardMetricFormatter.integerString(stats.recentWriteCount, locale: locale)) chunk rows indexed in \(window)",
@@ -498,6 +517,11 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         backupNow: Date? = nil,
         statusVerdict: BrainBarStatusVerdict? = nil
     ) -> Self {
+        if let statusVerdict {
+            return derive(statusVerdict: statusVerdict, snapshotFreshness: snapshotFreshness, observability: observability,
+                          stats: stats, agentActivity: agentActivity, now: now, calendar: calendar, locale: locale,
+                          observabilityCadence: observabilityCadence, backupNow: backupNow)
+        }
         let snapshotIsLive: Bool = if case .live = snapshotFreshness { true } else { false }
         let otherLiveHeroAttention = snapshotIsLive
             && hero.healthTone != .green
@@ -573,6 +597,57 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
             }
         }
 
+        return assemble(status: status, attentionItems: attentionItems, observability: observability, stats: stats,
+                        agentActivity: agentActivity, now: now, calendar: calendar, locale: locale,
+                        observabilityCadence: observabilityCadence, backupNow: backupNow)
+    }
+
+    /// S5: the Dashboard headline and "things need you" are the shared snapshot's verdict. Local
+    /// dashboard-data facts (a stale or failed refresh, unmeasured agent activity) are neutral text.
+    private static func derive(
+        statusVerdict: BrainBarStatusVerdict,
+        snapshotFreshness: SnapshotFreshnessState,
+        observability: ObservabilityReadResult,
+        stats: DashboardStats,
+        agentActivity: AgentActivitySnapshot,
+        now: Date,
+        calendar: Calendar,
+        locale: Locale,
+        observabilityCadence: ObservabilityCadence,
+        backupNow: Date?
+    ) -> Self {
+        var status = statusVerdict.dashboardStatus
+        if status.tone == .green {
+            switch snapshotFreshness {
+            case .loading:
+                status = .init(headline: "Checking…", reason: nil, tone: .neutral)
+            case let .stale(ageSeconds):
+                status = .init(headline: "No action needed", reason: "Dashboard data is \(ageText(ageSeconds)) old.", tone: .neutral)
+            case .error:
+                status = .init(headline: "No action needed", reason: "Dashboard data could not refresh.", tone: .neutral)
+            case .live:
+                if !agentActivity.isMeasured {
+                    status = .init(headline: "No action needed", reason: "Agent activity could not be measured.", tone: .neutral)
+                }
+            }
+        }
+        return assemble(status: status, attentionItems: statusVerdict.attention, observability: observability, stats: stats,
+                        agentActivity: agentActivity, now: now, calendar: calendar, locale: locale,
+                        observabilityCadence: observabilityCadence, backupNow: backupNow)
+    }
+
+    private static func assemble(
+        status: BrainBarOnePageStatus,
+        attentionItems: [String],
+        observability: ObservabilityReadResult,
+        stats: DashboardStats,
+        agentActivity: AgentActivitySnapshot,
+        now: Date,
+        calendar: Calendar,
+        locale: Locale,
+        observabilityCadence: ObservabilityCadence,
+        backupNow: Date?
+    ) -> Self {
         let backupLines: [ObservabilityStatusLine]
         let totalIndexedChunks: Int?
         let indexedToday: Int?
@@ -919,6 +994,7 @@ private struct BrainBarDashboardView: View {
     var locale: Locale = .current
     var jobAttentionReasons: [String] = []
     var jobsChecking: Bool = false
+    var statusVerdict: BrainBarStatusVerdict? = nil
     @ObservedObject var panelState: BrainBarDashboardPanelState
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1024,7 +1100,8 @@ private struct BrainBarDashboardView: View {
             flow: flowSummary,
             stats: collector.stats,
             backupTruth: backupTruth,
-            locale: locale
+            locale: locale,
+            statusVerdict: statusVerdict
         )
     }
 
@@ -1042,7 +1119,8 @@ private struct BrainBarDashboardView: View {
             jobAttentionReasons: jobAttentionReasons, jobsChecking: jobsChecking,
             calendar: calendar,
             locale: locale,
-            observabilityCadence: observabilityCadence, backupNow: currentBackupNow
+            observabilityCadence: observabilityCadence, backupNow: currentBackupNow,
+            statusVerdict: statusVerdict
         )
     }
 
