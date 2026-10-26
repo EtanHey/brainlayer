@@ -425,7 +425,7 @@ def test_prune_local_gzip_snapshots_reclaims_unverified_archive_with_three_newer
     assert len(list(tmp_path.glob("*.db.gz"))) == 3
 
 
-def test_run_backup_wires_verified_log_provenance_into_local_gzip_pruning(tmp_path, monkeypatch):
+def test_run_backup_opt_out_keeps_older_archives_with_legacy_receipts(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
     snapshot = tmp_path / "2026-06-10.db.gz"
@@ -487,10 +487,9 @@ def test_run_backup_wires_verified_log_provenance_into_local_gzip_pruning(tmp_pa
     )
 
     assert result["verified"] is True
-    assert result["local_gzip_retention_deleted"] == [
-        "2026-06-06.db.gz",
-        "2026-06-04.db.gz",
-    ]
+    assert result["local_gzip_retention_deleted"] == []
+    assert result["local_removed_skip_reason"] == "opt_out"
+    assert len(list(tmp_path.glob("*.db.gz"))) == 10
     assert (tmp_path / "2026-06-07.db.gz").exists()
     assert (tmp_path / "2026-06-09.db.gz").exists()
     assert (tmp_path / "2026-06-03.db.gz").exists()

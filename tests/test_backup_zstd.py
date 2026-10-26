@@ -421,7 +421,7 @@ def test_run_backup_feeds_receipt_verified_ids_to_drive_retention(tmp_path, monk
 # --- receipt readers ------------------------------------------------------------------------
 
 
-def test_receipt_readers_accept_both_suffixes(tmp_path):
+def test_receipt_readers_accept_both_suffixes(tmp_path, monkeypatch):
     from brainlayer.health_check import _jsonl_backup_attempt_time
 
     for suffix in (".db.zst", ".db.gz"):
@@ -433,7 +433,8 @@ def test_receipt_readers_accept_both_suffixes(tmp_path):
     (tmp_path / ".weekly-backup-pin.json").write_text("{not json")
     (tmp_path / "2026-10-20.db.zst").write_bytes(b"z")
     (tmp_path / "2026-10-19.db.gz").write_bytes(b"g")
-    assert backup._protected_snapshot_names(tmp_path) == {"2026-10-20.db.zst", "2026-10-19.db.gz"}
+    monkeypatch.setattr(backup, "local_backup_date", lambda *_: dt.date(2026, 10, 20))
+    assert backup._protected_snapshot_names(tmp_path) == {"2026-10-20.db.zst"}
 
 
 def test_upload_declares_zstd_content_type(tmp_path, monkeypatch):

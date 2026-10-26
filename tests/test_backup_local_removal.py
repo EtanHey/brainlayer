@@ -88,8 +88,8 @@ def _old_receipt(lane, name="2026-10-21.db.zst", **changes):
     )
 
 
-@pytest.mark.parametrize("unreadable_pin", [False, True])
-def test_upload_only_sweeps_verified_older_archives_even_with_unreadable_pin(removal_lane, unreadable_pin):
+@pytest.mark.parametrize("pin", [None, "unreadable", "past"])
+def test_upload_only_sweeps_verified_older_archives_after_pin_expiry(removal_lane, pin):
     staging = removal_lane["staging_dir"]
     verified = _old_receipt(removal_lane)
     unverified = _old_receipt(removal_lane, "2026-10-25.db.gz")
@@ -99,8 +99,10 @@ def test_upload_only_sweeps_verified_older_archives_even_with_unreadable_pin(rem
     raw = staging / "2026-10-21.db"
     raw.write_bytes(b"raw")
     removal_lane["db_path"].write_bytes(b"live")
-    if unreadable_pin:
-        (staging / ".weekly-backup-pin.json").write_text("broken")
+    if pin:
+        (staging / ".weekly-backup-pin.json").write_text(
+            "broken" if pin == "unreadable" else json.dumps({"date": "2026-10-21", "snapshot": verified["snapshot"]})
+        )
     removal_lane["log_path"].write_text("".join(json.dumps(r) + "\n" for r in [verified, unverified, today]))
     result = backup.run_backup(**removal_lane, phase="upload")
     assert result["upload_state"] == "nothing_pending"
@@ -114,12 +116,14 @@ def test_upload_only_sweeps_verified_older_archives_even_with_unreadable_pin(rem
     assert latest[unverified["snapshot"]]["local_removed_skip_reason"] == "not_verified"
 
 
-@pytest.mark.parametrize("damage", ["name", "size", "no_metadata", "revoked", "journal", "symlink", "opt_out"])
+@pytest.mark.parametrize("damage", ["name", "size", "id", "no_metadata", "revoked", "journal", "symlink", "opt_out"])
 def test_sweep_requires_matching_latest_drive_receipt(removal_lane, damage):
     receipt = _old_receipt(removal_lane)
     path = Path(receipt["snapshot"])
     if damage in {"name", "size"}:
         receipt["drive_file"][damage] = "wrong"
+    elif damage == "id":
+        receipt["drive_file"]["id"] = ["malformed"]
     elif damage == "no_metadata":
         receipt.pop("drive_file")
     elif damage == "symlink":
@@ -134,3 +138,31 @@ def test_sweep_requires_matching_latest_drive_receipt(removal_lane, damage):
     )
     backup.run_backup(**removal_lane, phase="upload", remove_local_after_upload=damage != "opt_out")
     assert path.exists()
+
+
+def test_sweep_before_capacity_failure(removal_lane, monkeypatch):
+    receipt = _old_receipt(removal_lane)
+    log = removal_lane["log_path"]
+    log.write_text(json.dumps(receipt) + "\n")
+
+    def no_capacity(*args, **kwargs):
+        assert not Path(receipt["snapshot"]).exists()
+        raise RuntimeError("capacity")
+
+    monkeypatch.setattr(backup, "create_sqlite_backup_artifact", no_capacity)
+    with pytest.raises(RuntimeError, match="capacity"):
+        backup.run_backup(**removal_lane)
+
+
+def test_end_sweep_is_persisted_in_final_receipt(removal_lane, monkeypatch):
+    def upload(path, *args, **kwargs):
+        old = _old_receipt(removal_lane)
+        backup._append_json_log(removal_lane["log_path"], old)
+        return {"id": "uploaded", "name": path.name, "size": str(path.stat().st_size)}
+
+    monkeypatch.setattr(backup, "upload_file_to_drive_raw", upload)
+    result = backup.run_backup(**removal_lane)
+    assert result["local_gzip_retention_deleted"] == ["2026-10-21.db.zst"]
+    assert not (removal_lane["staging_dir"] / "2026-10-21.db.zst").exists()
+    final = json.loads(removal_lane["log_path"].read_text().splitlines()[-1])
+    assert final["local_gzip_retention_deleted"] == result["local_gzip_retention_deleted"]

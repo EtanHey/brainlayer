@@ -17,6 +17,8 @@ def local_lane(tmp_path, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PROVENANCE", "real")
     monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
     monkeypatch.setattr(backup, "_should_run_full_verify", lambda _: False)
+    # Custody tests exercise the local gate, not live APFS volume reclamation.
+    monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda _: (False, "weekly gate fixture"))
     monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda _: None)
     monkeypatch.setattr(backup, "_brainbar_writer_started_at", lambda _: 0)
     db = tmp_path / "source.db"
