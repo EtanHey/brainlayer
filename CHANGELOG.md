@@ -39,6 +39,20 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.77] - 2026-10-26
+
+### Fixed
+- Maintenance observability now validates the schedule plist and reports unusable schedules instead of treating them as healthy (#1510).
+- Health checks determine supervisor ownership from migration state, and healing keeps paused workers from being stranded (#1511).
+- BrainBar uses one status snapshot across its icon, menu, dashboard, jobs and backups. Dots indicate real failures; a deferred weekly maintenance stays neutral unless maintenance has failed on three consecutive scheduled runs or no weekly maintenance has succeeded for more than 14 days. High Contrast changes re-render the icon (#1512). A newer verified backup copy clears an earlier backup-failure streak (#1515).
+- After a verified Drive upload, backup removes the local archive only when checksum and custody checks pass; older archives must also match the current file's MD5. A weekly pin is released the day after it was set (#1507).
+
+### Tests
+- Make the store busy-retry regression deterministic so lock contention is checked reliably (#1513).
+- Isolate the disk-space purge-poll test's fake clock so other threads' sleeps cannot leak into it (#1516).
+
+Release scope: Python package + Homebrew formula + BrainBar app 1.5.77 (cask)
+
 ## [1.5.76] - 2026-10-26
 
 ### Fixed
