@@ -270,17 +270,18 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         }
 
         // 5. Calendar job results. A future-dated copy is clock skew, never a recovery.
+        // S11: a newer verified copy resolves the failure; a historical streak never overrides it.
         func trusted(_ copy: Date?) -> Date? { copy.flatMap { $0.timeIntervalSince(now) <= 300 ? $0 : nil } }
         for (job, copy) in [(BrainLayerLaunchdJob.backupDaily, trusted(dbCopy)), (.jsonlBackup, trusted(transcriptCopy))]
         where desired(job) {
             guard let observation = observations?[job], observation.isFailedRun else { continue }
             let newer = copy.flatMap { copy in observation.lastRunAt.map { copy > $0 } } ?? false
             let streak = observation.calendarConsecutiveFailures ?? 1
-            let severity: BrainBarStatusIssue.Severity = !newer || streak >= 2 ? .attention : .notice
             let base = observation.failureText(job: job, formatDate: formatDate)
-            let text = streak >= 2 ? "\(base) (failed on \(streak) consecutive scheduled runs)"
-                : newer ? "\(base); a newer verified copy exists" : base
-            builder.add(.init(id: "job.\(job.rawValue)", component: .backups, severity: severity, text: text, jobs: [job]))
+            let text = newer ? "\(base); recovered through a newer verified copy"
+                : streak >= 2 ? "\(base) (failed on \(streak) consecutive scheduled runs)" : base
+            builder.add(.init(id: "job.\(job.rawValue)", component: .backups, severity: newer ? .notice : .attention,
+                              text: text, jobs: [job]))
         }
         // Index is a required job: two consecutive failures are the dot.
         if desired(.index), let observation = observations?[.index] {

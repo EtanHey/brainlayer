@@ -241,6 +241,29 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         Self.assertAgree(inputs, dot: false, "a newer verified copy exists")
     }
 
+    /// S11 (R3-1): a historical failure streak never overrides a NEWER verified copy.
+    func testBackupFailureStreakIsResolvedByANewerVerifiedCopyOnly() {
+        for job in [BrainLayerLaunchdJob.backupDaily, .jsonlBackup] {
+            func inputs(copy: Date?) -> BrainBarStatusInputs {
+                var value = Self.healthy()
+                value.observations?[job] = Self.failed(job, code: 1, at: Self.hoursAgo(4), consecutive: 2)
+                value.backups = .measured(job == .backupDaily ? Self.backups(db: copy) : Self.backups(transcripts: copy))
+                return value
+            }
+            let (recovered, _) = Self.assertAgree(inputs(copy: Self.hoursAgo(2)), dot: false, "\(job): streak 2 + newer copy")
+            let notice = recovered.notices.first { $0.id == "job.\(job.rawValue)" }
+            XCTAssertNotNil(notice, "\(job): \(recovered.issues)")
+            XCTAssertTrue(notice?.text.contains("recovered through a newer verified copy") ?? false, "\(job): \(notice?.text ?? "")")
+            XCTAssertFalse(notice?.text.contains("consecutive") ?? true, "\(job): \(notice?.text ?? "")")
+
+            let (outstanding, _) = Self.assertAgree(inputs(copy: Self.hoursAgo(10)), dot: true, "\(job): streak 2 + older copy")
+            XCTAssertTrue(outstanding.attention.contains { $0.id == "job.\(job.rawValue)" && $0.text.contains("2 consecutive") },
+                          "\(job): \(outstanding.attention)")
+            Self.assertAgree(inputs(copy: Self.hoursAgo(4)), dot: true, "\(job): streak 2 + equal copy")
+            Self.assertAgree(inputs(copy: Self.now.addingTimeInterval(3600)), dot: true, "\(job): streak 2 + future copy")
+        }
+    }
+
     func testDeferredMaintenanceReturnsToADotOnEachLeadCondition() {
         let failureAt = ISO8601DateFormatter().date(from: "2026-10-26T02:00:16Z")!
         let newerCopy = Self.backups(db: ISO8601DateFormatter().date(from: "2026-10-26T08:30:02Z")!)
