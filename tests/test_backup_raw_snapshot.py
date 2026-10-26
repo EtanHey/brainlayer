@@ -15,6 +15,16 @@ from brainlayer import disk_space
 from tests.test_backup_daily import _create_source_db, _stub_backup_for_drive_upload
 
 
+def _last_run_receipt(log, *, snapshot=True):
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    receipt = next(row for row in reversed(rows) if row.get("event") != "local_sweep")
+    assert "attempted_at" in receipt
+    assert receipt.get("event") != "local_sweep"
+    if snapshot:
+        assert "snapshot" in receipt
+    return receipt
+
+
 @pytest.fixture
 def raw_lane(tmp_path, monkeypatch):
     monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda _path: (False, "legacy-path fixture"))
@@ -47,8 +57,9 @@ def _unarchive(path) -> bytes:
 
 
 @pytest.mark.parametrize("compressor,suffix", [("zstd", ".db.zst"), ("gzip", ".db.gz")])
+@pytest.mark.parametrize("drive_md5", [True, False])
 @pytest.mark.parametrize("exit_path", ["success", "stall", "timeout", "stop", "error", "resume"])
-def test_raw_removed_before_any_upload_exit(raw_lane, monkeypatch, exit_path, compressor, suffix):
+def test_raw_removed_before_any_upload_exit(raw_lane, monkeypatch, exit_path, compressor, suffix, drive_md5):
     source, output = raw_lane
     monkeypatch.setenv("BRAINLAYER_BACKUP_COMPRESSOR", compressor)
     raw, compressed = output / "2026-10-17.db", output / f"2026-10-17{suffix}"
@@ -56,6 +67,11 @@ def test_raw_removed_before_any_upload_exit(raw_lane, monkeypatch, exit_path, co
     _stub_backup_for_drive_upload(backup, monkeypatch, compressed)
     monkeypatch.setattr(backup, "create_sqlite_backup_artifact", creator)
     monkeypatch.setattr(backup, "verify_drive_upload", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        backup,
+        "verify_sqlite_backup_artifact",
+        lambda *a, **kw: {"verified": True, "verification_mode": "quick", "local_md5": backup._md5_file(compressed)},
+    )
     if exit_path == "resume":
         raw.write_bytes(source.read_bytes())
         compressed.write_bytes(_archive_bytes(source.read_bytes(), suffix))
@@ -86,17 +102,18 @@ def test_raw_removed_before_any_upload_exit(raw_lane, monkeypatch, exit_path, co
         assert _unarchive(compressed) == source.read_bytes()
         if not success:
             raise errors[exit_path]
-        return {"id": "fake"}
+        return {"id": "fake", **({"md5Checksum": backup._md5_file(compressed)} if drive_md5 else {})}
 
     monkeypatch.setattr(backup, "upload_file_to_drive_raw", upload)
     args = dict(db_path=source, staging_dir=output, date_stamp="2026-10-17", log_path=output / "receipt.jsonl")
     if success:
-        backup.run_backup(**args)
+        result = backup.run_backup(**args)
+        assert result["local_removed_skip_reason"] == (None if drive_md5 else "md5_unverified")
     else:
         with pytest.raises(type(errors[exit_path])):
             backup.run_backup(**args)
     assert not raw.exists()
-    assert compressed.exists() is (not success)
+    assert compressed.exists() is (not success or not drive_md5)
 
 
 @pytest.mark.parametrize("compressor", ["zstd", "gzip"])
@@ -115,7 +132,7 @@ def test_failed_gzip_keeps_only_raw_and_receipt(raw_lane, monkeypatch, failure, 
     with pytest.raises(RuntimeError, match=failure):
         backup.run_backup(source, staging_dir=output, date_stamp="2026-10-17", upload=False, log_path=log)
     assert (output / "2026-10-17.db").read_bytes() == source.read_bytes()
-    assert json.loads(log.read_text().splitlines()[-1])["local_uncompressed_snapshot"].endswith("2026-10-17.db")
+    assert _last_run_receipt(log, snapshot=False)["local_uncompressed_snapshot"].endswith("2026-10-17.db")
 
 
 @pytest.mark.parametrize(
@@ -223,7 +240,7 @@ def test_mismatched_prior_pair_retained_and_named_in_receipt(raw_lane, monkeypat
             backup.run_backup(**args)
     assert raw.read_bytes() == original
     assert compressed.read_bytes() == compressed_bytes
-    receipt = json.loads(log.read_text().splitlines()[-1])
+    receipt = _last_run_receipt(log, snapshot=False)
     assert raw.name in receipt["retained_raw_snapshots"]
 
 
@@ -280,7 +297,7 @@ def test_compression_floor_breach_names_retained_raw_with_stalled_gzip(raw_lane,
     with pytest.raises(backup.RetainedStalledBackupCapacityError, match=raw.name):
         backup.run_backup(source, staging_dir=output, date_stamp="2026-10-17", log_path=log)
     assert raw.exists() and stalled_gzip.exists()
-    receipt = json.loads(log.read_text().splitlines()[-1])
+    receipt = _last_run_receipt(log, snapshot=False)
     assert raw.name in receipt["error"]
     assert raw.name in receipt["retained_raw_snapshots"]
 

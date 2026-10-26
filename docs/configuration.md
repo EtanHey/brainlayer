@@ -234,6 +234,8 @@ admission, only a marked consumed raw with the matching inode is deleted. Unmark
 raws, links, foreign files and archives are retained. A failed consuming attempt needs a fresh
 snapshot; legacy failures retain their untouched raw.
 
+Verified Drive uploads are removed locally (removal requires matching recorded local/Drive MD5s; older archives also need matching name/size receipts); weekly pins expire after their date, unreadable pins protect only today's archives, and explicit removal opt-out is honored.
+
 Snapshots use `YYYY-MM-DD.db.zst` by default. `BRAINLAYER_BACKUP_COMPRESSOR=gzip` selects
 `.db.gz`; any other value is refused. The zstd binary is resolved from
 `BRAINLAYER_BACKUP_ZSTD_PATH` (absolute and executable, or the run fails), then
@@ -241,9 +243,10 @@ Snapshots use `YYYY-MM-DD.db.zst` by default. `BRAINLAYER_BACKUP_COMPRESSOR=gzip
 `PATH=/usr/bin:/bin`. If zstd is absent, gzip is selected and `compressor_fallback` is recorded.
 Standard zstd/gzip decoders accept the concatenated frames/members. Every reader (verify,
 restore, raw cleanup, resume, retention, observability, the weekly gate and BrainBar's local-copy
-listing) accepts both formats. Local and Drive retention keep the newest verified copy of each
-format. For opt-in Drive retention, "verified" means the exact Drive file ID's latest backup-log
-receipt says `uploaded` and `verified` (no `verification_error` or MD5 mismatch); a format with
+listing) accepts both formats. Drive retention keeps the newest verified copy of each
+format; a verified local archive may be removed by the job. For opt-in Drive retention,
+"verified" means the exact Drive file ID's latest backup-log receipt says `uploaded` and
+`verified` (no `verification_error` or MD5 mismatch); a format with
 no such object has nothing trashed, and an unreadable log trashes nothing. Each zstd chunk child
 runs in the backup's process group, so the calendar's process-group stop reaches it. A child
 failure stops consumption and cleans the attempt; the legacy streaming child is also killed and

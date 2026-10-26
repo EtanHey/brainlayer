@@ -90,6 +90,18 @@ def test_prior_conflict_preserves_confirmed_upload_and_recovery_receipt(tmp_path
     monkeypatch.setattr(b, "assert_drive_folder_owned_by_machine", check_owner)
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1")
     monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PROVENANCE", "real")
+    md5 = b._md5_file(snapshot)
+    monkeypatch.setattr(b, "verify_sqlite_backup_artifact", lambda *a, **kw: {"verified": True, "local_md5": md5})
+    monkeypatch.setattr(
+        b,
+        "upload_file_to_drive_raw",
+        lambda *a, **kw: {
+            "id": "drive-file-id",
+            "name": snapshot.name,
+            "size": str(snapshot.stat().st_size),
+            "md5Checksum": md5,
+        },
+    )
     receipt_path = tmp_path / "receipt.jsonl"
     with pytest.raises(b.DriveFolderOwnedByOtherMachineError):
         b.run_backup(
@@ -98,7 +110,8 @@ def test_prior_conflict_preserves_confirmed_upload_and_recovery_receipt(tmp_path
             log_path=receipt_path,
             machine_id="Locals-MacBook-Pro",
         )
-    receipts = b._read_backup_receipts(receipt_path)
+    receipts = [r for r in b._read_backup_receipts(receipt_path) if r.get("event") != "local_sweep"]
+    assert all("snapshot" in r and "attempted_at" in r for r in receipts)
     assert len(receipts) == 4
     assert receipts[2]["uploaded"] is True and receipts[2]["verified"] is True
     assert receipts[0]["local_verified"] is True and receipts[0]["uploaded"] is False
