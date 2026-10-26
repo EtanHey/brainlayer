@@ -24,6 +24,7 @@ import socket
 import sqlite3
 import ssl
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -59,6 +60,8 @@ PRIOR_MACHINE_IDS = {"Locals-MacBook-Pro": ("Locals-MBP.lan",)}
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups"
 MIN_RAW_FREE_BYTES = 2 * 1024 * 1024 * 1024
 COPY_CHUNK_BYTES = 1024 * 1024
+RECLAIM_CHUNK_BYTES = 64 * 1024 * 1024
+FRAME_OVERHEAD_BYTES = 64 * 1024
 POST_PURGE_POLL_SECONDS = 0.5  # 60 polls give APFS up to 30s to release reclaimed bytes.
 DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "backup-daily.log"
 DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
@@ -166,6 +169,7 @@ class SQLiteBackupArtifact:
     compressor: str | None = None
     compressor_fallback: str | None = None
     compress_duration_seconds: float | None = None
+    raw_sha256: str | None = None
 
     @property
     def archive_path(self) -> Path:
@@ -785,6 +789,84 @@ def _owned_temp_inventory(output_dir: Path) -> list[tuple[str, int]]:
     return inventory
 
 
+def _cleanup_consumed_raw_remnants(output_dir: Path) -> list[str]:
+    """Remove only inode-bound consumed raws from this job's abandoned attempts.
+
+    A consumed raw is unrestorable, unlike an unconsumed raw or any archive. The caller
+    holds the job's staging lock; links, unmarked files and foreign inodes fail closed.
+    """
+    removed = []
+    if not output_dir.exists() or output_dir.is_symlink():
+        return removed
+    for directory in sorted(output_dir.glob("brainlayer-backup-*")):
+        try:
+            directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:
+            continue
+        try:
+            if os.fstat(directory_fd).st_uid != os.getuid():
+                continue
+            with os.fdopen(os.open(".consumed", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)) as handle:
+                info = os.fstat(handle.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
+                    continue
+                marker = json.loads(handle.read(4096))
+            if not isinstance(marker, dict) or marker.get("consumed") is not True:
+                continue
+            name = marker.get("raw")
+            if not isinstance(name, str) or _parse_uncompressed_snapshot_date(name) is None:
+                continue
+            with os.fdopen(os.open(".backup-date", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)) as handle:
+                if handle.read(32).strip() != name[:10]:
+                    continue
+            raw_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            try:
+                info = os.fstat(raw_fd)
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_nlink != 1
+                    or info.st_uid != os.getuid()
+                    or (info.st_dev, info.st_ino) != (marker.get("dev"), marker.get("ino"))
+                ):
+                    continue
+                current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                    continue
+                os.unlink(name, dir_fd=directory_fd)
+                os.fsync(directory_fd)
+                removed.append(f"{directory.name}/{name}")
+                print(f"Backup removed unrestorable consumed crash raw: {directory.name}/{name}", flush=True)
+            finally:
+                os.close(raw_fd)
+        except (OSError, UnicodeError, ValueError):
+            continue
+        finally:
+            os.close(directory_fd)
+    return removed
+
+
+def _consume_raw_in_attempt(raw: Path, directory: Path) -> Path:
+    info = raw.stat(follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ValueError("Cannot consume a linked or non-regular raw snapshot")
+    marker = {"raw": raw.name, "dev": info.st_dev, "ino": info.st_ino, "consumed": True}
+    with (directory / ".consumed").open("x", encoding="ascii") as handle:
+        json.dump(marker, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    consumed = directory / raw.name
+    raw.rename(consumed)
+    # Persist both sides of the rename before any destructive punch. A power loss must
+    # never resurrect the consumed inode at the published raw path.
+    for path in (directory, raw.parent):
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    return consumed
+
+
 def _prune_owned_temps_after_verified(output_dir: Path, verified_snapshot: Path) -> list[str]:
     """Remove old job-owned crash remnants only after a newer Drive backup verified."""
     verified_date = _parse_snapshot_date(verified_snapshot.name)
@@ -811,6 +893,7 @@ def _prune_owned_temps_after_verified(output_dir: Path, verified_snapshot: Path)
             or item.name
             not in {
                 ".backup-date",
+                ".consumed",
                 "restored.db",
                 f"{marked_date.isoformat()}.db",
                 *(f"{marked_date.isoformat()}{suffix}" for suffix in DB_SNAPSHOT_SUFFIXES),
@@ -922,12 +1005,21 @@ def _raw_bytes_pruned_before_verify(output_dir: Path, date_stamp: str, keep_late
     return sum(path.stat().st_size for _, path in dated if path not in kept or path == current)
 
 
-def _backup_phase_peaks(db_size: int, gzip_size: int, *, full: bool) -> dict[str, int]:
+def _backup_phase_peaks(db_size: int, gzip_size: int, *, full: bool, reclaim_raw: bool = False) -> dict[str, int]:
     """New bytes each backup phase holds at once; existing files are already in measured free space.
 
     The verified raw is unlinked before restore verification allocates restored.db, so the raw
     and the restored copy never coexist (2026-10-19: summing them failed a run with ~16 GB slack).
     """
+    if reclaim_raw:
+        # Each frame is capped before writing. Budget worst-case expansion, even when the
+        # historical compression estimate is too small, plus one frame before its raw is freed.
+        expansion = math.ceil(db_size / RECLAIM_CHUNK_BYTES) * FRAME_OVERHEAD_BYTES
+        phases = {"raw_copy": db_size, "gzip": db_size + expansion + RECLAIM_CHUNK_BYTES}
+        if full:
+            phases["drive_download"] = gzip_size
+        phases["restore"] = gzip_size  # Hash verification allocates no second file.
+        return phases
     phases = {
         "raw_copy": db_size,  # VACUUM INTO writes the raw snapshot.
         "gzip": db_size + gzip_size,  # The raw is still present while the gzip is written.
@@ -938,8 +1030,12 @@ def _backup_phase_peaks(db_size: int, gzip_size: int, *, full: bool) -> dict[str
     return phases
 
 
-def _peak_backup_required_bytes(db_size: int, gzip_size: int, *, full: bool) -> int:
-    return max(_backup_phase_peaks(db_size, gzip_size, full=full).values()) + MIN_RAW_FREE_BYTES + COPY_CHUNK_BYTES
+def _peak_backup_required_bytes(db_size: int, gzip_size: int, *, full: bool, reclaim_raw: bool = False) -> int:
+    return (
+        max(_backup_phase_peaks(db_size, gzip_size, full=full, reclaim_raw=reclaim_raw).values())
+        + MIN_RAW_FREE_BYTES
+        + COPY_CHUNK_BYTES
+    )
 
 
 def _stream_sha256(source: Any) -> bytes:
@@ -1049,22 +1145,24 @@ def _remove_raw_with_verified_gzip(output_dir: Path, raw: Path, *, own_run: bool
         with os.fdopen(os.open(gzip_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory), "rb") as compressed:
             if file_identity(os.fstat(compressed.fileno())) != gzip_identity:
                 raise ValueError(f"Snapshot changed before binding check: {raw.name}")
-            compressed.seek(-4, os.SEEK_END)
-            isize = int.from_bytes(compressed.read(4), "little")
-            if isize != raw_identity[2] % (1 << 32):
-                raise ValueError(f"Raw/gzip snapshot binding failed (ISIZE): {raw.name}")
-            compressed.seek(0)
             with gzip.GzipFile(fileobj=compressed, mode="rb") as restored:
-                if restored.read(16) != b"SQLite format 3\x00":
+                header = restored.read(16)
+                if header != b"SQLite format 3\x00":
                     raise ValueError(f"Raw/gzip snapshot binding failed (SQLite header): {raw.name}")
+                # A concatenated gzip's final ISIZE covers only its last member.
+                size, digest = len(header), hashlib.sha256(header)
+                while chunk := restored.read(COPY_CHUNK_BYTES):
+                    size += len(chunk)
+                    digest.update(chunk)
+                if size != raw_identity[2]:
+                    raise ValueError(f"Raw/gzip snapshot binding failed (size): {raw.name}")
                 if not own_run:
                     # A same-date gzip may predate this raw. Prove every byte, not just its name/size.
                     with os.fdopen(os.open(raw.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory), "rb") as original:
                         if file_identity(os.fstat(original.fileno())) != raw_identity:
                             raise ValueError(f"Snapshot changed before binding check: {raw.name}")
                         raw_hash = _stream_sha256(original)
-                    restored.seek(0)
-                    if _stream_sha256(restored) != raw_hash:
+                    if digest.digest() != raw_hash:
                         raise ValueError(f"Raw/gzip snapshot binding failed (SHA-256): {raw.name}")
             if sys.platform == "darwin":
                 fcntl.fcntl(compressed.fileno(), fcntl.F_FULLFSYNC)
@@ -1302,6 +1400,96 @@ def _decompress_archive_to(archive: Path, destination: Path) -> None:
         _decompress_gzip_to(archive, destination)
 
 
+def _punch_raw_hole(fd: int, offset: int, length: int) -> None:
+    if sys.platform != "darwin":
+        raise OSError("F_PUNCHHOLE requires macOS")
+    # Darwin fpunchhole_t: flags, reserved, off_t offset, off_t length (sys/fcntl.h).
+    fcntl.fcntl(fd, 99, struct.pack("=IIqq", 0, 0, offset, length))
+
+
+def _probe_raw_reclamation(output_dir: Path) -> tuple[bool, str | None]:
+    """Test the actual staging filesystem, using only a new, disposable file."""
+    try:
+        with tempfile.TemporaryFile(dir=output_dir) as probe:
+            probe.write(b"x" * COPY_CHUNK_BYTES)
+            probe.flush()
+            os.fsync(probe.fileno())
+            before = os.fstat(probe.fileno()).st_blocks
+            _punch_raw_hole(probe.fileno(), 0, COPY_CHUNK_BYTES)
+            after = os.fstat(probe.fileno()).st_blocks
+            probe.seek(0)
+            if before <= after or probe.read() != b"\0" * COPY_CHUNK_BYTES:
+                raise OSError("hole punch did not release allocated blocks")
+        return True, None
+    except OSError as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def _archive_stream_sha256(source: Any, *, zstd: bool) -> str:
+    if zstd:
+        return _zstd_stream_digest(source, want_sha256=True)[2].hex()
+    with gzip.GzipFile(fileobj=source, mode="rb") as restored:
+        return _stream_sha256(restored).hex()
+
+
+def _compress_reclaiming_raw(raw: Path, archive: Path, *, zstd_binary: str | None) -> str:
+    """Write durable independent frames, then release their raw extents; hash before punching.
+
+    Concatenated gzip members and zstd frames decode to the original byte stream. A failed
+    punch after selection aborts: switching to an unbudgeted full-copy path would be unsafe.
+    The caller moves this run's raw into its attempt directory before destructive consumption.
+    """
+    digest = hashlib.sha256()
+    with os.fdopen(os.open(raw, os.O_RDWR | os.O_NOFOLLOW), "r+b") as source, archive.open("xb") as sink:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError("Cannot consume a linked or non-regular raw snapshot")
+        offset = 0
+        while chunk := source.read(RECLAIM_CHUNK_BYTES):
+            digest.update(chunk)
+            if zstd_binary is None:
+                frame = gzip.compress(chunk, compresslevel=6)
+            else:
+                frame = subprocess.run(
+                    [zstd_binary, f"-{ZSTD_LEVEL}", "-T1", "--check", "-q", "-c"],
+                    input=chunk,
+                    capture_output=True,
+                    check=True,
+                ).stdout
+            if len(frame) > len(chunk) + FRAME_OVERHEAD_BYTES:
+                raise ValueError("Compressed frame exceeds budgeted expansion")
+            _require_raw_floor(archive.parent, forthcoming=len(frame))
+            sink.write(frame)
+            sink.flush()
+            if sys.platform == "darwin":
+                fcntl.fcntl(sink.fileno(), fcntl.F_FULLFSYNC)
+            else:
+                os.fsync(sink.fileno())
+            before_blocks = os.fstat(source.fileno()).st_blocks
+            # Full chunks are allocation-aligned; punching the short final extent is safe
+            # because no unread bytes follow it. APFS may retain its final partial block.
+            before_free = shutil.disk_usage(archive.parent).free
+            _punch_raw_hole(source.fileno(), offset, len(chunk))
+            freed = shutil.disk_usage(archive.parent).free - before_free
+            after_blocks = os.fstat(source.fileno()).st_blocks
+            if after_blocks >= before_blocks:
+                raise RuntimeError("punched raw extents not reclaimed (filesystem allocation pin)")
+            # Bracket only the punch: unrelated allocations during compression must not
+            # accumulate against reclaim. Allow half a chunk for concurrent volume activity.
+            tolerance = len(chunk) // 2
+            if freed < len(chunk) - tolerance:
+                raise RuntimeError(
+                    "punched raw extents not reclaimed (possible APFS snapshot pin or delayed volume reclaim)"
+                )
+            offset += len(chunk)
+            _require_raw_floor(archive.parent)
+    raw_hash = digest.hexdigest()
+    with archive.open("rb") as compressed:
+        if _archive_stream_sha256(compressed, zstd=zstd_binary is not None) != raw_hash:
+            raise ValueError("Raw/archive snapshot binding failed (SHA-256)")
+    return raw_hash
+
+
 def create_sqlite_backup_artifact(
     db_path: Path,
     output_dir: Path,
@@ -1315,7 +1503,8 @@ def create_sqlite_backup_artifact(
     integrity_status_callback: Callable[[str, str, float], None] | None = None,
 ) -> SQLiteBackupArtifact:
     """Create an integrity-tested archive (.db.zst by default, .db.gz with
-    BRAINLAYER_BACKUP_COMPRESSOR=gzip); retain raw only if compression/checking fails.
+    BRAINLAYER_BACKUP_COMPRESSOR=gzip). Unsupported filesystems retain the legacy raw on failure;
+    reclamation consumes this run's raw after integrity_check, so failure needs a fresh snapshot.
 
     The legacy keep_uncompressed/local_uncompressed_keep arguments are accepted for
     caller compatibility; they cannot authorize retaining duplicates or pruning only copies.
@@ -1332,7 +1521,14 @@ def create_sqlite_backup_artifact(
     output_dir.mkdir(parents=True, exist_ok=True)
     if _parse_uncompressed_snapshot_date(f"{date_stamp}.db") is None or output_dir.is_symlink():
         raise ValueError("Backup requires a dated snapshot in a non-symlink backup directory")
+    _cleanup_consumed_raw_remnants(output_dir)
     compressor, zstd_binary, compressor_fallback = _selected_compressor()
+    reclaim_raw, reclaim_fallback = _probe_raw_reclamation(output_dir)
+    print(
+        f"Backup raw reclamation: enabled={reclaim_raw} "
+        f"fallback={reclaim_fallback or 'none'}; {'streaming' if reclaim_raw else 'legacy'} peak budget",
+        flush=True,
+    )
     deleted, retained_raw = _cleanup_raw_snapshots(output_dir)
     for name, size in _owned_temp_inventory(output_dir):
         print(f"Backup crash remnant: name={name} bytes={size}; retained until a newer backup verifies", flush=True)
@@ -1366,7 +1562,7 @@ def create_sqlite_backup_artifact(
     # Only proven duplicates were reclaimed above; retained raws stay in measured free space and
     # are never budgeted as forthcoming room.
     full_verify = _should_run_full_verify(date_stamp)
-    phase_peaks = _backup_phase_peaks(db_size, estimated_gzip, full=full_verify)
+    phase_peaks = _backup_phase_peaks(db_size, estimated_gzip, full=full_verify, reclaim_raw=reclaim_raw)
 
     def describe_phases(peaks: dict[str, int]) -> tuple[int, str]:
         phase = max(peaks, key=peaks.__getitem__)
@@ -1375,7 +1571,8 @@ def create_sqlite_backup_artifact(
 
     _, capacity_detail = describe_phases(phase_peaks)
     required_bytes = (
-        _peak_backup_required_bytes(db_size, estimated_gzip, full=full_verify) + surviving_attempt_growth_reserve_bytes
+        _peak_backup_required_bytes(db_size, estimated_gzip, full=full_verify, reclaim_raw=reclaim_raw)
+        + surviving_attempt_growth_reserve_bytes
     )
     space = disk_space.measure_disk_space(output_dir)
     raw_before_purge = space.free_now_bytes
@@ -1477,7 +1674,8 @@ def create_sqlite_backup_artifact(
             sentinel_chunks = _validate_backup_target(raw_snapshot)
             pragma = (
                 "integrity_check"
-                if (integrity_full if integrity_full is not None else _should_run_full_verify(date_stamp))
+                if reclaim_raw
+                or (integrity_full if integrity_full is not None else _should_run_full_verify(date_stamp))
                 else "quick_check"
             )
             integrity_started = time.monotonic()
@@ -1496,16 +1694,29 @@ def create_sqlite_backup_artifact(
 
             temp_archive = Path(tmp) / final_archive.name
             compress_started = time.monotonic()
-            if zstd_binary is not None:
+            raw_sha256 = None
+            if reclaim_raw:
+                # Keep consumed extents inside the owned attempt, never at the published raw path.
+                consumed_raw = _consume_raw_in_attempt(raw_snapshot, Path(tmp))
+                print("Backup consuming verified raw snapshot; a failed attempt requires a fresh snapshot", flush=True)
+                raw_sha256 = _compress_reclaiming_raw(consumed_raw, temp_archive, zstd_binary=zstd_binary)
+            elif zstd_binary is not None:
                 _compress_zstd(zstd_binary, raw_snapshot, temp_archive, output_dir)
             else:
                 with raw_snapshot.open("rb") as src, gzip.open(temp_archive, "wb", compresslevel=6) as dst:
                     _copy_with_raw_floor(src, dst, output_dir)
             compress_duration = time.monotonic() - compress_started
             shutil.move(str(temp_archive), final_archive)
+            if reclaim_raw:
+                directory = os.open(output_dir, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
             print(f"Backup compressed: compressor={compressor} seconds={compress_duration:.1f}", flush=True)
 
-            _remove_raw_with_verified_archive(output_dir, final_raw, own_run=True, archive_name=final_archive.name)
+            if not reclaim_raw:
+                _remove_raw_with_verified_archive(output_dir, final_raw, own_run=True, archive_name=final_archive.name)
             deleted.append(final_raw.name)
     except BaseException:
         if orphan_cleanup and not raw_settled and owned_raw is not None:
@@ -1531,6 +1742,7 @@ def create_sqlite_backup_artifact(
         compressor=compressor,
         compressor_fallback=compressor_fallback,
         compress_duration_seconds=compress_duration,
+        raw_sha256=raw_sha256,
     )
 
 
@@ -2168,6 +2380,52 @@ def download_drive_file_raw(service: Any, *, file_id: str, destination: Path) ->
     return destination
 
 
+DRIVE_DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+
+
+def _download_drive_to_stream(service: Any, *, file_id: str, sink: Any) -> None:
+    from googleapiclient.http import MediaIoBaseDownload
+
+    request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+    downloader = MediaIoBaseDownload(sink, request, chunksize=DRIVE_DOWNLOAD_CHUNK_BYTES)
+    done = False
+    while not done:
+        _, done = _retry_transient_drive_call(downloader.next_chunk, what="Drive snapshot download")
+
+
+def _drive_stream_hashes(service: Any, *, file_id: str, zstd: bool) -> tuple[str, str]:
+    """A bounded pipe carries the download directly into decompression, never a disk file."""
+    read_fd, write_fd = os.pipe()
+    md5 = hashlib.md5()
+    errors: list[BaseException] = []
+
+    def download() -> None:
+        try:
+            with os.fdopen(write_fd, "wb") as writer:
+
+                class Sink:
+                    def write(self, data: bytes) -> int:
+                        written = writer.write(data)
+                        md5.update(data[:written])
+                        return written
+
+                _download_drive_to_stream(service, file_id=file_id, sink=Sink())
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=download, name="backup-drive-stream", daemon=True)
+    thread.start()
+    try:
+        with os.fdopen(read_fd, "rb") as reader:
+            raw_hash = _archive_stream_sha256(reader, zstd=zstd)
+    finally:
+        # Closing the reader also unblocks a writer if the decoder rejects the stream early.
+        thread.join()
+    if errors:
+        raise errors[0]
+    return raw_hash, md5.hexdigest()
+
+
 def _parse_snapshot_date(
     name: str, *, prefix: str = "", suffix: str | tuple[str, ...] = DB_SNAPSHOT_SUFFIXES
 ) -> dt.date | None:
@@ -2321,6 +2579,34 @@ def verify_sqlite_backup_artifact(
     try:
         local_md5 = _md5_file(artifact.gzip_path)
         result["local_md5"] = local_md5
+        if artifact.raw_sha256 is not None:
+            # Byte equality transfers both integrity_check and COUNT(*) from the raw DB.
+            if artifact.local_integrity != "ok" or artifact.local_integrity_pragma != "integrity_check":
+                raise ValueError("Streaming verification requires the raw integrity_check proof")
+            zstd = artifact.gzip_path.name.endswith(ZSTD_SNAPSHOT_SUFFIX)
+            result["compression"] = "zstd" if zstd else "gzip"
+            with artifact.gzip_path.open("rb") as source:
+                raw_hash = _archive_stream_sha256(source, zstd=zstd)
+            if raw_hash != artifact.raw_sha256:
+                raise ValueError("Local archive SHA-256 differs from integrity-checked raw snapshot")
+            if full:
+                if service is None or not file_id:
+                    raise ValueError("full verification requires Drive service and file_id")
+                drive_hash, drive_md5 = _drive_stream_hashes(service, file_id=file_id, zstd=zstd)
+                result.update(drive_md5=drive_md5, drive_md5_match=drive_md5 == local_md5)
+                if drive_md5 != local_md5 or drive_hash != artifact.raw_sha256:
+                    raise ValueError("Drive download md5 or raw SHA-256 mismatch")
+            result.update(
+                verified=True,
+                archive_test=True,
+                raw_sha256_match=True,
+                sentinel_verified_chunks=artifact.sentinel_chunks,
+                pragma="ok",
+                verification_proof="stream_sha256_of_integrity_checked_raw",
+            )
+            if not zstd:
+                result["gzip_test"] = True
+            return result
         with tempfile.TemporaryDirectory(prefix="brainlayer-restore-verify-", dir=artifact.gzip_path.parent) as tmp:
             tmp_dir = Path(tmp)
             (tmp_dir / ".backup-date").write_text(artifact.gzip_path.name[:10], encoding="ascii")
@@ -2937,6 +3223,7 @@ def run_backup(
                 "machine_id": resolved_machine_id,
             }
         )
+        result["consumed_raw_crash_leftovers_deleted"] = _cleanup_consumed_raw_remnants(Path(staging_dir))
         if resolved_log_path.exists():
             try:
                 _, noise_lines, skipped_lines = _scan_backup_receipts(resolved_log_path)
@@ -3010,6 +3297,7 @@ def run_backup(
                     local_integrity_pragma=resume.get("local_integrity_pragma"),
                     snapshot_duration_seconds=resume.get("snapshot_duration_seconds"),
                     integrity_duration_seconds=resume.get("integrity_duration_seconds"),
+                    raw_sha256=resume.get("raw_sha256"),
                 )
             for suffix in DB_SNAPSHOT_SUFFIXES:
                 target = Path(staging_dir) / f"{resolved_date_stamp}{suffix}"
@@ -3072,6 +3360,7 @@ def run_backup(
                     "local_integrity_pragma": getattr(artifact, "local_integrity_pragma", None),
                     "snapshot_duration_seconds": getattr(artifact, "snapshot_duration_seconds", None),
                     "integrity_duration_seconds": getattr(artifact, "integrity_duration_seconds", None),
+                    "raw_sha256": getattr(artifact, "raw_sha256", None),
                     "compressor": getattr(artifact, "compressor", None)
                     or ("zstd" if snapshot.name.endswith(ZSTD_SNAPSHOT_SUFFIX) else "gzip"),
                     "compress_duration_seconds": getattr(artifact, "compress_duration_seconds", None),

@@ -31,6 +31,7 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 
 @pytest.fixture
 def lane(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda _path: (False, "legacy-path fixture"))
     source, output = tmp_path / "source.db", tmp_path / "backups"
     _create_source_db(source, chunk_count=4)
     output.mkdir()
@@ -469,6 +470,7 @@ def test_experiment_snapshot_materializes_from_zstd_backup(tmp_path, monkeypatch
 
 
 def test_weekly_gate_accepts_verified_local_zstd_snapshot(local_lane, tmp_path, monkeypatch):
+    monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda _path: (False, "legacy-path fixture"))
     receipt = backup.run_backup(**local_lane, phase="snapshot")
     assert receipt["snapshot"].endswith(".db.zst") and receipt["compressor"] == "zstd"
     assert receipt["local_verified"] is True and receipt["local_integrity_pragma"] == "integrity_check"
