@@ -789,6 +789,84 @@ def _owned_temp_inventory(output_dir: Path) -> list[tuple[str, int]]:
     return inventory
 
 
+def _cleanup_consumed_raw_remnants(output_dir: Path) -> list[str]:
+    """Remove only inode-bound consumed raws from this job's abandoned attempts.
+
+    A consumed raw is unrestorable, unlike an unconsumed raw or any archive. The caller
+    holds the job's staging lock; links, unmarked files and foreign inodes fail closed.
+    """
+    removed = []
+    if not output_dir.exists() or output_dir.is_symlink():
+        return removed
+    for directory in sorted(output_dir.glob("brainlayer-backup-*")):
+        try:
+            directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:
+            continue
+        try:
+            if os.fstat(directory_fd).st_uid != os.getuid():
+                continue
+            with os.fdopen(os.open(".consumed", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)) as handle:
+                info = os.fstat(handle.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
+                    continue
+                marker = json.loads(handle.read(4096))
+            if not isinstance(marker, dict) or marker.get("consumed") is not True:
+                continue
+            name = marker.get("raw")
+            if not isinstance(name, str) or _parse_uncompressed_snapshot_date(name) is None:
+                continue
+            with os.fdopen(os.open(".backup-date", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)) as handle:
+                if handle.read(32).strip() != name[:10]:
+                    continue
+            raw_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            try:
+                info = os.fstat(raw_fd)
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_nlink != 1
+                    or info.st_uid != os.getuid()
+                    or (info.st_dev, info.st_ino) != (marker.get("dev"), marker.get("ino"))
+                ):
+                    continue
+                current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                    continue
+                os.unlink(name, dir_fd=directory_fd)
+                os.fsync(directory_fd)
+                removed.append(f"{directory.name}/{name}")
+                print(f"Backup removed unrestorable consumed crash raw: {directory.name}/{name}", flush=True)
+            finally:
+                os.close(raw_fd)
+        except (OSError, UnicodeError, ValueError):
+            continue
+        finally:
+            os.close(directory_fd)
+    return removed
+
+
+def _consume_raw_in_attempt(raw: Path, directory: Path) -> Path:
+    info = raw.stat(follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ValueError("Cannot consume a linked or non-regular raw snapshot")
+    marker = {"raw": raw.name, "dev": info.st_dev, "ino": info.st_ino, "consumed": True}
+    with (directory / ".consumed").open("x", encoding="ascii") as handle:
+        json.dump(marker, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    consumed = directory / raw.name
+    raw.rename(consumed)
+    # Persist both sides of the rename before any destructive punch. A power loss must
+    # never resurrect the consumed inode at the published raw path.
+    for path in (directory, raw.parent):
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    return consumed
+
+
 def _prune_owned_temps_after_verified(output_dir: Path, verified_snapshot: Path) -> list[str]:
     """Remove old job-owned crash remnants only after a newer Drive backup verified."""
     verified_date = _parse_snapshot_date(verified_snapshot.name)
@@ -815,6 +893,7 @@ def _prune_owned_temps_after_verified(output_dir: Path, verified_snapshot: Path)
             or item.name
             not in {
                 ".backup-date",
+                ".consumed",
                 "restored.db",
                 f"{marked_date.isoformat()}.db",
                 *(f"{marked_date.isoformat()}{suffix}" for suffix in DB_SNAPSHOT_SUFFIXES),
@@ -1379,6 +1458,9 @@ def _archive_stream_sha256(source: Any, *, zstd: bool) -> str:
         return _stream_sha256(restored).hex()
 
 
+RECLAIM_VOLUME_SLACK_BYTES = 64 * 1024 * 1024
+
+
 def _compress_reclaiming_raw(raw: Path, archive: Path, *, zstd_binary: str | None) -> str:
     """Write durable independent frames, then release their raw extents; hash before punching.
 
@@ -1392,6 +1474,8 @@ def _compress_reclaiming_raw(raw: Path, archive: Path, *, zstd_binary: str | Non
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise ValueError("Cannot consume a linked or non-regular raw snapshot")
         offset = 0
+        initial_free = shutil.disk_usage(archive.parent).free
+        frame_bytes = 0
         while chunk := source.read(RECLAIM_CHUNK_BYTES):
             digest.update(chunk)
             if zstd_binary is None:
@@ -1408,12 +1492,25 @@ def _compress_reclaiming_raw(raw: Path, archive: Path, *, zstd_binary: str | Non
             _require_raw_floor(archive.parent, forthcoming=len(frame))
             sink.write(frame)
             sink.flush()
-            fcntl.fcntl(sink.fileno(), fcntl.F_FULLFSYNC)
+            if sys.platform == "darwin":
+                fcntl.fcntl(sink.fileno(), fcntl.F_FULLFSYNC)
+            else:
+                os.fsync(sink.fileno())
+            frame_bytes += len(frame)
+            before_blocks = os.fstat(source.fileno()).st_blocks
             # Full chunks are allocation-aligned; punching the short final extent is safe
             # because no unread bytes follow it. APFS may retain its final partial block.
             _punch_raw_hole(source.fileno(), offset, len(chunk))
+            after_blocks = os.fstat(source.fileno()).st_blocks
+            if after_blocks >= before_blocks:
+                raise RuntimeError("punched raw extents not reclaimed (APFS snapshot or filesystem allocation pin)")
             offset += len(chunk)
             _require_raw_floor(archive.parent)
+            # st_blocks alone cannot see extents still pinned by an APFS snapshot. Bound
+            # cumulative volume loss too, allowing one chunk of allocation/accounting lag.
+            expected_growth = frame_bytes - offset
+            if initial_free - shutil.disk_usage(archive.parent).free > expected_growth + RECLAIM_VOLUME_SLACK_BYTES:
+                raise RuntimeError("punched raw extents not reclaimed (APFS snapshot or delayed volume reclaim)")
     raw_hash = digest.hexdigest()
     with archive.open("rb") as compressed:
         if _archive_stream_sha256(compressed, zstd=zstd_binary is not None) != raw_hash:
@@ -1452,6 +1549,7 @@ def create_sqlite_backup_artifact(
     output_dir.mkdir(parents=True, exist_ok=True)
     if _parse_uncompressed_snapshot_date(f"{date_stamp}.db") is None or output_dir.is_symlink():
         raise ValueError("Backup requires a dated snapshot in a non-symlink backup directory")
+    _cleanup_consumed_raw_remnants(output_dir)
     compressor, zstd_binary, compressor_fallback = _selected_compressor()
     reclaim_raw, reclaim_fallback = _probe_raw_reclamation(output_dir)
     print(
@@ -1621,8 +1719,7 @@ def create_sqlite_backup_artifact(
             raw_sha256 = None
             if reclaim_raw:
                 # Keep consumed extents inside the owned attempt, never at the published raw path.
-                consumed_raw = Path(tmp) / final_raw.name
-                raw_snapshot.rename(consumed_raw)
+                consumed_raw = _consume_raw_in_attempt(raw_snapshot, Path(tmp))
                 print("Backup consuming verified raw snapshot; a failed attempt requires a fresh snapshot", flush=True)
                 raw_sha256 = _compress_reclaiming_raw(consumed_raw, temp_archive, zstd_binary=zstd_binary)
             elif zstd_binary is not None:
@@ -2305,14 +2402,17 @@ def download_drive_file_raw(service: Any, *, file_id: str, destination: Path) ->
     return destination
 
 
+DRIVE_DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+
+
 def _download_drive_to_stream(service: Any, *, file_id: str, sink: Any) -> None:
     from googleapiclient.http import MediaIoBaseDownload
 
     request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
-    downloader = MediaIoBaseDownload(sink, request, chunksize=COPY_CHUNK_BYTES)
+    downloader = MediaIoBaseDownload(sink, request, chunksize=DRIVE_DOWNLOAD_CHUNK_BYTES)
     done = False
     while not done:
-        _, done = downloader.next_chunk()
+        _, done = _retry_transient_drive_call(downloader.next_chunk, what="Drive snapshot download")
 
 
 def _drive_stream_hashes(service: Any, *, file_id: str, zstd: bool) -> tuple[str, str]:
@@ -3145,6 +3245,7 @@ def run_backup(
                 "machine_id": resolved_machine_id,
             }
         )
+        result["consumed_raw_crash_leftovers_deleted"] = _cleanup_consumed_raw_remnants(Path(staging_dir))
         if resolved_log_path.exists():
             try:
                 _, noise_lines, skipped_lines = _scan_backup_receipts(resolved_log_path)

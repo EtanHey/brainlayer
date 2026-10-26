@@ -202,27 +202,51 @@ Weekly calendar runs use index → `backup-snapshot` → full maintenance → JS
 counters, checkpoint, decay and FTS checks → `backup-daily` in upload-only mode. Snapshot and upload use the existing
 calendar process-group supervisor sequentially; the upload keeps the existing job/history/log name; no detached worker is created. Nightly runs retain
 maintenance first and DB upload last. `BRAINLAYER_BACKUP_PHASE=snapshot` writes a durable local
-receipt after mandatory raw SQLite `integrity_check` (nightly uses `quick_check`), the archive's
-own checksum (zstd frame checksum and exact size, or legacy gzip CRC/ISIZE),
-SQLite header/sentinel and byte-equality checks; `upload` drains retained snapshots newest first
-from those same bytes, preserving resumable sessions and retrying completed-session verification.
-The default `all` phase keeps the combined daily command.
+receipt after raw SQLite checks and archive verification; `upload` drains retained snapshots
+newest first from those same bytes, preserving resumable sessions and retrying completed-session
+verification. The default `all` phase keeps the combined daily command.
 
-Snapshots are compressed with the zstd CLI (`zstd -3 -T0 --check`) to `YYYY-MM-DD.db.zst`.
-On the real 20.7 GB snapshot that is about 12 s, against 8+ minutes for the former Python
-gzip -6. `BRAINLAYER_BACKUP_COMPRESSOR=gzip` restores the old `.db.gz` output for rollback;
-any other value is refused. The binary is resolved from `BRAINLAYER_BACKUP_ZSTD_PATH`
-(absolute and executable, or the run fails), then `/opt/homebrew/bin/zstd`,
-`/usr/local/bin/zstd`, then `PATH`, because launchd jobs run with `PATH=/usr/bin:/bin`.
-If no zstd is found the run compresses with gzip and records `compressor_fallback` in its
-receipt. Every reader (verify, restore, raw cleanup, resume, retention, observability, the
-weekly gate, BrainBar's local-copy listing) accepts both `.db.zst` and legacy `.db.gz`, and
-local and Drive retention always keep the newest verified copy of each format. For opt-in
-Drive retention "verified" means the exact Drive file ID's latest receipt in the backup log
-says `uploaded` and `verified` (no `verification_error`, no md5 mismatch); a format with no
-such object in the listing has nothing trashed, and an unreadable log trashes nothing. The zstd child
-runs in the backup's process group, so the calendar's process-group stop reaches it, and any
-timeout, stop or free-space floor breach kills and reaps it.
+On a staging filesystem that passes the macOS hole-punch probe, every raw snapshot must pass
+full `integrity_check` and sentinel validation before compression. Compression hashes the raw
+stream and writes durable independent 64 MiB chunks (`zstd -3 -T1 --check` frames, or gzip -6
+members), then punches the consumed raw extents. Each punch must reduce the raw file's allocated
+blocks. Cumulative volume free-space loss is also checked with 64 MiB of accounting slack,
+because APFS snapshots can pin physical storage even after a file's block count drops. A punch
+that does not reclaim storage aborts with an explicit APFS snapshot/allocation error; the 2 GiB
+raw-free-space floor remains enforced before writes and after punches. The archive is decoded
+as a stream and SHA-256-compared with the checked raw before publication. Subsequent local and
+Drive verification use the same SHA-256 proof; full Drive verification also compares compressed
+MD5. Drive reads use 8 MiB requests and the upload path's bounded transient-network retry policy.
+
+This path reserves raw size + one 64 MiB chunk + at most 64 KiB expansion per frame, plus the
+2 GiB floor and 1 MiB margin. For a 22 GB database this is about 24.24 GB. If the staging probe
+cannot reclaim blocks, the log names the reason and selects the legacy pipeline and its larger
+raw-plus-compressed/restore/download peak budget. That fallback uses `quick_check` on ordinary
+nightly runs, full `integrity_check` for snapshot/full-verification runs, a single `zstd -3 -T0`
+process (or gzip), and the existing on-disk restore verifier. Older receipts without a raw hash
+also retain that restore verifier. A runtime reclamation failure aborts; it never switches to an
+unbudgeted fallback after consuming raw bytes.
+
+Consumed raws live only in job-owned attempt directories. Before the first punch, an inode-bound
+`.consumed` marker and the raw's move are fsynced. At the next run's start, before capacity
+admission, only a marked consumed raw with the matching inode is deleted. Unmarked/unconsumed
+raws, links, foreign files and archives are retained. A failed consuming attempt needs a fresh
+snapshot; legacy failures retain their untouched raw.
+
+Snapshots use `YYYY-MM-DD.db.zst` by default. `BRAINLAYER_BACKUP_COMPRESSOR=gzip` selects
+`.db.gz`; any other value is refused. The zstd binary is resolved from
+`BRAINLAYER_BACKUP_ZSTD_PATH` (absolute and executable, or the run fails), then
+`/opt/homebrew/bin/zstd`, `/usr/local/bin/zstd`, then `PATH`, because launchd jobs run with
+`PATH=/usr/bin:/bin`. If zstd is absent, gzip is selected and `compressor_fallback` is recorded.
+Standard zstd/gzip decoders accept the concatenated frames/members. Every reader (verify,
+restore, raw cleanup, resume, retention, observability, the weekly gate and BrainBar's local-copy
+listing) accepts both formats. Local and Drive retention keep the newest verified copy of each
+format. For opt-in Drive retention, "verified" means the exact Drive file ID's latest backup-log
+receipt says `uploaded` and `verified` (no `verification_error` or MD5 mismatch); a format with
+no such object has nothing trashed, and an unreadable log trashes nothing. Each zstd chunk child
+runs in the backup's process group, so the calendar's process-group stop reaches it. A child
+failure stops consumption and cleans the attempt; the legacy streaming child is also killed and
+reaped on timeout, stop or free-space floor breach.
 
 Weekly VACUUM requires a local verified snapshot of the same database, created since local midnight
 and at most `BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS` old (default **6**, shared by snapshot reuse and

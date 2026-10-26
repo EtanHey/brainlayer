@@ -5776,6 +5776,16 @@
         "target": "client.request"
       }
     },
+    "f819a24de8990b8d38f682a53d427741ee16c9c51fd4e4f956a36a8a9a15f5ef": {
+      "non_cloud_purpose": "Local zstd CLI compresses one bounded raw SQLite snapshot chunk into an independent checksummed frame; no model invocation or network transport.",
+      "site": {
+        "call_sha256": "a237da873f1e1f4db08a77c70871b217ed7a392ebbcbc0e072474766752b32f7",
+        "kind": "child_process",
+        "owner": "<module>._compress_reclaiming_raw",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.run"
+      }
+    },
     "f8c55f059cab056550803c9270a12adfe6a8c6382c60660075b5886deee0c591": {
       "non_cloud_purpose": "Explicit post-Homebrew local BrainBar activation only: bounded /bin/launchctl lifecycle calls and failure cleanup; no cloud models, enrichment, or network sender.",
       "site": {

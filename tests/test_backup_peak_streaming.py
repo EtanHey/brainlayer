@@ -3,9 +3,9 @@
 import dataclasses
 import gzip
 import json
-import subprocess
 import os
 import sqlite3
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -51,6 +51,7 @@ def snapshot_lane(tmp_path, monkeypatch):
     monkeypatch.setattr(backup, "_brainbar_writer_started_at", lambda *a: 1)
     monkeypatch.setattr(backup, "_important_usage_capacity_bytes", lambda *a: None)
     monkeypatch.setattr(backup, "RECLAIM_CHUNK_BYTES", 16384)
+    monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=10**12))
 
     def snapshot(target, **kwargs):
         with sqlite3.connect(source) as conn:
@@ -67,6 +68,7 @@ def punch_lane(snapshot_lane, monkeypatch, request):
     if request.param == "native":
         if not backup._probe_raw_reclamation(output)[0]:
             pytest.skip("staging filesystem cannot punch holes")
+        monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda path: (True, None))
         return snapshot_lane
     # Zero consumed bytes everywhere; emulate only allocation accounting. Production reads
     # the real fd's st_blocks. This fake never claims the filesystem freed physical storage.
@@ -316,6 +318,7 @@ def test_snapshot_pins_volume_space_despite_file_block_drop(punch_lane, monkeypa
     punched = 0
     real_punch = backup._punch_raw_hole
     free = 10**12
+    monkeypatch.setattr(backup, "RECLAIM_VOLUME_SLACK_BYTES", backup.RECLAIM_CHUNK_BYTES)
 
     def punch(fd, offset, length):
         nonlocal punched, free
@@ -384,6 +387,7 @@ def test_consumed_marker_is_durable_before_first_punch(punch_lane, monkeypatch):
 
 def test_stream_download_chunk_size_and_bounded_retry(monkeypatch):
     import io
+
     from googleapiclient.http import HttpRequest
     from httplib2 import Response
 
