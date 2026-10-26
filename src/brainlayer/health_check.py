@@ -1415,23 +1415,24 @@ def _run_health_check_locked(
             }
         )
 
-    if config.heal:
-        from .supervisor_adapters import adapt_commands
+    from .supervisor_adapters import adapt_commands
 
-        command_runner = adapt_commands(
-            command_runner,
-            config.pause_sentinel_path,
-            required=(
-                config.watch_label,
-                config.drain_label,
-                config.hotlane_label,
-                config.health_check_label,
-                config.observability_label,
-            ),
-            tolerate_unavailable=True,
-        )
-        if error := getattr(command_runner, "control_error", ""):
-            add_issue("supervisor_control_unavailable", "critical", f"supervisor control unavailable: {error}")
+    command_runner = adapt_commands(
+        command_runner,
+        config.pause_sentinel_path,
+        required=(
+            config.watch_label,
+            config.drain_label,
+            config.hotlane_label,
+            config.health_check_label,
+            config.observability_label,
+        ),
+        tolerate_unavailable=True,
+        discover_ownership=True,
+    )
+    if error := getattr(command_runner, "control_error", ""):
+        add_issue("supervisor_control_unavailable", "critical", f"supervisor control unavailable: {error}")
+        if config.heal:
             result.actions.append("heal_failed:supervisor_control_unavailable")
 
     if state.get("_state_corrupt_now"):

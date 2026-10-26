@@ -168,7 +168,7 @@ def needs_socket_migration(name: str, server: object) -> bool:
 
 
 def owned_mcp_config_paths(*, home: Path | None = None) -> tuple[Path, ...]:
-    """Configs BrainLayer owns and may rewrite on setup/upgrade."""
+    """Configs BrainLayer owns; scratch exclusions apply below the selected home."""
     root = home if home is not None else Path.home()
     paths: list[Path] = [
         root / ".claude.json",
@@ -181,7 +181,7 @@ def owned_mcp_config_paths(*, home: Path | None = None) -> tuple[Path, ...]:
         for repo_dir in sorted(gits.iterdir()):
             if not repo_dir.is_dir():
                 continue
-            if any(part in _SKIP_GITS_DIR_PARTS for part in repo_dir.parts):
+            if any(part in _SKIP_GITS_DIR_PARTS for part in repo_dir.relative_to(root).parts):
                 continue
             mcp_json = repo_dir / ".mcp.json"
             if mcp_json.is_file():

@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -16,8 +17,18 @@ from tests.test_stability_health_check import _make_db, _queue_backlog_config, _
 from tests.test_throughput_watchdog import _config, _load_module, _progress
 
 
+def _migrated_journal():
+    directory = Path.home() / ".local/share/brainlayer/supervisor"
+    directory.mkdir(parents=True, exist_ok=True)
+    journal = directory / "migration.json"
+    journal.write_text(json.dumps({"phase": "migrated"}))
+    journal.chmod(0o600)
+    return journal
+
+
 @pytest.fixture
 def backend(request, monkeypatch):
+    _migrated_journal()
     grace = getattr(request, "param", 1)
     path, start, request = request.getfixturevalue("native")
     code = native_tests.BOOT.replace("exit_timeout=1)", f"exit_timeout={grace})").replace(
@@ -274,6 +285,7 @@ def reply_endpoint(request):
 
 @pytest.mark.parametrize("failure", ["missing", "slow", "malformed"])
 def test_control_outage_preserves_health_result_badge_and_canary(tmp_path, monkeypatch, reply_endpoint, failure):
+    _migrated_journal()
     path = tmp_path / "missing.sock"
     if failure != "missing":
         path = reply_endpoint({"components": []}, delay=2.1 if failure == "slow" else 0)
@@ -384,3 +396,152 @@ def test_failed_drain_restart_is_reported_in_queue_summary(tmp_path):
         backlog_issue_active=True,
     )
     assert "heal=failing" in summary and action in summary and "heal_failures=2" in summary
+
+
+@pytest.mark.parametrize("phase", [None, "reverted", "rolled_back"])
+def test_canonical_legacy_owner_ignores_inherited_socket(monkeypatch, phase):
+    if phase is not None:
+        journal = _migrated_journal()
+        journal.write_text(json.dumps({"phase": phase}))
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_SOCKET", "/unused/control.sock")
+
+    def runner(args):
+        return args
+
+    assert adapt_commands(runner, discover_ownership=True) is runner
+
+
+@pytest.mark.parametrize("damage", ["json", "array", "phase", "phase-list", "mode", "link", "parent-link", "large"])
+def test_unknown_journal_owner_never_falls_back_to_legacy(damage):
+    journal = _migrated_journal()
+    if damage == "json":
+        journal.write_text("{")
+    elif damage == "array":
+        journal.write_text("[]")
+    elif damage in {"phase", "phase-list"}:
+        journal.write_text(json.dumps({"phase": "future" if damage == "phase" else []}))
+    elif damage == "mode":
+        journal.chmod(0o644)
+    elif damage == "large":
+        journal.write_bytes(b" " * (4 * 1024 * 1024 + 1))
+    else:
+        source = journal if damage == "link" else journal.parent
+        target = source.with_name(source.name + "-real")
+        source.rename(target)
+        source.symlink_to(target)
+    commands = []
+    runner = adapt_commands(commands.append, discover_ownership=True, tolerate_unavailable=True)
+    assert isinstance(runner, SupervisorCommands)
+    assert "can't determine job owner" in runner.control_error
+    assert runner(["launchctl", "print", f"gui/{os.getuid()}/com.brainlayer.watch"]).returncode == 127
+    assert commands == []
+
+
+@pytest.mark.parametrize("heal", [False, True])
+def test_migrated_health_control_outage_remains_critical_without_env(tmp_path, monkeypatch, heal):
+    _migrated_journal()
+    monkeypatch.delenv("BRAINLAYER_SUPERVISOR_SOCKET", raising=False)
+    config, _, _, _ = _queue_backlog_config(tmp_path, heal=heal)
+    commands = []
+
+    def legacy(args):
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    result = _run_queue_backlog_health(config, legacy)
+    assert any(i.code == "supervisor_control_unavailable" and i.severity == "critical" for i in result.issues)
+    assert result.canary_status == "results"
+    assert not any(a[0] == "launchctl" and a[1] in {"bootstrap", "kickstart", "bootout"} for a in commands)
+    if not heal:
+        assert result.actions == []
+
+
+@pytest.mark.parametrize(
+    "interval,next_run,error,exit_code,loaded",
+    [
+        (0, None, "", None, False),
+        (300, 2000, "", None, True),
+        (300, 2000, "", 0, True),
+        (300, 2000, "exited 1", 1, True),
+        (300, None, "stopped", 1, False),
+    ],
+)
+def test_supervisor_idle_interval_and_down_component_are_distinct(
+    tmp_path, monkeypatch, interval, next_run, error, exit_code, loaded
+):
+    client = SupervisorCommands(tmp_path / "unused.sock", lambda args: pytest.fail("legacy fallback"))
+    monkeypatch.setattr(
+        client,
+        "request",
+        lambda: {
+            "watch": dict(
+                configured=True,
+                paused=False,
+                pid=None,
+                starts=1,
+                interval=interval,
+                next_run_at=next_run,
+                error=error,
+                last_exit_code=exit_code,
+            )
+        },
+    )
+    assert health_check._launchd_label_loaded("com.brainlayer.watch", client) is loaded
+
+
+@pytest.mark.parametrize("outcome", ["disabled-state-unavailable", "restart-refused", "restarted"])
+def test_dead_watch_heal_never_pauses_and_only_reports_verified_restart(tmp_path, monkeypatch, outcome):
+    _migrated_journal()
+    config, _, _, _ = _queue_backlog_config(tmp_path, heal=True)
+    config.job_opt_path = None
+    states = {
+        name: dict(configured=True, paused=False, pid=4242, starts=1, exit_timeout=1, interval=0)
+        for name in ("watch", "drain", "hotlane", "health-check", "observability")
+    }
+    watch = states["watch"]
+    watch["pid"] = None
+    requests, commands = [], []
+
+    def control(self, action="status", component="*", **kwargs):
+        requests.append((action, component))
+        if action == "pause":
+            states[component].update(paused=True, pid=None)
+        elif action == "resume" and states[component]["paused"]:
+            states[component].update(paused=False, pid=4243)
+        elif action == "restart":
+            if outcome == "restart-refused":
+                raise RuntimeError("restart did not start every component")
+            states[component].update(pid=4243, starts=2)
+        return states
+
+    def fallback(args):
+        commands.append(args)
+        if args[:2] == ["launchctl", "print-disabled"]:
+            return subprocess.CompletedProcess(
+                args, int(outcome == "disabled-state-unavailable"), "disabled services = {}", ""
+            )
+        raise AssertionError(f"legacy command escaped adapter: {args}")
+
+    monkeypatch.setattr(SupervisorCommands, "request", control)
+    result = _run_queue_backlog_health(config, fallback)
+    assert watch["paused"] is False
+    assert not any(action == "pause" for action, _ in requests)
+    client = SupervisorCommands(tmp_path / "unused.sock", fallback)
+    loaded = health_check._launchd_label_loaded(config.watch_label, client)
+    watch_issues = [issue for issue in result.issues if issue.code == "watch_unloaded"]
+    if outcome == "restarted":
+        assert ("restart", "watch") in requests
+        assert watch["pid"] == 4243 and loaded is True
+        assert f"bootstrap:{config.watch_label}" in result.actions
+        assert not watch_issues
+    else:
+        assert loaded is False and watch["pid"] is None
+        assert f"bootstrap:{config.watch_label}" not in result.actions
+        assert f"bootstrap_failed:{config.watch_label}" in result.actions
+        assert [issue.severity for issue in watch_issues] == ["critical"]
+        assert result.ok is False
+        if outcome == "restart-refused":
+            assert ("restart", "watch") in requests
+        else:
+            assert all(action == "status" for action, _ in requests)
+    assert commands
