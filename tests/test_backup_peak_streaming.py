@@ -1,8 +1,10 @@
 """Small, real SQLite snapshots; no production database or BrainBar traffic."""
 
 import dataclasses
+import gzip
 import os
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +28,7 @@ def test_reclaiming_phase_budget(full, phase):
     assert backup._peak_backup_required_bytes(db, compressed, full=full, reclaim_raw=True) == (
         expected["gzip"] + backup.MIN_RAW_FREE_BYTES + backup.COPY_CHUNK_BYTES
     )
+    assert backup._peak_backup_required_bytes(db, compressed, full=full, reclaim_raw=True) < 24_300_000_000
 
 
 @pytest.mark.parametrize("full", [False, True])
@@ -83,6 +86,11 @@ def test_real_snapshot_reclaims_then_stream_verifies(snapshot_lane, monkeypatch,
     assert artifact.raw_sha256
     assert backup.verify_sqlite_backup_artifact(artifact)["verified"] is True
     assert list(output.iterdir()) == [artifact.archive_path]
+    restored = source.parent / "restored.db"
+    backup._decompress_archive_to(artifact.archive_path, restored)
+    with sqlite3.connect(restored) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 24
 
     def no_restore(*a, **kw):
         pytest.fail("stream verification must not materialize a restored database")
@@ -99,6 +107,9 @@ def test_real_snapshot_reclaims_then_stream_verifies(snapshot_lane, monkeypatch,
 
 @pytest.mark.parametrize("compressor", ["gzip", "zstd"])
 def test_streaming_drive_verification_never_writes_a_download(snapshot_lane, monkeypatch, compressor):
+    from googleapiclient.http import HttpRequest
+    from httplib2 import Response
+
     source, output = snapshot_lane
     if not backup._probe_raw_reclamation(output)[0]:
         pytest.skip("staging filesystem cannot punch holes")
@@ -107,18 +118,60 @@ def test_streaming_drive_verification_never_writes_a_download(snapshot_lane, mon
     payload = artifact.archive_path.read_bytes()
     calls = []
 
-    def download(service, *, file_id, sink):
-        calls.append(file_id)
-        for start in range(0, len(payload), 1024):
-            sink.write(payload[start : start + 1024])
+    class HTTP:
+        def request(self, uri, method, *, headers):
+            calls.append(headers["range"])
+            start, end = map(int, headers["range"].removeprefix("bytes=").split("-"))
+            end = min(end, len(payload) - 1)
+            return Response({"status": "206", "content-range": f"bytes {start}-{end}/{len(payload)}"}), payload[
+                start : end + 1
+            ]
 
-    monkeypatch.setattr(backup, "_download_drive_to_stream", download)
-    result = backup.verify_sqlite_backup_artifact(artifact, full=True, service=object(), file_id="test")
+    service = SimpleNamespace(
+        files=lambda: SimpleNamespace(get_media=lambda **kw: HttpRequest(HTTP(), lambda *a: None, "https://test/"))
+    )
+    monkeypatch.setattr(backup, "COPY_CHUNK_BYTES", 1024)
+    result = backup.verify_sqlite_backup_artifact(artifact, full=True, service=service, file_id="test")
     assert result["verified"] is True, result
     assert result["drive_md5_match"] is True
     assert result["raw_sha256_match"] is True
-    assert calls == ["test"]
+    assert len(calls) > 1
     assert list(output.iterdir()) == [artifact.archive_path]
+    payload = payload[:-5]
+    assert (
+        backup.verify_sqlite_backup_artifact(artifact, full=True, service=service, file_id="test")["verified"] is False
+    )
+
+
+def test_punch_failure_aborts_without_publishing_partial_snapshot(snapshot_lane, monkeypatch):
+    source, output = snapshot_lane
+    monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda path: (True, None))
+
+    def fail(*a):
+        raise OSError("punch failed after selection")
+
+    monkeypatch.setattr(backup, "_punch_raw_hole", fail)
+    with pytest.raises(OSError, match="punch failed"):
+        backup.create_sqlite_backup_artifact(source, output, "2026-10-26")
+    assert list(output.iterdir()) == []
+    with sqlite3.connect(source) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_raw_hash_survives_snapshot_receipt_resume(snapshot_lane, monkeypatch):
+    source, output = snapshot_lane
+    monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
+    monkeypatch.setenv(backup.BACKUP_COMPRESSOR_ENV, "gzip")
+    kwargs = dict(
+        db_path=source, staging_dir=output, date_stamp="2026-10-26", upload=False, log_path=output / "log.jsonl"
+    )
+    created = backup.run_backup(**kwargs)
+    assert created["raw_sha256"]
+    monkeypatch.setattr(
+        backup, "create_sqlite_backup_artifact", lambda *a, **kw: pytest.fail("unexpected new snapshot")
+    )
+    resumed = backup.run_backup(**kwargs)
+    assert resumed["raw_sha256"] == created["raw_sha256"]
 
 
 def test_probe_failure_logs_old_path(snapshot_lane, monkeypatch, capsys):
@@ -129,3 +182,14 @@ def test_probe_failure_logs_old_path(snapshot_lane, monkeypatch, capsys):
     assert artifact.raw_sha256 is None
     assert "unsupported filesystem" in capsys.readouterr().out
     assert backup.verify_sqlite_backup_artifact(artifact)["verified"] is True
+
+
+def test_reclaimed_gzip_members_bind_to_a_leftover_raw(snapshot_lane):
+    source, output = snapshot_lane
+    raw = output / "2026-10-26.db"
+    raw.write_bytes(source.read_bytes())
+    data = raw.read_bytes()
+    archive = raw.with_suffix(".db.gz")
+    archive.write_bytes(gzip.compress(data[:16384]) + gzip.compress(data[16384:]))
+    backup._remove_raw_with_verified_gzip(output, raw)
+    assert not raw.exists()

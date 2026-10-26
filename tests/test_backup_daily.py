@@ -32,6 +32,8 @@ def _stable_backup_machine_id(monkeypatch, tmp_path):
     monkeypatch.setenv("BRAINBAR_SOCKET_PATH", str(tmp_path / "no-brainbar.sock"))
     from brainlayer import backup_daily
 
+    # This suite pins the legacy capacity/restore path; the reclaiming path has its own suite.
+    monkeypatch.setattr(backup_daily, "_probe_raw_reclamation", lambda _path: (False, "legacy-path fixture"))
     monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
     monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda _path, _bytes: None, raising=False)
     monkeypatch.setattr(backup_daily, "POST_PURGE_POLL_SECONDS", 0, raising=False)

@@ -31,6 +31,7 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 
 @pytest.fixture
 def lane(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda _path: (False, "legacy-path fixture"))
     source, output = tmp_path / "source.db", tmp_path / "backups"
     _create_source_db(source, chunk_count=4)
     output.mkdir()

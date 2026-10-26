@@ -16,6 +16,7 @@ from tests.test_backup_daily import _create_source_db, _stub_backup_for_drive_up
 
 @pytest.fixture
 def raw_lane(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda _path: (False, "legacy-path fixture"))
     source, output = tmp_path / "source.db", tmp_path / "backups"
     _create_source_db(source)
     output.mkdir()
