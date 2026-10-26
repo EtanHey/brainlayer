@@ -2,6 +2,8 @@
 
 import dataclasses
 import gzip
+import json
+import subprocess
 import os
 import sqlite3
 from types import SimpleNamespace
@@ -59,11 +61,48 @@ def snapshot_lane(tmp_path, monkeypatch):
     return source, output
 
 
+@pytest.fixture(params=["portable", "native"])
+def punch_lane(snapshot_lane, monkeypatch, request):
+    _, output = snapshot_lane
+    if request.param == "native":
+        if not backup._probe_raw_reclamation(output)[0]:
+            pytest.skip("staging filesystem cannot punch holes")
+        return snapshot_lane
+    # Zero consumed bytes everywhere; emulate only allocation accounting. Production reads
+    # the real fd's st_blocks. This fake never claims the filesystem freed physical storage.
+    released = {}
+    real_stat = os.fstat
+
+    class AllocationStat:
+        def __init__(self, info, blocks):
+            self.info, self.st_blocks = info, blocks
+
+        def __getattr__(self, name):
+            return getattr(self.info, name)
+
+    def fstat(fd):
+        info = real_stat(fd)
+        blocks = max(0, info.st_blocks - released.get((info.st_dev, info.st_ino), 0))
+        return AllocationStat(info, blocks)
+
+    def punch(fd, offset, length):
+        info = real_stat(fd)
+        assert os.pwrite(fd, b"\0" * length, offset) == length
+        key = info.st_dev, info.st_ino
+        released[key] = released.get(key, 0) + (length + 511) // 512
+
+    monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda path: (True, None))
+    monkeypatch.setattr(backup, "_punch_raw_hole", punch)
+    monkeypatch.setattr(backup.os, "fstat", fstat)
+    # Exercise the missing-F_FULLFSYNC platform on macOS too.
+    monkeypatch.setattr(backup.sys, "platform", "linux")
+    monkeypatch.delattr(backup.fcntl, "F_FULLFSYNC", raising=False)
+    return snapshot_lane
+
+
 @pytest.mark.parametrize("compressor", ["gzip", "zstd"])
-def test_real_snapshot_reclaims_then_stream_verifies(snapshot_lane, monkeypatch, compressor):
-    source, output = snapshot_lane
-    if not backup._probe_raw_reclamation(output)[0]:
-        pytest.skip("staging filesystem cannot punch holes")
+def test_real_snapshot_reclaims_then_stream_verifies(punch_lane, monkeypatch, compressor):
+    source, output = punch_lane
     monkeypatch.setenv(backup.BACKUP_COMPRESSOR_ENV, compressor)
     checked, punched = [], []
     real_check, real_punch = backup._sqlite_pragma_check, backup._punch_raw_hole
@@ -106,13 +145,11 @@ def test_real_snapshot_reclaims_then_stream_verifies(snapshot_lane, monkeypatch,
 
 
 @pytest.mark.parametrize("compressor", ["gzip", "zstd"])
-def test_streaming_drive_verification_never_writes_a_download(snapshot_lane, monkeypatch, compressor):
+def test_streaming_drive_verification_never_writes_a_download(punch_lane, monkeypatch, compressor):
     from googleapiclient.http import HttpRequest
     from httplib2 import Response
 
-    source, output = snapshot_lane
-    if not backup._probe_raw_reclamation(output)[0]:
-        pytest.skip("staging filesystem cannot punch holes")
+    source, output = punch_lane
     monkeypatch.setenv(backup.BACKUP_COMPRESSOR_ENV, compressor)
     artifact = backup.create_sqlite_backup_artifact(source, output, "2026-10-26")
     payload = artifact.archive_path.read_bytes()
@@ -130,7 +167,7 @@ def test_streaming_drive_verification_never_writes_a_download(snapshot_lane, mon
     service = SimpleNamespace(
         files=lambda: SimpleNamespace(get_media=lambda **kw: HttpRequest(HTTP(), lambda *a: None, "https://test/"))
     )
-    monkeypatch.setattr(backup, "COPY_CHUNK_BYTES", 1024)
+    monkeypatch.setattr(backup, "DRIVE_DOWNLOAD_CHUNK_BYTES", 1024, raising=False)
     result = backup.verify_sqlite_backup_artifact(artifact, full=True, service=service, file_id="test")
     assert result["verified"] is True, result
     assert result["drive_md5_match"] is True
@@ -143,8 +180,8 @@ def test_streaming_drive_verification_never_writes_a_download(snapshot_lane, mon
     )
 
 
-def test_punch_failure_aborts_without_publishing_partial_snapshot(snapshot_lane, monkeypatch):
-    source, output = snapshot_lane
+def test_punch_failure_aborts_without_publishing_partial_snapshot(punch_lane, monkeypatch):
+    source, output = punch_lane
     monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda path: (True, None))
 
     def fail(*a):
@@ -158,8 +195,8 @@ def test_punch_failure_aborts_without_publishing_partial_snapshot(snapshot_lane,
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
-def test_raw_hash_survives_snapshot_receipt_resume(snapshot_lane, monkeypatch):
-    source, output = snapshot_lane
+def test_raw_hash_survives_snapshot_receipt_resume(punch_lane, monkeypatch):
+    source, output = punch_lane
     monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
     monkeypatch.setenv(backup.BACKUP_COMPRESSOR_ENV, "gzip")
     kwargs = dict(
@@ -193,3 +230,184 @@ def test_reclaimed_gzip_members_bind_to_a_leftover_raw(snapshot_lane):
     archive.write_bytes(gzip.compress(data[:16384]) + gzip.compress(data[16384:]))
     backup._remove_raw_with_verified_gzip(output, raw)
     assert not raw.exists()
+
+
+@pytest.mark.parametrize("compressor", ["gzip", "zstd"])
+@pytest.mark.parametrize("failure", ["compress", "integrity", "floor"])
+def test_reclaiming_failure_cleans_attempt_and_records_error(punch_lane, monkeypatch, compressor, failure):
+    source, output = punch_lane
+    monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
+    monkeypatch.setenv(backup.BACKUP_COMPRESSOR_ENV, compressor)
+    punches = []
+    real_punch = backup._punch_raw_hole
+
+    def punch(*args):
+        real_punch(*args)
+        punches.append(args[1:])
+
+    monkeypatch.setattr(backup, "_punch_raw_hole", punch)
+    if failure == "compress":
+        if compressor == "gzip":
+            real_compress = gzip.compress
+
+            def compress(*a, **kw):
+                if punches:
+                    raise RuntimeError("gzip compressor failed mid-stream")
+                return real_compress(*a, **kw)
+
+            monkeypatch.setattr(backup.gzip, "compress", compress)
+            error, message = RuntimeError, "gzip compressor failed"
+        else:
+            real_run = subprocess.run
+
+            def run(command, **kw):
+                if punches and "-T1" in command:
+                    raise subprocess.CalledProcessError(9, command, stderr=b"compressor failed")
+                return real_run(command, **kw)
+
+            monkeypatch.setattr(backup.subprocess, "run", run)
+            error, message = subprocess.CalledProcessError, "exit status 9"
+    elif failure == "integrity":
+        monkeypatch.setattr(backup, "_archive_stream_sha256", lambda *a, **kw: "0" * 64)
+        error, message = ValueError, "SHA-256"
+    else:
+        stalled = output / "2026-10-25.db.gz"
+        stalled.write_bytes(b"stalled archive remains untouched")
+        monkeypatch.setattr(backup, "_stalled_uploads", lambda *a: [{"snapshot": str(stalled), "resumable_upload": {}}])
+        real_floor = backup._require_raw_floor
+
+        def floor(path, *, forthcoming=0):
+            if punches:
+                # Drop the actual free-space reading only once compression has begun.
+                monkeypatch.setattr(
+                    backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=backup.MIN_RAW_FREE_BYTES - 1)
+                )
+            return real_floor(path, forthcoming=forthcoming)
+
+        monkeypatch.setattr(backup, "_require_raw_floor", floor)
+        error, message = backup.RetainedStalledBackupCapacityError, "raw free space floor breached"
+    log = output / "receipt.jsonl"
+    with pytest.raises(error, match=message):
+        backup.run_backup(source, staging_dir=output, date_stamp="2026-10-26", upload=failure == "floor", log_path=log)
+    assert punches  # A real prefix was consumed before the injected failure.
+    assert not (output / "2026-10-26.db").exists()
+    assert not list(output.glob("2026-10-26.db.*"))
+    assert not list(output.glob("brainlayer-backup-*"))
+    receipt = json.loads(log.read_text().splitlines()[-1])
+    assert message in receipt["error"]
+    assert receipt["verified"] is False
+    if failure == "floor":
+        assert stalled.read_bytes() == b"stalled archive remains untouched"
+        assert stalled.name in receipt["error"]
+    with sqlite3.connect(source) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_punch_that_frees_no_blocks_aborts(punch_lane, monkeypatch):
+    source, output = punch_lane
+    monkeypatch.setattr(backup, "_punch_raw_hole", lambda fd, offset, length: os.pwrite(fd, b"\0" * length, offset))
+    with pytest.raises(RuntimeError, match="punched raw extents not reclaimed.*APFS snapshot"):
+        backup.create_sqlite_backup_artifact(source, output, "2026-10-26")
+    assert list(output.iterdir()) == []
+
+
+def test_snapshot_pins_volume_space_despite_file_block_drop(punch_lane, monkeypatch):
+    source, output = punch_lane
+    punched = 0
+    real_punch = backup._punch_raw_hole
+    free = 10**12
+
+    def punch(fd, offset, length):
+        nonlocal punched, free
+        real_punch(fd, offset, length)
+        punched += length
+        free -= length  # No physical reclaim: volume free falls as the archive grows.
+
+    monkeypatch.setattr(backup, "_punch_raw_hole", punch)
+    monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=free))
+    with pytest.raises(RuntimeError, match="punched raw extents not reclaimed.*APFS snapshot"):
+        backup.create_sqlite_backup_artifact(source, output, "2026-10-26")
+    assert punched <= 2 * backup.RECLAIM_CHUNK_BYTES
+    assert list(output.iterdir()) == []
+
+
+@pytest.mark.parametrize("kind", ["consumed", "unmarked", "mismatch", "outside", "symlink", "hardlink"])
+def test_startup_consumed_cleanup_preserves_archives_and_unconsumed_raw(snapshot_lane, monkeypatch, kind):
+    source, output = snapshot_lane
+    directory = output / ("other-job" if kind == "outside" else "brainlayer-backup-crashed")
+    directory.mkdir()
+    raw = directory / "2026-10-25.db"
+    raw.write_bytes(source.read_bytes())
+    (directory / ".backup-date").write_text("2026-10-25")
+    if kind == "symlink":
+        raw.unlink()
+        raw.symlink_to(source)
+    elif kind == "hardlink":
+        raw.unlink()
+        os.link(source, raw)
+    info = raw.stat()
+    marker = {"raw": raw.name, "dev": info.st_dev, "ino": info.st_ino + (kind == "mismatch"), "consumed": True}
+    if kind != "unmarked":
+        (directory / ".consumed").write_text(json.dumps(marker))
+    archive = directory / "2026-10-25.db.gz"
+    archive.write_bytes(b"archive is never removed by startup cleanup")
+
+    def capacity(*a):
+        assert raw.exists() is (kind != "consumed")  # Must run before admission.
+        return SimpleNamespace(free=0)
+
+    monkeypatch.setattr(backup.shutil, "disk_usage", capacity)
+    monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda *a: (False, "test"))
+    with pytest.raises(RuntimeError, match="Insufficient free space"):
+        backup.create_sqlite_backup_artifact(source, output, "2026-10-26")
+    assert archive.read_bytes() == b"archive is never removed by startup cleanup"
+    assert source.exists()
+
+
+def test_consumed_marker_is_durable_before_first_punch(punch_lane, monkeypatch):
+    source, output = punch_lane
+    real_punch = backup._punch_raw_hole
+    marker_seen = []
+
+    def punch(fd, offset, length):
+        raw = next(output.glob("brainlayer-backup-*/2026-10-26.db"))
+        marker = json.loads((raw.parent / ".consumed").read_text())
+        info = os.fstat(fd)
+        assert marker == {"raw": raw.name, "dev": info.st_dev, "ino": info.st_ino, "consumed": True}
+        marker_seen.append(True)
+        real_punch(fd, offset, length)
+
+    monkeypatch.setattr(backup, "_punch_raw_hole", punch)
+    backup.create_sqlite_backup_artifact(source, output, "2026-10-26")
+    assert marker_seen
+
+
+def test_stream_download_chunk_size_and_bounded_retry(monkeypatch):
+    import io
+    from googleapiclient.http import HttpRequest
+    from httplib2 import Response
+
+    calls, sleeps = [], []
+
+    class HTTP:
+        def request(self, uri, method, *, headers):
+            calls.append(headers["range"])
+            if len(calls) < 3:
+                raise ConnectionResetError("transient reset")
+            return Response({"status": "200", "content-length": "3"}), b"abc"
+
+    service = SimpleNamespace(
+        files=lambda: SimpleNamespace(get_media=lambda **kw: HttpRequest(HTTP(), lambda *a: None, "https://test/"))
+    )
+    monkeypatch.setattr(backup, "_sleep", sleeps.append)
+    monkeypatch.setenv(backup.DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV, "3")
+    sink = io.BytesIO()
+    backup._download_drive_to_stream(service, file_id="test", sink=sink)
+    assert sink.getvalue() == b"abc"
+    assert calls == ["bytes=0-8388607"] * 3
+    assert sleeps == [2, 4]
+    calls.clear()
+    monkeypatch.setenv(backup.DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV, "2")
+    with pytest.raises(RuntimeError, match="after 2 attempts"):
+        backup._download_drive_to_stream(service, file_id="test", sink=io.BytesIO())
+    assert len(calls) == 2
