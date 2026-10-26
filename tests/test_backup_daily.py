@@ -245,7 +245,12 @@ def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_removes_raw_snapsho
 
     def fake_upload(file_path, folder_id, credentials, *, machine_id, **kwargs):  # noqa: ARG001
         uploads.append(Path(file_path))
-        return {"id": "drive-file-id", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size)}
+        return {
+            "id": "drive-file-id",
+            "name": Path(file_path).name,
+            "size": str(Path(file_path).stat().st_size),
+            "md5Checksum": backup_daily._md5_file(file_path),
+        }
 
     monkeypatch.setattr(backup_daily, "upload_file_to_drive_raw", fake_upload)
 
@@ -464,13 +469,14 @@ def test_run_backup_opt_out_keeps_older_archives_with_legacy_receipts(tmp_path, 
     monkeypatch.setattr(
         backup_daily,
         "verify_sqlite_backup_artifact",
-        lambda *args, **kwargs: {"verified": True, "verification_mode": "quick"},
+        lambda *args, **kwargs: {"verified": True, "verification_mode": "quick", "local_md5": "local-md5"},
     )
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",
         lambda file_path, folder_id, credentials, *, machine_id, **kwargs: {
             "id": "drive-file-id",
+            "md5Checksum": "local-md5",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),
         },
@@ -1964,7 +1970,13 @@ def test_run_backup_refuses_folder_with_other_machine_snapshot_and_records_error
         )
 
     assert upload_calls == []
-    receipt = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+    receipt = json.loads(
+        [
+            line
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if json.loads(line).get("event") != "local_sweep"
+        ][-1]
+    )
     assert receipt["uploaded"] is False
     assert receipt["error_code"] == "drive_folder_owned_by_other_machine"
 
@@ -2167,7 +2179,13 @@ def test_drive_upload_that_blocks_forever_fails_loudly_with_confirmed_bytes(tmp_
 
     assert time.monotonic() - started < 1
     assert any(value == "bytes */6" for value in ranges)
-    logged = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+    logged = json.loads(
+        [
+            line
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if json.loads(line).get("event") != "local_sweep"
+        ][-1]
+    )
     assert logged["error_type"] == "drive_upload_stalled"
     assert logged["error_code"] == "drive_upload_stalled"
     assert logged["bytes_confirmed"] == 3
@@ -2526,7 +2544,11 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
         log_path=log_path,
     )
 
-    lines = log_path.read_text(encoding="utf-8").splitlines()
+    lines = [
+        line
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if json.loads(line).get("event") != "local_sweep"
+    ]
     assert len(lines) == 4
     assert json.loads(lines[-2])["uploaded"] is True and json.loads(lines[-2])["verified"] is True
     assert json.loads(lines[0])["local_verified"] is True
@@ -2578,7 +2600,11 @@ def test_run_backup_appends_file_log_when_upload_fails(tmp_path, monkeypatch):
             log_path=log_path,
         )
 
-    lines = log_path.read_text(encoding="utf-8").splitlines()
+    lines = [
+        line
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if json.loads(line).get("event") != "local_sweep"
+    ]
     assert len(lines) == 2
     logged = json.loads(lines[-1])
     assert logged["snapshot"] == str(snapshot)
@@ -2645,7 +2671,11 @@ def test_run_backup_uses_env_log_path_without_explicit_log_path(tmp_path, monkey
         upload=False,
     )
 
-    lines = safe_log_path.read_text(encoding="utf-8").splitlines()
+    lines = [
+        line
+        for line in safe_log_path.read_text(encoding="utf-8").splitlines()
+        if json.loads(line).get("event") != "local_sweep"
+    ]
     assert len(lines) == 2
     logged = json.loads(lines[-1])
     assert logged == result

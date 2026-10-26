@@ -193,6 +193,9 @@ def test_drive_id_revocation_is_not_undone_by_either_sweep(removal_lane, snapsho
     assert len(events) == 1  # Same reason is deduped across start/end sweeps.
     assert events[0]["event"] == "local_sweep"
     assert events[0]["local_removed_skip_reason"] == "not_verified"
+    # Even a sweep carrying accidental verification fields cannot supersede remote proof.
+    backup._append_json_log(log, {**receipt, "event": "local_sweep"})
+    assert receipt["drive_file"]["id"] not in backup._verified_drive_file_ids(log)
     assert not (
         {"snapshot", "drive_file", "uploaded", "verified", "attempted_at", "backup_log_provenance"} & events[0].keys()
     )
@@ -248,6 +251,7 @@ def test_sweep_does_not_backdate_observability_or_brainbar_log(removal_lane):
         "standard_name",
         "before_today",
         "live_db",
+        "archive_date",
     ],
 )
 def test_each_sweep_deletion_guard_retains_archive(removal_lane, monkeypatch, guard):
@@ -262,8 +266,14 @@ def test_each_sweep_deletion_guard_retains_archive(removal_lane, monkeypatch, gu
         receipt["drive_file"][guard.removeprefix("drive_")] = "wrong"
     elif guard == "same_db":
         receipt["db"] = "other-db"
-    elif guard in {"staging_dir", "standard_name"}:
-        destination = path.parent / ("elsewhere" if guard == "staging_dir" else "2026-10-21-x.db.zst")
+    elif guard in {"staging_dir", "standard_name", "archive_date"}:
+        destination = path.parent / (
+            "elsewhere"
+            if guard == "staging_dir"
+            else "2026-10-21.db"
+            if guard == "archive_date"
+            else "2026-10-21-x.db.zst"
+        )
         if guard == "staging_dir":
             destination.mkdir()
             destination /= path.name
@@ -290,7 +300,9 @@ def test_each_sweep_deletion_guard_retains_archive(removal_lane, monkeypatch, gu
     log.write_text("".join(json.dumps(r) + "\n" for r in rows))
     assert backup._sweep_verified_local_archives(log, removal_lane["staging_dir"], context, remove_local=True) == []
     assert path.exists()
-    assert not any(json.loads(line).get("local_removed") for line in log.read_text().splitlines())
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert not any(r.get("local_removed") for r in rows)
+    assert not any(r.get("local_removed_skip_reason") == "delete_failed" for r in rows)
 
 
 @pytest.mark.parametrize("md5", ["match", "mismatch", "missing_local", "missing_drive"])

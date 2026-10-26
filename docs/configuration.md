@@ -234,7 +234,7 @@ admission, only a marked consumed raw with the matching inode is deleted. Unmark
 raws, links, foreign files and archives are retained. A failed consuming attempt needs a fresh
 snapshot; legacy failures retain their untouched raw.
 
-Verified Drive uploads are removed locally (older archives are swept only with matching name/size receipts); weekly pins expire after their date, unreadable pins protect only today's archives, and explicit removal opt-out is honored.
+Verified Drive uploads are removed locally (removal requires matching recorded local/Drive MD5s; older archives also need matching name/size receipts); weekly pins expire after their date, unreadable pins protect only today's archives, and explicit removal opt-out is honored.
 
 Snapshots use `YYYY-MM-DD.db.zst` by default. `BRAINLAYER_BACKUP_COMPRESSOR=gzip` selects
 `.db.gz`; any other value is refused. The zstd binary is resolved from

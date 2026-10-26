@@ -2763,6 +2763,8 @@ def _verified_drive_file_ids(log_path: Path) -> set[str] | None:
         return None
     latest: dict[str, Mapping[str, Any]] = {}
     for receipt in receipts:
+        if receipt.get("event") == "local_sweep":
+            continue
         drive_file = receipt.get("drive_file")
         file_id = drive_file.get("id") if isinstance(drive_file, dict) else None
         if isinstance(file_id, str) and file_id:
@@ -2896,6 +2898,18 @@ def _protected_snapshot_names(staging_dir: Path) -> set[str]:
     return _weekly_pin_protection(staging_dir)[0]
 
 
+def _archive_drive_md5_matches(receipt: Mapping[str, Any]) -> bool:
+    """Local deletion needs both recorded checksums, including Drive's stored-byte MD5."""
+    drive = receipt.get("drive_file")
+    local_md5 = receipt.get("local_md5")
+    return (
+        isinstance(local_md5, str)
+        and bool(local_md5)
+        and isinstance(drive, dict)
+        and drive.get("md5Checksum") == local_md5
+    )
+
+
 def _sweep_verified_local_archives(
     log_path: Path, staging_dir: Path, context: Mapping[str, Any], *, remove_local: bool
 ) -> list[str]:
@@ -2907,7 +2921,12 @@ def _sweep_verified_local_archives(
     except (OSError, ValueError):
         print("Cannot validate Drive receipts; retaining local archives", flush=True)
         return []
-    latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
+    latest = {
+        r["snapshot"]: r for r in receipts if r.get("event") != "local_sweep" and isinstance(r.get("snapshot"), str)
+    }
+    last_sweep = {
+        r["archive"]: r for r in receipts if r.get("event") == "local_sweep" and isinstance(r.get("archive"), str)
+    }
     verified_ids = _verified_drive_file_ids(log_path) or set()
     protected, pin_reason = _weekly_pin_protection(staging_dir)
     removed = []
@@ -2938,18 +2957,31 @@ def _sweep_verified_local_archives(
         reason = (
             "not_verified"
             if not verified
+            else "md5_unverified"
+            if not _archive_drive_md5_matches(receipt)
             else "opt_out"
             if not remove_local
             else pin_reason
             if path.name in protected
             else None
         )
-        update = {**receipt, "local_removed": reason is None, "local_removed_skip_reason": reason}
         if reason is None:
-            path.unlink()
-            removed.append(path.name)
-            update["local_removed_at"] = dt.datetime.now(dt.UTC).isoformat()
-        if reason is None or receipt.get("local_removed_skip_reason") != reason:
+            try:
+                path.unlink()
+            except OSError as exc:
+                print(f"Cannot delete local archive {path}: {exc}", flush=True)
+                reason = "delete_failed"
+            else:
+                removed.append(path.name)
+        # Local housekeeping cannot grant/revoke Drive verification or refresh last-backup status.
+        update = {
+            "event": "local_sweep",
+            "archive": str(path),
+            "at": dt.datetime.now(dt.UTC).isoformat(),
+            "local_removed": reason is None,
+            "local_removed_skip_reason": reason,
+        }
+        if reason is None or last_sweep.get(str(path), {}).get("local_removed_skip_reason") != reason:
             _append_json_log(log_path, update)
     return removed
 
@@ -3604,7 +3636,13 @@ def run_backup(
             if result["verified"]:
                 protected, pin_reason = _weekly_pin_protection(snapshot.parent)
                 result["local_removed_skip_reason"] = (
-                    "opt_out" if not remove_local_after_upload else pin_reason if snapshot.name in protected else None
+                    "md5_unverified"
+                    if not _archive_drive_md5_matches(result)
+                    else "opt_out"
+                    if not remove_local_after_upload
+                    else pin_reason
+                    if snapshot.name in protected
+                    else None
                 )
                 _append_json_log(resolved_log_path, result)  # remote proof precedes reclamation
                 _reclaim_superseded_local(resolved_log_path, result, snapshot.parent)
@@ -3617,8 +3655,13 @@ def run_backup(
                     snapshot.parent, snapshot
                 )
                 if result["local_removed_skip_reason"] is None:
-                    snapshot.unlink()
-                    result["local_removed"] = True
+                    try:
+                        snapshot.unlink()
+                    except OSError as exc:
+                        print(f"Cannot delete local archive {snapshot}: {exc}", flush=True)
+                        result["local_removed_skip_reason"] = "delete_failed"
+                    else:
+                        result["local_removed"] = True
                 if resume is None:
                     _remove_superseded_stalls(stalled, result, snapshot.name[:10])
                 if retention_enabled:
