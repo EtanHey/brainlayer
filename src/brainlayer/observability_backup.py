@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import math
 import os
+import plistlib
 import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+from xml.parsers.expat import ExpatError
 
 from brainlayer import backup_daily, jsonl_backup
 from brainlayer.backup_daily import _backup_log_path
@@ -301,6 +303,27 @@ def _unmeasurable(reason: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
     return {"state": "unmeasurable", "reason": reason, "inputs": inputs}
 
 
+def _maintenance_schedule_error(path: Path) -> str | None:
+    """A loaded parent is usable schedule evidence only with a readable Hour/Minute calendar."""
+    try:
+        with path.open("rb") as handle:
+            definition = plistlib.load(handle)
+    except (OSError, ValueError, plistlib.InvalidFileException, ExpatError) as exc:
+        reason = f"cannot read plist ({type(exc).__name__})"
+    else:
+        interval = definition.get("StartCalendarInterval") if isinstance(definition, dict) else None
+        if (
+            isinstance(interval, dict)
+            and type(interval.get("Hour")) is int
+            and 0 <= interval["Hour"] <= 23
+            and type(interval.get("Minute")) is int
+            and 0 <= interval["Minute"] <= 59
+        ):
+            return None
+        reason = "expected plist dictionary with StartCalendarInterval Hour (0-23) and Minute (0-59)"
+    return f"maintenance_schedule_unavailable: {path}: {reason}"
+
+
 def build_backups_section(
     *,
     env: Mapping[str, str],
@@ -321,6 +344,7 @@ def build_backups_section(
     launchd_override = env.get("BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT")
     observed_label, extra_inputs = LABEL, []
     launchd_not_loaded = False
+    schedule_error: str | None = None
     command_failure: str | None = None
     if launchd_override:
         launchd_path = Path(launchd_override).expanduser()
@@ -368,6 +392,7 @@ def build_backups_section(
                     )
                 )
                 observed_label = "com.brainlayer.maintenance"
+                schedule_error = _maintenance_schedule_error(agents / f"{observed_label}.plist")
                 argv = ["launchctl", "print", f"gui/{os.getuid()}/{observed_label}"]
                 completed = subprocess.run(argv, capture_output=True, text=False, timeout=5, check=False, shell=False)
             exit_code = completed.returncode
@@ -491,6 +516,10 @@ def build_backups_section(
     if error_type is None and db_reason is not None:
         error_type = db_reason
     bootstrapped = not launchd_not_loaded and observed_label in launchd_text
+    if schedule_error is not None:
+        bootstrapped = False
+        # Schedule uncertainty must not discard dated receipts or mask an existing failure.
+        error_type = f"{error_type}; {schedule_error}" if error_type else schedule_error
 
     # Optional evidence, never synthesized from a missing upload or a zero archive count.
     evidence: dict[str, Any] = {}

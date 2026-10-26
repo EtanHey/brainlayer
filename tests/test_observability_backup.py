@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import plistlib
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -753,6 +754,80 @@ def test_unset_launchd_input_uses_command_and_records_stdout(monkeypatch: pytest
     )
     assert command["sha256_first_64kb"] == hashlib.sha256(output.encode()).hexdigest()
     assert command["status"] == "read"
+
+
+@pytest.mark.parametrize(
+    "definition, usable",
+    [
+        ({"StartCalendarInterval": {"Hour": 3, "Minute": 17}}, True),
+        ({"StartCalendarInterval": {"Hour": 3, "Minute": 17, "Weekday": 1}}, True),
+        (plistlib.dumps({"StartCalendarInterval": {"Hour": 0, "Minute": 0}}, fmt=plistlib.FMT_BINARY), True),
+        (b'["maintenance", "--state-dir", "calendar"]', False),
+        (b'<?xml version="1.0"?><plist><dict>', False),
+        (["maintenance"], False),
+        ({}, False),
+        ({"StartCalendarInterval": {"Minute": 17}}, False),
+        ({"StartCalendarInterval": {"Hour": 3}}, False),
+        ({"StartCalendarInterval": {"Hour": True, "Minute": 17}}, False),
+        ({"StartCalendarInterval": {"Hour": "3", "Minute": 17}}, False),
+        ({"StartCalendarInterval": {"Hour": 24, "Minute": 17}}, False),
+        ({"StartCalendarInterval": {"Hour": -1, "Minute": 17}}, False),
+        ({"StartCalendarInterval": {"Hour": 3, "Minute": -1}}, False),
+        ({"StartCalendarInterval": {"Hour": 3, "Minute": 60}}, False),
+    ],
+)
+@pytest.mark.parametrize("existing_failure", [False, True])
+def test_maintenance_schedule_validation_preserves_backup_receipts(
+    monkeypatch, tmp_path, definition, usable, existing_failure
+):
+    env, recorder = _command_env(tmp_path)
+    if existing_failure:
+        with Path(env["BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG"]).open("a") as handle:
+            handle.write(json.dumps({"backup_log_provenance": "real", "error_type": "snapshot_failed"}) + "\n")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    agents = tmp_path / "Library/LaunchAgents"
+    agents.mkdir(parents=True)
+    plist = agents / "com.brainlayer.maintenance.plist"
+    original = definition if isinstance(definition, bytes) else plistlib.dumps(definition)
+    plist.write_bytes(original)
+    parent = "com.brainlayer.maintenance"
+    output = (
+        (FIXTURES / "launchd/healthy-dev.txt")
+        .read_bytes()
+        .replace(observability_backup.LABEL.encode(), parent.encode())
+    )
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv[-1])
+        if argv[-1].endswith("/" + observability_backup.LABEL):
+            return subprocess.CompletedProcess(argv, 113, b"", b"Could not find service")
+        return subprocess.CompletedProcess(argv, 0, output, b"")
+
+    monkeypatch.setattr(observability_backup.subprocess, "run", run)
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+    healthy, _ = _build("healthy-dev")
+
+    assert result["state"] == "measured"
+    assert result["last_verified_upload"] == healthy["last_verified_upload"]
+    assert result["db_snapshot"] == healthy["db_snapshot"]
+    assert result["freshness"] == "fresh"  # Receipt age is independent of scheduling.
+    assert result["launchd"]["bootstrapped"] is usable
+    if existing_failure:
+        assert result["error_type"].startswith("snapshot_failed")
+    elif usable:
+        assert result["error_type"] is None
+    if usable:
+        assert "maintenance_schedule_unavailable:" not in (result["error_type"] or "")
+    else:
+        assert "maintenance_schedule_unavailable:" in result["error_type"]
+        assert str(plist) in result["error_type"]
+    assert len(calls) == 2 and calls[-1].endswith("/" + parent)
+    assert plist.read_bytes() == original
+    assert any(item["path"] == str(plist) for item in result["inputs"])
+    for version in (1, 2):
+        schema = json.loads((FIXTURES / f"observability-schema.v{version}.json").read_text())
+        jsonschema.validate(result, {"$ref": "#/$defs/backups_measured", "$defs": schema["$defs"]})
 
 
 def test_unset_launchd_command_recognizes_not_loaded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
