@@ -39,7 +39,7 @@ from urllib.parse import urlsplit
 
 import requests
 
-from . import drive_credentials
+from . import disk_space, drive_credentials
 from .paths import get_db_path, resolve_db_path
 from .socket_hygiene import refuse_production_brainbar_socket
 
@@ -874,40 +874,14 @@ def _database_logical_size_bytes(db_path: Path) -> int:
     return max(main_file_size, page_count * page_size)
 
 
-def _important_usage_capacity_bytes(path: Path) -> int | None:
-    """Ask macOS for capacity including purgeable space; None means use statfs."""
-    if sys.platform != "darwin":
-        return None
-    script = (
-        'function run(argv) { ObjC.import("Foundation"); '
-        "var url = $.NSURL.fileURLWithPath(argv[0]); "
-        "var key = $.NSURLVolumeAvailableCapacityForImportantUsageKey; "
-        "var values = url.resourceValuesForKeysError($.NSArray.arrayWithObject(key), null); "
-        'if (!values) return "unavailable"; '
-        "var number = values.objectForKey(key); "
-        'return number ? ObjC.unwrap(number).toString() : "unavailable"; }'
-    )
-    try:
-        output = subprocess.run(
-            ["/usr/bin/osascript", "-l", "JavaScript", "-e", script, str(path)],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        ).stdout.strip()
-        return int(output) if output.isdecimal() else None
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return None
-
-
-def _request_macos_purge(path: Path, amount_bytes: int) -> None:
+def _request_macos_purge(path: Path, amount_bytes: int, urgency: int = 3) -> None:
     """Ask macOS CacheDelete to reclaim its own purgeable content before VACUUM INTO."""
     if sys.platform != "darwin":
         raise RuntimeError("macOS CacheDelete is unavailable on this platform")
     helper = Path(__file__).with_name("cachedelete_purge.swift")
     try:
         completed = subprocess.run(
-            ["/usr/bin/swift", str(helper), str(path), str(amount_bytes)],
+            ["/usr/bin/swift", str(helper), str(path), str(amount_bytes), str(urgency)],
             capture_output=True,
             text=True,
             check=False,
@@ -1127,7 +1101,7 @@ def _cleanup_raw_snapshots(output_dir: Path) -> tuple[list[str], list[str]]:
 
 
 def _require_raw_floor(path: Path, *, forthcoming: int = 0) -> None:
-    free = shutil.disk_usage(path).free
+    free = disk_space.measure_disk_space(path, include_available=False).free_now_bytes
     if free < MIN_RAW_FREE_BYTES + forthcoming:
         raise RuntimeError(
             f"raw free space floor breached: raw={free} floor={MIN_RAW_FREE_BYTES} forthcoming={forthcoming}"
@@ -1403,29 +1377,29 @@ def create_sqlite_backup_artifact(
     required_bytes = (
         _peak_backup_required_bytes(db_size, estimated_gzip, full=full_verify) + surviving_attempt_growth_reserve_bytes
     )
-    raw_before_purge = shutil.disk_usage(output_dir).free
-    try:
-        important_free_bytes = _important_usage_capacity_bytes(output_dir)
-    except (OSError, RuntimeError, ValueError):
-        important_free_bytes = None
+    space = disk_space.measure_disk_space(output_dir)
+    raw_before_purge = space.free_now_bytes
     purge_error: str | None = None
-    raw_free_bytes = raw_before_purge
-    if (
-        raw_before_purge < required_bytes
-        and important_free_bytes is not None
-        and important_free_bytes >= required_bytes
-    ):
-        request_bytes = required_bytes - raw_before_purge + COPY_CHUNK_BYTES
-        try:
-            _request_macos_purge(output_dir, request_bytes)
-        except RuntimeError as exc:
-            purge_error = _redact_upload_secrets(str(exc))
-        raw_free_bytes = shutil.disk_usage(output_dir).free
-        for _ in range(60):
-            if raw_free_bytes >= required_bytes:
+    if space.free_now_bytes < required_bytes <= space.available_bytes:
+        for urgency in (3, 4):
+            request_bytes = required_bytes - space.free_now_bytes + COPY_CHUNK_BYTES
+            purge_error = None
+            try:
+                _request_macos_purge(output_dir, request_bytes, urgency)
+            except RuntimeError as exc:
+                purge_error = _redact_upload_secrets(str(exc))
+            space = disk_space.measure_disk_space(output_dir)
+            for _ in range(60 if purge_error is None else 0):
+                if space.free_now_bytes >= required_bytes:
+                    break
+                time.sleep(POST_PURGE_POLL_SECONDS)
+                space = disk_space.measure_disk_space(output_dir, include_available=False)
+            # Refresh Available once after each escalation, not on every poll.
+            space = disk_space.measure_disk_space(output_dir)
+            if space.free_now_bytes >= required_bytes:
                 break
-            time.sleep(POST_PURGE_POLL_SECONDS)
-            raw_free_bytes = shutil.disk_usage(output_dir).free
+    raw_free_bytes = space.free_now_bytes
+    important_free_bytes = space.available_bytes if space.source == "macos_important_usage" else None
     free_bytes = raw_free_bytes
     if capacity_status_callback is not None:
         capacity_status_callback(raw_free_bytes, important_free_bytes, free_bytes, required_bytes)
@@ -1443,6 +1417,8 @@ def create_sqlite_backup_artifact(
         )
         raise RuntimeError(
             f"Insufficient free space for backup in {output_dir}: "
+            f"needs {required_bytes / 1e9:.1f} GB; {space.describe()}; "
+            f"purge freed {max(0, raw_free_bytes - raw_before_purge) / 1e9:.1f} GB; source={space.source}; "
             f"raw_before={raw_before_purge} raw_after={raw_free_bytes} "
             f"important_usage={important_free_bytes} required={required_bytes} floor={MIN_RAW_FREE_BYTES} "
             f"{capacity_detail}; {reason}; "
@@ -1459,11 +1435,15 @@ def create_sqlite_backup_artifact(
                 growth += db_size  # Not visible yet: the request may still write all of D.
         peak, detail = describe_phases({**phase_peaks, "raw_copy": growth + db_size})
         retry_required = peak + MIN_RAW_FREE_BYTES + COPY_CHUNK_BYTES + surviving_attempt_growth_reserve_bytes
-        raw = shutil.disk_usage(output_dir).free
+        space = disk_space.measure_disk_space(output_dir, include_available=False)
+        raw = space.free_now_bytes
+        if raw < retry_required:
+            space = disk_space.measure_disk_space(output_dir)
+            raw = space.free_now_bytes
         if raw < retry_required:
             raise RuntimeError(
                 f"Insufficient free space for backup retry in {output_dir}: raw={raw} required={retry_required} "
-                f"floor={MIN_RAW_FREE_BYTES} {detail}; "
+                f"needs {retry_required / 1e9:.1f} GB; {space.describe()}; floor={MIN_RAW_FREE_BYTES} {detail}; "
                 f"{len(unconfirmed)} unconfirmed attempts reserve {growth} growth bytes"
             )
 

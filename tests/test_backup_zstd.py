@@ -22,7 +22,7 @@ from types import SimpleNamespace
 import pytest
 
 from brainlayer import backup_daily as backup
-from brainlayer import maintenance
+from brainlayer import disk_space, maintenance
 from tests.test_backup_daily import _create_source_db
 from tests.test_weekly_local_gate import config_for, local_lane  # noqa: F401
 
@@ -36,7 +36,7 @@ def lane(tmp_path, monkeypatch):
     output.mkdir()
     monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
     monkeypatch.setattr(backup, "_brainbar_writer_started_at", lambda *a: 1)
-    monkeypatch.setattr(backup, "_important_usage_capacity_bytes", lambda *a: None)
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda *a: None)
     monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=10**12))
 
     def vacuum_into(target, **kwargs):  # noqa: ARG001

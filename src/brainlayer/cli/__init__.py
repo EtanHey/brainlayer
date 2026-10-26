@@ -59,6 +59,20 @@ from ..cli_jobs import register as register_jobs_commands
 register_jobs_commands(app, jobs_app)
 
 
+@app.command("disk")
+def disk_command(
+    path: Path = typer.Option(Path.home(), "--path", exists=True, help="Path on the volume to measure."),
+    json_output: bool = typer.Option(False, "--json", help="Print stable disk-space fields in bytes."),
+) -> None:
+    """Show Available, free now, and purgeable space (decimal GB)."""
+    from dataclasses import asdict
+
+    from ..disk_space import measure_disk_space
+
+    space = measure_disk_space(path)
+    typer.echo(json.dumps(asdict(space), sort_keys=True) if json_output else f"{space.describe()} [{space.source}]")
+
+
 @backup_app.command("auth")
 def backup_auth_command(
     status: bool = typer.Option(False, "--status", help="Check authorization without changing the token."),

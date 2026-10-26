@@ -19,11 +19,19 @@ from types import SimpleNamespace
 
 import pytest
 
+from brainlayer import disk_space
 from brainlayer.backup_daily import _request_macos_purge as _real_macos_purge
+from brainlayer.disk_space import _important_usage_capacity_bytes as _real_important_usage
 from tests.drive_listing_assertions import (
     assert_non_trashed_drive_files_only_grow_or_are_trashed,
     snapshot_non_trashed_drive_ids,
 )
+
+
+def _mock_macos_available(monkeypatch, amount):
+    """Inject Foundation capacity on every test host, including Linux CI."""
+    monkeypatch.setattr(disk_space.sys, "platform", "darwin")
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda _path: amount)
 
 
 @pytest.fixture(autouse=True)
@@ -32,8 +40,8 @@ def _stable_backup_machine_id(monkeypatch, tmp_path):
     monkeypatch.setenv("BRAINBAR_SOCKET_PATH", str(tmp_path / "no-brainbar.sock"))
     from brainlayer import backup_daily
 
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
-    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda _path, _bytes: None, raising=False)
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda _path: None)
+    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda _path, _bytes, _urgency: None, raising=False)
     monkeypatch.setattr(backup_daily, "POST_PURGE_POLL_SECONDS", 0, raising=False)
 
 
@@ -1060,7 +1068,7 @@ def test_recent_attempt_growth_is_reserved_in_disk_preflight(tmp_path, monkeypat
         free = base_required
 
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: Disk())
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda _path: None)
 
     with pytest.raises(RuntimeError, match="1 recent attempts reserve"):
         backup_daily.create_sqlite_backup_artifact(source, output_dir, date_stamp="2026-05-14")
@@ -1080,7 +1088,7 @@ def test_important_capacity_cannot_bypass_surviving_attempt_raw_reserve(tmp_path
     monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda _path: db_size)
     monkeypatch.setattr(backup_daily, "_brainbar_writer_started_at", lambda _socket_path: time.time())
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=raw_free))
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: 10**12)
+    _mock_macos_available(monkeypatch, 10**12)
     monkeypatch.setattr(
         backup_daily,
         "request_brainbar_vacuum_into",
@@ -1124,7 +1132,7 @@ def test_create_snapshot_rejects_low_disk_space(tmp_path, monkeypatch):
         free = 1
 
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: LowDisk())
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda _path: None)
 
     with pytest.raises(RuntimeError, match="Insufficient free space"):
         backup_daily.create_sqlite_backup_gzip(source, tmp_path / "out", date_stamp="2026-05-13")
@@ -1141,7 +1149,7 @@ def test_create_snapshot_accepts_space_for_raw_and_gzip(tmp_path, monkeypatch):
         free = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
 
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: Disk())
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda _path: None)
 
     def reached_writer(*args, **kwargs):  # noqa: ARG001
         raise RuntimeError("writer reached")
@@ -1166,8 +1174,10 @@ def test_create_snapshot_requests_purge_before_writer(tmp_path, monkeypatch, cap
     monkeypatch.setattr(
         backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=next(readings, raw_after))
     )
-    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda path, amount: requested.append((path, amount)))
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 10**12)
+    monkeypatch.setattr(
+        backup_daily, "_request_macos_purge", lambda path, amount, _urgency: requested.append((path, amount))
+    )
+    _mock_macos_available(monkeypatch, required + 10**12)
     monkeypatch.setattr(
         backup_daily,
         "request_brainbar_vacuum_into",
@@ -1215,8 +1225,8 @@ def test_create_snapshot_rejects_insufficient_purge_with_both_raw_readings(tmp_p
     monkeypatch.setattr(
         backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=next(readings, raw_after))
     )
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 10**12)
-    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda path, amount: requested.append(amount))
+    _mock_macos_available(monkeypatch, required + 10**12)
+    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda path, amount, _urgency: requested.append(amount))
     monkeypatch.setattr(
         backup_daily,
         "request_brainbar_vacuum_into",
@@ -1225,7 +1235,10 @@ def test_create_snapshot_rejects_insufficient_purge_with_both_raw_readings(tmp_p
 
     with pytest.raises(RuntimeError, match=rf"raw_before={raw_before}.*raw_after={raw_after}.*required={required}"):
         backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
-    assert requested == [required - raw_before + backup_daily.COPY_CHUNK_BYTES]
+    assert requested == [
+        required - raw_before + backup_daily.COPY_CHUNK_BYTES,
+        required - raw_after + backup_daily.COPY_CHUNK_BYTES,
+    ]
 
 
 def test_create_snapshot_reports_unavailable_purge_api(tmp_path, monkeypatch):
@@ -1237,7 +1250,7 @@ def test_create_snapshot_reports_unavailable_purge_api(tmp_path, monkeypatch):
     required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
     raw = required - 1
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=raw))
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 1)
+    _mock_macos_available(monkeypatch, required + 1)
     monkeypatch.setattr(
         backup_daily,
         "_request_macos_purge",
@@ -1264,7 +1277,7 @@ def test_create_snapshot_accepts_raw_gain_despite_purge_error(tmp_path, monkeypa
     required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
     readings = iter([required - 1, required])
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=next(readings, required)))
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 1)
+    _mock_macos_available(monkeypatch, required + 1)
     monkeypatch.setattr(
         backup_daily, "_request_macos_purge", lambda *_args: (_ for _ in ()).throw(RuntimeError("API failed"))
     )
@@ -1287,7 +1300,7 @@ def test_create_snapshot_waits_for_delayed_raw_gain(tmp_path, monkeypatch):
     required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
     readings = iter([required - 1, required - 1, required - 1, required])
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=next(readings, required)))
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 1)
+    _mock_macos_available(monkeypatch, required + 1)
     monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda *_args: None)
     monkeypatch.setattr(backup_daily.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
@@ -1310,7 +1323,7 @@ def test_create_snapshot_waits_beyond_one_second_for_raw_gain(tmp_path, monkeypa
     readings = iter([required - 1, *([required - 1] * 8), required])
     waited = []
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=next(readings, required)))
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 1)
+    _mock_macos_available(monkeypatch, required + 1)
     monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda *_args: None)
     monkeypatch.setattr(backup_daily, "POST_PURGE_POLL_SECONDS", 0.5, raising=False)
     monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: waited.append(seconds))
@@ -1376,7 +1389,7 @@ def test_create_snapshot_does_not_purge_without_enough_important_capacity(tmp_pa
     required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
     raw = required - 1
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=raw))
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required - 1)
+    _mock_macos_available(monkeypatch, required - 1)
     monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda *_args: pytest.fail("purge not viable"))
     monkeypatch.setattr(
         backup_daily,
@@ -1436,7 +1449,7 @@ def test_create_snapshot_rejects_one_raw_byte_despite_important_capacity(tmp_pat
     source = tmp_path / "brainlayer.db"
     _create_source_db(source, chunk_count=2)
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: type("Disk", (), {"free": 1})())
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: 10**12)
+    _mock_macos_available(monkeypatch, 10**12)
     monkeypatch.setattr(
         backup_daily,
         "request_brainbar_vacuum_into",
@@ -1490,7 +1503,7 @@ def _incident_capacity_gate(tmp_path, monkeypatch, *, free: int, date_stamp: str
     monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda _path: INCIDENT_DB_BYTES)
     monkeypatch.setattr(backup_daily, "_estimated_gzip_bytes", lambda _dir, _db: INCIDENT_GZIP_BYTES)
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=free))
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda _path: None)
     monkeypatch.setattr(
         backup_daily,
         "request_brainbar_vacuum_into",
@@ -1550,7 +1563,7 @@ def _vacuum_retry_run(tmp_path, monkeypatch, *, free: int, respond, on_backoff=N
     monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda _path: INCIDENT_DB_BYTES)
     monkeypatch.setattr(backup_daily, "_estimated_gzip_bytes", lambda _dir, _db: INCIDENT_GZIP_BYTES)
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=disk["free"]))
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda _path: None)
     monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", send)
     monkeypatch.setattr(backup_daily, "_sleep", backoff)
     with pytest.raises(RuntimeError) as raised:
@@ -1815,26 +1828,28 @@ def test_important_usage_probe_falls_back_on_invalid_or_timed_out_reply(tmp_path
             "run",
             lambda *args, **kwargs: SimpleNamespace(stdout=reply),
         )
-        assert backup_daily._important_usage_capacity_bytes(tmp_path) is None
+        assert _real_important_usage(tmp_path) is None
 
     def timed_out(*args, **kwargs):  # noqa: ARG001
         raise subprocess.TimeoutExpired("osascript", 5)
 
     monkeypatch.setattr(backup_daily.subprocess, "run", timed_out)
-    assert backup_daily._important_usage_capacity_bytes(tmp_path) is None
+    assert _real_important_usage(tmp_path) is None
     monkeypatch.setattr(backup_daily.sys, "platform", "linux")
-    assert backup_daily._important_usage_capacity_bytes(tmp_path) is None
+    assert _real_important_usage(tmp_path) is None
 
 
 def test_backup_capacity_probe_error_falls_back_and_logs_both_readings(tmp_path, monkeypatch):
     from brainlayer import backup_daily
+
+    monkeypatch.setattr(disk_space.sys, "platform", "darwin")
 
     source = tmp_path / "brainlayer.db"
     _create_source_db(source, chunk_count=2)
     output_dir = tmp_path / "out"
     log_path = tmp_path / "backup.log"
     monkeypatch.setattr(
-        backup_daily,
+        disk_space,
         "_important_usage_capacity_bytes",
         lambda _path: (_ for _ in ()).throw(RuntimeError("probe failed")),
     )
@@ -2939,7 +2954,7 @@ def test_stop_during_purge_never_reaches_writer(tmp_path, monkeypatch):
     monkeypatch.setattr(backup_daily, "_brainbar_writer_started_at", lambda *_args: None)
     monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda *_args: 2 * 1024**3)
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda *_args: SimpleNamespace(free=required - 1))
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda *_args: required + 1)
+    _mock_macos_available(monkeypatch, required + 1)
     monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda *_args: os.kill(os.getpid(), signal.SIGTERM))
     monkeypatch.setattr(
         backup_daily, "request_brainbar_vacuum_into", lambda *_args, **_kwargs: pytest.fail("writer reached")
