@@ -338,6 +338,8 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         updateTooltip()
     }
 
+    nonisolated(unsafe) static var increaseContrast: () -> Bool = { false }
+
     static func statusIconImage(stats: BrainDatabase.DashboardStats, badgeOn: Bool) -> NSImage {
         return SparklineRenderer.renderStatusBarIcon(
             agent: stats.recentAgentWriteBuckets,

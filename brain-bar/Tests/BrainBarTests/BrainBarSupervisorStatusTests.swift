@@ -645,4 +645,63 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         XCTAssertTrue(snapshot.attention.contains { $0.component == .configuration }, "\(snapshot.attention)")
     }
 
+
+    // MARK: R2-2 — an earned failure streak survives a deferral until a proven success
+
+    private func snapshot(_ lines: [String], in directory: URL) throws -> BrainBarStatusSnapshot {
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: directory.appendingPathComponent("runs.jsonl"))
+        let history = BrainBarCalendarHistory.read(directory: directory)
+        XCTAssertNil(history.error)
+        var inputs = BrainBarStatusSnapshotTests.healthy()
+        let sampled = Self.supervised(history: history).sampleActivity()
+        for job in [BrainLayerLaunchdJob.index, .backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly] {
+            inputs.observations?[job] = sampled[job]
+        }
+        return BrainBarStatusSnapshot.derive(inputs)
+    }
+
+    private func finished(_ step: String, _ offset: Int, _ status: String, _ code: Int, replaces: String? = nil) -> String {
+        let extra = replaces.map { #","replaces":"\#($0)""# } ?? ""
+        return #"{"event":"finished","step":"\#(step)","ts":\#(1784466000 - 1000 + offset),"status":"\#(status)","returncode":\#(code)\#(extra)}"#
+    }
+
+    func testEarnedMaintenanceAlarmSurvivesADeferralUntilASuccess() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        for step in ["maintenance-weekly", "maintenance-nightly"] {
+            var lines = (1...3).map { finished(step, $0, "failed", 76) }
+            XCTAssertTrue(try snapshot(lines, in: directory).needsAttention, "\(step) ×3")
+            lines.append(finished(step, 4, "deferred", 75))
+            let deferred = try snapshot(lines, in: directory)
+            XCTAssertTrue(deferred.needsAttention, "\(step): a deferral does not earn back the alarm: \(deferred.issues)")
+            let text = try XCTUnwrap(deferred.attention.first { $0.component == .maintenance }?.text)
+            XCTAssertTrue(text.contains("3 consecutive") && text.contains("deferred"), text)
+            XCTAssertFalse(text.contains("4 consecutive"), "exit 75 is not another failed attempt: \(text)")
+            lines.append(finished(step, 5, "ok", 0))
+            XCTAssertFalse(try snapshot(lines, in: directory).needsAttention, "\(step): a proven success clears it")
+        }
+    }
+
+    func testEarnedIndexAlarmSurvivesADeferralUntilASuccess() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        var lines = [finished("index", 1, "failed", 1), finished("index", 2, "failed", 1), finished("index", 3, "deferred", 75)]
+        let deferred = try snapshot(lines, in: directory)
+        XCTAssertTrue(deferred.needsAttention, "\(deferred.issues)")
+        XCTAssertEqual(deferred.attention.first?.jobs, [.index])
+        lines.append(finished("index", 4, "ok", 0))
+        XCTAssertFalse(try snapshot(lines, in: directory).needsAttention)
+    }
+
+    func testSingleDeferralTwoExit76AndWeeklyCoverageStayNeutral() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        XCTAssertFalse(try snapshot([finished("maintenance-weekly", 1, "deferred", 75)], in: directory).needsAttention)
+        XCTAssertFalse(try snapshot([finished("maintenance-weekly", 1, "failed", 76), finished("maintenance-weekly", 2, "failed", 76)],
+                                    in: directory).needsAttention, "the original two-exit-76 case")
+        let covered = (1...3).map { finished("maintenance-nightly", $0, "failed", 1) } + [
+            #"{"event":"runner","ts":1784465100,"scheduled_date":"2026-07-19"}"#,
+            #"{"event":"spawn","step":"maintenance-weekly","ts":1784465110,"pid":4242}"#,
+            finished("maintenance-weekly", 120, "ok", 0, replaces: "maintenance-nightly"),
+        ]
+        let snapshot = try snapshot(covered, in: directory)
+        XCTAssertFalse(snapshot.needsAttention, "a successful weekly that covered the nightly resolves it: \(snapshot.issues)")
+    }
 }

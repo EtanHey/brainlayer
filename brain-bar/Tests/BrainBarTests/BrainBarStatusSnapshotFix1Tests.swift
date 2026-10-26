@@ -192,6 +192,45 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         }
     }
 
+    // MARK: R2-3 — an unknown alert read keeps the last known critical
+
+    func testUnreadAlertSourceIsNeverAllGood() {
+        var inputs = T.healthy()
+        inputs.jobAlerts = nil
+        let snapshot = BrainBarStatusSnapshot.derive(inputs)
+        XCTAssertTrue(snapshot.isChecking)
+        XCTAssertNotEqual(snapshot.dashboardStatus.headline, "All good")
+    }
+
+    func testUnavailableAlertReadKeepsTheLastVerifiedCritical() {
+        var inputs = T.healthy()
+        inputs.jobAlerts = BrainBarJobAlerts(active: ["mcp-transport": "BrainBar MCP transport: event buffer overflow"])
+        inputs.jobAlertsState = .unavailable("job-alerts.json is unreadable or malformed")
+        let snapshot = BrainBarStatusSnapshot.derive(inputs)
+        XCTAssertTrue(snapshot.needsAttention, "\(snapshot.issues)")
+        XCTAssertTrue(snapshot.isChecking, "incomplete evidence")
+        XCTAssertTrue(snapshot.notices.contains { $0.text.contains("job-alerts.json") }, "\(snapshot.notices)")
+    }
+
+    // MARK: Macroscope Medium — one failed run is one issue
+
+    func testBackupRunAndItsAlertAreOneIssueWithShowLog() {
+        var inputs = T.healthy()
+        inputs.observations?[.backupDaily] = T.failed(.backupDaily, code: 1, at: T.hoursAgo(1))
+        inputs.backups = .measured(T.backups(db: T.hoursAgo(6), transcripts: T.hoursAgo(12)))
+        inputs.jobAlerts = BrainBarJobAlerts(active: ["backup-daily": "BrainLayer daily backup failed"])
+        let snapshot = BrainBarStatusSnapshot.derive(inputs)
+        XCTAssertEqual(snapshot.attention.count, 1, "\(snapshot.attention)")
+        XCTAssertEqual(snapshot.attention.first?.alertKey, "backup-daily")
+        XCTAssertEqual(snapshot.dashboardStatus.headline, "1 thing needs you")
+        inputs.observations?[.jsonlBackup] = T.failed(.jsonlBackup, code: 1, at: T.hoursAgo(1))
+        inputs.jobAlerts = BrainBarJobAlerts(active: ["backup-daily": "BrainLayer daily backup failed",
+                                                      "jsonl-backup": "Transcript backup failed"])
+        let both = BrainBarStatusSnapshot.derive(inputs)
+        XCTAssertEqual(both.attention.count, 2, "\(both.attention)")
+        XCTAssertEqual(Set(both.attention.compactMap(\.alertKey)), ["backup-daily", "jsonl-backup"])
+    }
+
     // MARK: model: one publication, one cadence, mixed Backups reason
 
     private final class Clock: @unchecked Sendable {
@@ -294,6 +333,31 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         try Data("{}".utf8).write(to: alerts)
         await model.sampleStatusTick(includeLaunchd: false)
         XCTAssertFalse(controller.statusDotForTesting)
+    }
+
+    func testLosingTheAlertSourceKeepsAKnownCriticalUntilAReadableEmptyMap() async throws {
+        let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
+            .appendingPathComponent("brainbar-s5-fix2-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let alerts = root.appendingPathComponent("job-alerts.json")
+        try Data(#"{"mcp-transport": "BrainBar MCP transport: event buffer overflow"}"#.utf8).write(to: alerts)
+        let clock = Clock(T.now)
+        let readable = try document(T.backups(), at: T.now)
+        let model = model(clock: clock, observability: { readable }, badgeURL: root.appendingPathComponent("badge-state.json"),
+                          alertsURL: alerts)
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        runtime.jobsModel = model
+        runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: T.now.addingTimeInterval(30 * Self.day)))
+        await model.sampleStatusTick(includeLaunchd: true)
+        XCTAssertTrue(model.publishedStatus.needsAttention, "\(model.publishedStatus.issues)")
+        try Data("{not json".utf8).write(to: alerts)
+        await model.sampleStatusTick(includeLaunchd: false)
+        XCTAssertTrue(model.publishedStatus.needsAttention, "an unknown read is not recovery: \(model.publishedStatus.issues)")
+        XCTAssertNotEqual(model.publishedStatus.dashboardStatus.headline, "All good")
+        try Data("{}".utf8).write(to: alerts)
+        await model.sampleStatusTick(includeLaunchd: false)
+        XCTAssertFalse(model.publishedStatus.needsAttention, "a readable empty map is the recovery: \(model.publishedStatus.issues)")
     }
 
     func testEverySurfaceReadsTheSamePublishedSnapshot() async throws {

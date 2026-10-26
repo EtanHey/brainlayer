@@ -37,8 +37,10 @@ struct BrainBarStatusInputs: Sendable {
     var now: Date
     var calendar: Calendar = .current
     var badge: BadgeStatePresentation? = nil
+    enum JobAlertsState: Equatable, Sendable { case readable, absent, unread, unavailable(String) }
     /// The live job-alert file; nil when it could not be read.
     var jobAlerts: BrainBarJobAlerts? = nil
+    var jobAlertsState: JobAlertsState? = nil
     var watcher: WatcherHealthStatus? = nil
     var watcherHeartbeatAt: Date? = nil
     /// The watcher's own structured report (DB probe, ingest alerts), when readable.

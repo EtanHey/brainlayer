@@ -59,6 +59,96 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
         }
     }
 
+    // MARK: R2-1 — appearance and contrast are part of the icon's identity
+
+    /// The factory output under an app/system appearance, as the reviewer measured it (NSApp
+    /// appearance + current drawing appearance); the status button follows that appearance.
+    private func factoryIcon(_ stats: BrainDatabase.DashboardStats, badgeOn: Bool, _ name: NSAppearance.Name) -> Data? {
+        let saved = NSApplication.shared.appearance
+        NSApplication.shared.appearance = NSAppearance(named: name)
+        defer { NSApplication.shared.appearance = saved }
+        var image: NSImage?
+        NSAppearance(named: name)!.performAsCurrentDrawingAppearance {
+            image = BrainBarStatusPopoverController.statusIconImage(stats: stats, badgeOn: badgeOn)
+        }
+        return image?.tiffRepresentation
+    }
+
+    func testAppearanceAndContrastChangesRerenderConstantBucketsAndDot() throws {
+        let fixture = try Fixture()
+        let saved = NSApplication.shared.appearance
+        let savedContrast = BrainBarStatusPopoverController.increaseContrast
+        var contrast = false
+        BrainBarStatusPopoverController.increaseContrast = { contrast }
+        defer {
+            NSApplication.shared.appearance = saved
+            BrainBarStatusPopoverController.increaseContrast = savedContrast
+            fixture.stop()
+        }
+        let menu = fixture.controller.contextMenuForTesting
+        fixture.pump()
+        // A shaped series, constant through the test: only appearance/contrast change.
+        fixture.provider.buckets = [1, 3, 2, 5, 4]
+        fixture.provider.value = 7
+        fixture.collector.refresh(force: true)
+        fixture.pump(until: { fixture.collector.stats.chunkCount == 7 })
+        fixture.controller.setBadgeForTesting(.failVisible("Constant dot"),
+            alertsURL: fixture.root.appendingPathComponent("absent-alerts.json"))
+        menu.delegate?.menuNeedsUpdate?(menu)
+        NSApplication.shared.appearance = NSAppearance(named: .aqua)
+        fixture.pump()
+        let button = fixture.host.button
+        let stats = fixture.collector.stats
+        // Headless test processes draw the same bitmap for every appearance (measured); the reviewer
+        // measured real differences under High Contrast. So this pins the contract: every
+        // appearance/contrast change re-renders exactly once, to the factory output for that state.
+
+        // Appearance changes (constant buckets and dot): exactly one render each, to the new factory output.
+        for name in [NSAppearance.Name.darkAqua, .aqua, .darkAqua, .aqua] {
+            let writes = button.imageWrites
+            let expected = factoryIcon(stats, badgeOn: true, name)
+            NSApplication.shared.appearance = NSAppearance(named: name)
+            fixture.pump()
+            XCTAssertEqual(button.imageWrites, writes + 1, "exactly one render for \(name)")
+            XCTAssertEqual(button.image?.tiffRepresentation, expected, "\(name)")
+        }
+
+        // Increase Contrast is part of the identity: its notification re-renders once per change.
+        var writes = button.imageWrites
+        contrast = true
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        fixture.pump()
+        XCTAssertEqual(button.imageWrites, writes + 1, "contrast on re-renders")
+        writes = button.imageWrites
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        fixture.pump()
+        XCTAssertEqual(button.imageWrites, writes, "a notification with nothing changed does not relayout")
+
+        // While the menu tracks, changes wait; exactly one latest-state render after close.
+        menu.delegate?.menuNeedsUpdate?(menu)
+        menu.delegate?.menuWillOpen?(menu)
+        writes = button.imageWrites
+        let expected = factoryIcon(stats, badgeOn: true, .darkAqua)
+        NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+        contrast = false
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        fixture.pump()
+        XCTAssertEqual(button.imageWrites, writes, "no relayout during tracking")
+        menu.delegate?.menuDidClose?(menu)
+        fixture.pump()
+        XCTAssertEqual(button.imageWrites, writes + 1, "one latest-state render after close")
+        XCTAssertEqual(button.image?.tiffRepresentation, expected)
+
+        // After stop nothing observes.
+        let settled = button.imageWrites
+        fixture.controller.stop()
+        NSApplication.shared.appearance = NSAppearance(named: .aqua)
+        contrast = true
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        fixture.pump()
+        XCTAssertEqual(button.imageWrites, settled, "observers are removed on stop")
+    }
+
     func testCloseThenImmediateReopenDoesNotFlushIntoNewTrackingSessionAndStopDiscardsPendingWork() throws {
         let fixture = try Fixture()
         defer { fixture.stop() }
@@ -278,6 +368,8 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
     private final class Provider: @unchecked Sendable {
         private let lock = NSLock()
         private var storedValue = 0
+        /// Optional shaped buckets for both series (appearance test); nil keeps [0, count] / [count, 0].
+        var buckets: [Int]?
         var value: Int {
             get { lock.withLock { storedValue } }
             set { lock.withLock { storedValue = newValue } }
@@ -286,8 +378,8 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
             let count = value
             return DashboardStats(chunkCount: count, enrichedChunkCount: 0, pendingEnrichmentCount: 0,
                 enrichmentPercent: 0, enrichmentRatePerMinute: 0, databaseSizeBytes: 0,
-                recentActivityBuckets: [0, count], recentAgentWriteBuckets: [0, count],
-                recentWatcherWriteBuckets: [count, 0], recentEnrichmentBuckets: [0, 0])
+                recentActivityBuckets: [0, count], recentAgentWriteBuckets: buckets ?? [0, count],
+                recentWatcherWriteBuckets: buckets?.reversed() ?? [count, 0], recentEnrichmentBuckets: [0, 0])
         }
     }
 
