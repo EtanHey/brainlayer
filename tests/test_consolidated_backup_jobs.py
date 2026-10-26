@@ -18,7 +18,16 @@ def test_archived_backup_observes_calendar_launcher_with_frozen_shape(monkeypatc
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     agents = tmp_path / "Library/LaunchAgents"
     agents.mkdir(parents=True)
-    (agents / "com.brainlayer.maintenance.plist").write_bytes(plistlib.dumps({"Label": "com.brainlayer.maintenance"}))
+    # Match the real maintenance launcher's calendar; a Label alone cannot schedule a run.
+    (agents / "com.brainlayer.maintenance.plist").write_bytes(
+        plistlib.dumps(
+            {
+                "Label": "com.brainlayer.maintenance",
+                "ProgramArguments": ["/bin/true"],
+                "StartCalendarInterval": {"Hour": 3, "Minute": 15},
+            }
+        )
+    )
     calls = []
 
     def run(argv, **kwargs):
