@@ -9,7 +9,6 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
-from xml.parsers.expat import ExpatError
 
 from brainlayer import backup_daily, jsonl_backup
 from brainlayer.backup_daily import _backup_log_path
@@ -308,7 +307,7 @@ def _maintenance_schedule_error(path: Path) -> str | None:
     try:
         with path.open("rb") as handle:
             definition = plistlib.load(handle)
-    except (OSError, ValueError, plistlib.InvalidFileException, ExpatError) as exc:
+    except Exception as exc:
         reason = f"cannot read plist ({type(exc).__name__})"
     else:
         interval = definition.get("StartCalendarInterval") if isinstance(definition, dict) else None
@@ -519,7 +518,8 @@ def build_backups_section(
     if schedule_error is not None:
         bootstrapped = False
         # Schedule uncertainty must not discard dated receipts or mask an existing failure.
-        error_type = f"{error_type}; {schedule_error}" if error_type else schedule_error
+        if not error_type:
+            error_type = schedule_error
 
     # Optional evidence, never synthesized from a missing upload or a zero archive count.
     evidence: dict[str, Any] = {}

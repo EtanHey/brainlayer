@@ -764,6 +764,7 @@ def test_unset_launchd_input_uses_command_and_records_stdout(monkeypatch: pytest
         (plistlib.dumps({"StartCalendarInterval": {"Hour": 0, "Minute": 0}}, fmt=plistlib.FMT_BINARY), True),
         (b'["maintenance", "--state-dir", "calendar"]', False),
         (b'<?xml version="1.0"?><plist><dict>', False),
+        (b'<?xml version="1.0"?><plist><dict><key>broken</key><date>xx</date></dict></plist>', False),
         (["maintenance"], False),
         ({}, False),
         ({"StartCalendarInterval": {"Minute": 17}}, False),
@@ -776,14 +777,27 @@ def test_unset_launchd_input_uses_command_and_records_stdout(monkeypatch: pytest
         ({"StartCalendarInterval": {"Hour": 3, "Minute": 60}}, False),
     ],
 )
-@pytest.mark.parametrize("existing_failure", [False, True])
+@pytest.mark.parametrize(
+    "existing_error",
+    [None, "snapshot_failed", "job_alert:Drive access expired", "drive_credentials_restored_backup_pending"],
+)
 def test_maintenance_schedule_validation_preserves_backup_receipts(
-    monkeypatch, tmp_path, definition, usable, existing_failure
+    monkeypatch, tmp_path, definition, usable, existing_error
 ):
     env, recorder = _command_env(tmp_path)
-    if existing_failure:
+    if existing_error and existing_error.startswith("job_alert:"):
+        alerts = tmp_path / "alerts.json"
+        alerts.write_text(json.dumps({"drive-consent": existing_error.removeprefix("job_alert:")}))
+        env["BRAINLAYER_JOB_ALERT_PATH"] = str(alerts)
+    elif existing_error:
+        prior_error = existing_error
+        if existing_error == "drive_credentials_restored_backup_pending":
+            prior_error = "drive_credentials_missing"
+            token = tmp_path / "tokens.json"
+            token.write_text(json.dumps({"access_token": "test-access", "refresh_token": "test-refresh"}))
+            monkeypatch.setattr(backup_daily, "DEFAULT_TOKEN_PATH", token)
         with Path(env["BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG"]).open("a") as handle:
-            handle.write(json.dumps({"backup_log_provenance": "real", "error_type": "snapshot_failed"}) + "\n")
+            handle.write(json.dumps({"backup_log_provenance": "real", "error_type": prior_error}) + "\n")
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     agents = tmp_path / "Library/LaunchAgents"
     agents.mkdir(parents=True)
@@ -813,14 +827,12 @@ def test_maintenance_schedule_validation_preserves_backup_receipts(
     assert result["db_snapshot"] == healthy["db_snapshot"]
     assert result["freshness"] == "fresh"  # Receipt age is independent of scheduling.
     assert result["launchd"]["bootstrapped"] is usable
-    if existing_failure:
-        assert result["error_type"].startswith("snapshot_failed")
+    if existing_error:
+        assert result["error_type"] == existing_error
     elif usable:
         assert result["error_type"] is None
-    if usable:
-        assert "maintenance_schedule_unavailable:" not in (result["error_type"] or "")
     else:
-        assert "maintenance_schedule_unavailable:" in result["error_type"]
+        assert result["error_type"].startswith("maintenance_schedule_unavailable:")
         assert str(plist) in result["error_type"]
     assert len(calls) == 2 and calls[-1].endswith("/" + parent)
     assert plist.read_bytes() == original
