@@ -133,10 +133,11 @@ def test_setup_tolerates_invalid_json_without_aborting(tmp_path: Path):
     assert json.loads(good.read_text())["mcpServers"]["brainlayer"] == BRIDGE_MCP
 
 
-def test_owned_paths_exclude_worktrees(tmp_path: Path):
+@pytest.mark.parametrize("home_suffix", ["home", ".worktrees/home"])
+def test_owned_paths_exclude_worktrees(tmp_path: Path, home_suffix: str):
     from brainlayer.mcp_socket_config import owned_mcp_config_paths
 
-    home = tmp_path / "home"
+    home = tmp_path / home_suffix
     gits = home / "Gits"
     (gits / "brainlayer").mkdir(parents=True)
     (gits / "brainlayer" / ".mcp.json").write_text("{}")
@@ -146,7 +147,7 @@ def test_owned_paths_exclude_worktrees(tmp_path: Path):
 
     paths = owned_mcp_config_paths(home=home)
     assert home / "Gits" / "brainlayer" / ".mcp.json" in paths
-    assert not any(".worktrees" in p.parts for p in paths)
+    assert not any(".worktrees" in p.relative_to(home).parts for p in paths)
 
 
 def test_setup_cli_migrates_all_four_owned_shapes_under_temp_home(tmp_path: Path, monkeypatch):
