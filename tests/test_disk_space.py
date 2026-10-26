@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -100,7 +102,9 @@ def test_backup_escalates_purge_and_keeps_raw_gate(tmp_path, monkeypatch, final_
 
     monkeypatch.setattr(disk_space.shutil, "disk_usage", raw)
     monkeypatch.setattr(backup_daily, "_request_macos_purge", purge)
-    monkeypatch.setattr(backup_daily.time, "sleep", lambda _seconds: None)
+    clock = SimpleNamespace(**vars(time))
+    clock.sleep = lambda _seconds: None
+    monkeypatch.setattr(backup_daily, "time", clock)
     monkeypatch.setattr(backup_daily, "_brainbar_writer_started_at", lambda _path: None)
     monkeypatch.setattr(backup_daily, "_should_run_full_verify", lambda _date: False)
     monkeypatch.setattr(
@@ -169,16 +173,31 @@ def test_purge_last_outcome_and_failed_helper_polling(tmp_path, monkeypatch, las
     monkeypatch.setattr(backup_daily, "request_brainbar_vacuum_into", lambda *_a, **_kw: pytest.fail("writer reached"))
     requests, sleeps = [], []
 
+    def sleep(seconds):
+        assert len(sleeps) < 60, "purge polling exceeded its 30-second fake-clock budget"
+        assert seconds == backup_daily.POST_PURGE_POLL_SECONDS
+        sleeps.append(seconds)
+
+    clock = SimpleNamespace(**vars(time))
+    clock.sleep = sleep
+    clock.monotonic = lambda: sum(sleeps)
+
     def purge(_path, _amount, urgency):
+        # A concurrent caller's sleep must not enter the purge poll's accounting.
+        worker = threading.Thread(target=lambda: time.sleep(0))
+        worker.start()
+        worker.join(timeout=1)
+        assert not worker.is_alive()
         requests.append(urgency)
         if urgency == 3 or last_fails:
             raise RuntimeError(f"urgency {urgency} failed")
 
     monkeypatch.setattr(backup_daily, "_request_macos_purge", purge)
-    monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(backup_daily, "time", clock)
     with pytest.raises(RuntimeError) as error:
         backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
     assert requests == [3, 4]
     assert "urgency 3 failed" not in str(error.value)
     assert ("urgency 4 failed" if last_fails else "macOS reclaimed too little purgeable space") in str(error.value)
     assert len(sleeps) == (0 if last_fails else 60)
+    assert clock.monotonic() == (0 if last_fails else 30)
