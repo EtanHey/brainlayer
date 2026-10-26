@@ -84,16 +84,17 @@ def test_run_records_removal_or_skip(removal_lane, monkeypatch, pin, verified, o
 def _old_receipt(lane, name="2026-10-21.db.zst", **changes):
     path = lane["staging_dir"] / name
     path.write_bytes(b"older archive")
+    md5 = backup._md5_file(path)
     return dict(
         db=str(lane["db_path"]),
         snapshot=str(path),
-        local_md5="local-md5",
+        local_md5=md5,
         uploaded=True,
         verified=True,
         machine_id="test-machine",
         drive_folder="/".join(backup.default_drive_folder_parts("test-machine")),
         backup_log_provenance=backup._backup_log_provenance(),
-        drive_file={"id": name, "name": name, "size": str(path.stat().st_size), "md5Checksum": "local-md5"},
+        drive_file={"id": name, "name": name, "size": str(path.stat().st_size), "md5Checksum": md5},
         **changes,
     )
 
@@ -308,8 +309,9 @@ def test_each_sweep_deletion_guard_retains_archive(removal_lane, monkeypatch, gu
 @pytest.mark.parametrize("md5", ["match", "mismatch", "missing_local", "missing_drive"])
 @pytest.mark.parametrize("sweep", [False, True])
 def test_deletion_requires_recorded_drive_and_local_md5(removal_lane, monkeypatch, md5, sweep):
-    local = {} if md5 == "missing_local" else {"local_md5": "local-md5"}
-    drive = {} if md5 == "missing_drive" else {"md5Checksum": "wrong" if md5 == "mismatch" else "local-md5"}
+    matching_md5 = backup._md5_file(Path(_old_receipt(removal_lane)["snapshot"])) if sweep else "local-md5"
+    local = {} if md5 == "missing_local" else {"local_md5": matching_md5}
+    drive = {} if md5 == "missing_drive" else {"md5Checksum": "wrong" if md5 == "mismatch" else matching_md5}
     if sweep:
         receipt = _old_receipt(removal_lane)
         receipt.pop("local_md5")
@@ -357,3 +359,23 @@ def test_unlink_failure_does_not_abort_new_backup(removal_lane, monkeypatch, cap
     assert receipt["local_removed"] is False
     assert receipt["local_removed_skip_reason"] == "delete_failed"
     assert "test archive locked" in capsys.readouterr().out
+
+
+def test_sweep_retains_same_size_archive_rewritten_after_upload(removal_lane):
+    receipt = _old_receipt(removal_lane)
+    path = Path(receipt["snapshot"])
+    uploaded_md5 = backup._md5_file(path)
+    receipt["local_md5"] = uploaded_md5
+    receipt["drive_file"]["md5Checksum"] = uploaded_md5
+    removal_lane["log_path"].write_text(json.dumps(receipt) + "\n")
+    path.write_bytes(b"OLDER ARCHIVE")
+    assert path.stat().st_size == int(receipt["drive_file"]["size"])
+    assert backup._md5_file(path) != uploaded_md5
+
+    backup.run_backup(**removal_lane, phase="upload")
+
+    assert path.read_bytes() == b"OLDER ARCHIVE"
+    event = json.loads(removal_lane["log_path"].read_text().splitlines()[-1])
+    assert event["event"] == "local_sweep"
+    assert event["local_removed"] is False
+    assert event["local_removed_skip_reason"] == "md5_current_mismatch"

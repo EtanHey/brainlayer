@@ -2967,12 +2967,16 @@ def _sweep_verified_local_archives(
         )
         if reason is None:
             try:
-                path.unlink()
+                if _md5_file(path) != drive["md5Checksum"]:
+                    reason = "md5_current_mismatch"
+                else:
+                    path.unlink()
             except OSError as exc:
                 print(f"Cannot delete local archive {path}: {exc}", flush=True)
                 reason = "delete_failed"
             else:
-                removed.append(path.name)
+                if reason is None:
+                    removed.append(path.name)
         # Local housekeeping cannot grant/revoke Drive verification or refresh last-backup status.
         update = {
             "event": "local_sweep",
