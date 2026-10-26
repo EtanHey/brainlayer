@@ -332,7 +332,7 @@ def test_reclaiming_failure_cleans_attempt_and_records_error(punch_lane, monkeyp
 def test_punch_that_frees_no_blocks_aborts(punch_lane, monkeypatch):
     source, output = punch_lane
     monkeypatch.setattr(backup, "_punch_raw_hole", lambda fd, offset, length: os.pwrite(fd, b"\0" * length, offset))
-    with pytest.raises(RuntimeError, match="punched raw extents not reclaimed.*APFS snapshot"):
+    with pytest.raises(RuntimeError, match="punched raw extents not reclaimed.*filesystem allocation pin"):
         backup.create_sqlite_backup_artifact(source, output, "2026-10-26")
     assert list(output.iterdir()) == []
 
@@ -342,7 +342,6 @@ def test_snapshot_pins_volume_space_despite_file_block_drop(punch_lane, monkeypa
     punched = 0
     real_punch = backup._punch_raw_hole
     free = 10**12
-    monkeypatch.setattr(backup, "RECLAIM_VOLUME_SLACK_BYTES", backup.RECLAIM_CHUNK_BYTES)
 
     def punch(fd, offset, length):
         nonlocal punched, free
@@ -370,7 +369,9 @@ def test_background_volume_drift_does_not_abort_healthy_punches(punch_lane, recl
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
-@pytest.mark.parametrize("kind", ["consumed", "unmarked", "mismatch", "date_mismatch", "outside", "symlink", "hardlink"])
+@pytest.mark.parametrize(
+    "kind", ["consumed", "unmarked", "mismatch", "date_mismatch", "outside", "symlink", "hardlink"]
+)
 def test_startup_consumed_cleanup_preserves_archives_and_unconsumed_raw(snapshot_lane, monkeypatch, kind):
     source, output = snapshot_lane
     directory = output / ("other-job" if kind == "outside" else "brainlayer-backup-crashed")

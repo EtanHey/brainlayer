@@ -1458,9 +1458,6 @@ def _archive_stream_sha256(source: Any, *, zstd: bool) -> str:
         return _stream_sha256(restored).hex()
 
 
-RECLAIM_VOLUME_SLACK_BYTES = 64 * 1024 * 1024
-
-
 def _compress_reclaiming_raw(raw: Path, archive: Path, *, zstd_binary: str | None) -> str:
     """Write durable independent frames, then release their raw extents; hash before punching.
 
@@ -1474,8 +1471,6 @@ def _compress_reclaiming_raw(raw: Path, archive: Path, *, zstd_binary: str | Non
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise ValueError("Cannot consume a linked or non-regular raw snapshot")
         offset = 0
-        initial_free = shutil.disk_usage(archive.parent).free
-        frame_bytes = 0
         while chunk := source.read(RECLAIM_CHUNK_BYTES):
             digest.update(chunk)
             if zstd_binary is None:
@@ -1496,21 +1491,24 @@ def _compress_reclaiming_raw(raw: Path, archive: Path, *, zstd_binary: str | Non
                 fcntl.fcntl(sink.fileno(), fcntl.F_FULLFSYNC)
             else:
                 os.fsync(sink.fileno())
-            frame_bytes += len(frame)
             before_blocks = os.fstat(source.fileno()).st_blocks
             # Full chunks are allocation-aligned; punching the short final extent is safe
             # because no unread bytes follow it. APFS may retain its final partial block.
+            before_free = shutil.disk_usage(archive.parent).free
             _punch_raw_hole(source.fileno(), offset, len(chunk))
+            freed = shutil.disk_usage(archive.parent).free - before_free
             after_blocks = os.fstat(source.fileno()).st_blocks
             if after_blocks >= before_blocks:
-                raise RuntimeError("punched raw extents not reclaimed (APFS snapshot or filesystem allocation pin)")
+                raise RuntimeError("punched raw extents not reclaimed (filesystem allocation pin)")
+            # Bracket only the punch: unrelated allocations during compression must not
+            # accumulate against reclaim. Allow half a chunk for concurrent volume activity.
+            tolerance = len(chunk) // 2
+            if freed < len(chunk) - tolerance:
+                raise RuntimeError(
+                    "punched raw extents not reclaimed (possible APFS snapshot pin or delayed volume reclaim)"
+                )
             offset += len(chunk)
             _require_raw_floor(archive.parent)
-            # st_blocks alone cannot see extents still pinned by an APFS snapshot. Bound
-            # cumulative volume loss too, allowing one chunk of allocation/accounting lag.
-            expected_growth = frame_bytes - offset
-            if initial_free - shutil.disk_usage(archive.parent).free > expected_growth + RECLAIM_VOLUME_SLACK_BYTES:
-                raise RuntimeError("punched raw extents not reclaimed (APFS snapshot or delayed volume reclaim)")
     raw_hash = digest.hexdigest()
     with archive.open("rb") as compressed:
         if _archive_stream_sha256(compressed, zstd=zstd_binary is not None) != raw_hash:
