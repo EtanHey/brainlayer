@@ -51,7 +51,6 @@ def snapshot_lane(tmp_path, monkeypatch):
     monkeypatch.setattr(backup, "_brainbar_writer_started_at", lambda *a: 1)
     monkeypatch.setattr(backup, "_important_usage_capacity_bytes", lambda *a: None)
     monkeypatch.setattr(backup, "RECLAIM_CHUNK_BYTES", 16384)
-    monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=10**12))
 
     def snapshot(target, **kwargs):
         with sqlite3.connect(source) as conn:
@@ -62,13 +61,37 @@ def snapshot_lane(tmp_path, monkeypatch):
     return source, output
 
 
+@pytest.fixture
+def reclaim_volume(snapshot_lane, monkeypatch):
+    _, output = snapshot_lane
+    volume = SimpleNamespace(released=0, background=0, archive_bytes=0)
+
+    def disk_usage(path):
+        archive_bytes = sum(p.stat().st_size for p in output.rglob("*.db.*") if p.is_file())
+        if archive_bytes > volume.archive_bytes:
+            # Other apps allocate between frames, outside the bracket around each punch.
+            volume.background += 96 * 1024 * 1024
+        volume.archive_bytes = archive_bytes
+        return SimpleNamespace(free=10**12 - archive_bytes - volume.background + volume.released)
+
+    monkeypatch.setattr(backup.shutil, "disk_usage", disk_usage)
+    return volume
+
+
 @pytest.fixture(params=["portable", "native"])
-def punch_lane(snapshot_lane, monkeypatch, request):
+def punch_lane(snapshot_lane, reclaim_volume, monkeypatch, request):
     _, output = snapshot_lane
     if request.param == "native":
         if not backup._probe_raw_reclamation(output)[0]:
             pytest.skip("staging filesystem cannot punch holes")
         monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda path: (True, None))
+        real_punch = backup._punch_raw_hole
+
+        def native_punch(fd, offset, length):
+            real_punch(fd, offset, length)
+            reclaim_volume.released += length
+
+        monkeypatch.setattr(backup, "_punch_raw_hole", native_punch)
         return snapshot_lane
     # Zero consumed bytes everywhere; emulate only allocation accounting. Production reads
     # the real fd's st_blocks. This fake never claims the filesystem freed physical storage.
@@ -92,6 +115,7 @@ def punch_lane(snapshot_lane, monkeypatch, request):
         assert os.pwrite(fd, b"\0" * length, offset) == length
         key = info.st_dev, info.st_ino
         released[key] = released.get(key, 0) + (length + 511) // 512
+        reclaim_volume.released += length
 
     monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda path: (True, None))
     monkeypatch.setattr(backup, "_punch_raw_hole", punch)
@@ -334,14 +358,26 @@ def test_snapshot_pins_volume_space_despite_file_block_drop(punch_lane, monkeypa
     assert list(output.iterdir()) == []
 
 
-@pytest.mark.parametrize("kind", ["consumed", "unmarked", "mismatch", "outside", "symlink", "hardlink"])
+@pytest.mark.parametrize("compressor", ["gzip", "zstd"])
+def test_background_volume_drift_does_not_abort_healthy_punches(punch_lane, reclaim_volume, monkeypatch, compressor):
+    source, output = punch_lane
+    monkeypatch.setenv(backup.BACKUP_COMPRESSOR_ENV, compressor)
+    artifact = backup.create_sqlite_backup_artifact(source, output, "2026-10-26")
+    assert reclaim_volume.background >= 300 * 1024 * 1024
+    assert reclaim_volume.released == source.stat().st_size
+    assert backup.verify_sqlite_backup_artifact(artifact)["verified"] is True
+    with sqlite3.connect(source) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+@pytest.mark.parametrize("kind", ["consumed", "unmarked", "mismatch", "date_mismatch", "outside", "symlink", "hardlink"])
 def test_startup_consumed_cleanup_preserves_archives_and_unconsumed_raw(snapshot_lane, monkeypatch, kind):
     source, output = snapshot_lane
     directory = output / ("other-job" if kind == "outside" else "brainlayer-backup-crashed")
     directory.mkdir()
     raw = directory / "2026-10-25.db"
     raw.write_bytes(source.read_bytes())
-    (directory / ".backup-date").write_text("2026-10-25")
+    (directory / ".backup-date").write_text("2026-10-24" if kind == "date_mismatch" else "2026-10-25")
     if kind == "symlink":
         raw.unlink()
         raw.symlink_to(source)
