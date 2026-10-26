@@ -555,6 +555,10 @@ class _DriveRequestDeadlineExceeded(TimeoutError):
     pass
 
 
+class _DriveStreamReaderClosed(RuntimeError):
+    """The local decoder stopped reading; retrying Drive cannot reopen its pipe."""
+
+
 # Network failures that say nothing about whether Drive kept the bytes: the answer is to ask
 # Drive (a status probe, or a re-read), never to assume failure. HTTP errors are not here.
 _DRIVE_TRANSIENT_NETWORK_ERRORS: tuple[type[BaseException], ...] = (
@@ -1476,8 +1480,10 @@ def _compress_reclaiming_raw(raw: Path, archive: Path, *, zstd_binary: str | Non
                 raise RuntimeError("punched raw extents not reclaimed (filesystem allocation pin)")
             # Bracket only the punch: unrelated allocations during compression must not
             # accumulate against reclaim. Allow half a chunk for concurrent volume activity.
+            # Short tails can free less than this tolerance due to APFS accounting; they
+            # retain the per-file block check above and the raw free-space floor below.
             tolerance = len(chunk) // 2
-            if freed < len(chunk) - tolerance:
+            if len(chunk) == RECLAIM_CHUNK_BYTES and freed < len(chunk) - tolerance:
                 raise RuntimeError(
                     "punched raw extents not reclaimed (possible APFS snapshot pin or delayed volume reclaim)"
                 )
@@ -2405,7 +2411,10 @@ def _drive_stream_hashes(service: Any, *, file_id: str, zstd: bool) -> tuple[str
 
                 class Sink:
                     def write(self, data: bytes) -> int:
-                        written = writer.write(data)
+                        try:
+                            written = writer.write(data)
+                        except BrokenPipeError as exc:
+                            raise _DriveStreamReaderClosed("Local snapshot decoder closed the download pipe") from exc
                         md5.update(data[:written])
                         return written
 
