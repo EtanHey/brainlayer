@@ -381,7 +381,10 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
         let model = try viewModel(BrainBarDashboardFixture.maintenanceAlertObservabilityResult)
         XCTAssertEqual(model.jobAlert, alert)
         let health = model.backupsHealth(drive: nil)
-        XCTAssertEqual(health.badge, .attention, "the verdict still says the page needs attention")
+        // L1: a maintenance alert is neutral housekeeping; it keeps its own (neutral) card and
+        // Show log, but it no longer makes the Backups page "Needs attention".
+        XCTAssertEqual(health.badge, .healthy)
+        XCTAssertTrue(model.jobAlertIsNotice)
         XCTAssertNil(model.backupsBadgeReason(drive: nil), "the alert card already says it")
         XCTAssertFalse(try XCTUnwrap(model.backupStatusLines).contains { $0.text == alert })
         let shown = [model.jobAlert, model.backupsBadgeReason(drive: nil)].compactMap { $0 }
@@ -415,7 +418,9 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
         let model = try viewModel(.readable(stale))
         XCTAssertNil(model.jobAlert)
         // Lead UX r1 on #1064: the Recovery checks card already says it; the header shows it once.
-        XCTAssertEqual(model.backupsHealth(drive: nil).reason, "Database copy: Last offsite DB copy is 2 days old")
+        // B4: the badge's reason is the snapshot's typed issue; the check sentence stays on the card.
+        XCTAssertEqual(model.backupsHealth(drive: nil).reason, model.publishedStatus.attention.first?.text)
+        XCTAssertEqual(model.backupChecks?.attentionSentence, "Database copy: Last offsite DB copy is 2 days old")
         XCTAssertNil(model.backupsBadgeReason(drive: nil))
     }
 }

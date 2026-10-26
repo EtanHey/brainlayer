@@ -235,9 +235,12 @@ final class BrainBarZeroWarningsTests: XCTestCase {
         let model = try settingsModel(observations)
         let schedule = try XCTUnwrap(model.presentedBackupSchedules.first { $0.title == "Nightly maintenance" })
         XCTAssertFalse(schedule.lastRun.contains("Covered by weekly"), file: file, line: line)
-        XCTAssertEqual(model.groupStatus(.maintenance).health, .notice, file: file, line: line)
-        XCTAssertTrue(model.groupStatus(.maintenance).attentionReason?.hasPrefix(expected) == true, file: file, line: line)
-        XCTAssertTrue(model.publishedStatus.verdict.notices.contains { $0.hasPrefix(expected) }, file: file, line: line)
+        // L1: a single failed nightly is a visible deferral notice, never hidden and never "covered".
+        XCTAssertEqual(model.groupStatus(.maintenance).health, .deferred, file: file, line: line)
+        XCTAssertTrue(model.groupStatus(.maintenance).attentionReason?.hasPrefix("Nightly maintenance deferred — ") == true,
+                      file: file, line: line)
+        XCTAssertTrue(model.publishedStatus.verdict.notices.contains { $0.hasPrefix("Nightly maintenance deferred — ") },
+                      file: file, line: line)
     }
 
     func testWeeklyCoverageExpiresAfterALaterScheduledNightWithoutNightly() throws {
@@ -303,7 +306,8 @@ final class BrainBarZeroWarningsTests: XCTestCase {
         let ticks = seen.values
         XCTAssertEqual(ticks.count, 2)
         XCTAssertTrue(ticks[0].contains("Backup Daily: calendar result failed, exit 1"), "\(ticks[0])")
-        XCTAssertTrue(ticks[0].contains { $0.contains("exit 76") }, "\(ticks[0])")
+        // L1: one weekly exit 76 is a deferral notice, not a "thing that needs you".
+        XCTAssertFalse(ticks[0].contains { $0.contains("exit 76") }, "\(ticks[0])")
         XCTAssertEqual(ticks[1], [], "A newer ok sample must clear the reasons on the next tick")
     }
 

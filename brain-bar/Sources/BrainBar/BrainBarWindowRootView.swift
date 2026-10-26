@@ -242,20 +242,15 @@ private struct BrainBarJobsDashboardContent: View {
     let hotkeyStatus: String
     let dbPath: String?
     let panelState: BrainBarDashboardPanelState
-    @Environment(\.brainBarDriveAuth) private var driveAuth
 
     var body: some View {
-        // S5: the headline and attention list are the app-lifetime snapshot the menu-bar icon
-        // renders. Its sampling loop is owned by the app (BrainBarStatusSampler), not this view.
-        let drive = driveAuth.map {
-            DriveAuthPresentation.derive(status: $0.status, isReconnecting: $0.isReconnecting,
-                lastOutcome: $0.lastOutcome, now: model.observabilityNow, formatDate: BrainBarDriveAuthFormat.date)
-        }
+        // S5: the headline and attention list are the model's ONE published snapshot, the same one
+        // the menu-bar icon renders. Its sampling loop is owned by the app, not this view.
         BrainBarDashboardContent(collector: collector, workspace: workspace,
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: model.dashboardObservabilityResult,
             observabilityCadence: model.observabilityCadence, backupReferenceNow: model.observabilityNow, panelState: panelState,
             jobAttentionReasons: model.dashboardJobAttentionReasons, jobsChecking: model.dashboardJobsChecking,
-            statusVerdict: model.statusSnapshot(drive: drive).verdict)
+            statusVerdict: model.publishedStatus.verdict)
             .onChange(of: collector.isManualRefreshInProgress) { _, refreshing in
                 if refreshing {
                     model.refreshLaunchdStatus()
@@ -616,22 +611,9 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         observabilityCadence: ObservabilityCadence,
         backupNow: Date?
     ) -> Self {
-        var status = statusVerdict.dashboardStatus
-        if status.tone == .green {
-            switch snapshotFreshness {
-            case .loading:
-                status = .init(headline: "Checking…", reason: nil, tone: .neutral)
-            case let .stale(ageSeconds):
-                status = .init(headline: "No action needed", reason: "Dashboard data is \(ageText(ageSeconds)) old.", tone: .neutral)
-            case .error:
-                status = .init(headline: "No action needed", reason: "Dashboard data could not refresh.", tone: .neutral)
-            case .live:
-                if !agentActivity.isMeasured {
-                    status = .init(headline: "No action needed", reason: "Agent activity could not be measured.", tone: .neutral)
-                }
-            }
-        }
-        return assemble(status: status, attentionItems: statusVerdict.attention, observability: observability, stats: stats,
+        // B5: the shared headline is never rewritten here; dashboard-data freshness and agent
+        // measurement stay in their own sections of the page.
+        return assemble(status: statusVerdict.dashboardStatus, attentionItems: statusVerdict.attention, observability: observability, stats: stats,
                         agentActivity: agentActivity, now: now, calendar: calendar, locale: locale,
                         observabilityCadence: observabilityCadence, backupNow: backupNow)
     }

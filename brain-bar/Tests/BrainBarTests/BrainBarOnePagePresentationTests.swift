@@ -362,7 +362,8 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
                 XCTAssertEqual(presentation.attentionItems, [])
                 XCTAssertEqual(presentation.status.tone, .neutral)
                 XCTAssertTrue(snapshot.verdict.notices.contains(reason), "\(snapshot.verdict.notices)")
-                XCTAssertEqual(model.groupStatus(group).health, .notice)
+                // L1: a failed maintenance run is a deferral notice; a single Index failure is a notice.
+                XCTAssertEqual(model.groupStatus(group).health, group == .maintenance ? .deferred : .notice)
             }
         }
     }

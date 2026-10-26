@@ -338,7 +338,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
             alertsURL: root.appendingPathComponent("absent-alerts.json"))
         let menu = controller.contextMenuForTesting
         controller.menuNeedsUpdate(menu)
-        XCTAssertEqual(menu.items.first?.toolTip, reason)
+        // S5: the tooltip lists every reason, the dot reason first.
+        XCTAssertTrue(menu.items.first?.toolTip?.hasPrefix(reason) == true, menu.items.first?.toolTip ?? "nil")
         let action = try XCTUnwrap(menu.items.first {
             !$0.isHidden && $0.isEnabled && $0.action == NSSelectorFromString("showJobAlertLog:")
         }, "The actual stopped-backup menu must expose a log action without a job-alert badge")

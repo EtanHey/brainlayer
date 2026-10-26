@@ -154,7 +154,7 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(notice?.text, "Weekly maintenance deferred — retries tonight 03:15")
         XCTAssertEqual(snapshot.notices.filter { $0.jobs.contains(.maintenanceWeekly) }.count, 1,
                        "the job alert and the calendar failure are ONE issue: \(snapshot.notices)")
-        XCTAssertEqual(value.menu, "Info: Weekly maintenance deferred: retries tonight 03:15")
+        XCTAssertEqual(value.menu, "Info: Weekly maintenance deferred — retries tonight 03:15")
         XCTAssertNotEqual(value.dashboard.headline, "All good")
         XCTAssertEqual(value.dashboard.reason, "Weekly maintenance deferred — retries tonight 03:15")
         XCTAssertEqual(value.jobs[.maintenance]?.health, .deferred)

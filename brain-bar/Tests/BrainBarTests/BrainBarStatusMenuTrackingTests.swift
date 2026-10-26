@@ -204,7 +204,11 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
             let writes = fixture.host.button.imageWrites
             NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: NSMenu(title: "Unrelated"))
             menu.delegate?.menuNeedsUpdate?(menu)
-            XCTAssertEqual(fixture.host.button.imageWrites, writes + 1)
+            // S5 fix1: icon writes coalesce by content. The changed reason updates the tooltip; the
+            // icon (same buckets, dot still on) is the same image, so it is not relaid out again.
+            XCTAssertLessThanOrEqual(fixture.host.button.imageWrites, writes + 1)
+            XCTAssertEqual(fixture.host.button.image?.tiffRepresentation,
+                BrainBarStatusPopoverController.statusIconImage(stats: fixture.collector.stats, badgeOn: true).tiffRepresentation)
             let index = try XCTUnwrap(menu.items.firstIndex { $0.title == "Open logs folder" })
             menu.performActionForItem(at: index)
             XCTAssertEqual(fixture.host.button.toolTip, "BrainBar — needs attention: \(reason)")

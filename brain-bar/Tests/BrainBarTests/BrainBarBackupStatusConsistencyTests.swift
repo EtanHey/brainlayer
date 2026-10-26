@@ -398,7 +398,12 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             // S5: the row's tooltip lists every notice; the backup one is among them.
             XCTAssertTrue(menu.contextMenuForTesting.items.first?.toolTip?.contains(
                 try XCTUnwrap(model.backupsHealth(drive: drive(expiresIn: 5 * 86400)).reason)) == true)
+            // B4/B5: Drive severity comes from the one published snapshot (the runtime's auth state).
+            runtime.driveAuth.setForPreview(status: .init(state: .invalid, reason: nil, expiresAt: nil))
+            model.republishStatus()
             XCTAssertEqual(model.backupsHealth(drive: drive(.invalid)).badge, .attention)
+            runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: now.addingTimeInterval(5 * 86400)))
+            model.republishStatus()
             model.setObservabilityResultForTesting(.readable(document.replacingBackupsErrorType("job_alert:Fixture failure")))
             XCTAssertEqual(model.backupsHealth(drive: drive()).badge, .attention)
             XCTAssertEqual(model.backupChecks?.verdictTone, .red)
