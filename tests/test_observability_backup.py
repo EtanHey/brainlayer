@@ -767,6 +767,7 @@ def test_unset_launchd_input_uses_command_and_records_stdout(monkeypatch: pytest
         (b'<?xml version="1.0"?><plist><dict><key>broken</key><date>xx</date></dict></plist>', False),
         (["maintenance"], False),
         ({}, False),
+        ({"Label": "com.brainlayer.maintenance"}, False),
         ({"StartCalendarInterval": {"Minute": 17}}, False),
         ({"StartCalendarInterval": {"Hour": 3}}, False),
         ({"StartCalendarInterval": {"Hour": True, "Minute": 17}}, False),
