@@ -434,8 +434,15 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
                 XCTAssertEqual(viewModel.watcherStatus.title, title)
                 XCTAssertEqual(viewModel.footerPresentation.state.title, title)
                 let ingest = viewModel.groupStatus(.ingest)
-                let expectedHealth: BrainLayerLaunchdGroupHealth = groupHealth == .healthy && !watchEnabled && !indexEnabled
-                    ? .skipped : groupHealth
+                // S5 dot policy: only a heartbeat older than 300 s on a desired-ON watcher is the dot;
+                // any other watcher fault is the same reason as neutral text.
+                let staleHeartbeat: Bool = if case let .readable(file) = health {
+                    now.timeIntervalSince(file.updatedAt) > WatcherHealthStatus.staleHeartbeatSeconds
+                } else { false }
+                let ruled: BrainLayerLaunchdGroupHealth = groupHealth == .unhealthy && !(staleHeartbeat && watchEnabled)
+                    ? .notice : groupHealth
+                let expectedHealth: BrainLayerLaunchdGroupHealth = ruled == .healthy && !watchEnabled && !indexEnabled
+                    ? .skipped : ruled
                 XCTAssertEqual(ingest.health, expectedHealth, title)
                 XCTAssertEqual(ingest.attentionReason, viewModel.footerPresentation.detail, title)
                 XCTAssertEqual(ingest.note, note)

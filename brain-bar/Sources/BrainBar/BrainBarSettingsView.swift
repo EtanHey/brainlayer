@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -27,6 +28,22 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published private(set) var embeddingProcess: BrainBarEmbeddingProcessState
     /// watcher-health.json beside the resolved DB: the same file the Dashboard reads (#966).
     @Published private(set) var watcherHealth: WatcherHealthFileRead?
+    /// The health check's badge as read (job alerts not yet applied); nil until the first read.
+    @Published private(set) var healthBadge: BadgeStatePresentation?
+    /// The last VERIFIED live job-alert map (R2-3): an unknown read never replaces it.
+    @Published private(set) var liveJobAlerts: BrainBarJobAlerts?
+    /// How the latest live job-alert read went.
+    @Published private(set) var liveJobAlertsState: BrainBarStatusInputs.JobAlertsState = .unread
+    /// S5/B5: the ONE published status verdict. Every surface projects this; none re-derives it.
+    @Published private(set) var publishedStatus = BrainBarStatusSnapshot.checking
+    /// L3: when the app sampler first found observability.json unreadable in the current episode.
+    private var observabilityUnreadableSince: Date?
+    private let healthBadgeURL: URL?
+    private let jobAlertsURL: URL?
+    private let badgeReadHistory = BadgeReadHistory()
+    let statusSamplingPeriod: TimeInterval
+    private weak var driveAuthSource: BrainBarDriveAuthModel?
+    private var driveAuthCancellable: AnyCancellable?
 
     /// The one watcher-health truth, from this view's launchd observation plus the health file.
     var watcherStatus: WatcherHealthStatus {
@@ -108,8 +125,14 @@ final class BrainBarSettingsViewModel: ObservableObject {
         initialMaintenanceEvidence: BrainLayerMaintenanceEvidence = .unread,
         copyFeedbackScheduler: @escaping @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void = { delay, action in
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
-        }
+        },
+        healthBadgeURL: URL? = nil,
+        jobAlertsURL: URL? = nil,
+        statusSamplingPeriod: TimeInterval = 30
     ) {
+        self.healthBadgeURL = healthBadgeURL
+        self.jobAlertsURL = jobAlertsURL
+        self.statusSamplingPeriod = statusSamplingPeriod
         self.store = store
         self.launchdStatusProvider = launchdStatusProvider
         self.runtimeStatusProvider = runtimeStatusProvider
@@ -155,6 +178,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         if refreshStatusOnLoad {
             refreshLaunchdStatus()
         }
+        republishStatus()
     }
 
     /// Keep the canonical heartbeat current while the Settings view is mounted, independently
@@ -182,6 +206,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         let result = await Task.detached { read(watcherHealthURL) }.value
         guard !Task.isCancelled, generation == watcherHealthGeneration else { return }
         watcherHealth = result
+        republishStatus()
     }
 
     /// Re-reads the installed plists, the backup logs and the local copies off the main actor;
@@ -202,6 +227,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             guard generation == backupScheduleGeneration else { return }
             backupSchedules = result.rows
             maintenanceEvidence = result.maintenance
+            republishStatus()
         }
     }
 
@@ -254,34 +280,70 @@ final class BrainBarSettingsViewModel: ObservableObject {
         group.jobs.allSatisfy { config.launchdJobs[$0]?.enabled == true }
     }
 
+    /// S5: the app-lifetime badge reader publishes here, so every surface sees the same inputs.
+    func applyHealthBadge(_ badge: BadgeStatePresentation, alerts: BrainBarJobAlerts?) {
+        applyHealthBadge(badge, alertsRead: alerts.map(BrainBarJobAlerts.ReadResult.readable) ?? .absent)
+    }
+
+    /// R2-3: a readable map (even empty) is the verified truth and the only recovery; an unavailable
+    /// read keeps the last verified map; a file that vanished after reporting alerts is unavailable.
+    func applyHealthBadge(_ badge: BadgeStatePresentation, alertsRead: BrainBarJobAlerts.ReadResult) {
+        if healthBadge != badge { healthBadge = badge }
+        let state: BrainBarStatusInputs.JobAlertsState
+        switch alertsRead {
+        case let .readable(map):
+            if liveJobAlerts != map { liveJobAlerts = map }
+            state = .readable
+        case .absent:
+            if liveJobAlerts?.active.isEmpty == false {
+                state = .unavailable("job-alerts.json disappeared after reporting alerts")
+            } else {
+                if liveJobAlerts != nil { liveJobAlerts = nil }
+                state = .absent
+            }
+        case let .unavailable(reason):
+            state = .unavailable(reason)
+        }
+        if liveJobAlertsState != state { liveJobAlertsState = state }
+        republishStatus()
+    }
+
+    /// The backups section as the Backups page shows it: a job alert the snapshot rates as neutral
+    /// text (a deferred weekly VACUUM) is not shown there as a red backup alert.
+    private func displayedBackups(_ document: ObservabilityDocument) -> ObservabilityDocument.Backups {
+        guard let reason = BrainBarJobAlerts.rawReason(document),
+              publishedStatus.isNoticeAlert(reason: reason) else { return document.backups }
+        return document.replacingBackupsErrorType(nil).backups
+    }
+
     var dashboardJobsChecking: Bool {
         BrainLayerLaunchdJobGroup.allCases.contains { groupStatus($0).health == .checking }
     }
 
+    /// S5: the job groups' dot reasons, from the one snapshot; notices are not "things that need you".
     var dashboardJobAttentionReasons: [String] {
         BrainLayerLaunchdJobGroup.allCases.compactMap { group in
             let status = groupStatus(group)
-            switch status.health {
-            case .unhealthy, .unknown, .deferred:
-                return status.attentionReason ?? "\(group.title): \(status.health.title)."
-            case .checking, .healthy, .awaitingRun, .skipped:
-                return nil
-            }
-        }
+            return status.health == .unhealthy ? status.attentionReason ?? "\(group.title): \(status.health.title)." : nil
+        }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
     }
 
     func groupStatus(_ group: BrainLayerLaunchdJobGroup) -> BrainLayerLaunchdGroupStatus {
-        let watcher = watcherStatus
-        // The independent health reader can measure a failure before launchd finishes.
-        if !hasCompletedLaunchdSample, !(group == .ingest && watcher.needsAttention) {
-            return .init(health: .checking, attentionReason: nil,
-                         lastRunText: "Checking…", nextRunText: "Checking…")
+        // The independent health reader can measure a watcher fault before launchd finishes; the
+        // shared snapshot then decides whether it is a dot or neutral text.
+        publishedStatus.project(rawGroupStatus(group), group: group)
+    }
+
+    /// The group's own launchd/calendar verdict, before the shared snapshot decides its severity.
+    private func rawGroupStatus(_ group: BrainLayerLaunchdJobGroup) -> BrainLayerLaunchdGroupStatus {
+        guard hasCompletedLaunchdSample || (group == .ingest && watcherStatus.needsAttention) else {
+            return .init(health: .checking, attentionReason: nil, lastRunText: "Checking…", nextRunText: "Checking…")
         }
         return group.status(
             settings: config.launchdJobs,
             observations: launchdObservations,
             formatDate: DashboardMetricFormatter.jobDateTimeString,
-            watcher: watcher,
+            watcher: watcherStatus,
             maintenance: maintenanceEvidence,
             now: now()
         )
@@ -315,14 +377,101 @@ final class BrainBarSettingsViewModel: ObservableObject {
         }
     }
 
+    /// S5: the app-lifetime status cadence: launchd/calendar every 60 s, observability and the
+    /// watcher heartbeat every 30 s. Cancelling the calling task stops all three.
+    func monitorStatus() async {
+        let period = statusSamplingPeriod
+        await monitorStatus(launchdEvery: 2) { try await Task.sleep(for: .seconds(period)) }
+    }
+
+    /// B6: ONE app-owned cadence. Each tick reads observability, the watcher heartbeat and the
+    /// badge/alert files once, off the main actor; launchd/calendar runs on every `launchdEvery` tick.
+    func monitorStatus(launchdEvery: Int, waitForNextTick: @Sendable () async throws -> Void) async {
+        var tick = 0
+        while !Task.isCancelled {
+            await sampleStatusTick(includeLaunchd: tick % max(launchdEvery, 1) == 0)
+            tick &+= 1
+            do { try await waitForNextTick() } catch { return }
+        }
+    }
+
+    /// One sampler tick; publishes one snapshot when every read it started has landed.
+    func sampleStatusTick(includeLaunchd: Bool) async {
+        refreshObservabilityStatus()
+        await observabilityTask?.value
+        await sampleWatcherHealth()
+        await sampleHealthBadge()
+        if includeLaunchd { await refreshLaunchdStatus(includeWatcher: false).value }
+        republishStatus()
+    }
+
+    /// Reads badge-state.json and job-alerts.json off the main actor.
+    private func sampleHealthBadge() async {
+        guard let healthBadgeURL else { return }
+        let alertsURL = jobAlertsURL, history = badgeReadHistory, now = now()
+        let cadence = observabilityCadence
+        let (raw, alerts) = await Task.detached {
+            (BadgeStateReader.read(url: healthBadgeURL, now: now, cadence: cadence, history: history),
+             alertsURL.map { BrainBarJobAlerts.readResult(url: $0) } ?? .absent)
+        }.value
+        guard !Task.isCancelled else { return }
+        applyHealthBadge(raw, alertsRead: alerts)
+    }
+
+    /// The Drive auth state the snapshot reads at publication time; its changes republish.
+    func attachDriveAuth(_ auth: BrainBarDriveAuthModel) {
+        guard driveAuthSource !== auth else { return }
+        driveAuthSource = auth
+        driveAuthCancellable = auth.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.republishStatus() }
+        republishStatus()
+    }
+
+    /// B5: derive once, with one captured time, and publish; surfaces only read `publishedStatus`.
+    func republishStatus() {
+        let snapshot = deriveStatus(at: now())
+        if snapshot.issues != publishedStatus.issues || snapshot.isChecking != publishedStatus.isChecking {
+            publishedStatus = snapshot
+        }
+    }
+
+    private func deriveStatus(at time: Date) -> BrainBarStatusSnapshot {
+        let backups: BrainBarStatusInputs.Backups
+        if !hasCompletedObservabilityRead {
+            backups = .notRead
+        } else if case let .readable(document) = observabilityResult, document.backups.state == "measured" {
+            backups = .measured(document.backups)
+        } else {
+            backups = .unavailable(backupStatusReason ?? "Backup status is unmeasurable.")
+        }
+        let file: WatcherHealthFile? = if case let .readable(value) = watcherHealth { value } else { nil }
+        let watcher = WatcherHealthStatus.derive(
+            launchd: WatcherLaunchdEvidence(setting: config.launchdJobs[.watch], loadState: config.launchdJobs[.watch]?.loadState),
+            file: watcherHealth, now: time)
+        let drive = driveAuthSource.map {
+            DriveAuthPresentation.derive(status: $0.status, isReconnecting: $0.isReconnecting, lastOutcome: $0.lastOutcome,
+                                         now: time, formatDate: BrainBarDriveAuthFormat.date)
+        }
+        return BrainBarStatusSnapshot.derive(BrainBarStatusInputs(
+            now: time, badge: healthBadge, jobAlerts: liveJobAlerts, jobAlertsState: liveJobAlertsState,
+            watcher: watcher, watcherHeartbeatAt: file?.updatedAt, watcherFile: file, settings: config.launchdJobs,
+            observations: hasCompletedLaunchdSample ? launchdObservations : nil,
+            backups: backups, backupsNotice: hasCompletedObservabilityRead ? backupTruth.statusNotice : nil,
+            drive: drive, maintenance: maintenanceEvidence,
+            observabilityUnreadableFor: observabilityUnreadableSince.map { time.timeIntervalSince($0) },
+            samplingPeriod: statusSamplingPeriod
+        ))
+    }
+
     /// One launchd/calendar sample, off the main actor; only the newest request publishes.
     @discardableResult
-    func refreshLaunchdStatus() -> Task<Void, Never> {
+    func refreshLaunchdStatus(includeWatcher: Bool = true) -> Task<Void, Never> {
         launchdSampleGeneration &+= 1
         let generation = launchdSampleGeneration
         isRefreshingLaunchdStatus = true
         refreshEmbeddingResidency()
-        refreshWatcherHealth()
+        if includeWatcher { refreshWatcherHealth() }
         refreshBackupSchedules()
         let provider = launchdStatusProvider
         return Task {
@@ -338,6 +487,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             activeRuntimeObservation = runtimeStatusProvider.sample()
             refreshLastSaveReceiptActiveState()
             isRefreshingLaunchdStatus = false
+            republishStatus()
         }
     }
 
@@ -366,7 +516,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             }
             return BrainBarBackupScheduleRow(title: title, cadence: cadence,
                 lastRun: observation?.lastRunText(formatDate: DashboardMetricFormatter.jobDateTimeString,
-                                                  never: "No calendar run recorded") ?? "No calendar run recorded",
+                                                  never: observation?.lastRunNeverText ?? "Last run unavailable") ?? "Last run unavailable",
                 nextRun: observation?.nextRunAt.map(DashboardMetricFormatter.jobDateTimeString) ?? "Unavailable",
                 localCopy: backupSchedules.first { $0.title == title }?.localCopy)
         }
@@ -375,37 +525,49 @@ final class BrainBarSettingsViewModel: ObservableObject {
     var backupStatus: ObservabilityBackupStatus? {
         guard case let .readable(document) = observabilityResult,
               document.backups.state == "measured" else { return nil }
-        return ObservabilityPresentation.backupStatus(for: document.backups, jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine, now: observabilityNow)
+        return ObservabilityPresentation.backupStatus(for: displayedBackups(document), jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine, now: observabilityNow)
     }
 
     /// The Backups page's checks in plain words (E1), from the same document as `backupStatus`.
     var backupChecks: BrainBarBackupChecks? {
         guard case let .readable(document) = observabilityResult,
               document.backups.state == "measured" else { return nil }
-        return BrainBarBackupChecks.derive(document.backups, now: observabilityNow,
+        return BrainBarBackupChecks.derive(displayedBackups(document), now: observabilityNow,
             jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine, statusNotice: backupTruth.statusNotice)
     }
 
     /// The Backups page's one verdict (#1029 review B1), from the same Drive presentation the card
     /// shows, the Backups job group and the backup checks, in the checks' own words.
     func backupsHealth(drive: DriveAuthPresentation?) -> BrainBarBackupsHealth {
+        // The page's own wording comes from the raw group; the snapshot then decides the severity.
         let verdict = BrainBarBackupsHealth.derive(
-            job: groupStatus(.backups),
+            job: rawGroupStatus(.backups),
             drive: drive,
             status: backupStatus,
             statusUnavailableReason: backupStatusReason ?? "Backup status is unmeasurable.",
             attentionSentence: backupChecks?.attentionSentence,
             isCheckingStatus: !hasCompletedObservabilityRead
         )
-        if verdict.badge == .attention || !hasCompletedObservabilityRead { return verdict }
+        let projected = publishedStatus.project(verdict)
+        if projected.badge == .attention || !hasCompletedObservabilityRead || projected != verdict { return projected }
         if let reason = backupTruth.statusNotice { return .init(badge: .unknown, reason: reason) }
-        return verdict
+        return projected
     }
 
-    /// A job alert (#1031) in its own words, shown once on the Backups page as its own card.
+    /// A job alert (#1031) in its own words, shown once on the Backups page as its own card — also
+    /// when the snapshot rates it a neutral notice (then the card is neutral, and the page's verdict
+    /// does not count it).
     var jobAlert: String? {
-        guard let status = backupStatus, status.errorIsJobAlert, status.error?.tone == .red else { return nil }
+        guard case let .readable(document) = observabilityResult, document.backups.state == "measured" else { return nil }
+        let status = ObservabilityPresentation.backupStatus(for: document.backups, now: observabilityNow)
+        guard status.errorIsJobAlert, status.error?.tone == .red else { return nil }
         return status.error?.text
+    }
+
+    /// The job-alert card is neutral text: the shared snapshot rates its alert a notice.
+    var jobAlertIsNotice: Bool {
+        guard case let .readable(document) = observabilityResult, let reason = BrainBarJobAlerts.rawReason(document) else { return false }
+        return publishedStatus.isNoticeAlert(reason: reason)
     }
 
     /// The backup status rows without the job alert, which the alert card already shows.
@@ -421,6 +583,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
         // card and the Recovery checks card each say their own; the header keeps only the badge.
         let reason = backupsHealth(drive: drive).reason
         let shownElsewhere = [jobAlert, drive?.line, backupChecks?.attentionSentence, backupChecks?.statusNotice].compactMap { $0 }
+        // A copy-age issue is already the red Recovery check below; the header keeps only the badge.
+        let copyIssue = publishedStatus.attention.contains { [.database, .transcripts].contains($0.component) && $0.text == reason }
+        if copyIssue, backupChecks?.checks.contains(where: { $0.tone == .red }) == true { return nil }
         return reason.flatMap { shownElsewhere.contains($0) ? nil : $0 }
     }
 
@@ -455,6 +620,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         observabilityNow = now()
         observabilityResult = result
         hasCompletedObservabilityRead = true
+        republishStatus()
     }
 #endif
 
@@ -508,6 +674,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             }
             applyLaunchdStates(launchdObservations.mapValues(\.loadState))
             errorMessage = nil
+            republishStatus()
             if !preservingDrafts { lastSaveReceipt = nil }
             return true
         } catch {
@@ -526,10 +693,15 @@ final class BrainBarSettingsViewModel: ObservableObject {
             let result = await read(observabilityURL)
             guard !Task.isCancelled else { return }
             guard let self else { return }
-            observabilityNow = now()
+            let readAt = now()
+            observabilityNow = readAt
             observabilityResult = result
             hasCompletedObservabilityRead = true
             isRefreshingObservabilityStatus = false
+            // L3: an unreadable file starts (or continues) an episode; any readable result ends it.
+            if case .unreadable = result { observabilityUnreadableSince = observabilityUnreadableSince ?? readAt }
+            else { observabilityUnreadableSince = nil }
+            republishStatus()
         }
     }
 
@@ -607,6 +779,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             }
             activeRuntimeObservation = runtimeStatusProvider.sample()
             config = nextConfig
+            defer { republishStatus() }
             onePasswordReference = nextConfig.googleAPIKey.opReference
             errorMessage = nil
             previousConfigForLastSaveReceipt = previousConfig
@@ -1071,7 +1244,8 @@ struct BrainBarSettingsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 BrainBarBackupFailureLogs(model: viewModel)
                 if let alert = viewModel.jobAlert {
-                    BrainBarJobAlertCard(alert: alert, logMessage: viewModel.jobAlertLogMessage) { viewModel.showJobAlertLog() }
+                    BrainBarJobAlertCard(alert: alert, logMessage: viewModel.jobAlertLogMessage,
+                                         isNotice: viewModel.jobAlertIsNotice) { viewModel.showJobAlertLog() }
                 }
                 if let driveAuth {
                     BrainBarDriveAwareBackupsGroup(viewModel: viewModel, driveAuth: driveAuth)
@@ -1263,10 +1437,12 @@ private struct BrainBarJobAlertCard: View {
     let alert: String
     /// Show log's sentence when the job has no log yet.
     var logMessage: String?
+    /// S5: the shared snapshot rates this alert neutral text (e.g. a deferred maintenance run).
+    var isNotice = false
     let showLog: () -> Void
 
     var body: some View {
-        let tone = Color(nsColor: BrainBarDesignTokens.Colors.statusError)
+        let tone = isNotice ? Color.brainBarTextMuted : Color(nsColor: BrainBarDesignTokens.Colors.statusError)
         VStack(alignment: .leading, spacing: 6) {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -1335,6 +1511,7 @@ struct BrainBarJobGroupCard: View {
         case .awaitingRun, .deferred: "clock.fill"
         case .unhealthy: "exclamationmark.triangle.fill"
         case .unknown: "questionmark.circle.fill"
+        case .notice: "info.circle.fill"
         case .skipped: "forward.end.circle.fill"
         }
     }
@@ -1345,7 +1522,7 @@ struct BrainBarJobGroupCard: View {
         case .awaitingRun: BrainBarStateTheme.loading.theme.swiftUIColor
         case .unhealthy: BrainBarStateTheme.error.theme.swiftUIColor
         case .deferred: Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
-        case .checking, .unknown, .skipped: Color.brainBarTextMuted
+        case .checking, .unknown, .skipped, .notice: Color.brainBarTextMuted
         }
     }
 
@@ -1366,7 +1543,7 @@ struct BrainBarJobGroupCard: View {
         let (symbol, color): (String, Color) = switch backupsHealth.badge {
         case .checking: (Self.symbol(.checking), Self.color(.checking))
         case .healthy: (Self.symbol(.healthy), Self.color(.healthy))
-        case .idle, .queued, .uploading: ("info.circle.fill", Color.brainBarTextMuted)
+        case .idle, .queued, .uploading, .notice: ("info.circle.fill", Color.brainBarTextMuted)
         case .awaitingRun: (Self.symbol(.awaitingRun), Self.color(.awaitingRun))
         case .expiring: ("clock.badge.exclamationmark.fill", Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
         case .attention: (Self.symbol(.unhealthy), Self.color(.unhealthy))

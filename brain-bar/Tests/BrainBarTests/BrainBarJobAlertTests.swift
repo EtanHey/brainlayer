@@ -286,6 +286,67 @@ final class BrainBarJobAlertTests: XCTestCase {
         XCTAssertNil(BrainBarStatusPopoverController.jobAlertKey(for: off))
         XCTAssertFalse(BrainBarStatusPopoverController.menuRowTitles(for: off).contains("Show log"))
     }
+    // MARK: S5 — a NEW alert key reaches every surface even when badge-state.json lacks it
+
+    func test_a_new_alert_key_absent_from_the_badge_reaches_icon_menu_dashboard_jobs_and_backups() throws {
+        let now = BrainBarStatusSnapshotTests.now
+        let inputs = BrainBarStatusSnapshotTests.healthy()
+        guard case let .readable(base) = BrainBarDashboardFixture.healthyObservabilityResult else {
+            return XCTFail("fixture must be readable")
+        }
+        let document = base.replacingBackupsForStatusTests(BrainBarStatusSnapshotTests.backups(), generatedAt: now)
+        var config = BrainLayerConfig.defaultConfig
+        for job in BrainLayerLaunchdJob.allCases { config.launchdJobs[job] = .init(enabled: true, loadState: .loaded) }
+        let model = BrainBarSettingsViewModel(
+            workspace: BrainBarRecordingWorkspace(),
+            store: BrainLayerConfigStore(configURL: URL(fileURLWithPath: "/fixture/config"),
+                                         loadDocumentOverride: { BrainLayerEnvDocument(config: config) }),
+            initialLaunchdObservations: inputs.observations!, refreshStatusOnLoad: false, now: { now },
+            initialObservabilityResult: .readable(document), observabilityCadence: .known(300),
+            initialWatcherHealth: .readable(.init(updatedAt: now.addingTimeInterval(-30), pollCount: 50)),
+            initialMaintenanceEvidence: inputs.maintenance)
+        let reason = "Local DB snapshot invalid; upload abandoned"
+        let quietBadge = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
+        model.applyHealthBadge(quietBadge, alerts: BrainBarJobAlerts(active: [:]))
+        XCTAssertFalse(model.publishedStatus.needsAttention, "\(model.publishedStatus.issues)")
+
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        runtime.jobsModel = model
+        runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: now.addingTimeInterval(30 * 86_400)))
+        let workspace = BrainBarRecordingWorkspace()
+        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+        let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
+            dashboardPanelController: panel, statusBar: TestStatusItemHost())
+        defer { controller.stop() }
+        controller.setBadgeForTesting(quietBadge, alertsURL: try writeAlerts(#"{"backup-upload-abandoned": "\#(reason)"}"#))
+        controller.menuNeedsUpdate(controller.contextMenuForTesting)
+
+        let snapshot = model.publishedStatus
+        XCTAssertTrue(snapshot.needsAttention, "\(snapshot.issues)")
+        XCTAssertTrue(controller.statusDotForTesting, "icon")
+        XCTAssertEqual(controller.contextMenuForTesting.items.first?.title, "Needs attention: \(reason)", "menu")
+        XCTAssertEqual(controller.statusItemForTesting.button?.toolTip, "BrainBar — needs attention: \(reason)")
+        XCTAssertEqual(model.groupStatus(.backups).health, .unhealthy, "Jobs")
+        XCTAssertEqual(model.backupsHealth(drive: nil).badge, .attention, "Backups")
+        XCTAssertEqual(snapshot.attention.map(\.text), [reason], "Dashboard")
+
+        // One clean publication removes the same issue everywhere.
+        controller.setBadgeForTesting(quietBadge, alertsURL: try writeAlerts("{}"))
+        controller.menuNeedsUpdate(controller.contextMenuForTesting)
+        XCTAssertFalse(model.publishedStatus.needsAttention)
+        XCTAssertFalse(controller.statusDotForTesting)
+        XCTAssertEqual(controller.contextMenuForTesting.items.first?.title, "Nothing needs attention")
+        XCTAssertNotEqual(model.groupStatus(.backups).health, .unhealthy)
+        XCTAssertNotEqual(model.backupsHealth(drive: nil).badge, .attention)
+    }
+
+    func test_an_informational_alert_key_is_visible_text_but_not_a_dot() {
+        var inputs = BrainBarStatusSnapshotTests.healthy()
+        inputs.jobAlerts = BrainBarJobAlerts(active: ["fleet-watchdog-hold": "BrainLayer recovered a stale fleet-watchdog hold; supervisor restored"])
+        let (_, surfaces) = BrainBarStatusSnapshotTests.assertAgree(inputs, dot: false, "watchdog recovery")
+        XCTAssertEqual(surfaces.menu.hasPrefix("Info:"), true, surfaces.menu)
+    }
+
 }
 
 /// The Backups page shows a job alert once: one alert card with Show log. The group badge keeps
@@ -320,7 +381,10 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
         let model = try viewModel(BrainBarDashboardFixture.maintenanceAlertObservabilityResult)
         XCTAssertEqual(model.jobAlert, alert)
         let health = model.backupsHealth(drive: nil)
-        XCTAssertEqual(health.badge, .attention, "the verdict still says the page needs attention")
+        // L1: a maintenance alert is neutral housekeeping; it keeps its own (neutral) card and
+        // Show log, but it no longer makes the Backups page "Needs attention".
+        XCTAssertEqual(health.badge, .healthy)
+        XCTAssertTrue(model.jobAlertIsNotice)
         XCTAssertNil(model.backupsBadgeReason(drive: nil), "the alert card already says it")
         XCTAssertFalse(try XCTUnwrap(model.backupStatusLines).contains { $0.text == alert })
         let shown = [model.jobAlert, model.backupsBadgeReason(drive: nil)].compactMap { $0 }
@@ -354,7 +418,9 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
         let model = try viewModel(.readable(stale))
         XCTAssertNil(model.jobAlert)
         // Lead UX r1 on #1064: the Recovery checks card already says it; the header shows it once.
-        XCTAssertEqual(model.backupsHealth(drive: nil).reason, "Database copy: Last offsite DB copy is 2 days old")
+        // B4: the badge's reason is the snapshot's typed issue; the check sentence stays on the card.
+        XCTAssertEqual(model.backupsHealth(drive: nil).reason, model.publishedStatus.attention.first?.text)
+        XCTAssertEqual(model.backupChecks?.attentionSentence, "Database copy: Last offsite DB copy is 2 days old")
         XCTAssertNil(model.backupsBadgeReason(drive: nil))
     }
 }
