@@ -237,7 +237,7 @@ final class BrainBarZeroWarningsTests: XCTestCase {
         XCTAssertFalse(schedule.lastRun.contains("Covered by weekly"), file: file, line: line)
         XCTAssertEqual(model.groupStatus(.maintenance).health, .notice, file: file, line: line)
         XCTAssertTrue(model.groupStatus(.maintenance).attentionReason?.hasPrefix(expected) == true, file: file, line: line)
-        XCTAssertTrue(model.statusSnapshot(drive: nil).verdict.notices.contains { $0.hasPrefix(expected) }, file: file, line: line)
+        XCTAssertTrue(model.publishedStatus.verdict.notices.contains { $0.hasPrefix(expected) }, file: file, line: line)
     }
 
     func testWeeklyCoverageExpiresAfterALaterScheduledNightWithoutNightly() throws {

@@ -308,7 +308,7 @@ final class BrainBarJobAlertTests: XCTestCase {
         let reason = "Local DB snapshot invalid; upload abandoned"
         let quietBadge = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
         model.applyHealthBadge(quietBadge, alerts: BrainBarJobAlerts(active: [:]))
-        XCTAssertFalse(model.statusSnapshot(drive: nil).needsAttention, "\(model.statusSnapshot(drive: nil).issues)")
+        XCTAssertFalse(model.publishedStatus.needsAttention, "\(model.publishedStatus.issues)")
 
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         runtime.jobsModel = model
@@ -321,7 +321,7 @@ final class BrainBarJobAlertTests: XCTestCase {
         controller.setBadgeForTesting(quietBadge, alertsURL: try writeAlerts(#"{"backup-upload-abandoned": "\#(reason)"}"#))
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
 
-        let snapshot = model.statusSnapshot(drive: nil)
+        let snapshot = model.publishedStatus
         XCTAssertTrue(snapshot.needsAttention, "\(snapshot.issues)")
         XCTAssertTrue(controller.statusDotForTesting, "icon")
         XCTAssertEqual(controller.contextMenuForTesting.items.first?.title, "Needs attention: \(reason)", "menu")
@@ -333,7 +333,7 @@ final class BrainBarJobAlertTests: XCTestCase {
         // One clean publication removes the same issue everywhere.
         controller.setBadgeForTesting(quietBadge, alertsURL: try writeAlerts("{}"))
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
-        XCTAssertFalse(model.statusSnapshot(drive: nil).needsAttention)
+        XCTAssertFalse(model.publishedStatus.needsAttention)
         XCTAssertFalse(controller.statusDotForTesting)
         XCTAssertEqual(controller.contextMenuForTesting.items.first?.title, "Nothing needs attention")
         XCTAssertNotEqual(model.groupStatus(.backups).health, .unhealthy)

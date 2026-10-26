@@ -41,6 +41,8 @@ struct BrainBarStatusInputs: Sendable {
     var jobAlerts: BrainBarJobAlerts? = nil
     var watcher: WatcherHealthStatus? = nil
     var watcherHeartbeatAt: Date? = nil
+    /// The watcher's own structured report (DB probe, ingest alerts), when readable.
+    var watcherFile: WatcherHealthFile? = nil
     var settings: [BrainLayerLaunchdJob: BrainLayerLaunchdJobSetting] = [:]
     /// Nil until the first launchd/calendar sample completes.
     var observations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]? = nil
@@ -49,6 +51,10 @@ struct BrainBarStatusInputs: Sendable {
     var backupsNotice: String? = nil
     var drive: DriveAuthPresentation? = nil
     var maintenance: BrainLayerMaintenanceEvidence = .unread
+    /// How long `observability.json` has been continuously unreadable while the app sampled it.
+    var observabilityUnreadableFor: TimeInterval? = nil
+    /// The app sampler's period (L3 measures unreadability in these).
+    var samplingPeriod: TimeInterval = 30
 }
 
 /// The one status verdict every BrainBar surface renders (S5, R2 §5.A): the menu-bar icon dot,

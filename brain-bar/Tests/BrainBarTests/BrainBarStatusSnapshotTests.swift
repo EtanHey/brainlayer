@@ -151,14 +151,14 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
             "BrainLayer full maintenance failed: tonight's local verified snapshot unavailable; VACUUM skipped."])
         let (snapshot, value) = Self.assertAgree(inputs, dot: false, "deferred weekly")
         let notice = snapshot.notices.first { $0.jobs.contains(.maintenanceWeekly) }
-        XCTAssertEqual(notice?.text, "Weekly maintenance deferred: retries tonight 03:15")
+        XCTAssertEqual(notice?.text, "Weekly maintenance deferred — retries tonight 03:15")
         XCTAssertEqual(snapshot.notices.filter { $0.jobs.contains(.maintenanceWeekly) }.count, 1,
                        "the job alert and the calendar failure are ONE issue: \(snapshot.notices)")
         XCTAssertEqual(value.menu, "Info: Weekly maintenance deferred: retries tonight 03:15")
         XCTAssertNotEqual(value.dashboard.headline, "All good")
-        XCTAssertEqual(value.dashboard.reason, "Weekly maintenance deferred: retries tonight 03:15")
+        XCTAssertEqual(value.dashboard.reason, "Weekly maintenance deferred — retries tonight 03:15")
         XCTAssertEqual(value.jobs[.maintenance]?.health, .deferred)
-        XCTAssertEqual(value.jobs[.maintenance]?.attentionReason, "Weekly maintenance deferred: retries tonight 03:15")
+        XCTAssertEqual(value.jobs[.maintenance]?.attentionReason, "Weekly maintenance deferred — retries tonight 03:15")
         XCTAssertEqual(value.backups.badge, .healthy, "a maintenance deferral is not a backup failure")
     }
 
@@ -249,21 +249,30 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         base.observations?[.maintenanceWeekly] = Self.failed(.maintenanceWeekly, code: 76, at: failureAt)
         Self.assertAgree(base, dot: false, "single exit 76")
 
+        // Lead amendment L1 (supersedes the 2-failure / 8-day / newer-copy / pending-run rule).
         var second = base
         second.observations?[.maintenanceWeekly] = Self.failed(.maintenanceWeekly, code: 76, at: failureAt, consecutive: 2)
-        Self.assertAgree(second, dot: true, "second consecutive exit 76")
+        Self.assertAgree(second, dot: false, "second consecutive exit 76")
+
+        var third = base
+        third.observations?[.maintenanceWeekly] = Self.failed(.maintenanceWeekly, code: 76, at: failureAt, consecutive: 3)
+        Self.assertAgree(third, dot: true, "third consecutive exit 76")
+
+        var nineDays = base
+        nineDays.maintenance = .init(weeklyCompletion: .completed(Self.now.addingTimeInterval(-9 * 86_400)), runRecords: [:])
+        Self.assertAgree(nineDays, dot: false, "9 days is inside the 14-day housekeeping window")
 
         var stale = base
-        stale.maintenance = .init(weeklyCompletion: .completed(Self.now.addingTimeInterval(-9 * 86_400)), runRecords: [:])
-        Self.assertAgree(stale, dot: true, "last successful weekly > 8 days")
+        stale.maintenance = .init(weeklyCompletion: .completed(Self.now.addingTimeInterval(-15 * 86_400)), runRecords: [:])
+        Self.assertAgree(stale, dot: true, "last successful weekly > 14 days")
 
         var noCopy = base
         noCopy.backups = .measured(Self.backups(db: Self.hoursAgo(14)))
-        Self.assertAgree(noCopy, dot: true, "no verified copy newer than the failure")
+        Self.assertAgree(noCopy, dot: false, "maintenance severity does not depend on a newer DB copy")
 
         var noNextRun = base
         noNextRun.observations?[.maintenanceWeekly] = Self.failed(.maintenanceWeekly, code: 76, at: failureAt, next: nil)
-        Self.assertAgree(noNextRun, dot: true, "next scheduled run not pending")
+        Self.assertAgree(noNextRun, dot: false, "a missing next run is uncertainty, not an emergency")
     }
 
     func testMalformedMaintenancePlistIsADotAndDedupesWithTheHealthCheck() {

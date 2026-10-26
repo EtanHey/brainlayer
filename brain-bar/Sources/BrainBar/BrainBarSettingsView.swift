@@ -112,7 +112,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
         initialMaintenanceEvidence: BrainLayerMaintenanceEvidence = .unread,
         copyFeedbackScheduler: @escaping @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void = { delay, action in
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
-        }
+        },
+        healthBadgeURL: URL? = nil,
+        jobAlertsURL: URL? = nil,
+        statusSamplingPeriod: TimeInterval = 30
     ) {
         self.store = store
         self.launchdStatusProvider = launchdStatusProvider
@@ -257,6 +260,12 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func isGroupEnabled(_ group: BrainLayerLaunchdJobGroup) -> Bool {
         group.jobs.allSatisfy { config.launchdJobs[$0]?.enabled == true }
     }
+
+    var publishedStatus: BrainBarStatusSnapshot { statusSnapshot(drive: nil) }
+
+    func sampleStatusTick(includeLaunchd: Bool) async {}
+
+    func monitorStatus(launchdEvery: Int, waitForNextTick: @Sendable () async throws -> Void) async {}
 
     /// S5: the app-lifetime badge reader publishes here, so every surface sees the same inputs.
     func applyHealthBadge(_ badge: BadgeStatePresentation, alerts: BrainBarJobAlerts?) {

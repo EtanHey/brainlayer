@@ -344,7 +344,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
                 embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
                 initialLaunchdObservations: observations, refreshStatusOnLoad: false, now: { now },
                 initialWatcherHealth: .readable(.init(updatedAt: now, pollCount: 50)))
-            let snapshot = model.statusSnapshot(drive: nil)
+            let snapshot = model.publishedStatus
             let presentation = try makePresentation(result: BrainBarOnePageTestFixture.healthyResult(),
                 now: now, statusVerdict: snapshot.verdict)
             let reason = try XCTUnwrap(model.groupStatus(group).attentionReason)
