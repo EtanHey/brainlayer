@@ -37,9 +37,21 @@ struct BrainBarStatusInputs: Sendable {
     var now: Date
     var calendar: Calendar = .current
     var badge: BadgeStatePresentation? = nil
-    enum JobAlertsState: Equatable, Sendable { case readable, absent, unread, unavailable(String) }
-    /// The live job-alert file; nil when it could not be read.
+    /// R2-3: how the live job-alert file read went.
+    enum JobAlertsState: Equatable, Sendable {
+        /// The file was read; `jobAlerts` is that map.
+        case readable
+        /// No file exists (no job has ever reported): genuine first-run absence.
+        case absent
+        /// Not read yet.
+        case unread
+        /// The file exists but could not be read or parsed; `jobAlerts` is the last verified map.
+        case unavailable(String)
+    }
+
+    /// The last VERIFIED live job-alert map; nil when none has been read.
     var jobAlerts: BrainBarJobAlerts? = nil
+    /// Nil derives it: `.readable` when `jobAlerts` is set, else `.unread`.
     var jobAlertsState: JobAlertsState? = nil
     var watcher: WatcherHealthStatus? = nil
     var watcherHeartbeatAt: Date? = nil
@@ -63,16 +75,16 @@ struct BrainBarStatusInputs: Sendable {
 /// the menu text, the Dashboard headline and attention list, Jobs group badges and the Backups
 /// badge. A pure reducer: the same inputs give the same verdict everywhere.
 ///
-/// Dot policy (lead ruling, 2026-10-26), and nothing else lights the dot:
-/// - watcher heartbeat stale > 300 s while the watcher should be running;
-/// - the verified DB or transcript copy older than the backups threshold (36 h);
-/// - a backup that FAILED with no verified copy newer than the failure;
-/// - a required job failing on two consecutive scheduled runs;
+/// Dot policy (lead ruling 2026-10-26, amended L1–L3 in review round 1):
+/// - watcher heartbeat stale > 300 s, a DB-read failure or an ingest stall, while the watcher should run;
+/// - any critical health-check code outside the neutral allow-list (search canary, DB, supervisor/MCP, …);
+/// - the verified DB or transcript copy older than the backups threshold (36 h), or none on record;
+/// - a backup that FAILED with no trusted verified copy newer than the failure;
+/// - Index failing on 2 consecutive scheduled runs; nightly/weekly maintenance on ≥ 3, or a measured
+///   last successful weekly older than 14 days — an earned streak survives exit-75 deferrals;
 /// - malformed or unreadable required configuration (e.g. a broken calendar LaunchAgent);
-/// - Drive authorization lost.
-/// A single weekly-maintenance exit 76 with a newer verified DB copy and a pending next run is a
-/// neutral "deferred" notice; it returns to a dot on a second consecutive failure, or when the last
-/// completed weekly pass is more than 8 days old. Unknown/checking is neutral text, never a dot.
+/// - Drive authorization lost; observability.json unreadable beyond two sampling periods.
+/// Everything else (below those thresholds, deferrals, first run, unknown/checking) is neutral text.
 struct BrainBarStatusSnapshot: Equatable, Sendable {
     let issues: [BrainBarStatusIssue]
     let isChecking: Bool
@@ -271,22 +283,36 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
             builder.add(.init(id: "job.\(job.rawValue)", component: .backups, severity: severity, text: text, jobs: [job]))
         }
         // Index is a required job: two consecutive failures are the dot.
-        if desired(.index), let observation = observations?[.index], observation.isFailedRun {
-            let streak = observation.calendarConsecutiveFailures ?? 1
-            let base = observation.failureText(job: .index, formatDate: formatDate)
-            builder.add(streak >= 2
-                ? .init(id: "job.index", component: .ingest, severity: .attention,
-                        text: "\(base) (failed on \(streak) consecutive scheduled runs)", jobs: [.index])
-                : .init(id: "job.index", component: .ingest, severity: .notice,
-                        text: "\(base); it retries at its next scheduled run", jobs: [.index]))
+        if desired(.index), let observation = observations?[.index] {
+            if observation.isFailedRun {
+                let streak = observation.calendarConsecutiveFailures ?? 1
+                let base = observation.failureText(job: .index, formatDate: formatDate)
+                builder.add(streak >= 2
+                    ? .init(id: "job.index", component: .ingest, severity: .attention,
+                            text: "\(base) (failed on \(streak) consecutive scheduled runs)", jobs: [.index])
+                    : .init(id: "job.index", component: .ingest, severity: .notice,
+                            text: "\(base); it retries at its next scheduled run", jobs: [.index]))
+            } else if let earned = observation.earnedStreakThroughDeferral(threshold: 2) {
+                builder.add(.init(id: "job.index", component: .ingest, severity: .attention,
+                                  text: "Index failed on \(earned) consecutive scheduled runs; the latest run was deferred (exit 75)",
+                                  jobs: [.index]))
+            }
         }
         // L1: nightly/weekly maintenance is housekeeping — neutral until ≥3 consecutive scheduled
         // failures, or a MEASURED last successful weekly older than 14 days (whatever the latest exit).
+        // R2-2: an earned streak stays the dot through exit-75 deferrals until a proven success.
         for job in [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly] where desired(job) {
-            guard let observation = observations?[job], observation.isFailedRun else { continue }
-            let streak = observation.calendarConsecutiveFailures ?? 1
-            builder.add(maintenanceIssue(job, streak: streak, observation: observation, now: now,
-                                         calendar: inputs.calendar, formatDate: formatDate))
+            guard let observation = observations?[job] else { continue }
+            if observation.isFailedRun {
+                let streak = observation.calendarConsecutiveFailures ?? 1
+                builder.add(maintenanceIssue(job, streak: streak, observation: observation, now: now,
+                                             calendar: inputs.calendar, formatDate: formatDate))
+            } else if let earned = observation.earnedStreakThroughDeferral(threshold: 3) {
+                let label = job == .maintenanceWeekly ? "Weekly" : "Nightly"
+                builder.add(.init(id: "job.\(job.rawValue)", component: .maintenance, severity: .attention,
+                                  text: "\(label) maintenance failed on \(earned) consecutive scheduled runs; "
+                                      + "the latest run was deferred (exit 75)", jobs: [job]))
+            }
         }
         if desired(.maintenanceWeekly), case let .completed(at) = inputs.maintenance.weeklyCompletion,
            now.timeIntervalSince(at) > maintenanceEmergencyAge {
@@ -296,7 +322,15 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         }
 
         // 6. Job alerts: the live file names every failing job, including keys the badge lacks.
+        // R2-3: `jobAlerts` is the last VERIFIED map. An unavailable read keeps its unresolved
+        // criticals (an unknown read is never a recovery); only a readable map can clear them.
+        let alertsState = inputs.jobAlertsState ?? (inputs.jobAlerts == nil ? .unread : .readable)
         var alerts = inputs.jobAlerts?.active ?? [:]
+        if case let .unavailable(reason) = alertsState {
+            builder.add(.init(id: "jobs.alerts-unavailable", component: .health, severity: .notice,
+                              text: "Job alerts could not be read (\(reason)); last known alerts are kept",
+                              noticeHealth: .unknown))
+        }
         if inputs.jobAlerts == nil, let badge = inputs.badge, badge.activeMessages.count == badge.activeCodes.count {
             // The live file is unreadable: the badge's own job-alert issues are the best evidence.
             for (code, message) in zip(badge.activeCodes, badge.activeMessages) where code.hasPrefix("job_alert_") {
@@ -320,9 +354,12 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                 builder.add(.init(id: job.map { "job.\($0.rawValue)" } ?? "alert.\(key)", component: .maintenance,
                                   severity: .notice, text: reason, jobs: job.map { [$0] } ?? [],
                                   noticeHealth: .deferred, alertKey: key, alertReason: reason))
-            case .backup:
-                builder.add(.init(id: "alert.\(key)", component: .backups, severity: .attention, text: reason,
-                                  jobs: [.backupDaily], alertKey: key, alertReason: reason))
+            case let .backup(job):
+                // One failed run is one issue: the alert joins its job's run issue (Show log keeps its key).
+                if let job, builder.attachAlert(key, reason: reason, toJob: job) { continue }
+                builder.add(.init(id: job.map { "job.\($0.rawValue)" } ?? "alert.\(key)", component: .backups,
+                                  severity: .attention, text: reason, jobs: job.map { [$0] } ?? [],
+                                  alertKey: key, alertReason: reason))
             case .drive:
                 // Typed from the Drive auth result; with no usable result, a consent alert is the dot.
                 let lost = switch inputs.drive?.tone {
@@ -398,7 +435,11 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
 
         // B5: every required source must have been read before anything can be "All good".
         let backupsUnread = if case .notRead = inputs.backups { true } else { false }
-        let incomplete = inputs.badge == nil || inputs.watcher == nil || observations == nil || backupsUnread
+        let alertsIncomplete = switch alertsState {
+        case .readable, .absent: false
+        case .unread, .unavailable: true
+        }
+        let incomplete = inputs.badge == nil || inputs.watcher == nil || observations == nil || backupsUnread || alertsIncomplete
         return Self(issues: builder.issues, isChecking: incomplete)
     }
 
@@ -438,7 +479,8 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
 
     enum AlertClass: Equatable {
         case maintenance(BrainLayerLaunchdJob?)
-        case backup, drive, informational, unknown
+        case backup(BrainLayerLaunchdJob?)
+        case drive, informational, unknown
     }
 
     static func alertClass(key: String) -> AlertClass {
@@ -448,7 +490,9 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         case "drive-consent": return .drive
         case let key where informationalAlertKeys.contains(key): return .informational
         case let key where key.hasPrefix("maintenance-"): return .maintenance(nil)
-        case let key where key.hasPrefix("backup") || key.hasPrefix("jsonl"): return .backup
+        case "backup-daily", "backup-upload-abandoned": return .backup(.backupDaily)
+        case "jsonl-backup": return .backup(.jsonlBackup)
+        case let key where key.hasPrefix("backup") || key.hasPrefix("jsonl"): return .backup(nil)
         default: return .unknown
         }
     }
@@ -487,6 +531,16 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
 }
 
 extension BrainLayerLaunchdJobObservation {
+    /// R2-2: the failure streak still outstanding behind a latest exit-75 deferral, when it has
+    /// reached `threshold`. Only a proven success (the history resets the streak) or a successful
+    /// weekly that covered this nightly resolves it; a deferral neither extends nor clears it.
+    func earnedStreakThroughDeferral(threshold: Int) -> Int? {
+        guard calendarCoveredByWeeklyAt == nil, loadState == .loaded,
+              lastExitCode == BrainLayerMaintenanceExit.deferred,
+              let streak = calendarConsecutiveFailures, streak >= threshold else { return nil }
+        return streak
+    }
+
     /// The failed run in the job's own words: the calendar's reason, else its exit and time.
     func failureText(job: BrainLayerLaunchdJob, formatDate: (Date) -> String) -> String {
         if case let .failed(reason) = loadState { return reason }

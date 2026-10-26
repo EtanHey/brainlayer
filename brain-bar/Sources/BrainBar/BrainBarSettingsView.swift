@@ -30,8 +30,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published private(set) var watcherHealth: WatcherHealthFileRead?
     /// The health check's badge as read (job alerts not yet applied); nil until the first read.
     @Published private(set) var healthBadge: BadgeStatePresentation?
-    /// The live job-alert file; nil when unread or unreadable.
+    /// The last VERIFIED live job-alert map (R2-3): an unknown read never replaces it.
     @Published private(set) var liveJobAlerts: BrainBarJobAlerts?
+    /// How the latest live job-alert read went.
+    @Published private(set) var liveJobAlertsState: BrainBarStatusInputs.JobAlertsState = .unread
     /// S5/B5: the ONE published status verdict. Every surface projects this; none re-derives it.
     @Published private(set) var publishedStatus = BrainBarStatusSnapshot.checking
     /// L3: when the app sampler first found observability.json unreadable in the current episode.
@@ -280,8 +282,29 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     /// S5: the app-lifetime badge reader publishes here, so every surface sees the same inputs.
     func applyHealthBadge(_ badge: BadgeStatePresentation, alerts: BrainBarJobAlerts?) {
+        applyHealthBadge(badge, alertsRead: alerts.map(BrainBarJobAlerts.ReadResult.readable) ?? .absent)
+    }
+
+    /// R2-3: a readable map (even empty) is the verified truth and the only recovery; an unavailable
+    /// read keeps the last verified map; a file that vanished after reporting alerts is unavailable.
+    func applyHealthBadge(_ badge: BadgeStatePresentation, alertsRead: BrainBarJobAlerts.ReadResult) {
         if healthBadge != badge { healthBadge = badge }
-        if liveJobAlerts != alerts { liveJobAlerts = alerts }
+        let state: BrainBarStatusInputs.JobAlertsState
+        switch alertsRead {
+        case let .readable(map):
+            if liveJobAlerts != map { liveJobAlerts = map }
+            state = .readable
+        case .absent:
+            if liveJobAlerts?.active.isEmpty == false {
+                state = .unavailable("job-alerts.json disappeared after reporting alerts")
+            } else {
+                if liveJobAlerts != nil { liveJobAlerts = nil }
+                state = .absent
+            }
+        case let .unavailable(reason):
+            state = .unavailable(reason)
+        }
+        if liveJobAlertsState != state { liveJobAlertsState = state }
         republishStatus()
     }
 
@@ -389,10 +412,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
         let cadence = observabilityCadence
         let (raw, alerts) = await Task.detached {
             (BadgeStateReader.read(url: healthBadgeURL, now: now, cadence: cadence, history: history),
-             alertsURL.flatMap { BrainBarJobAlerts.read(url: $0) })
+             alertsURL.map { BrainBarJobAlerts.readResult(url: $0) } ?? .absent)
         }.value
         guard !Task.isCancelled else { return }
-        applyHealthBadge(raw, alerts: alerts)
+        applyHealthBadge(raw, alertsRead: alerts)
     }
 
     /// The Drive auth state the snapshot reads at publication time; its changes republish.
@@ -431,7 +454,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
                                          now: time, formatDate: BrainBarDriveAuthFormat.date)
         }
         return BrainBarStatusSnapshot.derive(BrainBarStatusInputs(
-            now: time, badge: healthBadge, jobAlerts: liveJobAlerts,
+            now: time, badge: healthBadge, jobAlerts: liveJobAlerts, jobAlertsState: liveJobAlertsState,
             watcher: watcher, watcherHeartbeatAt: file?.updatedAt, watcherFile: file, settings: config.launchdJobs,
             observations: hasCompletedLaunchdSample ? launchdObservations : nil,
             backups: backups, backupsNotice: hasCompletedObservabilityRead ? backupTruth.statusNotice : nil,

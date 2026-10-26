@@ -1402,6 +1402,10 @@ enum SparklineRenderer {
     ) -> NSImage {
         let width = max(size.width.rounded(.up), 1)
         let height = max(size.height.rounded(.up), 1)
+        // S5 R2-1: ImageRenderer resolves the icon's colors, including increased contrast, from the
+        // app/system appearance (measured: the drawing appearance alone changes nothing, and an
+        // explicit color-scheme override discards the high-contrast variant). The status item keys
+        // and re-renders on those appearances. It stays a coloured, non-template image.
         let icon = ZStack(alignment: .topTrailing) {
             MenuBarSparklineIcon(series: [
                 .init(values: agent, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesAgent)),

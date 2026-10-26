@@ -52,6 +52,19 @@ struct BrainBarJobAlerts: Equatable, Sendable {
         return Self(active: active)
     }
 
+    /// R2-3: a read with its outcome explicit. `absent` (no file: no job has ever reported) is a
+    /// genuine first-run state; `unavailable` (exists, but unreadable or malformed) is unknown.
+    enum ReadResult: Equatable, Sendable {
+        case readable(BrainBarJobAlerts)
+        case absent
+        case unavailable(String)
+    }
+
+    static func readResult(url: URL) -> ReadResult {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .absent }
+        return read(url: url).map(ReadResult.readable) ?? .unavailable("job-alerts.json is unreadable or malformed")
+    }
+
     /// The job alert's reason exactly as the job wrote it, before display sanitizing; the key
     /// lookup must use this, since the shown text may be redacted or shortened.
     static func rawReason(_ document: ObservabilityDocument) -> String? {

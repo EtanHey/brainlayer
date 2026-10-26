@@ -78,10 +78,15 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private var rawBadgePresentation: BadgeStatePresentation?
     private var jobAlertsURL: URL?
     private var latestStats: BrainDatabase.DashboardStats?
+    /// The icon's full render identity: buckets, dot, and the appearance it is drawn for (R2-1).
     private struct RenderedIcon: Equatable {
         let agent: [Int], watcher: [Int], badgeOn: Bool
+        /// The button's appearance, and the app's (SwiftUI resolves the icon's colors from it).
+        let appearance: NSAppearance.Name?, appAppearance: NSAppearance.Name?, increaseContrast: Bool
     }
     private var lastRenderedIcon: RenderedIcon?
+    private var appearanceObservation: NSKeyValueObservation?
+    private var appAppearanceObservation: NSKeyValueObservation?
     private var latestState: PipelineState?
     private let statusLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     /// Shown for a job alert or a structured backup failure.
@@ -192,6 +197,12 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         collectorCancellables.removeAll()
         statusModelCancellables.removeAll()
         badgeReadGeneration = UUID()
+        appearanceObservation?.invalidate()
+        appearanceObservation = nil
+        appAppearanceObservation?.invalidate()
+        appAppearanceObservation = nil
+        NSWorkspace.shared.notificationCenter.removeObserver(self,
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         NotificationCenter.default.removeObserver(self, name: NSMenu.didBeginTrackingNotification, object: contextMenuForTesting)
         contextMenuForTesting.cancelTracking()
         isMenuTracking = false
@@ -207,6 +218,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         guard let button = statusItemForTesting.button else { return }
         button.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "BrainBar")
         button.toolTip = "BrainBar"
+        observeAppearance(of: button)
     }
 
     private func bindRuntime() {
@@ -329,8 +341,12 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         // fullscreen menu bar instead of the old single gray line that vanished.
         // Coalesce by content: late collector/badge deliveries after a menu closes must not relayout
         // the status item again when the icon they would draw is identical.
+        let appearance = statusItemForTesting.button?.effectiveAppearance ?? NSAppearance.currentDrawing()
         let icon = RenderedIcon(agent: stats.recentAgentWriteBuckets, watcher: stats.recentWatcherWriteBuckets,
-                                badgeOn: currentVerdict.needsAttention)
+                                badgeOn: currentVerdict.needsAttention,
+                                appearance: appearance.bestMatch(from: Self.iconAppearances),
+                                appAppearance: NSApplication.shared.effectiveAppearance.bestMatch(from: Self.iconAppearances),
+                                increaseContrast: Self.increaseContrast())
         if icon != lastRenderedIcon || statusItemForTesting.button?.image == nil {
             statusItemForTesting.button?.image = Self.statusIconImage(stats: stats, badgeOn: icon.badgeOn)
             lastRenderedIcon = icon
@@ -338,7 +354,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         updateTooltip()
     }
 
-    nonisolated(unsafe) static var increaseContrast: () -> Bool = { false }
+    /// The system Increase Contrast setting (High Contrast reaches the icon through it).
+    nonisolated(unsafe) static var increaseContrast: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast }
+
+    static let iconAppearances: [NSAppearance.Name] = [.aqua, .darkAqua, .accessibilityHighContrastAqua,
+                                                       .accessibilityHighContrastDarkAqua]
 
     static func statusIconImage(stats: BrainDatabase.DashboardStats, badgeOn: Bool) -> NSImage {
         return SparklineRenderer.renderStatusBarIcon(
@@ -347,6 +367,23 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
             badgeOn: badgeOn,
             size: NSSize(width: 26, height: 14)
         )
+    }
+
+    /// R2-1: an appearance or contrast change re-renders (after tracking ends, via the guard).
+    private func observeAppearance(of button: NSButton) {
+        appearanceObservation = button.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.renderCurrentStatus() }
+        }
+        // System-wide changes (dark mode, Increase Contrast) also arrive as the app's appearance.
+        appAppearanceObservation = NSApplication.shared.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.renderCurrentStatus() }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(accessibilityDisplayOptionsDidChange(_:)),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+    }
+
+    @objc private func accessibilityDisplayOptionsDidChange(_: Notification) {
+        renderCurrentStatus()
     }
 
     private func updateTooltip() {
@@ -364,7 +401,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         badgePresentation = raw
         jobAlertsURL = alertsURL
 #if BRAINBAR_UI
-        runtime.jobsModel?.applyHealthBadge(raw, alerts: BrainBarJobAlerts.read(url: alertsURL))
+        runtime.jobsModel?.applyHealthBadge(raw, alertsRead: BrainBarJobAlerts.readResult(url: alertsURL))
 #endif
     }
 #endif
