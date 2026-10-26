@@ -80,3 +80,65 @@ def test_t3_producer_consumer_share_resolver_and_public_cli(tmp_path, monkeypatc
     expected.write_text('{"alerting": true, "alert_reasons": ["reader_failure"]}')
     issue = health_check._t3_health_issue(health_check._load_json(captured["consumer"]))
     assert issue is not None and issue.code == "t3_ingest_unhealthy"
+
+
+@pytest.mark.parametrize("heal", [False, True])
+@pytest.mark.parametrize("phase", ["migrating", "migrated", "reverting"])
+@pytest.mark.parametrize("watch_running", [False, True])
+def test_supervisor_ownership_comes_from_journal_without_inherited_env(
+    tmp_path, monkeypatch, heal, phase, watch_running
+):
+    import json
+    import subprocess
+    from pathlib import Path
+
+    from brainlayer.supervisor_adapters import ALIASES, SupervisorCommands
+    from tests.test_stability_health_check import _queue_backlog_config, _run_queue_backlog_health
+
+    monkeypatch.delenv("BRAINLAYER_SUPERVISOR_SOCKET", raising=False)
+    directory = Path.home() / ".local/share/brainlayer/supervisor"
+    directory.mkdir(parents=True, exist_ok=True)
+    journal = directory / "migration.json"
+    journal.write_text(json.dumps({"phase": phase}))
+    journal.chmod(0o600)
+    states = {
+        name: {
+            "configured": True,
+            "paused": False,
+            "pid": 20077,
+            "starts": 1,
+            "exit_timeout": 30,
+            "interval": 0,
+            "error": "",
+            "last_exit_code": None,
+        }
+        for name in ALIASES.values()
+    }
+    if not watch_running:
+        states["watch"].update(pid=None, error="exited 1", last_exit_code=1)
+    requests = []
+
+    def status(self, action="status", component="*", **kwargs):
+        assert self.path == directory / "control.sock"
+        requests.append(action)
+        return states
+
+    monkeypatch.setattr(SupervisorCommands, "request", status)
+    config, _, _, _ = _queue_backlog_config(tmp_path, heal=heal)
+    config.job_opt_path = None
+    commands = []
+
+    def legacy(args):
+        commands.append(args)
+        if args[:2] == ["launchctl", "print-disabled"]:
+            return subprocess.CompletedProcess(args, 0, "disabled services = {}", "")
+        return subprocess.CompletedProcess(args, 113, "", "Could not find service")
+
+    result = _run_queue_backlog_health(config, legacy)
+    unloaded = {i.code: i.severity for i in result.issues if i.code.endswith("_unloaded")}
+    assert unloaded == ({} if watch_running else {"watch_unloaded": "critical"})
+    assert requests
+    assert not any(a[:2] == ["launchctl", "print"] and a[-1].split("/")[-1] in ALIASES for a in commands)
+    if not heal:
+        assert set(requests) == {"status"}
+        assert result.actions == []
