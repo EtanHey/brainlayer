@@ -19,7 +19,7 @@ class DiskSpace:
     def describe(self) -> str:
         label = "macOS Available" if self.source == "macos_important_usage" else "Available"
         return (
-            f"{label} {self.available_bytes / 1e9:.1f} GB = "
+            f"{label} {self.available_bytes / 1e9:.1f} GB ≈ "
             f"{self.free_now_bytes / 1e9:.1f} GB free now + {self.purgeable_bytes / 1e9:.1f} GB purgeable"
         )
 
