@@ -430,16 +430,6 @@
         "target": "subprocess.Popen"
       }
     },
-    "17830c2623b8b3dcb141cbdb24652abe46d89ba861c8aeacf9c2302be9abe990": {
-      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
-      "site": {
-        "call_sha256": "a6a06c7262adc677a63db7638bb867a59a4c4e1eba69e1812749f04020f6593c",
-        "kind": "child_process",
-        "owner": "<module>._request_macos_purge",
-        "path": "src/brainlayer/backup_daily.py",
-        "target": "subprocess.run"
-      }
-    },
     "1790dedd59dfee6d619651ee9b864b16bba1abcf6c1d4321c9617ebbd2d35904": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/write_queue.py <module>.WriteQueue.stop",
       "site": {
@@ -1230,16 +1220,6 @@
         "target": "subprocess.Popen"
       }
     },
-    "39d56b4b3dc4758b6bf3129fa75de86c3516d1b6d6f161cf8ec8239999851d5e": {
-      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
-      "site": {
-        "call_sha256": "701e2e4fc232f8ce324bc5f6b1a171cd618320d6d4f79ea87510db303dc4a140",
-        "kind": "child_process",
-        "owner": "<module>._important_usage_capacity_bytes",
-        "path": "src/brainlayer/backup_daily.py",
-        "target": "subprocess.run"
-      }
-    },
     "3b1ef3bc7d845a1c69ffd7f38b372442d4d221bb30e2140da7eace267966bd2e": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/brain_graph.py <module>.build_entity_session_edges",
       "site": {
@@ -1278,6 +1258,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/kg_judge.py",
         "target": "import subprocess"
+      }
+    },
+    "3c042c077b23e6a6dd48344b4070939202109724e26680a53d9024953fde60b9": {
+      "non_cloud_purpose": "Local isolated CacheDelete Swift helper with explicit urgency 3 or 4 for backup-space reclamation; no cloud/model subprocess.",
+      "site": {
+        "call_sha256": "ae9d0f4e5255ecadfa704ab0e57a5b1467d46809ea8d1bd6bebfbe0047cdb715",
+        "kind": "child_process",
+        "owner": "<module>._request_macos_purge",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.run"
       }
     },
     "3c8640922f60c409db0dd5e71fbcb6c5503f74b201e03b4d0783b1cac0fa3b4b": {
@@ -1846,16 +1836,6 @@
         "owner": "<module>._default_command_runner",
         "path": "src/brainlayer/health_check.py",
         "target": "subprocess.CompletedProcess"
-      }
-    },
-    "5620e4cc66f074ba6461b435f55318f95a0241db2745919e2e81fe595f164862": {
-      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>._important_usage_capacity_bytes subprocess.CalledProcessError.",
-      "site": {
-        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
-        "kind": "callable_reference",
-        "owner": "<module>._important_usage_capacity_bytes",
-        "path": "src/brainlayer/backup_daily.py",
-        "target": "subprocess.CalledProcessError"
       }
     },
     "5630892589a1470c03d492afad92f5386c3b60e4b48496eaa700dcd6808be4bb": {
@@ -2964,6 +2944,16 @@
         "target": "client.request"
       }
     },
+    "8644f4a4358b524633196e1326189fc020611328cdf49170f715cffc5a844de5": {
+      "non_cloud_purpose": "Local macOS Foundation volume-capacity query via pinned osascript, including subprocess exception/type metadata; no network or cloud/model sender.",
+      "site": {
+        "call_sha256": "701e2e4fc232f8ce324bc5f6b1a171cd618320d6d4f79ea87510db303dc4a140",
+        "kind": "child_process",
+        "owner": "<module>._important_usage_capacity_bytes",
+        "path": "src/brainlayer/disk_space.py",
+        "target": "subprocess.run"
+      }
+    },
     "8670771ec5de78de96ff3727d306c32b3e13605688ea34ec4fda03639ba0c865": {
       "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
       "site": {
@@ -3840,6 +3830,16 @@
         "target": "subprocess.run"
       }
     },
+    "abfa3aeea75c041904fca9fbec4abd8c797ee79695f0d0691f2e350d1af255c1": {
+      "non_cloud_purpose": "Local macOS Foundation volume-capacity query via pinned osascript, including subprocess exception/type metadata; no network or cloud/model sender.",
+      "site": {
+        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
+        "kind": "callable_reference",
+        "owner": "<module>._important_usage_capacity_bytes",
+        "path": "src/brainlayer/disk_space.py",
+        "target": "subprocess.CalledProcessError"
+      }
+    },
     "ac2c7a44e2c20b4aa1592d8d661eb4f4b5d58784942df7da893c2ff106ee47b7": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.MCPClient.__init__",
       "site": {
@@ -4028,6 +4028,16 @@
         "owner": "<module>._sqlite_pragma_check",
         "path": "src/brainlayer/backup_daily.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "b15ef19c256fb21cc55d124d50e9501f785e99df0abe31780b9723135b3e67a1": {
+      "non_cloud_purpose": "Local macOS Foundation volume-capacity query via pinned osascript, including subprocess exception/type metadata; no network or cloud/model sender.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._important_usage_capacity_bytes",
+        "path": "src/brainlayer/disk_space.py",
+        "target": "subprocess.TimeoutExpired"
       }
     },
     "b1904067f944440015fc9f59afdbcd172feb086ca7d1abafaf65a1e61ee04b50": {
@@ -4716,16 +4726,6 @@
         "owner": "<module>.AutoActivator._defer_for_brew",
         "path": "src/brainlayer/brainbar_auto_activation.py",
         "target": "subprocess.SubprocessError"
-      }
-    },
-    "c8e8ecaa10063ee1be9dd072083642685db915a79ba7b6959a9bbd529eae8ac1": {
-      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>._important_usage_capacity_bytes subprocess.TimeoutExpired.",
-      "site": {
-        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
-        "kind": "callable_reference",
-        "owner": "<module>._important_usage_capacity_bytes",
-        "path": "src/brainlayer/backup_daily.py",
-        "target": "subprocess.TimeoutExpired"
       }
     },
     "c9044373efd6c8fa270f8388f42d7cd9b0c28604f5c20d7243c4168f4f5de35d": {
@@ -5893,6 +5893,16 @@
         "kind": "import_binding",
         "owner": "<module>",
         "path": "src/brainlayer/archive_collapse.py",
+        "target": "import subprocess"
+      }
+    },
+    "fe0a5fa402bb9cdd757c7d4458b426d220800cdaa1f0ae2624fd45d368e83fad": {
+      "non_cloud_purpose": "Local macOS Foundation volume-capacity query via pinned osascript, including subprocess exception/type metadata; no network or cloud/model sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/disk_space.py",
         "target": "import subprocess"
       }
     },

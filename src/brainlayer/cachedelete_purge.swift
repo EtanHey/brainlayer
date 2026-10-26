@@ -25,15 +25,16 @@ if CommandLine.arguments.dropFirst().first == "--probe" {
     print("CacheDelete purge request symbol available")
     exit(0)
 }
-guard CommandLine.arguments.count == 3,
-      let amount = Int64(CommandLine.arguments[2]), amount > 0 else {
-    fail("expected volume path and positive byte count")
+guard CommandLine.arguments.count == 4,
+      let amount = Int64(CommandLine.arguments[2]), amount > 0,
+      let urgency = Int(CommandLine.arguments[3]), (3...4).contains(urgency) else {
+    fail("expected volume path, positive byte count, and urgency 3 or 4")
 }
 
 let info: NSDictionary = [
     "CACHE_DELETE_VOLUME": CommandLine.arguments[1],
     "CACHE_DELETE_AMOUNT": NSNumber(value: amount),
-    "CACHE_DELETE_URGENCY_LIMIT": NSNumber(value: 3),
+    "CACHE_DELETE_URGENCY_LIMIT": NSNumber(value: urgency),
 ]
 let request = unsafeBitCast(symbol, to: PurgeCall.self)
 let completed = DispatchSemaphore(value: 0)

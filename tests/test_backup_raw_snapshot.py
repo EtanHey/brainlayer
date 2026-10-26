@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from brainlayer import backup_daily as backup
+from brainlayer import disk_space
 from tests.test_backup_daily import _create_source_db, _stub_backup_for_drive_upload
 
 
@@ -22,7 +23,7 @@ def raw_lane(tmp_path, monkeypatch):
     output.mkdir()
     monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
     monkeypatch.setattr(backup, "_brainbar_writer_started_at", lambda *a: 1)
-    monkeypatch.setattr(backup, "_important_usage_capacity_bytes", lambda *a: None)
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda *a: None)
     monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=10**12))
     monkeypatch.setattr(
         backup, "request_brainbar_vacuum_into", lambda target, **kw: target.write_bytes(source.read_bytes())

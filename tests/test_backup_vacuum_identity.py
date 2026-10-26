@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from brainlayer import backup_daily as backup
+from brainlayer import disk_space
 from tests.test_backup_daily import _create_source_db
 
 
@@ -114,7 +115,7 @@ def test_artifact_refuses_mismatched_brainbar_before_any_raw(tmp_path, dbs, monk
     requests: list = []
     monkeypatch.setattr(backup, "_send_brainbar_json_request", _fake_brainbar(production, requests))
     monkeypatch.setattr(backup, "_brainbar_writer_started_at", lambda *a: 1)
-    monkeypatch.setattr(backup, "_important_usage_capacity_bytes", lambda *a: None)
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda *a: None)
     monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=10**12))
     _no_sleep(monkeypatch)
     out = tmp_path / "backups"
@@ -131,7 +132,7 @@ def raw_lane(tmp_path, monkeypatch):
     source, output = tmp_path / "source.db", tmp_path / "backups"
     _create_source_db(source)
     monkeypatch.setattr(backup, "_brainbar_writer_started_at", lambda *a: 1)
-    monkeypatch.setattr(backup, "_important_usage_capacity_bytes", lambda *a: None)
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda *a: None)
     monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=10**12))
 
     def promote(target, **_kw):
@@ -218,7 +219,7 @@ def test_configured_db_on_production_socket_passes_the_preflight(tmp_path, dbs, 
     requests: list = []
     monkeypatch.setattr(backup, "_send_brainbar_json_request", _fake_brainbar(production, requests))
     monkeypatch.setattr(backup, "_brainbar_writer_started_at", lambda *a: 1)
-    monkeypatch.setattr(backup, "_important_usage_capacity_bytes", lambda *a: None)
+    monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda *a: None)
     monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=10**12))
 
     artifact = backup.create_sqlite_backup_artifact(production, tmp_path / "backups", date_stamp="2026-10-18")

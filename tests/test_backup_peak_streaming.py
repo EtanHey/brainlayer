@@ -49,7 +49,7 @@ def snapshot_lane(tmp_path, monkeypatch):
         conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content BLOB)")
         conn.executemany("INSERT INTO chunks VALUES (?, ?)", [(str(n), os.urandom(4096)) for n in range(24)])
     monkeypatch.setattr(backup, "_brainbar_writer_started_at", lambda *a: 1)
-    monkeypatch.setattr(backup, "_important_usage_capacity_bytes", lambda *a: None)
+    monkeypatch.setattr(backup.disk_space, "_important_usage_capacity_bytes", lambda *a: None)
     monkeypatch.setattr(backup, "RECLAIM_CHUNK_BYTES", 16384)
 
     def snapshot(target, **kwargs):
