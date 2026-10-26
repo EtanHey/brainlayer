@@ -39,6 +39,16 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.76] - 2026-10-26
+
+### Fixed
+- Use `brainlayer disk --json` as the disk truth: it reports available space, free-now space, and purgeable-space estimates with their measurement source (#1503). Disk descriptions mark estimated values with `≈` (#1505).
+- Backup now needs about 24 GB instead of about 34 GB for a 22 GB database. Streaming compression reduces peak headroom while preserving the snapshot and verification gates (#1504).
+- Avoid false backup aborts on short final reclaim chunks on APFS, while retaining per-file block and free-space-floor checks. Stop retrying Drive downloads after the local decoder closes its pipe (#1506, the release gate). Urgency-4 purge is unverified on a real purge; this release does not claim that runtime qualification.
+
+### Release scope
+- Python package and Homebrew formula release only. Retain BrainBar 1.5.75 and its existing cask; the batch has no BrainBar source changes.
+
 ## [1.5.70] - 2026-10-22
 
 ### Fixed

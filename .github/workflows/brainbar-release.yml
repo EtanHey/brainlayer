@@ -27,6 +27,8 @@ on:
       - "!v1.5.67"
       # Formula-only supervisor heartbeat hotfix: retain BrainBar 1.5.69.
       - "!v1.5.70"
+      # Python-only disk truth and backup headroom fixes: retain BrainBar 1.5.75.
+      - "!v1.5.76"
 
 permissions:
   contents: write
