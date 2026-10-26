@@ -82,6 +82,7 @@ def test_backup_escalates_purge_and_keeps_raw_gate(tmp_path, monkeypatch, final_
     _create_source_db(source, chunk_count=2)
     db_size = 15_500_000_000
     monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda _path: db_size)
+    monkeypatch.setattr(backup_daily, "_probe_raw_reclamation", lambda _path: (False, "legacy-path fixture"))
     required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
     free = [13_500_000_000]
     measured = []

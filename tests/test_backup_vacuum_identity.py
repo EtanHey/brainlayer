@@ -221,6 +221,7 @@ def test_configured_db_on_production_socket_passes_the_preflight(tmp_path, dbs, 
     monkeypatch.setattr(backup, "_brainbar_writer_started_at", lambda *a: 1)
     monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda *a: None)
     monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=10**12))
+    monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda _path: (False, "legacy-path fixture"))
 
     artifact = backup.create_sqlite_backup_artifact(production, tmp_path / "backups", date_stamp="2026-10-18")
 
