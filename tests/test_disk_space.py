@@ -24,7 +24,25 @@ def test_disk_cli_json_contract(tmp_path, monkeypatch):
     datetime.fromisoformat(value["measured_at"])
     human = CliRunner().invoke(app, ["disk", "--path", str(tmp_path)])
     assert human.exit_code == 0
-    assert "Available 131.3 GB = 13.5 GB free now + 117.8 GB purgeable" in human.output
+    assert "Available 131.3 GB ≈ 13.5 GB free now + 117.8 GB purgeable" in human.output
+
+
+@pytest.mark.parametrize("source", ["macos_important_usage", "statfs_macos_available_unavailable"])
+def test_describe_marks_independently_rounded_values_as_approximate(source):
+    from dataclasses import asdict
+
+    from brainlayer.disk_space import DiskSpace
+
+    space = DiskSpace(2_120_000_000, 1_060_000_000, 1_060_000_000, source, "2026-10-26T00:00:00+00:00")
+    label = "macOS Available" if source == "macos_important_usage" else "Available"
+    assert space.describe() == f"{label} 2.1 GB ≈ 1.1 GB free now + 1.1 GB purgeable"
+    assert json.loads(json.dumps(asdict(space))) == {
+        "available_bytes": 2_120_000_000,
+        "free_now_bytes": 1_060_000_000,
+        "purgeable_bytes": 1_060_000_000,
+        "source": source,
+        "measured_at": "2026-10-26T00:00:00+00:00",
+    }
 
 
 @pytest.mark.parametrize(
@@ -99,7 +117,7 @@ def test_backup_escalates_purge_and_keeps_raw_gate(tmp_path, monkeypatch, final_
     if final_free >= required:
         assert "writer reached" in str(error.value)
     else:
-        assert "needs 33.1 GB; macOS Available 131.3 GB = 20.8 GB free now + 110.5 GB purgeable" in str(error.value)
+        assert "needs 33.1 GB; macOS Available 131.3 GB ≈ 20.8 GB free now + 110.5 GB purgeable" in str(error.value)
         assert "purge freed 7.3 GB" in str(error.value)
 
 
