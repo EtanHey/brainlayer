@@ -24,6 +24,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Resolve external import specs without loading package initializers or the full dev stack.
+      - name: Install sweep import resolution dependencies
+        run: python3 -m pip install pytest google-auth google-auth-oauthlib
+
       - name: Select exhaustive crash sweep
         id: sweeps
         run: python3 scripts/ci/crash_sweep_gate.py required

@@ -142,7 +142,14 @@ def test_workflows_keep_required_context_and_gate_both_publish_paths():
 
 @pytest.mark.parametrize(
     "kind,expected",
-    [("docs", "false"), ("label", "true"), ("rename", "true"), ("deleted-helper", "true"), ("bad-base", None)],
+    [
+        ("docs", "false"),
+        ("label", "true"),
+        ("rename", "true"),
+        ("deleted-helper", "true"),
+        ("unicode-path", "true"),
+        ("bad-base", None),
+    ],
 )
 def test_required_cli_reads_real_diff_and_fails_closed(tmp_path, monkeypatch, kind, expected):
     def git(*args):
@@ -152,6 +159,7 @@ def test_required_cli_reads_real_diff_and_fails_closed(tmp_path, monkeypatch, ki
     monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "foreign-tree"))
     monkeypatch.setenv("GIT_TEST_UNFAMILIAR_KEY", "foreign")
     assert not any(key.startswith("GIT_") for key in _clean_git_env())
+    (tmp_path / "pyproject.toml").write_text('[tool.pytest.ini_options]\npythonpath = ["src"]\n')
     git("init", "-q")
     git("config", "user.email", "fixture@example.invalid")
     git("config", "user.name", "Fixture")
@@ -167,13 +175,22 @@ def test_required_cli_reads_real_diff_and_fails_closed(tmp_path, monkeypatch, ki
     helper.write_text("value = 1\n")
     with sweep.open("a") as handle:
         handle.write("from tests.test_deletion_only_helper import value\n")
+    unicode_module = tmp_path / "src/brainlayer/résilience.py"
+    if kind == "unicode-path":
+        unicode_module.write_text("value = 1\n")
+        with sweep.open("a") as handle:
+            handle.write("import brainlayer.résilience\n")
     git("add", ".")
     git("commit", "-qm", "base")
     base = git("rev-parse", "HEAD")
+    if kind == "unicode-path":
+        unicode_module.write_text("value = 2\n")
     if kind == "deleted-helper":
         helper.unlink()
+        sweep.write_text(sweep.read_text().replace("from tests.test_deletion_only_helper import value\n", ""))
     if kind == "rename":
         git("mv", "src/brainlayer/launchd_consolidation.py", "guide.md")
+        sweep.write_text(sweep.read_text().replace("import brainlayer.launchd_consolidation\n", ""))
     else:
         (tmp_path / "guide.md").write_text("docs")
     git("add", ".")
