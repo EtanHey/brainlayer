@@ -1,0 +1,25 @@
+{"event": "runner", "guard": 90000000, "scheduled_date": "2026-10-26", "ts": 1792977305.940702}
+{"event": "spawn", "pid": 90000001, "step": "index", "ts": 1792977305.956766}
+{"event": "already-running", "scheduled_date": "2026-10-26", "ts": 1792978408.57262}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "index", "ts": 1792979081.55553}
+{"event": "spawn", "pid": 90000002, "step": "backup-snapshot", "ts": 1792979081.591548}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "backup-snapshot", "ts": 1792979169.0713458}
+{"event": "wait-start", "step": "maintenance-weekly", "ts": 1792979169.0923488}
+{"event": "wait-finished", "step": "maintenance-weekly", "ts": 1792980000.090579}
+{"event": "spawn", "pid": 90000003, "step": "maintenance-weekly", "ts": 1792980003.3150022}
+{"event": "finished", "replaces": "maintenance-nightly", "returncode": 0, "status": "ok", "step": "maintenance-weekly", "ts": 1792980016.092886}
+{"event": "spawn", "pid": 90000004, "step": "jsonl-backup", "ts": 1792980016.120417}
+{"event": "already-running", "scheduled_date": "2026-10-26", "ts": 1792980019.899998}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "jsonl-backup", "ts": 1792980330.927191}
+{"event": "spawn", "pid": 90000005, "step": "p0-counter", "ts": 1792980330.978103}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "p0-counter", "ts": 1792980341.0966651}
+{"event": "spawn", "pid": 90000006, "step": "wal-checkpoint", "ts": 1792980341.1300921}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "wal-checkpoint", "ts": 1792980341.741696}
+{"event": "spawn", "pid": 90000007, "step": "decay", "ts": 1792980341.760153}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "decay", "ts": 1792980439.0846531}
+{"event": "spawn", "pid": 90000008, "step": "repair-fts", "ts": 1792980444.094342}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "repair-fts", "ts": 1792980450.026809}
+{"backup_invocation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "event": "spawn", "pid": 90000009, "step": "backup-daily", "ts": 1792980450.056837}
+{"event": "already-running", "scheduled_date": "2026-10-26", "ts": 1792980452.921191}
+{"backup_invocation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "event": "finished", "returncode": 0, "status": "ok", "step": "backup-daily", "ts": 1792980452.940421}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792980453.211875}
