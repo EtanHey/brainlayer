@@ -1,7 +1,12 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { extname, join, relative, resolve } from "node:path";
 
-const renderedAppDir = resolve(".next/server/app");
+// Vercel's Next adapter emits final static and prerender-fallback HTML here.
+const renderedDirectories = [
+  ".next/server/app",
+  ".next/output/static",
+  ".next/output/functions",
+].map((directory) => resolve(directory));
 const doubleEscapedEntity = /&amp;(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);/gi;
 
 function htmlFilesUnder(directory) {
@@ -13,17 +18,18 @@ function htmlFilesUnder(directory) {
   });
 }
 
-if (!existsSync(renderedAppDir)) {
+const existingDirectories = renderedDirectories.filter((directory) => existsSync(directory));
+if (existingDirectories.length === 0) {
   console.error(
-    "Rendered-output guard requires a completed Next.js build at .next/server/app.",
+    "Rendered-output guard requires a completed Next.js build at .next/server/app or .next/output.",
   );
   process.exit(1);
 }
 
-const renderedPageFiles = htmlFilesUnder(renderedAppDir);
+const renderedPageFiles = existingDirectories.flatMap(htmlFilesUnder);
 if (renderedPageFiles.length === 0) {
   console.error(
-    "Rendered-output guard found no HTML files under .next/server/app.",
+    "Rendered-output guard found no HTML files under .next/server/app or .next/output.",
   );
   process.exit(1);
 }
