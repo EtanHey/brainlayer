@@ -27,24 +27,10 @@ def gate():
         *[
             f"src/brainlayer/{name}.py"
             for name in (
-                "maintenance_calendar",
-                "maintenance",
-                "maintenance_control",
-                "service_supervisor",
-                "supervisor_guard",
-                "supervisor_child",
-                "supervisor_jobs",
-                "supervisor_diagnostics",
-                "vector_store",
-                "backup_daily",
-                "migration_journal",
-                "migration_runtime",
-                "migration_custody",
-                "launchd_consolidation",
-                "launchd_revert",
-                "watcher",
-                "watcher_bridge",
-            )
+                "maintenance_calendar maintenance maintenance_control service_supervisor supervisor_guard "
+                "supervisor_child supervisor_jobs supervisor_diagnostics vector_store backup_daily migration_journal "
+                "migration_runtime migration_custody launchd_consolidation launchd_revert watcher watcher_bridge"
+            ).split()
         ],
         "src/brainlayer/pipeline/nested/stage.py",
         "scripts/launchd/install.sh",
@@ -216,3 +202,19 @@ def test_tag_hook_blocks_before_suite_when_full_sweep_missing(tmp_path):
         repo, log, f"refs/tags/v1.1.0 {sha} refs/tags/v1.1.0 {'0' * 40}\n", extra_env={"FIXTURE_SWEEP_EXIT": "1"}
     )
     assert result.returncode != 0 and not log.exists()
+
+
+def test_release_gate_peels_an_annotated_tag_before_checking_receipt(gate, tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("hook_fixture", ROOT / "tests/test_run_tests_script.py")
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    repo, _ = fixture._repo_with_annotated_tags(tmp_path)
+    tag_object = fixture._rev_parse(repo, "v1.1.0")
+    commit = fixture._rev_parse(repo, "v1.1.0^{commit}")
+    assert tag_object != commit
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(sys, "argv", ["gate", "verify-release", "EtanHey/brainlayer", tag_object, "--tag"])
+    checked = []
+    monkeypatch.setattr(gate, "verify_release", lambda repo, sha: checked.append(sha))
+    gate.main()
+    assert checked == [commit]

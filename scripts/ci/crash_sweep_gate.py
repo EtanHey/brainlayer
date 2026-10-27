@@ -75,9 +75,15 @@ def main():
     release = commands.add_parser("verify-release")
     release.add_argument("repo")
     release.add_argument("sha")
+    release.add_argument("--tag", action="store_true", help="peel a local tag object to its commit")
     args = parser.parse_args()
     if args.command == "verify-release":
-        verify_release(args.repo, args.sha)
+        sha = (
+            subprocess.check_output(["git", "rev-parse", f"{args.sha}^{{commit}}"], text=True, timeout=60).strip()
+            if args.tag
+            else args.sha
+        )
+        verify_release(args.repo, sha)
         return
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
     files, labels = [], []
