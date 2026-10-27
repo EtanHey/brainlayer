@@ -946,3 +946,241 @@ def test_index_deferral_reason_is_current_run_and_allowlisted(request, monkeypat
         if json.loads(line)["event"] == "finished"
     )
     assert row.get("reason") == expected
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_slow_spawn_receipt_keeps_guard_live_without_early_child_exec(tmp_path, monkeypatch, cancel):
+    from brainlayer import maintenance_calendar as calendar
+
+    entered, release = threading.Event(), threading.Event()
+    events, pulses, observations = [], [], []
+    directory, logs, marker = tmp_path / "calendar", tmp_path / "logs", tmp_path / "executed"
+    logs.mkdir()
+    read_fd, write_fd = os.pipe()
+    guard = SimpleNamespace(stdin=os.fdopen(write_fd, "wb", buffering=0), poll=lambda: None)
+    original_record, original_write = calendar.record, os.write
+
+    def record(path, **event):
+        if event.get("event") == "spawn":
+            events.append("receipt-enter")
+            entered.set()
+            assert release.wait(3)
+            original_record(path, **event)
+            events.append("durable-receipt")
+        else:
+            original_record(path, **event)
+
+    def write(fd, data):
+        if fd == write_fd and data == b"H\n" and entered.is_set():
+            pulses.append(data)
+        elif fd == write_fd and data.startswith(b"+"):
+            events.append("registered")
+        elif data == b"R":
+            events.append("gate-release")
+        return original_write(fd, data)
+
+    monkeypatch.setattr(calendar, "record", record)
+    monkeypatch.setattr(os, "write", write)
+
+    # A watchdog thread releases even the old synchronous implementation, so red cannot hang.
+    def observe():
+        assert entered.wait(3)
+        release.wait(0.5)  # Longer than the private 0.2 s heartbeat budget.
+        observations.append((len(pulses), marker.exists()))
+        release.set()
+
+    observer = threading.Thread(target=observe)
+    observer.start()
+
+    async def scenario():
+        stop, heartbeat_stop = asyncio.Event(), asyncio.Event()
+        heartbeat = asyncio.create_task(calendar.pulse(guard, heartbeat_stop, 0.02))
+
+        async def run():
+            with calendar.Custody(directory) as custody:
+                return await calendar._execute_step(
+                    calendar.Step(
+                        "jsonl-backup", (sys.executable, "-c", f"open({str(marker)!r},'a').write('once\\n')"), 2
+                    ),
+                    os.environ.copy(),
+                    directory=directory,
+                    logs=logs,
+                    custody=custody,
+                    guard=guard,
+                    stop=stop,
+                    guard_timeout=0.2,
+                    shutdown_timeout=2,
+                )
+
+        task = asyncio.create_task(run())
+        try:
+            while not entered.is_set():
+                await asyncio.sleep(0.01)
+            if cancel:
+                task.cancel()
+                await asyncio.sleep(0.05)
+                assert not task.done()
+                with pytest.raises(BlockingIOError), calendar.Custody(directory):
+                    pass
+                task.cancel()  # Repeated cancellation must still drain the worker.
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                assert await task == 0
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            heartbeat_stop.set()
+            await heartbeat
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+        observer.join(3)
+        guard.stdin.close()
+        os.close(read_fd)
+    assert observations and observations[0][0] >= 3, "receipt I/O starved the heartbeat loop"
+    assert not observations[0][1], "child executed before its durable receipt"
+    if cancel:
+        assert "registered" not in events and "gate-release" not in events and not marker.exists()
+    else:
+        assert events.index("durable-receipt") < events.index("registered") < events.index("gate-release")
+        assert marker.read_text() == "once\n"
+    with calendar.Custody(directory):
+        pass
+
+
+def test_real_guard_kills_permanently_stuck_calendar_worker_and_reaps(tmp_path):
+    import select
+    import signal
+    import time
+
+    from brainlayer.supervisor_guard import group_exists
+
+    code = r"""
+import asyncio,datetime as dt,inspect,os,sys,time
+from pathlib import Path
+from types import SimpleNamespace
+from brainlayer import maintenance_calendar as calendar
+p=Path(sys.argv[1]); marker=p/'child-ready'
+calendar.maintenance_control.control_client=lambda: SimpleNamespace(path=p/'unused.sock',request=lambda:{},_disabled=lambda *a,**kw:set())
+execute=calendar._execute_step
+def stuck():
+ while True: time.sleep(.05)
+async def wedged(*args,**kwargs):
+ child=asyncio.create_task(execute(*args,**kwargs))
+ while not marker.exists():
+  if child.done(): await child; raise RuntimeError('child stopped before wedge')
+  await asyncio.sleep(.01)
+ print(marker.read_text(),flush=True)
+ await calendar._blocking(stuck)
+ await child
+calendar._execute_step=wedged
+step=calendar.Step('jsonl-backup',(sys.executable,'-c',f"import os,time; open({str(marker)!r},'w').write(str(os.getpid())); time.sleep(60)"),60)
+options={'operation_timeout':.5} if 'operation_timeout' in inspect.signature(calendar.run_calendar).parameters else {}
+asyncio.run(calendar.run_calendar([step],p/'calendar',p/'logs',guard_timeout=.4,shutdown_timeout=1,now_fn=lambda:dt.datetime(2026,10,27,5),**options))
+"""
+    errors = (tmp_path / "runner.err").open("wb")
+    parent = subprocess.Popen((sys.executable, "-c", code, str(tmp_path)), stdout=subprocess.PIPE, stderr=errors)
+    group = None
+    try:
+        assert select.select([parent.stdout], [], [], 5)[0]
+        line = parent.stdout.readline()
+        assert line, (tmp_path / "runner.err").read_text()
+        group = int(line)
+        assert parent.wait(timeout=3) == -signal.SIGKILL
+        deadline = time.monotonic() + 3
+        while group_exists(group) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not group_exists(group)
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+        parent.wait(timeout=2)
+        if group:
+            deadline = time.monotonic() + 3
+            while group_exists(group) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if group_exists(group):
+                os.killpg(group, signal.SIGKILL)
+        errors.close()
+
+
+def test_backup_budget_failure_never_spawns_a_child(tmp_path, monkeypatch):
+    from brainlayer import maintenance_calendar as calendar
+
+    spawned = []
+    spawn = calendar.gated_spawn
+
+    def tracked(*args, **kwargs):
+        spawned.append(True)
+        return spawn(*args, **kwargs)
+
+    def invalid(step):
+        raise ValueError("invalid backup timeout")
+
+    monkeypatch.setattr(calendar, "gated_spawn", tracked)
+    monkeypatch.setattr(calendar, "backup_deadline", invalid)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    read, write = os.pipe()
+    guard = SimpleNamespace(stdin=os.fdopen(write, "wb", buffering=0), poll=lambda: None)
+    try:
+        with calendar.Custody(tmp_path / "calendar") as custody:
+            with pytest.raises(ValueError, match="invalid backup timeout"):
+                asyncio.run(
+                    calendar._execute_step(
+                        calendar.Step("backup-daily", (sys.executable, "-c", "pass"), 2),
+                        os.environ.copy(),
+                        directory=custody.directory,
+                        logs=logs,
+                        custody=custody,
+                        guard=guard,
+                        stop=asyncio.Event(),
+                        guard_timeout=0.4,
+                        shutdown_timeout=1,
+                    )
+                )
+        assert not spawned
+    finally:
+        guard.stdin.close()
+        os.close(read)
+
+
+@pytest.mark.parametrize("budget", [0, -1, float("inf"), float("nan")])
+def test_calendar_rejects_invalid_operation_budget(tmp_path, budget):
+    with pytest.raises(ValueError, match="invalid calendar timing"):
+        asyncio.run(run_calendar([], tmp_path / "calendar", tmp_path / "logs", operation_timeout=budget))
+
+
+def test_overdue_calendar_operation_emits_once_before_suppressing_heartbeat(monkeypatch):
+    import time
+
+    from brainlayer import maintenance_calendar as calendar
+
+    emitted, writes = [], []
+    operation = calendar.CalendarOperation("blocked-receipt", time.monotonic() - 1)
+
+    async def scenario():
+        stop = asyncio.Event()
+        ticks = []
+
+        async def sleep(interval):
+            ticks.append(True)
+            if len(ticks) == 2:
+                stop.set()
+
+        monkeypatch.setattr(calendar.asyncio, "sleep", sleep)
+        monkeypatch.setattr(calendar.os, "write", lambda *args: writes.append(args))
+        guard = SimpleNamespace(pid=1234, poll=lambda: None, stdin=SimpleNamespace(fileno=lambda: 999))
+        await calendar.pulse(
+            guard, stop, 0.01, {object(): operation}, 0.5, SimpleNamespace(emit=lambda **row: emitted.append(row))
+        )
+
+    asyncio.run(scenario())
+    assert not writes and len(emitted) == 1
+    row = emitted[0]
+    assert row["event"] == "heartbeat-suppressed" and row["reason"] == "operation-overdue"
+    assert row["operation"] == "blocked-receipt" and row["budget_s"] == 0.5
+    assert row["deadline_monotonic"] == operation.started + 0.5
