@@ -595,12 +595,12 @@ final class WatcherHealthStatusTests: XCTestCase {
         XCTAssertEqual(parsed.earliestQuarantinedRecordAt!.timeIntervalSince1970, 1_790_715_600.5, accuracy: 0.01)
     }
 
-    // MARK: S5 — the shared snapshot dots at 301 s, not 300 s
+    // MARK: S5 — the shared snapshot dots past fifteen minutes
 
     @MainActor
-    func testSharedSnapshotDotsOnlyPastThe300SecondThreshold() {
+    func testSharedSnapshotDotsOnlyPastTheFifteenMinuteThreshold() {
         let now = BrainBarStatusSnapshotTests.now
-        for (age, dot) in [(300.0, false), (301.0, true)] {
+        for (age, dot) in [(300.0, false), (301.0, false), (900.0, false), (901.0, true)] {
             let file = WatcherHealthFileRead.readable(WatcherHealthFile(updatedAt: now.addingTimeInterval(-age), pollCount: 72))
             var inputs = BrainBarStatusSnapshotTests.healthy()
             inputs.watcher = WatcherHealthStatus.derive(launchd: .running, file: file, now: now)
@@ -626,7 +626,7 @@ final class WatcherHealthStatusTests: XCTestCase {
         inputs.observations?[.watch] = paused
         BrainBarStatusSnapshotTests.assertAgree(inputs, dot: false, "paused watcher")
         inputs.observations?[.watch] = .stateOnly(.failed("exit 1"))
-        BrainBarStatusSnapshotTests.assertAgree(inputs, dot: true, "stopped watcher, stale heartbeat")
+        BrainBarStatusSnapshotTests.assertAgree(inputs, dot: false, "a stop without kill evidence remains a notice")
     }
 
 }

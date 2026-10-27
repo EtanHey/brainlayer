@@ -15,6 +15,11 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
     let nextRunAt: Date?
     let isContinuous: Bool
     var pid: Int32? = nil
+    /// Launchd/supervisor evidence, never inferred from a heartbeat gap.
+    var uncleanExit: String? = nil
+    var healthySince: Date? = nil
+    var killCheckUnavailable: String? = nil
+    var calendarNightOutcome: BrainBarCalendarHistory.NightOutcome? = nil
     var ownership: BrainBarJobOwnership = .legacy
     var ownerNote: String? = nil
     /// Owner notes are informational ("last result: ok", "PID …"); only a failed result is a warning.
@@ -28,6 +33,7 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
     var calendarIndexDeferralReason: String? = nil
     /// S5: failed calendar runs of this step in a row, newest first (deferrals neither count nor reset).
     var calendarConsecutiveFailures: Int? = nil
+    var calendarRunStatus: String? = nil
     /// S5: the schedule or parent probe could not be read; the known run above still stands.
     var calendarScheduleUncertainty: String? = nil
     /// S5: the installed calendar LaunchAgent exists but is not a usable schedule (malformed config).
@@ -112,7 +118,7 @@ enum BrainLayerLaunchdGroupHealth: Equatable, Sendable {
         case .unknown: "Status unknown"
         case .skipped: "Skipped"
         case .deferred: "Deferred"
-        case .notice: "No action needed"
+        case .notice: "Notice"
         }
     }
 }
@@ -571,7 +577,7 @@ struct BrainBarBackupsHealth: Equatable, Sendable {
             case .unknown: "Status unknown"
             case .skipped: "Skipped"
             case .deferred: "Deferred"
-            case .notice: "No action needed"
+            case .notice: "Notice"
             }
         }
     }
