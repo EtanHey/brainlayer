@@ -32,7 +32,8 @@ break. CI wiring is a follow-up, outside this PR.
 | A run terminates and releases custody within budget | `BoundedTermination`, `EventuallyReleased` | Guarded workers pass; pre-guard and post-guard wedges fail |
 | Healthy operations do not provoke SIGKILL | `NoFalseKill` | Finite off-loop stalls pass; historical synchronous I/O fails |
 | One child, after durable custody and registration | `ExactlyOneChild` | Registration **write** precedes release; actual guard receipt is not acknowledged |
-| Each started run has one reported terminal outcome | `Custody`, `AtMostOneTerminal` | Recent nightly passes; recovery, older and overwritten pending runs fail |
+| Each started run has one reported logical outcome | `Custody`, `AtMostOneTerminal` | Recent nightly passes; recovery, older and overwritten pending runs fail |
+| Each run has at most one physical terminal record | `TerminalRecordUnique` | Fails: recovery writes both abandoned and synthetic summary |
 | A torn journal cannot stop the next run | `TornJournalLive` | Passes with skipped torn rows and separated appends |
 | Recovery does not signal a reused PID | `PidReuseSafe` | Two birth generations; actual recovery function probed too |
 

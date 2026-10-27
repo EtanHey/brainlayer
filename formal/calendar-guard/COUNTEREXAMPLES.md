@@ -48,6 +48,12 @@ Source lines refer to the commits in `coverage.json`. Rerun logs contain full TL
   the next scanner skips that line, finds no runner identity, and cannot publish
   its terminal outcome. `maintenance_calendar.py:115-124,180-212,758-769`.
   The passing custody cases require a durable initial runner marker.
+- **`finding-terminal-record-count` — `TerminalRecordUnique`:** recovery
+  appends `abandoned`, then its synthetic `summary`, for one run identity.
+  That is one logical outcome but two physical terminal rows, so the brief's
+  literal record-uniqueness requirement fails. Both interpretations remain
+  visible. `maintenance_calendar.py:266,271-281`; actual file probes produce
+  one abandoned row and one summary row.
 - **`finding-guard-killed` — `BoundedTermination`:** an executor wedges and the
   environment kills the guard; suppressing H cannot kill the parent anymore.
   This exposes the necessary surviving-guard assumption, not a regression

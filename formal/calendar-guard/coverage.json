@@ -163,5 +163,11 @@
     "pre-1519": "f01469cfdac1368d54a9f9d47bf743f5fc49ca8d",
     "pre-1517": "54c580ca6849c2d32628f9ad38d924c54109f055",
     "1519-r1": "b8e476db50ed77045f53d0212922637f1df72384"
+  },
+  "properties": {
+    "TerminalRecordUnique": [
+      "src/brainlayer/maintenance_calendar.py:266",
+      "src/brainlayer/maintenance_calendar.py:271-281"
+    ]
   }
 }

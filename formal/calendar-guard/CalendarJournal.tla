@@ -79,4 +79,7 @@ Custody == s.pc = "done" =>
                s.outcomes[r] = 1 /\ r \in s.observed
 PidReuseSafe == ~s.wrongKill
 TornJournalLive == <>s.nextRan
+PhysicalTerminalCount(run) == Cardinality({i \in 1..Len(s.journal):
+    s.journal[i].run = run /\ s.journal[i].event \in TerminalEvents})
+TerminalRecordUnique == \A run \in 1..2: PhysicalTerminalCount(run) <= 1
 =============================================================================

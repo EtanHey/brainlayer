@@ -277,6 +277,15 @@ def matrix(current, histories):
     )
     cases.append(
         case(
+            "finding-terminal-record-count",
+            "CalendarJournal",
+            j,
+            ["TerminalRecordUnique"],
+            violation="TerminalRecordUnique",
+        )
+    )
+    cases.append(
+        case(
             "finding-guard-killed",
             "CalendarGuard",
             g | dict(Kill="guard", Mode="wedge"),
