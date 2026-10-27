@@ -21,6 +21,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from .supervisor_diagnostics import DiagnosticSink, emit
+
 
 @contextmanager
 def component_gate(directory: Path, *, exclusive=False):
@@ -218,23 +220,59 @@ class Custody:
         self._save()
 
 
-def run_guard(parent: int, timeout: float, ready: int, grace: float, shutdown_timeout: float = 20, lease_control=None):
+def run_guard(
+    parent: int,
+    timeout: float,
+    ready: int,
+    grace: float,
+    shutdown_timeout: float = 20,
+    lease_control=None,
+    *,
+    parent_birth=None,
+    diagnostics=None,
+    diagnostic_fd=None,
+):
     """H / +pgid / -pgid / Q, then EOF. Only the exact live parent can be killed."""
     if os.getppid() != parent:
         raise RuntimeError("guard parent identity mismatch")
+    owned_sink = None
+    if diagnostic_fd is not None:
+        try:
+            owned_sink = DiagnosticSink(diagnostic_fd)
+        except (OSError, RuntimeError):
+            os.close(diagnostic_fd)  # A diagnostics-thread startup failure cannot disarm the guard.
+    diagnostics = owned_sink if owned_sink is not None else diagnostics
+    parent_birth = parent_birth if parent_birth is not None else start_time(parent)
+    emit(diagnostics, event="guard-started", parent_pid=parent, parent_start_time=parent_birth, guard_pid=os.getpid())
     os.write(ready, b"R")
     os.close(ready)
     groups, buffer, quiesced = set(), b"", False
-    deadline = time.monotonic() + timeout
+    timed_out = False
+    last_heartbeat = time.monotonic()
+    deadline = last_heartbeat + timeout
     channel = socket.socket(fileno=lease_control) if lease_control is not None else None
     lease = None
     try:
         while True:
             remaining = max(0, deadline - time.monotonic())
             readable = select.select([0, channel] if channel else [0], [], [], remaining)[0]
+            timeout_event = dict(
+                event="guard-timeout",
+                health_event="supervisor_guard_timeout",
+                parent_pid=parent,
+                parent_start_time=parent_birth,
+                guard_pid=os.getpid(),
+                mode="shutdown" if quiesced else "heartbeat",
+                guard_mode="Q" if quiesced else "H",
+                last_heartbeat_age_s=time.monotonic() - last_heartbeat,
+                registered_pgids=sorted(groups),
+                reason="shutdown-timeout" if quiesced else "heartbeat-timeout",
+            )
             if not readable:
+                emit(diagnostics, **timeout_event)
                 if os.getppid() == parent:
                     os.kill(parent, signal.SIGKILL)
+                    timed_out = True
                 break
             if channel and channel in readable:
                 message, ancillary, _, _ = channel.recvmsg(1, socket.CMSG_SPACE(4))
@@ -262,7 +300,8 @@ def run_guard(parent: int, timeout: float, ready: int, grace: float, shutdown_ti
             while b"\n" in buffer:
                 line, buffer = buffer.split(b"\n", 1)
                 if line == b"H" and not quiesced:
-                    deadline = time.monotonic() + timeout
+                    last_heartbeat = time.monotonic()
+                    deadline = last_heartbeat + timeout
                 elif line == b"Q" and not quiesced:
                     quiesced = True
                     deadline = time.monotonic() + shutdown_timeout + 2
@@ -276,11 +315,15 @@ def run_guard(parent: int, timeout: float, ready: int, grace: float, shutdown_ti
                 else:
                     raise RuntimeError("invalid guard protocol")
     finally:
-        reap_groups(groups, grace, timeout=shutdown_timeout)
-        if lease is not None:
-            os.close(lease)
-        if channel:
-            channel.close()
+        try:
+            reap_groups(groups, grace, timeout=shutdown_timeout)
+        finally:
+            if lease is not None:
+                os.close(lease)
+            if channel:
+                channel.close()
+            if owned_sink:
+                owned_sink.close(drain=2 if timed_out else 0.02)
 
 
 def guard_lease(guard, fd=None):
@@ -306,12 +349,19 @@ def launch_guard(
 ) -> subprocess.Popen:
     if not math.isfinite(startup_timeout) or startup_timeout <= 0:
         raise ValueError("guard startup timeout must be finite and positive")
+    diagnostic_fd = None
+    try:
+        diagnostic_fd = DiagnosticSink.open_fd(custody.directory / "guard-events.jsonl")
+    except OSError:
+        logging.warning("guard diagnostic sink unavailable; timeout enforcement remains active")
     read, write = os.pipe()
     channel, receiver = socket.socketpair() if lease_control else (None, None)
     try:
         command = (
             "from brainlayer.supervisor_guard import run_guard; import sys; "
-            "run_guard(int(sys.argv[1]),float(sys.argv[2]),int(sys.argv[3]),float(sys.argv[4]),float(sys.argv[5]),None if sys.argv[6]=='-' else int(sys.argv[6]))"
+            "run_guard(int(sys.argv[1]),float(sys.argv[2]),int(sys.argv[3]),float(sys.argv[4]),float(sys.argv[5]),"
+            "None if sys.argv[6]=='-' else int(sys.argv[6]),parent_birth=sys.argv[7],"
+            "diagnostic_fd=None if sys.argv[8]=='-' else int(sys.argv[8]))"
         )
         guard = subprocess.Popen(
             (
@@ -324,9 +374,17 @@ def launch_guard(
                 str(grace),
                 str(shutdown_timeout),
                 str(receiver.fileno()) if receiver else "-",
+                start_time(os.getpid()) or "unknown",
+                str(diagnostic_fd) if diagnostic_fd is not None else "-",
             ),
             stdin=subprocess.PIPE,
-            pass_fds=(custody.fd, write, *extra_fds, *((receiver.fileno(),) if receiver else ())),
+            pass_fds=(
+                custody.fd,
+                write,
+                *extra_fds,
+                *((receiver.fileno(),) if receiver else ()),
+                *((diagnostic_fd,) if diagnostic_fd is not None else ()),
+            ),
             start_new_session=True,
         )
         os.close(write)
@@ -344,6 +402,8 @@ def launch_guard(
             channel = None
         return guard
     finally:
+        if diagnostic_fd is not None:
+            os.close(diagnostic_fd)
         os.close(read)
         if write is not None:
             os.close(write)
