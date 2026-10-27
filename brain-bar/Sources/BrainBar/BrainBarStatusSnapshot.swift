@@ -134,7 +134,11 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         }
         // B4: the badge and its primary reason are the snapshot's own typed issue.
         if let issue = relevant.first(where: { $0.severity == .attention }) { return .init(badge: .attention, reason: issue.text) }
-        if let failure = relevant.first(where: { $0.severity == .notice && $0.id.hasPrefix("job.") && !$0.jobs.isDisjoint(with: backupJobs) }) {
+        if let failure = relevant.first(where: {
+            $0.severity == .notice && $0.noticeHealth == .notice
+                && ([.backups, .drive].contains($0.component) || !$0.jobs.isDisjoint(with: backupJobs)
+                    || $0.alertKey == "unknown")
+        }) {
             return .init(badge: .notice, reason: failure.text)
         }
         guard health.badge == .attention else { return health }

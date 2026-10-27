@@ -400,11 +400,11 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             // B4/B5: Drive severity comes from the one published snapshot (the runtime's auth state).
             runtime.driveAuth.setForPreview(status: .init(state: .invalid, reason: nil, expiresAt: nil))
             model.republishStatus()
-            XCTAssertEqual(model.backupsHealth(drive: drive(.invalid)).badge, .unknown)
+            XCTAssertEqual(model.backupsHealth(drive: drive(.invalid)).badge, .notice)
             runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: now.addingTimeInterval(5 * 86400)))
             model.republishStatus()
             model.setObservabilityResultForTesting(.readable(document.replacingBackupsErrorType("job_alert:Fixture failure")))
-            XCTAssertEqual(model.backupsHealth(drive: drive()).badge, .unknown)
+            XCTAssertEqual(model.backupsHealth(drive: drive()).badge, .notice)
             XCTAssertEqual(model.backupChecks?.verdictTone, .neutral)
             menu.menuNeedsUpdate(menu.contextMenuForTesting)
             XCTAssertTrue(menu.contextMenuForTesting.items.first?.title.hasPrefix("Info:") == true)
