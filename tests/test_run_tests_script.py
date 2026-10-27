@@ -181,6 +181,10 @@ def _install_pre_push_hook(repo: Path, tmp_path: Path) -> Path:
     runner = repo / "scripts" / "ci" / "run_with_deadline.py"
     runner.parent.mkdir(parents=True, exist_ok=True)
     runner.write_text(GATE_RUNNER_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    # Scope tests isolate the hosted gate; test_crash_sweep_gate exercises its failure paths.
+    (runner.parent / "crash_sweep_gate.py").write_text(
+        "import os, sys\nraise SystemExit(int(os.environ.get('FIXTURE_SWEEP_EXIT', '0')))\n"
+    )
     return env_log
 
 

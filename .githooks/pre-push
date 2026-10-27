@@ -46,7 +46,11 @@ if [ ! -t 0 ]; then
       *) delete_refs=$((delete_refs + 1)); continue ;;
     esac
     case "$local_ref" in
-      refs/tags/*) tag_count=$((tag_count + 1)); tag_name="${local_ref#refs/tags/}" ;;
+      refs/tags/*)
+        if [[ "$local_ref" == refs/tags/v* ]]; then
+          python3 scripts/ci/crash_sweep_gate.py verify-release EtanHey/brainlayer "$local_sha" --tag </dev/null || exit 1
+        fi
+        tag_count=$((tag_count + 1)); tag_name="${local_ref#refs/tags/}" ;;
       *) non_tag_refs=$((non_tag_refs + 1)) ;;
     esac
   done
