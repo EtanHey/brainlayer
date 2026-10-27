@@ -18,6 +18,8 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
     /// Launchd/supervisor evidence, never inferred from a heartbeat gap.
     var uncleanExit: String? = nil
     var healthySince: Date? = nil
+    var killCheckUnavailable: String? = nil
+    var calendarNightOutcome: BrainBarCalendarHistory.NightOutcome? = nil
     var ownership: BrainBarJobOwnership = .legacy
     var ownerNote: String? = nil
     /// Owner notes are informational ("last result: ok", "PID …"); only a failed result is a warning.

@@ -77,6 +77,8 @@ struct BrainBarStatusInputs: Sendable {
 ///
 /// Etan's dot rule (2026-10-27): no verified Drive copy within 36 h, an unclean daemon/
 /// watcher exit until six healthy hours, or two consecutive failed/abandoned maintenance runs.
+/// Lead r1: an unprovable backup age for >60 min is at risk; a supposedly running watcher
+/// without a heartbeat for >15 min is not capturing. Future receipts cannot prove backup safety.
 /// Other faults remain visible notices on the same snapshot.
 struct BrainBarStatusSnapshot: Equatable, Sendable {
     let issues: [BrainBarStatusIssue]
@@ -114,7 +116,9 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                   nextRunText: status.nextRunText, note: status.note, noteTone: status.noteTone)
         }
         if let issue = touching.first(where: { $0.severity == .attention }) { return with(.unhealthy, issue.text) }
-        // Only a raw "Needs attention" is re-labelled; Unknown and Deferred already are neutral.
+        if let notice = touching.first, status.health == .healthy || status.health == .skipped || status.health == .awaitingRun {
+            return with(notice.noticeHealth, notice.text)
+        }
         guard [.unhealthy, .deferred, .unknown].contains(status.health) else { return status }
         let health = status.health == .unhealthy ? touching.first?.noticeHealth ?? .notice : status.health
         return with(health, touching.first?.text ?? status.attentionReason)
@@ -130,6 +134,9 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         }
         // B4: the badge and its primary reason are the snapshot's own typed issue.
         if let issue = relevant.first(where: { $0.severity == .attention }) { return .init(badge: .attention, reason: issue.text) }
+        if let failure = relevant.first(where: { $0.severity == .notice && $0.id.hasPrefix("job.") && !$0.jobs.isDisjoint(with: backupJobs) }) {
+            return .init(badge: .notice, reason: failure.text)
+        }
         guard health.badge == .attention else { return health }
         guard let issue = relevant.first else { return .init(badge: .unknown, reason: health.reason) }
         let badge: BrainBarBackupsHealth.Badge = switch issue.noticeHealth {
@@ -174,6 +181,17 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                               noticeHealth: .unknown))
         }
 
+        if let problem = observations?[.watch]?.killCheckUnavailable {
+            builder.add(.init(id: "process.kill-check", component: .watcher, severity: .notice,
+                              text: "Kill check unavailable: " + problem, jobs: [.watch], noticeHealth: .unknown))
+        }
+        if observations?[.watch]?.loadState == .running, desired(.watch),
+           let heartbeat = inputs.watcherHeartbeatAt, now.timeIntervalSince(heartbeat) > 15 * 60 {
+            builder.add(.init(id: "watcher.capture", component: .watcher, severity: .attention,
+                              text: "Watcher isn't capturing; last heartbeat at " + absoluteDate(heartbeat, calendar: inputs.calendar),
+                              jobs: [.watch]))
+        }
+
         if let incident = observations?[.watch]?.uncleanExit {
             let since = observations?[.watch]?.healthySince
             let recovered = since.map { now.timeIntervalSince($0) >= 6 * 3600 && $0 <= now } ?? false
@@ -190,8 +208,10 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         case .notRead:
             break
         case let .unavailable(reason):
-            builder.add(.init(id: "backups.unmeasured", component: .backups, severity: .notice, text: reason,
-                              noticeHealth: .unknown))
+            let atRisk = (inputs.observabilityUnreadableFor ?? 0) > 60 * 60
+            builder.add(.init(id: "backups.unmeasured", component: .backups, severity: atRisk ? .attention : .notice,
+                              text: atRisk ? "BrainLayer backup safety can't be proven: receipt age unavailable for over 60 minutes; " + reason : reason,
+                              jobs: [.backupDaily, .jsonlBackup], noticeHealth: .unknown))
         case let .measured(backups):
             let threshold: TimeInterval = 36 * 3600
             dbCopy = backups.dbSnapshot.flatMap { $0.verified ? $0.lastAt : nil }
@@ -289,19 +309,23 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                                   jobs: [.index]))
             }
         }
-        // Failed and abandoned maintenance runs share the two-run threshold.
-        // R2-2: an earned streak stays the dot through exit-75 deferrals until a proven success.
-        for job in [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly] where desired(job) {
-            guard let observation = observations?[job] else { continue }
-            if observation.isFailedRun {
-                let streak = observation.calendarConsecutiveFailures ?? 1
-                builder.add(maintenanceIssue(job, streak: streak, observation: observation, now: now,
-                                             calendar: inputs.calendar))
-            } else if let earned = observation.earnedStreakThroughDeferral(threshold: 2) {
-                let label = job == .maintenanceWeekly ? "Weekly" : "Nightly"
-                builder.add(.init(id: "job.\(job.rawValue)", component: .maintenance, severity: .attention,
-                                  text: "\(label) maintenance failed on \(earned) consecutive scheduled runs; "
-                                      + "the latest run was deferred (exit 75)", jobs: [job]))
+        // One outcome per scheduled night, independent of which maintenance plan it selected.
+        let maintenanceJobs: [BrainLayerLaunchdJob] = [.maintenanceNightly, .maintenanceWeekly]
+        let night = maintenanceJobs.compactMap { observations?[$0]?.calendarNightOutcome }.first
+        if let night, night.failed, maintenanceJobs.contains(where: desired) {
+            let next = maintenanceJobs.compactMap { observations?[$0]?.nextRunAt }.filter { $0 > now }.min()
+            let retry = next.map { "next retry " + absoluteDate($0, calendar: inputs.calendar) } ?? "next retry time unavailable"
+            let outcome = night.abandoned ? "abandoned" : "failed"
+            let count = night.consecutiveFailures >= 2 ? " (\(night.consecutiveFailures) consecutive failed nights)" : ""
+            builder.add(.init(id: "maintenance.night", component: .maintenance,
+                severity: night.consecutiveFailures >= 2 ? .attention : .notice,
+                text: "Scheduled maintenance \(outcome) at \(absoluteDate(night.at, calendar: inputs.calendar))\(count) — \(retry)",
+                jobs: Set(maintenanceJobs)))
+        } else {
+            // Legacy per-step failures stay visible, but can never earn a nightly-run dot.
+            for job in maintenanceJobs where desired(job) {
+                guard let observation = observations?[job], observation.isFailedRun else { continue }
+                builder.add(maintenanceIssue(job, observation: observation, now: now, calendar: inputs.calendar))
             }
         }
         // 6. Job alerts: the live file names every failing job, including keys the badge lacks.
@@ -422,11 +446,15 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         case .unread, .unavailable: true
         }
         let incomplete = inputs.badge == nil || inputs.watcher == nil || observations == nil || backupsUnread || alertsIncomplete
-        return Self(issues: builder.issues, isChecking: incomplete)
+        // Backup job failures lead the notices even when other sources are unavailable (B2).
+        let backupJobs: Set<BrainLayerLaunchdJob> = [.backupDaily, .jsonlBackup]
+        let backupNotices = builder.issues.filter { $0.severity == .notice && $0.id.hasPrefix("job.") && !$0.jobs.isDisjoint(with: backupJobs) }
+        let otherIssues = builder.issues.filter { !backupNotices.contains($0) }
+        return Self(issues: backupNotices + otherIssues, isChecking: incomplete)
     }
 
     /// One failure is explicit, but only the second consecutive failure gives a dot.
-    static func maintenanceIssue(_ job: BrainLayerLaunchdJob, streak: Int, observation: BrainLayerLaunchdJobObservation,
+    static func maintenanceIssue(_ job: BrainLayerLaunchdJob, observation: BrainLayerLaunchdJobObservation,
                                  now: Date, calendar: Calendar) -> BrainBarStatusIssue {
         let abandoned = observation.calendarRunStatus == "abandoned"
         let label = abandoned ? "Scheduled" : job == .maintenanceWeekly ? "Weekly" : "Nightly"
@@ -434,9 +462,8 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         let outcome = abandoned ? "abandoned" : "failed"
         let retry = observation.nextRunAt.flatMap { $0 > now ? $0 : nil }
             .map { "next retry " + absoluteDate($0, calendar: calendar) } ?? "next retry time unavailable"
-        let count = streak >= 2 ? " (\(streak) consecutive failed or abandoned runs)" : ""
         return .init(id: abandoned ? "maintenance.abandoned-run" : "job.\(job.rawValue)", component: .maintenance,
-                     severity: streak >= 2 ? .attention : .notice, text: "\(label) maintenance \(outcome) at \(when)\(count) — \(retry)", jobs: [job])
+                     severity: .notice, text: "\(label) maintenance \(outcome) at \(when) — \(retry)", jobs: [job])
     }
 
     static func absoluteDate(_ date: Date, calendar: Calendar) -> String {
@@ -511,7 +538,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         /// A job alert for a job the calendar already reported: the same issue, now with Show log.
         mutating func attachAlert(_ key: String, reason: String, toJob job: BrainLayerLaunchdJob) -> Bool {
             guard let index = issues.firstIndex(where: { $0.id == "job.\(job.rawValue)"
-                || ($0.id == "maintenance.abandoned-run" && $0.jobs.contains(job)) }) else { return false }
+                || (["maintenance.abandoned-run", "maintenance.night"].contains($0.id) && $0.jobs.contains(job)) }) else { return false }
             issues[index].alertKey = key
             issues[index].alertReason = reason
             return true

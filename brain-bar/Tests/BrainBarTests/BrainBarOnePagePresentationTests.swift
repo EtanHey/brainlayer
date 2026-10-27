@@ -348,23 +348,14 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             let presentation = try makePresentation(result: BrainBarOnePageTestFixture.healthyResult(),
                 now: now, statusVerdict: snapshot.verdict)
             let reason = try XCTUnwrap(model.groupStatus(group).attentionReason)
-            // S5 dot policy: a failed backup with no newer verified copy is a dot; a single failed
-            // Index or maintenance run is visible neutral text. Neither is ever "All good".
+            // Every failed calendar step is visible, without a dot from per-step legacy history.
             XCTAssertNotEqual(presentation.status.headline, "All good")
-            if group == .backups {
-                XCTAssertEqual(presentation.status.headline, "1 thing needs you")
-                XCTAssertEqual(presentation.status.reason, reason)
-                XCTAssertEqual(presentation.attentionItems, [reason])
-                XCTAssertEqual(presentation.status.tone, .amber)
-                XCTAssertEqual(model.groupStatus(group).health, .unhealthy)
-            } else {
-                XCTAssertEqual(presentation.status.headline, "No action needed")
-                XCTAssertEqual(presentation.attentionItems, [])
-                XCTAssertEqual(presentation.status.tone, .neutral)
-                XCTAssertTrue(snapshot.verdict.notices.contains(reason), "\(snapshot.verdict.notices)")
-                // L1: a failed maintenance run is a deferral notice; a single Index failure is a notice.
-                XCTAssertEqual(model.groupStatus(group).health, group == .maintenance ? .deferred : .notice)
-            }
+            XCTAssertEqual(presentation.status.headline, "Status notice")
+            XCTAssertTrue(presentation.status.reason?.contains(reason) == true)
+            XCTAssertEqual(presentation.attentionItems, [])
+            XCTAssertEqual(presentation.status.tone, .neutral)
+            XCTAssertTrue(snapshot.verdict.notices.contains(reason), "\(snapshot.verdict.notices)")
+            XCTAssertEqual(model.groupStatus(group).health, .notice)
         }
     }
 

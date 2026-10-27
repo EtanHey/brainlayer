@@ -28,7 +28,7 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         let (snapshot, surfaces) = T.assertAgree(inputs, dot: true, "today")
         let notice = snapshot.attention.filter { $0.jobs.contains(.maintenanceWeekly) }
         XCTAssertEqual(notice.count, 1, "\(snapshot.notices)")
-        XCTAssertEqual(notice.first?.text.hasPrefix("Weekly maintenance failed at 2026-10-26 04:00"), true, notice.first?.text ?? "")
+        XCTAssertEqual(notice.first?.text.hasPrefix("Scheduled maintenance failed at 2026-10-26 04:00"), true, notice.first?.text ?? "")
         XCTAssertEqual(surfaces.jobs[.maintenance]?.health, .unhealthy)
     }
 
@@ -58,8 +58,9 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
     func testMissingNextRunIsUncertaintyNotAMaintenanceEmergency() {
         var inputs = T.healthy()
         inputs.observations?[.maintenanceWeekly] = Self.weekly(76, consecutive: 1, next: nil)
+        inputs.observations?[.maintenanceNightly] = T.step(next: nil)
         let (snapshot, _) = T.assertAgree(inputs, dot: false, "no next run")
-        XCTAssertTrue(snapshot.notices.contains { $0.text.hasPrefix("Weekly maintenance failed at 2026-10-26 04:00 GMT+2 — next retry time unavailable") },
+        XCTAssertTrue(snapshot.notices.contains { $0.text.hasPrefix("Scheduled maintenance failed at 2026-10-26 04:00 GMT+2 — next retry time unavailable") },
                       "\(snapshot.notices)")
     }
 
@@ -286,6 +287,33 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         clock.now = T.now.addingTimeInterval(120)
         await model.sampleStatusTick(includeLaunchd: false)
         XCTAssertFalse(model.publishedStatus.needsAttention, "a new episode starts its own clock")
+    }
+
+    func testUnmeasurableBackupReadDoesNotResetTheSafetyDeadline() async throws {
+        let clock = Clock(T.now)
+        let unmeasurable = try document(.init(state: "unmeasurable", reason: "fixture source unavailable", inputs: [],
+            freshness: nil, thresholdHours: nil, retentionInvariant: nil, survivingArchives30D: nil,
+            errorType: nil, lastVerifiedUpload: nil, dbSnapshot: nil, launchd: nil), at: T.now)
+        let measured = try document(T.backups(), at: T.now)
+        final class Result: @unchecked Sendable { var value: ObservabilityReadResult = .unreadable("missing") }
+        let result = Result()
+        let model = model(clock: clock, observability: { result.value })
+        model.applyHealthBadge(.init(badgeOn: false, reason: "", activeCodes: []), alerts: .init(active: [:]))
+        await model.sampleStatusTick(includeLaunchd: false)
+        clock.now = T.now.addingTimeInterval(1800)
+        result.value = unmeasurable
+        await model.sampleStatusTick(includeLaunchd: false)
+        XCTAssertFalse(model.publishedStatus.needsAttention)
+        clock.now = T.now.addingTimeInterval(3601)
+        await model.sampleStatusTick(includeLaunchd: false)
+        XCTAssertTrue(model.publishedStatus.needsAttention, "readable but unmeasurable is not recovery")
+        result.value = measured
+        await model.sampleStatusTick(includeLaunchd: false)
+        XCTAssertFalse(model.publishedStatus.needsAttention)
+        result.value = unmeasurable
+        clock.now = T.now.addingTimeInterval(4000)
+        await model.sampleStatusTick(includeLaunchd: false)
+        XCTAssertFalse(model.publishedStatus.needsAttention, "measured backup safety resets the deadline")
     }
 
     func testOneTickReadsEachSourceOnceAndLaunchdOnItsSlowerSubCadence() async throws {

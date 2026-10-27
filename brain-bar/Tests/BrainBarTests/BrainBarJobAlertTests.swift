@@ -322,13 +322,13 @@ final class BrainBarJobAlertTests: XCTestCase {
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
 
         let snapshot = model.publishedStatus
-        XCTAssertTrue(snapshot.needsAttention, "\(snapshot.issues)")
-        XCTAssertTrue(controller.statusDotForTesting, "icon")
-        XCTAssertEqual(controller.contextMenuForTesting.items.first?.title, "Needs attention: \(reason)", "menu")
-        XCTAssertEqual(controller.statusItemForTesting.button?.toolTip, "BrainBar — needs attention: \(reason)")
-        XCTAssertEqual(model.groupStatus(.backups).health, .unhealthy, "Jobs")
-        XCTAssertEqual(model.backupsHealth(drive: nil).badge, .attention, "Backups")
-        XCTAssertEqual(snapshot.attention.map(\.text), [reason], "Dashboard")
+        XCTAssertFalse(snapshot.needsAttention, "\(snapshot.issues)")
+        XCTAssertFalse(controller.statusDotForTesting, "icon")
+        XCTAssertEqual(controller.contextMenuForTesting.items.first?.title, "Info: \(reason)", "menu")
+        XCTAssertEqual(controller.statusItemForTesting.button?.toolTip, "BrainBar")
+        XCTAssertEqual(model.groupStatus(.backups).health, .notice, "Jobs")
+        XCTAssertEqual(model.backupsHealth(drive: nil).badge, .notice, "Backups")
+        XCTAssertEqual(snapshot.notices.map(\.text), [reason], "Dashboard")
 
         // One clean publication removes the same issue everywhere.
         controller.setBadgeForTesting(quietBadge, alertsURL: try writeAlerts("{}"))

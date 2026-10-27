@@ -41,6 +41,10 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         var value = step(.failed("\(job.title): calendar result failed, exit \(code)"), code: code, at: at,
                          next: next, consecutiveFailures: consecutive)
         value.ownerNoteTone = .warning
+        if job == .maintenanceNightly || job == .maintenanceWeekly {
+            value.calendarNightOutcome = .init(scheduledDate: "2026-10-26", at: at, failed: true,
+                                               abandoned: false, consecutiveFailures: consecutive)
+        }
         return value
     }
 
@@ -151,14 +155,14 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
             "BrainLayer full maintenance failed: tonight's local verified snapshot unavailable; VACUUM skipped."])
         let (snapshot, value) = Self.assertAgree(inputs, dot: false, "deferred weekly")
         let notice = snapshot.notices.first { $0.jobs.contains(.maintenanceWeekly) }
-        XCTAssertEqual(notice?.text, "Weekly maintenance failed at 2026-10-26 04:00 GMT+2 — next retry 2026-10-27 03:15 GMT+2")
+        XCTAssertEqual(notice?.text, "Scheduled maintenance failed at 2026-10-26 04:00 GMT+2 — next retry 2026-10-27 03:15 GMT+2")
         XCTAssertEqual(snapshot.notices.filter { $0.jobs.contains(.maintenanceWeekly) }.count, 1,
                        "the job alert and the calendar failure are ONE issue: \(snapshot.notices)")
-        XCTAssertTrue(value.menu.hasPrefix("Info: Weekly maintenance failed at 2026-10-26 04:00"), value.menu)
+        XCTAssertTrue(value.menu.hasPrefix("Info: Scheduled maintenance failed at 2026-10-26 04:00"), value.menu)
         XCTAssertNotEqual(value.dashboard.headline, "All good")
-        XCTAssertEqual(value.dashboard.reason, "Weekly maintenance failed at 2026-10-26 04:00 GMT+2 — next retry 2026-10-27 03:15 GMT+2")
+        XCTAssertEqual(value.dashboard.reason, "Scheduled maintenance failed at 2026-10-26 04:00 GMT+2 — next retry 2026-10-27 03:15 GMT+2")
         XCTAssertEqual(value.jobs[.maintenance]?.health, .notice)
-        XCTAssertEqual(value.jobs[.maintenance]?.attentionReason, "Weekly maintenance failed at 2026-10-26 04:00 GMT+2 — next retry 2026-10-27 03:15 GMT+2")
+        XCTAssertEqual(value.jobs[.maintenance]?.attentionReason, "Scheduled maintenance failed at 2026-10-26 04:00 GMT+2 — next retry 2026-10-27 03:15 GMT+2")
         XCTAssertEqual(value.backups.badge, .healthy, "a maintenance deferral is not a backup failure")
     }
 

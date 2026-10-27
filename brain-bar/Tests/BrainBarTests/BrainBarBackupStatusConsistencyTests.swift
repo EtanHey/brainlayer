@@ -207,7 +207,7 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             (backups(), .valid, false), (backups(age: 48), .valid, true),
             (datedBackups(now.addingTimeInterval(86400)), .valid, true),
             (datedBackups(now.addingTimeInterval(-366 * 86400)), .valid, true),
-            (backups(error: "job_alert:Fixture backup failed"), .valid, true), (backups(), .invalid, true),
+            (backups(error: "job_alert:Fixture backup failed"), .valid, false), (backups(), .invalid, false),
         ]
         let referenceNow = ISO8601DateFormatter().date(from: "2026-09-14T12:00:00Z")!
         let future = ISO8601DateFormatter().date(from: "2027-01-01T12:00:00Z")!
@@ -223,17 +223,16 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
                 initialLaunchdStates: Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, .running) }),
                 refreshStatusOnLoad: false, now: { now },
                 initialObservabilityResult: .readable(document), observabilityCadence: .known(300))
-            // S5 dot policy: a future-dated receipt is clock skew (unknown) — red on the receipt line,
-            // neutral text on the badge and menu, never the dot.
+            // Future receipts cannot prove a current verified Drive copy, so they are backup risk.
             let futureDated = (b.lastVerifiedUpload.map { $0.at > now } ?? false) || (b.dbSnapshot.map { $0.lastAt > now } ?? false)
-            let dot = needsAttention && !futureDated
+            let dot = needsAttention
             if b.verifiedIdle(now: now) {
                 let health = model.backupsHealth(drive: drive(expiresIn: 5 * 86400))
                 XCTAssertEqual(health.badge, dot ? .attention : futureDated ? .notice : .idle)
-                XCTAssertEqual(health.badge.title, dot ? "Needs attention" : futureDated ? "No action needed" : "Idle — no new transcripts")
+                XCTAssertEqual(health.badge.title, dot ? "Needs attention" : futureDated ? "Notice" : "Idle — no new transcripts")
                 XCTAssertEqual(model.backupsHealth(drive: nil).badge, dot ? .attention : futureDated ? .notice : .idle)
                 XCTAssertEqual(model.backupChecks?.verdictTone, needsAttention ? .red : .neutral)
-                if dot { XCTAssertEqual(health.reason, model.backupChecks?.attentionSentence) }
+                if dot { XCTAssertEqual(health.reason, model.publishedStatus.attention.first?.text) }
                 let collector = BrainBarDashboardFixture.makeCollector()
                 let hero = BrainBarHeroPresentation.derive(
                     flow: DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: now),
@@ -401,14 +400,14 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             // B4/B5: Drive severity comes from the one published snapshot (the runtime's auth state).
             runtime.driveAuth.setForPreview(status: .init(state: .invalid, reason: nil, expiresAt: nil))
             model.republishStatus()
-            XCTAssertEqual(model.backupsHealth(drive: drive(.invalid)).badge, .attention)
+            XCTAssertEqual(model.backupsHealth(drive: drive(.invalid)).badge, .unknown)
             runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: now.addingTimeInterval(5 * 86400)))
             model.republishStatus()
             model.setObservabilityResultForTesting(.readable(document.replacingBackupsErrorType("job_alert:Fixture failure")))
-            XCTAssertEqual(model.backupsHealth(drive: drive()).badge, .attention)
-            XCTAssertEqual(model.backupChecks?.verdictTone, .red)
+            XCTAssertEqual(model.backupsHealth(drive: drive()).badge, .unknown)
+            XCTAssertEqual(model.backupChecks?.verdictTone, .neutral)
             menu.menuNeedsUpdate(menu.contextMenuForTesting)
-            XCTAssertTrue(menu.contextMenuForTesting.items.first?.title.hasPrefix("Needs attention:") == true)
+            XCTAssertTrue(menu.contextMenuForTesting.items.first?.title.hasPrefix("Info:") == true)
         }
     }
 

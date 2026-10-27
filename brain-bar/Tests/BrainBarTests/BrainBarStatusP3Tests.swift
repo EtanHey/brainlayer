@@ -60,8 +60,8 @@ final class BrainBarStatusP3Tests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("runs.jsonl")
         let abandoned = """
-        {"event":"abandoned","scheduled_date":"2026-10-25","step":"maintenance-weekly","pid":42,"runner_started_at":1792880000,"detected_at":1792880100,"reason":"runner-killed","ts":1792880100}
-        {"event":"abandoned","scheduled_date":"2026-10-26","step":null,"pid":null,"runner_started_at":1792966400,"detected_at":1792966500,"reason":"runner-vanished","ts":1792966500}
+        {"event":"abandoned","kind":"nightly","incomplete_steps":["maintenance-weekly"],"scheduled_date":"2026-10-25","step":"maintenance-weekly","pid":42,"runner_started_at":1792880000,"detected_at":1792880100,"reason":"runner-killed","ts":1792880100}
+        {"event":"abandoned","kind":"nightly","incomplete_steps":["maintenance-weekly"],"scheduled_date":"2026-10-26","step":null,"pid":null,"runner_started_at":1792966400,"detected_at":1792966500,"reason":"runner-vanished","ts":1792966500}
 
         """
         try Data((abandoned + abandoned).utf8).write(to: file)
@@ -94,7 +94,7 @@ final class BrainBarStatusP3Tests: XCTestCase {
         {"event":"runner","scheduled_date":"2026-10-26","ts":1792966400}
         {"event":"spawn","step":"maintenance-weekly","ts":1792966401,"pid":42}
         {"event":"finished","step":"maintenance-weekly","ts":1792966450,"status":"ok","returncode":0,"replaces":"maintenance-nightly"}
-        {"event":"abandoned","scheduled_date":"2026-10-26","step":"backup-daily","runner_started_at":1792966400,"ts":1792966500,"reason":"runner-vanished"}
+        {"event":"abandoned","kind":"nightly","incomplete_steps":["maintenance-weekly"],"scheduled_date":"2026-10-26","step":"backup-daily","runner_started_at":1792966400,"ts":1792966500,"reason":"runner-vanished"}
 
         """.utf8).write(to: directory.appendingPathComponent("runs.jsonl"))
         let history = BrainBarCalendarHistory.read(directory: directory)

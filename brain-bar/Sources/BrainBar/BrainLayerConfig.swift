@@ -604,7 +604,11 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
                             || disabledLabels.contains("com.brainlayer.maintenance")
                     }
                 }
+                if job == .maintenanceNightly || job == .maintenanceWeekly {
+                    result.calendarNightOutcome = history.maintenanceNight
+                }
                 if job == .watch {
+                    if case .probeError = result.loadState { result.killCheckUnavailable = "Watcher supervisor status unavailable" }
                     if let code = result.lastExitCode, ![0, -15, -2].contains(code) {
                         result.uncleanExit = "Watcher exited uncleanly (exit \(code))"
                         result.healthySince = result.loadState == .running ? result.lastRunAt : nil
@@ -619,8 +623,12 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
 
     private func addingDaemonExit(to observation: BrainLayerLaunchdJobObservation,
                                   daemon: BrainLayerLaunchdCommandResult) -> BrainLayerLaunchdJobObservation {
-        guard let exit = uncleanLaunchdExit(daemon) else { return observation }
         var result = observation
+        if let problem = killCheckProblem(daemon) {
+            result.killCheckUnavailable = [observation.killCheckUnavailable, problem].compactMap { $0 }.joined(separator: "; ")
+            return result
+        }
+        guard let exit = uncleanLaunchdExit(daemon) else { return result }
         let daemonStart = launchdHealthySince(daemon)
         if let watcherExit = observation.uncleanExit {
             result.uncleanExit = "Supervisor daemon " + exit + "; " + watcherExit
@@ -632,6 +640,15 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
             result.healthySince = daemonStart
         }
         return result
+    }
+
+    private func killCheckProblem(_ result: BrainLayerLaunchdCommandResult) -> String? {
+        guard result.terminationStatus == 0 else { return "launchctl print exited \(result.terminationStatus)" }
+        if integerLine(named: "pid", in: result.output) != nil || integerLine(named: "runs", in: result.output) != nil
+            || integerLine(named: "last exit code", in: result.output) != nil
+            || result.output.range(of: #"(?m)^\s*state\s*=\s*\S+"#, options: .regularExpression) != nil
+            || firstInteger(matching: #"last terminating signal\s*=\s*[^\n:]*:\s*(\d+)"#, in: result.output) != nil { return nil }
+        return "launchctl print output could not be parsed"
     }
 
     private func uncleanLaunchdExit(_ result: BrainLayerLaunchdCommandResult) -> String? {

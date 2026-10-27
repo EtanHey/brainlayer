@@ -357,7 +357,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
     // MARK: S5 — first run is neutral; a malformed configuration is a dot
 
     @MainActor
-    func testFirstRunAfterMigrationIsNeutralButMalformedConfigurationIsADot() {
+    func testFirstRunAfterMigrationAndMalformedConfigurationStayVisibleWithoutADot() {
         var inputs = BrainBarStatusSnapshotTests.healthy()
         for job in [BrainLayerLaunchdJob.index, .backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly] {
             var value = BrainLayerLaunchdJobObservation(loadState: .loaded, runs: 0, lastExitCode: nil, lastRunAt: nil,
@@ -376,7 +376,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
         for job in [BrainLayerLaunchdJob.index, .backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly] {
             inputs.observations?[job]?.calendarScheduleProblem = "com.brainlayer.maintenance.plist is malformed: not a property-list dictionary"
         }
-        BrainBarStatusSnapshotTests.assertAgree(inputs, dot: true, "malformed configuration")
+        BrainBarStatusSnapshotTests.assertAgree(inputs, dot: false, "malformed configuration")
     }
 
 }
