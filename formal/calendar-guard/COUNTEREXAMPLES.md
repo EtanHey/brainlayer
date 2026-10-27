@@ -39,10 +39,14 @@ Source lines refer to the commits in `coverage.json`. Rerun logs contain full TL
 - **`finding-late` — `Custody`:** write nightly runner, then die; the next
   successful recovery occurs two days later; the date filter skips the pending
   run forever. `maintenance_calendar.py:223-227`.
-- **`finding-two-pending` — `Custody`:** two runner identities have no terminal
+- **`finding-two-pending` — `Custody` (abstraction finding):** two runner identities have no terminal
   row; a later scan overwrites `latest` with the second; only that second run
   receives an abandonment. `maintenance_calendar.py:188-190,211-227`.
-  Actual function probes confirm the last three findings on disposable files.
+  The fixture bypasses run 2’s real pre-run abandonment scan. In the real
+  sequence this requires an earlier skipped/failed scan (for example the late
+  policy or the swallowed scan exception at :282-284); it is not an independent
+  ordinary-run defect. The disposable-file probe confirms reader policy,
+  not reachability of that fixture through successful sequential runners.
 - **`finding-lost-start` — `Custody`:** the guard or environment kills the
   runner before its initial journal append completes; only torn bytes remain;
   the next scanner skips that line, finds no runner identity, and cannot publish
@@ -58,11 +62,14 @@ Source lines refer to the commits in `coverage.json`. Rerun logs contain full TL
   environment kills the guard; suppressing H cannot kill the parent anymore.
   This exposes the necessary surviving-guard assumption, not a regression
   introduced by #1519. `maintenance_calendar.py:558-569,749-757`.
-- **`registration-ack` — `RegistrationAcknowledged`:** durable record finishes;
+- **`registration-ack` — `RegistrationAcknowledged` (stronger-contract finding):** durable record finishes;
   parent writes `+pid`; parent releases gate and the child executes before the
   guard parses `+pid`. `maintenance_calendar.py:456-458` and
   `supervisor_guard.py:296-314`. The existing promise is enqueue ordering;
   a stronger actual-registration-before-exec promise would need an acknowledgment.
+  This is not evidence of an orphan/cleanup bug: the buffered stdin registration
+  is consumed before stdin EOF cleanup. Parent death before receipt is now
+  allowed explicitly, and the reap path waits for that buffered receipt.
   The ordinary `ExactlyOneChild` check preserves the implemented enqueue contract.
 
 ## Real-code scratch break
@@ -85,3 +92,17 @@ The historical configs focus on the named failing property (plus listed common
 invariants); they are not a cross-product verification of every historical source.
 There is no all-property current PASS: the stronger brief is contradicted by the
 source. Fault-free bounded checks stay separate from those findings.
+
+## Round-1 model corrections
+
+`probe-parent-before-receipt` reaches a parent death after gate release with
+`sent=TRUE`, `registered=FALSE`. Its deliberately false `ParentDeathAfterReceipt`
+assertion fails. This is distinct from `finding-lost-start`, which concerns the
+initial journal row before child startup. `current-parent-killed` continues to
+check eventual release, including buffered-registration cleanup.
+
+`current-completed-then-pending` scans run 1’s summary before abandoning run 2.
+`AbandonSummary` must credit both the scanned terminal set and the latest run
+as observed. The old model omitted the scanned set and would falsely fail
+`Custody` on this path. The missing-terminal two-pending trace is retained;
+its abstraction caveat above remains applicable.

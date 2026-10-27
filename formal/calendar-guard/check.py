@@ -255,6 +255,20 @@ def matrix(current, histories):
         case("current-parent-killed", "CalendarGuard", g | dict(Kill="parent"), gi, ["EventuallyReleased"]),
         case("current-journal", "CalendarJournal", j, ji, ["TornJournalLive"]),
         case("current-completed", "CalendarJournal", j | dict(Crash=False), ji, ["TornJournalLive"]),
+        case(
+            "current-completed-then-pending",
+            "CalendarJournal",
+            j | dict(Crash=False, TwoPending=True),
+            ji,
+            ["TornJournalLive"],
+        ),
+        case(
+            "probe-parent-before-receipt",
+            "CalendarGuard",
+            g | dict(Kill="parent"),
+            ["ParentDeathAfterReceipt"],
+            violation="ParentDeathAfterReceipt",
+        ),
     ]
     for phase in ("pre", "summary"):
         cases.append(
@@ -367,7 +381,7 @@ def run_tlc(entry, output):
     cfg = output / f"{entry['name']}.cfg"
     cfg.write_text(config_text(entry))
     command = [
-        str(Path(os.environ.get("TLC", "~/.local/bin/tlc")).expanduser()),
+        str(Path(os.environ.get("TLC", "~/.local/bin/tlc")).expanduser().absolute()),
         "-workers",
         "1",
         "-fp",
@@ -393,12 +407,14 @@ def run_tlc(entry, output):
     count = re.search(r"([\d,]+) states generated, ([\d,]+) distinct states found", log)
     depth = re.search(r"The depth of the complete state graph search is (\d+)", log)
     violated = re.search(r"Invariant (\w+) is violated", log)
+    version = re.search(r"TLC2 Version ([^\r\n]+)", log)
     expected = entry["violation"]
     temporal = expected in entry["properties"] and "Temporal properties were violated" in log
     progress = re.findall(r"Progress\((\d+)\)", log)
     row = dict(
         name=entry["name"],
         **load_receipt,
+        tlc_version=version[1].strip() if version else None,
         rc=result.returncode,
         violation=violated[1] if violated else expected if temporal else None,
         states=int(count[2].replace(",", "")) if count else None,
@@ -433,11 +449,13 @@ def main():
     output = Path(tempfile.mkdtemp(prefix=time.strftime("%Y%m%dT%H%M%SZ-", time.gmtime()), dir=output_root))
     text = source(CURRENT)
     coverage = json.loads((HERE / "coverage.json").read_text())
+    if (coverage["sync_sha"], coverage["base_sha"], coverage["historical_sources"]) != (CURRENT, MAIN, HISTORIES):
+        raise RuntimeError("coverage.json pins differ from check.py constants")
     for path, entry in coverage["sources"].items():
         actual = hashlib.sha256(source(entry["sha"], path).encode()).hexdigest()
         if actual != entry["sha256"]:
             raise RuntimeError(f"source fingerprint mismatch: {path}")
-        accepted = {entry["sha256"], hashlib.sha256(source(MAIN, path).encode()).hexdigest()}
+        accepted = {entry["sha256"]}
         if hashlib.sha256((REPO / path).read_bytes()).hexdigest() not in accepted:
             raise RuntimeError(f"checkout drift: {path}; review the model and update coverage.json")
     for module, actions in coverage["actions"].items():
@@ -512,7 +530,7 @@ def main():
         (output / f"{entry['name']}.cfg").write_text(expected_config)
     (output / "probes.json").write_text(json.dumps(probes, indent=2) + "\n")
     (output / "cases.json").write_text(json.dumps(entries, indent=2) + "\n")
-    print(f"Source: calendar={CURRENT} guard={MAIN}; TLC=1.7.4", flush=True)
+    print(f"Source: calendar={CURRENT} guard={MAIN}", flush=True)
     if args.prepare_only:
         for entry in entries:
             print(f"Prepared {entry['name']}: expected {entry['violation'] or 'PASS'}")
@@ -527,10 +545,13 @@ def main():
     return 0 if args.expect_known or not any(entry["violation"] for entry in entries) else 1
 
 
-if __name__ == "__main__":
+def cli():
     try:
-        code = main()
-    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
-        print(f"Verification could not complete: {exc}", file=sys.stderr)
-        code = 2
-    raise SystemExit(code)
+        return main()
+    except Exception as exc:
+        print(f"Verification could not complete: {exc!r}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(cli())

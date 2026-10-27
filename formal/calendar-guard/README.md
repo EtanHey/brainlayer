@@ -17,12 +17,15 @@ TLC=/path/to/rig/bin/tlc formal/calendar-guard/check.sh --scratch-break
 ```
 
 When unset, `TLC` defaults to `~/.local/bin/tlc`. A leading `~` is expanded;
-the value is one executable path, not a shell command with arguments.
+relative paths resolve against the caller’s working directory before the launcher
+changes directory. The value is one executable path, not a shell command with arguments.
 `check.sh` forwards the environment unchanged. To probe executable selection
 without starting TLC, run `pytest -q formal/calendar-guard/test_check.py`.
 
 Exit **1** means the documented current-source findings remain; **2** means
-an unexpected result. `--expect-known --scratch-break` returns 0 only when all
+an incomplete or unexpected result, including a probe crash. The source banner
+does not assert a tool version; each result records `tlc_version` from actual
+TLC output, or null if absent. Different versions are recorded, not rejected. `--expect-known --scratch-break` returns 0 only when all
 expected passes and counterexamples reproduce, and still prints `NOT_GREEN`.
 With `--case`, a passing selection returns 0 and a documented failure returns 1.
 The full current-source contract remains `NOT_GREEN` in either case.
@@ -55,7 +58,7 @@ break. CI wiring is a follow-up, outside this PR.
 | Each started run has one reported logical outcome | `Custody`, `AtMostOneTerminal` | Recent nightly passes; recovery, older and overwritten pending runs fail |
 | Each run has at most one physical terminal record | `TerminalRecordUnique` | Fails: recovery writes both abandoned and synthetic summary |
 | A torn journal cannot stop the next run | `TornJournalLive` | Passes with skipped torn rows and separated appends |
-| Recovery does not signal a reused PID | `PidReuseSafe` | Two birth generations; actual recovery function probed too |
+| Recovery does not signal a reused PID | `PidReuseSafe` | Probe-verified: actual recovery function executes against a mismatched birth; TLA `BirthChecked=TRUE` is a hard-coded constant |
 
 `CalendarGuard.tla` explores one step with independently scheduled durable
 record, registration write, guard receipt, gate release, child finish, H/Q,
@@ -63,6 +66,22 @@ parent death and guard reaping. `CalendarJournal.tla` starts after custody can
 be reacquired, explores normal/nightly and hourly records, two pending identities,
 one interrupted abandonment publication, and a subsequent run. These are
 complementary abstractions, **not a composed refinement proof**.
+
+`ExactlyOneChild` is true by construction in these models and has not been
+shown failing; a future source-order projection/negative test is needed.
+`registration-ack` checks a stronger receipt-before-exec requirement, not a
+proven runtime cleanup defect. `finding-two-pending` injects two pending rows
+without the intervening pre-run recovery scan; it is an abstraction finding
+(reachable in the real sequence only with a skipped or failed earlier scan).
+The literal terminal-record check also differs from the designed one-logical-outcome
+contract. These traces must not automatically become runtime fix PRs.
+
+Outer process bounds are **not modeled**: the nightly is a plain launchd
+`StartCalendarInterval` job with no run timeout (`scripts/launchd/com.brainlayer.maintenance.plist`;
+`ExitTimeOut=30` bounds shutdown, not runtime). Hourly transcript recovery runs
+under the supervisor with a **7,500 s** run timeout (`supervisor_jobs.py`),
+which reaps its group on timeout (`service_supervisor.py`). The unbounded-wedge
+findings therefore have different external limits on the two entry points.
 
 Time is a bounded logical clock: operation budget 4, H budget 2, Q budget 3,
 finite stalls 0/1/3 and horizon 40 ticks. These preserve deadline ordering, not
@@ -98,7 +117,7 @@ Run these commands sequentially from the modeling checkout:
 | Historical a | `formal/calendar-guard/check.sh --case historical-sync` | `NoFalseKill`, TLC 12, wrapper 1 |
 | Historical b | `formal/calendar-guard/check.sh --case historical-missing-terminal` | `Custody`, TLC 12, wrapper 1 |
 | Historical c | `formal/calendar-guard/check.sh --case historical-worker-wedge --case historical-worker-liveness` | `BoundedTermination` and `EventuallyReleased`, TLC 12 and 13, wrapper 1 |
-| Current | `formal/calendar-guard/check.sh --case current` | Nine bounded passes and nine retained current findings, wrapper 1 / `NOT_GREEN` |
+| Current | `formal/calendar-guard/check.sh --case current` | Ten bounded passes and nine retained current findings, wrapper 1 / `NOT_GREEN` |
 | Scratch break | `formal/calendar-guard/check.sh --case scratch-worker-wedge --scratch-break --scratch-ref origin/scratch/t2-calendar-guard-budget-20261027` | `BoundedTermination`, TLC 12, wrapper 1 |
 
 Add `--prepare-only` to validate source probes, config selection and committed
@@ -111,3 +130,11 @@ the unchanged TLA+ model. Any unexpected source, config or verdict returns 2.
 
 Return each run directory's `cases.json`, `results.json`, `probes.json`, configs
 and `.log` files to the lead. Generated state files can stay on the runner.
+
+Round-1 model regression configs: `current-completed-then-pending` must pass
+`Custody` after scanning run 1’s summary and publishing run 2’s abandonment.
+`probe-parent-before-receipt` deliberately violates `ParentDeathAfterReceipt`
+to prove reachability after gate release, before guard receipt. It is a
+reachability probe, **not an additional product finding**. The expanded full
+run contains 25 outcomes. Parent-death cleanup drains the sent registration
+before reap; the stronger receipt-before-exec assertion still fails.

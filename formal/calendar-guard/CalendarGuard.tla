@@ -30,7 +30,7 @@ Spawn == /\ s.parent /\ s.pc = "spawn"
          /\ s' = [s EXCEPT !.child = "gated", !.pc = "custody"]
 WriteRegistration == /\ s.parent /\ s.pc = "register" /\ s.durable
                      /\ s' = [s EXCEPT !.sent = TRUE, !.pc = "release"]
-ReadRegistration == /\ s.guard = "H" /\ s.sent /\ ~s.registered
+ReadRegistration == /\ s.guard \in {"H", "reap"} /\ s.sent /\ ~s.registered
                     /\ s' = [s EXCEPT !.registered = TRUE]
 ReleaseGate == /\ s.parent /\ s.pc = "release" /\ s.durable /\ s.sent
                /\ s' = [s EXCEPT !.child = "running", !.ran = @ + 1, !.pc = "wait"]
@@ -42,7 +42,8 @@ Quiesce == /\ s.parent /\ s.pc = "shutdown"
            /\ s' = [s EXCEPT !.guard = "Q", !.pc = "guard-exit", !.heartbeat = 0]
 GuardEOF == /\ s.guard = "Q"
             /\ s' = [s EXCEPT !.guard = "reap"]
-GuardReap == /\ s.guard = "reap"
+(* Buffered +pid is consumed before stdin EOF cleanup. *)
+GuardReap == /\ s.guard = "reap" /\ (~s.sent \/ s.registered)
              /\ s' = [s EXCEPT !.guard = "gone",
                        !.child = IF s.registered \/ s.child = "gated" THEN "gone" ELSE @,
                        !.lock = IF ~s.parent THEN FALSE ELSE @,
@@ -51,7 +52,7 @@ Close == /\ s.parent /\ s.pc = "close"
          /\ s' = [s EXCEPT !.pc = "done", !.parent = FALSE, !.lock = FALSE]
 EnvironmentKill ==
     /\ ~s.envKilled /\ Kill \in {"parent", "guard", "both"}
-    /\ IF Kill = "guard" THEN s.pc = "custody" /\ s.work ELSE s.pc = "wait" /\ s.registered
+    /\ IF Kill = "guard" THEN s.pc = "custody" /\ s.work ELSE s.pc = "wait"
     /\ s' = [s EXCEPT !.envKilled = TRUE,
               !.parent = IF Kill \in {"parent", "both"} THEN FALSE ELSE @,
               !.guard = IF Kill \in {"guard", "both"} THEN "gone" ELSE "reap",
@@ -91,6 +92,9 @@ TypeOK == /\ s.pc \in Operations \cup {"launch", "spawn", "register", "release",
           /\ s.child \in {"none", "gated", "running", "gone"}
           /\ s.ran \in 0..1 /\ s.tick \in 0..Horizon
 ExactlyOneChild == s.ran <= 1 /\ (s.ran = 1 => s.durable /\ s.sent)
+(* Deliberately false reachability assertion: the parent can die after sending
+   registration but before receipt. This is not a product safety promise. *)
+ParentDeathAfterReceipt == ~(s.envKilled /\ ~s.parent /\ s.sent /\ ~s.registered)
 RegistrationAcknowledged == s.ran = 1 => s.registered
 NoFalseKill == (Mode = "healthy" /\ Kill = "none") => ~s.killed
 Settled == ~s.lock /\ s.child \in {"none", "gone"}

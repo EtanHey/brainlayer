@@ -56,7 +56,7 @@ PublishAbandoned ==
 AbandonSummary ==
     /\ s.pc = "abandon-summary"
     /\ s' = [s EXCEPT !.journal = Append(@, Row("summary", s.latest)),
-              !.terminal = @ \cup {s.latest}, !.observed = @ \cup {s.latest}, !.pc = "run-next"]
+              !.terminal = @ \cup {s.latest}, !.observed = @ \cup s.terminal \cup {s.latest}, !.pc = "run-next"]
 InterruptPublication ==
     /\ s.pc = "abandon-summary" /\ ~s.interrupted
     /\ s' = [s EXCEPT !.pc = "next", !.owned = FALSE, !.interrupted = TRUE,

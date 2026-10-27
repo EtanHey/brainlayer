@@ -140,9 +140,9 @@
   "atomicity": {
     "operations": "Begin/Complete expose every stall, including gated child before fsync; Complete represents successful persistence, not crash-atomic fsync.",
     "clock": "Tick aggregates scheduled pulse delivery, elapsed worker time and child polling. GuardTimeout and registration receipt are separate interleavings.",
-    "journal": "Each append is separate; abandoned plus synthetic summary is one logical terminal outcome. Torn rows are explicit. One interrupted abandonment publication is explored.",
+    "journal": "Each append is separate; abandoned plus synthetic summary is one logical terminal outcome. Torn rows are explicit. One interrupted abandonment publication is explored. SecondPending injects a fixture without the intervening pre-run scan; its missing-terminal finding needs a skipped/failed scan in the real sequence.",
     "reap": "Abstracts successful TERM/KILL plus ESRCH as one action; signals succeeding within the cleanup budget is an explicit assumption.",
-    "environment": "Kill and PID reuse are fault inputs grounded in identity/EOF handlers, not asserted product actions."
+    "environment": "Kill and PID reuse are fault inputs grounded in identity/EOF handlers, not asserted product actions. Parent death after gate release need not wait for registration receipt; buffered stdin registration is drained before reap."
   },
   "bounds": {
     "operation_budget_ticks": 4,
@@ -168,6 +168,10 @@
     "TerminalRecordUnique": [
       "src/brainlayer/maintenance_calendar.py:266",
       "src/brainlayer/maintenance_calendar.py:271-281"
+    ],
+    "ParentDeathAfterReceipt": [
+      "src/brainlayer/maintenance_calendar.py:456-458",
+      "src/brainlayer/supervisor_guard.py:296-314"
     ]
   },
   "merged_main_sha": "a93f28f9f7f4b6edad107a23986bccfe178d9483",

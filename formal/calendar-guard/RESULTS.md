@@ -1,4 +1,74 @@
-# Measured TLC results
+# Latest round-1 TLC receipt
+
+Status: **NOT_GREEN**, wrapper **exit 1**, **25/25 expected outcomes reproduced**.
+One invocation only: `formal/calendar-guard/check.sh --scratch-break`,
+2026-10-27 08:45:34Z. TLC version observed from each log:
+`2.19 of 08 August 2024 (rev: 5a47802)` (the 1.7.4 jar distribution used by
+prior receipts). No hardcoded version banner. Load gate observed 22.16–23.74,
+no admission wait. One worker and 512 MiB heap, as before.
+Local evidence: `.build.noindex/calendar-guard/20261027T084534Z-49ea8ifs/`.
+
+All 23 prior case verdicts remain unchanged; state counts/depths below supersede
+the earlier counts for the revised models. Ten bounded current passes, nine
+retained current findings (including labeled abstraction/policy assumptions),
+four historical failures, the scratch failure, and one deliberately false
+reachability assertion total 25 expected outcomes. The reachability assertion
+is not an additional product finding.
+
+| Config | TLC exit | Distinct states | Depth | Wall seconds | Violation |
+|---|---:|---:|---:|---:|---|
+| current-healthy | 0 | 1055 | 39 | 1.262 | PASS within scope |
+| current-wedge-runner | 0 | 95 | 16 | 0.833 | PASS within scope |
+| current-wedge-custody | 0 | 215 | 22 | 0.864 | PASS within scope |
+| current-wedge-finish | 0 | 752 | 33 | 0.886 | PASS within scope |
+| current-loop-wedge | 0 | 143 | 18 | 0.817 | PASS within scope |
+| current-q-timeout | 0 | 1718 | 41 | 0.930 | PASS within scope |
+| current-parent-killed | 0 | 1217 | 39 | 0.878 | PASS within scope |
+| current-journal | 0 | 70 | 23 | 1.011 | PASS within scope |
+| current-completed | 0 | 13 | 13 | 0.779 | PASS within scope |
+| current-completed-then-pending | 0 | 28 | 26 | 0.909 | PASS within scope |
+| probe-parent-before-receipt | 12 | 85 | 12 | 0.796 | ParentDeathAfterReceipt |
+| finding-wedge-pre | 12 | 122 | 42 | 0.815 | BoundedTermination |
+| finding-wedge-summary | 12 | 3042 | 59 | 0.883 | BoundedTermination |
+| finding-recovery | 12 | 27 | 9 | 0.834 | Custody |
+| finding-late | 12 | 27 | 9 | 0.809 | Custody |
+| finding-two-pending | 12 | 40 | 12 | 0.756 | Custody |
+| finding-lost-start | 12 | 7 | 7 | 0.773 | Custody |
+| registration-ack | 12 | 67 | 11 | 0.814 | RegistrationAcknowledged |
+| finding-terminal-record-count | 12 | 27 | 9 | 0.790 | TerminalRecordUnique |
+| finding-guard-killed | 12 | 3432 | 49 | 0.854 | BoundedTermination |
+| historical-sync | 12 | 34 | 8 | 0.892 | NoFalseKill |
+| historical-missing-terminal | 12 | 27 | 9 | 0.806 | Custody |
+| historical-worker-wedge | 12 | 726 | 48 | 0.999 | BoundedTermination |
+| historical-worker-liveness | 13 | 743 | 48 | 0.963 | EventuallyReleased |
+| scratch-worker-wedge | 12 | 363 | 45 | 0.844 | BoundedTermination |
+
+Round-1 changes and regression evidence:
+
+- Configs for parent death before receipt and a completed run followed by a
+  pending run were written before model edits. TLC was reserved for this one
+  final run; no pre-fix model run is claimed.
+- `probe-parent-before-receipt` fails the deliberately false reachability
+  assertion at depth 12: after ReleaseGate, `parent=FALSE`, `sent=TRUE`,
+  `registered=FALSE`, child running. Buffered receipt precedes reap. The
+  parent-killed liveness config still passes. This is distinct from lost-start.
+- `current-completed-then-pending` passes Custody (28 states, depth 26) after
+  AbandonSummary credits scanned terminal outcomes too. The missing-terminal
+  two-pending finding remains, explicitly labeled as an injected abstraction.
+- Python probe red→green: **12 failed, 6 passed** before checker edits;
+  **18 passed in 0.10 s** after. Launch-failure/nonzero-exit tests passed
+  already and retain their existing correct behavior.
+- Relative TLC paths are absolute before changing cwd; versions are observed
+  or null; ordinary probe crashes exit 2 while parser SystemExit is preserved;
+  duplicated coverage pins are checked; stale pre-#1519 checkout is refused.
+- All four Opus wording fixes applied; external nightly/hourly bounds and
+  hard-coded BirthChecked/ExactlyOneChild limitations are explicit in README.
+- Ruff lint/format, shell syntax and diff whitespace checks passed. No runtime
+  code changed, no CI wiring, no M1 access or full suite, no new reviewer.
+
+---
+
+# Earlier MBP/M1 receipts (models before round 1)
 
 Status: **NOT_GREEN**. All 23 expected outcomes reproduced; this is not an all-property pass.
 
