@@ -595,3 +595,106 @@ def test_index_deferral_reason_is_current_run_and_allowlisted(request, monkeypat
         if json.loads(line)["event"] == "finished"
     )
     assert row.get("reason") == expected
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_slow_spawn_receipt_keeps_guard_live_without_early_child_exec(tmp_path, monkeypatch, cancel):
+    from brainlayer import maintenance_calendar as calendar
+
+    entered, release = threading.Event(), threading.Event()
+    events, pulses, observations = [], [], []
+    directory, logs, marker = tmp_path / "calendar", tmp_path / "logs", tmp_path / "executed"
+    logs.mkdir()
+    read_fd, write_fd = os.pipe()
+    guard = SimpleNamespace(stdin=os.fdopen(write_fd, "wb", buffering=0), poll=lambda: None)
+    original_record, original_write = calendar.record, os.write
+
+    def record(path, **event):
+        if event.get("event") == "spawn":
+            events.append("receipt-enter")
+            entered.set()
+            assert release.wait(3)
+            original_record(path, **event)
+            events.append("durable-receipt")
+        else:
+            original_record(path, **event)
+
+    def write(fd, data):
+        if fd == write_fd and data == b"H\n" and entered.is_set():
+            pulses.append(data)
+        elif fd == write_fd and data.startswith(b"+"):
+            events.append("registered")
+        elif data == b"R":
+            events.append("gate-release")
+        return original_write(fd, data)
+
+    monkeypatch.setattr(calendar, "record", record)
+    monkeypatch.setattr(os, "write", write)
+
+    # A watchdog thread releases even the old synchronous implementation, so red cannot hang.
+    def observe():
+        assert entered.wait(3)
+        release.wait(0.5)  # Longer than the private 0.2 s heartbeat budget.
+        observations.append((len(pulses), marker.exists()))
+        release.set()
+
+    observer = threading.Thread(target=observe)
+    observer.start()
+
+    async def scenario():
+        stop, heartbeat_stop = asyncio.Event(), asyncio.Event()
+        heartbeat = asyncio.create_task(calendar.pulse(guard, heartbeat_stop, 0.02))
+
+        async def run():
+            with calendar.Custody(directory) as custody:
+                return await calendar._execute_step(
+                    calendar.Step(
+                        "jsonl-backup", (sys.executable, "-c", f"open({str(marker)!r},'a').write('once\\n')"), 2
+                    ),
+                    os.environ.copy(),
+                    directory=directory,
+                    logs=logs,
+                    custody=custody,
+                    guard=guard,
+                    stop=stop,
+                    guard_timeout=0.2,
+                    shutdown_timeout=2,
+                )
+
+        task = asyncio.create_task(run())
+        try:
+            while not entered.is_set():
+                await asyncio.sleep(0.01)
+            if cancel:
+                task.cancel()
+                await asyncio.sleep(0.05)
+                assert not task.done()
+                with pytest.raises(BlockingIOError), calendar.Custody(directory):
+                    pass
+                task.cancel()  # Repeated cancellation must still drain the worker.
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                assert await task == 0
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            heartbeat_stop.set()
+            await heartbeat
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+        observer.join(3)
+        guard.stdin.close()
+        os.close(read_fd)
+    assert observations and observations[0][0] >= 3, "receipt I/O starved the heartbeat loop"
+    assert not observations[0][1], "child executed before its durable receipt"
+    if cancel:
+        assert "registered" not in events and "gate-release" not in events and not marker.exists()
+    else:
+        assert events.index("durable-receipt") < events.index("registered") < events.index("gate-release")
+        assert marker.read_text() == "once\n"
+    with calendar.Custody(directory):
+        pass
