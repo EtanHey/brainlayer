@@ -1960,14 +1960,23 @@ def test_a_mapped_watchdog_change_still_falls_back_when_another_source_is_unmapp
     assert "src/brainlayer/no_such_module.py" in result.stdout
 
 
-@pytest.mark.parametrize("helper_mode", ["present", "missing", "unset-home", "empty-override"])
+@pytest.mark.parametrize(
+    "helper_mode", ["present", "default", "default-empty", "root-only", "missing", "unset-home", "empty-override"]
+)
 @pytest.mark.parametrize("suite_exit", [0, 7])
 def test_pre_push_heavy_suite_contract(tmp_path: Path, helper_mode: str, suite_exit: int) -> None:
-    helper_exists = helper_mode == "present"
+    helper_exists = helper_mode in {"present", "default", "default-empty"}
     repo, env_log = _repo_with_the_pre_push_hook(tmp_path)
     suite = repo / "scripts" / "run_tests.sh"
     suite.write_text(suite.read_text().replace("exit 0", f"exit {suite_exit}"))
     helper = tmp_path / "helper with spaces.py"
+    pinned = tmp_path / "Gits/golems/.worktrees/hooks-live/scripts/hooks/heavy-suite.py"
+    root_helper = tmp_path / "Gits/golems/scripts/hooks/heavy-suite.py"
+    root_helper.parent.mkdir(parents=True)
+    root_helper.write_text("raise SystemExit('ROOT CHECKOUT MUST NOT RUN')\n")
+    if helper_mode in {"default", "default-empty"}:
+        helper = pinned
+    helper.parent.mkdir(parents=True, exist_ok=True)
     if helper_exists:
         helper.write_text(
             "import os, subprocess, sys\n"
@@ -1976,6 +1985,9 @@ def test_pre_push_heavy_suite_contract(tmp_path: Path, helper_mode: str, suite_e
             "print('FAKE HEAVY HELPER', flush=True)\n"
             "sys.exit(subprocess.call(sys.argv[2:]))\n"
         )
+    if helper_mode == "present":
+        pinned.parent.mkdir(parents=True)
+        pinned.write_text("raise SystemExit('OVERRIDE MUST WIN')\n")
     env = _script_env()
     env.update(
         HOME=str(tmp_path),
@@ -1983,7 +1995,11 @@ def test_pre_push_heavy_suite_contract(tmp_path: Path, helper_mode: str, suite_e
         GOLEMS_HEAVY_SUITE_HELPER=str(helper),
         HOOK_ENV_LOG=str(env_log),
     )
-    if helper_mode == "unset-home":
+    if helper_mode in {"default", "root-only"}:
+        env.pop("GOLEMS_HEAVY_SUITE_HELPER", None)
+    elif helper_mode == "default-empty":
+        env["GOLEMS_HEAVY_SUITE_HELPER"] = ""
+    elif helper_mode == "unset-home":
         env.pop("HOME", None)
         env.pop("GOLEMS_HEAVY_SUITE_HELPER", None)
     elif helper_mode == "empty-override":
