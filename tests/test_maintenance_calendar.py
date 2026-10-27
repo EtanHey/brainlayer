@@ -34,9 +34,10 @@ def test_calendar_replays_dead_run_without_recovery_summaries_hiding_failure(tmp
     now = dt.datetime(2026, 10, 27, 7)
     plan = calendar_steps(sys.executable, "/unused", tmp_path, now.date())
     for _ in range(2):
-        assert asyncio.run(
-            run_calendar(plan, directory, tmp_path / "logs", now_fn=lambda: now, transcript_recovery=True)
-        ) == int(abandoned)
+        assert (
+            asyncio.run(run_calendar(plan, directory, tmp_path / "logs", now_fn=lambda: now, transcript_recovery=True))
+            == 0
+        )
     rows = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
     events = [row for row in rows if row["event"] == "abandoned"]
     assert len(events) == int(abandoned)
@@ -55,9 +56,12 @@ def test_calendar_replays_dead_run_without_recovery_summaries_hiding_failure(tmp
             ).items()
         )
         assert event["detected_at"] == event["ts"]
+        assert event["kind"] == "nightly"
         assert "maintenance-weekly" in event["incomplete_steps"]
         assert state["incomplete_run"]["failed"] == 1
-        assert rows[-1]["failed"] == 1
+        assert rows[-1]["failed"] == 0
+        outcomes = [row for row in rows if row.get("kind") == "nightly" and row["event"] == "summary"]
+        assert len(outcomes) == 1 and outcomes[0]["failed"] == 1
         assert "maintenance-full" in job_alerts.active_alerts(alerts)
         assert not any(row["event"] == "spawn" for row in rows[len(history.read_text().splitlines()) :])
     else:
@@ -162,10 +166,9 @@ def test_abandonment_identity_and_interrupted_receipt(tmp_path, monkeypatch, sha
         if shape == "append-interrupted":
             with monkeypatch.context() as patch:
                 patch.setattr(calendar, "report", lambda *_args: (_ for _ in ()).throw(OSError("fixture")))
-                with pytest.raises(OSError):
-                    calendar._recover_abandoned(directory, state, plan)
+                calendar._recover_abandoned(directory, state, plan, today=plan.scheduled_date)
         for _ in range(2):
-            calendar._recover_abandoned(directory, state, plan)
+            calendar._recover_abandoned(directory, state, plan, today=plan.scheduled_date)
     recovered = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
     events = [row for row in recovered if row["event"] == "abandoned"]
     assert len(events) == (0 if shape == "live" else 1)
@@ -173,6 +176,193 @@ def test_abandonment_identity_and_interrupted_receipt(tmp_path, monkeypatch, sha
         assert events[0]["reason"] == ("step-orphaned" if shape == "orphan" else "runner-vanished")
         assert events[0]["step"] == (None if shape == "startup" else "index")
         assert state["incomplete_run"]["failed"] == recovered[-1]["failed"] == 1
+
+
+@pytest.fixture
+def custody_fix1(tmp_path, monkeypatch):
+    from brainlayer import maintenance_calendar as calendar
+
+    directory = tmp_path / "calendar"
+    directory.mkdir(mode=0o700)
+    (directory / "state.json").write_text('{"deferrals":{}}')
+    rows = [
+        dict(
+            event="runner",
+            scheduled_date="2026-10-27",
+            guard=90000000,
+            ts=1,
+            steps=["jsonl-backup", "maintenance-nightly"],
+        ),
+        dict(event="spawn", step="jsonl-backup", pid=90000001, ts=2),
+    ]
+    journal = directory / "runs.jsonl"
+    journal.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    alerts = tmp_path / "alerts.json"
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(alerts))
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "fixture.env"))
+    monkeypatch.setattr(calendar, "_transcripts_fresh", lambda _now: True)
+    monkeypatch.setattr(
+        calendar.maintenance_control,
+        "control_client",
+        lambda: SimpleNamespace(path=tmp_path / "unused.sock", request=lambda: {}, _disabled=lambda *_a, **_k: set()),
+    )
+    selected, executed = ["p0-counter", "jsonl-backup"], []
+    monkeypatch.setattr(
+        calendar.CalendarPlan,
+        "select",
+        lambda self, *_: [step for name in selected for step in self.candidates if step.name == name],
+    )
+    code = [0]
+
+    async def execute(step, env, **kwargs):
+        executed.append(step.name)
+        return code[0]
+
+    monkeypatch.setattr(calendar, "_execute_step", execute)
+    clock = [dt.datetime(2026, 10, 27, 7)]
+
+    def tick(recovery=True):
+        plan = calendar_steps(sys.executable, "/unused", tmp_path, clock[0].date())
+        return asyncio.run(
+            run_calendar(plan, directory, tmp_path / "logs", now_fn=lambda: clock[0], transcript_recovery=recovery)
+        )
+
+    def read_rows():
+        result = []
+        for line in journal.read_text().splitlines():
+            try:
+                row = json.loads(line)
+                if isinstance(row, dict) and isinstance(row.get("event"), str):
+                    result.append(row)
+            except ValueError:
+                pass
+        return result
+
+    return SimpleNamespace(
+        calendar=calendar,
+        directory=directory,
+        journal=journal,
+        alerts=alerts,
+        selected=selected,
+        executed=executed,
+        code=code,
+        clock=clock,
+        tick=tick,
+        rows=read_rows,
+    )
+
+
+@pytest.mark.parametrize("bad", ['{"event":', "[]\n", "{}\n", '{"event":"runner"}\n'])
+def test_fix1_scan_damage_does_not_block_reap_or_ticks(custody_fix1, monkeypatch, caplog, bad):
+    f = custody_fix1
+    original = f.journal.read_text() + bad
+    f.journal.write_text(original)
+    reaped = []
+    recover = f.calendar.Custody.recover
+
+    def reap(custody, grace):
+        reaped.append(True)
+        return recover(custody, grace)
+
+    monkeypatch.setattr(f.calendar.Custody, "recover", reap)
+    birth = f.calendar.start_time
+
+    def identity(pid):
+        assert reaped, "stale writers must be reaped before scanning identities"
+        return birth(pid)
+
+    monkeypatch.setattr(f.calendar, "start_time", identity)
+    assert f.tick() == f.tick() == 0
+    assert len(reaped) == 2
+    assert f.journal.read_text().startswith(original)
+    assert len([row for row in f.rows() if row["event"] == "abandoned"]) == 1
+    assert f.rows()[-1]["event"] == "summary" and f.rows()[-1]["failed"] == 0
+    assert "skipped=1" in caplog.text
+
+
+def test_fix1_alert_failure_is_logged_and_scheduled_work_runs(custody_fix1, monkeypatch, caplog):
+    f = custody_fix1
+
+    def denied(*args):
+        raise PermissionError("fixture")
+
+    monkeypatch.setattr(f.calendar, "report", denied)
+    assert f.tick(False) == 0
+    assert f.executed == f.selected
+    assert any(row["event"] == "alert-error" for row in f.rows())
+    assert "PermissionError" in caplog.text
+
+
+def test_fix1_hourly_result_and_alert_are_independent_of_abandonment(custody_fix1, monkeypatch):
+    f = custody_fix1
+    assert f.tick() == 0
+    prior = job_alerts.active_alerts(f.alerts)
+    assert "jsonl-backup" in prior
+    monkeypatch.setattr(f.calendar, "_transcripts_fresh", lambda _now: False)
+    f.code[0] = 1
+    assert f.tick() == 1
+    f.code[0] = 0
+    assert f.tick() == 0
+    assert job_alerts.active_alerts(f.alerts) == prior
+    summaries = [row for row in f.rows() if row["event"] == "summary"]
+    assert [row["failed"] for row in summaries if row.get("kind") == "recovery"] == [0, 1, 0]
+    assert len([row for row in summaries if row.get("kind") == "nightly"]) == 1
+
+
+@pytest.mark.parametrize("code", [0, 75, 1])
+def test_fix1_complete_next_nightly_retires_marker_and_replaced_alert(custody_fix1, code):
+    f = custody_fix1
+    assert f.tick() == 0
+    job_alerts.report("index", "unrelated failure", path=f.alerts)
+    f.clock[0] += dt.timedelta(days=1)
+    f.code[0] = code
+    assert f.tick(False) == int(code not in (0, 75))
+    assert f.executed == f.selected
+    assert "incomplete_run" not in json.loads((f.directory / "state.json").read_text())
+    alerts = job_alerts.active_alerts(f.alerts)
+    assert "maintenance-light" not in alerts  # This plan replaced the abandoned nightly step.
+    assert alerts["index"] == "unrelated failure"
+    assert f.rows()[-1]["kind"] == "nightly" and f.rows()[-1]["complete"] is True
+    assert f.rows()[-1]["failed"] == int(code not in (0, 75)) * len(f.selected)
+
+
+def test_fix1_term_during_early_finish_keeps_incomplete_plan(custody_fix1, monkeypatch):
+    f = custody_fix1
+    assert f.tick() == 0
+    f.clock[0] += dt.timedelta(days=1)
+    stop = []
+    execute = f.calendar._execute_step
+
+    async def capture(*args, **kwargs):
+        stop.append(kwargs["stop"])
+        return await execute(*args, **kwargs)
+
+    finish = f.calendar._finish_step
+
+    async def terminate(*args, **kwargs):
+        # Models SIGTERM arriving during the shielded finish worker, without signalling a process.
+        result = await finish(*args, **kwargs)
+        stop[0].set()
+        return result
+
+    monkeypatch.setattr(f.calendar, "_execute_step", capture)
+    monkeypatch.setattr(f.calendar, "_finish_step", terminate)
+    assert f.tick(False) == 1
+    assert f.executed == [f.selected[0]]
+    assert "incomplete_run" in json.loads((f.directory / "state.json").read_text())
+    assert f.rows()[-1]["kind"] == "nightly" and f.rows()[-1]["complete"] is False
+    assert f.rows()[-1]["failed"] >= 1
+
+
+@pytest.mark.parametrize("today,expected", [(27, ["2026-10-27"]), (28, ["2026-10-27"]), (29, [])])
+def test_fix1_multiday_journal_does_not_backfill_old_runs(custody_fix1, today, expected):
+    f = custody_fix1
+    f.journal.write_text(
+        (Path(__file__).parent / "fixtures/maintenance_calendar/multiday-2026-10-27.jsonl").read_text()
+    )
+    f.clock[0] = f.clock[0].replace(day=today)
+    assert f.tick() == f.tick() == 0
+    assert [row["scheduled_date"] for row in f.rows() if row["event"] == "abandoned"] == expected
 
 
 def test_calendar_invocation_is_fresh_and_reaches_actual_child_and_terminal(tmp_path, monkeypatch):

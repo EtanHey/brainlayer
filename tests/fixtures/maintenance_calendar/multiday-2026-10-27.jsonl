@@ -1,0 +1,352 @@
+{"event": "runner", "guard": 90000000, "scheduled_date": "2026-10-15", "ts": 1792023306.0748029}
+{"event": "spawn", "pid": 90000001, "step": "index", "ts": 1792023306.103056}
+{"event": "finished", "returncode": 1, "status": "failed", "step": "index", "ts": 1792023336.989752}
+{"event": "spawn", "pid": 90000002, "step": "backup-daily", "ts": 1792023337.044668}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "backup-daily", "ts": 1792036400.7785048}
+{"event": "finished", "returncode": 75, "status": "deferred", "step": "maintenance-weekly", "ts": 1792036400.8357718}
+{"event": "spawn", "pid": 90000003, "step": "jsonl-backup", "ts": 1792036401.14011}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "jsonl-backup", "ts": 1792037652.928766}
+{"event": "spawn", "pid": 90000004, "step": "p0-counter", "ts": 1792037653.231833}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "p0-counter", "ts": 1792037731.877663}
+{"event": "spawn", "pid": 90000005, "step": "wal-checkpoint", "ts": 1792037731.974985}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "wal-checkpoint", "ts": 1792037751.0098612}
+{"event": "spawn", "pid": 90000006, "step": "decay", "ts": 1792037751.095346}
+{"event": "finished", "returncode": 124, "status": "failed", "step": "decay", "ts": 1792046499.317269}
+{"event": "spawn", "pid": 90000007, "step": "repair-fts", "ts": 1792046529.701748}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "repair-fts", "ts": 1792046543.735002}
+{"deferred": 1, "event": "summary", "failed": 2, "ts": 1792046543.736918}
+{"event": "runner", "guard": 90000008, "scheduled_date": "2026-10-16", "ts": 1792109707.971942}
+{"event": "spawn", "pid": 90000009, "step": "index", "ts": 1792109708.026061}
+{"event": "finished", "returncode": 1, "status": "failed", "step": "index", "ts": 1792109770.213714}
+{"event": "spawn", "pid": 90000010, "step": "backup-daily", "ts": 1792109770.272923}
+{"event": "finished", "returncode": 1, "status": "failed", "step": "backup-daily", "ts": 1792124294.5419881}
+{"event": "finished", "returncode": 75, "status": "deferred", "step": "maintenance-weekly", "ts": 1792124294.839489}
+{"event": "spawn", "pid": 90000011, "step": "jsonl-backup", "ts": 1792124295.373706}
+{"event": "runner", "guard": 90000012, "scheduled_date": "2026-10-17", "ts": 1792196107.065881}
+{"event": "spawn", "pid": 90000013, "step": "index", "ts": 1792196107.124276}
+{"event": "finished", "returncode": 1, "status": "failed", "step": "index", "ts": 1792196583.5613482}
+{"event": "spawn", "pid": 90000014, "step": "backup-daily", "ts": 1792196583.580663}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "backup-daily", "ts": 1792200072.370286}
+{"event": "spawn", "pid": 90000015, "step": "maintenance-weekly", "ts": 1792200079.690252}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "maintenance-weekly", "ts": 1792200894.509606}
+{"event": "spawn", "pid": 90000016, "step": "jsonl-backup", "ts": 1792200894.5452778}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "jsonl-backup", "ts": 1792202163.3630111}
+{"event": "spawn", "pid": 90000017, "step": "p0-counter", "ts": 1792202163.396518}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "p0-counter", "ts": 1792202172.925807}
+{"event": "spawn", "pid": 90000018, "step": "wal-checkpoint", "ts": 1792202172.950007}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "wal-checkpoint", "ts": 1792202182.255157}
+{"event": "spawn", "pid": 90000019, "step": "decay", "ts": 1792202182.2763672}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "decay", "ts": 1792202246.7997599}
+{"event": "spawn", "pid": 90000020, "step": "repair-fts", "ts": 1792202250.9553862}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "repair-fts", "ts": 1792202256.3673458}
+{"deferred": 0, "event": "summary", "failed": 1, "ts": 1792202256.368681}
+{"event": "runner", "guard": 90000021, "scheduled_date": "2026-10-18", "ts": 1792282507.3668811}
+{"event": "spawn", "pid": 90000022, "step": "index", "ts": 1792282507.3988008}
+{"event": "finished", "returncode": 1, "status": "failed", "step": "index", "ts": 1792282570.355584}
+{"event": "spawn", "pid": 90000023, "step": "backup-daily", "ts": 1792282570.388557}
+{"event": "finished", "returncode": 1, "status": "failed", "step": "backup-daily", "ts": 1792299682.289872}
+{"event": "finished", "returncode": 75, "status": "deferred", "step": "maintenance-weekly", "ts": 1792299682.494003}
+{"event": "spawn", "pid": 90000024, "step": "jsonl-backup", "ts": 1792299817.591091}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "jsonl-backup", "ts": 1792301010.1988008}
+{"event": "spawn", "pid": 90000025, "step": "p0-counter", "ts": 1792301010.224001}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "p0-counter", "ts": 1792301026.224019}
+{"event": "spawn", "pid": 90000026, "step": "wal-checkpoint", "ts": 1792301026.324091}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "wal-checkpoint", "ts": 1792301027.2956522}
+{"event": "spawn", "pid": 90000027, "step": "decay", "ts": 1792301027.33163}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "decay", "ts": 1792301229.915466}
+{"event": "spawn", "pid": 90000028, "step": "repair-fts", "ts": 1792301253.9797661}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "repair-fts", "ts": 1792301262.947503}
+{"deferred": 1, "event": "summary", "failed": 2, "ts": 1792301262.948859}
+{"event": "runner", "guard": 90000029, "scheduled_date": "2026-10-19", "ts": 1792368906.181566}
+{"event": "spawn", "pid": 90000030, "step": "index", "ts": 1792368906.231683}
+{"event": "finished", "reason": "resident-writer-busy", "returncode": 75, "status": "deferred", "step": "index", "ts": 1792369063.761097}
+{"event": "spawn", "pid": 90000031, "step": "backup-daily", "ts": 1792369063.779926}
+{"event": "finished", "returncode": 1, "status": "failed", "step": "backup-daily", "ts": 1792369331.11044}
+{"event": "spawn", "pid": 90000032, "step": "maintenance-weekly", "ts": 1792371609.972228}
+{"event": "finished", "replaces": "maintenance-nightly", "returncode": 76, "status": "failed", "step": "maintenance-weekly", "ts": 1792378801.4186811}
+{"event": "spawn", "pid": 90000033, "step": "jsonl-backup", "ts": 1792378801.4391491}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "jsonl-backup", "ts": 1792380432.390839}
+{"event": "spawn", "pid": 90000034, "step": "p0-counter", "ts": 1792380432.422029}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "p0-counter", "ts": 1792380445.335526}
+{"event": "spawn", "pid": 90000035, "step": "wal-checkpoint", "ts": 1792380445.364374}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "wal-checkpoint", "ts": 1792380446.358426}
+{"event": "spawn", "pid": 90000036, "step": "decay", "ts": 1792380446.417734}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "decay", "ts": 1792380554.790465}
+{"event": "spawn", "pid": 90000037, "step": "repair-fts", "ts": 1792380560.84654}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "repair-fts", "ts": 1792380568.296003}
+{"deferred": 1, "event": "summary", "failed": 2, "ts": 1792380568.2972531}
+{"event": "runner", "guard": 90000038, "scheduled_date": "2026-10-20", "ts": 1792455305.629579}
+{"event": "spawn", "pid": 90000039, "step": "index", "ts": 1792455305.645771}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "index", "ts": 1792457109.918515}
+{"event": "spawn", "pid": 90000040, "step": "backup-snapshot", "ts": 1792457109.9487731}
+{"event": "finished", "returncode": 124, "status": "failed", "step": "backup-snapshot", "ts": 1792459810.150054}
+{"event": "spawn", "pid": 90000041, "step": "maintenance-weekly", "ts": 1792459814.3410401}
+{"event": "finished", "replaces": "maintenance-nightly", "returncode": 76, "status": "failed", "step": "maintenance-weekly", "ts": 1792459826.474265}
+{"event": "spawn", "pid": 90000042, "step": "jsonl-backup", "ts": 1792459826.487721}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "jsonl-backup", "ts": 1792460927.8004942}
+{"event": "spawn", "pid": 90000043, "step": "p0-counter", "ts": 1792460927.833363}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "p0-counter", "ts": 1792460936.914177}
+{"event": "spawn", "pid": 90000044, "step": "wal-checkpoint", "ts": 1792460936.94519}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "wal-checkpoint", "ts": 1792460937.654318}
+{"event": "spawn", "pid": 90000045, "step": "decay", "ts": 1792460937.682428}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "decay", "ts": 1792461007.1975439}
+{"event": "spawn", "pid": 90000046, "step": "repair-fts", "ts": 1792461012.586272}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "repair-fts", "ts": 1792461018.667393}
+{"event": "spawn", "pid": 90000047, "step": "backup-daily", "ts": 1792461018.6934762}
+{"event": "finished", "returncode": 1, "status": "failed", "step": "backup-daily", "ts": 1792461020.386337}
+{"deferred": 0, "event": "summary", "failed": 3, "ts": 1792461020.3942678}
+{"event": "runner", "guard": 90000048, "scheduled_date": "2026-10-21", "ts": 1792541705.9396899}
+{"event": "spawn", "pid": 90000049, "step": "index", "ts": 1792541705.979071}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "index", "ts": 1792543510.432437}
+{"event": "spawn", "pid": 90000050, "step": "backup-snapshot", "ts": 1792543510.471322}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "backup-snapshot", "ts": 1792544491.2614121}
+{"event": "spawn", "pid": 90000051, "step": "maintenance-weekly", "ts": 1792544496.818094}
+{"event": "finished", "replaces": "maintenance-nightly", "returncode": 0, "status": "ok", "step": "maintenance-weekly", "ts": 1792545451.507839}
+{"event": "spawn", "pid": 90000052, "step": "jsonl-backup", "ts": 1792545451.523435}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "jsonl-backup", "ts": 1792545834.645654}
+{"event": "spawn", "pid": 90000053, "step": "p0-counter", "ts": 1792545834.686284}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "p0-counter", "ts": 1792545845.779352}
+{"event": "spawn", "pid": 90000054, "step": "wal-checkpoint", "ts": 1792545845.8078551}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "wal-checkpoint", "ts": 1792545850.279537}
+{"event": "spawn", "pid": 90000055, "step": "decay", "ts": 1792545850.313678}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "decay", "ts": 1792545925.423894}
+{"event": "spawn", "pid": 90000056, "step": "repair-fts", "ts": 1792545928.2068548}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "repair-fts", "ts": 1792545934.554825}
+{"event": "spawn", "pid": 90000057, "step": "backup-daily", "ts": 1792545934.580724}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "backup-daily", "ts": 1792547435.1275048}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792547435.132076}
+{"event": "runner", "guard": 90000058, "scheduled_date": "2026-10-22", "ts": 1792628111.843323}
+{"event": "spawn", "pid": 90000059, "step": "index", "ts": 1792628112.182917}
+{"event": "finished", "returncode": 124, "status": "failed", "step": "index", "ts": 1792629960.1070652}
+{"event": "runner", "guard": 90000060, "scheduled_date": "2026-10-22", "ts": 1792649367.598773}
+{"event": "spawn", "pid": 90000061, "step": "index", "ts": 1792649368.422245}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "index", "ts": 1792651172.35028}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792651172.4983768}
+{"event": "runner", "guard": 90000062, "scheduled_date": "2026-10-23", "ts": 1792714506.562907}
+{"event": "spawn", "pid": 90000063, "step": "index", "ts": 1792714506.615345}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "index", "ts": 1792716320.0700428}
+{"event": "spawn", "pid": 90000064, "step": "maintenance-nightly", "ts": 1792717207.245816}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "maintenance-nightly", "ts": 1792717214.165452}
+{"event": "spawn", "pid": 90000065, "step": "jsonl-backup", "ts": 1792717214.189591}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "jsonl-backup", "ts": 1792719301.511988}
+{"event": "spawn", "pid": 90000066, "step": "p0-counter", "ts": 1792719301.5353851}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "p0-counter", "ts": 1792719313.407271}
+{"event": "spawn", "pid": 90000067, "step": "wal-checkpoint", "ts": 1792719313.452308}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "wal-checkpoint", "ts": 1792719314.183798}
+{"event": "spawn", "pid": 90000068, "step": "backup-daily", "ts": 1792719314.204206}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "backup-daily", "ts": 1792729660.144704}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792729660.3345642}
+{"event": "runner", "guard": 90000069, "scheduled_date": "2026-10-24", "ts": 1792800906.496649}
+{"event": "spawn", "pid": 90000070, "step": "index", "ts": 1792800906.534873}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "index", "ts": 1792802713.894546}
+{"event": "spawn", "pid": 90000071, "step": "maintenance-nightly", "ts": 1792803608.031588}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "maintenance-nightly", "ts": 1792803615.1927822}
+{"event": "spawn", "pid": 90000072, "step": "jsonl-backup", "ts": 1792803615.225694}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "jsonl-backup", "ts": 1792804489.7191072}
+{"event": "spawn", "pid": 90000073, "step": "p0-counter", "ts": 1792804489.735465}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "p0-counter", "ts": 1792804497.732912}
+{"event": "spawn", "pid": 90000074, "step": "wal-checkpoint", "ts": 1792804497.76663}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "wal-checkpoint", "ts": 1792804498.475281}
+{"event": "spawn", "pid": 90000075, "step": "backup-daily", "ts": 1792804498.50404}
+{"event": "finished", "returncode": 143, "status": "stopped", "step": "backup-daily", "ts": 1792806744.952629}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792806745.1091032}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792807137.885725}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792807137.8877509}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792807158.754269}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792807158.7547}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792810759.6539001}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792810759.6542919}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792814360.9342778}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792814360.935026}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792819494.055806}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792819494.06324}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792823094.965534}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792823094.965903}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792826695.9546309}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792826695.955169}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792830297.01277}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792830297.0129862}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792833897.58512}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792833897.585311}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792835062.803403}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792835062.853154}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792835083.827696}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792835083.828348}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792838684.677608}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792838684.677856}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792842285.567499}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792842285.567874}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792845886.5178921}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792845886.518243}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792849487.440916}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792849487.44114}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792853088.3746822}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792853088.375159}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792856690.185524}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792856690.1858912}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792860291.109602}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792860291.110021}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792863892.080937}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792863892.0815098}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792867492.9254148}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792867492.925897}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792871093.716557}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792871093.7168262}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792874695.3475971}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792874695.348149}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792878300.1369731}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792878300.137311}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792881901.299509}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792881901.312497}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792885503.76065}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792885503.7613068}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792889105.957742}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792889105.9654698}
+{"event": "runner", "guard": 90000076, "scheduled_date": "2026-10-25", "ts": 1792890910.4479759}
+{"event": "spawn", "pid": 90000077, "step": "index", "ts": 1792890910.49119}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "index", "ts": 1792892689.414405}
+{"event": "spawn", "pid": 90000078, "step": "backup-snapshot", "ts": 1792892689.541409}
+{"event": "finished", "returncode": 1, "status": "failed", "step": "backup-snapshot", "ts": 1792892931.402857}
+{"event": "spawn", "pid": 90000079, "step": "maintenance-weekly", "ts": 1792893604.7635782}
+{"event": "finished", "replaces": "maintenance-nightly", "returncode": 76, "status": "failed", "step": "maintenance-weekly", "ts": 1792893617.978635}
+{"event": "spawn", "pid": 90000080, "step": "jsonl-backup", "ts": 1792893617.9994261}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "jsonl-backup", "ts": 1792893958.265478}
+{"event": "spawn", "pid": 90000081, "step": "p0-counter", "ts": 1792893958.50564}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "p0-counter", "ts": 1792893972.04734}
+{"event": "spawn", "pid": 90000082, "step": "wal-checkpoint", "ts": 1792893972.07265}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "wal-checkpoint", "ts": 1792893973.499707}
+{"event": "spawn", "pid": 90000083, "step": "decay", "ts": 1792893973.521805}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "decay", "ts": 1792894083.324399}
+{"event": "spawn", "pid": 90000084, "step": "repair-fts", "ts": 1792894089.9175072}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "repair-fts", "ts": 1792894098.123178}
+{"backup_invocation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "event": "spawn", "pid": 90000085, "step": "backup-daily", "ts": 1792894098.142347}
+{"backup_invocation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "event": "finished", "returncode": 0, "status": "ok", "step": "backup-daily", "ts": 1792894118.665465}
+{"deferred": 0, "event": "summary", "failed": 2, "ts": 1792894119.833639}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792894123.934678}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792894123.9349298}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792896855.826711}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792896855.868143}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792900458.158679}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792900458.159034}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792904059.722107}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792904059.725848}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792907661.247473}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792907661.2479901}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792911262.212377}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792911262.212584}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792914863.8547368}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792914863.855082}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792918465.167799}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792918465.1683478}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792922065.923881}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792922065.924248}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792925666.884052}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792925666.884661}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792929267.7867332}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792929267.787136}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792932868.402828}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792932868.403192}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792936468.8626812}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792936468.862986}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792939052.674747}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792939052.678815}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792942653.505106}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792942653.505495}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792946254.414839}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792946254.4155111}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792949855.139689}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792949855.1398442}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792953456.256172}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792953456.256707}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792957057.166712}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792957057.167229}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792960657.872211}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792960657.872583}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792964258.5504372}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792964258.550775}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792967859.820574}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792967859.8212411}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792971197.625298}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792971197.771199}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792974807.502135}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792974807.502601}
+{"event": "runner", "guard": 90000086, "scheduled_date": "2026-10-26", "ts": 1792977305.940702}
+{"event": "spawn", "pid": 90000087, "step": "index", "ts": 1792977305.956766}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "index", "ts": 1792979081.55553}
+{"event": "spawn", "pid": 90000088, "step": "backup-snapshot", "ts": 1792979081.591548}
+{"event": "finished", "returncode": 1, "status": "failed", "step": "backup-snapshot", "ts": 1792979169.0713458}
+{"event": "spawn", "pid": 90000089, "step": "maintenance-weekly", "ts": 1792980003.3150022}
+{"event": "finished", "replaces": "maintenance-nightly", "returncode": 76, "status": "failed", "step": "maintenance-weekly", "ts": 1792980016.092886}
+{"event": "spawn", "pid": 90000090, "step": "jsonl-backup", "ts": 1792980016.120417}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "jsonl-backup", "ts": 1792980330.927191}
+{"event": "spawn", "pid": 90000091, "step": "p0-counter", "ts": 1792980330.978103}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "p0-counter", "ts": 1792980341.0966651}
+{"event": "spawn", "pid": 90000092, "step": "wal-checkpoint", "ts": 1792980341.1300921}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "wal-checkpoint", "ts": 1792980341.741696}
+{"event": "spawn", "pid": 90000093, "step": "decay", "ts": 1792980341.760153}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "decay", "ts": 1792980439.0846531}
+{"event": "spawn", "pid": 90000094, "step": "repair-fts", "ts": 1792980444.094342}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "repair-fts", "ts": 1792980450.026809}
+{"backup_invocation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "event": "spawn", "pid": 90000095, "step": "backup-daily", "ts": 1792980450.056837}
+{"backup_invocation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "event": "finished", "returncode": 0, "status": "ok", "step": "backup-daily", "ts": 1792980452.940421}
+{"deferred": 0, "event": "summary", "failed": 2, "ts": 1792980453.211875}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792984053.95037}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792984053.950825}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792987654.551114}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792987654.5520499}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792991255.0663738}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792991255.067113}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792994855.5896802}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792994855.590104}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1792998456.40621}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1792998456.4070652}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793002057.131032}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793002057.131231}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793005665.741445}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793005665.742381}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793009266.89727}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793009266.897734}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793012883.135906}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793012883.1931672}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793014432.871648}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793014432.871906}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793015543.301404}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793015543.3142378}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793019157.29154}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793019157.2960079}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793023261.479689}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793023261.487794}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793026878.800194}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793026878.8442502}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793029483.983917}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793029483.988642}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793033085.355977}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793033085.3569531}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793036686.232606}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793036686.233093}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793040287.288244}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793040287.288776}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793043888.1977658}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793043888.1982348}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793044841.632731}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793044841.633132}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793049659.96863}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793049659.972712}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793053260.677987}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793053260.678924}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793056861.3157482}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793056861.315945}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793060462.1765912}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793060462.176944}
+{"event": "runner", "guard": 90000096, "scheduled_date": "2026-10-27", "ts": 1793063702.7738612}
+{"event": "spawn", "pid": 90000097, "step": "index", "ts": 1793063702.791651}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793065325.542509}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793065325.542928}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793065735.562016}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793065735.5832992}
+{"event": "transcript-recovery", "guard": 90000098, "scheduled_date": "2026-10-27", "ts": 1793069336.546009}
+{"event": "spawn", "pid": 90000099, "step": "jsonl-backup", "ts": 1793069336.5635788}
+{"event": "finished", "returncode": 0, "status": "ok", "step": "jsonl-backup", "ts": 1793070126.089917}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793070126.611592}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793073727.590231}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793073727.590386}
