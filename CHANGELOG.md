@@ -43,9 +43,9 @@
 
 ### Fixed
 - A killed or abandoned nightly run is recorded once as an abandoned nightly event, counts as a failure, and is retried by the next scheduled run. A torn journal line or alert-write failure no longer blocks a run (#1517).
-- BrainBar shows a dot only when no verified Drive copy exists within 36 hours, backup age has been unknown for over 60 minutes, the daemon or watcher is killed (including a watcher silent for over 15 minutes), or maintenance fails on two consecutive nights. A single failure shows a dated notice without a dot; remove “No action needed” and the three-failures/14-days masking (#1518).
+- BrainBar shows a dot only when no verified Drive copy exists within 36 hours, backup age has been unknown for over 60 minutes, the daemon or watcher is killed (including a watcher silent for over 15 minutes), or maintenance fails on two consecutive nights. A single failure shows a dated notice without a dot. “No action needed” and the three-failures/14-days masking are removed (#1518).
 - Blocking calendar I/O runs off the heartbeat loop, with a 120-second budget per operation so the guard can still kill and reap a stuck worker. Compute the backup budget before spawning its worker (#1519).
-- Before each timeout kill, record parent and birth identity, mode, heartbeat age, process groups and reason in `supervisor/guard-events.jsonl` as `supervisor_guard_timeout`. The supervisor also records overdue operations that suppress heartbeats (#1520).
+- Before each timeout kill, queue a best-effort `supervisor_guard_timeout` row (parent and birth identity, mode, heartbeat age, process groups and reason) for `guard-events.jsonl` in the supervisor and calendar custody directories; the write finishes after the kill and can be dropped, and never delays the kill. The supervisor also records overdue operations that suppress heartbeats (#1520).
 
 Release scope: Python package + Homebrew formula + BrainBar app 1.5.78 (cask)
 
