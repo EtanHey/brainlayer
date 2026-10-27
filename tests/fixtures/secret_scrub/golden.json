@@ -263,8 +263,8 @@
     },
     {
       "name": "prose-prefixes",
-      "input": "the tskey-auth-keys-are-rotated-weekly runbook; gsk_ and vck_ are prefixes",
-      "expected_text": "the tskey-auth-keys-are-rotated-weekly runbook; gsk_ and vck_ are prefixes",
+      "input": "the {{t*1}}skey-auth-keys-are-rotated-weekly runbook; gsk_ and vck_ are prefixes",
+      "expected_text": "the {{t*1}}skey-auth-keys-are-rotated-weekly runbook; gsk_ and vck_ are prefixes",
       "expected_providers": [],
       "expected_quarantine_count": 0
     },
