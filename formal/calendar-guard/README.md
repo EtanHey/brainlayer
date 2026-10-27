@@ -10,6 +10,17 @@ Run from the repository root with Python 3.11+, Java and TLC 1.7.4 installed at
 formal/calendar-guard/check.sh --scratch-break
 ```
 
+Set `TLC` to use a different executable path (including a rig-local wrapper):
+
+```sh
+TLC=/path/to/rig/bin/tlc formal/calendar-guard/check.sh --scratch-break
+```
+
+When unset, `TLC` defaults to `~/.local/bin/tlc`. A leading `~` is expanded;
+the value is one executable path, not a shell command with arguments.
+`check.sh` forwards the environment unchanged. To probe executable selection
+without starting TLC, run `pytest -q formal/calendar-guard/test_check.py`.
+
 Exit **1** means the documented current-source findings remain; **2** means
 an unexpected result. `--expect-known --scratch-break` returns 0 only when all
 expected passes and counterexamples reproduce, and still prints `NOT_GREEN`.

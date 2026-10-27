@@ -367,7 +367,7 @@ def run_tlc(entry, output):
     cfg = output / f"{entry['name']}.cfg"
     cfg.write_text(config_text(entry))
     command = [
-        str(Path.home() / ".local/bin/tlc"),
+        str(Path(os.environ.get("TLC", "~/.local/bin/tlc")).expanduser()),
         "-workers",
         "1",
         "-fp",

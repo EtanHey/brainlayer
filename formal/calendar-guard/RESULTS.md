@@ -105,3 +105,39 @@ The first resumed push at `ac9b80bf` passed its queued scoped hook: unit suite
 correctly skipped because formal files map no pytest targets; registration 3
 passed, isolated routing/eval 40 passed, bun 5 passed, shell regression passed.
 This does not erase the earlier RED push recorded above.
+
+## M1 confirmation and launcher override
+
+The lead-supplied M1 receipt (`T2-m1-run.md`, 2026-10-27) confirms all 23
+outcomes above at model head `489fdd89840b6e233e82086a00b3dd9a2f37872c`
+and scratch input `8a30073b9555d99bb0cc485eac798fe6a3b4b8c3`.
+One run, exit **1 / NOT_GREEN**, no timeout, no rerun. Its command was
+`formal/calendar-guard/check.sh --scratch-break --scratch-ref 8a30073b9555d99bb0cc485eac798fe6a3b4b8c3`,
+under pgrun and `/usr/bin/time -l`. Real **18.61 s**, user 23.73 s,
+sys 2.03 s; maximum RSS **125222912 bytes (125 MB)**. Admission load 5.63;
+per-case load 5.36–5.63. State counts and depths match the table above.
+This is a report receipt from the assigned M1 lane, not a new local run.
+
+The M1 preflight exposed the hardcoded executable path. The confirmation run
+used an explicitly authorized `~/.local/bin/tlc` wrapper. `TLC` now selects an
+alternate executable without requiring that installation; the default remains
+`~/.local/bin/tlc`.
+
+T2B verification under HOST PRESSURE (no TLC):
+
+- First `pytest -q formal/calendar-guard/test_check.py`: **2 failed, 1 passed**;
+  both override paths still selected the hardcoded default.
+- After the launcher fix: **3 passed in 0.02 s**. The probe intercepts
+  `subprocess.run`; no TLC process can start. It checks the default, an absolute
+  path containing spaces, and tilde expansion.
+- `check.sh --prepare-only --scratch-break --scratch-ref 8a30073b9555d99bb0cc485eac798fe6a3b4b8c3`:
+  **23 configs prepared, exit 0, TLC NOT RUN**. This proves preparation only;
+  it does not replace or extend the earlier model verdict.
+- Ruff lint/format, shell syntax and diff whitespace checks passed.
+- Runtime diff against `origin/main` (`src brain-bar tests scripts`) is empty.
+
+No runtime code changed. No CI wiring (follow-up). Lead-routed review pending.
+
+T2B CodeRabbit pre-commit pass: CLI 0.7.6 returned `Rate limit exceeded`
+(exit 1), offering a paid rerun capped at 775 cents for 31 files. No paid
+rerun or CLI upgrade was performed. No independent review verdict is claimed.
