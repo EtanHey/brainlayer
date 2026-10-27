@@ -1280,6 +1280,16 @@
         "target": "import subprocess"
       }
     },
+    "3ba678c47ac7466c34fbaa01f9d93e7bbd216885fa08b951e57165bc0533cc67": {
+      "non_cloud_purpose": "Offline lexical diagnostic: compile/execute only the AST-selected _escape_fts5_query function from explicitly supplied local BrainLayer source to reproduce its FTS query builder without loading embedding models or provider SDKs. No network or cloud-model sender in the reviewed helper.",
+      "site": {
+        "call_sha256": "3626834e8d6f1bfd195fcfcb9a49d9d29226ddc16075f6c8c015b6f2b9d1fe41",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.python_builder",
+        "path": "scripts/diagnose_literal_recall.py",
+        "target": "compile"
+      }
+    },
     "3bdd6fd701295aa4346da8a45ee40bc10968684ebb99e16a17540434f38f3afc": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/kg_judge.py <module>",
       "site": {
@@ -1466,6 +1476,16 @@
         "owner": "<module>.AppSocket.__init__",
         "path": "scripts/harness_probe_native.py",
         "target": "self.sock.sendall"
+      }
+    },
+    "4368eb05557df597de0da6630eca75daf85fae2ab729313718ce2ea1657386c3": {
+      "non_cloud_purpose": "Bounded offline retrieval-audit export from an explicitly selected local SQLite file: mode=ro URI, query_only=ON, short timeout and bounded exact-ID/FTS reads. No database writes, network or cloud-model sender.",
+      "site": {
+        "call_sha256": "768c8e17bef065eb555362fc193c0510fe844c5a43c296dc858122eae2c3c73b",
+        "kind": "generic_send",
+        "owner": "<module>.readonly",
+        "path": "scripts/diagnose_literal_recall.py",
+        "target": "sqlite3.connect"
       }
     },
     "43a15a48a9eb1f821a37dc820b4f0457b53913e58da5c01e0227564a4b626fb3": {
@@ -3350,6 +3370,16 @@
         "owner": "<module>.peer_uid",
         "path": "src/brainlayer/supervisor_guard.py",
         "target": "ctypes.byref"
+      }
+    },
+    "94648f10f1d4e479954c2dca5ab051c121b274d75df4fb7ac9b80753a9c50768": {
+      "non_cloud_purpose": "Offline lexical diagnostic: compile/execute only the AST-selected _escape_fts5_query function from explicitly supplied local BrainLayer source to reproduce its FTS query builder without loading embedding models or provider SDKs. No network or cloud-model sender in the reviewed helper.",
+      "site": {
+        "call_sha256": "d755e3aa2bb671306771ccd3f13c58e0ca53824954319a40dcb80870bf88b140",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.python_builder",
+        "path": "scripts/diagnose_literal_recall.py",
+        "target": "exec"
       }
     },
     "94750005d4ab902ca2c076c64498d3bae1c308a331089e2419cbc0f4c925113d": {
@@ -5264,6 +5294,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/mcp_stdio_bridge.py",
         "target": "import socket"
+      }
+    },
+    "e30119c734b0cc3b179d976271a19ca21b6554425aa1435c60378b97bc70ed6f": {
+      "non_cloud_purpose": "Offline lexical mechanism fixture: SQLite :memory: FTS5 index populated only from supplied scratch documents. Ephemeral in-process ranking/membership analysis; no persistent DB, network or cloud-model sender.",
+      "site": {
+        "call_sha256": "cf84c78471be4f6546fd338733c94579bcc637dc30e69a15c26964e1dd951cfb",
+        "kind": "generic_send",
+        "owner": "<module>.fts_index",
+        "path": "scripts/diagnose_literal_recall.py",
+        "target": "sqlite3.connect"
       }
     },
     "e331b5e35c4296106518aa501e6f80c489286d98f706a0c7a91f9f64c1a8fde7": {
