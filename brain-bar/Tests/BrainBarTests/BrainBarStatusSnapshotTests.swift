@@ -151,14 +151,14 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
             "BrainLayer full maintenance failed: tonight's local verified snapshot unavailable; VACUUM skipped."])
         let (snapshot, value) = Self.assertAgree(inputs, dot: false, "deferred weekly")
         let notice = snapshot.notices.first { $0.jobs.contains(.maintenanceWeekly) }
-        XCTAssertEqual(notice?.text, "Weekly maintenance deferred — retries tonight 03:15")
+        XCTAssertEqual(notice?.text, "Weekly maintenance failed at 2026-10-26 04:00 GMT+2 — next retry 2026-10-27 03:15 GMT+2")
         XCTAssertEqual(snapshot.notices.filter { $0.jobs.contains(.maintenanceWeekly) }.count, 1,
                        "the job alert and the calendar failure are ONE issue: \(snapshot.notices)")
-        XCTAssertEqual(value.menu, "Info: Weekly maintenance deferred — retries tonight 03:15")
+        XCTAssertTrue(value.menu.hasPrefix("Info: Weekly maintenance failed at 2026-10-26 04:00"), value.menu)
         XCTAssertNotEqual(value.dashboard.headline, "All good")
-        XCTAssertEqual(value.dashboard.reason, "Weekly maintenance deferred — retries tonight 03:15")
-        XCTAssertEqual(value.jobs[.maintenance]?.health, .deferred)
-        XCTAssertEqual(value.jobs[.maintenance]?.attentionReason, "Weekly maintenance deferred — retries tonight 03:15")
+        XCTAssertEqual(value.dashboard.reason, "Weekly maintenance failed at 2026-10-26 04:00 GMT+2 — next retry 2026-10-27 03:15 GMT+2")
+        XCTAssertEqual(value.jobs[.maintenance]?.health, .notice)
+        XCTAssertEqual(value.jobs[.maintenance]?.attentionReason, "Weekly maintenance failed at 2026-10-26 04:00 GMT+2 — next retry 2026-10-27 03:15 GMT+2")
         XCTAssertEqual(value.backups.badge, .healthy, "a maintenance deferral is not a backup failure")
     }
 
@@ -186,14 +186,14 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         XCTAssertNotEqual(value.jobs[.maintenance]?.health, .unhealthy)
     }
 
-    func testSingleRequiredJobFailureIsANoticeAndTheSecondConsecutiveIsADot() {
+    func testIndexFailuresRemainVisibleWithoutADot() {
         var inputs = Self.healthy()
         inputs.observations?[.index] = Self.failed(.index, code: 1, consecutive: 1)
         Self.assertAgree(inputs, dot: false, "index failed once")
         inputs.observations?[.index] = Self.failed(.index, code: 1, consecutive: 2)
-        let (snapshot, value) = Self.assertAgree(inputs, dot: true, "index failed twice")
-        XCTAssertEqual(value.jobs[.ingest]?.health, .unhealthy)
-        XCTAssertTrue(snapshot.attention.first?.text.contains("2 consecutive") == true, "\(snapshot.attention)")
+        let (snapshot, value) = Self.assertAgree(inputs, dot: false, "index failed twice")
+        XCTAssertEqual(value.jobs[.ingest]?.health, .notice)
+        XCTAssertTrue(snapshot.notices.first?.text.contains("2 consecutive") == true, "\(snapshot.attention)")
     }
 
     func testWarningOnlyBadgeIsInfoNotADot() {
@@ -204,15 +204,15 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(value.menu, "Info: queue backed up")
     }
 
-    func testDriveExpiringIsANoticeAndDriveLostIsADot() {
+    func testDriveAuthProblemsAreNoticesUntilTheBackupAgeLimit() {
         var inputs = Self.healthy()
         inputs.drive = .init(line: "1 thing needs you: reconnect Drive by Oct 28", detail: nil, tone: .expiring,
                              showsReconnect: true, reconnectEnabled: true, needsAttention: true)
         Self.assertAgree(inputs, dot: false, "drive expiring")
         inputs.drive = .init(line: "Drive access expired or was revoked. Backups can't upload.", detail: nil,
                              tone: .attention, showsReconnect: true, reconnectEnabled: true, needsAttention: true)
-        let (_, value) = Self.assertAgree(inputs, dot: true, "drive lost")
-        XCTAssertEqual(value.backups.badge, .attention)
+        let (_, value) = Self.assertAgree(inputs, dot: false, "drive lost")
+        XCTAssertEqual(value.backups.badge, .notice)
     }
 
     // MARK: dot
@@ -232,11 +232,11 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         Self.assertAgree(inputs, dot: false, "35 h is inside the 36 h threshold")
     }
 
-    func testBackupFailureWithoutNewerVerifiedCopyIsADotAndWithOneIsNot() {
+    func testRecentBackupFailureIsANoticeAndNewerVerifiedCopyShowsRecovery() {
         var inputs = Self.healthy()
         inputs.observations?[.backupDaily] = Self.failed(.backupDaily, code: 1, at: Self.hoursAgo(4))
         inputs.backups = .measured(Self.backups(db: Self.hoursAgo(10)))
-        Self.assertAgree(inputs, dot: true, "backup failed after the newest copy")
+        Self.assertAgree(inputs, dot: false, "backup failed after the newest copy")
         inputs.backups = .measured(Self.backups(db: Self.hoursAgo(2)))
         Self.assertAgree(inputs, dot: false, "a newer verified copy exists")
     }
@@ -256,10 +256,10 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
             XCTAssertTrue(notice?.text.contains("recovered through a newer verified copy") ?? false, "\(job): \(notice?.text ?? "")")
             XCTAssertFalse(notice?.text.contains("consecutive") ?? true, "\(job): \(notice?.text ?? "")")
 
-            let (outstanding, _) = Self.assertAgree(inputs(copy: Self.hoursAgo(10)), dot: true, "\(job): streak 2 + older copy")
-            XCTAssertTrue(outstanding.attention.contains { $0.id == "job.\(job.rawValue)" && $0.text.contains("2 consecutive") },
+            let (outstanding, _) = Self.assertAgree(inputs(copy: Self.hoursAgo(10)), dot: false, "\(job): streak 2 + older copy")
+            XCTAssertTrue(outstanding.notices.contains { $0.id == "job.\(job.rawValue)" && $0.text.contains("2 consecutive") },
                           "\(job): \(outstanding.attention)")
-            Self.assertAgree(inputs(copy: Self.hoursAgo(4)), dot: true, "\(job): streak 2 + equal copy")
+            Self.assertAgree(inputs(copy: Self.hoursAgo(4)), dot: false, "\(job): streak 2 + equal copy")
             Self.assertAgree(inputs(copy: Self.now.addingTimeInterval(3600)), dot: true, "\(job): streak 2 + future copy")
         }
     }
@@ -272,10 +272,10 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         base.observations?[.maintenanceWeekly] = Self.failed(.maintenanceWeekly, code: 76, at: failureAt)
         Self.assertAgree(base, dot: false, "single exit 76")
 
-        // Lead amendment L1 (supersedes the 2-failure / 8-day / newer-copy / pending-run rule).
+        // Etan, 2026-10-27: the second consecutive maintenance failure is the dot.
         var second = base
         second.observations?[.maintenanceWeekly] = Self.failed(.maintenanceWeekly, code: 76, at: failureAt, consecutive: 2)
-        Self.assertAgree(second, dot: false, "second consecutive exit 76")
+        Self.assertAgree(second, dot: true, "second consecutive exit 76")
 
         var third = base
         third.observations?[.maintenanceWeekly] = Self.failed(.maintenanceWeekly, code: 76, at: failureAt, consecutive: 3)
@@ -287,7 +287,7 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
 
         var stale = base
         stale.maintenance = .init(weeklyCompletion: .completed(Self.now.addingTimeInterval(-15 * 86_400)), runRecords: [:])
-        Self.assertAgree(stale, dot: true, "last successful weekly > 14 days")
+        Self.assertAgree(stale, dot: false, "completion age alone does not give a dot")
 
         var noCopy = base
         noCopy.backups = .measured(Self.backups(db: Self.hoursAgo(14)))
@@ -298,7 +298,7 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         Self.assertAgree(noNextRun, dot: false, "a missing next run is uncertainty, not an emergency")
     }
 
-    func testMalformedMaintenancePlistIsADotAndDedupesWithTheHealthCheck() {
+    func testMalformedMaintenancePlistIsANoticeAndDedupesWithTheHealthCheck() {
         var inputs = Self.healthy()
         let reason = "com.brainlayer.maintenance.plist is malformed: not a property-list dictionary"
         for job in [BrainLayerLaunchdJob.index, .backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly] {
@@ -309,8 +309,8 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
             activeCodes: ["job_scan_failed"],
             activeMessages: ["cannot inspect BrainLayer plist /Users/x/Library/LaunchAgents/com.brainlayer.maintenance.plist: Invalid file"],
             activeSeverities: ["critical"])
-        let (snapshot, _) = Self.assertAgree(inputs, dot: true, "malformed plist")
-        XCTAssertEqual(snapshot.attention.filter { $0.component == .configuration }.count, 1, "\(snapshot.attention)")
+        let (snapshot, _) = Self.assertAgree(inputs, dot: false, "malformed plist")
+        XCTAssertEqual(snapshot.notices.filter { $0.component == .configuration }.count, 1, "\(snapshot.attention)")
     }
 
     func testIssuesDedupeByIdentityNotSentence() {

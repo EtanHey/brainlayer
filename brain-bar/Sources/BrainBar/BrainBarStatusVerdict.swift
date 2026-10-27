@@ -17,9 +17,9 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
     var dashboardStatus: BrainBarOnePageStatus {
         if let first = attention.first {
             return .init(headline: attention.count == 1 ? "1 thing needs you" : "\(attention.count) things need you",
-                         reason: first, tone: .amber)
+                         reason: ([first] + notices).joined(separator: "; "), tone: .amber)
         }
-        if let first = notices.first { return .init(headline: "No action needed", reason: first, tone: .neutral) }
+        if !notices.isEmpty { return .init(headline: "Status notice", reason: notices.joined(separator: "; "), tone: .neutral) }
         if isChecking { return .init(headline: "Checking…", reason: nil, tone: .neutral) }
         return .init(headline: "All good", reason: nil, tone: .green)
     }

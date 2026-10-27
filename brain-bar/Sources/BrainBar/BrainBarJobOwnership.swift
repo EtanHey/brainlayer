@@ -111,6 +111,7 @@ struct BrainBarCalendarHistory: Sendable {
             var result = Self()
             var starts: [String: Date] = [:]
             var streaks: [String: Int] = [:]
+            var abandonedRuns: Set<String> = []
             for (ordinal, line) in String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).enumerated() {
                 guard let row = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
                 else { throw CocoaError(.fileReadCorruptFile) }
@@ -121,6 +122,27 @@ struct BrainBarCalendarHistory: Sendable {
                 if row["event"] as? String == "runner" {
                     starts.removeAll()
                     result.latestScheduledDate = row["scheduled_date"] as? String
+                }
+                if row["event"] as? String == "abandoned" {
+                    guard let date = row["scheduled_date"] as? String,
+                          let ts = row["ts"] as? Double, ts.isFinite else { throw CocoaError(.fileReadCorruptFile) }
+                    // This schema has no plan for unstarted steps: report the abandoned RUN,
+                    // projected onto maintenance rows, without claiming either step executed.
+                    // Count it once per scheduled night; finished steps keep their own result.
+                    guard abandonedRuns.insert(date).inserted else { continue }
+                    for step in ["maintenance-nightly", "maintenance-weekly"] {
+                        guard result.runs[step]?.scheduledDate != date else { continue }
+                        if step == "maintenance-nightly", let weekly = result.runs["maintenance-weekly"],
+                           weekly.scheduledDate == date, weekly.status == "ok", weekly.code == 0,
+                           weekly.replaces == "maintenance-nightly" { continue }
+                        streaks[step, default: 0] += 1
+                        result.runs[step] = Run(at: Date(timeIntervalSince1970: ts), code: -1, status: "abandoned",
+                            startedAt: (row["runner_started_at"] as? Double).map(Date.init(timeIntervalSince1970:)),
+                            reason: row["reason"] as? String, scheduledDate: date, journalOrdinal: ordinal,
+                            consecutiveFailures: streaks[step] ?? 0)
+                    }
+                    result.latestScheduledDate = date
+                    continue
                 }
                 guard row["event"] as? String == "finished" else { continue }
                 guard let step = row["step"] as? String, let ts = row["ts"] as? Double, ts.isFinite,
@@ -140,7 +162,7 @@ struct BrainBarCalendarHistory: Sendable {
                 }
                 result.runs[step] = Run(at: Date(timeIntervalSince1970: ts), code: code, status: status,
                     startedAt: startedAt, reason: row["reason"] as? String, replaces: row["replaces"] as? String,
-                    scheduledDate: result.latestScheduledDate, journalOrdinal: ordinal,
+                    scheduledDate: row["scheduled_date"] as? String ?? result.latestScheduledDate, journalOrdinal: ordinal,
                     consecutiveFailures: streaks[step] ?? 0)
             }
             return result

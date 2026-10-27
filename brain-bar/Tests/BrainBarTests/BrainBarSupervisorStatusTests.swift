@@ -401,7 +401,7 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
     static func supervised(history: BrainBarCalendarHistory = .empty, logs: URL? = nil, disabled: Bool = false) -> BrainLayerLaunchdStatusProvider {
         BrainLayerLaunchdStatusProvider(commandRunner: { command in
             if command.first == "/bin/launchctl" {
-                if command.contains("print") { XCTAssertTrue(command.last!.hasSuffix("/com.brainlayer.maintenance")) }
+                if command.contains("print") { XCTAssertTrue(["/com.brainlayer.maintenance", "/com.brainlayer.daemon"].contains { command.last!.hasSuffix($0) }) }
                 return .init(terminationStatus: 0, output: "runs = 0")
             }
             return .init(terminationStatus: 0, output: """
@@ -642,7 +642,7 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         inputs.observations = observations
         let snapshot = BrainBarStatusSnapshot.derive(inputs)
         XCTAssertTrue(snapshot.needsAttention)
-        XCTAssertTrue(snapshot.attention.contains { $0.component == .configuration }, "\(snapshot.attention)")
+        XCTAssertTrue(snapshot.notices.contains { $0.component == .configuration }, "\(snapshot.notices)")
     }
 
 
@@ -681,20 +681,20 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         }
     }
 
-    func testEarnedIndexAlarmSurvivesADeferralUntilASuccess() throws {
+    func testIndexFailureNoticeSurvivesADeferralUntilASuccess() throws {
         let directory = try journal("migrated").deletingLastPathComponent()
         var lines = [finished("index", 1, "failed", 1), finished("index", 2, "failed", 1), finished("index", 3, "deferred", 75)]
         let deferred = try snapshot(lines, in: directory)
-        XCTAssertTrue(deferred.needsAttention, "\(deferred.issues)")
-        XCTAssertEqual(deferred.attention.first?.jobs, [.index])
+        XCTAssertFalse(deferred.needsAttention)
+        XCTAssertEqual(deferred.notices.first?.jobs, [.index])
         lines.append(finished("index", 4, "ok", 0))
         XCTAssertFalse(try snapshot(lines, in: directory).needsAttention)
     }
 
-    func testSingleDeferralTwoExit76AndWeeklyCoverageStayNeutral() throws {
+    func testSingleDeferralIsNeutralTwoFailuresDotAndWeeklyCoverageRecovers() throws {
         let directory = try journal("migrated").deletingLastPathComponent()
         XCTAssertFalse(try snapshot([finished("maintenance-weekly", 1, "deferred", 75)], in: directory).needsAttention)
-        XCTAssertFalse(try snapshot([finished("maintenance-weekly", 1, "failed", 76), finished("maintenance-weekly", 2, "failed", 76)],
+        XCTAssertTrue(try snapshot([finished("maintenance-weekly", 1, "failed", 76), finished("maintenance-weekly", 2, "failed", 76)],
                                     in: directory).needsAttention, "the original two-exit-76 case")
         let covered = (1...3).map { finished("maintenance-nightly", $0, "failed", 1) } + [
             #"{"event":"runner","ts":1784465100,"scheduled_date":"2026-07-19"}"#,

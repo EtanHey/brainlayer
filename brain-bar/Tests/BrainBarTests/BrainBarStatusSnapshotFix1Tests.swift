@@ -1,10 +1,7 @@
 import XCTest
 @testable import BrainBar
 
-/// PR #1512 review round 1 (Codex Sol) and lead amendments L1–L3 (2026-10-26):
-/// L1 maintenance is housekeeping — neutral until ≥3 consecutive scheduled failures or > 14 days
-/// since a successful weekly; L2 real health criticals default to the dot with an explicit neutral
-/// allow-list; L3 an unreadable status file is a dot strictly beyond two sampling periods.
+/// Shared-source and recovery regressions, updated for Etan's 2026-10-27 dot rule.
 @MainActor
 final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
     typealias T = BrainBarStatusSnapshotTests
@@ -19,40 +16,39 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         .init(weeklyCompletion: .completed(T.now.addingTimeInterval(-daysAgo * day)), runRecords: [:])
     }
 
-    // MARK: L1 — maintenance is housekeeping
+    // MARK: maintenance failure streaks
 
-    func testTodaysTwoConsecutiveExit76FailuresAreNotADot() {
+    func testTodaysTwoConsecutiveExit76FailuresGiveADot() {
         var inputs = T.healthy()
         // Oct 25 + Oct 26 exit 76, last successful weekly Oct 21 (5 days).
         inputs.observations?[.maintenanceWeekly] = Self.weekly(76, consecutive: 2)
         inputs.maintenance = Self.completed(daysAgo: 5)
         inputs.jobAlerts = BrainBarJobAlerts(active: ["maintenance-full":
             "BrainLayer full maintenance failed: tonight's local verified snapshot unavailable; VACUUM skipped."])
-        let (snapshot, surfaces) = T.assertAgree(inputs, dot: false, "today")
-        let notice = snapshot.notices.filter { $0.jobs.contains(.maintenanceWeekly) }
+        let (snapshot, surfaces) = T.assertAgree(inputs, dot: true, "today")
+        let notice = snapshot.attention.filter { $0.jobs.contains(.maintenanceWeekly) }
         XCTAssertEqual(notice.count, 1, "\(snapshot.notices)")
-        XCTAssertEqual(notice.first?.text.hasPrefix("Weekly maintenance deferred — retries tonight 03:15"), true, notice.first?.text ?? "")
-        XCTAssertEqual(surfaces.jobs[.maintenance]?.health, .deferred)
+        XCTAssertEqual(notice.first?.text.hasPrefix("Weekly maintenance failed at 2026-10-26 04:00"), true, notice.first?.text ?? "")
+        XCTAssertEqual(surfaces.jobs[.maintenance]?.health, .unhealthy)
     }
 
-    func testMaintenanceDotsOnTheThirdConsecutiveFailure() {
+    func testMaintenanceDotsOnTheSecondConsecutiveFailure() {
         for (job, code) in [(BrainLayerLaunchdJob.maintenanceWeekly, Int32(76)), (.maintenanceWeekly, 1), (.maintenanceNightly, 1)] {
             var inputs = T.healthy()
             inputs.maintenance = Self.completed(daysAgo: 3)
             inputs.observations?[job] = T.failed(job, code: code, consecutive: 2)
-            T.assertAgree(inputs, dot: false, "\(job) exit \(code) ×2")
+            T.assertAgree(inputs, dot: true, "\(job) exit \(code) ×2")
             inputs.observations?[job] = T.failed(job, code: code, consecutive: 3)
             T.assertAgree(inputs, dot: true, "\(job) exit \(code) ×3")
         }
     }
 
-    func testWeeklyAgeIsMeasuredIndependentlyOfTheLatestExitAt14Days() {
+    func testOldWeeklyCompletionAloneDoesNotGiveADot() {
         var inputs = T.healthy() // latest weekly run is exit 0
         inputs.maintenance = Self.completed(daysAgo: 14)
         T.assertAgree(inputs, dot: false, "exactly 14 days")
         inputs.maintenance = .init(weeklyCompletion: .completed(T.now.addingTimeInterval(-14 * Self.day - 1)), runRecords: [:])
-        let (snapshot, _) = T.assertAgree(inputs, dot: true, "14 days + 1 s, latest exit 0")
-        XCTAssertEqual(snapshot.attention.first?.component, .maintenance)
+        T.assertAgree(inputs, dot: false, "old completion, latest exit 0")
         for unknown in [BrainLayerMaintenanceEvidence.unread, .init(weeklyCompletion: .noneRecorded, runRecords: [:])] {
             inputs.maintenance = unknown
             T.assertAgree(inputs, dot: false, "unknown completion age is not a measured > 14-day age")
@@ -63,7 +59,7 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         var inputs = T.healthy()
         inputs.observations?[.maintenanceWeekly] = Self.weekly(76, consecutive: 1, next: nil)
         let (snapshot, _) = T.assertAgree(inputs, dot: false, "no next run")
-        XCTAssertTrue(snapshot.notices.contains { $0.text.hasPrefix("Weekly maintenance deferred — next run time unavailable") },
+        XCTAssertTrue(snapshot.notices.contains { $0.text.hasPrefix("Weekly maintenance failed at 2026-10-26 04:00 GMT+2 — next retry time unavailable") },
                       "\(snapshot.notices)")
     }
 
@@ -78,15 +74,15 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         T.assertAgree(inputs, dot: false, "badge maintenance alert, alert file unreadable")
     }
 
-    // MARK: L2 — real criticals are dots by default
+    // MARK: other criticals remain visible notices
 
-    func testCriticalHealthCodesDefaultToADotWithAnExplicitNeutralAllowList() {
+    func testHealthCodesRemainVisibleWithoutADot() {
         for code in ["brain_search_canary_failed", "job_state_unknown", "drain_no_progress", "supervisor_control_unavailable",
                      "a_code_nobody_has_seen_yet"] {
             var inputs = T.healthy()
             inputs.badge = .init(badgeOn: true, reason: code, activeCodes: [code], activeMessages: ["\(code) message"],
                                  activeSeverities: ["critical"])
-            T.assertAgree(inputs, dot: true, code)
+            T.assertAgree(inputs, dot: false, code)
         }
         for (code, severity) in [("queue_backed_up", "warning"), ("missing_embeddings_scan_incomplete", "warning"),
                                  ("queue_backed_up", "critical"), ("missing_embeddings_scan_incomplete", "critical"),
@@ -105,15 +101,15 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         T.assertAgree(inputs, dot: false, "fresh local heartbeat proves recovery")
         inputs.watcher = .unknown(reason: "Watcher is running, but its health file is missing.")
         inputs.watcherHeartbeatAt = nil
-        let (snapshot, _) = T.assertAgree(inputs, dot: true, "no local recovery evidence")
-        XCTAssertEqual(snapshot.attention.filter { $0.component == .watcher }.count, 1, "\(snapshot.attention)")
+        let (snapshot, _) = T.assertAgree(inputs, dot: false, "no local recovery evidence")
+        XCTAssertEqual(snapshot.notices.filter { $0.id == "watcher.heartbeat" }.count, 1, "\(snapshot.attention)")
     }
 
     func testFreshHeartbeatDoesNotHideADatabaseProbeFailureOrAnIngestStall() {
         let now = T.now
         for (file, dot, name) in [
-            (WatcherHealthFile(updatedAt: now.addingTimeInterval(-30), pollCount: 72, dbProbeFailed: true), true, "db probe"),
-            (WatcherHealthFile(updatedAt: now.addingTimeInterval(-30), pollCount: 72, alertReasons: ["coverage_drop"]), true, "ingest stall"),
+            (WatcherHealthFile(updatedAt: now.addingTimeInterval(-30), pollCount: 72, dbProbeFailed: true), false, "db probe"),
+            (WatcherHealthFile(updatedAt: now.addingTimeInterval(-30), pollCount: 72, alertReasons: ["coverage_drop"]), false, "ingest stall"),
             (WatcherHealthFile(updatedAt: now.addingTimeInterval(-30), pollCount: 72, alertReasons: ["offset_lag"],
                                maxOffsetLagBytes: 4_000_000), false, "lag"),
             (WatcherHealthFile(updatedAt: now.addingTimeInterval(-30), pollCount: 72, alertReasons: ["file_ingestion_failure"],
@@ -127,10 +123,10 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         }
     }
 
-    func testActiveTransportAlertIsADotAndARecoveryNoticeIsNot() {
+    func testTransportAlertAndRecoveryRemainVisibleWithoutADot() {
         var inputs = T.healthy()
         inputs.jobAlerts = BrainBarJobAlerts(active: ["mcp-transport": "BrainBar MCP transport: event buffer overflow; storm counts unmeasurable"])
-        T.assertAgree(inputs, dot: true, "active MCP transport incident")
+        T.assertAgree(inputs, dot: false, "active MCP transport incident")
         inputs.jobAlerts = BrainBarJobAlerts(active: ["fleet-watchdog-hold": "BrainLayer recovered a stale fleet-watchdog hold; supervisor restored"])
         T.assertAgree(inputs, dot: false, "recovered hold")
     }
@@ -144,7 +140,7 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         inputs.jobAlerts = BrainBarJobAlerts(active: ["drive-consent": "Drive consent is gone"])
         inputs.drive = .init(line: "Drive access expired or was revoked. Backups can't upload.", detail: nil, tone: .attention,
                              showsReconnect: true, reconnectEnabled: true, needsAttention: true)
-        T.assertAgree(inputs, dot: true, "typed lost, whatever the wording")
+        T.assertAgree(inputs, dot: false, "typed lost, whatever the wording")
     }
 
     // MARK: future receipts are not recovery
@@ -153,13 +149,13 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         var inputs = T.healthy()
         inputs.observations?[.backupDaily] = T.failed(.backupDaily, code: 1, at: T.hoursAgo(4))
         inputs.backups = .measured(T.backups(db: T.now.addingTimeInterval(3_600)))
-        T.assertAgree(inputs, dot: true, "future DB copy is not newer than the failure")
+        T.assertAgree(inputs, dot: true, "future DB copy is not a usable verified receipt")
     }
 
-    // MARK: L3 — an unreadable status file
+    // MARK: an unreadable status file
 
-    func testUnreadableStatusFileIsADotStrictlyBeyondTwoSamplingPeriods() {
-        for (seconds, dot) in [(59.0, false), (60.0, false), (61.0, true)] {
+    func testUnreadableStatusFileRemainsANotice() {
+        for (seconds, dot) in [(59.0, false), (60.0, false), (61.0, false)] {
             var inputs = T.healthy()
             inputs.backups = .unavailable("observability.json is unreadable")
             inputs.observabilityUnreadableFor = seconds
@@ -207,7 +203,7 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         inputs.jobAlerts = BrainBarJobAlerts(active: ["mcp-transport": "BrainBar MCP transport: event buffer overflow"])
         inputs.jobAlertsState = .unavailable("job-alerts.json is unreadable or malformed")
         let snapshot = BrainBarStatusSnapshot.derive(inputs)
-        XCTAssertTrue(snapshot.needsAttention, "\(snapshot.issues)")
+        XCTAssertFalse(snapshot.needsAttention, "\(snapshot.issues)")
         XCTAssertTrue(snapshot.isChecking, "incomplete evidence")
         XCTAssertTrue(snapshot.notices.contains { $0.text.contains("job-alerts.json") }, "\(snapshot.notices)")
     }
@@ -220,15 +216,15 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         inputs.backups = .measured(T.backups(db: T.hoursAgo(6), transcripts: T.hoursAgo(12)))
         inputs.jobAlerts = BrainBarJobAlerts(active: ["backup-daily": "BrainLayer daily backup failed"])
         let snapshot = BrainBarStatusSnapshot.derive(inputs)
-        XCTAssertEqual(snapshot.attention.count, 1, "\(snapshot.attention)")
-        XCTAssertEqual(snapshot.attention.first?.alertKey, "backup-daily")
-        XCTAssertEqual(snapshot.dashboardStatus.headline, "1 thing needs you")
+        XCTAssertEqual(snapshot.notices.count, 1, "\(snapshot.attention)")
+        XCTAssertEqual(snapshot.notices.first?.alertKey, "backup-daily")
+        XCTAssertEqual(snapshot.dashboardStatus.headline, "Status notice")
         inputs.observations?[.jsonlBackup] = T.failed(.jsonlBackup, code: 1, at: T.hoursAgo(1))
         inputs.jobAlerts = BrainBarJobAlerts(active: ["backup-daily": "BrainLayer daily backup failed",
                                                       "jsonl-backup": "Transcript backup failed"])
         let both = BrainBarStatusSnapshot.derive(inputs)
-        XCTAssertEqual(both.attention.count, 2, "\(both.attention)")
-        XCTAssertEqual(Set(both.attention.compactMap(\.alertKey)), ["backup-daily", "jsonl-backup"])
+        XCTAssertEqual(both.notices.count, 2, "\(both.attention)")
+        XCTAssertEqual(Set(both.notices.compactMap(\.alertKey)), ["backup-daily", "jsonl-backup"])
     }
 
     // MARK: model: one publication, one cadence, mixed Backups reason
@@ -270,14 +266,14 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         return .readable(base.replacingBackupsForStatusTests(backups, generatedAt: date))
     }
 
-    func testUnreadableStatusFileEscalatesAfterTwoPeriodsAndClearsOnRecoveryThroughTheModel() async throws {
+    func testUnreadableStatusFileNoticeClearsOnRecoveryThroughTheModel() async throws {
         let clock = Clock(T.now)
         let readable = try document(T.backups(), at: T.now)
         final class Result: @unchecked Sendable { var value: ObservabilityReadResult = .unreadable("Unexpected character") }
         let result = Result()
         let model = model(clock: clock, observability: { result.value })
         model.applyHealthBadge(.init(badgeOn: false, reason: "", activeCodes: []), alerts: BrainBarJobAlerts(active: [:]))
-        for (offset, dot) in [(0.0, false), (30.0, false), (60.0, false), (61.0, true)] {
+        for (offset, dot) in [(0.0, false), (30.0, false), (60.0, false), (61.0, false)] {
             clock.now = T.now.addingTimeInterval(offset)
             await model.sampleStatusTick(includeLaunchd: false)
             XCTAssertEqual(model.publishedStatus.needsAttention, dot, "t+\(offset)s: \(model.publishedStatus.issues)")
@@ -306,7 +302,7 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         XCTAssertEqual(launchdReads.value, 2, "launchd on every second tick")
     }
 
-    func testNewAlertReachesTheIconWithNoWindowAndNoMenuOpen() async throws {
+    func testNewAlertReachesPublishedNoticeWithNoWindowAndNoMenuOpen() async throws {
         let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-s5-fix1-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -329,7 +325,8 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         XCTAssertFalse(controller.statusDotForTesting, "\(model.publishedStatus.issues)")
         try Data(#"{"backup-upload-abandoned": "Local DB snapshot invalid; upload abandoned"}"#.utf8).write(to: alerts)
         await model.sampleStatusTick(includeLaunchd: false)
-        XCTAssertTrue(controller.statusDotForTesting, "no menu open, no window: \(model.publishedStatus.issues)")
+        XCTAssertFalse(controller.statusDotForTesting)
+        XCTAssertTrue(model.publishedStatus.notices.contains { $0.alertKey == "backup-upload-abandoned" })
         try Data("{}".utf8).write(to: alerts)
         await model.sampleStatusTick(includeLaunchd: false)
         XCTAssertFalse(controller.statusDotForTesting)
@@ -350,10 +347,11 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         runtime.jobsModel = model
         runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: T.now.addingTimeInterval(30 * Self.day)))
         await model.sampleStatusTick(includeLaunchd: true)
-        XCTAssertTrue(model.publishedStatus.needsAttention, "\(model.publishedStatus.issues)")
+        XCTAssertFalse(model.publishedStatus.needsAttention, "\(model.publishedStatus.issues)")
         try Data("{not json".utf8).write(to: alerts)
         await model.sampleStatusTick(includeLaunchd: false)
-        XCTAssertTrue(model.publishedStatus.needsAttention, "an unknown read is not recovery: \(model.publishedStatus.issues)")
+        XCTAssertFalse(model.publishedStatus.needsAttention)
+        XCTAssertTrue(model.publishedStatus.notices.contains { $0.alertKey == "mcp-transport" })
         XCTAssertNotEqual(model.publishedStatus.dashboardStatus.headline, "All good")
         try Data("{}".utf8).write(to: alerts)
         await model.sampleStatusTick(includeLaunchd: false)
