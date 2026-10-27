@@ -110,9 +110,96 @@ def calendar_steps(python, cli, lib_dir, scheduled_date):
 
 def record(directory, **event):
     with (directory / "runs.jsonl").open("a") as handle:
-        handle.write(json.dumps(dict(ts=time.time(), **event), sort_keys=True) + "\n")
+        handle.write(json.dumps({"ts": time.time(), **event}, sort_keys=True) + "\n")
         handle.flush()
         os.fsync(handle.fileno())
+
+
+def _recover_abandoned(directory, state, plan):
+    """Called only under calendar custody; recovery summaries never finish a nightly run."""
+    path = directory / "runs.jsonl"
+    if not path.exists():
+        return
+    pending, current = {}, None
+    with path.open() as handle:
+        for line in handle:
+            row = json.loads(line)
+            event = row.get("event")
+            if event == "runner":
+                current = row["ts"]
+                pending[current] = dict(runner=row, spawn={}, finished=set(), abandoned=None)
+            elif event in {"transcript-recovery", "transcript-recovery-skip"}:
+                current = None
+            elif event == "abandoned" and row["runner_started_at"] in pending:
+                pending[row["runner_started_at"]]["abandoned"] = row
+            elif event == "summary":
+                pending.pop(row.get("runner_started_at", current), None)
+                current = None
+            elif current in pending:
+                if event == "spawn":
+                    pending[current]["spawn"] = row
+                elif event == "finished":
+                    pending[current]["finished"].add(row["step"])
+    for started, run in pending.items():
+        runner, spawn = run["runner"], run["spawn"]
+        event = run["abandoned"]
+        if event is None:
+            # Birth checks on new journals avoid treating a reused PID as the original holder.
+            identities = [
+                (runner.get("guard"), runner.get("guard_start_time")),
+                (spawn.get("pid"), spawn.get("start_time")),
+            ]
+            dead = [
+                pid
+                for pid, birth in identities
+                if isinstance(pid, int)
+                and pid > 1
+                and ((actual := start_time(pid)) is None or (birth is not None and actual != birth))
+            ]
+            if not dead:
+                continue
+            date = dt.date.fromisoformat(runner["scheduled_date"])
+            names = runner.get("steps")
+            if names is None:
+                marker = dt.date.fromisoformat(state["last_weekly"]) if state.get("last_weekly") else None
+                names = (
+                    [s.name for s in CalendarPlan(date, plan.candidates).select(marker)]
+                    if isinstance(plan, CalendarPlan)
+                    else [s.name for s in plan]
+                )
+            detected = time.time()
+            event = dict(
+                event="abandoned",
+                scheduled_date=date.isoformat(),
+                step=spawn.get("step"),
+                pid=spawn.get("pid", runner.get("guard")),
+                runner_started_at=started,
+                detected_at=detected,
+                ts=detected,
+                reason="runner-vanished" if runner.get("guard") in dead else "step-orphaned",
+                incomplete_steps=[name for name in names if name not in run["finished"]],
+                retry="next-scheduled-run",
+            )
+            record(directory, **event)
+        # Replay an event whose process died between the durable append and state/summary.
+        state["incomplete_run"] = event | dict(failed=1)
+        _atomic_write(directory / "state.json", state)
+        for name in event["incomplete_steps"] or [event["step"] or "maintenance-weekly"]:
+            if key := KEYS.get(name):
+                report(
+                    key,
+                    f"BrainLayer calendar {event['scheduled_date']} abandoned during "
+                    f"{event['step'] or 'startup'}; incomplete {name}; retries at next scheduled run",
+                )
+        record(
+            directory,
+            event="summary",
+            scheduled_date=event["scheduled_date"],
+            runner_started_at=started,
+            failed=1,
+            deferred=0,
+            abandoned=True,
+        )
 
 
 def backup_deadline(step):
@@ -229,7 +316,7 @@ async def _execute_step(
             if step.name == "backup-daily" and env.get(BACKUP_INVOCATION_ENV)
             else {}
         )
-        record(directory, event="spawn", step=step.name, pid=child.pid, **identity)
+        record(directory, event="spawn", step=step.name, pid=child.pid, start_time=birth, **identity)
         os.write(gate, b"R")
         budget, held, clock = backup_deadline(step), False, time.monotonic
         if deadline is not None:
@@ -457,21 +544,24 @@ async def run_calendar(
         return custody
     stop, heartbeat_stop, handlers, results = asyncio.Event(), asyncio.Event(), {}, {}
     guard, heartbeat = None, None
-    active_step, runner_failed = None, 0
+    active_step, runner_failed, incomplete_failed = None, 0, 0
+    runner_started_at = None
     loop = asyncio.get_running_loop()
     try:
-        custody.recover(min(1, shutdown_timeout / 2))  # Reap stale writers before reacquiring their lease.
         state_path = directory / "state.json"
         state = json.loads(state_path.read_text()) if state_path.exists() else dict(deferrals={})
         if not isinstance(state, dict) or not isinstance(state.get("deferrals"), dict):
             raise ValueError("unknown calendar state")
+        _recover_abandoned(directory, state, steps)
+        incomplete_failed = int(bool(state.get("incomplete_run")))
+        custody.recover(min(1, shutdown_timeout / 2))  # Reap stale writers before reacquiring their lease.
         planned = isinstance(steps, CalendarPlan)
         if transcript_recovery:
             # The freshness decision shares custody with the entire nightly plan. A competing
             # runner cannot begin an upload between this check and our transcript step.
             if _transcripts_fresh(now_fn()):
                 record(directory, event="transcript-recovery-skip", reason="fresh-verified-receipt")
-                return 0
+                return incomplete_failed
             candidates = steps.candidates if planned else steps
             steps = tuple(step for step in candidates if step.name == "jsonl-backup")
             if len(steps) != 1:
@@ -486,10 +576,14 @@ async def run_calendar(
         logs.mkdir(parents=True, exist_ok=True)
         guard = launch_guard(custody, guard_timeout, 0.2, shutdown_timeout, lease_control=True)
         heartbeat = asyncio.create_task(pulse(guard, heartbeat_stop, min(0.1, guard_timeout / 4)))
+        runner_started_at = time.time()
         record(
             directory,
             event="transcript-recovery" if transcript_recovery else "runner",
             guard=guard.pid,
+            guard_start_time=start_time(guard.pid),
+            steps=[step.name for step in steps],
+            ts=runner_started_at,
             scheduled_date=date.isoformat(),
         )
         if install_signals:
@@ -601,7 +695,11 @@ async def run_calendar(
             state["last_weekly"] = (date - dt.timedelta(days=(date.weekday() + 1) % 7)).isoformat()
             _atomic_write(directory / "state.json", state)
         failed = sum(v == "failed" for v in results.values())
-        return int(failed > 0 or stop.is_set())
+        if planned and not transcript_recovery and results and all(v == "ok" for v in results.values()):
+            state.pop("incomplete_run", None)
+            _atomic_write(state_path, state)
+            incomplete_failed = 0
+        return int(failed > 0 or stop.is_set() or incomplete_failed)
     except Exception as exc:
         if active_step is not None:
             results[active_step] = "failed"
@@ -639,7 +737,9 @@ async def run_calendar(
                 record(
                     directory,
                     event="summary",
-                    failed=sum(v == "failed" for v in results.values()) + runner_failed,
+                    scheduled_date=date.isoformat(),
+                    runner_started_at=runner_started_at,
+                    failed=sum(v == "failed" for v in results.values()) + runner_failed + incomplete_failed,
                     deferred=sum(v == "deferred" for v in results.values()),
                 )
             finally:

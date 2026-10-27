@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,166 @@ import pytest
 from brainlayer import job_alerts
 from brainlayer.maintenance_calendar import calendar_steps, run_calendar
 from tests.test_maintenance_control import control, native  # noqa: F401
+
+
+@pytest.mark.parametrize(
+    "fixture,abandoned",
+    [("abandoned-2026-10-27", True), ("completed-2026-10-26", False), ("success-2026-10-26", False)],
+)
+def test_calendar_replays_dead_run_without_recovery_summaries_hiding_failure(tmp_path, monkeypatch, fixture, abandoned):
+    from brainlayer import maintenance_calendar as calendar
+
+    directory = tmp_path / "calendar"
+    directory.mkdir(mode=0o700)
+    history = Path(__file__).parent / "fixtures/maintenance_calendar" / f"{fixture}.jsonl"
+    (directory / "runs.jsonl").write_text(history.read_text())
+    (directory / "state.json").write_text(json.dumps(dict(deferrals={}, last_weekly="2026-10-18")))
+    alerts = tmp_path / "alerts.json"
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(alerts))
+    monkeypatch.setattr(calendar, "start_time", lambda _pid: None)
+    monkeypatch.setattr(calendar, "_transcripts_fresh", lambda _now: True)
+    now = dt.datetime(2026, 10, 27, 7)
+    plan = calendar_steps(sys.executable, "/unused", tmp_path, now.date())
+    for _ in range(2):
+        assert asyncio.run(
+            run_calendar(plan, directory, tmp_path / "logs", now_fn=lambda: now, transcript_recovery=True)
+        ) == int(abandoned)
+    rows = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
+    events = [row for row in rows if row["event"] == "abandoned"]
+    assert len(events) == int(abandoned)
+    state = json.loads((directory / "state.json").read_text())
+    assert state["last_weekly"] == "2026-10-18"
+    if abandoned:
+        event = events[0]
+        assert (
+            event.items()
+            >= dict(
+                scheduled_date="2026-10-27",
+                step="index",
+                pid=90000001,
+                runner_started_at=1793063702.7738612,
+                reason="runner-vanished",
+            ).items()
+        )
+        assert event["detected_at"] == event["ts"]
+        assert "maintenance-weekly" in event["incomplete_steps"]
+        assert state["incomplete_run"]["failed"] == 1
+        assert rows[-1]["failed"] == 1
+        assert "maintenance-full" in job_alerts.active_alerts(alerts)
+        assert not any(row["event"] == "spawn" for row in rows[len(history.read_text().splitlines()) :])
+    else:
+        assert "incomplete_run" not in state
+        assert not job_alerts.active_alerts(alerts)
+
+
+def test_calendar_next_scheduled_plan_acquires_dead_holders_lock(tmp_path, monkeypatch):
+    from brainlayer import maintenance_calendar as calendar
+
+    directory = tmp_path / "calendar"
+    # A real process exits normally while holding the lock; files remain, kernel ownership does not.
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from pathlib import Path; from contextlib import ExitStack; "
+            "from brainlayer.supervisor_guard import Custody; "
+            "p=Path(__import__('sys').argv[1]); s=ExitStack(); "
+            "[s.enter_context(Custody(d)) for d in (p, p/'full-calendar', p/'recovery-admission')]",
+            str(directory),
+        ],
+        check=True,
+        env=os.environ | {"PYTHONPATH": str(Path(calendar.__file__).parents[1])},
+    )
+    (directory / "runs.jsonl").write_text(
+        (Path(__file__).parent / "fixtures/maintenance_calendar/abandoned-2026-10-27.jsonl").read_text()
+    )
+    (directory / "state.json").write_text(json.dumps(dict(deferrals={}, last_weekly="2026-10-18")))
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "alerts.json"))
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "fixture.env"))
+    monkeypatch.setattr(
+        calendar.maintenance_control,
+        "control_client",
+        lambda: SimpleNamespace(path=tmp_path / "unused.sock", request=lambda: {}, _disabled=lambda *_a, **_k: set()),
+    )
+    executed = []
+
+    async def execute(step, env, **kwargs):
+        executed.append(step.name)
+        return 0
+
+    monkeypatch.setattr(calendar, "_execute_step", execute)
+    clock = [dt.datetime(2026, 10, 28, 3, 45)]
+
+    async def advance(_seconds):
+        clock[0] = clock[0].replace(hour=4)
+
+    now = clock[0]
+    plan = calendar_steps(sys.executable, "/unused", tmp_path, now.date())
+    # No held maintenance is executed in this admission test; the existing window tests own that contract.
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def hold(_client, _guard, env, _step, _now):
+        yield env
+
+    monkeypatch.setattr(calendar, "step_hold", hold)
+    assert asyncio.run(run_calendar(plan, directory, tmp_path / "logs", now_fn=lambda: clock[0], sleep_fn=advance)) == 0
+    assert executed == [step.name for step in plan.select(dt.date(2026, 10, 18))]
+    rows = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
+    assert len([row for row in rows if row["event"] == "abandoned"]) == 1
+    assert "incomplete_run" not in json.loads((directory / "state.json").read_text())
+
+
+@pytest.mark.parametrize("shape", ["startup", "finished", "live", "orphan", "reused", "append-interrupted"])
+def test_abandonment_identity_and_interrupted_receipt(tmp_path, monkeypatch, shape):
+    from brainlayer import maintenance_calendar as calendar
+
+    directory = tmp_path / "calendar"
+    directory.mkdir(mode=0o700)
+    rows = [
+        dict(
+            event="runner",
+            guard=90000000,
+            scheduled_date="2026-10-27",
+            ts=1,
+            guard_start_time="original",
+            steps=["index"],
+        )
+    ]
+    if shape != "startup":
+        rows.append(dict(event="spawn", pid=90000001, step="index", ts=2))
+    if shape == "finished":
+        rows.append(dict(event="finished", step="index", status="ok", returncode=0, ts=3))
+    (directory / "runs.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "alerts.json"))
+    monkeypatch.setattr(
+        calendar,
+        "start_time",
+        lambda pid: (
+            "reused"
+            if shape == "reused"
+            else "original"
+            if shape == "live" or (shape == "orphan" and pid == 90000000)
+            else None
+        ),
+    )
+    state = dict(deferrals={})
+    plan = calendar_steps(sys.executable, "/unused", tmp_path, dt.date(2026, 10, 27))
+    with calendar.Custody(directory):
+        if shape == "append-interrupted":
+            with monkeypatch.context() as patch:
+                patch.setattr(calendar, "report", lambda *_args: (_ for _ in ()).throw(OSError("fixture")))
+                with pytest.raises(OSError):
+                    calendar._recover_abandoned(directory, state, plan)
+        for _ in range(2):
+            calendar._recover_abandoned(directory, state, plan)
+    recovered = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
+    events = [row for row in recovered if row["event"] == "abandoned"]
+    assert len(events) == (0 if shape == "live" else 1)
+    if events:
+        assert events[0]["reason"] == ("step-orphaned" if shape == "orphan" else "runner-vanished")
+        assert events[0]["step"] == (None if shape == "startup" else "index")
+        assert state["incomplete_run"]["failed"] == recovered[-1]["failed"] == 1
 
 
 def test_calendar_invocation_is_fresh_and_reaches_actual_child_and_terminal(tmp_path, monkeypatch):
