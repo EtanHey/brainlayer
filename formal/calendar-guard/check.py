@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -333,6 +334,21 @@ def matrix(current, histories):
     return cases
 
 
+def wait_for_load():
+    """HOST-PRESSURE: fail closed after ten minutes above one-minute load 40."""
+    began = time.monotonic()
+    while True:
+        raw = subprocess.check_output(["sysctl", "-n", "vm.loadavg"], text=True, timeout=5)
+        load = float(raw.strip("{} \n").split()[0])
+        waited = time.monotonic() - began
+        print(f"Load gate: one-minute={load:.2f}, waited={waited:.1f}s", flush=True)
+        if load <= 40:
+            return dict(load_1m=load, load_wait_s=round(waited, 3))
+        if waited >= 600:
+            raise RuntimeError("HOST-PRESSURE: load stayed above 40 for ten minutes; TLC not started")
+        time.sleep(min(15, 600 - waited))
+
+
 def run_tlc(entry, output):
     constants = "\n".join(
         f"  {k} = {str(v).upper() if isinstance(v, bool) else json.dumps(v)}" for k, v in entry["constants"].items()
@@ -358,6 +374,7 @@ def run_tlc(entry, output):
         str(cfg),
         entry["module"] + ".tla",
     ]
+    load_receipt = wait_for_load()
     began = time.monotonic()
     result = subprocess.run(
         command,
@@ -377,6 +394,7 @@ def run_tlc(entry, output):
     progress = re.findall(r"Progress\((\d+)\)", log)
     row = dict(
         name=entry["name"],
+        **load_receipt,
         rc=result.returncode,
         violation=violated[1] if violated else expected if temporal else None,
         states=int(count[2].replace(",", "")) if count else None,
@@ -466,4 +484,9 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        code = main()
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
+        print(f"Verification could not complete: {exc}", file=sys.stderr)
+        code = 2
+    raise SystemExit(code)

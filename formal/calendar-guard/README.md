@@ -15,6 +15,11 @@ an unexpected result. `--expect-known --scratch-break` returns 0 only when all
 expected passes and counterexamples reproduce, and still prints `NOT_GREEN`.
 Logs, generated configs, state files, scratch code and `results.json` live in
 `.build.noindex/calendar-guard/<UTC timestamp>/`. Nothing generated goes into Git.
+Each TLC process uses `-workers 1` and a 512 MiB heap, sequentially. Before
+every process, the checker reads `sysctl -n vm.loadavg`; one-minute load above
+40 delays startup for at most ten minutes, then fails without starting TLC.
+Each result records the observed load and wait. This host-pressure runner
+requires macOS's `vm.loadavg` sysctl.
 
 The pinned target is main `f01469cfdac1368d54a9f9d47bf743f5fc49ca8d`
 (#1517/#1518/#1520) with calendar source from #1519

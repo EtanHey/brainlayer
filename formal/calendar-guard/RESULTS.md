@@ -2,39 +2,43 @@
 
 Status: **NOT_GREEN**. All 23 expected outcomes reproduced; this is not an all-property pass.
 
-Run: 2026-10-27 07:25:29Z, TLC 1.7.4, one worker, 512 MiB heap, fingerprint 0.
+Run: 2026-10-27 07:33:06Z, TLC 1.7.4, one worker, 512 MiB heap, fingerprint 0.
 Command: `formal/calendar-guard/check.sh --scratch-break` (exit 1: current contract findings remain).
 `--expect-known` accepts these findings with exit 0; exit 2 means unexpected results.
-Local logs: `.build.noindex/calendar-guard/20261027T072529Z/` (excluded from Git; rerun to regenerate).
+Local logs: `.build.noindex/calendar-guard/20261027T073306Z/` (excluded from Git; rerun to regenerate).
 
 | Config | TLC exit | Distinct states | Depth | Wall seconds | Result |
 |---|---:|---:|---:|---:|---|
-| current-healthy | 0 | 1421 | 39 | 1.211 | PASS within stated scope |
-| current-wedge-runner | 0 | 95 | 16 | 0.684 | PASS within stated scope |
-| current-wedge-custody | 0 | 215 | 22 | 0.702 | PASS within stated scope |
-| current-wedge-finish | 0 | 779 | 33 | 0.808 | PASS within stated scope |
-| current-loop-wedge | 0 | 143 | 18 | 0.785 | PASS within stated scope |
-| current-q-timeout | 0 | 2477 | 41 | 0.795 | PASS within stated scope |
-| current-parent-killed | 0 | 1529 | 39 | 0.808 | PASS within stated scope |
-| current-journal | 0 | 70 | 23 | 0.795 | PASS within stated scope |
-| current-completed | 0 | 13 | 13 | 0.681 | PASS within stated scope |
-| finding-wedge-pre | 12 | 122 | 42 | 0.715 | BoundedTermination |
-| finding-wedge-summary | 12 | 5340 | 58 | 0.819 | BoundedTermination |
-| finding-recovery | 12 | 27 | 9 | 0.828 | Custody |
-| finding-late | 12 | 27 | 9 | 0.675 | Custody |
-| finding-two-pending | 12 | 40 | 12 | 0.751 | Custody |
-| finding-lost-start | 12 | 7 | 7 | 0.696 | Custody |
-| registration-ack | 12 | 67 | 11 | 0.726 | RegistrationAcknowledged |
-| finding-terminal-record-count | 12 | 27 | 9 | 1.081 | TerminalRecordUnique |
-| finding-guard-killed | 12 | 3432 | 49 | 0.817 | BoundedTermination |
-| historical-sync | 12 | 34 | 8 | 0.747 | NoFalseKill |
-| historical-missing-terminal | 12 | 27 | 9 | 0.789 | Custody |
-| historical-worker-wedge | 12 | 726 | 48 | 0.795 | BoundedTermination |
-| historical-worker-liveness | 13 | 743 | 48 | 0.801 | EventuallyReleased |
-| scratch-worker-wedge | 12 | 363 | 45 | 0.749 | BoundedTermination |
+| current-healthy | 0 | 1421 | 39 | 1.875 | PASS within stated scope |
+| current-wedge-runner | 0 | 95 | 16 | 0.979 | PASS within stated scope |
+| current-wedge-custody | 0 | 215 | 22 | 0.947 | PASS within stated scope |
+| current-wedge-finish | 0 | 779 | 33 | 0.916 | PASS within stated scope |
+| current-loop-wedge | 0 | 143 | 18 | 0.872 | PASS within stated scope |
+| current-q-timeout | 0 | 2477 | 41 | 1.105 | PASS within stated scope |
+| current-parent-killed | 0 | 1529 | 39 | 0.961 | PASS within stated scope |
+| current-journal | 0 | 70 | 23 | 0.850 | PASS within stated scope |
+| current-completed | 0 | 13 | 13 | 0.906 | PASS within stated scope |
+| finding-wedge-pre | 12 | 122 | 42 | 0.818 | BoundedTermination |
+| finding-wedge-summary | 12 | 5340 | 58 | 1.377 | BoundedTermination |
+| finding-recovery | 12 | 27 | 9 | 1.083 | Custody |
+| finding-late | 12 | 27 | 9 | 0.890 | Custody |
+| finding-two-pending | 12 | 40 | 12 | 0.957 | Custody |
+| finding-lost-start | 12 | 7 | 7 | 0.873 | Custody |
+| registration-ack | 12 | 67 | 11 | 0.851 | RegistrationAcknowledged |
+| finding-terminal-record-count | 12 | 27 | 9 | 0.836 | TerminalRecordUnique |
+| finding-guard-killed | 12 | 3432 | 49 | 1.168 | BoundedTermination |
+| historical-sync | 12 | 34 | 8 | 0.976 | NoFalseKill |
+| historical-missing-terminal | 12 | 27 | 9 | 0.828 | Custody |
+| historical-worker-wedge | 12 | 726 | 48 | 0.909 | BoundedTermination |
+| historical-worker-liveness | 13 | 743 | 48 | 0.904 | EventuallyReleased |
+| scratch-worker-wedge | 12 | 363 | 45 | 0.925 | BoundedTermination |
 
 Depth is the complete BFS depth or TLC's final `Progress(N)` depth for temporal failures.
 Invariant counterexamples stop exploration early. Runtimes are process wall measurements, not a performance comparison.
+
+Every TLC process first ran `sysctl -n vm.loadavg`; observed one-minute load ranged from 25.74 to 29.26, so none required a pressure wait. The runner now refuses startup after ten minutes above 40. A stdlib-only gate probe verified waiting above 40, admission at 40, and refusal at 600 seconds; no pytest or Swift suite was manually run in this resumed lane.
+
+The recovered branch was merged with `origin/main` at `a93f28f9f7f4b6edad107a23986bccfe178d9483` before this run. Its three modeled runtime files match the pinned composite byte-for-byte.
 
 ## Checked properties by config
 
@@ -71,9 +75,11 @@ Invariant counterexamples stop exploration early. Runtimes are process wall meas
 - Scratch source SHA-256: `9ad28230d86cb3f8e279c773c56e1afc68a18323ea42b1acba0a5b64661b7e8d`.
 - Original calendar SHA-256: `dbdca628b3991a7f1ddd437619fb0e57d4bb0ff63362c9c00f600296f8fc7cef`.
 
-Additional scoped verification at checkout main `f01469cf`: `PYTHONPATH=src pytest tests/test_maintenance_calendar.py -q -k "scan_damage or identity_and_interrupted_receipt or multiday_journal"` → **13 passed, 53 deselected, 1 existing RequestsDependencyWarning in 1.66s**.
+Prior child verification (not rerun under HOST-PRESSURE) at checkout main `f01469cf`: `PYTHONPATH=src pytest tests/test_maintenance_calendar.py -q -k "scan_damage or identity_and_interrupted_receipt or multiday_journal"` → **13 passed, 53 deselected, 1 existing RequestsDependencyWarning in 1.66s**.
 `ruff check formal/calendar-guard/check.py`, `sh -n formal/calendar-guard/check.sh`, and `git diff --check` passed.
 
 No production DB, live socket, live service, install, deploy, full suite or CI wiring was used.
 
 Initial pre-push at `32128ae6` was RED: registration tests had 3 passes and a teardown error because shared `origin/main` changed during pytest. Isolated tests had 40 passes, bun had 5 passes, and shell regression passed. This adverse result is retained; no bypass or timeout change was used.
+
+Resumed-lane CodeRabbit pre-commit pass was unavailable: CLI 0.7.6 returned `Rate limit exceeded` and requested a paid `--use-credits` rerun (maximum 200 cents). No paid rerun, CLI upgrade, reviewer child, or approval bypass was used. Claude pair review remains lead-routed after PR open.
