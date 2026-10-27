@@ -10,6 +10,7 @@ import signal
 import time
 import uuid
 from contextlib import ExitStack, asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
@@ -351,9 +352,57 @@ def _bounded_index_step(step, now, shutdown_timeout):
     )
 
 
-async def pulse(guard, stop, interval):
+_calendar_operations = ContextVar("calendar_operations", default=None)
+
+
+@dataclass
+class CalendarOperation:
+    label: str
+    started: float
+    reported: bool = False
+
+
+def _open_operation_diagnostics(directory):
+    try:
+        from .supervisor_diagnostics import DiagnosticSink
+    except ImportError:
+        return None  # Optional until the independently reviewed diagnostics PR lands.
+    try:
+        return DiagnosticSink.open(directory / "operation-events.jsonl")
+    except (OSError, RuntimeError):
+        logging.warning("calendar operation diagnostic sink unavailable; enforcement remains active")
+        return None
+
+
+async def pulse(guard, stop, interval, operations=None, operation_timeout=120, diagnostics=None):
+    operations = operations if operations is not None else {}
     while not stop.is_set() and guard.poll() is None:
-        os.write(guard.stdin.fileno(), b"H\n")
+        now = time.monotonic()
+        overdue = [op for op in operations.values() if now - op.started >= operation_timeout]
+        for op in overdue:
+            if not op.reported:
+                event = dict(
+                    event="heartbeat-suppressed",
+                    reason="operation-overdue",
+                    operation=op.label,
+                    started_monotonic=op.started,
+                    deadline_monotonic=op.started + operation_timeout,
+                    age_s=now - op.started,
+                    budget_s=operation_timeout,
+                    parent_pid=os.getpid(),
+                    parent_start_time=start_time(os.getpid()) or "unknown",
+                    guard_pid=guard.pid,
+                )
+                if diagnostics:
+                    try:
+                        diagnostics.emit(**event)
+                    except Exception:
+                        pass
+                else:
+                    logging.error("calendar heartbeat-suppressed: %s", event)
+                op.reported = True
+        if not overdue:
+            os.write(guard.stdin.fileno(), b"H\n")
         await asyncio.sleep(interval)
 
 
@@ -384,22 +433,29 @@ async def _execute_step(
 ):
     child, gate = None, None
     try:
-        with (logs / f"{step.name}.out.log").open("ab") as out, (logs / f"{step.name}.err.log").open("ab") as err:
-            fds = tuple(int(env[k]) for k in ("BRAINLAYER_CALENDAR_GUARD_FD", "BRAINLAYER_MAINTENANCE_FD") if k in env)
-            child, gate = gated_spawn(step.argv, env, out, err, extra_fds=fds)
-        birth = start_time(child.pid)
-        if birth is None:
-            raise RuntimeError("calendar child birth unknown")
-        custody.record(child.pid, birth)
+        budget, held, clock = await _blocking(backup_deadline, step), False, time.monotonic
+
+        def prepare():
+            nonlocal child, gate
+            with (logs / f"{step.name}.out.log").open("ab") as out, (logs / f"{step.name}.err.log").open("ab") as err:
+                fds = tuple(
+                    int(env[k]) for k in ("BRAINLAYER_CALENDAR_GUARD_FD", "BRAINLAYER_MAINTENANCE_FD") if k in env
+                )
+                child, gate = gated_spawn(step.argv, env, out, err, extra_fds=fds)
+            birth = start_time(child.pid)
+            if birth is None:
+                raise RuntimeError("calendar child birth unknown")
+            custody.record(child.pid, birth)
+            identity = (
+                {"backup_invocation_id": env[BACKUP_INVOCATION_ENV]}
+                if step.name == "backup-daily" and env.get(BACKUP_INVOCATION_ENV)
+                else {}
+            )
+            record(directory, event="spawn", step=step.name, pid=child.pid, start_time=birth, **identity)
+
+        await _blocking(prepare)
         os.write(guard.stdin.fileno(), f"+{child.pid}\n".encode())
-        identity = (
-            {"backup_invocation_id": env[BACKUP_INVOCATION_ENV]}
-            if step.name == "backup-daily" and env.get(BACKUP_INVOCATION_ENV)
-            else {}
-        )
-        record(directory, event="spawn", step=step.name, pid=child.pid, start_time=birth, **identity)
         os.write(gate, b"R")
-        budget, held, clock = backup_deadline(step), False, time.monotonic
         if deadline is not None:
             # A held step runs on the hold clock, the same one VACUUM and the watchdog read, so a
             # wall-clock step can neither drop nor reorder the bound.
@@ -413,7 +469,7 @@ async def _execute_step(
                 raise RuntimeError("calendar guard exited")
             await asyncio.sleep(min(0.1, guard_timeout / 4))
         if held and child.poll() is None and not stop.is_set():
-            record(directory, event="hold-expired", step=step.name, pid=child.pid)
+            await _blocking(record, directory, event="hold-expired", step=step.name, pid=child.pid)
         return child.returncode if child.returncode is not None else (143 if stop.is_set() else 124)
     finally:
         if gate is not None:
@@ -424,18 +480,18 @@ async def _execute_step(
                 os.write(guard.stdin.fileno(), b"H\n")  # Guard shutdown follows the finish worker.
             except BrokenPipeError:
                 stop.set()
-            await stop_group(child, 0.2, lambda: (deadline, shutdown_timeout / 2))
-            custody.forget(guard, child.pid)
+            await _drain(asyncio.create_task(stop_group(child, 0.2, lambda: (deadline, shutdown_timeout / 2))))
+            await _blocking(custody.forget, guard, child.pid)
 
 
 async def _window(directory, step, now_fn, sleep_fn, stop):
     if step.name not in {"maintenance-nightly", "maintenance-weekly"}:
         return True
     if now_fn().hour < 4:
-        record(directory, event="wait-start", step=step.name)
+        await _blocking(record, directory, event="wait-start", step=step.name)
         while now_fn().hour < 4 and not stop.is_set():
             await sleep_fn(0.1)  # Responsive to TERM; tests advance their private clock.
-        record(directory, event="wait-finished", step=step.name)
+        await _blocking(record, directory, event="wait-finished", step=step.name)
     return not stop.is_set() and 4 <= now_fn().hour < 6
 
 
@@ -485,19 +541,36 @@ def finish(
     return status
 
 
-async def _finish_step(*args, **kwargs):
-    # Shield the executor future itself so repeated cancellation cannot abandon state writes.
-    worker = asyncio.get_running_loop().run_in_executor(None, partial(finish, *args, **kwargs))
+async def _drain(worker):
+    """Retain custody until executor work or group cleanup survives repeated cancellation."""
     cancelled = None
     while True:
         try:
-            status = await asyncio.shield(worker)
+            result = await asyncio.shield(worker)
             break
         except asyncio.CancelledError as exc:
             cancelled = exc
     if cancelled is not None:
         raise cancelled
-    return status
+    return result
+
+
+async def _blocking(operation, *args, **kwargs):
+    label = getattr(operation, "__qualname__", type(operation).__name__)
+    began = time.monotonic()
+    worker = asyncio.get_running_loop().run_in_executor(None, partial(operation, *args, **kwargs))
+    operations = _calendar_operations.get()
+    if operations is not None:
+        operations[worker] = CalendarOperation(label, began)
+    try:
+        return await _drain(worker)
+    finally:
+        if operations is not None:
+            operations.pop(worker, None)
+
+
+async def _finish_step(*args, **kwargs):
+    return await _blocking(finish, *args, **kwargs)
 
 
 HELD_STEPS = frozenset({"maintenance-nightly", "maintenance-weekly", "repair-fts"})
@@ -509,17 +582,17 @@ async def step_hold(client, guard, env, step, now_fn=None):
         yield env
         return
     hold = MaintenanceHold(client, now_fn=now_fn)  # Calendar holds are always window-bound.
-    await asyncio.to_thread(hold.__enter__)  # Keep watchdog pulses alive during acknowledged pause.
     try:
-        guard_lease(guard, hold.fd)
+        await _blocking(hold.__enter__)
+        await _blocking(guard_lease, guard, hold.fd)
         yield env | dict(
             BRAINLAYER_MAINTENANCE_FD=str(hold.fd),
             BRAINLAYER_MAINTENANCE_TOKEN=hold.token,
             BRAINLAYER_MAINTENANCE_HOLD_DEADLINE=repr(hold.deadline),
         )
-        guard_lease(guard, None)  # Only after the child group is confirmed gone.
+        await _blocking(guard_lease, guard, None)  # Only after the child group is confirmed gone.
     finally:
-        await asyncio.to_thread(hold.__exit__, None, None, None)
+        await _blocking(hold.__exit__, None, None, None)
 
 
 def _transcripts_fresh(now):
@@ -552,11 +625,11 @@ async def _admit_calendar(steps, directory, date, transcript_recovery, guard_tim
     full = isinstance(steps, CalendarPlan) and not transcript_recovery
     try:
         if full or transcript_recovery:
-            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            await _blocking(directory.mkdir, mode=0o700, parents=True, exist_ok=True)
         if full:
             # Only full invocations touch this singleton: a recovery's short admission
             # probe must never make a scheduled full invocation look like a duplicate.
-            leases.enter_context(Custody(directory / "full-calendar", reset_previous_boot=False))
+            await _blocking(leases.enter_context, Custody(directory / "full-calendar", reset_previous_boot=False))
         deadline = maintenance_control.hold_clock()
         if full:
             recovery = [step for step in steps.candidates if step.name == "jsonl-backup"]
@@ -575,28 +648,28 @@ async def _admit_calendar(steps, directory, date, transcript_recovery, guard_tim
         waiting, admission = False, None
         while True:
             if full and maintenance_control.hold_clock() >= deadline:
-                record(directory, event="calendar-admission-timeout", scheduled_date=date.isoformat())
+                await _blocking(record, directory, event="calendar-admission-timeout", scheduled_date=date.isoformat())
                 leases.close()
                 return None, 1
             try:
                 if (full or transcript_recovery) and admission is None:
-                    admission = leases.enter_context(
-                        Custody(directory / "recovery-admission", reset_previous_boot=False)
+                    admission = await _blocking(
+                        leases.enter_context, Custody(directory / "recovery-admission", reset_previous_boot=False)
                     )
-                custody = leases.enter_context(Custody(directory))
+                custody = await _blocking(leases.enter_context, Custody(directory))
                 if transcript_recovery:
-                    admission.__exit__(None, None, None)
+                    await _blocking(admission.__exit__, None, None, None)
                 return leases, custody
             except BlockingIOError:
                 if not full:
                     raise
                 if not waiting:
-                    record(directory, event="calendar-admission-wait", scheduled_date=date.isoformat())
+                    await _blocking(record, directory, event="calendar-admission-wait", scheduled_date=date.isoformat())
                     waiting = True
                 await sleep_fn(min(1, max(0, deadline - maintenance_control.hold_clock())))
     except BlockingIOError:
         leases.close()
-        record(directory, event="already-running", scheduled_date=date.isoformat())
+        await _blocking(record, directory, event="already-running", scheduled_date=date.isoformat())
         return None, 0
     except BaseException:
         leases.close()
@@ -610,6 +683,7 @@ async def run_calendar(
     *,
     guard_timeout=30,
     shutdown_timeout=15,
+    operation_timeout=120,
     install_signals=False,
     scheduled_date=None,
     now_fn=lambda: dt.datetime.now().astimezone(),
@@ -617,16 +691,26 @@ async def run_calendar(
     defer_after=3,
     transcript_recovery=False,
 ):
-    if not all(math.isfinite(v) and v > 0 for v in (guard_timeout, shutdown_timeout)) or defer_after < 1:
+    if (
+        not all(math.isfinite(v) and v > 0 for v in (guard_timeout, shutdown_timeout, operation_timeout))
+        or defer_after < 1
+    ):
         raise ValueError("invalid calendar timing")
     date = steps.scheduled_date if isinstance(steps, CalendarPlan) else scheduled_date or local_backup_date(now_fn())
-    leases, custody = await _admit_calendar(
-        steps, directory, date, transcript_recovery, guard_timeout, shutdown_timeout, sleep_fn
-    )
+    operations = {}
+    token = _calendar_operations.set(operations)
+    try:
+        leases, custody = await _admit_calendar(
+            steps, directory, date, transcript_recovery, guard_timeout, shutdown_timeout, sleep_fn
+        )
+    except BaseException:
+        _calendar_operations.reset(token)
+        raise
     if leases is None:
+        _calendar_operations.reset(token)
         return custody
     stop, heartbeat_stop, handlers, results = asyncio.Event(), asyncio.Event(), {}, {}
-    guard, heartbeat = None, None
+    guard, heartbeat, diagnostics = None, None, None
     active_step, runner_failed = None, 0
     planned, plan_complete = isinstance(steps, CalendarPlan), False
     kind = "recovery" if transcript_recovery else "nightly" if planned else "manual"
@@ -634,18 +718,20 @@ async def run_calendar(
     runner_started_at = None
     loop = asyncio.get_running_loop()
     try:
-        custody.recover(min(1, shutdown_timeout / 2))  # Reap stale writers before any journal scan.
+        await _blocking(custody.recover, min(1, shutdown_timeout / 2))  # Reap stale writers before any journal scan.
         state_path = directory / "state.json"
-        state = json.loads(state_path.read_text()) if state_path.exists() else dict(deferrals={})
+        state = await _blocking(
+            lambda: json.loads(state_path.read_text()) if state_path.exists() else dict(deferrals={})
+        )
         if not isinstance(state, dict) or not isinstance(state.get("deferrals"), dict):
             raise ValueError("unknown calendar state")
-        _recover_abandoned(directory, state, steps, today=now_fn().date())
+        await _blocking(_recover_abandoned, directory, state, steps, today=now_fn().date())
         manual_failed = int(kind == "manual" and bool(state.get("incomplete_run")))
         if transcript_recovery:
             # The freshness decision shares custody with the entire nightly plan. A competing
             # runner cannot begin an upload between this check and our transcript step.
-            if _transcripts_fresh(now_fn()):
-                record(directory, event="transcript-recovery-skip", reason="fresh-verified-receipt")
+            if await _blocking(_transcripts_fresh, now_fn()):
+                await _blocking(record, directory, event="transcript-recovery-skip", reason="fresh-verified-receipt")
                 return 0
             candidates = steps.candidates if planned else steps
             steps = tuple(step for step in candidates if step.name == "jsonl-backup")
@@ -658,11 +744,20 @@ async def run_calendar(
         weekly_substitution = planned and any(step.name == "maintenance-weekly" for step in steps)
         index_overran_window = False
         client = maintenance_control.control_client()
-        logs.mkdir(parents=True, exist_ok=True)
-        guard = launch_guard(custody, guard_timeout, 0.2, shutdown_timeout, lease_control=True)
-        heartbeat = asyncio.create_task(pulse(guard, heartbeat_stop, min(0.1, guard_timeout / 4)))
+        await _blocking(logs.mkdir, parents=True, exist_ok=True)
+
+        def start_guard():
+            nonlocal guard
+            guard = launch_guard(custody, guard_timeout, 0.2, shutdown_timeout, lease_control=True)
+
+        diagnostics = await _blocking(_open_operation_diagnostics, directory)
+        await _blocking(start_guard)
+        heartbeat = asyncio.create_task(
+            pulse(guard, heartbeat_stop, min(0.1, guard_timeout / 4), operations, operation_timeout, diagnostics)
+        )
         runner_started_at = time.time()
-        record(
+        await _blocking(
+            record,
             directory,
             event="transcript-recovery" if transcript_recovery else "runner",
             kind=kind,
@@ -686,21 +781,21 @@ async def run_calendar(
         for step in steps:
             active_step = step.name
             if stop.is_set():
-                record(directory, event="finished", step=step.name, status="skipped", returncode=None)
+                await _blocking(record, directory, event="finished", step=step.name, status="skipped", returncode=None)
                 continue
             code, missed, reason, step_failed = 1, False, None, False
             invocation = uuid.uuid4().hex if step.name == "backup-daily" else None
             try:
                 bounded = step
                 if step.name == "index":
-                    bounded = _bounded_index_step(step, now_fn(), shutdown_timeout)
+                    bounded = await _blocking(_bounded_index_step, step, now_fn(), shutdown_timeout)
                 elif step.name == "backup-snapshot":
-                    bounded = _bounded_snapshot_step(step, now_fn(), shutdown_timeout)
+                    bounded = await _blocking(_bounded_snapshot_step, step, now_fn(), shutdown_timeout)
                 if bounded is None:
                     code, reason = 75, "maintenance-window"
                 else:
                     step = bounded
-                    disabled = client._disabled(client.request(), include_paused=False)
+                    disabled = client._disabled(await _blocking(client.request), include_paused=False)
                     if f"com.brainlayer.{_service_name(step)}" in disabled or "com.brainlayer.maintenance" in disabled:
                         code, reason = 75, "disabled"
                     elif not await _window(directory, step, now_fn, sleep_fn, stop):
@@ -726,8 +821,12 @@ async def run_calendar(
                                 else:
                                     started = now_fn()
                                     index_log = logs / "index.out.log"
-                                    index_offset = (
-                                        index_log.stat().st_size if step.name == "index" and index_log.exists() else 0
+                                    index_offset = await _blocking(
+                                        lambda: (
+                                            index_log.stat().st_size
+                                            if step.name == "index" and index_log.exists()
+                                            else 0
+                                        )
                                     )
                                     code = await _execute_step(
                                         step,
@@ -746,7 +845,7 @@ async def run_calendar(
                                     ended = now_fn()
                                     if step.name == "index":
                                         if code == 75:
-                                            reason = _index_deferral_reason(index_log, index_offset)
+                                            reason = await _blocking(_index_deferral_reason, index_log, index_offset)
                                         # Only attribute the miss to indexing when its measured interval
                                         # crossed this day's window end. Backup delays get a generic reason.
                                         window_end = started.replace(hour=6, minute=0, second=0, microsecond=0)
@@ -755,7 +854,7 @@ async def run_calendar(
                             # The window closed between the check and the grant: defer, keep the plan going.
                             code, reason = 75, "maintenance-window"
             except (OSError, RuntimeError, ValueError) as exc:
-                record(directory, event="step-error", step=step.name, error=type(exc).__name__)
+                await _blocking(record, directory, event="step-error", step=step.name, error=type(exc).__name__)
                 code = 1
                 step_failed = True
                 stop.set()  # Custody/protocol failures abort; ordinary child failures remain isolated.
@@ -781,7 +880,7 @@ async def run_calendar(
         plan_complete = bool(steps) and not stop.is_set() and len(results) == len(steps)
         if all(results.get(n) == "ok" for n in ("maintenance-weekly", "decay", "repair-fts")):
             state["last_weekly"] = (date - dt.timedelta(days=(date.weekday() + 1) % 7)).isoformat()
-            _atomic_write(directory / "state.json", state)
+            await _blocking(_atomic_write, directory / "state.json", state)
         failed = sum(v == "failed" for v in results.values())
         return int(failed > 0 or stop.is_set() or manual_failed)
     except Exception as exc:
@@ -789,7 +888,7 @@ async def run_calendar(
             results[active_step] = "failed"
         else:
             runner_failed = 1
-        record(directory, event="runner-error", step=active_step, error=type(exc).__name__)
+        await _blocking(record, directory, event="runner-error", step=active_step, error=type(exc).__name__)
         raise
     finally:
         try:
@@ -814,11 +913,12 @@ async def run_calendar(
                     signal.signal(sig, previous)
         except Exception as exc:
             runner_failed += 1
-            record(directory, event="runner-error", phase="cleanup", error=type(exc).__name__)
+            await _blocking(record, directory, event="runner-error", phase="cleanup", error=type(exc).__name__)
             raise
         finally:
             try:
-                record(
+                await _blocking(
+                    record,
                     directory,
                     event="summary",
                     kind=kind,
@@ -833,9 +933,16 @@ async def run_calendar(
                 )
                 if kind == "nightly" and plan_complete and not runner_failed:
                     try:
-                        _retire_incomplete(directory, state, [step.name for step in steps])
+                        await _blocking(_retire_incomplete, directory, state, [step.name for step in steps])
                     except OSError as exc:
                         LOG.warning("abandonment state retirement failed: %s", type(exc).__name__)
-                        _scan_record(directory, event="abandon-scan-error", error=type(exc).__name__)
+                        await _blocking(_scan_record, directory, event="abandon-scan-error", error=type(exc).__name__)
             finally:
-                leases.close()
+                try:
+                    if diagnostics:
+                        await _blocking(diagnostics.close)
+                finally:
+                    try:
+                        leases.close()
+                    finally:
+                        _calendar_operations.reset(token)
