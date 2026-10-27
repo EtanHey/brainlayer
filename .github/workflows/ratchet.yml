@@ -4,6 +4,8 @@ name: Ratchet
 # commit. Pure CI: no agent is ever involved. scripts/ci_ratchet_table.py owns the rule that a row
 # prints a measured number or `n/a — <reason>`, never a guess; a RED row fails this job because it
 # is a finding the PR author has to clear.
+# Mapped bytes, search p50/p95, idle CPU and fallback replay debt are local-only; not enforced by
+# hosted CI. Hosted success gives no verdict on them; the table keeps their capability reasons.
 #
 # Three jobs, because one of the five rows is measured on a different machine:
 #   gate       (ubuntu)  decides whether this PR pays for a macOS runner

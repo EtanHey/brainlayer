@@ -1840,6 +1840,9 @@ def collect(probe: Probe, corpus: dict) -> list[Row]:
 # --------------------------------------------------------------------------------------------
 
 
+LOCAL_ONLY_ROWS = frozenset({"mapped bytes", "search p50/p95", "idle CPU", "fallback replay debt"})
+
+
 def escape_cell(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
 
@@ -1866,13 +1869,18 @@ def render(rows: list[Row], probe: Probe, run_url: str | None, now: datetime) ->
         "`n/a — <reason>` instead of a number; baselines in **Notes** name their own machine, "
         "method and date and were **not** measured here.",
         "",
+        "Hosted success gives no verdict on mapped bytes, search p50/p95, idle CPU, or fallback replay debt.",
+        "",
         "| Row | Status | Value (measured by this run) | Method | Notes |",
         "| --- | --- | --- | --- | --- |",
     ]
     for row in rows:
+        notes = row.notes
+        if row.name in LOCAL_ONLY_ROWS:
+            notes = f"**local-only; not enforced by hosted CI**. {notes}"
         lines.append(
             f"| {escape_cell(row.name)} | {BADGE[row.status]} | {escape_cell(row.value)} "
-            f"| {escape_cell(row.method)} | {escape_cell(row.notes)} |"
+            f"| {escape_cell(row.method)} | {escape_cell(notes)} |"
         )
     reds = [row for row in rows if row.status == RED]
     lines += [
