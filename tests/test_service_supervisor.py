@@ -462,3 +462,48 @@ def test_control_disconnect_is_expected_but_other_errors_surface(tmp_path, monke
         raise RuntimeError("unexpected")
 
     asyncio.run(scenario())
+
+
+def test_overdue_operation_records_reason_before_heartbeat_suppression(native, monkeypatch):
+    injection = """
+import time
+import brainlayer.service_supervisor as module
+original = module.gated_spawn
+def stuck(*args, **kwargs):
+ if (p/'wedge').exists():
+  while True: time.sleep(.05)
+ return original(*args, **kwargs)
+module.gated_spawn = stuck
+"""
+    boot = BOOT.replace("s=Supervisor(", injection + "\ns=Supervisor(")
+    boot = boot.replace("backoff=.3)", "backoff=.3,guard_timeout=.4,operation_timeout=.5)")
+    monkeypatch.setattr(sys.modules[__name__], "BOOT", boot)
+    path, start, _ = native
+    process, before, _ = start()
+    (path / "wedge").touch()
+    with socket.socket(socket.AF_UNIX) as client:
+        client.connect(str(path / "control.sock"))
+        client.sendall(b'{"action":"restart","component":"drain"}\n')
+    assert process.wait(timeout=3) == -signal.SIGKILL
+    eventually(lambda: not any(exists(c["pid"]) for c in before.values() if c["pid"]))
+    rows = [json.loads(line) for line in (path / "operation-events.jsonl").read_text().splitlines()]
+    row = next(row for row in rows if row["event"] == "heartbeat-suppressed")
+    assert row["reason"] == "operation-overdue" and row["operation"] == "spawn:drain"
+    assert row["age_s"] >= row["budget_s"] == 0.5
+    assert row["deadline_monotonic"] == row["started_monotonic"] + 0.5
+    assert row["parent_pid"] == process.pid and row["parent_start_time"]
+    timeouts = [json.loads(line) for line in (path / "guard-events.jsonl").read_text().splitlines()]
+    timeout = next(row for row in timeouts if row["event"] == "guard-timeout")
+    assert timeout["ts"] >= row["ts"]
+
+
+def test_blocking_callable_without_qualname_is_tracked_before_start(tmp_path):
+    import asyncio
+    from functools import partial
+
+    async def scenario():
+        supervisor = Supervisor({}, tmp_path / "unused")
+        assert await supervisor._blocking(partial(int, "42")) == 42
+        assert not supervisor.operations
+
+    asyncio.run(scenario())

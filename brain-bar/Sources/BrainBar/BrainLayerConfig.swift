@@ -560,7 +560,12 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
     func sampleActivity() -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] {
         switch ownership() {
         case .legacy:
-            return Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, observation(for: $0)) })
+            var results = Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, observation(for: $0)) })
+            if let watcher = results[.watch] {
+                let daemon = commandRunner(["/bin/launchctl", "print", "gui/\(uidProvider())/com.brainlayer.daemon"])
+                results[.watch] = addingDaemonExit(to: watcher, daemon: daemon)
+            }
+            return results
         case let .unknown(reason):
             return Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map {
                 var result = BrainLayerLaunchdJobObservation.stateOnly(.ownerUnknown(reason))
@@ -569,6 +574,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
             })
         case .supervisor:
             let parent = commandRunner(["/bin/launchctl", "print", "gui/\(uidProvider())/com.brainlayer.maintenance"])
+            let daemon = commandRunner(["/bin/launchctl", "print", "gui/\(uidProvider())/com.brainlayer.daemon"])
             let history = calendarHistory()
             let disabledResult = commandRunner(["/bin/launchctl", "print-disabled", "gui/\(uidProvider())"])
             let disabledLabels: Set<String> = {
@@ -598,10 +604,78 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
                             || disabledLabels.contains("com.brainlayer.maintenance")
                     }
                 }
+                if job == .maintenanceNightly || job == .maintenanceWeekly {
+                    result.calendarNightOutcome = history.maintenanceNight
+                }
+                if job == .watch {
+                    if case .probeError = result.loadState { result.killCheckUnavailable = "Watcher supervisor status unavailable" }
+                    if let code = result.lastExitCode, ![0, -15, -2].contains(code) {
+                        result.uncleanExit = "Watcher exited uncleanly (exit \(code))"
+                        result.healthySince = result.loadState == .running ? result.lastRunAt : nil
+                    }
+                    result = addingDaemonExit(to: result, daemon: daemon)
+                }
                 result.ownership = .supervisor
                 return (job, result)
             })
         }
+    }
+
+    private func addingDaemonExit(to observation: BrainLayerLaunchdJobObservation,
+                                  daemon: BrainLayerLaunchdCommandResult) -> BrainLayerLaunchdJobObservation {
+        var result = observation
+        if let problem = killCheckProblem(daemon) {
+            result.killCheckUnavailable = [observation.killCheckUnavailable, problem].compactMap { $0 }.joined(separator: "; ")
+            return result
+        }
+        guard let exit = uncleanLaunchdExit(daemon) else { return result }
+        let daemonStart = launchdHealthySince(daemon)
+        if let watcherExit = observation.uncleanExit {
+            result.uncleanExit = "Supervisor daemon " + exit + "; " + watcherExit
+            result.healthySince = if let daemonStart, let watcherStart = observation.healthySince {
+                max(daemonStart, watcherStart)
+            } else { nil }
+        } else {
+            result.uncleanExit = "Supervisor daemon " + exit
+            result.healthySince = daemonStart
+        }
+        return result
+    }
+
+    private func killCheckProblem(_ result: BrainLayerLaunchdCommandResult) -> String? {
+        guard result.terminationStatus == 0 else { return "launchctl print exited \(result.terminationStatus)" }
+        if integerLine(named: "pid", in: result.output) != nil || integerLine(named: "runs", in: result.output) != nil
+            || integerLine(named: "last exit code", in: result.output) != nil
+            || result.output.range(of: #"(?m)^\s*state\s*=\s*\S+"#, options: .regularExpression) != nil
+            || firstInteger(matching: #"last terminating signal\s*=\s*[^\n:]*:\s*(\d+)"#, in: result.output) != nil { return nil }
+        return "launchctl print output could not be parsed"
+    }
+
+    private func uncleanLaunchdExit(_ result: BrainLayerLaunchdCommandResult) -> String? {
+        guard result.terminationStatus == 0 else { return nil }
+        if let signal = firstInteger(matching: #"last terminating signal\s*=\s*[^\n:]*:\s*(\d+)"#, in: result.output),
+           ![0, 2, 15].contains(signal) { return "was killed (signal \(signal))" }
+        if let code = integerLine(named: "last exit code", in: result.output), code != 0 {
+            return "exited uncleanly (exit \(code))"
+        }
+        return nil
+    }
+
+    private func launchdHealthySince(_ result: BrainLayerLaunchdCommandResult) -> Date? {
+        guard let pid = integerLine(named: "pid", in: result.output), pid > 1 else { return nil }
+        // BSD ps etime is [[dd-]hh:]mm:ss. Elapsed time survives an app restart and avoids
+        // treating a newly observed old kill as a new incident.
+        let elapsed = commandRunner(["/bin/ps", "-p", String(pid), "-o", "etime="])
+        guard elapsed.terminationStatus == 0 else { return nil }
+        let fields = elapsed.output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "-")
+        guard fields.count <= 2, let clock = fields.last else { return nil }
+        let parts = clock.split(separator: ":").compactMap { Double($0) }
+        guard !parts.isEmpty, parts.count <= 3, parts.allSatisfy({ $0 >= 0 }),
+              parts.count == clock.split(separator: ":").count else { return nil }
+        let days = fields.count == 2 ? Double(fields[0]) : 0
+        guard let days, days >= 0 else { return nil }
+        let seconds = parts.reduce(0) { $0 * 60 + $1 } + days * 86400
+        return now().addingTimeInterval(-seconds)
     }
 
     private func observation(for job: BrainLayerLaunchdJob) -> BrainLayerLaunchdJobObservation {
@@ -609,7 +683,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         let result = commandRunner(["/bin/launchctl", "print", target])
         if result.terminationStatus == 0 {
             let components = schedule(job)
-            return BrainLayerLaunchdJobObservation(
+            var observation = BrainLayerLaunchdJobObservation(
                 loadState: result.output.contains("pid =") ? .running : .loaded,
                 runs: integerLine(named: "runs", in: result.output),
                 lastExitCode: integerLine(named: "last exit code", in: result.output).map(Int32.init),
@@ -617,6 +691,11 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
                 nextRunAt: nextRun(components: components),
                 isContinuous: components == nil && job.isContinuous
             )
+            if job == .watch, let exit = uncleanLaunchdExit(result) {
+                observation.uncleanExit = "Watcher " + exit
+                observation.healthySince = launchdHealthySince(result)
+            }
+            return observation
         }
 
         if result.terminationStatus == 113 ||
@@ -694,13 +773,15 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
             return covered
         }
         let state: BrainLayerLaunchdLoadState
-        if let run, run.status == "failed" || run.status == "stopped" || (run.code != 0 && run.code != 75) {
-            state = .failed("\(job.title): calendar result \(run.status), exit \(run.code)")
+        if let run, run.status == "failed" || run.status == "stopped" || run.status == "abandoned" || (run.code != 0 && run.code != 75) {
+            state = .failed(run.status == "abandoned" ? "\(job.title): calendar run abandoned"
+                : "\(job.title): calendar result \(run.status), exit \(run.code)")
         } else { state = .loaded }
         var observation = BrainLayerLaunchdJobObservation(
-            loadState: state, runs: run == nil ? 0 : nil, lastExitCode: run?.code,
+            loadState: state, runs: run == nil ? 0 : nil, lastExitCode: run?.status == "abandoned" ? nil : run?.code,
             lastRunAt: run?.at, nextRunAt: next, isContinuous: false
         )
+        observation.calendarRunStatus = run?.status
         observation.calendarStartedAt = run?.startedAt
         if let run, state == .loaded, run.code == 75 {
             observation.calendarDisabled = run.startedAt == nil && (run.reason == "disabled" || (run.reason == nil && calendarIsDisabled(job)))

@@ -1,0 +1,7 @@
+{"event": "runner", "guard": 90000000, "scheduled_date": "2026-10-27", "ts": 1793063702.7738612}
+{"event": "spawn", "pid": 90000001, "step": "index", "ts": 1793063702.791651}
+{"event": "already-running", "scheduled_date": "2026-10-27", "ts": 1793064084.0601358}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793065325.542509}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793065325.542928}
+{"event": "transcript-recovery-skip", "reason": "fresh-verified-receipt", "ts": 1793065735.562016}
+{"deferred": 0, "event": "summary", "failed": 0, "ts": 1793065735.5832992}

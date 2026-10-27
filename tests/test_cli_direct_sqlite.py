@@ -496,4 +496,20 @@ def test_brainbar_swift_daemon_is_independent_of_python_daemon() -> None:
     swift_roots = [REPO_ROOT / "brain-bar/Sources", REPO_ROOT / "brain-bar/Tests"]
     swift_text = "\n".join(path.read_text() for root in swift_roots for path in root.rglob("*.swift") if path.is_file())
     forbidden_refs = ["brainlayer.daemon", "brainlayer.client", "brainlayer-daemon", "daemon.py", "client.py"]
+    # The supervisor's launchd label is not an import of the removed Python daemon.
+    swift_text = swift_text.replace("com.brainlayer.daemon", "")
     assert not any(ref in swift_text for ref in forbidden_refs)
+
+
+@pytest.mark.parametrize("module", ["brainlayer.daemon", "brainlayer.client"])
+def test_swift_daemon_independence_guard_rejects_real_module_reference(monkeypatch, module) -> None:
+    original_read = Path.read_text
+    target = REPO_ROOT / "brain-bar/Sources/BrainBarDaemon/BrainBarDaemonMain.swift"
+
+    def injected_read(path, *args, **kwargs):
+        text = original_read(path, *args, **kwargs)
+        return text + f'\nlet removedPythonModule = "{module}"\n' if path == target else text
+
+    monkeypatch.setattr(Path, "read_text", injected_read)
+    with pytest.raises(AssertionError):
+        test_brainbar_swift_daemon_is_independent_of_python_daemon()

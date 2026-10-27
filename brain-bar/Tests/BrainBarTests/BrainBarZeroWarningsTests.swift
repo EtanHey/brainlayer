@@ -236,10 +236,10 @@ final class BrainBarZeroWarningsTests: XCTestCase {
         let schedule = try XCTUnwrap(model.presentedBackupSchedules.first { $0.title == "Nightly maintenance" })
         XCTAssertFalse(schedule.lastRun.contains("Covered by weekly"), file: file, line: line)
         // L1: a single failed nightly is a visible deferral notice, never hidden and never "covered".
-        XCTAssertEqual(model.groupStatus(.maintenance).health, .deferred, file: file, line: line)
-        XCTAssertTrue(model.groupStatus(.maintenance).attentionReason?.hasPrefix("Nightly maintenance deferred — ") == true,
+        XCTAssertEqual(model.groupStatus(.maintenance).health, .notice, file: file, line: line)
+        XCTAssertTrue(model.groupStatus(.maintenance).attentionReason?.hasPrefix("Nightly maintenance failed at ") == true,
                       file: file, line: line)
-        XCTAssertTrue(model.publishedStatus.verdict.notices.contains { $0.hasPrefix("Nightly maintenance deferred — ") },
+        XCTAssertTrue(model.publishedStatus.verdict.notices.contains { $0.hasPrefix("Nightly maintenance failed at ") },
                       file: file, line: line)
     }
 
@@ -300,7 +300,9 @@ final class BrainBarZeroWarningsTests: XCTestCase {
         let model = try settingsModel([:], provider: provider)
         let seen = ReasonLog()
         await model.monitorLaunchdStatus(waitForNextTick: {
-            let reasons = await MainActor.run { model.dashboardJobAttentionReasons }
+            let reasons = await MainActor.run {
+                model.publishedStatus.notices.filter { $0.id == "job.backupDaily" }.map(\.text)
+            }
             if seen.append(reasons) >= 2 { throw CancellationError() }
         })
         let ticks = seen.values

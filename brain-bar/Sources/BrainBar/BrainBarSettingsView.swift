@@ -698,9 +698,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
             observabilityResult = result
             hasCompletedObservabilityRead = true
             isRefreshingObservabilityStatus = false
-            // L3: an unreadable file starts (or continues) an episode; any readable result ends it.
-            if case .unreadable = result { observabilityUnreadableSince = observabilityUnreadableSince ?? readAt }
-            else { observabilityUnreadableSince = nil }
+            // Only a measured backup-age source ends the safety-unknown episode.
+            if case let .readable(document) = result, document.backups.state == "measured" {
+                observabilityUnreadableSince = nil
+            } else { observabilityUnreadableSince = observabilityUnreadableSince ?? readAt }
             republishStatus()
         }
     }

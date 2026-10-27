@@ -26,10 +26,12 @@ from .backup_daily import (
 from .config import configured_brainlayer_env_value, get_user_env_path
 from .drive_credentials import _atomic_write
 from .index_budget import CALENDAR_INDEX_UNWIND_S, calendar_index_budget_s
-from .job_alerts import report
+from .job_alerts import active_alerts, report
 from .maintenance_control import MaintenanceHold
 from .supervisor_guard import Custody, gated_spawn, guard_lease, launch_guard, start_time, stop_group
 from .supervisor_jobs import TRANSCRIPT_RECOVERY_EXIT_TIMEOUT, TRANSCRIPT_RECOVERY_RUN_TIMEOUT
+
+LOG = logging.getLogger(__name__)
 
 NAMES = tuple(
     "index,backup-daily,maintenance-nightly,jsonl-backup,p0-counter,wal-checkpoint,maintenance-weekly,decay,repair-fts,backup-snapshot".split(
@@ -111,10 +113,175 @@ def calendar_steps(python, cli, lib_dir, scheduled_date):
 
 
 def record(directory, **event):
-    with (directory / "runs.jsonl").open("a") as handle:
-        handle.write(json.dumps(dict(ts=time.time(), **event), sort_keys=True) + "\n")
+    with (directory / "runs.jsonl").open("a+b") as handle:
+        end = handle.seek(0, 2)
+        if end:
+            handle.seek(-1, 2)
+            if handle.read(1) != b"\n":
+                handle.write(b"\n")  # Preserve torn bytes, separating them from the next valid record.
+        handle.write((json.dumps({"ts": time.time(), **event}, sort_keys=True) + "\n").encode())
         handle.flush()
         os.fsync(handle.fileno())
+
+
+def _scan_record(directory, **event):
+    try:
+        record(directory, **event)
+    except OSError as exc:
+        LOG.warning("abandonment %s write failed: %s", event["event"], type(exc).__name__)
+
+
+def _abandonment_alerts(event):
+    names = event["incomplete_steps"] or [event["step"] or "maintenance-weekly"]
+    detail = (
+        f"incomplete {', '.join(event['incomplete_steps'])}"
+        if event["incomplete_steps"]
+        else "steps finished; terminal summary missing"
+    )
+    return {
+        KEYS[name]: f"BrainLayer calendar {event['scheduled_date']} abandoned during "
+        f"{event['step'] or 'startup'}; {detail}; retries at next scheduled run"
+        for name in names
+        if name in KEYS
+    }
+
+
+def _abandonment_notice(directory, key, reason):
+    try:
+        report(key, reason)
+    except OSError as exc:
+        LOG.warning("abandonment alert %s failed: %s", key, type(exc).__name__)
+        _scan_record(directory, event="alert-error", key=key, error=type(exc).__name__)
+
+
+def _retire_incomplete(directory, state, steps):
+    event = state.get("incomplete_run")
+    if not event:
+        return
+    selected_keys = {KEYS.get(name) for name in steps}
+    alerts = active_alerts()
+    for key, reason in _abandonment_alerts(event).items():
+        if key not in selected_keys and alerts.get(key) == reason:
+            _abandonment_notice(directory, key, None)
+    state.pop("incomplete_run", None)
+    _atomic_write(directory / "state.json", state)
+
+
+def _recover_abandoned(directory, state, plan, today=None):
+    """Best effort, under custody AFTER writer reap and BEFORE launch_guard (blocking I/O)."""
+    latest, current, skipped = None, None, 0
+    try:
+        path = directory / "runs.jsonl"
+        if not path.exists():
+            return
+        with path.open(errors="replace") as handle:
+            for number, line in enumerate(handle, 1):
+                try:
+                    row = json.loads(line)
+                    if not isinstance(row, dict) or not isinstance(row.get("event"), str):
+                        raise ValueError("not an event object")
+                    event = row["event"]
+                    if event == "runner":
+                        dt.date.fromisoformat(row["scheduled_date"])
+                        if not isinstance(row["ts"], (float, int)) or not math.isfinite(row["ts"]):
+                            raise ValueError("invalid timestamp")
+                        latest = current = dict(runner=row, spawn={}, finished=set(), abandoned=None, terminal=None)
+                    elif event in {"transcript-recovery", "transcript-recovery-skip"}:
+                        current = None  # Hourly work is not a nightly maintenance outcome.
+                    elif event == "abandoned" and latest and row["runner_started_at"] == latest["runner"]["ts"]:
+                        latest["abandoned"] = row
+                    elif event == "summary" and latest:
+                        if row.get("runner_started_at", current and current["runner"]["ts"]) == latest["runner"]["ts"]:
+                            latest["terminal"] = row
+                        current = None
+                    elif current and event == "spawn":
+                        if row["step"] not in NAMES or not isinstance(row["pid"], int):
+                            raise ValueError("invalid spawn")
+                        current["spawn"] = row
+                    elif current and event == "finished":
+                        current["finished"].add(row["step"])
+                except (ValueError, KeyError, TypeError) as exc:
+                    skipped += 1
+                    LOG.warning(
+                        "abandonment scan skipped line=%d count=%d error=%s", number, skipped, type(exc).__name__
+                    )
+        if skipped:
+            LOG.warning("abandonment scan skipped=%d", skipped)
+            _scan_record(directory, event="abandon-scan-skipped", count=skipped)
+        if not latest:
+            return
+        runner, spawn = latest["runner"], latest["spawn"]
+        kind = runner.get("kind", "nightly")
+        terminal = latest["terminal"]
+        if terminal:
+            if terminal.get("complete") and state.get("incomplete_run"):
+                _retire_incomplete(directory, state, runner["steps"])
+            elif state.get("incomplete_run"):
+                for key, reason in _abandonment_alerts(state["incomplete_run"]).items():
+                    _abandonment_notice(directory, key, reason)
+            return
+        date = dt.date.fromisoformat(runner["scheduled_date"])
+        today = today or dt.datetime.now().astimezone().date()
+        # Ad-hoc custody cleanup is separate from scheduled nightly outcome history.
+        if kind != "manual" and (today - date).days not in (0, 1):
+            return
+        event = latest["abandoned"]
+        if event is None:
+            identities = [
+                (runner.get("guard"), runner.get("guard_start_time")),
+                (spawn.get("pid"), spawn.get("start_time")),
+            ]
+            dead = [
+                pid
+                for pid, birth in identities
+                if isinstance(pid, int)
+                and pid > 1
+                and ((actual := start_time(pid)) is None or (birth is not None and actual != birth))
+            ]
+            if not dead:
+                return
+            names = runner.get("steps")
+            if names is None:
+                marker = dt.date.fromisoformat(state["last_weekly"]) if state.get("last_weekly") else None
+                names = (
+                    [s.name for s in CalendarPlan(date, plan.candidates).select(marker)]
+                    if isinstance(plan, CalendarPlan)
+                    else [s.name for s in plan]
+                )
+            detected = time.time()
+            event = dict(
+                event="abandoned",
+                kind="nightly",
+                scheduled_date=date.isoformat(),
+                step=spawn.get("step"),
+                pid=spawn.get("pid", runner.get("guard")),
+                runner_started_at=runner["ts"],
+                detected_at=detected,
+                ts=detected,
+                # Under custody a new guard is gone; orphan covers legacy PID reuse.
+                reason="runner-vanished" if runner.get("guard") in dead else "step-orphaned",
+                incomplete_steps=[name for name in names if name not in latest["finished"]],
+                retry="next-scheduled-run",
+            )
+            record(directory, **event)
+        state["incomplete_run"] = event | dict(failed=1)
+        _atomic_write(directory / "state.json", state)
+        for key, reason in _abandonment_alerts(event).items():
+            _abandonment_notice(directory, key, reason)
+        record(
+            directory,
+            event="summary",
+            kind="nightly",
+            scheduled_date=event["scheduled_date"],
+            runner_started_at=runner["ts"],
+            failed=1,
+            deferred=0,
+            abandoned=True,
+            complete=False,
+        )
+    except Exception as exc:
+        LOG.warning("abandonment scan failed: %s", type(exc).__name__)
+        _scan_record(directory, event="abandon-scan-error", error=type(exc).__name__, skipped=skipped)
 
 
 def backup_deadline(step):
@@ -284,7 +451,7 @@ async def _execute_step(
                 if step.name == "backup-daily" and env.get(BACKUP_INVOCATION_ENV)
                 else {}
             )
-            record(directory, event="spawn", step=step.name, pid=child.pid, **identity)
+            record(directory, event="spawn", step=step.name, pid=child.pid, start_time=birth, **identity)
 
         await _blocking(prepare)
         os.write(guard.stdin.fileno(), f"+{child.pid}\n".encode())
@@ -341,6 +508,7 @@ def finish(
     reason=None,
     replaces=None,
     backup_invocation_id=None,
+    preserve_abandonment_alerts=False,
 ):
     status = "stopped" if stopped else "deferred" if code == 75 else "ok" if code == 0 else "failed"
     detail = {
@@ -363,7 +531,8 @@ def finish(
             state["deferrals"].pop(key, None)
             notice = (key, None if code == 0 else f"BrainLayer {step.name} exited {code}; see its log")
     _atomic_write(directory / "state.json", state)
-    if notice is not None:
+    protected = state.get("incomplete_run")
+    if notice is not None and not (preserve_abandonment_alerts and protected and key in _abandonment_alerts(protected)):
         try:
             report(*notice)
         except OSError as exc:
@@ -543,18 +712,21 @@ async def run_calendar(
     stop, heartbeat_stop, handlers, results = asyncio.Event(), asyncio.Event(), {}, {}
     guard, heartbeat, diagnostics = None, None, None
     active_step, runner_failed = None, 0
+    planned, plan_complete = isinstance(steps, CalendarPlan), False
+    kind = "recovery" if transcript_recovery else "nightly" if planned else "manual"
+    manual_failed = 0
+    runner_started_at = None
     loop = asyncio.get_running_loop()
     try:
-        await _blocking(
-            custody.recover, min(1, shutdown_timeout / 2)
-        )  # Reap stale writers before reacquiring their lease.
+        await _blocking(custody.recover, min(1, shutdown_timeout / 2))  # Reap stale writers before any journal scan.
         state_path = directory / "state.json"
         state = await _blocking(
             lambda: json.loads(state_path.read_text()) if state_path.exists() else dict(deferrals={})
         )
         if not isinstance(state, dict) or not isinstance(state.get("deferrals"), dict):
             raise ValueError("unknown calendar state")
-        planned = isinstance(steps, CalendarPlan)
+        await _blocking(_recover_abandoned, directory, state, steps, today=now_fn().date())
+        manual_failed = int(kind == "manual" and bool(state.get("incomplete_run")))
         if transcript_recovery:
             # The freshness decision shares custody with the entire nightly plan. A competing
             # runner cannot begin an upload between this check and our transcript step.
@@ -583,11 +755,16 @@ async def run_calendar(
         heartbeat = asyncio.create_task(
             pulse(guard, heartbeat_stop, min(0.1, guard_timeout / 4), operations, operation_timeout, diagnostics)
         )
+        runner_started_at = time.time()
         await _blocking(
             record,
             directory,
             event="transcript-recovery" if transcript_recovery else "runner",
+            kind=kind,
             guard=guard.pid,
+            guard_start_time=start_time(guard.pid),
+            steps=[step.name for step in steps],
+            ts=runner_started_at,
             scheduled_date=date.isoformat(),
         )
         if install_signals:
@@ -697,13 +874,15 @@ async def run_calendar(
                 reason=reason,
                 replaces="maintenance-nightly" if weekly_substitution and step.name == "maintenance-weekly" else None,
                 backup_invocation_id=invocation,
+                preserve_abandonment_alerts=transcript_recovery,
             )
         active_step = None
+        plan_complete = bool(steps) and not stop.is_set() and len(results) == len(steps)
         if all(results.get(n) == "ok" for n in ("maintenance-weekly", "decay", "repair-fts")):
             state["last_weekly"] = (date - dt.timedelta(days=(date.weekday() + 1) % 7)).isoformat()
             await _blocking(_atomic_write, directory / "state.json", state)
         failed = sum(v == "failed" for v in results.values())
-        return int(failed > 0 or stop.is_set())
+        return int(failed > 0 or stop.is_set() or manual_failed)
     except Exception as exc:
         if active_step is not None:
             results[active_step] = "failed"
@@ -742,9 +921,22 @@ async def run_calendar(
                     record,
                     directory,
                     event="summary",
-                    failed=sum(v == "failed" for v in results.values()) + runner_failed,
+                    kind=kind,
+                    complete=plan_complete and not runner_failed,
+                    scheduled_date=date.isoformat(),
+                    runner_started_at=runner_started_at,
+                    failed=max(
+                        int(kind == "nightly" and not plan_complete),
+                        sum(v == "failed" for v in results.values()) + runner_failed + manual_failed,
+                    ),
                     deferred=sum(v == "deferred" for v in results.values()),
                 )
+                if kind == "nightly" and plan_complete and not runner_failed:
+                    try:
+                        await _blocking(_retire_incomplete, directory, state, [step.name for step in steps])
+                    except OSError as exc:
+                        LOG.warning("abandonment state retirement failed: %s", type(exc).__name__)
+                        await _blocking(_scan_record, directory, event="abandon-scan-error", error=type(exc).__name__)
             finally:
                 try:
                     if diagnostics:
