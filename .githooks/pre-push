@@ -48,7 +48,7 @@ if [ ! -t 0 ]; then
     case "$local_ref" in
       refs/tags/*)
         if [[ "$local_ref" == refs/tags/v* ]]; then
-          python3 scripts/ci/crash_sweep_gate.py verify-release EtanHey/brainlayer "$local_sha" --tag || exit 1
+          python3 scripts/ci/crash_sweep_gate.py verify-release EtanHey/brainlayer "$local_sha" --tag </dev/null || exit 1
         fi
         tag_count=$((tag_count + 1)); tag_name="${local_ref#refs/tags/}" ;;
       *) non_tag_refs=$((non_tag_refs + 1)) ;;

@@ -7,6 +7,11 @@ on:
     types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
+# Coalesce PR label/synchronize events; preserve every main/batch SHA's receipt.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   changes:
     runs-on: ubuntu-latest

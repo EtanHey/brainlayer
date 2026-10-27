@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SHA = "a" * 40
 
 
+def _clean_git_env():
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 @pytest.fixture
 def gate():
     spec = importlib.util.spec_from_file_location("crash_sweep_gate", ROOT / "scripts/ci/crash_sweep_gate.py")
@@ -22,25 +27,9 @@ def gate():
 
 
 @pytest.mark.parametrize(
-    "path",
-    [
-        *[
-            f"src/brainlayer/{name}.py"
-            for name in (
-                "maintenance_calendar maintenance maintenance_control service_supervisor supervisor_guard "
-                "supervisor_child supervisor_jobs supervisor_diagnostics vector_store backup_daily migration_journal "
-                "migration_runtime migration_custody launchd_consolidation launchd_revert watcher watcher_bridge"
-            ).split()
-        ],
-        "src/brainlayer/pipeline/nested/stage.py",
-        "scripts/launchd/install.sh",
-        "tests/test_launchd_revert_crash.py",
-        "tests/test_launchd_consolidation_recovery.py",
-        "scripts/ci/crash_sweep_gate.py",
-        ".github/workflows/ci.yml",
-    ],
+    "path", ["scripts/launchd/install.sh", "scripts/ci/crash_sweep_gate.py", ".github/workflows/ci.yml"]
 )
-def test_sensitive_paths_require_all_sweeps(gate, path):
+def test_sensitive_harness_paths_require_all_sweeps(gate, path):
     assert gate.required("pull_request", [path], [])
 
 
@@ -52,7 +41,19 @@ def test_docs_skip_unless_opted_in_and_every_batch_requires_sweeps(gate):
 
 
 @pytest.mark.parametrize(
-    "defect", [None, "dispatch", "wrong-sha", "pr", "failed", "skipped-job", "missing-job", "wrong-job-sha"]
+    "defect",
+    [
+        None,
+        "dispatch",
+        "wrong-sha",
+        "pr",
+        "failed",
+        "skipped-job",
+        "missing-job",
+        "wrong-job-sha",
+        "skipped-step",
+        "missing-step",
+    ],
 )
 def test_release_requires_successful_full_sweep_on_exact_sha(gate, monkeypatch, defect):
     run = {
@@ -63,7 +64,13 @@ def test_release_requires_successful_full_sweep_on_exact_sha(gate, monkeypatch, 
         "head_branch": "main",
         "conclusion": "success",
     }
-    job = {"name": "crash sweeps", "head_sha": SHA, "conclusion": "success", "html_url": "https://github.com/job/123"}
+    job = {
+        "name": "crash sweeps",
+        "head_sha": SHA,
+        "conclusion": "success",
+        "html_url": "https://github.com/job/123",
+        "steps": [{"name": "Exhaustive crash sweeps", "conclusion": "success"}],
+    }
     if defect == "dispatch":
         run["event"] = "workflow_dispatch"
         run["head_branch"] = "batch"
@@ -77,6 +84,10 @@ def test_release_requires_successful_full_sweep_on_exact_sha(gate, monkeypatch, 
         job["conclusion"] = "skipped"
     elif defect == "wrong-job-sha":
         job["head_sha"] = "b" * 40
+    if defect == "skipped-step":
+        job["steps"][0]["conclusion"] = "skipped"
+    elif defect == "missing-step":
+        job["steps"] = []
     calls = []
 
     def api(endpoint):
@@ -130,23 +141,39 @@ def test_workflows_keep_required_context_and_gate_both_publish_paths():
 
 
 @pytest.mark.parametrize(
-    "kind,expected", [("docs", "false"), ("label", "true"), ("rename", "true"), ("bad-base", None)]
+    "kind,expected",
+    [("docs", "false"), ("label", "true"), ("rename", "true"), ("deleted-helper", "true"), ("bad-base", None)],
 )
 def test_required_cli_reads_real_diff_and_fails_closed(tmp_path, monkeypatch, kind, expected):
     def git(*args):
-        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True).strip()
+        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True, env=_clean_git_env()).strip()
 
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "foreign.git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "foreign-tree"))
+    monkeypatch.setenv("GIT_TEST_UNFAMILIAR_KEY", "foreign")
+    assert not any(key.startswith("GIT_") for key in _clean_git_env())
     git("init", "-q")
     git("config", "user.email", "fixture@example.invalid")
     git("config", "user.name", "Fixture")
-    sensitive = tmp_path / "src/brainlayer/watcher.py"
+    sensitive = tmp_path / "src/brainlayer/launchd_consolidation.py"
     sensitive.parent.mkdir(parents=True)
     sensitive.write_text("original")
+    sweep = tmp_path / "tests/test_fixture_sweep.py"
+    sweep.parent.mkdir()
+    sweep.write_text(
+        "import pytest\nimport brainlayer.launchd_consolidation\n@pytest.mark.crash_sweep\ndef test_cut(): pass\n"
+    )
+    helper = tmp_path / "tests/test_deletion_only_helper.py"
+    helper.write_text("value = 1\n")
+    with sweep.open("a") as handle:
+        handle.write("from tests.test_deletion_only_helper import value\n")
     git("add", ".")
     git("commit", "-qm", "base")
     base = git("rev-parse", "HEAD")
+    if kind == "deleted-helper":
+        helper.unlink()
     if kind == "rename":
-        git("mv", "src/brainlayer/watcher.py", "guide.md")
+        git("mv", "src/brainlayer/launchd_consolidation.py", "guide.md")
     else:
         (tmp_path / "guide.md").write_text("docs")
     git("add", ".")
@@ -172,6 +199,7 @@ def test_required_cli_reads_real_diff_and_fails_closed(tmp_path, monkeypatch, ki
         cwd=tmp_path,
         capture_output=True,
         text=True,
+        env=_clean_git_env(),
     )
     if expected is None:
         assert result.returncode != 0 and not output.exists()
@@ -216,5 +244,24 @@ def test_release_gate_peels_an_annotated_tag_before_checking_receipt(gate, tmp_p
     monkeypatch.setattr(sys, "argv", ["gate", "verify-release", "EtanHey/brainlayer", tag_object, "--tag"])
     checked = []
     monkeypatch.setattr(gate, "verify_release", lambda repo, sha: checked.append(sha))
+    for key in list(os.environ):
+        if key.startswith("GIT_"):
+            monkeypatch.delenv(key)
     gate.main()
     assert checked == [commit]
+
+
+def test_label_concurrency_cancels_only_pull_requests():
+    ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    concurrency = ci["concurrency"]
+    assert concurrency["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+    assert "github.event.pull_request.number || github.sha" in concurrency["group"]
+    assert "github.event_name == 'pull_request' && 'pr' || github.run_id" in concurrency["group"]
+    for job in ci["jobs"].values():
+        assert "github.event.label" not in job.get("if", "")
+
+
+def test_tag_gate_cannot_consume_the_ref_loop_stdin():
+    hook = (ROOT / ".githooks/pre-push").read_text()
+    call = next(line for line in hook.splitlines() if "crash_sweep_gate.py verify-release" in line)
+    assert "</dev/null" in call

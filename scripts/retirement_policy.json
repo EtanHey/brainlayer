@@ -480,6 +480,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "1a1be2d88c61f4d6dc49ff176827bfb96e3824b8044766e6cedd1fe5f0e126ba": {
+      "non_cloud_purpose": "Read-only local git rev-parse of an annotated tag or git diff of PR base/head paths for exact-SHA release custody and crash-sweep selection; fixed command vectors with a 60-second timeout, no shell, network or model sender.",
+      "site": {
+        "call_sha256": "a85b006e225b1ce36dd328c7b4b1235b81910b4856b1f68fc631c89502df96bc",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "subprocess.check_output"
+      }
+    },
     "1a5301f219bb9cd40dea485d1b3cb7ddb83c801a5c5615d9cb7a06b49db8bb03": {
       "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe_t3.py <module> import subprocess.",
       "site": {
@@ -1868,6 +1878,16 @@
         "target": "sock.connect"
       }
     },
+    "56578e8e136a980f43a8450ea210a5f1867caec0de512876e7ee9c85ac2bbeeb": {
+      "non_cloud_purpose": "Read-only local git rev-parse of an annotated tag or git diff of PR base/head paths for exact-SHA release custody and crash-sweep selection; fixed command vectors with a 60-second timeout, no shell, network or model sender.",
+      "site": {
+        "call_sha256": "5c497fc7eea66fe5718d190db3af1bade2bb4bd376752285452e598f016cd0ef",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "subprocess.check_output"
+      }
+    },
     "573819ab1b0492061b0e747764b414556610a41fe46a699d7416a15403c7cb1b": {
       "non_cloud_purpose": "Read-only local /usr/bin/git rev-parse/status/ls-files for independent BrainBar source identity; no remote/model invocation.",
       "site": {
@@ -2652,6 +2672,16 @@
         "owner": "<module>.reclassify_t3_source_class",
         "path": "src/brainlayer/source_class_migration.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "7473afc65c3a5d520ffbf59d11f87f4764806eb3d95633cd19495995562d1505": {
+      "non_cloud_purpose": "Read-only GitHub Actions workflow-run and job/step metadata through the fixed gh api command with pagination and a 120-second timeout; verifies exact-SHA crash-sweep receipts, no model request or data mutation.",
+      "site": {
+        "call_sha256": "b90639026c688ea134363d14ad110fd287273c90d626146e0e46d713a9fe0df2",
+        "kind": "child_process",
+        "owner": "<module>.api",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "subprocess.run"
       }
     },
     "74928325a3b02c1e9761a65ed08586d553cf72b2a8a92ccf52676c6c11f04cd9": {
@@ -4558,6 +4588,16 @@
         "target": "import requests"
       }
     },
+    "c1a0779df99e7d08fe99882f1b0012220df983f681d9a17fbb933aefab9197f8": {
+      "non_cloud_purpose": "Read-only local git archive of the PR base src/brainlayer and tests to derive the prior AST import closure in memory without extracting or executing it; protects deleted/renamed dependencies, no network or model sender.",
+      "site": {
+        "call_sha256": "6b432cea30eea191ff0576c51979548d526e4212c6b5e301d25c9f8a72c2d8ef",
+        "kind": "child_process",
+        "owner": "<module>.sweep_dependencies",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "subprocess.check_output"
+      }
+    },
     "c1e66ea9e601f63e9f7322179155ab8df3e2a2f267451dc0463ae8cb7fe42e9b": {
       "non_cloud_purpose": "Operator-only external harness launch plus bounded local process/socket metadata and local BrainBar bridge verification. External harness inference is explicit, not a BrainLayer-owned model backend. Site: <module> import subprocess.",
       "site": {
@@ -4596,6 +4636,16 @@
         "owner": "<module>._run",
         "path": "scripts/release_tag_contains.py",
         "target": "subprocess.CompletedProcess"
+      }
+    },
+    "c34b29306fce7526d0d06270d8cd95034270e54ccbbc4589d0634cfa5af4b26b": {
+      "non_cloud_purpose": "Bind stdlib subprocess for the crash-sweep CI selector and exact-SHA release gate; only bounded read-only local Git commands and authenticated read-only GitHub Actions metadata queries, no model API or shell execution.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "import subprocess"
       }
     },
     "c38b0e75ee5d77871cf379320bc3d4d631e2ffc8adc011c2eacf60b2d1691a17": {
