@@ -46,6 +46,10 @@ def test_every_marked_sweep_and_transitive_dependency_requires_sweeps():
         "pyproject.toml",
         "tests/conftest.py",
         "scripts/run_tests.sh",
+        "scripts/check_stray_apps.py",
+        "src/brainlayer/vector_store.py",  # Imported by the recovery-oracle collection conftest.
+        "tests/benchmarks/conftest.py",
+        "tests/recovery_oracle/conftest.py",
     } <= reached
     # This loop checks self-consistency; the pinned anchors and synthetic fixture guard discovery.
     for path in reached:
@@ -88,7 +92,7 @@ def test_added_sweep_imports_are_followed_without_updating_a_path_list(tmp_path)
 
 def test_withdrawn_unrelated_modules_skip_the_migration_sweeps():
     gate = load_gate()
-    for name in ("maintenance_calendar", "maintenance", "watcher", "watcher_bridge", "vector_store", "backup_daily"):
+    for name in ("maintenance_calendar", "maintenance", "watcher", "watcher_bridge", "backup_daily"):
         path = f"src/brainlayer/{name}.py"
         assert path not in gate.sweep_dependencies()
         assert not gate.required("pull_request", [path], [])
@@ -130,3 +134,24 @@ def test_external_resolution_does_not_execute_package_initializers(tmp_path, mon
     (package / "child.py").write_text("value = 1\n")
     monkeypatch.syspath_prepend(str(tmp_path))
     assert gate.external_module("external_fixture_package.child")
+
+
+@pytest.mark.parametrize("conftest", ["conftest.py", "tests/conftest.py", "tests/nested/conftest.py"])
+def test_collection_conftest_imports_require_sweeps_transitively(tmp_path, conftest):
+    gate = load_gate()
+    sources = {
+        "tests/nested/test_cut.py": "import pytest\n@pytest.mark.crash_sweep\ndef test_cut(): pass\n",
+        conftest: "from scripts.helper2 import value\n",
+        "scripts/helper2.py": "from scripts.helper3 import value\n",
+        "scripts/helper3.py": "value = 1\n",
+        "outside/conftest.py": "import nonexistent_outside_collection\n",
+    }
+    for name, text in sources.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    reached = gate.sweep_dependencies(tmp_path)
+    assert {conftest, "scripts/helper2.py", "scripts/helper3.py"} <= reached
+    assert gate.required("pull_request", ["scripts/helper2.py"], [], root=tmp_path)
+    assert gate.required("pull_request", ["scripts/helper3.py"], [], root=tmp_path)
+    assert "outside/conftest.py" not in reached

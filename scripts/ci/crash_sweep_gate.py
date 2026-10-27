@@ -88,7 +88,11 @@ def import_closure(sources, roots=(".", "src"), declared=()):
         return name
 
     # Parse non-test packages lazily: unrelated scripts need not be executable/importable test code.
-    trees = {path: ast.parse(text, filename=path) for path, text in sources.items() if path.startswith("tests/")}
+    trees = {
+        path: ast.parse(text, filename=path)
+        for path, text in sources.items()
+        if path.startswith("tests/") or path == "conftest.py"
+    }
     pending = [
         path
         for path, tree in trees.items()
@@ -97,6 +101,9 @@ def import_closure(sources, roots=(".", "src"), declared=()):
     ]
     if not pending:
         raise RuntimeError("No crash_sweep-marked test files found")
+    # pytest tests/ collects nested test directories before applying the crash_sweep marker.
+    # Traverse their conftests and the repository ancestor, not merely their filenames in HARNESS.
+    pending.extend(path for path in trees if path == "conftest.py" or path.endswith("/conftest.py"))
     reached = set()
     while pending:
         path = pending.pop()
