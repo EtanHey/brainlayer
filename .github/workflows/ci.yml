@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
 
 jobs:
   changes:
@@ -11,8 +13,15 @@ jobs:
     outputs:
       brain_bar: ${{ steps.filter.outputs.brain_bar }}
       launchd: ${{ steps.filter.outputs.launchd }}
+      crash_sweeps: ${{ steps.sweeps.outputs.required }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select exhaustive crash sweep
+        id: sweeps
+        run: python3 scripts/ci/crash_sweep_gate.py required
 
       - id: filter
         uses: dorny/paths-filter@v3
@@ -270,20 +279,38 @@ jobs:
 
   crash-sweeps:
     name: crash sweeps
+    needs: changes
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
+      - name: Require a successful policy decision
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          SWEEPS_REQUIRED: ${{ needs.changes.outputs.crash_sweeps }}
+        run: |
+          test "$CHANGES_RESULT" = success
+          case "$SWEEPS_REQUIRED" in true|false) ;; *) exit 1 ;; esac
+
+      - name: Skip exhaustive sweeps for this PR
+        if: needs.changes.outputs.crash_sweeps == 'false'
+        run: echo "No crash-sensitive changes or crash-sweep label; batch gate remains required."
+
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.crash_sweeps == 'true'
       - uses: actions/setup-python@v5
+        if: needs.changes.outputs.crash_sweeps == 'true'
         with:
           python-version: "3.13"
 
       - name: Free runner disk
+        if: needs.changes.outputs.crash_sweeps == 'true'
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
           df -h
 
       - name: Cache pip
+        if: needs.changes.outputs.crash_sweeps == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip/http-v2
@@ -291,6 +318,7 @@ jobs:
           restore-keys: ${{ runner.os }}-pip-downloads-v2-
 
       - name: Install crash test dependencies
+        if: needs.changes.outputs.crash_sweeps == 'true'
         run: pip install -e ".[dev]" pytest-xdist
 
       # Old py3.13 completion intervals: first migration 5.5–13.1s/shard,
@@ -298,6 +326,7 @@ jobs:
       # estimate 2245s serial; 2400s bounds this gate independently, while
       # xdist uses available CPUs. The unit job keeps its existing 1800s bound.
       - name: Exhaustive crash sweeps
+        if: needs.changes.outputs.crash_sweeps == 'true'
         env:
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
@@ -307,7 +336,7 @@ jobs:
           -n auto --durations=0 --junitxml="$RUNNER_TEMP/crash-sweeps.xml"
 
       - name: Retain per-shard timings and complete coverage inventory
-        if: always()
+        if: always() && needs.changes.outputs.crash_sweeps == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: crash-sweep-results-python-3.13
