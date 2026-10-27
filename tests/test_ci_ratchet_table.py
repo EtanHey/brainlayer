@@ -674,6 +674,23 @@ def test_a_selected_wheel_that_is_gone_is_red_not_na(tmp_path: Path) -> None:
 # --- the four rows a runner cannot measure ---------------------------------------------------
 
 
+def test_hosted_render_labels_local_only_coverage(tmp_path: Path) -> None:
+    probe = linux_probe(tmp_path)
+    rows = ratchet.collect(probe, CORPUS)
+    rendered = ratchet.render(rows, probe, None, NOW)
+
+    for name in ("mapped bytes", "search p50/p95", "idle CPU", "fallback replay debt"):
+        rendered_row = next(line for line in rendered.splitlines() if line.startswith(f"| {name} |"))
+        assert "local-only; not enforced by hosted CI" in rendered_row
+        assert row(rows, name).value in rendered_row
+        assert row(rows, name).notes in rendered_row
+    assert (
+        "Hosted success gives no verdict on mapped bytes, search p50/p95, idle CPU, or fallback replay debt."
+    ) in rendered
+    assert "2026-09-03" in rendered
+    assert CORPUS["latency_baseline_ms"]["captured_at"] in rendered
+
+
 @pytest.mark.parametrize("name", ["mapped bytes", "search p50/p95", "idle CPU"])
 def test_socket_rows_blame_the_served_stack_not_the_operating_system(tmp_path: Path, name: str) -> None:
     """These three are FIXTURE-bound, not runner-bound.
