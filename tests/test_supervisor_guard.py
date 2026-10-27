@@ -214,3 +214,126 @@ def test_guard_startup_delayed_readiness_is_bounded(tmp_path, monkeypatch, delay
                 if child.poll() is None:
                     child.kill()
                 child.wait(timeout=2)
+
+
+@pytest.mark.parametrize("quiesced", [False, True])
+@pytest.mark.parametrize("sink_failure", [False, True])
+def test_timeout_records_parent_birth_mode_and_groups_before_signal(tmp_path, monkeypatch, quiesced, sink_failure):
+    from types import SimpleNamespace
+
+    clock, actions = [0.0], []
+    path = tmp_path / "guard-events.jsonl"
+
+    def emit(**row):
+        if row["event"] != "guard-timeout":
+            return
+        actions.append("diagnostic-attempt")
+        if sink_failure:
+            raise OSError("private sink unavailable")
+        path.write_text(json.dumps(dict(schema_version=1, **row)) + "\n")
+
+    monkeypatch.setattr(guard.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(guard.os, "getppid", lambda: 1234)
+    monkeypatch.setattr(guard.os, "getpid", lambda: 5678)
+    monkeypatch.setattr(guard.os, "write", lambda *_: 1)
+    monkeypatch.setattr(guard.os, "close", lambda *_: None)
+    monkeypatch.setattr(guard.os, "read", lambda *_: b"+2468\nH\n" + (b"Q\n" if quiesced else b""))
+
+    def select(read, write, error, timeout):
+        if not actions:
+            actions.append("protocol")
+            clock[0] = 1.0
+            return [0], [], []
+        clock[0] += timeout
+        return [], [], []
+
+    def kill(pid, sig):
+        assert actions[-1] == "diagnostic-attempt"
+        assert (pid, sig) == (1234, signal.SIGKILL)
+        if not sink_failure:
+            row = json.loads(path.read_text())
+            assert row["schema_version"] == 1
+            assert row["health_event"] == "supervisor_guard_timeout"
+            assert (row["parent_pid"], row["parent_start_time"], row["guard_pid"]) == (1234, "parent-birth", 5678)
+            assert row["mode"] == ("shutdown" if quiesced else "heartbeat")
+            assert row["guard_mode"] == ("Q" if quiesced else "H")
+            assert row["registered_pgids"] == [2468]
+            assert row["last_heartbeat_age_s"] == pytest.approx(2.1 if quiesced else 2.0)
+            assert row["reason"] == ("shutdown-timeout" if quiesced else "heartbeat-timeout")
+        actions.append("kill")
+
+    def reap(groups, *args, **kwargs):
+        assert actions[-1] == "kill" and groups == {2468}
+        actions.append("reap")
+
+    if sink_failure:
+
+        def unavailable(fd):
+            raise RuntimeError("diagnostic thread unavailable")
+
+        monkeypatch.setattr(guard, "DiagnosticSink", unavailable)
+    monkeypatch.setattr(guard.select, "select", select)
+    monkeypatch.setattr(guard.os, "kill", kill)
+    monkeypatch.setattr(guard, "reap_groups", reap)
+    guard.run_guard(
+        1234,
+        2,
+        99,
+        0.1,
+        shutdown_timeout=0.1,
+        parent_birth="parent-birth",
+        diagnostics=SimpleNamespace(emit=emit),
+        diagnostic_fd=987 if sink_failure else None,
+    )
+    assert actions[-2:] == ["kill", "reap"]
+
+
+def test_diagnostic_sink_is_capped_and_blocked_writer_cannot_block_emit(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from brainlayer.supervisor_diagnostics import DiagnosticSink
+
+    path = tmp_path / "events.jsonl"
+    sink = DiagnosticSink.open(path, capacity=8192)
+    try:
+        for n in range(80):
+            sink.emit(event="sample", value=n, padding="x" * 200)
+            time.sleep(0.001)
+    finally:
+        sink.close()
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert path.stat().st_size <= 8192 and rows[-1]["value"] == 79
+
+    entered, release = threading.Event(), threading.Event()
+    original_write = os.write
+
+    def blocked(fd, data):
+        entered.set()
+        release.wait(3)
+        return original_write(fd, data)
+
+    sink = DiagnosticSink.open(tmp_path / "blocked.jsonl")
+    monkeypatch.setattr("brainlayer.supervisor_diagnostics.os.write", blocked)
+    try:
+        sink.emit(event="first")
+        assert entered.wait(1)
+        began = time.monotonic()
+        for _ in range(1000):
+            sink.emit(event="guard-timeout")
+        sink.close()
+        assert time.monotonic() - began < 0.2
+    finally:
+        release.set()
+        sink.writer.join(timeout=1)
+
+
+def test_unavailable_diagnostic_file_does_not_prevent_guard_startup(tmp_path, monkeypatch):
+    def unavailable(path):
+        raise OSError("private sink unavailable")
+
+    monkeypatch.setattr(guard.DiagnosticSink, "open_fd", unavailable)
+    with Custody(tmp_path) as custody:
+        child = guard.launch_guard(custody, 30, 0.1)
+        child.stdin.close()
+        assert child.wait(timeout=2) == 0

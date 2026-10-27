@@ -17,6 +17,7 @@ from pathlib import Path
 
 from brainlayer import supervisor_guard
 from brainlayer.paths import supervisor_socket_path
+from brainlayer.supervisor_diagnostics import DiagnosticSink, emit
 from brainlayer.supervisor_guard import Custody, gated_spawn, launch_guard, peer_uid, start_time, stop_group
 
 
@@ -74,6 +75,14 @@ class Component:
         )
 
 
+@dataclass
+class Operation:
+    label: str
+    started: float
+    deadline: float
+    reported: bool = False
+
+
 class Supervisor:
     def __init__(
         self,
@@ -112,11 +121,14 @@ class Supervisor:
         self.recovery_at = 0
         self.io_lock, self.operations = asyncio.Lock(), {}
         self.operation_timeout = operation_timeout
+        self.diagnostics = None
+        self.parent_birth = None
 
-    async def _blocking(self, operation, *args):
+    async def _blocking(self, operation, *args, label=None):
         """Keep loop progress observable; never abandon a worker holding custody on cancellation."""
         worker = asyncio.get_running_loop().run_in_executor(None, operation, *args)
-        self.operations[worker] = time.monotonic()
+        began = time.monotonic()
+        self.operations[worker] = Operation(label or operation.__qualname__, began, began + self.operation_timeout)
         cancelled = None
         try:
             while True:
@@ -131,10 +143,32 @@ class Supervisor:
         finally:
             self.operations.pop(worker, None)
 
+    def _heartbeat_allowed(self):
+        now = time.monotonic()
+        overdue = [op for op in self.operations.values() if now >= op.deadline]
+        for op in overdue:
+            if not op.reported:
+                emit(
+                    self.diagnostics,
+                    event="heartbeat-suppressed",
+                    reason="operation-overdue",
+                    operation=op.label,
+                    started_monotonic=op.started,
+                    deadline_monotonic=op.deadline,
+                    age_s=now - op.started,
+                    budget_s=self.operation_timeout,
+                    parent_pid=os.getpid(),
+                    parent_start_time=self.parent_birth,
+                    guard_pid=self.guard.pid if self.guard else None,
+                )
+                op.reported = True
+        return not overdue
+
     async def _start_pending(self, child):
         async with self.io_lock:  # Spawn/record/forget share one durable journal writer.
             if not self.stop.is_set() and not child.paused:
-                await self._blocking(self._start, child)
+                name = next((name for name, component in self.components.items() if component is child), "unregistered")
+                await self._blocking(self._start, child, label=f"spawn:{name}")
 
     def _schedule_start(self, child):
         if child.startup is None:
@@ -367,13 +401,18 @@ class Supervisor:
                     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
                         handlers[sig] = signal.getsignal(sig)
                         loop.add_signal_handler(sig, self.stop.set)
+                self.parent_birth = start_time(os.getpid())
+                try:
+                    self.diagnostics = DiagnosticSink.open(self.path.parent / "operation-events.jsonl")
+                except (OSError, RuntimeError):
+                    logging.warning("operation diagnostic sink unavailable; timeout enforcement remains active")
                 self.guard = launch_guard(self.custody, self.guard_timeout, grace, self.shutdown_timeout)
                 await server.start_serving()
                 while not self.stop.is_set():
                     if self.guard.poll() is not None:
                         raise RuntimeError("supervisor heartbeat guard exited")
                     # A responsive loop may wait for slow I/O, but a stuck worker has a finite budget.
-                    if all(time.monotonic() - began < self.operation_timeout for began in self.operations.values()):
+                    if self._heartbeat_allowed():
                         self._send("H")
                     self._tick()
                     await asyncio.sleep(min(0.1, self.guard_timeout / 4))
@@ -406,5 +445,7 @@ class Supervisor:
                     loop.remove_signal_handler(sig)
                     signal.signal(sig, previous)
                 self.path.unlink(missing_ok=True)
+                if self.diagnostics:
+                    self.diagnostics.close()
                 if any(isinstance(r, BaseException) for r in results):
                     raise RuntimeError("shutdown deadline exceeded; guard retains orphan custody")
