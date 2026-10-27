@@ -105,7 +105,11 @@ raise SystemExit(asyncio.run(run_calendar([Step('maintenance-nightly',(sys.execu
         assert parent.wait(timeout=3) == (-signal.SIGKILL if death in {"freeze", "both"} else 1)
         if death == "both":
             os.kill(step, 0)
-            assert asyncio.run(run_calendar([], path / "calendar", path / "logs")) == 0
+            # Cleanup still reaps the writer, but a killed run must be reported as failed.
+            assert asyncio.run(run_calendar([], path / "calendar", path / "logs")) == 1
+            recovered = [json.loads(line) for line in (path / "calendar" / "runs.jsonl").read_text().splitlines()]
+            assert len([row for row in recovered if row["event"] == "abandoned"]) == 1
+            assert recovered[-1]["failed"] == 1
 
         def dead():
             try:
