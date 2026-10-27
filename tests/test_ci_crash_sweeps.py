@@ -55,7 +55,7 @@ def test_ci_separates_sweeps_without_raising_the_unit_deadline_or_sampling():
     assert args[args.index("--seconds") + 1] == "1800"
     assert args[args.index("-m") + 1] == "not integration and not live and not crash_sweep"
     crash = jobs["crash-sweeps"]
-    assert crash["name"] == "crash sweeps" and "if" not in crash
+    assert crash["name"] == "crash sweeps" and crash["if"] == "always()"
     assert "matrix" not in crash.get("strategy", {})  # One Python, all shards via xdist.
     assert any(step.get("with", {}).get("python-version") == "3.13" for step in crash["steps"])
     run = next(step["run"] for step in crash["steps"] if step.get("name") == "Exhaustive crash sweeps")
@@ -67,6 +67,7 @@ def test_ci_separates_sweeps_without_raising_the_unit_deadline_or_sampling():
     assert not any(arg.split("=", 1)[0] in ("-k", "--ignore", "--deselect", "--lf", "--last-failed") for arg in args)
     assert any("pytest-xdist" in str(step.get("run", "")) for step in crash["steps"])
     assert any(
-        step.get("uses", "").startswith("actions/upload-artifact") and step.get("if") == "always()"
+        step.get("uses", "").startswith("actions/upload-artifact")
+        and step.get("if") == "always() && needs.changes.outputs.crash_sweeps == 'true'"
         for step in crash["steps"]
     )

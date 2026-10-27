@@ -1683,7 +1683,7 @@ DELETE_REF = f"(delete) {'0' * 40} refs/heads/fixture {'a' * 40}\n"
 
 
 def replay_pre_push(hook: Path, refs: str) -> tuple[subprocess.CompletedProcess[str], int]:
-    """Execute the checkout's real hook; only its expensive suite is a sentinel."""
+    """Execute the real delete boundary with sentinel suite and isolated hosted release gate."""
     bash = shutil.which("bash")
     if bash is None:
         raise FileNotFoundError("bash binary unavailable for real hook replay")
@@ -1692,6 +1692,8 @@ def replay_pre_push(hook: Path, refs: str) -> tuple[subprocess.CompletedProcess[
         scripts = fixture / "scripts"
         (scripts / "ci").mkdir(parents=True)
         shutil.copyfile(ROOT / "scripts/ci/run_with_deadline.py", scripts / "ci/run_with_deadline.py")
+        # This replay measures suite starts, not release custody (covered by test_crash_sweep_gate).
+        (scripts / "ci/crash_sweep_gate.py").write_text("# synthetic hosted release approval\n", encoding="utf-8")
         sentinel = fixture / "suite-starts"
         (scripts / "run_tests.sh").write_text('echo started >> "$SUITE_STARTS"\n', encoding="utf-8")
         env = {

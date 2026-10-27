@@ -30,6 +30,16 @@
         "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
       }
     },
+    "012534e611e8853a35e92994ac7216f58bbff44829de58fae28c1ce2927b2cb0": {
+      "non_cloud_purpose": "Read-only bounded local git archive of tracked Python sources across all repo import roots plus pyproject metadata; parse the immutable base import closure in memory without extracting or executing code. No network or model sender.",
+      "site": {
+        "call_sha256": "3705a7b48515ac3e60d393ffe00ac914c81d8aefbd1d483668ccb89fe084a93c",
+        "kind": "child_process",
+        "owner": "<module>.sweep_dependencies",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "subprocess.check_output"
+      }
+    },
     "023bc7f48ec39203f7c49485cbc91883b773b21fce8b463c84242679e345bd70": {
       "non_cloud_purpose": "Read only the local per-boot session identity for maintenance hold generations: Darwin libc sysctlbyname kern.bootsessionuuid (string buffer), or Linux boot_id file. No subprocess/network/model sender.",
       "site": {
@@ -478,6 +488,16 @@
         "owner": "<module>.get_contact_info",
         "path": "src/brainlayer/pipeline/extract_whatsapp.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "1a1be2d88c61f4d6dc49ff176827bfb96e3824b8044766e6cedd1fe5f0e126ba": {
+      "non_cloud_purpose": "Read-only local git rev-parse of an annotated tag or git diff of PR base/head paths for exact-SHA release custody and crash-sweep selection; fixed command vectors with a 60-second timeout, no shell, network or model sender.",
+      "site": {
+        "call_sha256": "a85b006e225b1ce36dd328c7b4b1235b81910b4856b1f68fc631c89502df96bc",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "subprocess.check_output"
       }
     },
     "1a5301f219bb9cd40dea485d1b3cb7ddb83c801a5c5615d9cb7a06b49db8bb03": {
@@ -1070,6 +1090,16 @@
         "target": "subprocess.Popen"
       }
     },
+    "3406f4739174b133e16792a74459cd68c20d3b6248e206fcbc8c38b9e49f471f": {
+      "non_cloud_purpose": "Read-only local git diff of PR base/head with NUL-delimited paths (-z), preserving non-ASCII, quotes and newlines without Git path quoting; fixed argv, 60-second timeout, no shell, network or model sender.",
+      "site": {
+        "call_sha256": "f61c8c721b1c8431820e710506fca451172931f342a5896f464b437bcd2dd4ad",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "subprocess.check_output"
+      }
+    },
     "3422b3fef4419bbb6b9b2791a0052e0f5962039faa61ab3b8e855f3c8d65d556": {
       "non_cloud_purpose": "Local Git merge-base resolves the immutable dependency baseline; no shell, network, or model send.",
       "site": {
@@ -1626,6 +1656,16 @@
         "owner": "<module>._git_root_uncached",
         "path": "src/brainlayer/fallback_replay.py",
         "target": "subprocess.check_output"
+      }
+    },
+    "4b9b97737314e11702ffe1c4cc3153977f02db0788ce25a808a4e40c8810f446": {
+      "non_cloud_purpose": "Bind stdlib importlib.machinery.PathFinder for read-only installed module spec resolution without package execution; no dynamic model loader, network transport or model sender.",
+      "site": {
+        "call_sha256": "751d3eb7444974c7a353d2cf7f8cc4336a7dbf44a4f6d270f461c1b1ef0e628b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "from importlib.machinery import PathFinder"
       }
     },
     "4ca3ef7c8fdf6bed5029ce4ca3f70154cc0cfb7247c3fbcc4066e30d9941d5bf": {
@@ -2652,6 +2692,16 @@
         "owner": "<module>.reclassify_t3_source_class",
         "path": "src/brainlayer/source_class_migration.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "7473afc65c3a5d520ffbf59d11f87f4764806eb3d95633cd19495995562d1505": {
+      "non_cloud_purpose": "Read-only GitHub Actions workflow-run and job/step metadata through the fixed gh api command with pagination and a 120-second timeout; verifies exact-SHA crash-sweep receipts, no model request or data mutation.",
+      "site": {
+        "call_sha256": "b90639026c688ea134363d14ad110fd287273c90d626146e0e46d713a9fe0df2",
+        "kind": "child_process",
+        "owner": "<module>.api",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "subprocess.run"
       }
     },
     "74928325a3b02c1e9761a65ed08586d553cf72b2a8a92ccf52676c6c11f04cd9": {
@@ -4598,6 +4648,16 @@
         "target": "subprocess.CompletedProcess"
       }
     },
+    "c34b29306fce7526d0d06270d8cd95034270e54ccbbc4589d0634cfa5af4b26b": {
+      "non_cloud_purpose": "Bind stdlib subprocess for the crash-sweep CI selector and exact-SHA release gate; only bounded read-only local Git commands and authenticated read-only GitHub Actions metadata queries, no model API or shell execution.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "import subprocess"
+      }
+    },
     "c38b0e75ee5d77871cf379320bc3d4d631e2ffc8adc011c2eacf60b2d1691a17": {
       "non_cloud_purpose": "Local fixed-argv preflight only: /bin/bash -n parses helper bytes or /usr/bin/plutil -lint -- - parses rendered plist bytes; no helper execution, cloud/model process or network sender.",
       "site": {
@@ -5016,6 +5076,16 @@
         "owner": "<module>.retag_t3_app_chunks",
         "path": "scripts/retag_t3_app_provenance.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "d894c0f85224c92c1262a03f24a5c1f1571f724e46513bd2a1897837c34f94bd": {
+      "non_cloud_purpose": "Read-only importlib PathFinder spec lookup through installed package search locations, without importing or executing package initializers or loading model runtimes; distinguishes external imports from unresolved local dependencies. No network, model call or dynamic module execution.",
+      "site": {
+        "call_sha256": "b704e31c8edb18f67ec46d3b40da7d3f3600448d8cfdf5cc9f21181e86d6fb9c",
+        "kind": "transport_call",
+        "owner": "<module>.external_module",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "importlib.machinery.PathFinder.find_spec"
       }
     },
     "d8c6c3c6bbf4ff3cda4c515faca0befb16770e253d3d552114106c373ea8a040": {
