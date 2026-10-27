@@ -212,7 +212,8 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         var inputs = Self.healthy()
         inputs.drive = .init(line: "1 thing needs you: reconnect Drive by Oct 28", detail: nil, tone: .expiring,
                              showsReconnect: true, reconnectEnabled: true, needsAttention: true)
-        Self.assertAgree(inputs, dot: false, "drive expiring")
+        let (_, expiringSurfaces) = Self.assertAgree(inputs, dot: false, "drive expiring")
+        XCTAssertEqual(expiringSurfaces.backups.badge, .expiring)
         inputs.drive = .init(line: "Drive access expired or was revoked. Backups can't upload.", detail: nil,
                              tone: .attention, showsReconnect: true, reconnectEnabled: true, needsAttention: true)
         let (_, value) = Self.assertAgree(inputs, dot: false, "drive lost")

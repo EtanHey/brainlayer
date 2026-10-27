@@ -136,6 +136,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         if let issue = relevant.first(where: { $0.severity == .attention }) { return .init(badge: .attention, reason: issue.text) }
         if let failure = relevant.first(where: {
             $0.severity == .notice && $0.noticeHealth == .notice
+                && !($0.id == "drive.auth" && health.badge == .expiring)
                 && ([.backups, .drive].contains($0.component) || !$0.jobs.isDisjoint(with: backupJobs)
                     || $0.alertKey == "unknown")
         }) {
