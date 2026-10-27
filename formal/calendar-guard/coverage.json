@@ -1,0 +1,167 @@
+{
+  "sync_sha": "a9c3f184821006dd29b40f2758bee1ba2df4afc5",
+  "base_sha": "f01469cfdac1368d54a9f9d47bf743f5fc49ca8d",
+  "sources": {
+    "src/brainlayer/maintenance_calendar.py": {
+      "sha": "a9c3f184821006dd29b40f2758bee1ba2df4afc5",
+      "sha256": "dbdca628b3991a7f1ddd437619fb0e57d4bb0ff63362c9c00f600296f8fc7cef"
+    },
+    "src/brainlayer/supervisor_guard.py": {
+      "sha": "f01469cfdac1368d54a9f9d47bf743f5fc49ca8d",
+      "sha256": "bbfed017c31e07a7d7141be0d4e1dcdcd6704cf9298da59b9b7df83112ba7269"
+    },
+    "src/brainlayer/supervisor_child.py": {
+      "sha": "f01469cfdac1368d54a9f9d47bf743f5fc49ca8d",
+      "sha256": "811d174f883de3ea337afbdfe0a82097fb9717828090f97c9202eb2913940fa0"
+    }
+  },
+  "actions": {
+    "CalendarGuard": {
+      "Init": [
+        "src/brainlayer/maintenance_calendar.py:703-721",
+        "src/brainlayer/supervisor_guard.py:145-175"
+      ],
+      "BeginOperation": [
+        "src/brainlayer/maintenance_calendar.py:558-566"
+      ],
+      "CompleteOperation": [
+        "src/brainlayer/maintenance_calendar.py:544-569",
+        "src/brainlayer/maintenance_calendar.py:721-728",
+        "src/brainlayer/maintenance_calendar.py:759-769",
+        "src/brainlayer/maintenance_calendar.py:448-454",
+        "src/brainlayer/maintenance_calendar.py:519",
+        "src/brainlayer/maintenance_calendar.py:920-946"
+      ],
+      "LaunchGuard": [
+        "src/brainlayer/maintenance_calendar.py:749-757",
+        "src/brainlayer/supervisor_guard.py:340-414"
+      ],
+      "Spawn": [
+        "src/brainlayer/maintenance_calendar.py:438-448",
+        "src/brainlayer/supervisor_guard.py:416-441"
+      ],
+      "WriteRegistration": [
+        "src/brainlayer/maintenance_calendar.py:456-457"
+      ],
+      "ReadRegistration": [
+        "src/brainlayer/supervisor_guard.py:296-314"
+      ],
+      "ReleaseGate": [
+        "src/brainlayer/maintenance_calendar.py:458",
+        "src/brainlayer/supervisor_child.py:31-38"
+      ],
+      "FinishChild": [
+        "src/brainlayer/maintenance_calendar.py:466-484",
+        "src/brainlayer/supervisor_guard.py:111-132"
+      ],
+      "Quiesce": [
+        "src/brainlayer/maintenance_calendar.py:895-907",
+        "src/brainlayer/supervisor_guard.py:305-309"
+      ],
+      "GuardEOF": [
+        "src/brainlayer/supervisor_guard.py:277-280",
+        "src/brainlayer/supervisor_guard.py:296-298"
+      ],
+      "GuardReap": [
+        "src/brainlayer/supervisor_guard.py:317-326",
+        "src/brainlayer/supervisor_guard.py:87-108"
+      ],
+      "Close": [
+        "src/brainlayer/maintenance_calendar.py:940-948",
+        "src/brainlayer/supervisor_guard.py:172-175"
+      ],
+      "EnvironmentKill": [
+        "src/brainlayer/maintenance_calendar.py:467-469",
+        "src/brainlayer/supervisor_guard.py:136",
+        "src/brainlayer/supervisor_guard.py:298"
+      ],
+      "Tick": [
+        "src/brainlayer/maintenance_calendar.py:377-406",
+        "src/brainlayer/maintenance_calendar.py:466-470",
+        "src/brainlayer/supervisor_guard.py:251-276",
+        "src/brainlayer/supervisor_guard.py:302-309"
+      ],
+      "GuardTimeout": [
+        "src/brainlayer/supervisor_guard.py:271-276",
+        "src/brainlayer/supervisor_guard.py:305-307"
+      ]
+    },
+    "CalendarJournal": {
+      "Init": [
+        "src/brainlayer/maintenance_calendar.py:115-124"
+      ],
+      "Runner": [
+        "src/brainlayer/maintenance_calendar.py:758-769"
+      ],
+      "Spawn": [
+        "src/brainlayer/maintenance_calendar.py:448-454"
+      ],
+      "Finish": [
+        "src/brainlayer/maintenance_calendar.py:513-519"
+      ],
+      "Summary": [
+        "src/brainlayer/maintenance_calendar.py:920-933"
+      ],
+      "CrashRunner": [
+        "src/brainlayer/maintenance_calendar.py:115-124",
+        "src/brainlayer/supervisor_guard.py:136",
+        "src/brainlayer/supervisor_guard.py:271-276"
+      ],
+      "SecondPending": [
+        "src/brainlayer/maintenance_calendar.py:184-190"
+      ],
+      "AcquireNext": [
+        "src/brainlayer/maintenance_calendar.py:655-662"
+      ],
+      "RecoverGroups": [
+        "src/brainlayer/maintenance_calendar.py:721",
+        "src/brainlayer/supervisor_guard.py:206-220"
+      ],
+      "ReadLine": [
+        "src/brainlayer/maintenance_calendar.py:177-210"
+      ],
+      "PublishAbandoned": [
+        "src/brainlayer/maintenance_calendar.py:228-270"
+      ],
+      "AbandonSummary": [
+        "src/brainlayer/maintenance_calendar.py:271-281"
+      ],
+      "InterruptPublication": [
+        "src/brainlayer/maintenance_calendar.py:266-281"
+      ],
+      "ScanDone": [
+        "src/brainlayer/maintenance_calendar.py:211-227"
+      ],
+      "RunNext": [
+        "src/brainlayer/maintenance_calendar.py:728-754"
+      ]
+    }
+  },
+  "atomicity": {
+    "operations": "Begin/Complete expose every stall, including gated child before fsync; Complete represents successful persistence, not crash-atomic fsync.",
+    "clock": "Tick aggregates scheduled pulse delivery, elapsed worker time and child polling. GuardTimeout and registration receipt are separate interleavings.",
+    "journal": "Each append is separate; abandoned plus synthetic summary is one logical terminal outcome. Torn rows are explicit. One interrupted abandonment publication is explored.",
+    "reap": "Abstracts successful TERM/KILL plus ESRCH as one action; signals succeeding within the cleanup budget is an explicit assumption.",
+    "environment": "Kill and PID reuse are fault inputs grounded in identity/EOF handlers, not asserted product actions."
+  },
+  "bounds": {
+    "operation_budget_ticks": 4,
+    "heartbeat_budget_ticks": 2,
+    "Q_budget_ticks": 3,
+    "finite_stalls": [
+      0,
+      1,
+      3
+    ],
+    "horizon_ticks": 40,
+    "run_identities": 2,
+    "PID_generations": 2,
+    "steps_per_run": 1,
+    "abandonment_publication_interruptions": 1
+  },
+  "historical_sources": {
+    "pre-1519": "f01469cfdac1368d54a9f9d47bf743f5fc49ca8d",
+    "pre-1517": "54c580ca6849c2d32628f9ad38d924c54109f055",
+    "1519-r1": "b8e476db50ed77045f53d0212922637f1df72384"
+  }
+}
