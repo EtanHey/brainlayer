@@ -247,6 +247,7 @@ def run_guard(
     os.write(ready, b"R")
     os.close(ready)
     groups, buffer, quiesced = set(), b"", False
+    timed_out = False
     last_heartbeat = time.monotonic()
     deadline = last_heartbeat + timeout
     channel = socket.socket(fileno=lease_control) if lease_control is not None else None
@@ -255,22 +256,23 @@ def run_guard(
         while True:
             remaining = max(0, deadline - time.monotonic())
             readable = select.select([0, channel] if channel else [0], [], [], remaining)[0]
+            timeout_event = dict(
+                event="guard-timeout",
+                health_event="supervisor_guard_timeout",
+                parent_pid=parent,
+                parent_start_time=parent_birth,
+                guard_pid=os.getpid(),
+                mode="shutdown" if quiesced else "heartbeat",
+                guard_mode="Q" if quiesced else "H",
+                last_heartbeat_age_s=time.monotonic() - last_heartbeat,
+                registered_pgids=sorted(groups),
+                reason="shutdown-timeout" if quiesced else "heartbeat-timeout",
+            )
             if not readable:
-                emit(
-                    diagnostics,
-                    event="guard-timeout",
-                    health_event="supervisor_guard_timeout",
-                    parent_pid=parent,
-                    parent_start_time=parent_birth,
-                    guard_pid=os.getpid(),
-                    mode="shutdown" if quiesced else "heartbeat",
-                    guard_mode="Q" if quiesced else "H",
-                    last_heartbeat_age_s=time.monotonic() - last_heartbeat,
-                    registered_pgids=sorted(groups),
-                    reason="shutdown-timeout" if quiesced else "heartbeat-timeout",
-                )
+                emit(diagnostics, **timeout_event)
                 if os.getppid() == parent:
                     os.kill(parent, signal.SIGKILL)
+                    timed_out = True
                 break
             if channel and channel in readable:
                 message, ancillary, _, _ = channel.recvmsg(1, socket.CMSG_SPACE(4))
@@ -321,7 +323,7 @@ def run_guard(
             if channel:
                 channel.close()
             if owned_sink:
-                owned_sink.close()
+                owned_sink.close(drain=2 if timed_out else 0.02)
 
 
 def guard_lease(guard, fd=None):

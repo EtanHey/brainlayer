@@ -297,3 +297,42 @@ def test_unavailable_diagnostic_file_does_not_prevent_guard_startup(tmp_path, mo
         child = guard.launch_guard(custody, 30, 0.1)
         child.stdin.close()
         assert child.wait(timeout=2) == 0
+
+
+def test_timeout_flushes_slow_sink_after_signal_before_exit(tmp_path, monkeypatch):
+    import time
+
+    from brainlayer.supervisor_diagnostics import DiagnosticSink
+
+    killed, sinks = [], []
+    path = tmp_path / "events.jsonl"
+    original = DiagnosticSink._write
+
+    def slow_write(self):
+        time.sleep(0.15)
+        assert killed, "enforcement waited for the sink"
+        original(self)
+
+    def sink(fd):
+        instance = DiagnosticSink(fd)
+        sinks.append(instance)
+        return instance
+
+    monkeypatch.setattr(DiagnosticSink, "_write", slow_write)
+    monkeypatch.setattr(guard, "DiagnosticSink", sink)
+    monkeypatch.setattr(guard.os, "getppid", lambda: 1234)
+    monkeypatch.setattr(guard.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(guard.select, "select", lambda *args: ([], [], []))
+    ready_read, ready_write = os.pipe()
+    began = time.monotonic()
+    try:
+        guard.run_guard(1234, 0.1, ready_write, 0.1, parent_birth="birth", diagnostic_fd=DiagnosticSink.open_fd(path))
+        elapsed = time.monotonic() - began
+        assert killed == [(1234, signal.SIGKILL)]
+        assert 0.15 <= elapsed < 2.2
+        assert any(json.loads(line)["event"] == "guard-timeout" for line in path.read_text().splitlines())
+    finally:
+        os.close(ready_read)
+        for instance in sinks:
+            instance.close()
+            instance.writer.join(timeout=2)

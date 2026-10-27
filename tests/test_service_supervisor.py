@@ -495,3 +495,15 @@ module.gated_spawn = stuck
     timeouts = [json.loads(line) for line in (path / "guard-events.jsonl").read_text().splitlines()]
     timeout = next(row for row in timeouts if row["event"] == "guard-timeout")
     assert timeout["ts"] >= row["ts"]
+
+
+def test_blocking_callable_without_qualname_is_tracked_before_start(tmp_path):
+    import asyncio
+    from functools import partial
+
+    async def scenario():
+        supervisor = Supervisor({}, tmp_path / "unused")
+        assert await supervisor._blocking(partial(int, "42")) == 42
+        assert not supervisor.operations
+
+    asyncio.run(scenario())

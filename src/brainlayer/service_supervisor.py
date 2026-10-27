@@ -126,9 +126,10 @@ class Supervisor:
 
     async def _blocking(self, operation, *args, label=None):
         """Keep loop progress observable; never abandon a worker holding custody on cancellation."""
-        worker = asyncio.get_running_loop().run_in_executor(None, operation, *args)
+        label = label or getattr(operation, "__qualname__", type(operation).__name__)
         began = time.monotonic()
-        self.operations[worker] = Operation(label or operation.__qualname__, began, began + self.operation_timeout)
+        worker = asyncio.get_running_loop().run_in_executor(None, operation, *args)
+        self.operations[worker] = Operation(label, began, began + self.operation_timeout)
         cancelled = None
         try:
             while True:

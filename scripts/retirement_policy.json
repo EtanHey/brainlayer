@@ -1798,6 +1798,16 @@
         "target": "import subprocess"
       }
     },
+    "53f4cb7d0723c0ee96c1620ca43f183c40cb5ccb0251a5e05c09022f087f5a25": {
+      "non_cloud_purpose": "Local inherited anonymous Unix socketpair and SCM_RIGHTS writer-lease transfer to the guardian; private acknowledgement and process-group custody, no TCP, public socket or cloud/model sender. The same watchdog now also inherits a pre-opened owner-only bounded diagnostic descriptor; still no model API.",
+      "site": {
+        "call_sha256": "6b8295ebae287645a2e5c8fbb11b8fa6b91ec9fca582caac9d7d00ad1edb6dcc",
+        "kind": "child_process",
+        "owner": "<module>.launch_guard",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "5458c970b5e99f03bcd3f851c87aa71123936dc84cc307204f04c2572467f7ea": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
@@ -5674,16 +5684,6 @@
         "owner": "<module>._run",
         "path": "scripts/release_tag_contains.py",
         "target": "subprocess.run"
-      }
-    },
-    "f493453d24ffb47387f07b7306515d2088e17234a2073a6f9c402dfa2eb68e32": {
-      "non_cloud_purpose": "Local inherited anonymous Unix socketpair and SCM_RIGHTS writer-lease transfer to the guardian; private acknowledgement and process-group custody, no TCP, public socket or cloud/model sender.",
-      "site": {
-        "call_sha256": "b17c5ee085bfd721fcb9455d253d42d72c4c0e25e805e27ae4ef3627fe5e00ea",
-        "kind": "child_process",
-        "owner": "<module>.launch_guard",
-        "path": "src/brainlayer/supervisor_guard.py",
-        "target": "subprocess.Popen"
       }
     },
     "f499d017f3e771a3bb1f4fc04d930e4cafad177043ef2b180e2f63a36d7c2c5e": {

@@ -43,9 +43,7 @@ class DiagnosticSink:
     def emit(self, **event):
         if self.closed.is_set():
             return
-        row = (json.dumps(dict(schema_version=1, ts=time.time(), **event), sort_keys=True) + "\n").encode()
-        if len(row) > 4096:
-            return
+        row = dict(schema_version=1, ts=time.time(), **event)
         try:
             self.pending.put_nowait(row)
         except queue.Full:
@@ -55,11 +53,42 @@ class DiagnosticSink:
         try:
             while not self.closed.is_set() or not self.pending.empty():
                 try:
-                    row = self.pending.get(timeout=0.01)
+                    event = self.pending.get(timeout=1)
                 except queue.Empty:
+                    continue
+                if event is None:
+                    break
+                row = (json.dumps(event, sort_keys=True) + "\n").encode()
+                if len(row) > min(4096, self.capacity):
                     continue
                 end = os.lseek(self.fd, 0, os.SEEK_END)
                 if end + len(row) > self.capacity:
+                    start = max(0, end - self.capacity)
+                    history = os.pread(self.fd, min(end, self.capacity), start)
+                    if start:
+                        history = history.partition(b"\n")[2]
+                    lines = [line for line in history.splitlines(keepends=True) if line.endswith(b"\n")]
+                    retained, size = [], 0
+                    room = min(self.capacity // 2, self.capacity - len(row))
+                    for line in reversed(lines):
+                        if size + len(line) > room:
+                            break
+                        retained.insert(0, line)
+                        size += len(line)
+                    # Keep the newest timeout even through a subsequent startup storm.
+                    if event.get("event") != "guard-timeout":
+                        for line in reversed(lines):
+                            try:
+                                timeout = json.loads(line).get("event") == "guard-timeout"
+                            except (ValueError, AttributeError):
+                                continue
+                            if timeout:
+                                if line not in retained and len(line) + len(row) <= self.capacity:
+                                    while retained and size + len(line) + len(row) > self.capacity:
+                                        size -= len(retained.pop(0))
+                                    retained.insert(0, line)
+                                break
+                    row = b"".join(retained) + row
                     os.ftruncate(self.fd, 0)
                     os.lseek(self.fd, 0, os.SEEK_SET)
                 view = memoryview(row)
@@ -74,9 +103,13 @@ class DiagnosticSink:
         finally:
             os.close(self.fd)
 
-    def close(self):
+    def close(self, *, drain=0.02):
         self.closed.set()
-        self.writer.join(timeout=0.02)  # Never wait for disk recovery, including after a kill.
+        try:
+            self.pending.put_nowait(None)
+        except queue.Full:
+            pass  # A full queue already wakes the writer; it exits after draining.
+        self.writer.join(timeout=drain)  # Never wait for disk recovery, including after a kill.
 
 
 def emit(sink, **event):
