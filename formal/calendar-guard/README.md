@@ -13,8 +13,12 @@ formal/calendar-guard/check.sh --scratch-break
 Exit **1** means the documented current-source findings remain; **2** means
 an unexpected result. `--expect-known --scratch-break` returns 0 only when all
 expected passes and counterexamples reproduce, and still prints `NOT_GREEN`.
-Logs, generated configs, state files, scratch code and `results.json` live in
-`.build.noindex/calendar-guard/<UTC timestamp>/`. Nothing generated goes into Git.
+With `--case`, a passing selection returns 0 and a documented failure returns 1.
+The full current-source contract remains `NOT_GREEN` in either case.
+Logs, run configs, state files, scratch code and `results.json` live in
+`.build.noindex/calendar-guard/<UTC timestamp>-<unique suffix>/`.
+The generated reference configs in `configs/` are committed. The checker
+compares them with the source projections before starting TLC.
 Each TLC process uses `-workers 1` and a 512 MiB heap, sequentially. Before
 every process, the checker reads `sysctl -n vm.loadavg`; one-minute load above
 40 delays startup for at most ten minutes, then fails without starting TLC.
@@ -67,3 +71,32 @@ not execution of the full daemon or a native installed acceptance test.
 
 See [COUNTEREXAMPLES.md](COUNTEREXAMPLES.md) for source-grounded traces and
 [RESULTS.md](RESULTS.md) for the measured run.
+
+To run the M1 verification, fetch both branches on the machine assigned by the
+lead. Keep the checkout on `fix/tla-calendar-guard`; the scratch branch is input
+data and must never merge to main.
+
+```sh
+git fetch origin fix/tla-calendar-guard scratch/t2-calendar-guard-budget-20261027
+```
+
+Run these commands sequentially from the modeling checkout:
+
+| Case | Command | Expected result |
+|---|---|---|
+| Historical a | `formal/calendar-guard/check.sh --case historical-sync` | `NoFalseKill`, TLC 12, wrapper 1 |
+| Historical b | `formal/calendar-guard/check.sh --case historical-missing-terminal` | `Custody`, TLC 12, wrapper 1 |
+| Historical c | `formal/calendar-guard/check.sh --case historical-worker-wedge --case historical-worker-liveness` | `BoundedTermination` and `EventuallyReleased`, TLC 12 and 13, wrapper 1 |
+| Current | `formal/calendar-guard/check.sh --case current` | Nine bounded passes and nine retained current findings, wrapper 1 / `NOT_GREEN` |
+| Scratch break | `formal/calendar-guard/check.sh --case scratch-worker-wedge --scratch-break --scratch-ref origin/scratch/t2-calendar-guard-budget-20261027` | `BoundedTermination`, TLC 12, wrapper 1 |
+
+Add `--prepare-only` to validate source probes, config selection and committed
+configs without starting TLC. The scratch ref carries the full real calendar
+module at `formal/calendar-guard/scratch/maintenance_calendar.py`, with only
+`if not overdue:` replaced by `if True:`. Runtime paths remain unchanged on
+both branches. The checker
+copies and executes that function body, records both source hashes, and runs
+the unchanged TLA+ model. Any unexpected source, config or verdict returns 2.
+
+Return each run directory's `cases.json`, `results.json`, `probes.json`, configs
+and `.log` files to the lead. Generated state files can stay on the runner.

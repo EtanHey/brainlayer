@@ -349,12 +349,11 @@ def wait_for_load():
         time.sleep(min(15, 600 - waited))
 
 
-def run_tlc(entry, output):
+def config_text(entry):
     constants = "\n".join(
         f"  {k} = {str(v).upper() if isinstance(v, bool) else json.dumps(v)}" for k, v in entry["constants"].items()
     )
-    cfg = output / f"{entry['name']}.cfg"
-    cfg.write_text(
+    return (
         "SPECIFICATION Spec\nCHECK_DEADLOCK FALSE\nCONSTANTS\n"
         + constants
         + "\nINVARIANTS "
@@ -362,6 +361,11 @@ def run_tlc(entry, output):
         + "\n"
         + ("PROPERTIES " + " ".join(entry["properties"]) + "\n" if entry["properties"] else "")
     )
+
+
+def run_tlc(entry, output):
+    cfg = output / f"{entry['name']}.cfg"
+    cfg.write_text(config_text(entry))
     command = [
         str(Path.home() / ".local/bin/tlc"),
         "-workers",
@@ -414,9 +418,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expect-known", action="store_true", help="accept documented findings; never calls them PASS")
     parser.add_argument("--scratch-break", action="store_true", help="mutate real pulse in a private scratch copy")
+    parser.add_argument("--scratch-ref", help="read the broken real calendar module from this Git ref")
+    parser.add_argument(
+        "--case", action="append", help="one config name, repeatable; 'current' includes known findings"
+    )
+    parser.add_argument(
+        "--prepare-only", action="store_true", help="check source/projections/configs without running TLC"
+    )
     args = parser.parse_args()
-    output = REPO / ".build.noindex/calendar-guard" / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    output.mkdir(parents=True, exist_ok=False)
+    if args.scratch_ref and not args.scratch_break:
+        parser.error("--scratch-ref requires --scratch-break")
+    output_root = REPO / ".build.noindex/calendar-guard"
+    output_root.mkdir(parents=True, exist_ok=True)
+    output = Path(tempfile.mkdtemp(prefix=time.strftime("%Y%m%dT%H%M%SZ-", time.gmtime()), dir=output_root))
     text = source(CURRENT)
     coverage = json.loads((HERE / "coverage.json").read_text())
     for path, entry in coverage["sources"].items():
@@ -452,10 +466,16 @@ def main():
         broken = text.replace("if not overdue:\n", "if True:  # scratch: disable operation budget\n")
         if text.count("if not overdue:\n") != 1:
             raise RuntimeError("scratch break must replace exactly one guard")
+        if args.scratch_ref:
+            patched_copy = source(args.scratch_ref, "formal/calendar-guard/scratch/maintenance_calendar.py")
+            if patched_copy != broken:
+                raise RuntimeError("scratch ref must contain exactly the real pulse budget break")
+            broken = patched_copy
         scratch.write_text(broken)
         shutil.copy2(HERE / "CalendarGuard.tla", output / "scratch/CalendarGuard.tla")
         projected = facts(scratch.read_text())
         probes["scratch"] = dict(
+            ref=args.scratch_ref,
             facts=projected,
             original_sha256=hashlib.sha256(text.encode()).hexdigest(),
             scratch_sha256=hashlib.sha256(broken.encode()).hexdigest(),
@@ -472,15 +492,39 @@ def main():
                 violation="BoundedTermination",
             )
         )
+    if args.case:
+        available = {entry["name"] for entry in entries}
+        selected = set()
+        for name in args.case:
+            if name == "current":
+                selected.update(
+                    n for n in available if n.startswith(("current-", "finding-")) or n == "registration-ack"
+                )
+            elif name in available:
+                selected.add(name)
+            else:
+                parser.error(f"unknown config {name!r}; scratch config requires --scratch-break")
+        entries = [entry for entry in entries if entry["name"] in selected]
+    for entry in entries:
+        expected_config = config_text(entry)
+        if (HERE / "configs" / f"{entry['name']}.cfg").read_text() != expected_config:
+            raise RuntimeError(f"committed config drift: {entry['name']}")
+        (output / f"{entry['name']}.cfg").write_text(expected_config)
     (output / "probes.json").write_text(json.dumps(probes, indent=2) + "\n")
+    (output / "cases.json").write_text(json.dumps(entries, indent=2) + "\n")
     print(f"Source: calendar={CURRENT} guard={MAIN}; TLC=1.7.4", flush=True)
+    if args.prepare_only:
+        for entry in entries:
+            print(f"Prepared {entry['name']}: expected {entry['violation'] or 'PASS'}")
+        print(f"Evidence: {output}; TLC NOT RUN", flush=True)
+        return 0
     rows = [run_tlc(entry, output) for entry in entries]
     (output / "results.json").write_text(json.dumps(rows, indent=2) + "\n")
     print(f"Evidence: {output}", flush=True)
     if not all(row["reproduced"] for row in rows):
         return 2
     print("Known counterexamples reproduced; current product is NOT_GREEN.")
-    return 0 if args.expect_known else 1
+    return 0 if args.expect_known or not any(entry["violation"] for entry in entries) else 1
 
 
 if __name__ == "__main__":

@@ -83,3 +83,25 @@ No production DB, live socket, live service, install, deploy, full suite or CI w
 Initial pre-push at `32128ae6` was RED: registration tests had 3 passes and a teardown error because shared `origin/main` changed during pytest. Isolated tests had 40 passes, bun had 5 passes, and shell regression passed. This adverse result is retained; no bypass or timeout change was used.
 
 Resumed-lane CodeRabbit pre-commit pass was unavailable: CLI 0.7.6 returned `Rate limit exceeded` and requested a paid `--use-credits` rerun (maximum 200 cents). No paid rerun, CLI upgrade, reviewer child, or approval bypass was used. Claude pair review remains lead-routed after PR open.
+
+## M1 handoff after the local run
+
+The lead requested M1 offload after the 07:33Z run above had finished. No TLC
+process was started after that instruction. The final runner adds `--case`,
+`--prepare-only` and `--scratch-ref`; the 23 reference configs are committed.
+All five handoff selections passed source/config preparation with TLC disabled.
+The current selection contains nine passing cases and nine retained findings.
+An unknown config returns exit 2. The final selector changes still need the M1
+TLC run; the earlier local results do not claim that later execution.
+
+The separate scratch branch `scratch/t2-calendar-guard-budget-20261027` at
+`8a30073b9555d99bb0cc485eac798fe6a3b4b8c3` carries the patched full module
+copy at `formal/calendar-guard/scratch/maintenance_calendar.py`. Runtime paths
+are unchanged on both branches. The source probe verifies that this copy differs
+from the pinned real module only by the pulse budget break. README.md lists the
+five exact runner commands and expected failures.
+
+The first resumed push at `ac9b80bf` passed its queued scoped hook: unit suite
+correctly skipped because formal files map no pytest targets; registration 3
+passed, isolated routing/eval 40 passed, bun 5 passed, shell regression passed.
+This does not erase the earlier RED push recorded above.

@@ -170,5 +170,12 @@
       "src/brainlayer/maintenance_calendar.py:271-281"
     ]
   },
-  "merged_main_sha": "a93f28f9f7f4b6edad107a23986bccfe178d9483"
+  "merged_main_sha": "a93f28f9f7f4b6edad107a23986bccfe178d9483",
+  "scratch_input": {
+    "branch": "scratch/t2-calendar-guard-budget-20261027",
+    "sha": "8a30073b9555d99bb0cc485eac798fe6a3b4b8c3",
+    "path": "formal/calendar-guard/scratch/maintenance_calendar.py",
+    "sha256": "9ad28230d86cb3f8e279c773c56e1afc68a18323ea42b1acba0a5b64661b7e8d",
+    "note": "Full real module copy, only pulse overdue condition removed; runtime paths unchanged."
+  }
 }
