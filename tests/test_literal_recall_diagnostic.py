@@ -129,3 +129,23 @@ def test_cli_preserves_prior_or_concurrently_created_receipt(tmp_path, monkeypat
         mod.main()
     assert exc.value.code == 2
     assert output.read_bytes() == b"prior evidence\n"
+
+
+@pytest.mark.parametrize("serializable", [True, False])
+def test_cli_serializes_before_creating_a_new_receipt(tmp_path, monkeypatch, capsys, serializable):
+    import hashlib
+    import json
+    import sys
+
+    mod = harness()
+    output = tmp_path / "receipt.json"
+    monkeypatch.setattr(mod, "snapshot", lambda _: {"value": "synthetic" if serializable else object()})
+    monkeypatch.setattr(sys, "argv", ["diagnose", "snapshot", "--audit", str(tmp_path), "--output", str(output)])
+    if serializable:
+        mod.main()
+        assert json.loads(output.read_text())["value"] == "synthetic"
+        assert json.loads(capsys.readouterr().out)["sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
+    else:
+        with pytest.raises(TypeError):
+            mod.main()
+        assert not output.exists()

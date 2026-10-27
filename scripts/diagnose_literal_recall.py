@@ -284,10 +284,11 @@ def main():
     else:
         result = snapshot(args.audit)
     result["captured_utc"] = datetime.now(timezone.utc).isoformat()
+    payload = json.dumps(result, indent=2) + "\n"
     args.output.parent.mkdir(parents=True, exist_ok=True)
     try:
         with args.output.open("x") as output:
-            output.write(json.dumps(result, indent=2) + "\n")
+            output.write(payload)
     except FileExistsError:
         parser.error("output exists; choose a new receipt path to preserve prior evidence")
     print(json.dumps(dict(mode=args.mode, output=str(args.output), sha256=digest(args.output))))
