@@ -99,3 +99,33 @@ def test_offline_arms_preserve_candidate_ids(tmp_path):
     assert arms["python_actual"]["top5"] == ["G01"]
     assert arms["forced_and_counterfactual"]["candidates"] == []
     assert all(arm["error"] is None for arm in arms.values())
+
+
+@pytest.mark.parametrize("existing", [True, False])
+def test_cli_preserves_prior_or_concurrently_created_receipt(tmp_path, monkeypatch, existing):
+    import sys
+
+    mod = harness()
+    output = tmp_path / "receipt.json"
+    if existing:
+        output.write_bytes(b"prior evidence\n")
+
+    def snapshot(_audit):
+        assert not existing, "existing output must refuse before gathering inputs"
+        return {"state": "new"}
+
+    original_open = Path.open
+
+    def concurrent_open(path, mode="r", *args, **kwargs):
+        if path == output and mode in {"w", "x"} and not existing:
+            with original_open(path, "x") as winner:
+                winner.write("prior evidence\n")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", concurrent_open)
+    monkeypatch.setattr(mod, "snapshot", snapshot)
+    monkeypatch.setattr(sys, "argv", ["diagnose", "snapshot", "--audit", str(tmp_path), "--output", str(output)])
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    assert exc.value.code == 2
+    assert output.read_bytes() == b"prior evidence\n"
