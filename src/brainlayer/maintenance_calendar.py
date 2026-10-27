@@ -3,12 +3,14 @@
 import asyncio
 import datetime as dt
 import json
+import logging
 import math
 import os
 import signal
 import time
 import uuid
 from contextlib import ExitStack, asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
@@ -183,9 +185,57 @@ def _bounded_index_step(step, now, shutdown_timeout):
     )
 
 
-async def pulse(guard, stop, interval):
+_calendar_operations = ContextVar("calendar_operations", default=None)
+
+
+@dataclass
+class CalendarOperation:
+    label: str
+    started: float
+    reported: bool = False
+
+
+def _open_operation_diagnostics(directory):
+    try:
+        from .supervisor_diagnostics import DiagnosticSink
+    except ImportError:
+        return None  # Optional until the independently reviewed diagnostics PR lands.
+    try:
+        return DiagnosticSink.open(directory / "operation-events.jsonl")
+    except (OSError, RuntimeError):
+        logging.warning("calendar operation diagnostic sink unavailable; enforcement remains active")
+        return None
+
+
+async def pulse(guard, stop, interval, operations=None, operation_timeout=120, diagnostics=None):
+    operations = operations if operations is not None else {}
     while not stop.is_set() and guard.poll() is None:
-        os.write(guard.stdin.fileno(), b"H\n")
+        now = time.monotonic()
+        overdue = [op for op in operations.values() if now - op.started >= operation_timeout]
+        for op in overdue:
+            if not op.reported:
+                event = dict(
+                    event="heartbeat-suppressed",
+                    reason="operation-overdue",
+                    operation=op.label,
+                    started_monotonic=op.started,
+                    deadline_monotonic=op.started + operation_timeout,
+                    age_s=now - op.started,
+                    budget_s=operation_timeout,
+                    parent_pid=os.getpid(),
+                    parent_start_time=start_time(os.getpid()) or "unknown",
+                    guard_pid=guard.pid,
+                )
+                if diagnostics:
+                    try:
+                        diagnostics.emit(**event)
+                    except Exception:
+                        pass
+                else:
+                    logging.error("calendar heartbeat-suppressed: %s", event)
+                op.reported = True
+        if not overdue:
+            os.write(guard.stdin.fileno(), b"H\n")
         await asyncio.sleep(interval)
 
 
@@ -216,6 +266,7 @@ async def _execute_step(
 ):
     child, gate = None, None
     try:
+        budget, held, clock = await _blocking(backup_deadline, step), False, time.monotonic
 
         def prepare():
             nonlocal child, gate
@@ -238,7 +289,6 @@ async def _execute_step(
         await _blocking(prepare)
         os.write(guard.stdin.fileno(), f"+{child.pid}\n".encode())
         os.write(gate, b"R")
-        budget, held, clock = await _blocking(backup_deadline, step), False, time.monotonic
         if deadline is not None:
             # A held step runs on the hold clock, the same one VACUUM and the watchdog read, so a
             # wall-clock step can neither drop nor reorder the bound.
@@ -337,7 +387,17 @@ async def _drain(worker):
 
 
 async def _blocking(operation, *args, **kwargs):
-    return await _drain(asyncio.get_running_loop().run_in_executor(None, partial(operation, *args, **kwargs)))
+    label = getattr(operation, "__qualname__", type(operation).__name__)
+    began = time.monotonic()
+    worker = asyncio.get_running_loop().run_in_executor(None, partial(operation, *args, **kwargs))
+    operations = _calendar_operations.get()
+    if operations is not None:
+        operations[worker] = CalendarOperation(label, began)
+    try:
+        return await _drain(worker)
+    finally:
+        if operations is not None:
+            operations.pop(worker, None)
 
 
 async def _finish_step(*args, **kwargs):
@@ -454,6 +514,7 @@ async def run_calendar(
     *,
     guard_timeout=30,
     shutdown_timeout=15,
+    operation_timeout=120,
     install_signals=False,
     scheduled_date=None,
     now_fn=lambda: dt.datetime.now().astimezone(),
@@ -461,16 +522,26 @@ async def run_calendar(
     defer_after=3,
     transcript_recovery=False,
 ):
-    if not all(math.isfinite(v) and v > 0 for v in (guard_timeout, shutdown_timeout)) or defer_after < 1:
+    if (
+        not all(math.isfinite(v) and v > 0 for v in (guard_timeout, shutdown_timeout, operation_timeout))
+        or defer_after < 1
+    ):
         raise ValueError("invalid calendar timing")
     date = steps.scheduled_date if isinstance(steps, CalendarPlan) else scheduled_date or local_backup_date(now_fn())
-    leases, custody = await _admit_calendar(
-        steps, directory, date, transcript_recovery, guard_timeout, shutdown_timeout, sleep_fn
-    )
+    operations = {}
+    token = _calendar_operations.set(operations)
+    try:
+        leases, custody = await _admit_calendar(
+            steps, directory, date, transcript_recovery, guard_timeout, shutdown_timeout, sleep_fn
+        )
+    except BaseException:
+        _calendar_operations.reset(token)
+        raise
     if leases is None:
+        _calendar_operations.reset(token)
         return custody
     stop, heartbeat_stop, handlers, results = asyncio.Event(), asyncio.Event(), {}, {}
-    guard, heartbeat = None, None
+    guard, heartbeat, diagnostics = None, None, None
     active_step, runner_failed = None, 0
     loop = asyncio.get_running_loop()
     try:
@@ -507,8 +578,11 @@ async def run_calendar(
             nonlocal guard
             guard = launch_guard(custody, guard_timeout, 0.2, shutdown_timeout, lease_control=True)
 
+        diagnostics = await _blocking(_open_operation_diagnostics, directory)
         await _blocking(start_guard)
-        heartbeat = asyncio.create_task(pulse(guard, heartbeat_stop, min(0.1, guard_timeout / 4)))
+        heartbeat = asyncio.create_task(
+            pulse(guard, heartbeat_stop, min(0.1, guard_timeout / 4), operations, operation_timeout, diagnostics)
+        )
         await _blocking(
             record,
             directory,
@@ -672,4 +746,11 @@ async def run_calendar(
                     deferred=sum(v == "deferred" for v in results.values()),
                 )
             finally:
-                leases.close()
+                try:
+                    if diagnostics:
+                        await _blocking(diagnostics.close)
+                finally:
+                    try:
+                        leases.close()
+                    finally:
+                        _calendar_operations.reset(token)

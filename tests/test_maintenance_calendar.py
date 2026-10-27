@@ -698,3 +698,138 @@ def test_slow_spawn_receipt_keeps_guard_live_without_early_child_exec(tmp_path, 
         assert marker.read_text() == "once\n"
     with calendar.Custody(directory):
         pass
+
+
+def test_real_guard_kills_permanently_stuck_calendar_worker_and_reaps(tmp_path):
+    import select
+    import signal
+    import time
+
+    from brainlayer.supervisor_guard import group_exists
+
+    code = r"""
+import asyncio,datetime as dt,inspect,os,sys,time
+from pathlib import Path
+from types import SimpleNamespace
+from brainlayer import maintenance_calendar as calendar
+p=Path(sys.argv[1]); marker=p/'child-ready'
+calendar.maintenance_control.control_client=lambda: SimpleNamespace(path=p/'unused.sock',request=lambda:{},_disabled=lambda *a,**kw:set())
+execute=calendar._execute_step
+def stuck():
+ while True: time.sleep(.05)
+async def wedged(*args,**kwargs):
+ child=asyncio.create_task(execute(*args,**kwargs))
+ while not marker.exists():
+  if child.done(): await child; raise RuntimeError('child stopped before wedge')
+  await asyncio.sleep(.01)
+ print(marker.read_text(),flush=True)
+ await calendar._blocking(stuck)
+ await child
+calendar._execute_step=wedged
+step=calendar.Step('jsonl-backup',(sys.executable,'-c',f"import os,time; open({str(marker)!r},'w').write(str(os.getpid())); time.sleep(60)"),60)
+options={'operation_timeout':.5} if 'operation_timeout' in inspect.signature(calendar.run_calendar).parameters else {}
+asyncio.run(calendar.run_calendar([step],p/'calendar',p/'logs',guard_timeout=.4,shutdown_timeout=1,now_fn=lambda:dt.datetime(2026,10,27,5),**options))
+"""
+    errors = (tmp_path / "runner.err").open("wb")
+    parent = subprocess.Popen((sys.executable, "-c", code, str(tmp_path)), stdout=subprocess.PIPE, stderr=errors)
+    group = None
+    try:
+        assert select.select([parent.stdout], [], [], 5)[0]
+        line = parent.stdout.readline()
+        assert line, (tmp_path / "runner.err").read_text()
+        group = int(line)
+        assert parent.wait(timeout=3) == -signal.SIGKILL
+        deadline = time.monotonic() + 3
+        while group_exists(group) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not group_exists(group)
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+        parent.wait(timeout=2)
+        if group:
+            deadline = time.monotonic() + 3
+            while group_exists(group) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if group_exists(group):
+                os.killpg(group, signal.SIGKILL)
+        errors.close()
+
+
+def test_backup_budget_failure_never_spawns_a_child(tmp_path, monkeypatch):
+    from brainlayer import maintenance_calendar as calendar
+
+    spawned = []
+    spawn = calendar.gated_spawn
+
+    def tracked(*args, **kwargs):
+        spawned.append(True)
+        return spawn(*args, **kwargs)
+
+    def invalid(step):
+        raise ValueError("invalid backup timeout")
+
+    monkeypatch.setattr(calendar, "gated_spawn", tracked)
+    monkeypatch.setattr(calendar, "backup_deadline", invalid)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    read, write = os.pipe()
+    guard = SimpleNamespace(stdin=os.fdopen(write, "wb", buffering=0), poll=lambda: None)
+    try:
+        with calendar.Custody(tmp_path / "calendar") as custody:
+            with pytest.raises(ValueError, match="invalid backup timeout"):
+                asyncio.run(
+                    calendar._execute_step(
+                        calendar.Step("backup-daily", (sys.executable, "-c", "pass"), 2),
+                        os.environ.copy(),
+                        directory=custody.directory,
+                        logs=logs,
+                        custody=custody,
+                        guard=guard,
+                        stop=asyncio.Event(),
+                        guard_timeout=0.4,
+                        shutdown_timeout=1,
+                    )
+                )
+        assert not spawned
+    finally:
+        guard.stdin.close()
+        os.close(read)
+
+
+@pytest.mark.parametrize("budget", [0, -1, float("inf"), float("nan")])
+def test_calendar_rejects_invalid_operation_budget(tmp_path, budget):
+    with pytest.raises(ValueError, match="invalid calendar timing"):
+        asyncio.run(run_calendar([], tmp_path / "calendar", tmp_path / "logs", operation_timeout=budget))
+
+
+def test_overdue_calendar_operation_emits_once_before_suppressing_heartbeat(monkeypatch):
+    import time
+
+    from brainlayer import maintenance_calendar as calendar
+
+    emitted, writes = [], []
+    operation = calendar.CalendarOperation("blocked-receipt", time.monotonic() - 1)
+
+    async def scenario():
+        stop = asyncio.Event()
+        ticks = []
+
+        async def sleep(interval):
+            ticks.append(True)
+            if len(ticks) == 2:
+                stop.set()
+
+        monkeypatch.setattr(calendar.asyncio, "sleep", sleep)
+        monkeypatch.setattr(calendar.os, "write", lambda *args: writes.append(args))
+        guard = SimpleNamespace(pid=1234, poll=lambda: None, stdin=SimpleNamespace(fileno=lambda: 999))
+        await calendar.pulse(
+            guard, stop, 0.01, {object(): operation}, 0.5, SimpleNamespace(emit=lambda **row: emitted.append(row))
+        )
+
+    asyncio.run(scenario())
+    assert not writes and len(emitted) == 1
+    row = emitted[0]
+    assert row["event"] == "heartbeat-suppressed" and row["reason"] == "operation-overdue"
+    assert row["operation"] == "blocked-receipt" and row["budget_s"] == 0.5
+    assert row["deadline_monotonic"] == operation.started + 0.5

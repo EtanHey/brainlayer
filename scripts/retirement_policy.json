@@ -2934,16 +2934,6 @@
         "target": "subprocess.CalledProcessError"
       }
     },
-    "86368bb78adc22ccd207f1265f1194046d766451f205cd43b744a22f2fbd98b9": {
-      "non_cloud_purpose": "Local scheduled maintenance custody and owner-only status; backup keeps its own timeout supervisor in the calendar process group with inherited writer lease. No cloud/model sender.",
-      "site": {
-        "call_sha256": "c1bb8ed47a76141758d8b908abe3a2a4983be8bbca7671f2792da4cb7e3acee0",
-        "kind": "generic_send",
-        "owner": "<module>.run_calendar",
-        "path": "src/brainlayer/maintenance_calendar.py",
-        "target": "client.request"
-      }
-    },
     "8644f4a4358b524633196e1326189fc020611328cdf49170f715cffc5a844de5": {
       "non_cloud_purpose": "Local macOS Foundation volume-capacity query via pinned osascript, including subprocess exception/type metadata; no network or cloud/model sender.",
       "site": {
@@ -5324,6 +5314,16 @@
         "owner": "<module>.native_id",
         "path": "scripts/harness_probe_t3.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "ea840c08afedc3200fe4da9589754b6775e48a559481aaf32932ce03737e36fb": {
+      "non_cloud_purpose": "Local scheduled maintenance custody and owner-only status; backup keeps its own timeout supervisor in the calendar process group with inherited writer lease. No cloud/model sender. Calendar now passes the same local callable through its cancellation-drained, operation-budgeted executor; no cloud/model transport.",
+      "site": {
+        "call_sha256": "530420bac71aa52a48e9644e3015a326af512238f1afcb22fe79c634039d8cfc",
+        "kind": "callable_reference",
+        "owner": "<module>.run_calendar",
+        "path": "src/brainlayer/maintenance_calendar.py",
+        "target": "client.request"
       }
     },
     "ea84f6d1cecc87fe4a368e41e5b4c5888161fb0999d8042713f13d95772f6e66": {
