@@ -198,7 +198,8 @@ def test_input_text_is_utf8_even_with_a_legacy_locale(tmp_path, monkeypatch, sta
         mod.analyze(audit, Path(__file__).parents[1], None)
 
 
-def test_swift_mirror_keeps_the_native_token_joining_contract():
+def test_python_swift_mirror_examples_without_native_source_binding():
+    """Examples for the diagnostic mirror; Swift source changes do not gate this test."""
     mirror = harness().swift_mirror
     assert mirror("cedar parser stale") == '"cedar"* "parser"* "stale"*'
     assert mirror("a b c d") == '"a"* OR "b"* OR "c"* OR "d"*'
