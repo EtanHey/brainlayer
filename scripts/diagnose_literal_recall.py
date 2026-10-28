@@ -34,7 +34,7 @@ STOP = frozenset(
 
 
 def read(path):
-    return json.loads(Path(path).read_text())
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def digest(path):
@@ -43,7 +43,7 @@ def digest(path):
 
 def python_builder(repo):
     path = repo / "src/brainlayer/_helpers.py"
-    tree = ast.parse(path.read_text())
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_escape_fts5_query")
     namespace = {}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), namespace)
@@ -66,11 +66,17 @@ def ids(result):
 
 
 def snapshot(audit):
-    questions = read(audit / "questions.json")
-    assert questions == read(audit / "groundtruth-freeze.json")["questions"]
-    scores = read(audit / "brain-source-scoring.json")["scores"]
-    runs = read(audit / "brain-benchmark.json")
-    grep = [r for r in read(audit / "structural-linked-benchmark.json") if r["arm"] == "rg"]
+    raw_inputs = {name: (audit / name).read_bytes() for name in FROZEN}
+    inputs = {name: hashlib.sha256(data).hexdigest() for name, data in raw_inputs.items()}
+
+    def frozen_read(name):
+        return json.loads(raw_inputs[name].decode("utf-8"))
+
+    questions = frozen_read("questions.json")
+    assert questions == frozen_read("groundtruth-freeze.json")["questions"]
+    scores = frozen_read("brain-source-scoring.json")["scores"]
+    runs = frozen_read("brain-benchmark.json")
+    grep = [r for r in frozen_read("structural-linked-benchmark.json") if r["arm"] == "rg"]
     rows = []
     for q in questions:
         matching = [r for r in runs if r["id"] == q["id"]]
@@ -91,11 +97,12 @@ def snapshot(audit):
                 stable_ids=all(ids(r["result"]) == ids(matching[0]["result"]) for r in matching),
             )
         )
-    manifest = read(audit / "corpus-manifest.json")
+    manifest = frozen_read("corpus-manifest.json")
     sources = []
     for unit in manifest:
         copy = audit / "corpus" / unit["corpus_file"]
-        assert digest(copy) == unit["sha256"], f"Corpus drift: {unit['id']}"
+        copy_sha = digest(copy)
+        assert copy_sha == unit["sha256"], f"Corpus drift: {unit['id']}"
         original = Path(unit["source"])
         sources.append(
             dict(
@@ -103,11 +110,13 @@ def snapshot(audit):
                 original=str(original),
                 exists=original.is_file(),
                 original_sha256=digest(original) if original.is_file() else None,
-                corpus_sha256=digest(copy),
+                corpus_sha256=copy_sha,
             )
         )
+    if inputs != {name: digest(audit / name) for name in FROZEN}:
+        raise ValueError("audit inputs changed during snapshot")
     return dict(
-        inputs={n: digest(audit / n) for n in FROZEN},
+        inputs=inputs,
         sources=sources,
         questions=rows,
         macro_recall=sum(r["recall"] for r in rows) / len(rows),
@@ -218,7 +227,7 @@ def membership(repo, sample, chunk_ids, query):
 def analyze(audit, repo, sample):
     escape = python_builder(repo)
     corpus = [
-        dict(id=u["id"], content=(audit / "corpus" / u["corpus_file"]).read_text())
+        dict(id=u["id"], content=(audit / "corpus" / u["corpus_file"]).read_text(encoding="utf-8"))
         for u in read(audit / "corpus-manifest.json")
     ]
     cohorts = {"curated_documents": corpus}
