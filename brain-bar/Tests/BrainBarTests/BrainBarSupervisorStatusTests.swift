@@ -26,7 +26,42 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
             XCTAssertEqual(BrainBarJobOwnership.read(journalURL: try journal(phase)), .legacy)
         }
         let missing = try journal("migrated").deletingLastPathComponent().appendingPathComponent("missing")
-        XCTAssertEqual(BrainBarJobOwnership.read(journalURL: missing), .legacy)
+        XCTAssertEqual(BrainBarJobOwnership.read(journalURL: missing, daemonProbe: { 113 }), .legacy)
+    }
+
+    func testMissingJournalRequiresProvenDaemonAbsence() throws {
+        let missing = try journal("migrated").deletingLastPathComponent().appendingPathComponent("missing.json")
+        let statuses: [Int32?] = [nil, 0, 1, 113]
+        for status in statuses {
+            let owner = BrainBarJobOwnership.read(journalURL: missing, daemonProbe: { status })
+            if status == 113 { XCTAssertEqual(owner, .legacy) }
+            else if case .unknown = owner {} else { XCTFail("Unproven absence must stay unknown") }
+        }
+    }
+
+    @MainActor
+    func testMissingJournalWithSupervisorEvidenceCannotLookHealthy() throws {
+        let root = try journal("migrated").deletingLastPathComponent()
+        let missing = root.appendingPathComponent("missing.json")
+        for manifestPresent in [false, true] {
+            if manifestPresent {
+                let manifest = root.appendingPathComponent("jobs.json")
+                try Data("{}".utf8).write(to: manifest)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)
+            }
+            let owner = BrainBarJobOwnership.read(journalURL: missing, daemonProbe: {
+                manifestPresent ? 113 : 0
+            })
+            guard case .unknown = owner else { return XCTFail("Conflicting supervisor evidence must remain uncertain") }
+            let provider = BrainLayerLaunchdStatusProvider(commandRunner: { _ in
+                .init(terminationStatus: 0, output: "pid = 42\nlast exit code = 0")
+            }, ownership: { owner })
+            var inputs = BrainBarStatusSnapshotTests.healthy()
+            inputs.observations = provider.sampleActivity()
+            let (snapshot, surfaces) = BrainBarStatusSnapshotTests.assertAgree(inputs, dot: false, "mixed ownership")
+            XCTAssertFalse(snapshot.notices.isEmpty)
+            XCTAssertNotEqual(surfaces.dashboard.headline, "All good")
+        }
     }
 
     func testRealShapedLargeMigrationJournalKeepsOwnershipAndStillBoundsReads() throws {

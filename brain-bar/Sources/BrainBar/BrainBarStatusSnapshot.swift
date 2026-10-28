@@ -25,6 +25,7 @@ struct BrainBarStatusIssue: Equatable, Sendable, Identifiable {
     var alertKey: String? = nil
     /// That job alert's reason exactly as the job wrote it.
     var alertReason: String? = nil
+    var driveTone: DriveAuthPresentation.Tone? = nil
 }
 
 struct BrainBarStatusInputs: Sendable {
@@ -134,7 +135,12 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         }
         // B4: the badge and its primary reason are the snapshot's own typed issue.
         if let issue = relevant.first(where: { $0.severity == .attention }) { return .init(badge: .attention, reason: issue.text) }
-        if let failure = relevant.first(where: { $0.severity == .notice && $0.id.hasPrefix("job.") && !$0.jobs.isDisjoint(with: backupJobs) }) {
+        if let failure = relevant.first(where: {
+            $0.severity == .notice && $0.noticeHealth == .notice
+                && $0.driveTone != .expiring
+                && ([.backups, .drive].contains($0.component) || !$0.jobs.isDisjoint(with: backupJobs)
+                    || $0.alertKey == "unknown")
+        }) {
             return .init(badge: .notice, reason: failure.text)
         }
         guard health.badge == .attention else { return health }
@@ -260,7 +266,8 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         case .attention?:
             builder.add(.init(id: "drive.auth", component: .drive, severity: .notice, text: inputs.drive!.line))
         case .expiring?:
-            builder.add(.init(id: "drive.auth", component: .drive, severity: .notice, text: inputs.drive!.line))
+            builder.add(.init(id: "drive.auth", component: .drive, severity: .notice, text: inputs.drive!.line,
+                              driveTone: .expiring))
         case .unknown?:
             builder.add(.init(id: "drive.auth", component: .drive, severity: .notice, text: inputs.drive!.line,
                               noticeHealth: .unknown))

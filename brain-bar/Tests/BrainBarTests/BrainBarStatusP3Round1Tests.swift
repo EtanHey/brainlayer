@@ -87,6 +87,58 @@ final class BrainBarStatusP3Round1Tests: XCTestCase {
         T.assertAgree(inputs(secondNight), dot: true, "a distinct failed scheduled night earns the dot")
     }
 
+    func testLegacyOwnershipSkipsMissingSupervisorDaemon() {
+        let provider = BrainLayerLaunchdStatusProvider(commandRunner: { args in
+            if args.last?.hasSuffix("/com.brainlayer.daemon") == true {
+                XCTFail("Legacy ownership must not probe the supervisor daemon")
+                return .init(terminationStatus: 113, output: "Could not find service")
+            }
+            return .init(terminationStatus: 0, output: "pid = 42\nlast exit code = 0")
+        }, now: { T.now }, ownership: { .legacy })
+        var inputs = T.healthy()
+        let watcher = provider.sampleActivity()[.watch]
+        XCTAssertNil(watcher?.killCheckUnavailable)
+        inputs.observations?[.watch] = watcher
+        let (snapshot, surfaces) = T.assertAgree(inputs, dot: false, "legacy without supervisor daemon")
+        XCTAssertTrue(snapshot.notices.isEmpty)
+        XCTAssertEqual(surfaces.dashboard.headline, "All good")
+    }
+
+    func testExpiringDrivePreservesUnavailableAndFirstReadBackupStates() {
+        var inputs = T.healthy()
+        inputs.drive = .init(line: "Drive access expiring", detail: nil, tone: .expiring,
+                            showsReconnect: true, reconnectEnabled: true, needsAttention: true)
+        inputs.backups = .unavailable("Backup evidence unavailable")
+        let snapshot = BrainBarStatusSnapshot.derive(inputs)
+        let unavailable = snapshot.project(.init(badge: .attention, reason: "Backup evidence unavailable"))
+        XCTAssertEqual(unavailable.badge, .unknown)
+        XCTAssertEqual(unavailable.reason, "Backup evidence unavailable")
+        inputs.backups = .notRead
+        let firstRead = BrainBarStatusSnapshot.derive(inputs).project(.init(badge: .checking, reason: nil))
+        XCTAssertEqual(firstRead.badge, .checking)
+        XCTAssertNil(firstRead.reason)
+    }
+
+    func testKnownBackupErrorsTakePrecedenceOverUnknownStatus() {
+        for error in ["upload_failed", "job_alert:Fixture failure"] {
+            var inputs = T.healthy()
+            inputs.jobAlerts = nil
+            inputs.backups = .measured(T.backups(error: error))
+            inputs.backupsNotice = "Receipt envelope freshness unknown"
+            let (_, surfaces) = T.assertAgree(inputs, dot: false, error)
+            XCTAssertEqual(surfaces.backups.badge, .notice)
+            XCTAssertNotEqual(surfaces.backups.reason, inputs.backupsNotice)
+        }
+    }
+
+    func testInformationalFleetAlertDoesNotChangeBackupsBadge() {
+        var inputs = T.healthy()
+        inputs.jobAlerts = .init(active: ["fleet-watchdog-hold": "Fleet watchdog held"])
+        let (snapshot, surfaces) = T.assertAgree(inputs, dot: false, "fleet notice")
+        XCTAssertFalse(snapshot.notices.isEmpty)
+        XCTAssertEqual(surfaces.backups.badge, .healthy)
+    }
+
     func testKillCheckFailuresAreVisibleAndNeverHealthy() {
         for result in [BrainLayerLaunchdCommandResult(terminationStatus: 113, output: "service unavailable"),
                        .init(terminationStatus: 0, output: "unparseable fixture")] {
