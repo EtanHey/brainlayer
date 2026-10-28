@@ -23,6 +23,9 @@ from pathlib import Path
 
 from .supervisor_diagnostics import DiagnosticSink, emit
 
+STALL_OVERSHOOT_S = 5.0
+MAX_STALL_REARMS = 3
+
 
 @contextmanager
 def component_gate(directory: Path, *, exclusive=False):
@@ -248,14 +251,35 @@ def run_guard(
     os.close(ready)
     groups, buffer, quiesced = set(), b"", False
     timed_out = False
+    stall_rearms = 0
     last_heartbeat = time.monotonic()
     deadline = last_heartbeat + timeout
     channel = socket.socket(fileno=lease_control) if lease_control is not None else None
     lease = None
     try:
         while True:
-            remaining = max(0, deadline - time.monotonic())
+            wait_started = time.monotonic()
+            remaining = max(0, deadline - wait_started)
             readable = select.select([0, channel] if channel else [0], [], [], remaining)[0]
+            now = time.monotonic()
+            overshoot = now - wait_started - remaining
+            # A starved guard cannot judge parent liveness. Give it a fresh window,
+            # but only a real heartbeat replenishes the three-rearm incident cap.
+            if not quiesced and overshoot > STALL_OVERSHOOT_S and stall_rearms < MAX_STALL_REARMS:
+                stall_rearms += 1
+                deadline = now + timeout
+                emit(
+                    diagnostics,
+                    event="guard-stall-rearm",
+                    parent_pid=parent,
+                    parent_start_time=parent_birth,
+                    guard_pid=os.getpid(),
+                    wait_overshoot_s=overshoot,
+                    stall_rearms=stall_rearms,
+                    grace_used_s=stall_rearms * timeout,
+                )
+                if not readable:
+                    continue
             timeout_event = dict(
                 event="guard-timeout",
                 health_event="supervisor_guard_timeout",
@@ -264,7 +288,7 @@ def run_guard(
                 guard_pid=os.getpid(),
                 mode="shutdown" if quiesced else "heartbeat",
                 guard_mode="Q" if quiesced else "H",
-                last_heartbeat_age_s=time.monotonic() - last_heartbeat,
+                last_heartbeat_age_s=now - last_heartbeat,
                 registered_pgids=sorted(groups),
                 reason="shutdown-timeout" if quiesced else "heartbeat-timeout",
             )
@@ -300,6 +324,7 @@ def run_guard(
             while b"\n" in buffer:
                 line, buffer = buffer.split(b"\n", 1)
                 if line == b"H" and not quiesced:
+                    stall_rearms = 0
                     last_heartbeat = time.monotonic()
                     deadline = last_heartbeat + timeout
                 elif line == b"Q" and not quiesced:
