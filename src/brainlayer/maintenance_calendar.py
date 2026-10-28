@@ -645,9 +645,9 @@ async def _admit_calendar(steps, directory, date, transcript_recovery, guard_tim
             if len(recovery) != 1:
                 raise ValueError("full calendar admission requires one bounded transcript step")
             # Cover the actual step bound, the supervisor backstop and its exit grace,
-            # plus guard startup/expiry (with its host-stall re-arms) and group/guard
-            # shutdown. The suspend-aware elapsed clock cannot be extended by a
-            # wall-clock change or sleep.
+            # plus guard startup/expiry (its host-stall grace ends at an absolute
+            # missed-deadline + MAX_STALL_GRACE_S) and group/guard shutdown. The
+            # suspend-aware elapsed clock cannot be extended by a wall-clock change or sleep.
             deadline += (
                 max(recovery[0].timeout, TRANSCRIPT_RECOVERY_RUN_TIMEOUT)
                 + TRANSCRIPT_RECOVERY_EXIT_TIMEOUT

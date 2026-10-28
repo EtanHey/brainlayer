@@ -51,7 +51,8 @@ def test_starved_guard_rearms_and_emits_stall(simulate_guard, stall):
     assert not kills and waits == [30, 30]
     row = next(row for row in rows if row["event"] == "guard-stall-rearm")
     assert row["wait_overshoot_s"] == stall
-    assert row["stall_rearms"] == 1 and row["grace_used_s"] == 30
+    # grace_used_s is how far the new deadline sits past the missed one, overshoot included.
+    assert row["stall_rearms"] == 1 and row["grace_used_s"] == stall + 30
     assert (row["parent_pid"], row["parent_start_time"]) == (1234, "birth")
     assert not any(row["event"] == "guard-timeout" for row in rows)
 
@@ -71,19 +72,27 @@ def test_repeated_stalls_exhaust_three_rearm_cap(simulate_guard):
     assert rows[-1]["reason"] == "heartbeat-timeout"
 
 
-@pytest.mark.parametrize("timeout,grants", [(120, [120, 240, 300]), (900, [300])])
-def test_cumulative_stall_grace_is_capped_at_300_seconds(simulate_guard, timeout, grants):
-    rows, kills, waits = simulate_guard([(60, None)] * (len(grants) + 1), timeout=timeout)
+@pytest.mark.parametrize("timeout,used,expected_waits", [(120, [180, 300], [120, 120, 60]), (900, [300], [900, 240])])
+def test_cumulative_stall_grace_is_capped_at_300_seconds(simulate_guard, timeout, used, expected_waits):
+    rows, kills, waits = simulate_guard([(60, None)] * len(expected_waits), timeout=timeout)
     rearms = [row for row in rows if row["event"] == "guard-stall-rearm"]
-    assert [row["grace_used_s"] for row in rearms] == grants
-    assert waits == [timeout] + [grants[0]] + [b - a for a, b in zip(grants, grants[1:])]
+    assert [row["grace_used_s"] for row in rearms] == used
+    assert waits == expected_waits
     assert kills == [(1234, signal.SIGKILL)] and rows[-1]["reason"] == "heartbeat-timeout"
 
 
+def test_stall_overshoots_count_against_the_absolute_grace_end(simulate_guard):
+    # R-1536-delta-sol: per-grant accounting let 3 x 36 s overshoots reach 528 s; the end is 120 + 300.
+    rows, kills, waits = simulate_guard([(36, None)] * 3, timeout=120)
+    assert [row["grace_used_s"] for row in rows if row["event"] == "guard-stall-rearm"] == [156, 300]
+    assert waits == [120, 120, 108]
+    assert kills == [(1234, signal.SIGKILL)] and rows[-1]["last_heartbeat_age_s"] == 456
+
+
 def test_real_heartbeat_resets_cumulative_stall_grace(simulate_guard):
-    rows, kills, _ = simulate_guard([(60, None)] * 3 + [(0, b"H\n")] + [(60, None)] * 3 + [(0, b"")], timeout=120)
+    rows, kills, _ = simulate_guard([(60, None)] * 2 + [(0, b"H\n")] + [(60, None)] * 2 + [(0, b"")], timeout=120)
     assert not kills
-    assert [row["grace_used_s"] for row in rows if row["event"] == "guard-stall-rearm"] == [120, 240, 300] * 2
+    assert [row["grace_used_s"] for row in rows if row["event"] == "guard-stall-rearm"] == [180, 300] * 2
 
 
 def test_stall_coinciding_with_eof_reaps_without_rearm(simulate_guard):

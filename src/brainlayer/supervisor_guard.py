@@ -283,7 +283,7 @@ def run_guard(
     groups, buffer, quiesced = set(), b"", False
     timed_out = False
     stall_rearms = 0
-    stall_grace_used = 0.0
+    stall_grace_end = None  # Absolute end of this incident's grace: missed deadline + MAX_STALL_GRACE_S.
     last_heartbeat = time.monotonic()
     deadline = last_heartbeat + timeout
     channel = socket.socket(fileno=lease_control) if lease_control is not None else None
@@ -299,17 +299,19 @@ def run_guard(
             if data == b"":
                 break  # A dead parent needs cleanup, never stall grace.
             # A starved guard cannot judge parent liveness. Give it a fresh window,
-            # bounded by both incident caps; only a real heartbeat resets them.
+            # bounded by both incident caps; only a real heartbeat resets them. The
+            # grace is an absolute end, so stall overshoots count against it too.
+            if not quiesced and overshoot > STALL_OVERSHOOT_S and stall_grace_end is None:
+                stall_grace_end = deadline + MAX_STALL_GRACE_S
             if (
                 not quiesced
                 and overshoot > STALL_OVERSHOOT_S
                 and stall_rearms < MAX_STALL_REARMS
-                and stall_grace_used < MAX_STALL_GRACE_S
+                and now < stall_grace_end
             ):
-                stall_grace = min(timeout, MAX_STALL_GRACE_S - stall_grace_used)
                 stall_rearms += 1
-                stall_grace_used += stall_grace
-                deadline = now + stall_grace
+                deadline = min(now + timeout, stall_grace_end)
+                stall_grace_used = deadline - (stall_grace_end - MAX_STALL_GRACE_S)
                 emit(
                     diagnostics,
                     event="guard-stall-rearm",
@@ -364,7 +366,7 @@ def run_guard(
                 line, buffer = buffer.split(b"\n", 1)
                 if line == b"H" and not quiesced:
                     stall_rearms = 0
-                    stall_grace_used = 0.0
+                    stall_grace_end = None
                     last_heartbeat = time.monotonic()
                     deadline = last_heartbeat + timeout
                 elif line == b"Q" and not quiesced:
