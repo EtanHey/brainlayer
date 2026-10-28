@@ -68,12 +68,15 @@ def ids(result):
 def snapshot(audit):
     raw_inputs = {name: (audit / name).read_bytes() for name in FROZEN}
     inputs = {name: hashlib.sha256(data).hexdigest() for name, data in raw_inputs.items()}
-    frozen = {name: json.loads(data.decode("utf-8")) for name, data in raw_inputs.items() if name.endswith(".json")}
-    questions = frozen["questions.json"]
-    assert questions == frozen["groundtruth-freeze.json"]["questions"]
-    scores = frozen["brain-source-scoring.json"]["scores"]
-    runs = frozen["brain-benchmark.json"]
-    grep = [r for r in frozen["structural-linked-benchmark.json"] if r["arm"] == "rg"]
+
+    def frozen_read(name):
+        return json.loads(raw_inputs[name].decode("utf-8"))
+
+    questions = frozen_read("questions.json")
+    assert questions == frozen_read("groundtruth-freeze.json")["questions"]
+    scores = frozen_read("brain-source-scoring.json")["scores"]
+    runs = frozen_read("brain-benchmark.json")
+    grep = [r for r in frozen_read("structural-linked-benchmark.json") if r["arm"] == "rg"]
     rows = []
     for q in questions:
         matching = [r for r in runs if r["id"] == q["id"]]
@@ -94,7 +97,7 @@ def snapshot(audit):
                 stable_ids=all(ids(r["result"]) == ids(matching[0]["result"]) for r in matching),
             )
         )
-    manifest = frozen["corpus-manifest.json"]
+    manifest = frozen_read("corpus-manifest.json")
     sources = []
     for unit in manifest:
         copy = audit / "corpus" / unit["corpus_file"]

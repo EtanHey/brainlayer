@@ -160,6 +160,16 @@ def test_snapshot_refuses_metadata_changed_after_it_was_read(tmp_path, monkeypat
         mod.snapshot(audit)
 
 
+def test_snapshot_keeps_unused_frozen_artifacts_opaque(tmp_path):
+    import hashlib
+
+    mod = harness()
+    audit = audit_fixture(tmp_path)
+    opaque = b"frozen opaque artifact\xff"
+    (audit / "brain-guided.json").write_bytes(opaque)
+    assert mod.snapshot(audit)["inputs"]["brain-guided.json"] == hashlib.sha256(opaque).hexdigest()
+
+
 @pytest.mark.parametrize("stage", ["json", "builder", "corpus"])
 def test_input_text_is_utf8_even_with_a_legacy_locale(tmp_path, monkeypatch, stage):
     mod = harness()
