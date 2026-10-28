@@ -84,6 +84,8 @@ def run_graphify(python, args, cwd, out):
         GRAPHIFY_BACKEND="none",
         GRAPHIFY_MAX_WORKERS="1",
         GRAPHIFY_VIZ_NODE_LIMIT="0",
+        PYTHONHASHSEED="0",
+        GRAPHIFY_NO_AUTO_REFRESH="1",
     )
     with subprocess.Popen(
         [str(python), "-I", "-B", "-m", "graphify", *args],
@@ -275,7 +277,9 @@ class SourceMap:
                     status="refused",
                     reason=f"Exact symbol has {len(matches)} matches; use a unique node ID. {FALLBACK}",
                 )
-            output = run_graphify(self.python, [mode, matches[0]["id"], "--graph", str(graph)], self.repo, graph.parent)
+            output = run_graphify(
+                self.python, [mode, matches[0]["id"], "--graph", str(graph)], graph.parent, graph.parent
+            )
             checked = self.doctor()
             if checked != current:
                 return dict(checked, status="stale", reason="Evidence changed during query; discard result.")

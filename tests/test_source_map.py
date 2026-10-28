@@ -3,6 +3,7 @@
 import json
 import subprocess
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -42,6 +43,33 @@ def ready(a):
     assert a.refresh()["status"] == "queued"
     assert a.refresh(run=True)["status"] == "fresh"
     assert a.doctor()["status"] == "fresh"
+
+
+@pytest.mark.parametrize("key,value", [("PYTHONHASHSEED", "0"), ("GRAPHIFY_NO_AUTO_REFRESH", "1")])
+def test_graphify_environment_preserves_isolation_and_disables_refresh(tmp_path, monkeypatch, key, value):
+    process = MagicMock(returncode=0)
+    process.__enter__.return_value = process
+    process.communicate.return_value = ("", "")
+    popen = MagicMock(return_value=process)
+    monkeypatch.setattr(sm.subprocess, "Popen", popen)
+    sm.run_graphify(Path("/fixture/python"), ["update", "--help"], tmp_path, tmp_path)
+    assert popen.call_args.args[0][1:5] == ["-I", "-B", "-m", "graphify"]
+    assert popen.call_args.kwargs["env"].get(key) == value
+
+
+def test_query_contains_process_writes_in_artifact_scratch(adapter, monkeypatch):
+    ready(adapter)
+    graph = Path(adapter.doctor()["graph"])
+
+    def writing_query(python, args, cwd, out):
+        (cwd / "query-write-probe").write_text("owned synthetic mutation")
+        return "original source.ts"
+
+    monkeypatch.setattr(sm, "run_graphify", writing_query)
+    result = adapter.query("original")
+    assert not (adapter.repo / "query-write-probe").exists()
+    assert (graph.parent / "query-write-probe").is_file()
+    assert result["status"] == "fresh"
 
 
 @pytest.mark.parametrize("mutation", ["tracked", "untracked", "ignore", "config", "head", "checksum", "missing"])
