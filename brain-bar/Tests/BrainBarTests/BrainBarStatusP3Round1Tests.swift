@@ -104,6 +104,21 @@ final class BrainBarStatusP3Round1Tests: XCTestCase {
         XCTAssertEqual(surfaces.dashboard.headline, "All good")
     }
 
+    func testExpiringDrivePreservesUnavailableAndFirstReadBackupStates() {
+        var inputs = T.healthy()
+        inputs.drive = .init(line: "Drive access expiring", detail: nil, tone: .expiring,
+                            showsReconnect: true, reconnectEnabled: true, needsAttention: true)
+        inputs.backups = .unavailable("Backup evidence unavailable")
+        let snapshot = BrainBarStatusSnapshot.derive(inputs)
+        let unavailable = snapshot.project(.init(badge: .attention, reason: "Backup evidence unavailable"))
+        XCTAssertEqual(unavailable.badge, .unknown)
+        XCTAssertEqual(unavailable.reason, "Backup evidence unavailable")
+        inputs.backups = .notRead
+        let firstRead = BrainBarStatusSnapshot.derive(inputs).project(.init(badge: .checking, reason: nil))
+        XCTAssertEqual(firstRead.badge, .checking)
+        XCTAssertNil(firstRead.reason)
+    }
+
     func testKnownBackupErrorsTakePrecedenceOverUnknownStatus() {
         for error in ["upload_failed", "job_alert:Fixture failure"] {
             var inputs = T.healthy()

@@ -7,11 +7,26 @@ enum BrainBarJobOwnership: Equatable, Sendable {
     static let directory = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".local/share/brainlayer/supervisor")
 
-    static func read(journalURL: URL = directory.appendingPathComponent("migration.json")) -> Self {
+    static func read(
+        journalURL: URL = directory.appendingPathComponent("migration.json"),
+        daemonProbe: () -> BrainLayerLaunchdCommandResult = {
+            BrainLayerLaunchdStatusProvider.run(["/bin/launchctl", "print", "gui/\(getuid())/com.brainlayer.daemon"])
+        }
+    ) -> Self {
         do {
             // Rollback payloads, published plists and the manifest make the live journal >100 KB.
             // 4 MiB leaves room for that inventory while keeping the private read finite.
-            guard let data = try readOwnedFile(journalURL, privateMode: true, limit: 4 * 1024 * 1024) else { return .legacy }
+            guard let data = try readOwnedFile(journalURL, privateMode: true, limit: 4 * 1024 * 1024) else {
+                let manifest = journalURL.deletingLastPathComponent().appendingPathComponent("jobs.json")
+                if try readOwnedFile(manifest, privateMode: true, limit: 4 * 1024 * 1024) != nil {
+                    return .unknown("Can't determine job owner: migration journal missing but supervisor manifest exists")
+                }
+                let daemon = daemonProbe()
+                guard daemon.terminationStatus == 113 else {
+                    return .unknown("Can't determine job owner: migration journal missing and supervisor daemon is loaded or its absence cannot be proven")
+                }
+                return .legacy
+            }
             guard let row = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let phase = row["phase"] as? String else { throw CocoaError(.fileReadCorruptFile) }
             switch phase {
