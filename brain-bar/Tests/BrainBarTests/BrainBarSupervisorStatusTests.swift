@@ -26,7 +26,17 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
             XCTAssertEqual(BrainBarJobOwnership.read(journalURL: try journal(phase)), .legacy)
         }
         let missing = try journal("migrated").deletingLastPathComponent().appendingPathComponent("missing")
-        XCTAssertEqual(BrainBarJobOwnership.read(journalURL: missing, daemonProbe: { .init(terminationStatus: 113, output: "Could not find service") }), .legacy)
+        XCTAssertEqual(BrainBarJobOwnership.read(journalURL: missing, daemonProbe: { 113 }), .legacy)
+    }
+
+    func testMissingJournalRequiresProvenDaemonAbsence() throws {
+        let missing = try journal("migrated").deletingLastPathComponent().appendingPathComponent("missing.json")
+        let statuses: [Int32?] = [nil, 0, 1, 113]
+        for status in statuses {
+            let owner = BrainBarJobOwnership.read(journalURL: missing, daemonProbe: { status })
+            if status == 113 { XCTAssertEqual(owner, .legacy) }
+            else if case .unknown = owner {} else { XCTFail("Unproven absence must stay unknown") }
+        }
     }
 
     @MainActor
@@ -40,8 +50,7 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)
             }
             let owner = BrainBarJobOwnership.read(journalURL: missing, daemonProbe: {
-                .init(terminationStatus: manifestPresent ? 113 : 0,
-                      output: manifestPresent ? "Could not find service" : "last terminating signal = Killed: 9")
+                manifestPresent ? 113 : 0
             })
             guard case .unknown = owner else { return XCTFail("Conflicting supervisor evidence must remain uncertain") }
             let provider = BrainLayerLaunchdStatusProvider(commandRunner: { _ in

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Dispatch
 
 enum BrainBarJobOwnership: Equatable, Sendable {
     case legacy, supervisor, unknown(String)
@@ -9,9 +10,7 @@ enum BrainBarJobOwnership: Equatable, Sendable {
 
     static func read(
         journalURL: URL = directory.appendingPathComponent("migration.json"),
-        daemonProbe: () -> BrainLayerLaunchdCommandResult = {
-            BrainLayerLaunchdStatusProvider.run(["/bin/launchctl", "print", "gui/\(getuid())/com.brainlayer.daemon"])
-        }
+        daemonProbe: () -> Int32? = { probeDaemon() }
     ) -> Self {
         do {
             // Rollback payloads, published plists and the manifest make the live journal >100 KB.
@@ -22,7 +21,7 @@ enum BrainBarJobOwnership: Equatable, Sendable {
                     return .unknown("Can't determine job owner: migration journal missing but supervisor manifest exists")
                 }
                 let daemon = daemonProbe()
-                guard daemon.terminationStatus == 113 else {
+                guard daemon == 113 else {
                     return .unknown("Can't determine job owner: migration journal missing and supervisor daemon is loaded or its absence cannot be proven")
                 }
                 return .legacy
@@ -37,6 +36,24 @@ enum BrainBarJobOwnership: Equatable, Sendable {
         } catch {
             return .unknown("Can't determine job owner: migration journal is unreadable or untrusted")
         }
+    }
+
+    private static func probeDaemon() -> Int32? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["print", "gui/\(getuid())/com.brainlayer.daemon"]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+        do { try process.run() } catch { return nil }
+        guard finished.wait(timeout: .now() + 1) == .success else {
+            if process.isRunning { process.terminate() }
+            return nil
+        }
+        guard process.terminationReason == .exit else { return nil }
+        return process.terminationStatus
     }
 
     // Same custody checks as install.sh's journal guard. Open every path segment with NOFOLLOW:

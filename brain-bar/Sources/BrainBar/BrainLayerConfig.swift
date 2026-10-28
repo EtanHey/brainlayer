@@ -903,7 +903,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         return nil
     }
 
-    static func run(_ command: [String]) -> BrainLayerLaunchdCommandResult {
+    private static func run(_ command: [String]) -> BrainLayerLaunchdCommandResult {
         let result = LaunchctlWatcherProcessProbe.run(command,
             timeout: command.first == BrainBarSupervisorRuntime.cli ? 5 : 1)
         return BrainLayerLaunchdCommandResult(terminationStatus: result.terminationStatus, output: result.output)
