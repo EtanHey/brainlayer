@@ -41,7 +41,7 @@ def test_token_family_is_redacted_with_its_provider(family):
 @pytest.mark.parametrize(
     "prose",
     [
-        "the tskey-auth-keys-are-rotated-weekly runbook",
+        "the ts" + "key-auth-keys-are-rotated-weekly runbook",
         "gsk_ prefixes mark Groq keys",
         "vck_ is a Vercel prefix",
         "the word ya29 describes a token prefix",

@@ -1683,7 +1683,7 @@ DELETE_REF = f"(delete) {'0' * 40} refs/heads/fixture {'a' * 40}\n"
 
 
 def replay_pre_push(hook: Path, refs: str) -> tuple[subprocess.CompletedProcess[str], int]:
-    """Execute the checkout's real hook; only its expensive suite is a sentinel."""
+    """Execute the real delete boundary with sentinel suite and isolated hosted release gate."""
     bash = shutil.which("bash")
     if bash is None:
         raise FileNotFoundError("bash binary unavailable for real hook replay")
@@ -1692,6 +1692,8 @@ def replay_pre_push(hook: Path, refs: str) -> tuple[subprocess.CompletedProcess[
         scripts = fixture / "scripts"
         (scripts / "ci").mkdir(parents=True)
         shutil.copyfile(ROOT / "scripts/ci/run_with_deadline.py", scripts / "ci/run_with_deadline.py")
+        # This replay measures suite starts, not release custody (covered by test_crash_sweep_gate).
+        (scripts / "ci/crash_sweep_gate.py").write_text("# synthetic hosted release approval\n", encoding="utf-8")
         sentinel = fixture / "suite-starts"
         (scripts / "run_tests.sh").write_text('echo started >> "$SUITE_STARTS"\n', encoding="utf-8")
         env = {
@@ -1838,6 +1840,9 @@ def collect(probe: Probe, corpus: dict) -> list[Row]:
 # --------------------------------------------------------------------------------------------
 
 
+LOCAL_ONLY_ROWS = frozenset({"mapped bytes", "search p50/p95", "idle CPU", "fallback replay debt"})
+
+
 def escape_cell(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
 
@@ -1864,13 +1869,18 @@ def render(rows: list[Row], probe: Probe, run_url: str | None, now: datetime) ->
         "`n/a — <reason>` instead of a number; baselines in **Notes** name their own machine, "
         "method and date and were **not** measured here.",
         "",
+        "Hosted success gives no verdict on mapped bytes, search p50/p95, idle CPU, or fallback replay debt.",
+        "",
         "| Row | Status | Value (measured by this run) | Method | Notes |",
         "| --- | --- | --- | --- | --- |",
     ]
     for row in rows:
+        notes = row.notes
+        if row.name in LOCAL_ONLY_ROWS:
+            notes = f"**local-only; not enforced by hosted CI**. {notes}"
         lines.append(
             f"| {escape_cell(row.name)} | {BADGE[row.status]} | {escape_cell(row.value)} "
-            f"| {escape_cell(row.method)} | {escape_cell(row.notes)} |"
+            f"| {escape_cell(row.method)} | {escape_cell(notes)} |"
         )
     reds = [row for row in rows if row.status == RED]
     lines += [

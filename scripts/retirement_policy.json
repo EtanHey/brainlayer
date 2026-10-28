@@ -30,6 +30,16 @@
         "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
       }
     },
+    "012534e611e8853a35e92994ac7216f58bbff44829de58fae28c1ce2927b2cb0": {
+      "non_cloud_purpose": "Read-only bounded local git archive of tracked Python sources across all repo import roots plus pyproject metadata; parse the immutable base import closure in memory without extracting or executing code. No network or model sender.",
+      "site": {
+        "call_sha256": "3705a7b48515ac3e60d393ffe00ac914c81d8aefbd1d483668ccb89fe084a93c",
+        "kind": "child_process",
+        "owner": "<module>.sweep_dependencies",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "subprocess.check_output"
+      }
+    },
     "023bc7f48ec39203f7c49485cbc91883b773b21fce8b463c84242679e345bd70": {
       "non_cloud_purpose": "Read only the local per-boot session identity for maintenance hold generations: Darwin libc sysctlbyname kern.bootsessionuuid (string buffer), or Linux boot_id file. No subprocess/network/model sender.",
       "site": {
@@ -478,6 +488,16 @@
         "owner": "<module>.get_contact_info",
         "path": "src/brainlayer/pipeline/extract_whatsapp.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "1a1be2d88c61f4d6dc49ff176827bfb96e3824b8044766e6cedd1fe5f0e126ba": {
+      "non_cloud_purpose": "Read-only local git rev-parse of an annotated tag or git diff of PR base/head paths for exact-SHA release custody and crash-sweep selection; fixed command vectors with a 60-second timeout, no shell, network or model sender.",
+      "site": {
+        "call_sha256": "a85b006e225b1ce36dd328c7b4b1235b81910b4856b1f68fc631c89502df96bc",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "subprocess.check_output"
       }
     },
     "1a5301f219bb9cd40dea485d1b3cb7ddb83c801a5c5615d9cb7a06b49db8bb03": {
@@ -1070,6 +1090,16 @@
         "target": "subprocess.Popen"
       }
     },
+    "3406f4739174b133e16792a74459cd68c20d3b6248e206fcbc8c38b9e49f471f": {
+      "non_cloud_purpose": "Read-only local git diff of PR base/head with NUL-delimited paths (-z), preserving non-ASCII, quotes and newlines without Git path quoting; fixed argv, 60-second timeout, no shell, network or model sender.",
+      "site": {
+        "call_sha256": "f61c8c721b1c8431820e710506fca451172931f342a5896f464b437bcd2dd4ad",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "subprocess.check_output"
+      }
+    },
     "3422b3fef4419bbb6b9b2791a0052e0f5962039faa61ab3b8e855f3c8d65d556": {
       "non_cloud_purpose": "Local Git merge-base resolves the immutable dependency baseline; no shell, network, or model send.",
       "site": {
@@ -1628,6 +1658,16 @@
         "target": "subprocess.check_output"
       }
     },
+    "4b9b97737314e11702ffe1c4cc3153977f02db0788ce25a808a4e40c8810f446": {
+      "non_cloud_purpose": "Bind stdlib importlib.machinery.PathFinder for read-only installed module spec resolution without package execution; no dynamic model loader, network transport or model sender.",
+      "site": {
+        "call_sha256": "751d3eb7444974c7a353d2cf7f8cc4336a7dbf44a4f6d270f461c1b1ef0e628b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "from importlib.machinery import PathFinder"
+      }
+    },
     "4ca3ef7c8fdf6bed5029ce4ca3f70154cc0cfb7247c3fbcc4066e30d9941d5bf": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/deploy_drift.py <module>._git_stdout",
       "site": {
@@ -1796,6 +1836,16 @@
         "owner": "<module>",
         "path": "scripts/retirement_artifact.py",
         "target": "import subprocess"
+      }
+    },
+    "53f4cb7d0723c0ee96c1620ca43f183c40cb5ccb0251a5e05c09022f087f5a25": {
+      "non_cloud_purpose": "Local inherited anonymous Unix socketpair and SCM_RIGHTS writer-lease transfer to the guardian; private acknowledgement and process-group custody, no TCP, public socket or cloud/model sender. The same watchdog now also inherits a pre-opened owner-only bounded diagnostic descriptor; still no model API.",
+      "site": {
+        "call_sha256": "6b8295ebae287645a2e5c8fbb11b8fa6b91ec9fca582caac9d7d00ad1edb6dcc",
+        "kind": "child_process",
+        "owner": "<module>.launch_guard",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
       }
     },
     "5458c970b5e99f03bcd3f851c87aa71123936dc84cc307204f04c2572467f7ea": {
@@ -2644,6 +2694,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "7473afc65c3a5d520ffbf59d11f87f4764806eb3d95633cd19495995562d1505": {
+      "non_cloud_purpose": "Read-only GitHub Actions workflow-run and job/step metadata through the fixed gh api command with pagination and a 120-second timeout; verifies exact-SHA crash-sweep receipts, no model request or data mutation.",
+      "site": {
+        "call_sha256": "b90639026c688ea134363d14ad110fd287273c90d626146e0e46d713a9fe0df2",
+        "kind": "child_process",
+        "owner": "<module>.api",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "subprocess.run"
+      }
+    },
     "74928325a3b02c1e9761a65ed08586d553cf72b2a8a92ccf52676c6c11f04cd9": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/setup.py <module>.verify_mcp_transport",
       "site": {
@@ -2932,16 +2992,6 @@
         "owner": "<module>._detect_git_sha",
         "path": "src/brainlayer/archive_collapse.py",
         "target": "subprocess.CalledProcessError"
-      }
-    },
-    "86368bb78adc22ccd207f1265f1194046d766451f205cd43b744a22f2fbd98b9": {
-      "non_cloud_purpose": "Local scheduled maintenance custody and owner-only status; backup keeps its own timeout supervisor in the calendar process group with inherited writer lease. No cloud/model sender.",
-      "site": {
-        "call_sha256": "c1bb8ed47a76141758d8b908abe3a2a4983be8bbca7671f2792da4cb7e3acee0",
-        "kind": "generic_send",
-        "owner": "<module>.run_calendar",
-        "path": "src/brainlayer/maintenance_calendar.py",
-        "target": "client.request"
       }
     },
     "8644f4a4358b524633196e1326189fc020611328cdf49170f715cffc5a844de5": {
@@ -4598,6 +4648,16 @@
         "target": "subprocess.CompletedProcess"
       }
     },
+    "c34b29306fce7526d0d06270d8cd95034270e54ccbbc4589d0634cfa5af4b26b": {
+      "non_cloud_purpose": "Bind stdlib subprocess for the crash-sweep CI selector and exact-SHA release gate; only bounded read-only local Git commands and authenticated read-only GitHub Actions metadata queries, no model API or shell execution.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "import subprocess"
+      }
+    },
     "c38b0e75ee5d77871cf379320bc3d4d631e2ffc8adc011c2eacf60b2d1691a17": {
       "non_cloud_purpose": "Local fixed-argv preflight only: /bin/bash -n parses helper bytes or /usr/bin/plutil -lint -- - parses rendered plist bytes; no helper execution, cloud/model process or network sender.",
       "site": {
@@ -5018,6 +5078,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "d894c0f85224c92c1262a03f24a5c1f1571f724e46513bd2a1897837c34f94bd": {
+      "non_cloud_purpose": "Read-only importlib PathFinder spec lookup through installed package search locations, without importing or executing package initializers or loading model runtimes; distinguishes external imports from unresolved local dependencies. No network, model call or dynamic module execution.",
+      "site": {
+        "call_sha256": "b704e31c8edb18f67ec46d3b40da7d3f3600448d8cfdf5cc9f21181e86d6fb9c",
+        "kind": "transport_call",
+        "owner": "<module>.external_module",
+        "path": "scripts/ci/crash_sweep_gate.py",
+        "target": "importlib.machinery.PathFinder.find_spec"
+      }
+    },
     "d8c6c3c6bbf4ff3cda4c515faca0befb16770e253d3d552114106c373ea8a040": {
       "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module> import socket.",
       "site": {
@@ -5324,6 +5394,16 @@
         "owner": "<module>.native_id",
         "path": "scripts/harness_probe_t3.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "ea840c08afedc3200fe4da9589754b6775e48a559481aaf32932ce03737e36fb": {
+      "non_cloud_purpose": "Local scheduled maintenance custody and owner-only status; backup keeps its own timeout supervisor in the calendar process group with inherited writer lease. No cloud/model sender. Calendar now passes the same local callable through its cancellation-drained, operation-budgeted executor; no cloud/model transport.",
+      "site": {
+        "call_sha256": "530420bac71aa52a48e9644e3015a326af512238f1afcb22fe79c634039d8cfc",
+        "kind": "callable_reference",
+        "owner": "<module>.run_calendar",
+        "path": "src/brainlayer/maintenance_calendar.py",
+        "target": "client.request"
       }
     },
     "ea84f6d1cecc87fe4a368e41e5b4c5888161fb0999d8042713f13d95772f6e66": {
@@ -5674,16 +5754,6 @@
         "owner": "<module>._run",
         "path": "scripts/release_tag_contains.py",
         "target": "subprocess.run"
-      }
-    },
-    "f493453d24ffb47387f07b7306515d2088e17234a2073a6f9c402dfa2eb68e32": {
-      "non_cloud_purpose": "Local inherited anonymous Unix socketpair and SCM_RIGHTS writer-lease transfer to the guardian; private acknowledgement and process-group custody, no TCP, public socket or cloud/model sender.",
-      "site": {
-        "call_sha256": "b17c5ee085bfd721fcb9455d253d42d72c4c0e25e805e27ae4ef3627fe5e00ea",
-        "kind": "child_process",
-        "owner": "<module>.launch_guard",
-        "path": "src/brainlayer/supervisor_guard.py",
-        "target": "subprocess.Popen"
       }
     },
     "f499d017f3e771a3bb1f4fc04d930e4cafad177043ef2b180e2f63a36d7c2c5e": {
