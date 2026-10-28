@@ -23,6 +23,9 @@ from pathlib import Path
 
 from .supervisor_diagnostics import DiagnosticSink, emit
 
+STALL_OVERSHOOT_S = 5.0
+MAX_STALL_REARMS = 3
+MAX_STALL_GRACE_S = 300.0
 GUARD_TIMEOUT_ENV = "BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS"
 # Background launchd jobs under host load stalled 31-36 s on 2026-10-28; 30 s killed live parents.
 # A dead parent is still caught at once by pipe EOF, so this only bounds an alive-but-silent one.
@@ -279,14 +282,48 @@ def run_guard(
     os.close(ready)
     groups, buffer, quiesced = set(), b"", False
     timed_out = False
+    stall_rearms = 0
+    stall_grace_end = None  # Absolute end of this incident's grace: missed deadline + MAX_STALL_GRACE_S.
     last_heartbeat = time.monotonic()
     deadline = last_heartbeat + timeout
     channel = socket.socket(fileno=lease_control) if lease_control is not None else None
     lease = None
     try:
         while True:
-            remaining = max(0, deadline - time.monotonic())
+            wait_started = time.monotonic()
+            remaining = max(0, deadline - wait_started)
             readable = select.select([0, channel] if channel else [0], [], [], remaining)[0]
+            now = time.monotonic()
+            overshoot = now - wait_started - remaining
+            data = os.read(0, 65536) if 0 in readable else None
+            if data == b"":
+                break  # A dead parent needs cleanup, never stall grace.
+            # A starved guard cannot judge parent liveness. Give it a fresh window,
+            # bounded by both incident caps; only a real heartbeat resets them. The
+            # grace is an absolute end, so stall overshoots count against it too.
+            if not quiesced and overshoot > STALL_OVERSHOOT_S and stall_grace_end is None:
+                stall_grace_end = deadline + MAX_STALL_GRACE_S
+            if (
+                not quiesced
+                and overshoot > STALL_OVERSHOOT_S
+                and stall_rearms < MAX_STALL_REARMS
+                and now < stall_grace_end
+            ):
+                stall_rearms += 1
+                deadline = min(now + timeout, stall_grace_end)
+                stall_grace_used = deadline - (stall_grace_end - MAX_STALL_GRACE_S)
+                emit(
+                    diagnostics,
+                    event="guard-stall-rearm",
+                    parent_pid=parent,
+                    parent_start_time=parent_birth,
+                    guard_pid=os.getpid(),
+                    wait_overshoot_s=overshoot,
+                    stall_rearms=stall_rearms,
+                    grace_used_s=stall_grace_used,
+                )
+                if not readable:
+                    continue
             timeout_event = dict(
                 event="guard-timeout",
                 health_event="supervisor_guard_timeout",
@@ -295,7 +332,7 @@ def run_guard(
                 guard_pid=os.getpid(),
                 mode="shutdown" if quiesced else "heartbeat",
                 guard_mode="Q" if quiesced else "H",
-                last_heartbeat_age_s=time.monotonic() - last_heartbeat,
+                last_heartbeat_age_s=now - last_heartbeat,
                 registered_pgids=sorted(groups),
                 reason="shutdown-timeout" if quiesced else "heartbeat-timeout",
             )
@@ -324,13 +361,12 @@ def run_guard(
                 channel.sendall(b"R")
                 if 0 not in readable:
                     continue
-            data = os.read(0, 65536)
-            if not data:
-                break  # Even Q cannot abandon groups if shutdown itself was killed.
             buffer += data
             while b"\n" in buffer:
                 line, buffer = buffer.split(b"\n", 1)
                 if line == b"H" and not quiesced:
+                    stall_rearms = 0
+                    stall_grace_end = None
                     last_heartbeat = time.monotonic()
                     deadline = last_heartbeat + timeout
                 elif line == b"Q" and not quiesced:
