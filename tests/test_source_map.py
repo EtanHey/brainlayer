@@ -1,6 +1,7 @@
 """Synthetic freshness and review-regression fixtures; no live inputs."""
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -10,8 +11,12 @@ import pytest
 from brainlayer import source_map as sm
 
 
+def _clean_git_env():
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def git(repo, *args):
-    return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+    return subprocess.check_output(["git", "-C", str(repo), *args], text=True, env=_clean_git_env()).strip()
 
 
 @pytest.fixture
@@ -139,3 +144,27 @@ def test_malformed_node_refuses_instead_of_crashing(adapter):
     current["checksum"] = sm.digest(graph.read_bytes())
     sm.atomic(adapter.state / "current.json", current)
     assert adapter.query("orphan")["status"] == "refused"
+
+
+def test_adapter_git_fixture_ignores_inherited_parent_env(tmp_path, monkeypatch, request):
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    git(parent, "init", "-q")
+    git(parent, "config", "user.email", "parent@example.invalid")
+    git(parent, "config", "user.name", "Synthetic Parent")
+    (parent / "sentinel.txt").write_text("parent must stay untouched")
+    git(parent, "add", ".")
+    git(parent, "commit", "-qm", "parent sentinel")
+
+    def snapshot():
+        return {str(p.relative_to(parent)): p.read_bytes() for p in parent.rglob("*") if p.is_file()}
+
+    before = snapshot()
+    monkeypatch.setenv("GIT_DIR", str(parent / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(parent))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(parent / ".git" / "index"))
+    fixture = request.getfixturevalue("adapter")
+    assert Path(git(fixture.repo, "rev-parse", "--show-toplevel")) == fixture.repo
+    assert git(fixture.repo, "ls-files").splitlines() == [".gitignore", "source.ts"]
+    assert git(fixture.repo, "log", "-1", "--format=%s") == "fixture"
+    assert snapshot() == before
