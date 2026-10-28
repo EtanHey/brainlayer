@@ -90,13 +90,15 @@ class Supervisor:
         path: Path | None = None,
         *,
         backoff: float = 10,
-        guard_timeout: float = 30,
+        guard_timeout: float | None = None,
         shutdown_timeout: float = 15,
         stable_uptime: float = 60,
         operation_timeout: float = 120,
     ):
         if any(name.removeprefix("com.brainlayer.") in {"enrich", "enrichment"} for name in components):
             raise ValueError("enrichment is retired")
+        if guard_timeout is None:
+            guard_timeout = supervisor_guard.configured_guard_timeout()
         if not all(
             math.isfinite(v) and v > 0
             for v in (backoff, guard_timeout, shutdown_timeout, stable_uptime, operation_timeout)

@@ -26,6 +26,36 @@ from .supervisor_diagnostics import DiagnosticSink, emit
 STALL_OVERSHOOT_S = 5.0
 MAX_STALL_REARMS = 3
 MAX_STALL_GRACE_S = 300.0
+GUARD_TIMEOUT_ENV = "BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS"
+# Background launchd jobs under host load stalled 31-36 s on 2026-10-28; 30 s killed live parents.
+# A dead parent is still caught at once by pipe EOF, so this only bounds an alive-but-silent one.
+DEFAULT_GUARD_TIMEOUT_SECONDS = 120.0
+GUARD_TIMEOUT_BOUNDS = (10.0, 900.0)
+
+
+def configured_guard_timeout() -> float:
+    """Heartbeat budget for the daemon and calendar guards; an invalid override raises, never falls back."""
+    from .config import _split_launchd_env_assignment, configured_brainlayer_env_value, get_user_env_path
+
+    path = Path(os.environ.get("BRAINLAYER_ENV_FILE", get_user_env_path()))
+    configured = configured_brainlayer_env_value(GUARD_TIMEOUT_ENV, path)
+    if path.exists():
+        # The shared parser skips a substitution line as absent; here that would be a silent fallback.
+        for line in path.read_text(encoding="utf-8").splitlines():
+            assignment = _split_launchd_env_assignment(line)
+            if assignment and assignment[0] == GUARD_TIMEOUT_ENV and ("$(" in assignment[1] or "`" in assignment[1]):
+                raise ValueError(f"{GUARD_TIMEOUT_ENV} in {path} uses unsupported command substitution")
+    raw = configured if configured is not None else os.environ.get(GUARD_TIMEOUT_ENV)
+    if raw is None:
+        return DEFAULT_GUARD_TIMEOUT_SECONDS
+    low, high = GUARD_TIMEOUT_BOUNDS
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not (math.isfinite(value) and low <= value <= high):
+        raise ValueError(f"{GUARD_TIMEOUT_ENV} must be a finite number of seconds in [{low:g}, {high:g}]: {raw!r}")
+    return value
 
 
 @contextmanager
