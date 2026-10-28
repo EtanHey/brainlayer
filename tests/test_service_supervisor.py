@@ -507,3 +507,15 @@ def test_blocking_callable_without_qualname_is_tracked_before_start(tmp_path):
         assert not supervisor.operations
 
     asyncio.run(scenario())
+
+
+def test_supervisor_guard_timeout_defaults_to_120_and_reads_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "brainlayer.env"))
+    monkeypatch.delenv("BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS", raising=False)
+    assert Supervisor({}, tmp_path / "s.sock").guard_timeout == 120
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS", "240")
+    assert Supervisor({}, tmp_path / "s.sock").guard_timeout == 240
+    assert Supervisor({}, tmp_path / "s.sock", guard_timeout=0.4).guard_timeout == 0.4  # Explicit wins.
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS", "nan")
+    with pytest.raises(ValueError, match="BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS"):
+        Supervisor({}, tmp_path / "s.sock")

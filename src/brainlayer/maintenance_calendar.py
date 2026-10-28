@@ -28,7 +28,15 @@ from .drive_credentials import _atomic_write
 from .index_budget import CALENDAR_INDEX_UNWIND_S, calendar_index_budget_s
 from .job_alerts import active_alerts, report
 from .maintenance_control import MaintenanceHold
-from .supervisor_guard import Custody, gated_spawn, guard_lease, launch_guard, start_time, stop_group
+from .supervisor_guard import (
+    Custody,
+    configured_guard_timeout,
+    gated_spawn,
+    guard_lease,
+    launch_guard,
+    start_time,
+    stop_group,
+)
 from .supervisor_jobs import TRANSCRIPT_RECOVERY_EXIT_TIMEOUT, TRANSCRIPT_RECOVERY_RUN_TIMEOUT
 
 LOG = logging.getLogger(__name__)
@@ -681,7 +689,7 @@ async def run_calendar(
     directory,
     logs,
     *,
-    guard_timeout=30,
+    guard_timeout=None,
     shutdown_timeout=15,
     operation_timeout=120,
     install_signals=False,
@@ -691,6 +699,8 @@ async def run_calendar(
     defer_after=3,
     transcript_recovery=False,
 ):
+    if guard_timeout is None:
+        guard_timeout = await _blocking(configured_guard_timeout)
     if (
         not all(math.isfinite(v) and v > 0 for v in (guard_timeout, shutdown_timeout, operation_timeout))
         or defer_after < 1
