@@ -69,6 +69,29 @@ def test_calendar_replays_dead_run_without_recovery_summaries_hiding_failure(tmp
         assert not job_alerts.active_alerts(alerts)
 
 
+def test_abandoned_run_sets_every_step_alert_but_posts_one_notification(tmp_path, monkeypatch):
+    from brainlayer import maintenance_calendar as calendar
+
+    directory = tmp_path / "calendar"
+    directory.mkdir(mode=0o700)
+    history = Path(__file__).parent / "fixtures/maintenance_calendar/abandoned-2026-10-27.jsonl"
+    (directory / "runs.jsonl").write_text(history.read_text())
+    (directory / "state.json").write_text(json.dumps(dict(deferrals={}, last_weekly="2026-10-18")))
+    alerts = tmp_path / "alerts.json"
+    notices = []
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(alerts))
+    monkeypatch.setattr(calendar, "report", lambda k, r: job_alerts.report(k, r, path=alerts, notify=notices.append))
+    monkeypatch.setattr(calendar, "start_time", lambda _pid: None)
+    monkeypatch.setattr(calendar, "_transcripts_fresh", lambda _now: True)
+    now = dt.datetime(2026, 10, 27, 7)
+    plan = calendar_steps(sys.executable, "/unused", tmp_path, now.date())
+    run = run_calendar(plan, directory, tmp_path / "logs", now_fn=lambda: now, transcript_recovery=True)
+    assert asyncio.run(run) == 0
+    abandoned = {k: v for k, v in job_alerts.active_alerts(alerts).items() if "abandoned during" in v}
+    assert len(abandoned) > 1 and len(set(abandoned.values())) == 1
+    assert notices == list(set(abandoned.values()))
+
+
 def test_calendar_next_scheduled_plan_acquires_dead_holders_lock(tmp_path, monkeypatch):
     from brainlayer import maintenance_calendar as calendar
 

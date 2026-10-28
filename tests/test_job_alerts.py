@@ -38,7 +38,7 @@ def test_failure_episode_and_recovery(tmp_path):
     assert active_alerts(path) == {"backup-daily": "Database backup failed"}
     assert report("backup-daily", None, path=path, notify=notify)
     assert not report("backup-daily", None, path=path, notify=notify)
-    assert notifications == ["Database backup failed", "BrainLayer backup-daily recovered"]
+    assert notifications == ["Database backup failed"]
     assert active_alerts(path) == {}
     assert path.stat().st_mode & 0o777 == 0o600
 
@@ -53,7 +53,40 @@ def test_consent_warns_once_then_escalates_and_reauthorization_clears(tmp_path):
     assert not report("drive-consent", warn, **kwargs)
     assert report("drive-consent", expired, **kwargs)
     assert report("drive-consent", None, **kwargs)
-    assert notices == [warn, expired, "BrainLayer drive-consent recovered"]
+    assert notices == [warn, expired]
+    assert active_alerts(path) == {}
+
+
+def test_recovery_logs_health_event_without_notification(tmp_path, caplog):
+    path = tmp_path / "alerts.json"
+    notices = []
+    assert report("backup-daily", "Database backup failed", path=path, notify=notices.append)
+    caplog.set_level("WARNING", logger="brainlayer.job_alerts")
+    assert report("backup-daily", None, path=path, notify=notices.append)
+    assert notices == ["Database backup failed"]
+    assert active_alerts(path) == {}
+    assert "job=backup-daily state=recovered" in caplog.text
+
+
+def test_identical_message_already_active_on_another_key_posts_once(tmp_path):
+    path = tmp_path / "alerts.json"
+    notices = []
+    incident = "BrainLayer calendar 2026-10-27 abandoned during index; incomplete index; retries at next scheduled run"
+    for key in ("index", "backup-daily", "jsonl-backup", "maintenance-full"):
+        assert report(key, incident, path=path, notify=notices.append)
+    assert notices == [incident]
+    assert active_alerts(path) == dict.fromkeys(("index", "backup-daily", "jsonl-backup", "maintenance-full"), incident)
+    assert report("backup-snapshot", "Snapshot failed", path=path, notify=notices.append)
+    assert notices == [incident, "Snapshot failed"]
+
+
+def test_identical_message_posts_again_once_the_other_key_cleared(tmp_path):
+    path = tmp_path / "alerts.json"
+    notices = []
+    assert report("index", "same text", path=path, notify=notices.append)
+    assert report("index", None, path=path, notify=notices.append)
+    assert report("backup-daily", "same text", path=path, notify=notices.append)
+    assert notices == ["same text", "same text"]
 
 
 def test_database_backup_exit_reports_and_clears(monkeypatch):
@@ -174,7 +207,7 @@ def test_maintenance_alert_episode_clears_after_warning_success(tmp_path, monkey
     monkeypatch.setattr(maintenance, "run_maintenance", lambda *args, **kwargs: result)
     assert maintenance.main(["--light"]) == 0
     assert job_alerts.active_alerts(path) == {}
-    assert notices[-1] == "BrainLayer maintenance-light recovered"
+    assert len(notices) == 1 and "search latency pathological" in notices[0]
 
 
 def test_unexpected_maintenance_failure_alert_does_not_expose_exception_value(monkeypatch, isolated_maintenance_log):

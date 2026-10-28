@@ -524,7 +524,7 @@ def test_non_scan_errno_never_flaps_after_one_shot_migration(monitor, monkeypatc
         assert "[Errno 13]" in job_alerts.active_alerts()["brainbar-activation"]
     assert sum(reason is None for _, reason in alerts) == int(legacy)
     assert sum(reason is not None for _, reason in alerts) == 3
-    assert len(notifications) == 1 + int(legacy)
+    assert len(notifications) == 1
     assert worker.state.with_suffix(".scan-migration.json").is_file()
     assert not calls
 
