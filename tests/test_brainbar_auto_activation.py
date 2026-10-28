@@ -7,6 +7,8 @@ import pytest
 from brainlayer import brainbar_auto_activation as auto
 from brainlayer.brainbar_identity import JOBS
 
+REAL_BREW_PROCESSES = auto.brew_processes
+
 
 @pytest.fixture
 def monitor(tmp_path, monkeypatch):
@@ -332,6 +334,41 @@ def test_brew_deferral_discards_argv_before_every_alert_sink(tmp_path, monkeypat
     ]
 
 
+def test_malformed_process_rows_never_refuse_the_scan(monkeypatch):
+    # A process exiting or exec-ing mid-scan can leave a row with empty args or
+    # a torn pid; one such row must not make the whole table unreadable.
+    rows = [
+        "42 1 brew",
+        "43 1 python",
+        "pid 1 ruby /Homebrew/brew.rb upgrade",
+        "",
+        "44",
+        "45 1 ruby /Homebrew/brew.rb reinstall",
+        "46 1 python python worker.py",
+    ]
+    monkeypatch.setattr(auto, "process_table", lambda: "\n".join(rows))
+    assert auto.brew_processes() == ["42 brew", "45 ruby"]
+    # The automatic activate child catches ValueError and cleans up; keep that type.
+    monkeypatch.setattr(auto, "process_table", lambda: "garbage\n44")
+    with pytest.raises(ValueError, match="unreadable process table"):
+        auto.brew_active()
+
+
+@pytest.mark.parametrize("table", ["", "garbage\n", "pid ppid comm args\n44\n"])
+def test_unusable_process_table_is_counted_never_refused(monitor, monkeypatch, table):
+    worker, _, calls, alerts = monitor
+    monkeypatch.setattr(auto, "brew_processes", REAL_BREW_PROCESSES)
+    monkeypatch.setattr(auto, "process_table", lambda: table)
+    for _ in range(11):
+        auto.AutoActivator(worker.agents, worker.state).tick()
+    assert not alerts and not calls
+    assert json.loads(worker.state.with_suffix(".scan.json").read_text()) == {"failures": 11}
+    worker.tick()
+    assert alerts == [
+        ("brainbar-activation", "BrainBar activation process scan failed for >=12 ticks: unreadable process table")
+    ]
+
+
 def test_process_scan_scrubs_and_bounds_executable_basename(monkeypatch):
     token = "ghp_" + "B" * 36
     monkeypatch.setattr(auto, "process_table", lambda: f"42 1 /private/{token} /Homebrew/child --secret private")
@@ -392,6 +429,7 @@ def test_scan_failures_are_transient_durable_and_recover(monitor, monkeypatch, e
             "BrainBar activation monitor refused: Command '['/bin/ps', '-axo', 'pid=,ppid=,comm=,args=']' timed out after 5 seconds",
             True,
         ),
+        ("BrainBar activation monitor refused: unreadable process table", True),
         ("BrainBar activation failed: blocked", False),
     ],
 )
