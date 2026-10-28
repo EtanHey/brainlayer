@@ -68,17 +68,19 @@ def test_alias_expansion_can_reintroduce_conjunction():
     path = repo / "src/brainlayer/mcp/search_handler.py"
     node = next(
         n
-        for n in ast.parse(path.read_text()).body
+        for n in ast.parse(path.read_text(encoding="utf-8")).body
         if isinstance(n, ast.FunctionDef) and n.name == "_expanded_fts_query"
     )
     namespace = {
         "Any": object,
         "_escape_fts5_query": mod.python_builder(repo),
-        "_lexical_defense_variants": lambda token: [token, "cedar"] if token == "birch" else [token],
+        "_lexical_defense_variants": lambda token: [token],
         "_kg_alias_variants": lambda token, store: [],
     }
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), namespace)
     query = "why did birch parser stall"
+    assert namespace["_expanded_fts_query"](query, None) is None
+    namespace["_kg_alias_variants"] = lambda token, store: ["cedar"] if token == "birch" else []
     override = namespace["_expanded_fts_query"](query, None)
     db = mod.fts_index([{"id": "target", "content": "cedar parser stale"}])
     assert mod.ranked(db, mod.python_builder(repo)(query)) == ["target"]
@@ -99,6 +101,99 @@ def test_offline_arms_preserve_candidate_ids(tmp_path):
     assert arms["python_actual"]["top5"] == ["G01"]
     assert arms["forced_and_counterfactual"]["candidates"] == []
     assert all(arm["error"] is None for arm in arms.values())
+
+
+def audit_fixture(tmp_path):
+    import hashlib
+    import json
+
+    audit = tmp_path / "audit"
+    (audit / "corpus").mkdir(parents=True)
+    doc = audit / "corpus/one.md"
+    doc.write_bytes("cedar שלום".encode("utf-8"))
+    q = {"id": "Q1", "question": "cedar", "relevant": ["G01"]}
+    values = {
+        "questions.json": [q],
+        "groundtruth-freeze.json": {"questions": [q]},
+        "corpus-manifest.json": [
+            {
+                "id": "G01",
+                "corpus_file": "one.md",
+                "sha256": hashlib.sha256(doc.read_bytes()).hexdigest(),
+                "source": str(doc),
+            }
+        ],
+        "brain-benchmark.json": [
+            {"id": "Q1", "question": "cedar", "result": {"content": [{"type": "text", "text": "- ID: target"}]}}
+            for _ in range(5)
+        ],
+        "brain-source-scoring.json": {
+            "scores": [{"id": "Q1", "arm": "literal", "units": ["G01"], "hits": ["G01"], "recall_at_5": 1}]
+        },
+        "brain-guided.json": [],
+        "brain-alias-verification.json": [],
+        "structural-linked-benchmark.json": [{"id": "Q1", "arm": "rg", "recall_at_5": 1}],
+    }
+    for name, value in values.items():
+        (audit / name).write_bytes(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+    (audit / "REPORT.md").write_bytes(b"Synthetic audit")
+    return audit
+
+
+def test_snapshot_refuses_metadata_changed_after_it_was_read(tmp_path, monkeypatch):
+    mod = harness()
+    audit = audit_fixture(tmp_path)
+    target = audit / "questions.json"
+    original_bytes, original_text = Path.read_bytes, Path.read_text
+    mutated = False
+
+    def change_after_read(path, value):
+        nonlocal mutated
+        if path == target and not mutated:
+            mutated = True
+            target.write_bytes(b'[{"id":"Q1","question":"changed","relevant":["G01"]}]')
+        return value
+
+    monkeypatch.setattr(Path, "read_bytes", lambda path: change_after_read(path, original_bytes(path)))
+    monkeypatch.setattr(Path, "read_text", lambda path, *a, **k: change_after_read(path, original_text(path, *a, **k)))
+    with pytest.raises(ValueError, match="audit inputs changed"):
+        mod.snapshot(audit)
+
+
+@pytest.mark.parametrize("stage", ["json", "builder", "corpus"])
+def test_input_text_is_utf8_even_with_a_legacy_locale(tmp_path, monkeypatch, stage):
+    mod = harness()
+    audit = audit_fixture(tmp_path)
+    original = Path.read_text
+    monkeypatch.setattr(
+        Path, "read_text", lambda p, encoding=None, **k: original(p, encoding=encoding or "cp1252", **k)
+    )
+    if stage == "json":
+        path = tmp_path / "input.json"
+        path.write_bytes('{"value":"שלום"}'.encode("utf-8"))
+        assert mod.read(path) == {"value": "שלום"}
+    elif stage == "builder":
+        source = tmp_path / "src/brainlayer/_helpers.py"
+        source.parent.mkdir(parents=True)
+        source.write_bytes('def _escape_fts5_query(q): return q.replace("שלום", "hello")'.encode("utf-8"))
+        assert mod.python_builder(tmp_path)("שלום") == "hello"
+    else:
+        index = mod.fts_index
+
+        def inspect_rows(rows):
+            assert rows[0]["content"] == "cedar שלום"
+            return index(rows)
+
+        monkeypatch.setattr(mod, "fts_index", inspect_rows)
+        mod.analyze(audit, Path(__file__).parents[1], None)
+
+
+def test_swift_mirror_keeps_the_native_token_joining_contract():
+    mirror = harness().swift_mirror
+    assert mirror("cedar parser stale") == '"cedar"* "parser"* "stale"*'
+    assert mirror("a b c d") == '"a"* OR "b"* OR "c"* OR "d"*'
+    assert mirror('say "hi" a*') == '"say"* "hi"* "a"*'
+    assert mirror("   ") == '""'
 
 
 @pytest.mark.parametrize("existing", [True, False])
