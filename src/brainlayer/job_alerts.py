@@ -65,7 +65,12 @@ def report(
     path: Path | None = None,
     notify: Callable[[str], None] = _notify,
 ) -> bool:
-    """Set or clear one episode. Return true only when the visible state changes."""
+    """Set or clear one episode. Return true only when the visible state changes.
+
+    Only a new failure posts a notification, and only when no other active key already
+    carries the identical message (one incident fanned out across keys posts once).
+    Recovery updates the alert file and the health log but never notifies.
+    """
     destination = path or alert_path()
     with _locked(destination):
         current = active_alerts(destination)
@@ -75,15 +80,19 @@ def report(
                 return False
             current.pop(key)
             message = f"BrainLayer {key} recovered"
+            post = False
         else:
             if before is not None and (before == reason or key != "drive-consent"):
                 return False
+            post = reason not in (value for other, value in current.items() if other != key)
             current[key] = reason
             message = reason
         from brainlayer.drive_credentials import _atomic_write
 
         _atomic_write(destination, current)
     LOG.warning("health event job=%s state=%s reason=%s", key, "recovered" if reason is None else "failed", message)
+    if not post:
+        return True
     try:
         notify(message)
     except (OSError, subprocess.SubprocessError) as exc:
