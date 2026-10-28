@@ -48,10 +48,14 @@ does not advertise a gated startup PID as ready. Pause and shutdown wait for an
 in-flight startup before acknowledging group quiescence. Cancelling a worker's waiter
 does not release the journal lock while its write is still running.
 
-Heartbeats remain on the event loop with the existing 30-second guard timeout. Slow
+Heartbeats remain on the event loop with a 120-second guard timeout, shared by the daemon
+and the maintenance calendar. `BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS` (env file or
+environment, 10–900) overrides it; any other value fails startup instead of falling back.
+It was 30 seconds until background jobs under host load stalled 31–36 seconds and the
+guard SIGKILLed live parents. A dead parent is still reaped at once on pipe EOF. Slow
 I/O can finish without starving loop progress. Each executor operation has a
 120-second budget; while an operation is overdue the supervisor withholds heartbeats,
-so a permanently stuck worker also triggers the guard. A wedged event loop cannot
+so a permanently stuck worker also triggers the guard, one guard timeout later. A wedged event loop cannot
 send heartbeats at all. The guard retains group custody and the existing bounded
 quiescence/EOF cleanup protocol in both cases.
 

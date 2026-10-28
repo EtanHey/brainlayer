@@ -336,3 +336,103 @@ def test_timeout_flushes_slow_sink_after_signal_before_exit(tmp_path, monkeypatc
         for instance in sinks:
             instance.close()
             instance.writer.join(timeout=2)
+
+
+@pytest.fixture
+def guard_env(tmp_path, monkeypatch):
+    env_file = tmp_path / "brainlayer.env"
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(env_file))
+    monkeypatch.delenv(guard.GUARD_TIMEOUT_ENV, raising=False)
+    return env_file
+
+
+def test_guard_timeout_defaults_to_120_seconds(guard_env):
+    assert guard.GUARD_TIMEOUT_ENV == "BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS"
+    assert guard.DEFAULT_GUARD_TIMEOUT_SECONDS == 120
+    assert guard.configured_guard_timeout() == 120
+
+
+def test_guard_timeout_env_override_and_env_file_override(guard_env, monkeypatch):
+    monkeypatch.setenv(guard.GUARD_TIMEOUT_ENV, "45.5")
+    assert guard.configured_guard_timeout() == 45.5
+    for bound in ("10", "900"):
+        monkeypatch.setenv(guard.GUARD_TIMEOUT_ENV, bound)
+        assert guard.configured_guard_timeout() == float(bound)
+    guard_env.write_text(f"{guard.GUARD_TIMEOUT_ENV}=300\n")
+    assert guard.configured_guard_timeout() == 300  # The launchd env file wins, as for the other knobs.
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "nan", "inf", "-inf", "9.99", "900.5", "901", "abc", ""])
+@pytest.mark.parametrize("source", ["environ", "env-file"])
+def test_invalid_guard_timeout_raises_never_falls_back(guard_env, monkeypatch, value, source):
+    if source == "environ":
+        monkeypatch.setenv(guard.GUARD_TIMEOUT_ENV, value)
+    else:
+        guard_env.write_text(f"{guard.GUARD_TIMEOUT_ENV}={value}\n")
+    with pytest.raises(ValueError, match=guard.GUARD_TIMEOUT_ENV):
+        guard.configured_guard_timeout()
+
+
+@pytest.mark.parametrize("value", ["$(bad)", "`bad`", '"$(echo 60)"', "6`echo 0`"])
+@pytest.mark.parametrize("process_value", [None, "240"])
+def test_unsupported_env_file_substitution_raises_never_falls_back(guard_env, monkeypatch, value, process_value):
+    # The shared parser skips these lines as absent; for this knob that would silently mean 120 (or the
+    # process value), so a present-but-unsupported assignment must fail loudly instead.
+    if process_value is not None:
+        monkeypatch.setenv(guard.GUARD_TIMEOUT_ENV, process_value)
+    guard_env.write_text(f"OTHER=1\nexport {guard.GUARD_TIMEOUT_ENV}={value}\n")
+    with pytest.raises(ValueError, match=f"{guard.GUARD_TIMEOUT_ENV}.*unsupported"):
+        guard.configured_guard_timeout()
+
+
+def test_substitution_on_other_knobs_keeps_the_shared_parser_contract(guard_env):
+    from brainlayer.config import configured_brainlayer_env_value
+
+    guard_env.write_text("BRAINLAYER_BACKUP_TIMEOUT_SECONDS=$(bad)\nOTHER=`bad`\n")
+    assert guard.configured_guard_timeout() == 120
+    assert configured_brainlayer_env_value("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", guard_env) is None
+    assert configured_brainlayer_env_value("OTHER", guard_env) is None
+
+
+def _scripted_guard(monkeypatch, script, timeout):
+    """Run run_guard in-process on a fake clock; script items are (silence_s, bytes_or_None)."""
+    clock, kills, reaps, selects = [0.0], [], [], []
+    pending = list(script)
+    monkeypatch.setattr(guard.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(guard.os, "getppid", lambda: 1234)
+    monkeypatch.setattr(guard.os, "write", lambda *_: 1)
+    monkeypatch.setattr(guard.os, "close", lambda *_: None)
+    monkeypatch.setattr(guard, "emit", lambda *_args, **_row: None)
+    monkeypatch.setattr(guard.os, "kill", lambda pid, sig: kills.append((clock[0], pid, sig)))
+    monkeypatch.setattr(guard, "reap_groups", lambda groups, *a, **k: reaps.append((clock[0], set(groups))))
+    data = [b""]
+
+    def select(read, write, error, wait):
+        selects.append(wait)
+        if pending and pending[0][0] <= wait:
+            silence, data[0] = pending.pop(0)
+            clock[0] += silence
+            return [0], [], []
+        if pending:
+            pending[0] = (pending[0][0] - wait, pending[0][1])
+        clock[0] += wait  # An honest select: it waited the whole requested interval.
+        return [], [], []
+
+    monkeypatch.setattr(guard.select, "select", select)
+    monkeypatch.setattr(guard.os, "read", lambda *_: data[0])
+    guard.run_guard(1234, timeout, 0, 0.1, 5, parent_birth="birth")
+    return kills, reaps, selects
+
+
+def test_default_guard_survives_60s_silent_parent_and_kills_past_120s(guard_env, monkeypatch):
+    timeout = guard.configured_guard_timeout()
+    # 60 s of silence (the 2026-10-28 stalls were 31-36 s), then one more heartbeat, then silence.
+    kills, reaps, _ = _scripted_guard(monkeypatch, [(0, b"+2468\nH\n"), (60, b"H\n")], timeout)
+    assert kills == [(180.0, 1234, signal.SIGKILL)]  # 120 s after the last heartbeat, never at 60 s.
+    assert reaps == [(180.0, {2468})]
+
+
+def test_eof_from_dead_parent_reaps_at_once_regardless_of_timeout(guard_env, monkeypatch):
+    kills, reaps, _ = _scripted_guard(monkeypatch, [(0, b"+2468\nH\n"), (5, b"")], guard.configured_guard_timeout())
+    assert kills == []
+    assert reaps == [(5.0, {2468})]
