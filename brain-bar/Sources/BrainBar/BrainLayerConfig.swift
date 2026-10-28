@@ -560,12 +560,8 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
     func sampleActivity() -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] {
         switch ownership() {
         case .legacy:
-            var results = Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, observation(for: $0)) })
-            if let watcher = results[.watch] {
-                let daemon = commandRunner(["/bin/launchctl", "print", "gui/\(uidProvider())/com.brainlayer.daemon"])
-                results[.watch] = addingDaemonExit(to: watcher, daemon: daemon)
-            }
-            return results
+            // Legacy jobs have no supervisor daemon; watcher exit evidence comes from its own label.
+            return Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, observation(for: $0)) })
         case let .unknown(reason):
             return Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map {
                 var result = BrainLayerLaunchdJobObservation.stateOnly(.ownerUnknown(reason))

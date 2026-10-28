@@ -354,7 +354,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
         try png.write(to: url)
     }
 
-    // MARK: S5 — first run is neutral; a malformed configuration is a dot
+    // MARK: S5 — first run and malformed configuration are visible notices without a dot
 
     @MainActor
     func testFirstRunAfterMigrationAndMalformedConfigurationStayVisibleWithoutADot() {
@@ -376,7 +376,8 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
         for job in [BrainLayerLaunchdJob.index, .backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly] {
             inputs.observations?[job]?.calendarScheduleProblem = "com.brainlayer.maintenance.plist is malformed: not a property-list dictionary"
         }
-        BrainBarStatusSnapshotTests.assertAgree(inputs, dot: false, "malformed configuration")
+        let (malformed, _) = BrainBarStatusSnapshotTests.assertAgree(inputs, dot: false, "malformed configuration")
+        XCTAssertTrue(malformed.notices.contains { $0.component == .configuration })
     }
 
 }

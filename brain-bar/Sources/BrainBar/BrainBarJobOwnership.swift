@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Dispatch
 
 enum BrainBarJobOwnership: Equatable, Sendable {
     case legacy, supervisor, unknown(String)
@@ -7,11 +8,24 @@ enum BrainBarJobOwnership: Equatable, Sendable {
     static let directory = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".local/share/brainlayer/supervisor")
 
-    static func read(journalURL: URL = directory.appendingPathComponent("migration.json")) -> Self {
+    static func read(
+        journalURL: URL = directory.appendingPathComponent("migration.json"),
+        daemonProbe: () -> Int32? = { probeDaemon() }
+    ) -> Self {
         do {
             // Rollback payloads, published plists and the manifest make the live journal >100 KB.
             // 4 MiB leaves room for that inventory while keeping the private read finite.
-            guard let data = try readOwnedFile(journalURL, privateMode: true, limit: 4 * 1024 * 1024) else { return .legacy }
+            guard let data = try readOwnedFile(journalURL, privateMode: true, limit: 4 * 1024 * 1024) else {
+                let manifest = journalURL.deletingLastPathComponent().appendingPathComponent("jobs.json")
+                if try readOwnedFile(manifest, privateMode: true, limit: 4 * 1024 * 1024) != nil {
+                    return .unknown("Can't determine job owner: migration journal missing but supervisor manifest exists")
+                }
+                let daemon = daemonProbe()
+                guard daemon == 113 else {
+                    return .unknown("Can't determine job owner: migration journal missing and supervisor daemon is loaded or its absence cannot be proven")
+                }
+                return .legacy
+            }
             guard let row = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let phase = row["phase"] as? String else { throw CocoaError(.fileReadCorruptFile) }
             switch phase {
@@ -22,6 +36,24 @@ enum BrainBarJobOwnership: Equatable, Sendable {
         } catch {
             return .unknown("Can't determine job owner: migration journal is unreadable or untrusted")
         }
+    }
+
+    private static func probeDaemon() -> Int32? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["print", "gui/\(getuid())/com.brainlayer.daemon"]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+        do { try process.run() } catch { return nil }
+        guard finished.wait(timeout: .now() + 1) == .success else {
+            if process.isRunning { process.terminate() }
+            return nil
+        }
+        guard process.terminationReason == .exit else { return nil }
+        return process.terminationStatus
     }
 
     // Same custody checks as install.sh's journal guard. Open every path segment with NOFOLLOW:

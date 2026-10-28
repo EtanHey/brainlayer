@@ -31,12 +31,15 @@ def brew_processes():
     # Include brew's Ruby entrypoint and Homebrew-owned child executables, even
     # after reparenting. Unknown/unreadable process tables defer activation.
     rows = process_table().splitlines()
-    matches = []
+    matches, readable = [], 0
     for row in rows:
         fields = row.split(None, 3)
-        if len(fields) != 4 or not fields[0].isascii() or not fields[0].isdecimal():
-            raise ValueError("unreadable process table")
-        tokens = fields[3].split()
+        # A process exiting or exec-ing mid-scan can tear one row: empty args
+        # are still checked by comm, a row without a pid and comm is skipped.
+        if len(fields) < 3 or not fields[0].isascii() or not fields[0].isdecimal():
+            continue
+        readable += 1
+        tokens = fields[3].split() if len(fields) == 4 else []
         if Path(fields[2]).name == "brew" or any(
             Path(token).name in {"brew", "brew.rb"} or "/Homebrew/" in token or "/homebrew/Library/Homebrew/" in token
             for token in tokens
@@ -44,6 +47,8 @@ def brew_processes():
             # argv is detection-only: Homebrew curl headers can carry tokens.
             executable = scrub_secrets(Path(fields[2]).name).text[:128]
             matches.append(f"{fields[0]} {executable}")
+    if not readable:
+        raise ValueError("unreadable process table")
     return matches
 
 
@@ -85,6 +90,9 @@ class AutoActivator:
             processes = brew_processes()
         except (OSError, subprocess.SubprocessError) as exc:
             raise ProcessScanUnavailable(type(exc).__name__) from None
+        except ValueError:
+            # Counted and alerted only after 12 ticks, never an immediate refusal.
+            raise ProcessScanUnavailable("unreadable process table") from None
         # Recover before activation can report a new failure on the same alert key.
         self.state.with_suffix(".scan.json").unlink(missing_ok=True)
         reason = active_alerts().get("brainbar-activation", "")
@@ -97,6 +105,7 @@ class AutoActivator:
             (
                 "BrainBar activation process scan failed for >=12 ticks:",
                 "BrainBar activation monitor refused: Command '['/bin/ps',",
+                "BrainBar activation monitor refused: unreadable process table",
             )
         ):
             report("brainbar-activation", None)

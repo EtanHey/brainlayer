@@ -393,7 +393,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
             (.running(pid: 42), .running, BrainBarDashboardFixture.healthyWatcherHealth, "Watcher running", .healthy),
             (.running(pid: 42), .running, degradedHealth(), "Watcher needs attention", .unhealthy),
             (.running(pid: 42), .running, .readable(WatcherHealthFile(
-                updatedAt: now.addingTimeInterval(-900), pollCount: 72
+                updatedAt: now.addingTimeInterval(-901), pollCount: 72
             )), "Watcher needs attention", .unhealthy),
             (.running(pid: 42), .running, .missing(path: "/fixture/health.json"), "Watcher status unknown", .unknown),
             (.absent, .unloaded, BrainBarDashboardFixture.healthyWatcherHealth, "Watcher stopped", .unhealthy),
@@ -444,7 +444,13 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
                 let expectedHealth: BrainLayerLaunchdGroupHealth = ruled == .healthy && !watchEnabled && !indexEnabled
                     ? .skipped : ruled
                 XCTAssertEqual(ingest.health, expectedHealth, title)
-                XCTAssertEqual(ingest.attentionReason, viewModel.footerPresentation.detail, title)
+                if staleHeartbeat && watchEnabled {
+                    XCTAssertTrue(ingest.attentionReason?.contains("Watcher isn't capturing") == true)
+                    XCTAssertTrue(viewModel.publishedStatus.needsAttention)
+                } else {
+                    XCTAssertEqual(ingest.attentionReason, viewModel.footerPresentation.detail, title)
+                    XCTAssertFalse(viewModel.publishedStatus.needsAttention)
+                }
                 XCTAssertEqual(ingest.note, note)
                 XCTAssertFalse(ingest.nextRunText.contains("Index Continuous"), "loaded scheduled Index is not executing")
                 if title != "Watcher stopped" {
