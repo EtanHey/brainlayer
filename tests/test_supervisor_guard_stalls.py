@@ -10,8 +10,8 @@ from brainlayer import supervisor_guard as guard
 
 @pytest.fixture
 def simulate_guard(monkeypatch):
-    def run(steps, *, diagnostics_fail=False):
-        clock, rows, kills, waits = [0.0], [], [], []
+    def run(steps, *, diagnostics_fail=False, timeout=30, expected_reaped=None):
+        clock, rows, kills, waits, reaped = [0.0], [], [], [], []
         steps = iter(steps)
         pending = [b""]
 
@@ -35,9 +35,11 @@ def simulate_guard(monkeypatch):
         monkeypatch.setattr(guard.os, "close", lambda *_: None)
         monkeypatch.setattr(guard.os, "read", lambda *_: pending[0])
         monkeypatch.setattr(guard.os, "kill", lambda *args: kills.append(args))
-        monkeypatch.setattr(guard, "reap_groups", lambda *args, **kwargs: None)
-        guard.run_guard(1234, 30, 99, 0.1, parent_birth="birth", diagnostics=SimpleNamespace(emit=emit))
+        monkeypatch.setattr(guard, "reap_groups", lambda groups, *args, **kwargs: reaped.append(groups.copy()))
+        guard.run_guard(1234, timeout, 99, 0.1, parent_birth="birth", diagnostics=SimpleNamespace(emit=emit))
         assert list(steps) == [], "guard exited before the simulated incident ended"
+        if expected_reaped is not None:
+            assert reaped == [expected_reaped]
         return rows, kills, waits
 
     return run
@@ -67,6 +69,27 @@ def test_repeated_stalls_exhaust_three_rearm_cap(simulate_guard):
     rearms = [row for row in rows if row["event"] == "guard-stall-rearm"]
     assert [row["stall_rearms"] for row in rearms] == [1, 2, 3]
     assert rows[-1]["reason"] == "heartbeat-timeout"
+
+
+@pytest.mark.parametrize("timeout,grants", [(120, [120, 240, 300]), (900, [300])])
+def test_cumulative_stall_grace_is_capped_at_300_seconds(simulate_guard, timeout, grants):
+    rows, kills, waits = simulate_guard([(60, None)] * (len(grants) + 1), timeout=timeout)
+    rearms = [row for row in rows if row["event"] == "guard-stall-rearm"]
+    assert [row["grace_used_s"] for row in rearms] == grants
+    assert waits == [timeout] + [grants[0]] + [b - a for a, b in zip(grants, grants[1:])]
+    assert kills == [(1234, signal.SIGKILL)] and rows[-1]["reason"] == "heartbeat-timeout"
+
+
+def test_real_heartbeat_resets_cumulative_stall_grace(simulate_guard):
+    rows, kills, _ = simulate_guard([(60, None)] * 3 + [(0, b"H\n")] + [(60, None)] * 3 + [(0, b"")], timeout=120)
+    assert not kills
+    assert [row["grace_used_s"] for row in rows if row["event"] == "guard-stall-rearm"] == [120, 240, 300] * 2
+
+
+def test_stall_coinciding_with_eof_reaps_without_rearm(simulate_guard):
+    rows, kills, _ = simulate_guard([(0, b"+2468\n"), (60, b"")], expected_reaped={2468})
+    assert not kills
+    assert not any(row["event"] in ("guard-stall-rearm", "guard-timeout") for row in rows)
 
 
 def test_real_heartbeat_after_stall_resets_cap(simulate_guard):

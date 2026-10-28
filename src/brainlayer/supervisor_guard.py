@@ -25,6 +25,7 @@ from .supervisor_diagnostics import DiagnosticSink, emit
 
 STALL_OVERSHOOT_S = 5.0
 MAX_STALL_REARMS = 3
+MAX_STALL_GRACE_S = 300.0
 
 
 @contextmanager
@@ -252,6 +253,7 @@ def run_guard(
     groups, buffer, quiesced = set(), b"", False
     timed_out = False
     stall_rearms = 0
+    stall_grace_used = 0.0
     last_heartbeat = time.monotonic()
     deadline = last_heartbeat + timeout
     channel = socket.socket(fileno=lease_control) if lease_control is not None else None
@@ -263,11 +265,21 @@ def run_guard(
             readable = select.select([0, channel] if channel else [0], [], [], remaining)[0]
             now = time.monotonic()
             overshoot = now - wait_started - remaining
+            data = os.read(0, 65536) if 0 in readable else None
+            if data == b"":
+                break  # A dead parent needs cleanup, never stall grace.
             # A starved guard cannot judge parent liveness. Give it a fresh window,
-            # but only a real heartbeat replenishes the three-rearm incident cap.
-            if not quiesced and overshoot > STALL_OVERSHOOT_S and stall_rearms < MAX_STALL_REARMS:
+            # bounded by both incident caps; only a real heartbeat resets them.
+            if (
+                not quiesced
+                and overshoot > STALL_OVERSHOOT_S
+                and stall_rearms < MAX_STALL_REARMS
+                and stall_grace_used < MAX_STALL_GRACE_S
+            ):
+                stall_grace = min(timeout, MAX_STALL_GRACE_S - stall_grace_used)
                 stall_rearms += 1
-                deadline = now + timeout
+                stall_grace_used += stall_grace
+                deadline = now + stall_grace
                 emit(
                     diagnostics,
                     event="guard-stall-rearm",
@@ -276,7 +288,7 @@ def run_guard(
                     guard_pid=os.getpid(),
                     wait_overshoot_s=overshoot,
                     stall_rearms=stall_rearms,
-                    grace_used_s=stall_rearms * timeout,
+                    grace_used_s=stall_grace_used,
                 )
                 if not readable:
                     continue
@@ -317,14 +329,12 @@ def run_guard(
                 channel.sendall(b"R")
                 if 0 not in readable:
                     continue
-            data = os.read(0, 65536)
-            if not data:
-                break  # Even Q cannot abandon groups if shutdown itself was killed.
             buffer += data
             while b"\n" in buffer:
                 line, buffer = buffer.split(b"\n", 1)
                 if line == b"H" and not quiesced:
                     stall_rearms = 0
+                    stall_grace_used = 0.0
                     last_heartbeat = time.monotonic()
                     deadline = last_heartbeat + timeout
                 elif line == b"Q" and not quiesced:
