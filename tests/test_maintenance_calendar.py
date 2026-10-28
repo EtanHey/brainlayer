@@ -1184,3 +1184,25 @@ def test_overdue_calendar_operation_emits_once_before_suppressing_heartbeat(monk
     assert row["event"] == "heartbeat-suppressed" and row["reason"] == "operation-overdue"
     assert row["operation"] == "blocked-receipt" and row["budget_s"] == 0.5
     assert row["deadline_monotonic"] == operation.started + 0.5
+
+
+def test_calendar_guard_timeout_defaults_to_120_and_reads_override(tmp_path, monkeypatch):
+    from brainlayer import maintenance_calendar as calendar
+
+    seen = []
+
+    async def admit(steps, directory, date, recovery, guard_timeout, shutdown_timeout, sleep_fn):
+        seen.append(guard_timeout)
+        return None, 0
+
+    monkeypatch.setattr(calendar, "_admit_calendar", admit)
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "brainlayer.env"))
+    monkeypatch.delenv("BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS", raising=False)
+    when = dt.date(2026, 10, 28)
+    assert asyncio.run(run_calendar([], tmp_path / "calendar", tmp_path / "logs", scheduled_date=when)) == 0
+    (tmp_path / "brainlayer.env").write_text("BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS=600\n")
+    assert asyncio.run(run_calendar([], tmp_path / "calendar", tmp_path / "logs", scheduled_date=when)) == 0
+    assert seen == [120, 600]
+    (tmp_path / "brainlayer.env").write_text("BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS=5\n")
+    with pytest.raises(ValueError, match="BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS"):
+        asyncio.run(run_calendar([], tmp_path / "calendar", tmp_path / "logs", scheduled_date=when))
