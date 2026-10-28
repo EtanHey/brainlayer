@@ -373,6 +373,27 @@ def test_invalid_guard_timeout_raises_never_falls_back(guard_env, monkeypatch, v
         guard.configured_guard_timeout()
 
 
+@pytest.mark.parametrize("value", ["$(bad)", "`bad`", '"$(echo 60)"', "6`echo 0`"])
+@pytest.mark.parametrize("process_value", [None, "240"])
+def test_unsupported_env_file_substitution_raises_never_falls_back(guard_env, monkeypatch, value, process_value):
+    # The shared parser skips these lines as absent; for this knob that would silently mean 120 (or the
+    # process value), so a present-but-unsupported assignment must fail loudly instead.
+    if process_value is not None:
+        monkeypatch.setenv(guard.GUARD_TIMEOUT_ENV, process_value)
+    guard_env.write_text(f"OTHER=1\nexport {guard.GUARD_TIMEOUT_ENV}={value}\n")
+    with pytest.raises(ValueError, match=f"{guard.GUARD_TIMEOUT_ENV}.*unsupported"):
+        guard.configured_guard_timeout()
+
+
+def test_substitution_on_other_knobs_keeps_the_shared_parser_contract(guard_env):
+    from brainlayer.config import configured_brainlayer_env_value
+
+    guard_env.write_text("BRAINLAYER_BACKUP_TIMEOUT_SECONDS=$(bad)\nOTHER=`bad`\n")
+    assert guard.configured_guard_timeout() == 120
+    assert configured_brainlayer_env_value("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", guard_env) is None
+    assert configured_brainlayer_env_value("OTHER", guard_env) is None
+
+
 def _scripted_guard(monkeypatch, script, timeout):
     """Run run_guard in-process on a fake clock; script items are (silence_s, bytes_or_None)."""
     clock, kills, reaps, selects = [0.0], [], [], []

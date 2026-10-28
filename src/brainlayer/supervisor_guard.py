@@ -32,10 +32,16 @@ GUARD_TIMEOUT_BOUNDS = (10.0, 900.0)
 
 def configured_guard_timeout() -> float:
     """Heartbeat budget for the daemon and calendar guards; an invalid override raises, never falls back."""
-    from .config import configured_brainlayer_env_value, get_user_env_path
+    from .config import _split_launchd_env_assignment, configured_brainlayer_env_value, get_user_env_path
 
     path = Path(os.environ.get("BRAINLAYER_ENV_FILE", get_user_env_path()))
     configured = configured_brainlayer_env_value(GUARD_TIMEOUT_ENV, path)
+    if path.exists():
+        # The shared parser skips a substitution line as absent; here that would be a silent fallback.
+        for line in path.read_text(encoding="utf-8").splitlines():
+            assignment = _split_launchd_env_assignment(line)
+            if assignment and assignment[0] == GUARD_TIMEOUT_ENV and ("$(" in assignment[1] or "`" in assignment[1]):
+                raise ValueError(f"{GUARD_TIMEOUT_ENV} in {path} uses unsupported command substitution")
     raw = configured if configured is not None else os.environ.get(GUARD_TIMEOUT_ENV)
     if raw is None:
         return DEFAULT_GUARD_TIMEOUT_SECONDS
