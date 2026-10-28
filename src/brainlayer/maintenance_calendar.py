@@ -29,6 +29,7 @@ from .index_budget import CALENDAR_INDEX_UNWIND_S, calendar_index_budget_s
 from .job_alerts import active_alerts, report
 from .maintenance_control import MaintenanceHold
 from .supervisor_guard import (
+    MAX_STALL_GRACE_S,
     Custody,
     configured_guard_timeout,
     gated_spawn,
@@ -644,12 +645,14 @@ async def _admit_calendar(steps, directory, date, transcript_recovery, guard_tim
             if len(recovery) != 1:
                 raise ValueError("full calendar admission requires one bounded transcript step")
             # Cover the actual step bound, the supervisor backstop and its exit grace,
-            # plus guard startup/expiry and group/guard shutdown. The suspend-aware
-            # elapsed clock cannot be extended by a wall-clock change or sleep.
+            # plus guard startup/expiry (with its host-stall re-arms) and group/guard
+            # shutdown. The suspend-aware elapsed clock cannot be extended by a
+            # wall-clock change or sleep.
             deadline += (
                 max(recovery[0].timeout, TRANSCRIPT_RECOVERY_RUN_TIMEOUT)
                 + TRANSCRIPT_RECOVERY_EXIT_TIMEOUT
                 + guard_timeout
+                + MAX_STALL_GRACE_S
                 + 2 * shutdown_timeout
                 + 30
             )

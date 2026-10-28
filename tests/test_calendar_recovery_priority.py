@@ -211,6 +211,50 @@ def test_expired_wait_cannot_start_an_old_plan_after_custody_becomes_free(priori
     assert runner.rows()[-1]["event"] == "calendar-admission-timeout"
 
 
+def test_admission_outwaits_a_prior_guard_that_used_its_stall_grace(priority_runner, monkeypatch):
+    runner = priority_runner
+    plan = calendar.calendar_steps(sys.executable, "/unused", runner.logs, NOW.date())
+    recovery = next(step for step in plan.candidates if step.name == "jsonl-backup")
+    # The prior owner's guard may outlive guard_timeout by up to MAX_STALL_GRACE_S of re-arms.
+    without_stall_grace = (
+        max(recovery.timeout, calendar.TRANSCRIPT_RECOVERY_RUN_TIMEOUT)
+        + calendar.TRANSCRIPT_RECOVERY_EXIT_TIMEOUT
+        + 120
+        + 2 * 15
+        + 30
+    )
+    elapsed, executed, clock = [0.0], [], [NOW]
+    monkeypatch.setattr(calendar.maintenance_control, "hold_clock", lambda: elapsed[0])
+
+    async def execute(step, _env, **_kwargs):
+        executed.append(step.name)
+        if step.name == "index":
+            clock[0] = NOW.replace(hour=4, minute=5)
+        return 0
+
+    monkeypatch.setattr(calendar, "_execute_step", execute)
+    owner = calendar.Custody(runner.directory)
+
+    async def prior_guard_expires_late(_seconds):
+        elapsed[0] = without_stall_grace + 1
+        owner.__exit__(None, None, None)
+
+    with owner:
+        code = asyncio.run(
+            calendar.run_calendar(
+                plan,
+                runner.directory,
+                runner.logs,
+                guard_timeout=120,
+                now_fn=lambda: clock[0],
+                sleep_fn=prior_guard_expires_late,
+            )
+        )
+    assert code == 0
+    assert not any(row["event"] == "calendar-admission-timeout" for row in runner.rows())
+    assert executed == [step.name for step in plan.select(NOW.date())]
+
+
 def test_cancelled_admission_releases_priority_without_starting_workers(priority_runner, monkeypatch):
     runner = priority_runner
     plan = calendar.calendar_steps(sys.executable, "/unused", runner.logs, NOW.date())
