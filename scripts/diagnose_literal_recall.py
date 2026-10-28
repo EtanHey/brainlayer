@@ -273,6 +273,8 @@ def main():
         parser.error("export requires an explicit --database (always opened readonly)")
     if args.mode == "membership" and (not args.sample or not args.query or not args.chunk_id):
         parser.error("membership requires --sample, --query and 1-4 --chunk-id arguments")
+    if args.output.exists():
+        parser.error("output exists; choose a new receipt path to preserve prior evidence")
     if args.mode == "analyze":
         result = analyze(args.audit, args.repo, args.sample)
     elif args.mode == "membership":
@@ -282,10 +284,13 @@ def main():
     else:
         result = snapshot(args.audit)
     result["captured_utc"] = datetime.now(timezone.utc).isoformat()
+    payload = json.dumps(result, indent=2) + "\n"
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    if args.output.exists():
+    try:
+        with args.output.open("x") as output:
+            output.write(payload)
+    except FileExistsError:
         parser.error("output exists; choose a new receipt path to preserve prior evidence")
-    args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(dict(mode=args.mode, output=str(args.output), sha256=digest(args.output))))
 
 
