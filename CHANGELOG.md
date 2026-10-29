@@ -39,6 +39,17 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.79] - 2026-10-28
+
+### Fixed
+- Increase the supervisor guard timeout from 30 to 120 seconds and make it configurable (#1537).
+- Preserve BrainBar legacy ownership when checking processes for termination (#1521).
+- Tolerate torn process-list rows during activation scans (#1538).
+- Emit one notification per incident (#1539).
+- Tolerate host stalls with an absolute guard grace period (#1536).
+
+Release scope: Python package + Homebrew formula + BrainBar app 1.5.79 (cask)
+
 ## [1.5.78] - 2026-10-27
 
 ### Fixed
