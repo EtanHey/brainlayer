@@ -42,7 +42,8 @@ def test_lock_recovery(world, monkeypatch, deferred_seeds):
     finally:
         holder.execute("ROLLBACK")
         holder.close()
-    assert any(r["status"] == "DEFERRED" for r in world.receipts)
+    # Only stores made under the holder count; deferred seeds would satisfy this vacuously.
+    assert any(r["status"] == "DEFERRED" for r in world.receipts[2:])
     from .faults import catch_up
 
     convergence = catch_up(world, timeout=5)
