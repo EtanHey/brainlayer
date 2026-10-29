@@ -9,6 +9,7 @@ import sqlite3
 import sys
 import threading
 import time
+from multiprocessing.connection import wait
 from pathlib import Path
 
 import apsw
@@ -972,6 +973,7 @@ def test_drain_seen_merge_compares_tags_semantically(tmp_path, monkeypatch):
         assert conn.execute("SELECT COUNT(*) FROM tag_update_hits").fetchone()[0] == 0
 
 
+@pytest.mark.timeout(540, method="thread")  # Both 240s phase bounds plus child cleanup; pre-push defaults to 300s.
 def test_drain_daemon_serializes_three_concurrent_producers(tmp_path, monkeypatch):
     from brainlayer.drain import drain_once
 
@@ -982,11 +984,37 @@ def test_drain_daemon_serializes_three_concurrent_producers(tmp_path, monkeypatc
     monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
 
     workers = [mp.Process(target=_producer, args=(str(queue_dir), worker, 1000)) for worker in range(3)]
-    for worker in workers:
-        worker.start()
-    for worker in workers:
-        worker.join(timeout=20)
-        assert worker.exitcode == 0
+    started_workers = []
+    try:
+        # Darwin queue publication uses F_FULLFSYNC, including ancestor-directory
+        # barriers per item. This tests serialization, not a 20-second producer SLA.
+        # Wait on exits with one shared bound so a deadlock still fails promptly.
+        deadline = time.monotonic() + 240
+        for worker in workers:
+            worker.start()
+            started_workers.append(worker)
+        pending = {worker.sentinel: worker for worker in started_workers}
+        while pending:
+            ready = wait(pending, timeout=max(0, deadline - time.monotonic()))
+            assert ready, (
+                f"producers did not finish within 240s: exitcodes={[w.exitcode for w in started_workers]}, "
+                f"published={len(list(queue_dir.glob('*.jsonl')))}/3000"
+            )
+            for sentinel in ready:
+                worker = pending.pop(sentinel)
+                worker.join(timeout=1)
+                assert worker.exitcode == 0, f"producer pid={worker.pid} exited with {worker.exitcode}"
+    finally:
+        # Never leave this test's writers running after a failure or deadline.
+        for worker in started_workers:
+            if worker.is_alive():
+                worker.terminate()
+        for worker in started_workers:
+            worker.join(timeout=5)
+            if worker.is_alive():
+                worker.kill()
+                worker.join(timeout=5)
+            assert not worker.is_alive(), f"test producer pid={worker.pid} survived cleanup"
 
     # Poll-until-drained with a generous deadline. The completion signal is the
     # DB end-state (3000 rows + FTS + empty queue), NOT a fixed time window: under
