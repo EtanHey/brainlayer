@@ -30,6 +30,7 @@ opaque `.pb` implicit records, and per-session `.system_generated` /
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import fcntl
 import functools
 import gzip
@@ -1226,7 +1227,8 @@ class _HashingReader:
 
 def create_jsonl_bundle_with_digests(
     candidates: list[JsonlCandidate], staging_dir: Path, *, date_stamp: str
-) -> tuple[Path, dict[str, str], dict[str, int]]:
+) -> tuple[Path | None, dict[str, str], dict[str, int]]:
+    """Bundle completed source snapshots; return no archive when every source vanished."""
     if not candidates:
         raise ValueError("create_jsonl_bundle requires at least one candidate")
     staging_dir = Path(staging_dir).expanduser()
@@ -1240,30 +1242,37 @@ def create_jsonl_bundle_with_digests(
     sizes: dict[str, int] = {}
     try:
         with tarfile.open(temp_path, "w:gz") as tar:
+            tar.dereference = True
             for candidate in candidates:
-                # Hash and archive the SAME bytes, without holding the file in memory.
-                # Re-reading the source afterwards could record a digest for content the
-                # archive does not contain -- a file that changed while keeping its mtime
-                # and size would then read as covered. Sources reach ~375MB, so the digest
-                # is taken from the very stream tarfile consumes rather than from a copy.
-                # Discovery follows file symlinks, so archive their resolved target as a
-                # regular member too; preserving the link would make verification reject
-                # the whole bundle as non-regular.
-                source_path = candidate.path.resolve()
-                info = tar.gettarinfo(str(source_path), arcname=_archive_name(candidate))
-                with source_path.open("rb") as handle:
-                    reader = _HashingReader(handle)
-                    tar.addfile(info, reader)
+                # Open before fstat so unlink/rotation cannot invalidate the metadata.
+                # Snapshot one member on disk before writing its tar header: an ENOENT
+                # even partway through a read must leave no partial member in the gzip.
+                # Hash exactly the snapshot bytes, at O(buffer) memory. Following links
+                # and dereferencing hardlinks keeps every source a regular member.
+                with tempfile.TemporaryFile(dir=staging_dir) as snapshot:
+                    try:
+                        with candidate.path.open("rb") as handle:
+                            info = tar.gettarinfo(fileobj=handle, arcname=_archive_name(candidate))
+                            reader = _HashingReader(handle)
+                            tarfile.copyfileobj(reader, snapshot, info.size)
+                    except OSError as exc:
+                        if isinstance(exc, FileNotFoundError) or exc.errno == errno.ENOENT:
+                            continue
+                        raise
+                    snapshot.seek(0)
+                    tar.addfile(info, snapshot)
                 digests[candidate.path.as_posix()] = reader.hexdigest()
                 sizes[candidate.path.as_posix()] = info.size
+        if not digests:
+            return None, digests, sizes
         os.replace(temp_path, archive_path)
     finally:
         temp_path.unlink(missing_ok=True)
     return archive_path, digests, sizes
 
 
-def create_jsonl_bundle(candidates: list[JsonlCandidate], staging_dir: Path, *, date_stamp: str) -> Path:
-    """Backwards-compatible wrapper returning only the archive path."""
+def create_jsonl_bundle(candidates: list[JsonlCandidate], staging_dir: Path, *, date_stamp: str) -> Path | None:
+    """Return only the archive path, or None when every candidate vanished."""
     archive_path, _, _ = create_jsonl_bundle_with_digests(candidates, staging_dir, date_stamp=date_stamp)
     return archive_path
 
@@ -1626,7 +1635,18 @@ def run_backup(
     if pending_candidates:
         changed = [candidate for candidate in changed if candidate.path.as_posix() not in pending_icloud_sources]
 
-    if not changed and pending_candidates:
+    archive_path = None
+    bundle_digests: dict[str, str] = {}
+    bundle_sizes: dict[str, int] = {}
+    if changed:
+        archive_path, bundle_digests, bundle_sizes = create_jsonl_bundle_with_digests(
+            changed, staging_dir, date_stamp=date_stamp
+        )
+        bundled = [candidate for candidate in changed if candidate.path.as_posix() in bundle_digests]
+        vanished += len(changed) - len(bundled)
+        changed = bundled
+
+    if archive_path is None and pending_candidates:
         error = (
             f"iCloud coverage is pending; repair deferred while {len(pending_candidates)} source(s) finish uploading"
         )
@@ -1649,7 +1669,7 @@ def run_backup(
         _enqueue_run_summary(result, queue_dir=queue_dir)
         return result
 
-    if not changed and icloud_bootstrap_pending and active:
+    if archive_path is None and icloud_bootstrap_pending and active:
         error = (
             "iCloud coverage is not verified; repair deferred because "
             f"{len(active)} discovered source(s) are still active"
@@ -1672,7 +1692,7 @@ def run_backup(
         _enqueue_run_summary(result, queue_dir=queue_dir)
         return result
 
-    if not changed:
+    if archive_path is None:
         result: dict[str, Any] = {
             "attempted_at": attempted_at,
             "status": "no-op",
@@ -1689,9 +1709,6 @@ def run_backup(
         _enqueue_run_summary(result, queue_dir=queue_dir)
         return result
 
-    archive_path, bundle_digests, bundle_sizes = create_jsonl_bundle_with_digests(
-        changed, staging_dir, date_stamp=date_stamp
-    )
     archive_size = archive_path.stat().st_size
     result = {
         "attempted_at": attempted_at,
