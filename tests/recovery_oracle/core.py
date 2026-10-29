@@ -123,7 +123,7 @@ class Universe:
         norm = math.sqrt(sum(v * v for v in values))
         return [v / norm for v in values]
 
-    def store(self, name, content=None):
+    def store(self, name, content=None, *, before_join=None):
         self.check()
         started = time.monotonic()
         _, result = asyncio.run(
@@ -132,6 +132,8 @@ class Universe:
         elapsed = (time.monotonic() - started) * 1000
         assert result["status"] in {"STORED", "DUPLICATE", "MERGED", "DEFERRED"}, result
         self.receipts.append({**result, "name": name, "ack_ms": elapsed})
+        if before_join is not None:
+            before_join()
         # Background embedding has no per-ack completion deadline. Join owned
         # writers before sharing the DB again; the 30s test watchdog bounds a
         # stuck worker. Cleanup stays outside the measured acknowledgement.

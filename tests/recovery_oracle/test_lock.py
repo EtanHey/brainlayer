@@ -1,6 +1,7 @@
 """A real contended WAL, production queue/drain/hotlane, and independent receipts."""
 
 import json
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -129,19 +130,22 @@ def test_all_success_outcomes_are_accounted_for(world, monkeypatch, delayed_writ
 
     if delayed_writer:
         original_open = runtime_store.open_writer_store
+        join_started = threading.Event()
         delayed = False
 
         def open_writer(*args, **kwargs):
             nonlocal delayed
             if not delayed:
                 delayed = True
-                # Outlast the fixture's former 3s join, after the store commits.
+                # Start the delay only once the fixture is joining, so it always
+                # outlasts the former 3s join regardless of acknowledgement time.
+                assert join_started.wait(timeout=30)
                 time.sleep(3.2)
             return original_open(*args, **kwargs)
 
         monkeypatch.setattr(runtime_store, "open_writer_store", open_writer)
 
-    first = world.store("otter")
+    first = world.store("otter", before_join=join_started.set if delayed_writer else None)
     if delayed_writer:
         assert delayed, "precondition: store must start its background writer"
     world.store("otter")
