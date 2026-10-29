@@ -642,9 +642,14 @@ def test_version_two_migrates_pending_without_rewriting_legacy_event_ids(relay, 
     _alerts(env, {"backup-daily": "x"})
     assert relay.run(env["config"]) == 0
     state = json.loads(state_path.read_text())
-    assert state["version"] == 3 and state["epoch"] == EPOCH
+    assert state["version"] == 4 and state["epoch"] == EPOCH
     migrated = state["hosts"]["m4-max"]
-    assert {key: migrated[key] for key in host} == host and state["outbox"] == []
+    assert {key: migrated[key] for key in host if key != "episodes"} == {
+        key: value for key, value in host.items() if key != "episodes"
+    } and state["outbox"] == []
+    episode = migrated["episodes"]["job-alert:backup-daily"]
+    assert {key: episode[key] for key in ("open", "seq")} == host["episodes"]["job-alert:backup-daily"]
+    assert episode["event_id"] == legacy_id and episode["acknowledged"] is False
     assert migrated["unreach"] == 0 and isinstance(migrated["first_seen"], float)
     assert _blocked(env) == [legacy_line]
     _alerts(env, {})
@@ -673,20 +678,21 @@ def _clean_git_env() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 
 
-def test_rollback_rejects_new_state_explicitly(relay, env):
+@pytest.mark.parametrize("old_commit", [PRE_HARDENING_RELAY, "a40345a5"])
+def test_rollback_rejects_new_state_explicitly(relay, env, old_commit):
     # A depth-1 CI checkout lacks the pre-hardening commit; local and pre-push runs have it.
     has_commit = subprocess.run(
-        ["git", "cat-file", "-e", f"{PRE_HARDENING_RELAY}^{{commit}}"],
+        ["git", "cat-file", "-e", f"{old_commit}^{{commit}}"],
         cwd=ROOT,
         capture_output=True,
         env=_clean_git_env(),
     )
     if has_commit.returncode != 0:
-        pytest.skip(f"pre-hardening relay commit {PRE_HARDENING_RELAY[:8]} not in this checkout")
+        pytest.skip(f"pre-hardening relay commit {old_commit[:8]} not in this checkout")
     assert relay.run(env["config"]) == 0
     state_path = env["tmp"] / "state/state.json"
     result = subprocess.run(
-        ["git", "show", f"{PRE_HARDENING_RELAY}:scripts/health_relay/health_relay.py"],
+        ["git", "show", f"{old_commit}:scripts/health_relay/health_relay.py"],
         cwd=ROOT,
         capture_output=True,
         text=True,
