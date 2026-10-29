@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independent BrainLayer health relay: per-host health evidence -> `@orc BLOCKED:` inbox lines.
+"""Independent BrainLayer health relay: per-host evidence -> primary inbox + optional escalation.
 
 Runs from its own LaunchAgent on the inbox's Mac, outside the BrainLayer supervisor, so it still
 observes when that supervisor is dead. Remote hosts are read over an existing SSH alias with a
@@ -54,6 +54,15 @@ READ_STATES = ("ok", "absent", "unreadable", "oversize", "corrupt")
 HEALTH_LABEL, WATCH_LABEL = "com.brainlayer.health-check", "com.brainlayer.watch"
 MAX_SOURCE_BYTES, MAX_OUTPUT_BYTES, MAX_DELIVER_PER_RUN, MAX_CLOSED = 262144, 2097152, 32, 128
 CLOCK_SKEW_SECONDS = 300
+ESCALATION_ISSUES = (
+    "host-unreachable",
+    "health-stale",
+    "watcher-stale",
+    "job-alert:backup-daily",
+    "job-alert:jsonl-backup",
+    "badge:brain-search-canary-failed",
+    "source-missing:badge",
+)
 DEFAULTS = {
     "first_run_grace_seconds": 900,
     "badge_max_age_seconds": 1200,
@@ -114,6 +123,27 @@ def load_config(path: Path) -> dict:
     if any(type(value) is not int or not 0 <= value <= 2**31 - 1 for value in cfg.values()):
         raise RelayError("config-invalid")
     cfg.update(inbox=_abs(raw["inbox"]), state_dir=_abs(raw["state_dir"]), hosts=[])
+    if "escalation" in raw:
+        escalation = raw["escalation"]
+        if not isinstance(escalation, dict) or "inbox" not in escalation:
+            raise RelayError("config-invalid")
+        after = escalation.get("after_seconds", 1800)
+        patterns = escalation.get("issues", list(ESCALATION_ISSUES))
+        if (
+            type(after) is not int
+            or not 0 <= after <= 2**31 - 1
+            or not isinstance(patterns, list)
+            or not all(isinstance(p, str) for p in patterns)
+        ):
+            raise RelayError("config-invalid")
+        try:
+            cfg["escalation"] = {
+                "inbox": _abs(escalation["inbox"]),
+                "after_seconds": after,
+                "issues": [re.compile(p) for p in patterns],
+            }
+        except re.error:
+            raise RelayError("config-invalid") from None
     inbox, state_dir = Path(cfg["inbox"]), Path(cfg["state_dir"])
     destinations = [state_dir / name for name in ("state.json", "status.json", "relay.lock")]
     destinations += [_atomic_temp(path) for path in destinations[:2]]
@@ -132,25 +162,29 @@ def load_config(path: Path) -> dict:
             raise RelayError("config-invalid")
         cfg["hosts"].append(host)
     sources = [Path(path) for host in cfg["hosts"] if host["transport"] == "local" for path in host["paths"].values()]
-    for destination, is_source in [(p, False) for p in destinations] + [(p, True) for p in sources]:
-        try:
-            resolved = destination.resolve()
-        except (OSError, RuntimeError):
-            if not is_source:
-                raise
-            resolved = Path(os.path.abspath(destination))
-        if inbox.resolve() == resolved:
-            raise RelayError("config-invalid")
-        try:
-            same_file = os.path.samefile(inbox, destination)
-        except FileNotFoundError:
-            same_file = False
-        except OSError:
-            if not is_source:
-                raise
-            same_file = False
-        if same_file:
-            raise RelayError("config-invalid")
+    inboxes = [inbox] + ([Path(cfg["escalation"]["inbox"])] if "escalation" in cfg else [])
+    for inbox in inboxes:
+        checks = [(p, False) for p in destinations + [p for p in inboxes if p is not inbox]]
+        checks += [(p, True) for p in sources]
+        for destination, is_source in checks:
+            try:
+                resolved = destination.resolve()
+            except (OSError, RuntimeError):
+                if not is_source:
+                    raise
+                resolved = Path(os.path.abspath(destination))
+            if inbox.resolve() == resolved:
+                raise RelayError("config-invalid")
+            try:
+                same_file = os.path.samefile(inbox, destination)
+            except FileNotFoundError:
+                same_file = False
+            except OSError:
+                if not is_source:
+                    raise
+                same_file = False
+            if same_file:
+                raise RelayError("config-invalid")
     if not cfg["hosts"] or len({h["id"] for h in cfg["hosts"]}) != len(cfg["hosts"]):
         raise RelayError("config-invalid")
     return cfg
@@ -381,15 +415,12 @@ def _observe(host: dict, cfg: dict, hstate: dict, clock: float, epoch: str) -> l
         episode = episodes.setdefault(issue, {"open": False})
         if not episode["open"]:
             hstate["seq"] = hstate.get("seq", 0) + 1
-            episode.update(open=True, seq=hstate["seq"])
-            event_id = f"bl-{host['id']}-{epoch}-{hstate['seq']}-{issue.replace(':', '.')}"
-            source = SOURCES.get(_source_of(issue), "transport")
-            line = (
-                f"@orc BLOCKED: [BrainLayer {host['label']}] {issue} on host={host['id']}; "
-                f"source={host['id']}:{source}; event={event_id}"
+            event = _event(host, issue, epoch, hstate["seq"], clock)
+            episode.update(
+                open=True, seq=hstate["seq"], opened_at=clock, event_id=event["id"], acknowledged=False, escalated=False
             )
-            stamp = datetime.fromtimestamp(clock, timezone.utc).isoformat(timespec="seconds")
-            events.append({"id": event_id, "ts": stamp, "line": line})
+            episode.pop("migrated", None)
+            events.append(event)
     for issue, episode in episodes.items():
         source = _source_of(issue)
         if episode["open"] and issue not in issues | held and (source in measured if source else reached):
@@ -398,6 +429,17 @@ def _observe(host: dict, cfg: dict, hstate: dict, clock: float, epoch: str) -> l
     for _, issue in closed[: max(0, len(closed) - MAX_CLOSED)]:
         del episodes[issue]
     return events
+
+
+def _event(host: dict, issue: str, epoch: str, seq: int, clock: float, event_id=None) -> dict:
+    event_id = event_id or f"bl-{host['id']}-{epoch}-{seq}-{issue.replace(':', '.')}"
+    source = SOURCES.get(_source_of(issue), "transport")
+    line = (
+        f"@orc BLOCKED: [BrainLayer {host['label']}] {issue} on host={host['id']}; "
+        f"source={host['id']}:{source}; event={event_id}"
+    )
+    stamp = datetime.fromtimestamp(clock, timezone.utc).isoformat(timespec="seconds")
+    return {"id": event_id, "ts": stamp, "line": line}
 
 
 class _Locked:
@@ -413,7 +455,7 @@ class _Locked:
         os.close(self.fd)
 
 
-def _load_state(path: Path, inbox: str, accept_new_epoch: bool) -> dict:
+def _load_state(path: Path, inbox: str, accept_new_epoch: bool, clock=None) -> dict:
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -428,12 +470,32 @@ def _load_state(path: Path, inbox: str, accept_new_epoch: bool) -> dict:
             re.fullmatch(r"<!-- brainlayer-health:[a-z0-9][a-z0-9._-]* -->", line) for line in whole | {tail}
         ):
             raise RelayError("state-missing") from None
-        return {"version": 3, "epoch": os.urandom(16).hex(), "hosts": {}, "outbox": []}
+        return {
+            "version": 4,
+            "epoch": os.urandom(16).hex(),
+            "hosts": {},
+            "outbox": [],
+            "escalation_outbox": [],
+            "escalation_inbox": None,
+        }
     except (OSError, ValueError, RecursionError):
         raise RelayError("state-corrupt") from None
     _validate_state(state)
-    if state["version"] == 2:
-        state.update(version=3, epoch=os.urandom(16).hex())
+    if state["version"] < 4:
+        legacy = state["version"] == 2
+        if legacy:
+            state["epoch"] = os.urandom(16).hex()
+        for host_id, host in state["hosts"].items():
+            for issue, episode in host.get("episodes", {}).items():
+                identity = host_id if legacy else f"{host_id}-{state['epoch']}"
+                episode.update(
+                    opened_at=time.time() if clock is None else clock,
+                    event_id=f"bl-{identity}-{episode['seq']}-{issue.replace(':', '.')}",
+                    acknowledged=False,
+                    escalated=False,
+                    migrated=True,
+                )
+        state.update(version=4, escalation_outbox=[], escalation_inbox=None)
     try:
         _verify_inbox(state, inbox)
     except RelayError as exc:
@@ -475,9 +537,15 @@ def _validate_state(state) -> None:
         return isinstance(value, str) and bool(value) and not re.search(r"[\x00-\x1f\x7f]", value)
 
     require(isinstance(state, dict))
-    require(type(state.get("version")) is int and state["version"] in (2, 3))
-    if state["version"] == 3 or "epoch" in state:
+    require(type(state.get("version")) is int and state["version"] in (2, 3, 4))
+    if state["version"] >= 3 or "epoch" in state:
         require(isinstance(state.get("epoch"), str) and re.fullmatch(r"[0-9a-f]{32}", state["epoch"]))
+    if state["version"] == 4:
+        require(isinstance(state.get("escalation_outbox"), list))
+        require("escalation_inbox" in state)
+        destination = state["escalation_inbox"]
+        require(destination is None or (single_line(destination) and os.path.isabs(destination)))
+        require(not state["escalation_outbox"] or destination is not None)
     require(isinstance(state.get("hosts"), dict) and isinstance(state.get("outbox"), list))
     for host_id, host in state["hosts"].items():
         require(isinstance(host_id, str) and SAFE_ID.fullmatch(host_id))
@@ -500,12 +568,19 @@ def _validate_state(state) -> None:
             )
             require(isinstance(episode, dict) and type(episode.get("open")) is bool)
             require(sequence(episode.get("seq")) and 0 < episode["seq"] <= host.get("seq", 0))
+            if state["version"] == 4:
+                opened = episode.get("opened_at")
+                require(type(opened) in (int, float) and abs(opened) < 1e15 and math.isfinite(opened))
+                require(type(episode.get("acknowledged")) is bool and type(episode.get("escalated")) is bool)
+                require(type(episode.get("migrated", False)) is bool)
+                require(single_line(episode.get("event_id")))
+                require(re.fullmatch(r"[a-z0-9][a-z0-9._-]*", episode["event_id"]))
     if "verify_floor" in state:
         require(isinstance(state["verify_floor"], dict))
         for host_id, floor in state["verify_floor"].items():
             require(isinstance(host_id, str) and SAFE_ID.fullmatch(host_id))
             require(sequence(floor) and floor <= state["hosts"].get(host_id, {}).get("seq", 0))
-    for event in state["outbox"]:
+    for event in state["outbox"] + (state["escalation_outbox"] if state["version"] == 4 else []):
         require(isinstance(event, dict))
         require(all(single_line(event.get(key)) for key in ("id", "ts", "line")))
         require(re.fullmatch(r"[a-z0-9][a-z0-9._-]*", event["id"]))
@@ -597,19 +672,55 @@ def _append(inbox: str, records: list) -> None:
         os.close(fd)
 
 
-def _deliver(cfg: dict, state: dict, state_path: Path) -> None:
+def _deliver(cfg: dict, state: dict, state_path: Path, outbox_key="outbox") -> None:
     """Deliver at most MAX_DELIVER_PER_RUN events; the rest stay pending for the next tick."""
-    batch = state["outbox"][:MAX_DELIVER_PER_RUN]
+    batch = state[outbox_key][:MAX_DELIVER_PER_RUN]
     lines = _lines(_read_inbox(cfg["inbox"]))
     if batch:
         _append(cfg["inbox"], [record for record in (_owed(lines, event) for event in batch) if record])
         lines = _lines(_read_inbox(cfg["inbox"]))
     done = {event["id"] for event in batch if not _owed(lines, event)}
-    remaining = [event for event in state["outbox"] if event["id"] not in done]
-    _save_state(state_path, {**state, "outbox": remaining})
-    state["outbox"] = remaining
+    remaining = [event for event in state[outbox_key] if event["id"] not in done]
+    _save_state(state_path, {**state, outbox_key: remaining})
+    state[outbox_key] = remaining
     if len(done) < len(batch):
         raise RelayError("inbox-ack-missing")
+
+
+def _escalate(cfg: dict, state: dict, path: Path, clock: float) -> None:
+    """Lead ACKs and measured recovery cancel undelivered escalations, never primary events."""
+    escalation = cfg["escalation"]
+    if state["escalation_inbox"] not in (None, escalation["inbox"]):
+        raise RelayError("destination-changed")
+    state["escalation_inbox"] = escalation["inbox"]
+    whole, tail = _lines(_read_inbox(cfg["inbox"]))
+    lines = whole | {tail}
+    retained = set()
+    for host in cfg["hosts"]:
+        for issue, episode in state["hosts"][host["id"]].get("episodes", {}).items():
+            if episode.pop("migrated", False):
+                # A v3 state may itself have migrated v2 episodes; resolve only after inbox recovery.
+                legacy_id = f"bl-{host['id']}-{episode['seq']}-{issue.replace(':', '.')}"
+                if _marker(episode["event_id"]) not in lines and _marker(legacy_id) in lines:
+                    episode["event_id"] = legacy_id
+            event_id = episode["event_id"]
+            if f"ACK {event_id}" in lines:
+                episode["acknowledged"] = True
+            if not episode["open"] or episode["acknowledged"]:
+                continue
+            retained.add(event_id + ".esc")
+            if (
+                not episode["escalated"]
+                and clock - episode["opened_at"] >= escalation["after_seconds"]
+                and any(p.fullmatch(issue) for p in escalation["issues"])
+            ):
+                state["escalation_outbox"].append(
+                    _event(host, issue, state["epoch"], episode["seq"], clock, event_id + ".esc")
+                )
+                episode["escalated"] = True
+    state["escalation_outbox"] = [e for e in state["escalation_outbox"] if e["id"] in retained]
+    _save_state(path, state)
+    _deliver(escalation, state, path, "escalation_outbox")
 
 
 def run(config_path: Path, *, clock=time.time, accept_new_epoch=False) -> int:
@@ -631,7 +742,7 @@ def run(config_path: Path, *, clock=time.time, accept_new_epoch=False) -> int:
         return 1
     with lock:
         try:
-            state = _load_state(state_dir / "state.json", cfg["inbox"], accept_new_epoch)
+            state = _load_state(state_dir / "state.json", cfg["inbox"], accept_new_epoch, clock())
             for host in cfg["hosts"]:
                 hstate = state["hosts"].setdefault(host["id"], {})
                 state["outbox"].extend(_observe(host, cfg, hstate, clock(), state["epoch"]))
@@ -642,10 +753,15 @@ def run(config_path: Path, *, clock=time.time, accept_new_epoch=False) -> int:
                 _verify_inbox(state, cfg["inbox"])
                 _save_state(state_dir / "state.json", state)
             _deliver(cfg, state, state_dir / "state.json")
+            if "escalation" in cfg:
+                try:
+                    _escalate(cfg, state, state_dir / "state.json", clock())
+                except RelayError as exc:
+                    raise RelayError(f"escalation-{exc}") from None
         except RelayError as exc:
             status["error"] = str(exc)
             code = 2 if str(exc) == "state-corrupt" else 1
-        status["pending"] = len(state["outbox"]) if state else None
+        status["pending"] = len(state["outbox"]) + len(state["escalation_outbox"]) if state else None
         try:
             _write_atomic(state_dir / "status.json", status)
         except OSError:
