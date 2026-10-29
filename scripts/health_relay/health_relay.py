@@ -468,7 +468,8 @@ def _validate_state(state) -> None:
         require(sequence(host.get("seq", 0)))
         require(sequence(host.get("unreach", 0)))
         first_seen = host.get("first_seen", 0.0)
-        require(type(first_seen) in (int, float) and math.isfinite(first_seen))
+        # An int beyond float range (10**400 is valid JSON) would overflow the clock arithmetic.
+        require(type(first_seen) in (int, float) and abs(first_seen) < 1e15 and math.isfinite(first_seen))
         seen, episodes = host.get("seen", []), host.get("episodes", {})
         require(isinstance(seen, list) and all(isinstance(name, str) and name in SOURCES for name in seen))
         require(isinstance(episodes, dict))

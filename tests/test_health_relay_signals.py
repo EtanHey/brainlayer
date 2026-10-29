@@ -551,6 +551,7 @@ def test_first_run_grace_only_holds_badge_and_watcher_absence(relay, env):
         ("first_seen", None),
         ("first_seen", True),
         ("first_seen", float("inf")),
+        ("first_seen", 10**400),
         ("unreach", "x"),
         ("unreach", []),
         ("unreach", -1),
