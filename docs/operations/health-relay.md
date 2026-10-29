@@ -56,7 +56,11 @@ Every observed issue is tracked, however many.
 
 ## State recovery and rollback
 
-A first-ever bootstrap works without `state.json` when the inbox has no complete relay markers.
+A first-ever bootstrap works without `state.json` only after successfully reading an inbox with no
+complete relay markers. An unreadable or missing inbox refuses bootstrap with exit 1,
+`error: "state-missing"` and `pending: null`; no state is created and nothing is appended.
+Restore inbox access to retry, or explicitly use `--accept-new-epoch` to authorize a new epoch.
+With that flag, an unavailable inbox still leaves delivery pending until access returns.
 If state is absent and the inbox already contains a complete `<!-- brainlayer-health:<id> -->`
 line (including an unterminated final line), the run exits 1 with `error: "state-missing"` and
 `pending: null` in `status.json`. It neither appends nor creates replacement state.

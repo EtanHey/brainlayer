@@ -287,7 +287,8 @@ def test_missing_inbox_is_never_created(relay, env):
     env["inbox"].unlink()
     _alerts(env, {"backup-daily": "x"})
     assert relay.run(env["config"]) == 1
-    assert not env["inbox"].exists() and _status(env)["error"] == "inbox-unavailable"
+    assert not env["inbox"].exists() and _status(env)["error"] == "state-missing"
+    assert not (env["tmp"] / "state/state.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -817,3 +818,77 @@ def test_atomic_temp_link_planted_after_unlink_is_not_opened(relay, env, monkeyp
         with pytest.raises(FileExistsError):
             relay._write_atomic(destination, {"x": 1})
     assert target.read_bytes() == b"preserve these bytes" and not destination.exists()
+
+
+@pytest.mark.parametrize("fault", ["permission", "missing"])
+@pytest.mark.parametrize("markers", [False, True])
+def test_bootstrap_requires_a_readable_markerless_inbox(relay, env, fault, markers):
+    if markers:
+        env["inbox"].write_text(f"# inbox\n<!-- brainlayer-health:{EVENT} -->\n")
+    before = env["inbox"].read_bytes()
+    state = env["tmp"] / "state/state.json"
+    parked = env["tmp"] / "parked-inbox.md"
+    previous = env["inbox"].stat().st_mode & 0o777
+    if fault == "permission":
+        env["inbox"].chmod(0)
+    else:
+        env["inbox"].rename(parked)
+    try:
+        if fault == "permission" and os.access(env["inbox"], os.R_OK):
+            pytest.skip("user can bypass chmod 000")
+        assert relay.run(env["config"]) == 1
+        assert not state.exists()
+        assert _status(env)["error"] == "state-missing" and _status(env)["pending"] is None
+        if fault == "missing":
+            assert not env["inbox"].exists() and parked.read_bytes() == before
+    finally:
+        if fault == "permission":
+            env["inbox"].chmod(previous)
+        else:
+            parked.rename(env["inbox"])
+    assert env["inbox"].read_bytes() == before
+    assert relay.run(env["config"]) == (1 if markers else 0)
+    assert state.exists() is not markers
+    assert env["inbox"].read_bytes() == before
+    assert _status(env)["error"] == ("state-missing" if markers else None)
+
+
+@pytest.mark.parametrize("fault", ["permission", "missing"])
+def test_explicit_new_epoch_can_recover_with_an_unreadable_inbox(relay, env, fault):
+    _alerts(env, {"backup-daily": "x"})
+    previous = env["inbox"].stat().st_mode & 0o777
+    if fault == "permission":
+        env["inbox"].chmod(0)
+    else:
+        env["inbox"].unlink()
+    try:
+        if fault == "permission" and os.access(env["inbox"], os.R_OK):
+            pytest.skip("user can bypass chmod 000")
+        assert relay.run(env["config"], accept_new_epoch=True) == 1
+        state = json.loads((env["tmp"] / "state/state.json").read_text())
+        assert len(state["outbox"]) == 1
+        assert _status(env)["error"] == ("inbox-unreadable" if fault == "permission" else "inbox-unavailable")
+    finally:
+        if fault == "permission":
+            env["inbox"].chmod(previous)
+        else:
+            env["inbox"].write_text("# inbox\n")
+    assert _run(relay, env) == 0
+    _acked_with_line_and_marker(env)
+
+
+@pytest.mark.parametrize("error", [PermissionError, NotADirectoryError, OSError])
+def test_host_source_resolve_errors_do_not_abort_other_alerts(relay, env, monkeypatch, error):
+    source = env["data"] / "job-alerts.json"
+    _alerts(env, {"backup-daily": "x"})
+    real_resolve = Path.resolve
+
+    def resolve(path, *args, **kwargs):
+        if path == source:
+            raise error("source resolution failed")
+        return real_resolve(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "resolve", resolve)
+        assert relay.run(env["config"]) == 0
+    _acked_with_line_and_marker(env)

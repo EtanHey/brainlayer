@@ -198,6 +198,8 @@ def _load_state(path: Path, inbox: str, accept_new_epoch: bool) -> dict:
         try:
             text = _read_inbox(inbox)
         except RelayError:
+            if not accept_new_epoch:
+                raise RelayError("state-missing") from None
             text = ""
         whole, tail = _lines(text)
         if not accept_new_epoch and any(
