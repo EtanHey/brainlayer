@@ -31,6 +31,127 @@ def _ack(env, line=None):
         handle.write(f"ACK {EVENT}\n" if line is None else line)
 
 
+@pytest.fixture
+def migrated_v3(tiered):
+    path = tiered["tmp"] / "state/state.json"
+    path.parent.mkdir()
+    path.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "epoch": EPOCH,
+                "hosts": {"m4-max": {"seq": 1, "episodes": {"job-alert:backup-daily": {"open": True, "seq": 1}}}},
+                "outbox": [],
+            }
+        )
+    )
+    return tiered
+
+
+LEGACY_EVENT = "bl-m4-max-1-job-alert.backup-daily"
+
+
+@pytest.mark.parametrize("already_appended", [False, True])
+def test_migrated_pending_escalation_survives_id_rebinding(relay, migrated_v3, monkeypatch, already_appended):
+    env = migrated_v3
+    archived = env["inbox"].with_suffix(".archived")
+    env["inbox"].rename(archived)
+    env["escalation"].unlink()
+    assert relay.run(env["config"], clock=lambda: 1000) == 1
+    assert relay.run(env["config"], clock=lambda: 2800) == 1
+    queued = _state(env)["escalation_outbox"]
+    assert len(queued) == 1 and queued[0]["id"] == EVENT + ".esc"
+    # Also model append followed by failed state commit: the same event is still queued.
+    env["escalation"].write_text(relay._owed((set(), ""), queued[0]) if already_appended else "# restored\n")
+    archived.rename(env["inbox"])
+    _ack(env, relay._marker(LEGACY_EVENT) + "\n")
+    if not already_appended:
+        real_append = relay._append
+
+        def fail_escalation(path, records):
+            if path == str(env["escalation"]):
+                raise relay.RelayError("inbox-append-failed")
+            real_append(path, records)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(relay, "_append", fail_escalation)
+            assert relay.run(env["config"], clock=lambda: 2801) == 1
+        rebound = _state(env)["escalation_outbox"][0]
+        assert rebound["id"] == LEGACY_EVENT + ".esc" and rebound["ts"] == queued[0]["ts"]
+        assert rebound["line"].endswith("; event=" + rebound["id"])
+    assert relay.run(env["config"], clock=lambda: 2801) == 0
+    delivered = env["escalation"].read_text()
+    expected_id = (EVENT if already_appended else LEGACY_EVENT) + ".esc"
+    assert delivered.count("@orc BLOCKED:") == 1
+    assert f"; event={expected_id}\n" in delivered and relay._marker(expected_id) in delivered
+    state = _state(env)
+    assert state["escalation_outbox"] == []
+    assert state["hosts"]["m4-max"]["episodes"]["job-alert:backup-daily"]["event_id"] == LEGACY_EVENT
+    assert relay.run(env["config"], clock=lambda: 10000) == 0
+    assert env["escalation"].read_text() == delivered
+
+
+@pytest.mark.parametrize("event_id", [EVENT, LEGACY_EVENT])
+def test_migrated_id_resolves_after_snapshot_with_neither_marker(relay, migrated_v3, event_id):
+    env = migrated_v3
+    assert relay.run(env["config"], clock=lambda: 1000) == 0
+    _ack(env, f"{relay._marker(event_id)}\nACK {event_id}\n")
+    assert relay.run(env["config"], clock=lambda: 2800) == 0
+    episode = _state(env)["hosts"]["m4-max"]["episodes"]["job-alert:backup-daily"]
+    assert episode["event_id"] == event_id and episode["acknowledged"] is True
+    assert "migrated" not in episode
+    assert env["escalation"].read_text() == "# escalation\n"
+
+
+def test_migrated_rebinding_finishes_appended_line_before_changing_dedup_id(relay, migrated_v3):
+    env = migrated_v3
+    archived = env["inbox"].with_suffix(".archived")
+    env["inbox"].rename(archived)
+    env["escalation"].unlink()
+    assert relay.run(env["config"], clock=lambda: 1000) == 1
+    assert relay.run(env["config"], clock=lambda: 2800) == 1
+    pending = _state(env)["escalation_outbox"][0]
+    env["escalation"].write_text(pending["line"])  # Complete line, interrupted before marker.
+    archived.rename(env["inbox"])
+    _ack(env, relay._marker(LEGACY_EVENT) + "\n")
+    assert relay.run(env["config"], clock=lambda: 2801) == 0
+    delivered = env["escalation"].read_text()
+    assert delivered.count("@orc BLOCKED:") == 1 and relay._marker(EVENT + ".esc") in delivered
+    assert _state(env)["escalation_outbox"] == []
+    assert relay.run(env["config"], clock=lambda: 2802) == 0
+    episode = _state(env)["hosts"]["m4-max"]["episodes"]["job-alert:backup-daily"]
+    assert episode["event_id"] == LEGACY_EVENT and "migrated" not in episode
+    assert env["escalation"].read_text() == delivered
+
+
+@pytest.mark.parametrize("event_id", [EVENT, LEGACY_EVENT])
+def test_unresolved_migrated_episode_accepts_either_ack(relay, migrated_v3, event_id):
+    env = migrated_v3
+    _ack(env, f"ACK {event_id}\n")
+    assert relay.run(env["config"], clock=lambda: 1000) == 0
+    episode = _state(env)["hosts"]["m4-max"]["episodes"]["job-alert:backup-daily"]
+    assert episode.get("migrated") is True and episode["acknowledged"] is True
+    assert _state(env)["acknowledged_event_ids"] == [event_id]
+    env["inbox"].rename(env["inbox"].with_suffix(".archived"))
+    assert relay.run(env["config"], clock=lambda: 2800) == 1
+    assert env["escalation"].read_text() == "# escalation\n"
+
+
+def test_ack_cache_prunes_absent_episodes_and_keeps_live_and_closed_acks(relay, tiered):
+    assert relay.run(tiered["config"], clock=lambda: 1000) == 0
+    _ack(tiered, f"ACK {EVENT}\nACK {EVENT}.esc\nACK unrelated\n")
+    assert relay.run(tiered["config"], clock=lambda: 1100) == 0
+    assert _state(tiered)["acknowledged_event_ids"] == [EVENT]
+    _alerts(tiered, {})
+    assert relay.run(tiered["config"], clock=lambda: 1200) == 0
+    assert _state(tiered)["acknowledged_event_ids"] == [EVENT]
+    _alerts(tiered, {"backup-daily": "x"})
+    assert relay.run(tiered["config"], clock=lambda: 1300) == 0
+    assert _state(tiered)["acknowledged_event_ids"] == []
+    assert relay.run(tiered["config"], clock=lambda: 3100) == 0
+    assert tiered["escalation"].read_text().count("@orc BLOCKED:") == 1
+
+
 def test_primary_immediate_escalation_once_at_threshold_after_restart(relay, tiered):
     assert relay.run(tiered["config"], clock=lambda: 1000) == 0
     assert len(_blocked(tiered)) == 1 and tiered["escalation"].read_text() == "# escalation\n"

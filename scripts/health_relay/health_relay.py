@@ -694,6 +694,13 @@ def _deliver(cfg: dict, state: dict, state_path: Path, outbox_key="outbox") -> N
         raise RelayError("inbox-ack-missing")
 
 
+def _episode_ids(host_id: str, issue: str, episode: dict) -> set:
+    ids = {episode["event_id"]}
+    if episode.get("migrated"):
+        ids.add(f"bl-{host_id}-{episode['seq']}-{issue.replace(':', '.')}")
+    return ids
+
+
 def _escalate(cfg: dict, state: dict, path: Path, clock: float, primary_lines=None) -> None:
     """Lead ACKs and measured recovery cancel undelivered escalations, never primary events."""
     escalation = cfg["escalation"]
@@ -704,14 +711,33 @@ def _escalate(cfg: dict, state: dict, path: Path, clock: float, primary_lines=No
     retained = set()
     for host in cfg["hosts"]:
         for issue, episode in state["hosts"][host["id"]].get("episodes", {}).items():
-            if primary_lines is not None and episode.pop("migrated", False):
+            if _episode_ids(host["id"], issue, episode) & acknowledged:
+                episode["acknowledged"] = True
+            if primary_lines is not None and episode.get("migrated"):
                 # A v3 state may itself have migrated v2 episodes; resolve only after inbox recovery.
                 legacy_id = f"bl-{host['id']}-{episode['seq']}-{issue.replace(':', '.')}"
-                if _marker(episode["event_id"]) not in primary_lines and _marker(legacy_id) in primary_lines:
-                    episode["event_id"] = legacy_id
+                event_id = episode["event_id"]
+                if _marker(event_id) in primary_lines:
+                    episode.pop("migrated")
+                elif _marker(legacy_id) in primary_lines:
+                    pending = next((e for e in state["escalation_outbox"] if e["id"] == event_id + ".esc"), None)
+                    can_rebind = True
+                    if pending and episode["open"] and not episode["acknowledged"]:
+                        lines = _lines(_read_inbox(escalation["inbox"]))
+                        if not _owed(lines, pending):
+                            state["escalation_outbox"].remove(pending)
+                        elif pending["line"] in lines[0] or pending["line"] == lines[1]:
+                            # Finish a started record under its original dedup ID before rebinding.
+                            can_rebind = False
+                        else:
+                            pending.update(
+                                _event(host, issue, state["epoch"], episode["seq"], clock, legacy_id + ".esc"),
+                                ts=pending["ts"],
+                            )
+                    if can_rebind:
+                        episode["event_id"] = legacy_id
+                        episode.pop("migrated")
             event_id = episode["event_id"]
-            if event_id in acknowledged:
-                episode["acknowledged"] = True
             if not episode["open"] or episode["acknowledged"]:
                 continue
             retained.add(event_id + ".esc")
@@ -725,6 +751,13 @@ def _escalate(cfg: dict, state: dict, path: Path, clock: float, primary_lines=No
                 )
                 episode["escalated"] = True
     state["escalation_outbox"] = [e for e in state["escalation_outbox"] if e["id"] in retained]
+    live_ids = {
+        event_id
+        for host_id, host in state["hosts"].items()
+        for issue, episode in host.get("episodes", {}).items()
+        for event_id in _episode_ids(host_id, issue, episode)
+    }
+    state["acknowledged_event_ids"] = sorted(acknowledged & live_ids)
     _save_state(path, state)
     _deliver(escalation, state, path, "escalation_outbox")
 
