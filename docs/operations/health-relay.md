@@ -50,7 +50,8 @@ Every observed issue is tracked, however many.
   inbox resolves or aliases to any configured host source, state, status, lock or atomic temporary
   files. Corrupt state is preserved byte-for-byte; the failure status has `error: "state-corrupt"` and `pending: null`.
   A lock-open failure exits 1 with `error: "lock-open-failed"` and `pending: null`; failure status
-  writes are best-effort. Atomic temp files refuse symlinks and are created with mode 0600.
+  writes are best-effort. Atomic temp names are unlinked before exclusive creation with mode 0600;
+  planted symlinks and hardlinks cannot truncate their targets.
   `status.json` records `error` and `pending` after each run with valid configuration.
 
 ## State recovery and rollback
@@ -59,6 +60,12 @@ A first-ever bootstrap works without `state.json` when the inbox has no complete
 If state is absent and the inbox already contains a complete `<!-- brainlayer-health:<id> -->`
 line (including an unterminated final line), the run exits 1 with `error: "state-missing"` and
 `pending: null` in `status.json`. It neither appends nor creates replacement state.
+
+When state exists, the relay scans the inbox once at load for complete markers from that state's
+epoch, including an unterminated final line. A marker above its host's persisted sequence refuses
+the run with exit 1, `error: "state-stale"` and `pending: null`. Nothing is appended and state bytes
+stay unchanged. Never restore an older `state.json`; move stale state aside and use
+`--accept-new-epoch` instead. The flag does not bypass the stale-state check while state exists.
 
 Preserve damaged state for investigation; do not delete it as a routine repair. After investigating
 state loss, an operator may explicitly authorize a new epoch:

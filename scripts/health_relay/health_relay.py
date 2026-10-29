@@ -89,13 +89,23 @@ def load_config(path: Path) -> dict:
         if item["transport"] != "local":
             raise RelayError("config-invalid")
         cfg["hosts"].append(host)
-    destinations += [Path(path) for host in cfg["hosts"] for path in host["paths"].values()]
-    for destination in destinations:
-        if inbox.resolve() == destination.resolve():
+    sources = [Path(path) for host in cfg["hosts"] for path in host["paths"].values()]
+    for destination, is_source in [(p, False) for p in destinations] + [(p, True) for p in sources]:
+        try:
+            resolved = destination.resolve()
+        except (OSError, RuntimeError):
+            if not is_source:
+                raise
+            resolved = Path(os.path.abspath(destination))
+        if inbox.resolve() == resolved:
             raise RelayError("config-invalid")
         try:
             same_file = os.path.samefile(inbox, destination)
         except FileNotFoundError:
+            same_file = False
+        except OSError:
+            if not is_source:
+                raise
             same_file = False
         if same_file:
             raise RelayError("config-invalid")
@@ -200,6 +210,21 @@ def _load_state(path: Path, inbox: str, accept_new_epoch: bool) -> dict:
     _validate_state(state)
     if state["version"] == 2:
         state.update(version=3, epoch=os.urandom(16).hex())
+    try:
+        text = _read_inbox(inbox)
+    except RelayError:
+        text = ""  # Delivery still reports the inbox failure and retains pending events.
+    whole, tail = _lines(text)
+    marker = re.compile(
+        rf"<!-- brainlayer-health:bl-([a-z0-9][a-z0-9._-]{{0,63}})-{state['epoch']}-([0-9]+)-[a-z0-9._-]+ -->"
+    )
+    for line in whole | {tail}:
+        match = marker.fullmatch(line)
+        if match:
+            persisted = str(state["hosts"].get(match[1], {}).get("seq", 0))
+            delivered = match[2].lstrip("0") or "0"
+            if (len(delivered), delivered) > (len(persisted), persisted):
+                raise RelayError("state-stale")
     return state
 
 
@@ -242,7 +267,11 @@ def _atomic_temp(path: Path) -> Path:
 
 def _write_atomic(path: Path, document: dict) -> None:
     tmp = _atomic_temp(path)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        tmp.unlink()
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(document, handle, sort_keys=True)
         handle.flush()
