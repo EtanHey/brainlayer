@@ -3174,6 +3174,16 @@
         "target": "session.get"
       }
     },
+    "8b1a8e75f2e38e62f3798c38a1599bb293399f6f8818b98f5d7dec6ac71ac660": {
+      "non_cloud_purpose": "Existing owner-only local supervisor status read, moved from run_calendar into shared failed-recovery admission so status probes and retries use the same disabled/paused gate. The AF_UNIX status request does not change operator state or send to cloud/model services.",
+      "site": {
+        "call_sha256": "530420bac71aa52a48e9644e3015a326af512238f1afcb22fe79c634039d8cfc",
+        "kind": "callable_reference",
+        "owner": "<module>._failed_recovery_admission",
+        "path": "src/brainlayer/maintenance_calendar.py",
+        "target": "client.request"
+      }
+    },
     "8b2afb324a96b806b32ba52542f9128cbf4dd80e733504d82603fe3dc231a0f2": {
       "non_cloud_purpose": "Import local subprocess support for private synthetic BrainBar proof execution and fail-closed process receipts; no cloud model transport.",
       "site": {

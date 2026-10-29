@@ -17,6 +17,10 @@ def register(app, jobs_app):
         state_dir: Path | None = typer.Option(None, "--state-dir"),
         logs_dir: Path = typer.Option(Path.home() / "Library/Logs/brainlayer", "--logs-dir"),
         recover_transcripts: bool = typer.Option(False, "--recover-transcripts"),
+        recover_failed: bool = typer.Option(False, "--recover-failed"),
+        status: bool = typer.Option(
+            False, "--status", help="Check failed-step recovery admission without running steps"
+        ),
     ):
         """Run BrainLayer Maintenance for one scheduled date."""
         from .maintenance_calendar import calendar_steps, run_calendar
@@ -26,19 +30,42 @@ def register(app, jobs_app):
             date = dt.date.fromisoformat(scheduled_date) if scheduled_date else dt.date.today()
         except ValueError as exc:
             raise typer.BadParameter("date must be ISO YYYY-MM-DD") from exc
+        if recover_failed and recover_transcripts:
+            raise typer.BadParameter("Choose --recover-failed or --recover-transcripts")
+        if status and not recover_failed:
+            raise typer.BadParameter("--status requires --recover-failed")
+        if recover_failed and scheduled_date:
+            raise typer.BadParameter("Failed-step recovery uses the latest scheduled night; omit --date")
+        result = {}
         directory = state_dir or supervisor_socket_path().parent / "calendar"
         if directory.resolve() == supervisor_socket_path().parent.resolve():
             raise typer.BadParameter("calendar custody directory must differ from resident supervisor")
-        plan = calendar_steps(sys.executable, str(Path(sys.executable).with_name("brainlayer")), lib_dir, date)
-        code = asyncio.run(
-            run_calendar(
-                plan,
-                directory,
-                logs_dir,
-                install_signals=True,
-                transcript_recovery=recover_transcripts,
+        try:
+            plan = calendar_steps(sys.executable, str(Path(sys.executable).with_name("brainlayer")), lib_dir, date)
+            code = asyncio.run(
+                run_calendar(
+                    plan,
+                    directory,
+                    logs_dir,
+                    install_signals=True,
+                    transcript_recovery=recover_transcripts,
+                    **(
+                        dict(failed_recovery=True, recovery_status=status, recovery_result=result)
+                        if recover_failed
+                        else {}
+                    ),
+                )
             )
-        )
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+            if not recover_failed:
+                raise
+            from .maintenance_calendar import recovery_refusal_reason
+
+            status = "failed" if result.get("status") in {"accepted", "failed"} else "refused"
+            result.update(status=status, reason=recovery_refusal_reason(exc), steps=[])
+            code = 1
+        if recover_failed:
+            typer.echo(json.dumps(result, sort_keys=True))
         raise typer.Exit(code)
 
     @app.command("daemon")
