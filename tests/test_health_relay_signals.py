@@ -408,13 +408,13 @@ def test_ssh_capture_has_byte_limits_and_reaps_overflow(relay, env, monkeypatch,
     assert _issues(env) == ["job-alert:backup-daily"]
 
 
-def test_signal_issues_reload_under_v3_without_duplicate_delivery(relay, env, monkeypatch):
+def test_signal_issues_reload_under_v4_without_duplicate_delivery(relay, env, monkeypatch):
     _host(env["m4"], badge_age=7200, watcher_age=7200)
     monkeypatch.setenv("FAKE_SSH_FAIL", "1")
     for _ in range(3):
         assert relay.run(env["config"]) == 0
     state = _state(env)
-    assert state["version"] == 3
+    assert state["version"] == 4
     assert set(_issues(env)) == {"health-stale", "watcher-stale", "host-unreachable"}
     assert len(_blocked(env)) == 3 and _status(env)["pending"] == 0
     loaded = relay._load_state(env["tmp"] / "state/state.json", str(env["inbox"]), False)

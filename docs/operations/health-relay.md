@@ -1,7 +1,9 @@
 # Independent health relay (`com.etanhey.brainlayer-health-relay`)
 
-One LaunchAgent on the M4 (the Mac that holds `orchestrator/docs.local/collab/orc-inbox.md`)
-reads both Macs' health files and appends one `@orc BLOCKED:` line per new issue episode.
+One LaunchAgent on the M4 reads both Macs' health files and appends one `@orc BLOCKED:` line
+per new issue episode to its primary inbox. The live primary is the BrainLayer collab,
+`/Users/etanheyman/Gits/orchestrator/docs.local/collab/brainlayer-health.md`.
+An optional second inbox receives only prolonged, unacknowledged user-visible outages.
 Source: `scripts/health_relay/health_relay.py`, stdlib only, no BrainLayer imports. It never
 opens a database, reads credentials, runs `health-check`, heals, or writes producer state.
 
@@ -84,6 +86,110 @@ Each source file is read with `O_NOFOLLOW`, must be a regular file, and is cappe
   planted symlinks and hardlinks cannot truncate their targets.
   `status.json` records `error`, `pending` and per-host reachability after each run with valid configuration.
 
+## Tiered escalation and lead acknowledgment
+
+Every new episode still goes to `inbox` immediately with the unchanged delivery contract above.
+Without `escalation`, no second destination is read or written. To enable escalation, configure:
+
+```json
+"escalation": {
+  "inbox": "/Users/etanheyman/Gits/orchestrator/docs.local/collab/orc-inbox.md",
+  "after_seconds": 1800,
+  "issues": [
+    "host-unreachable", "health-stale", "watcher-stale",
+    "job-alert:backup-daily", "job-alert:jsonl-backup",
+    "job-alert:mcp-transport", "job-alert:brainbar-activation", "job-alert:backup-snapshot",
+    "badge:brain-search-canary-failed", "source-missing:badge"
+  ]
+}
+```
+
+`inbox` is required in that object. The shown threshold and patterns are the defaults when omitted.
+The threshold uses the same integer bounds as other config numbers. `issues` must be a list of
+valid regular expressions; each must **fullmatch** the issue class. An empty list disables new
+escalations. Both inboxes must be distinct, existing files at delivery time. Neither is created.
+The same path-resolution, symlink/hardlink alias, local-source and state-file collision checks
+apply to both; collisions fail before any write. Remote source paths are never statted locally.
+
+The default classes are deliberately narrow:
+
+| Class | User-visible reason |
+|---|---|
+| `host-unreachable` | A host's memory services cannot be observed over the configured transport |
+| `health-stale` | Fleet health evidence stopped advancing; outages may be invisible |
+| `watcher-stale` | Conversation indexing stopped reporting progress, threatening current recall |
+| `job-alert:backup-daily` | Durable database backup protection is impaired |
+| `job-alert:jsonl-backup` | Original conversation backup protection is impaired |
+| `job-alert:mcp-transport` | BrainBar MCP connections or requests are failing to recover |
+| `job-alert:brainbar-activation` | BrainBar activation failed, leaving the agent memory service unavailable |
+| `job-alert:backup-snapshot` | The database snapshot phase of daily backup protection failed |
+| `badge:brain-search-canary-failed` | The search canary reports a failed memory retrieval path |
+| `source-missing:badge` | Health evidence disappeared after grace, leaving health visibility absent |
+
+These signals indicate a user-visible service or protection gap, not proof of data loss.
+Internal classes such as `badge:job-scan-failed` and `badge:slow-check` stay in the primary collab.
+Badge codes `lock_holder_wedge`, `queue_backed_up`, `hotlane_dead`, and `drain_no_progress`
+(normalized by the relay to hyphens) also stay there: they indicate degraded operation, not a
+user-visible outage by themselves, so they are excluded from default escalation.
+
+Orc must **not** watch the primary collab: primary lines retain `@orc BLOCKED:` for compatibility,
+so watching it would wake orc for every immediate alert. The BrainLayer lead watches that collab
+with a filter that matches `@orc` (for example `--alias @orc`), and acknowledges an episode by
+appending exactly this whole line there, in the **primary** inbox:
+
+```text
+ACK <primary-event-id>
+```
+
+Quoted, indented, suffixed, or partial matches do not count. An exact final line at EOF also counts.
+CRLF ACK lines do not count; use LF line endings. Successfully sampled ACK event IDs persist in
+state, including when primary delivery subsequently fails, and suppress escalation through a
+later primary outage. Acknowledgment also persists in episode state; it does not
+close the issue or acknowledge primary delivery. A measured recovery closes as before. Unknown
+or stale evidence still cannot close anything and does not reset the episode timer.
+
+An eligible episode open continuously for at least `after_seconds`, without a lead ACK, queues
+one event `<primary-event-id>.esc`. It carries one `@orc BLOCKED:` line, the same identity fields,
+and the same self-contained append-only record, durable outbox, fsync gate and marker dedup.
+Both queues use the same delivery function; each can deliver up to 32 events per tick. Primary
+delivery runs first. Escalation failure exits 1 with an `escalation-*` error in `status.json`;
+primary delivery is retained, and `pending` counts both queues. A missing or unreadable escalation
+inbox is reported even before a threshold is reached. A pending escalation retries after restart
+without duplicating a complete line, including a crash after append but before state acknowledgment.
+A lead ACK or measured recovery cancels an undelivered escalation on the next tick. Already
+appended bytes cannot be retracted, including bytes left by a failed fsync. Escalation never
+clears or reopens an episode; a new episode after recovery gets a fresh timer and escalation ID.
+
+The escalation destination is pinned in state on first use. Changing it fails visibly with
+`escalation-destination-changed` after primary delivery, preventing pending events from being
+silently redirected. Removing the optional config pauses escalation and retains its pending
+queue; re-enabling the same destination resumes it. If primary access or delivery fails
+(`inbox-unavailable`, `inbox-unreadable`, `inbox-append-failed`, or `inbox-ack-missing`), due
+escalations still run using only previously persisted ACKs. The run still exits nonzero and
+`status.error` retains the original primary error, even if escalation also fails. Primary events
+remain pending under the unchanged delivery contract. A missing primary scan retains its
+`verify_floor`; migration ID resolution waits for primary recovery. State-integrity errors,
+including `state-stale`, `state-corrupt`, and `state-commit-failed`, block escalation entirely.
+ACKs are sampled once per tick, so a concurrent ACK arriving
+after that sample may race with that tick's append.
+
+To recover from `escalation-destination-changed` when deliberately moving the destination:
+
+1. Restore the configured escalation inbox to the pinned `escalation_inbox` in `state.json`.
+   Repair access there and run normally until `escalation_outbox` is empty. Pending events may
+   instead be cancelled by exact lead ACKs in the primary or measured recovery; do not discard
+   them manually. If neither is possible, leave the pin in place and investigate.
+2. Pause relay invocations and wait for any active run to finish. Preserve a copy of state and
+   both inboxes for recovery outside the repo, with the state copy retaining private permissions.
+   Recheck that `escalation_outbox` is empty while no relay can write.
+3. Change only `escalation_inbox` in state to JSON `null`, using an atomic replacement with the
+   original permissions. Retain the epoch, sequences, both queues, `verify_floor`, ACK IDs and
+   every episode flag. Never clear `escalated`: already sent episodes must not be resent.
+4. Set config `escalation.inbox` to the new distinct, existing, writable absolute inbox and
+   resume. The next run pins that destination. Verify `status.error` is null and both queues
+   drain normally; existing delivered episodes stay delivered. Do not truncate either inbox or
+   reset the state to move a destination. Removing the optional config alone does not clear its pin.
+
 ## State recovery and rollback
 
 A first-ever bootstrap works without `state.json` only after successfully reading an inbox with no
@@ -101,8 +207,10 @@ its host's persisted sequence refuses
 the run with exit 1, `error: "state-stale"` and `pending: null`. Nothing is appended and state bytes
 stay unchanged. If the scan cannot read the inbox, the relay persists the pre-observation per-host
 sequences as `verify_floor`, retaining the earliest floor across outage runs. The next successful
-scan checks against that floor and clears it only after verification. No delivery occurs before
-that verification, even if inbox access returns within the same run. Observations remain pending.
+scan checks against that floor and clears it only after verification. No **primary** delivery
+occurs before that verification, even if inbox access returns within the same run. Observations
+remain pending; the escalation safety net may still deliver due events during primary access
+failure, using persisted ACKs only. A detected stale state blocks both destinations.
 Never restore an older `state.json`; move stale state aside and use
 `--accept-new-epoch` instead. The flag does not bypass the stale-state check while state exists.
 
@@ -117,15 +225,24 @@ The flag permits bootstrap despite retained markers. Recurring issues get fresh 
 alerts. Lost episode history and pending events cannot be reconstructed; currently active issues
 are observed again. The flag does not bypass corrupt-state validation or reset existing state.
 
-New writes use state **version 3** and require an epoch. Version 2 is still readable and upgrades
-on the next successful state write, retaining its sequences, episodes, and pending event IDs.
-New events use the new epoch. Rolling back to the version-2-only relay explicitly fails closed
-with exit 2 and `state-corrupt`, preserving the version-3 state; use the newer relay to resume.
-Do not downgrade or delete state to force a rollback.
+New writes use state **version 4**: episodes persist `opened_at`, `event_id`, `acknowledged`, and
+`escalated`; state also holds `escalation_outbox`, its pinned `escalation_inbox`, and the
+`acknowledged_event_ids` set serialized as a list (absent in older v4 states means empty). Versions 2 and 3
+migrate on the next successful write, retaining primary pending IDs, sequences, and open/closed
+history. Since neither old version records episode opening time, migrated episodes start their
+escalation timer at migration, conservatively waiting the full threshold. Version-2 episode IDs
+retain the legacy form; newly opened episodes use the epoch form. A transient `migrated` flag
+lets a v3 state that already contains v2 episodes resolve their original IDs from inbox markers
+after inbox access recovers, preserving existing ACKs. Migration does not resend
+already delivered primary events. Invalid timestamps (including booleans, nonfinite and huge
+values), flags or IDs fail closed and preserve the original state bytes.
+Rolling back to a version-3-only or version-2-only relay explicitly fails closed with exit 2 and
+`state-corrupt`, preserving version-4 state; use the newer relay to resume. Do not downgrade or
+delete state to force a rollback.
 
 ## Limits
 
-- `relay.lock` serializes relay runs only. Other writers of `orc-inbox.md` do not take it.
+- `relay.lock` serializes relay runs only. Other writers of either inbox do not take it.
   Self-contained records keep relay alerts intact whatever those writers do, but a torn relay
   fragment that another writer appends to *without* a leading newline will share that writer's
   first line. The relay's own complete record still follows.
@@ -156,5 +273,6 @@ Do not downgrade or delete state to force a rollback.
    and `__LOG_DIR__`. Lint it with `plutil -lint`, then `launchctl bootstrap gui/$(id -u)` it.
    Prove that `status.json` `ts` advances on schedule, and that SSH works from launchd's
    environment (no interactive agent).
-5. Point `inbox` at the real `orc-inbox.md` only with authorization. Active alerts at that moment
-   are delivered on the first run.
+5. Point `inbox` at the BrainLayer collab and, if enabled, `escalation.inbox` at the orc inbox
+   only within the deployment's authorization. Active issues reach the primary on the first run;
+   escalation waits for the episode threshold and honors primary ACKs.
