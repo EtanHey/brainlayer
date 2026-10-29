@@ -80,15 +80,6 @@ def load_config(path: Path) -> dict:
     inbox, state_dir = Path(cfg["inbox"]), Path(cfg["state_dir"])
     destinations = [state_dir / name for name in ("state.json", "status.json", "relay.lock")]
     destinations += [_atomic_temp(path) for path in destinations[:2]]
-    for destination in destinations:
-        if inbox.resolve() == destination.resolve():
-            raise RelayError("config-invalid")
-        try:
-            same_file = os.path.samefile(inbox, destination)
-        except FileNotFoundError:
-            same_file = False
-        if same_file:
-            raise RelayError("config-invalid")
     for item in raw["hosts"]:
         host = {"id": _match(SAFE_ID, item["id"]), "label": _match(SAFE_LABEL, item["label"])}
         base, overrides = _abs(item["dir"]), item.get("sources", {})
@@ -98,6 +89,16 @@ def load_config(path: Path) -> dict:
         if item["transport"] != "local":
             raise RelayError("config-invalid")
         cfg["hosts"].append(host)
+    destinations += [Path(path) for host in cfg["hosts"] for path in host["paths"].values()]
+    for destination in destinations:
+        if inbox.resolve() == destination.resolve():
+            raise RelayError("config-invalid")
+        try:
+            same_file = os.path.samefile(inbox, destination)
+        except FileNotFoundError:
+            same_file = False
+        if same_file:
+            raise RelayError("config-invalid")
     if not cfg["hosts"] or len({h["id"] for h in cfg["hosts"]}) != len(cfg["hosts"]):
         raise RelayError("config-invalid")
     return cfg
@@ -139,18 +140,18 @@ def _source_of(issue: str):
     return name if kind.startswith("source-") else {"job-alert": "job-alerts"}.get(kind)
 
 
-def _observe(host: dict, hstate: dict, clock: float) -> list:
+def _observe(host: dict, hstate: dict, clock: float, epoch: str) -> list:
     """Advance one host's episodes; return newly opened events."""
     snap = _read_sources(host["paths"], MAX_SOURCE_BYTES)
     issues, measured = evaluate(snap, hstate.setdefault("seen", []))
-    hstate["seen"] = sorted(set(hstate["seen"]) | {n for n, r in snap["sources"].items() if r["s"] == "ok"})
+    hstate["seen"] = sorted(set(hstate["seen"]) | {n for n, r in snap["sources"].items() if r["s"] != "absent"})
     episodes, events = hstate.setdefault("episodes", {}), []
     for issue in sorted(issues):
         episode = episodes.setdefault(issue, {"open": False})
         if not episode["open"]:
             hstate["seq"] = hstate.get("seq", 0) + 1
             episode.update(open=True, seq=hstate["seq"])
-            event_id = f"bl-{host['id']}-{hstate['seq']}-{issue.replace(':', '.')}"
+            event_id = f"bl-{host['id']}-{epoch}-{hstate['seq']}-{issue.replace(':', '.')}"
             source = SOURCES.get(_source_of(issue), "transport")
             line = (
                 f"@orc BLOCKED: [BrainLayer {host['label']}] {issue} on host={host['id']}; "
@@ -180,14 +181,25 @@ class _Locked:
         os.close(self.fd)
 
 
-def _load_state(path: Path) -> dict:
+def _load_state(path: Path, inbox: str, accept_new_epoch: bool) -> dict:
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return {"version": 2, "hosts": {}, "outbox": []}
+        try:
+            text = _read_inbox(inbox)
+        except RelayError:
+            text = ""
+        whole, tail = _lines(text)
+        if not accept_new_epoch and any(
+            re.fullmatch(r"<!-- brainlayer-health:[a-z0-9][a-z0-9._-]* -->", line) for line in whole | {tail}
+        ):
+            raise RelayError("state-missing") from None
+        return {"version": 3, "epoch": os.urandom(16).hex(), "hosts": {}, "outbox": []}
     except (OSError, ValueError, RecursionError):
         raise RelayError("state-corrupt") from None
     _validate_state(state)
+    if state["version"] == 2:
+        state.update(version=3, epoch=os.urandom(16).hex())
     return state
 
 
@@ -203,7 +215,9 @@ def _validate_state(state) -> None:
         return isinstance(value, str) and bool(value) and not re.search(r"[\x00-\x1f\x7f]", value)
 
     require(isinstance(state, dict))
-    require(type(state.get("version")) is int and state["version"] == 2)
+    require(type(state.get("version")) is int and state["version"] in (2, 3))
+    if state["version"] == 3 or "epoch" in state:
+        require(isinstance(state.get("epoch"), str) and re.fullmatch(r"[0-9a-f]{32}", state["epoch"]))
     require(isinstance(state.get("hosts"), dict) and isinstance(state.get("outbox"), list))
     for host_id, host in state["hosts"].items():
         require(isinstance(host_id, str) and SAFE_ID.fullmatch(host_id))
@@ -228,7 +242,8 @@ def _atomic_temp(path: Path) -> Path:
 
 def _write_atomic(path: Path, document: dict) -> None:
     tmp = _atomic_temp(path)
-    with open(tmp, "w", encoding="utf-8") as handle:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(document, handle, sort_keys=True)
         handle.flush()
         os.fsync(handle.fileno())
@@ -318,7 +333,7 @@ def _deliver(cfg: dict, state: dict, state_path: Path) -> None:
         raise RelayError("inbox-ack-missing")
 
 
-def run(config_path: Path, *, clock=time.time) -> int:
+def run(config_path: Path, *, clock=time.time, accept_new_epoch=False) -> int:
     try:
         cfg = load_config(config_path)
         state_dir = Path(cfg["state_dir"])
@@ -326,11 +341,22 @@ def run(config_path: Path, *, clock=time.time) -> int:
     except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError, RelayError):
         return 2
     status, code, state = {"ts": clock(), "error": None, "pending": None}, 0, None
-    with _Locked(state_dir / "relay.lock"):
+    try:
+        lock = _Locked(state_dir / "relay.lock")
+    except OSError:
+        status["error"] = "lock-open-failed"
         try:
-            state = _load_state(state_dir / "state.json")
+            _write_atomic(state_dir / "status.json", status)
+        except OSError:
+            pass
+        return 1
+    with lock:
+        try:
+            state = _load_state(state_dir / "state.json", cfg["inbox"], accept_new_epoch)
             for host in cfg["hosts"]:
-                state["outbox"].extend(_observe(host, state["hosts"].setdefault(host["id"], {}), clock()))
+                state["outbox"].extend(
+                    _observe(host, state["hosts"].setdefault(host["id"], {}), clock(), state["epoch"])
+                )
             _save_state(state_dir / "state.json", state)
             _deliver(cfg, state, state_dir / "state.json")
         except RelayError as exc:
@@ -347,7 +373,9 @@ def run(config_path: Path, *, clock=time.time) -> int:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", required=True, type=Path)
-    return run(parser.parse_args(argv).config)
+    parser.add_argument("--accept-new-epoch", action="store_true", help="Allow lost-state recovery with a new epoch")
+    args = parser.parse_args(argv)
+    return run(args.config, accept_new_epoch=args.accept_new_epoch)
 
 
 if __name__ == "__main__":
