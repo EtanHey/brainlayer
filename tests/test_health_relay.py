@@ -654,10 +654,18 @@ def test_version_three_requires_a_valid_epoch(relay, env, epoch):
 PRE_HARDENING_RELAY = "9c6910f1657e50d7b5efb86a075e885cf414dd5f"
 
 
+def _clean_git_env() -> dict[str, str]:
+    # An inherited GIT_DIR (a git hook runs the suite) would point `git show` at the wrong repo.
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def test_rollback_rejects_new_state_explicitly(relay, env):
     # A depth-1 CI checkout lacks the pre-hardening commit; local and pre-push runs have it.
     has_commit = subprocess.run(
-        ["git", "cat-file", "-e", f"{PRE_HARDENING_RELAY}^{{commit}}"], cwd=ROOT, capture_output=True
+        ["git", "cat-file", "-e", f"{PRE_HARDENING_RELAY}^{{commit}}"],
+        cwd=ROOT,
+        capture_output=True,
+        env=_clean_git_env(),
     )
     if has_commit.returncode != 0:
         pytest.skip(f"pre-hardening relay commit {PRE_HARDENING_RELAY[:8]} not in this checkout")
@@ -669,6 +677,7 @@ def test_rollback_rejects_new_state_explicitly(relay, env):
         capture_output=True,
         text=True,
         check=True,
+        env=_clean_git_env(),
     )
     old_script = env["tmp"] / "old-relay.py"
     old_script.write_text(result.stdout)
