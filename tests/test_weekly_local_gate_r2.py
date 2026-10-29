@@ -84,12 +84,14 @@ def test_probe_d_failed_verification_cannot_fall_back_to_earlier_good_receipt(lo
 
 @pytest.mark.parametrize("phase,pragma", [("all", "quick_check"), ("snapshot", "integrity_check")])
 def test_raw_snapshot_gets_mandatory_sqlite_check_before_compression(local_lane, monkeypatch, phase, pragma):
+    # This matrix covers the legacy path; filesystem reclamation forces a full check.
+    monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda _: (False, "legacy-path fixture"))
     calls = []
     original = backup._sqlite_pragma_check
 
     def check(path, name):
         assert path.exists() and path.suffix == ".db"
-        assert not list(local_lane["staging_dir"].glob("*.gz"))
+        assert not [*local_lane["staging_dir"].glob("*.gz"), *local_lane["staging_dir"].glob("*.zst")]
         calls.append(name)
         return original(path, name)
 
@@ -100,14 +102,24 @@ def test_raw_snapshot_gets_mandatory_sqlite_check_before_compression(local_lane,
     assert receipt["local_integrity_pragma"] == pragma
 
 
-def test_raw_corruption_retains_raw_and_never_publishes_local_proof(local_lane, monkeypatch):
-    monkeypatch.setattr(backup, "_sqlite_pragma_check", lambda *a: "malformed page")
+@pytest.mark.parametrize("phase", ["all", "snapshot"])
+@pytest.mark.parametrize("reclaim_raw", [False, True])
+def test_raw_corruption_retains_raw_and_never_publishes_local_proof(local_lane, monkeypatch, phase, reclaim_raw):
+    monkeypatch.setattr(backup, "_probe_raw_reclamation", lambda _: (reclaim_raw, None))
+    calls = []
+
+    def corrupt(path, pragma):
+        calls.append(pragma)
+        return "malformed page"
+
+    monkeypatch.setattr(backup, "_sqlite_pragma_check", corrupt)
     with pytest.raises(RuntimeError, match="malformed page"):
-        backup.run_backup(**local_lane, phase="snapshot")
+        backup.run_backup(**local_lane, phase=phase, upload=False)
+    assert calls == ["integrity_check" if reclaim_raw or phase == "snapshot" else "quick_check"]
     receipt = backup._read_backup_receipts(local_lane["log_path"])[-1]
     assert not receipt.get("local_verified")
     assert list(local_lane["staging_dir"].glob("*.db"))
-    assert not list(local_lane["staging_dir"].glob("*.gz"))
+    assert not [*local_lane["staging_dir"].glob("*.gz"), *local_lane["staging_dir"].glob("*.zst")]
 
 
 def test_probe_a_failed_snapshot_survives_empty_upload_and_its_alert_key(local_lane, monkeypatch, tmp_path):
