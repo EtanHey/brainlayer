@@ -9,9 +9,20 @@ import pytest
 pytestmark = [pytest.mark.recovery_oracle, pytest.mark.timeout(30)]
 
 
-def test_lock_recovery(world):
-    world.store("otter")
-    world.store("ibis")
+@pytest.mark.parametrize("deferred_seeds", [False, True], ids=["default-seeds", "deferred-seeds"])
+def test_lock_recovery(world, monkeypatch, deferred_seeds):
+    with monkeypatch.context() as seed_setup:
+        if deferred_seeds:
+            seed_setup.setenv("BRAINLAYER_ARBITRATED", "1")
+        world.store("otter")
+        world.store("ibis")
+    if deferred_seeds:
+        assert [r["status"] for r in world.receipts] == ["DEFERRED", "DEFERRED"]
+    # A seed store can exhaust its 25ms budget and acknowledge DEFERRED.
+    # Materialize seeds before locking: drain cannot do so under the holder,
+    # and an empty hotlane scan correctly skips the contended write entirely.
+    world.drain()
+    assert world.writer.conn.execute("SELECT COUNT(*) FROM chunks").fetchone() == (2,)
     world.writer.conn.execute("DELETE FROM chunk_vectors")
     holder = world.connection()
     holder.execute("BEGIN IMMEDIATE")
@@ -31,7 +42,8 @@ def test_lock_recovery(world):
     finally:
         holder.execute("ROLLBACK")
         holder.close()
-    assert any(r["status"] == "DEFERRED" for r in world.receipts)
+    # Only stores made under the holder count; deferred seeds would satisfy this vacuously.
+    assert any(r["status"] == "DEFERRED" for r in world.receipts[2:])
     from .faults import catch_up
 
     convergence = catch_up(world, timeout=5)
