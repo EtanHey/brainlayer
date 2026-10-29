@@ -79,7 +79,7 @@ final class BrainBarStatusP3Tests: XCTestCase {
         inputs.observations?[.maintenanceNightly] = sampled[.maintenanceNightly]
         let (snapshot, _) = T.assertAgree(inputs, dot: true, "two abandoned runners")
         XCTAssertEqual(snapshot.attention.filter { $0.component == .maintenance }.count, 1)
-        XCTAssertTrue(snapshot.attention.contains { $0.text.contains("Weekly maintenance was cut off (step maintenance-weekly)") })
+        XCTAssertTrue(snapshot.attention.contains { $0.text.contains("Weekly maintenance (step maintenance-weekly) found cut off") })
         try Data((abandoned + "{\"event\":\"finished\",\"step\":\"maintenance-weekly\",\"ts\":1793052900,\"status\":\"ok\",\"returncode\":0}\n").utf8).write(to: file)
         XCTAssertEqual(BrainBarCalendarHistory.read(directory: directory).runs["maintenance-weekly"]?.consecutiveFailures, 0)
     }
