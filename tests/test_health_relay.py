@@ -651,11 +651,20 @@ def test_version_three_requires_a_valid_epoch(relay, env, epoch):
     assert state_path.read_text() == original and _blocked(env) == []
 
 
+PRE_HARDENING_RELAY = "9c6910f1657e50d7b5efb86a075e885cf414dd5f"
+
+
 def test_rollback_rejects_new_state_explicitly(relay, env):
+    # A depth-1 CI checkout lacks the pre-hardening commit; local and pre-push runs have it.
+    has_commit = subprocess.run(
+        ["git", "cat-file", "-e", f"{PRE_HARDENING_RELAY}^{{commit}}"], cwd=ROOT, capture_output=True
+    )
+    if has_commit.returncode != 0:
+        pytest.skip(f"pre-hardening relay commit {PRE_HARDENING_RELAY[:8]} not in this checkout")
     assert relay.run(env["config"]) == 0
     state_path = env["tmp"] / "state/state.json"
     result = subprocess.run(
-        ["git", "show", "9c6910f1657e50d7b5efb86a075e885cf414dd5f:scripts/health_relay/health_relay.py"],
+        ["git", "show", f"{PRE_HARDENING_RELAY}:scripts/health_relay/health_relay.py"],
         cwd=ROOT,
         capture_output=True,
         text=True,
