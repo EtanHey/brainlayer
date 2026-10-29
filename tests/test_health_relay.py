@@ -897,3 +897,63 @@ def test_host_source_resolve_errors_do_not_abort_other_alerts(relay, env, monkey
         patch.setattr(Path, "resolve", resolve)
         assert relay.run(env["config"]) == 0
     _acked_with_line_and_marker(env)
+
+
+@pytest.mark.parametrize("outage_runs", [1, 2])
+@pytest.mark.parametrize("transient", [False, True])
+def test_failed_stale_scan_retains_pre_observe_floor(relay, env, monkeypatch, outage_runs, transient):
+    assert relay.run(env["config"]) == 0
+    path = env["tmp"] / "state/state.json"
+    snapshot = path.read_bytes()
+    _alerts(env, {"backup-daily": "x"})
+    assert relay.run(env["config"]) == 0
+    _alerts(env, {})
+    assert relay.run(env["config"]) == 0
+    path.write_bytes(snapshot)
+    _alerts(env, {"backup-daily": "x"})
+    inbox_before = env["inbox"].read_bytes()
+    real_read = relay._read_inbox
+    calls = 0
+
+    def outage(inbox):
+        nonlocal calls
+        calls += 1
+        if not transient or calls == 1:
+            raise relay.RelayError("inbox-unreadable")
+        return real_read(inbox)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(relay, "_read_inbox", outage)
+        for _ in range(outage_runs):
+            assert relay.run(env["config"]) == 1
+    saved = path.read_bytes()
+    state = json.loads(saved)
+    assert state["verify_floor"] == {"m4-max": 0}
+    assert state["hosts"]["m4-max"]["seq"] == 1 and len(state["outbox"]) == 1
+    assert relay.run(env["config"]) == 1
+    assert _status(env)["error"] == "state-stale"
+    assert path.read_bytes() == saved and env["inbox"].read_bytes() == inbox_before
+
+
+def test_successful_stale_scan_clears_floor_and_delivers_outage_events(relay, env, monkeypatch):
+    assert relay.run(env["config"]) == 0
+    _alerts(env, {"backup-daily": "x"})
+    with monkeypatch.context() as patch:
+        patch.setattr(relay, "_read_inbox", lambda _: (_ for _ in ()).throw(relay.RelayError("inbox-unreadable")))
+        assert relay.run(env["config"]) == 1
+    assert relay.run(env["config"]) == 0
+    state = json.loads((env["tmp"] / "state/state.json").read_text())
+    assert "verify_floor" not in state and not state["outbox"]
+    assert relay.run(env["config"]) == 0 and len(_blocked(env)) == 1
+
+
+@pytest.mark.parametrize("floor", [None, [], {"m4-max": True}, {"m4-max": -1}, {"m4-max": 1}, {"bad\n": 0}])
+def test_corrupt_verify_floor_is_refused_without_state_changes(relay, env, floor):
+    assert relay.run(env["config"]) == 0
+    path = env["tmp"] / "state/state.json"
+    state = json.loads(path.read_text())
+    state["verify_floor"] = floor
+    path.write_text(json.dumps(state))
+    before = path.read_bytes()
+    assert relay.run(env["config"]) == 2
+    assert _status(env)["error"] == "state-corrupt" and path.read_bytes() == before

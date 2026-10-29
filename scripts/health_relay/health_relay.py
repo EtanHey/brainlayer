@@ -110,7 +110,9 @@ def _match(pattern, value) -> str:
 
 def load_config(path: Path) -> dict:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    cfg = {key: int(raw.get(key, default)) for key, default in DEFAULTS.items()}
+    cfg = {key: raw.get(key, default) for key, default in DEFAULTS.items()}
+    if any(type(value) is not int or not 0 <= value <= 2**31 - 1 for value in cfg.values()):
+        raise RelayError("config-invalid")
     cfg.update(inbox=_abs(raw["inbox"]), state_dir=_abs(raw["state_dir"]), hosts=[])
     inbox, state_dir = Path(cfg["inbox"]), Path(cfg["state_dir"])
     destinations = [state_dir / name for name in ("state.json", "status.json", "relay.lock")]
@@ -204,12 +206,12 @@ def _ssh_output(argv: list, program: bytes, timeout: int) -> bytes:
 def _snapshot(host: dict, cfg: dict):
     if host["transport"] == "local":
         return _read_sources(host["paths"], MAX_SOURCE_BYTES)
-    reader = inspect.getsource(_read_sources)
-    program = f"{reader}\nimport json, sys\nsys.stdout.write(json.dumps(_read_sources({host['paths']!r}, {MAX_SOURCE_BYTES})))\n"
-    options = [arg for option in SSH_OPTIONS for arg in ("-o", option)]
-    remote_argv = [shlex.quote(arg) for arg in (host["remote_python"], "-I", "-")]
-    argv = [host["ssh_bin"], "-T", *options, "--", host["ssh_alias"], *remote_argv]
     try:
+        reader = inspect.getsource(_read_sources)
+        program = f"{reader}\nimport json, sys\nsys.stdout.write(json.dumps(_read_sources({host['paths']!r}, {MAX_SOURCE_BYTES})))\n"
+        options = [arg for option in SSH_OPTIONS for arg in ("-o", option)]
+        remote_argv = [shlex.quote(arg) for arg in (host["remote_python"], "-I", "-")]
+        argv = [host["ssh_bin"], "-T", *options, "--", host["ssh_alias"], *remote_argv]
         snap = json.loads(_ssh_output(argv, program.encode(), cfg["ssh_timeout_seconds"]))
         sources = snap["sources"]
         valid = isinstance(snap["now"], float) and set(sources) == set(SOURCES)
@@ -231,13 +233,14 @@ def _when(value) -> float:
 
 
 def evaluate(snap: dict, cfg: dict, seen: list, in_grace: bool):
-    """Return (issues, measured sources).
+    """Return (issues, measured sources, held episodes).
 
     A source is measured only by fresh, validated evidence, or by the healthy absence of an
-    optional file never seen before. Stale, pending, suppressed or erroring evidence can open
-    issues but clears nothing.
+    optional file never seen before. Stale, pending or erroring evidence can open issues but
+    clears nothing. Codes present in either badge list hold existing episodes open; only
+    critical, unsuppressed active codes open new badge episodes.
     """
-    now, issues, measured, docs = snap["now"], set(), set(), {}
+    now, issues, measured, held, docs = snap["now"], set(), set(), set(), {}
     for name, read in snap["sources"].items():
         if read["s"] == "ok":
             try:
@@ -260,7 +263,7 @@ def evaluate(snap: dict, cfg: dict, seen: list, in_grace: bool):
             issues.add(f"source-corrupt:{name}")
             docs.pop(name, None)
         else:
-            if name in docs or snap["sources"][name]["s"] == "absent":
+            if name in docs or (snap["sources"][name]["s"] == "absent" and name not in seen):
                 measured.add(name)
     jobs, pause = docs.get("jobs", {}), docs.get("pause", {})
 
@@ -307,26 +310,29 @@ def evaluate(snap: dict, cfg: dict, seen: list, in_grace: bool):
                 if _when(alerts["expected_first_run_by"]) < now and not off(HEALTH_LABEL):
                     issues.add("health-stale")
             else:
-                active = alerts["active"]
-                if not isinstance(active, list):
-                    raise ValueError("badge active")
-                normalized = []
-                for item in active:
-                    if (
-                        not isinstance(item, dict)
-                        or not isinstance(item.get("code"), str)
-                        or item.get("severity") not in ("critical", "warning")
-                    ):
-                        raise ValueError("badge entry")
-                    code = item["code"].replace("_", "-")
-                    if not SAFE_ID.fullmatch(code):
-                        raise ValueError("badge code")
-                    normalized.append((code, item["severity"]))
+                normalized = {}
+                for group in ("active", "suppressed"):
+                    if not isinstance(alerts[group], list):
+                        raise ValueError("badge list")
+                    normalized[group] = []
+                    for item in alerts[group]:
+                        if (
+                            not isinstance(item, dict)
+                            or not isinstance(item.get("code"), str)
+                            or item.get("severity") not in ("critical", "warning")
+                        ):
+                            raise ValueError("badge entry")
+                        code = item["code"].replace("_", "-")
+                        if not SAFE_ID.fullmatch(code):
+                            raise ValueError("badge code")
+                        normalized[group].append((code, item["severity"]))
+                muted = {f"badge:{code}" for code, _ in normalized["suppressed"]}
+                held.update(muted | {f"badge:{code}" for code, _ in normalized["active"]})
                 current = fresh(badge["generated_at"], cfg["badge_max_age_seconds"])
                 if not (current or off(HEALTH_LABEL)):
                     issues.add("health-stale")
-                for code, severity in normalized:
-                    if severity == "critical" and not code.startswith("job-alert-"):
+                for code, severity in normalized["active"]:
+                    if severity == "critical" and not code.startswith("job-alert-") and f"badge:{code}" not in muted:
                         issues.add(f"badge:{code}")
                 if current:
                     measured.add("badge")
@@ -344,7 +350,7 @@ def evaluate(snap: dict, cfg: dict, seen: list, in_grace: bool):
             absent("watcher", WATCH_LABEL)
     except (KeyError, TypeError, ValueError, AttributeError):
         issues.add("source-corrupt:watcher")
-    return issues, measured
+    return issues, measured, held
 
 
 def _source_of(issue: str):
@@ -364,12 +370,12 @@ def _observe(host: dict, cfg: dict, hstate: dict, clock: float, epoch: str) -> l
         hstate["unreach"] = 0
         # A future first_seen (a clock that ran ahead) grants no grace rather than endless grace.
         in_grace = 0 <= clock - hstate["first_seen"] < cfg["first_run_grace_seconds"]
-        issues, measured = evaluate(snap, cfg, hstate.setdefault("seen", []), in_grace)
+        issues, measured, held = evaluate(snap, cfg, hstate.setdefault("seen", []), in_grace)
         hstate["seen"] = sorted(set(hstate["seen"]) | {n for n, r in snap["sources"].items() if r["s"] != "absent"})
     else:
         hstate["unreach"] = hstate.get("unreach", 0) + 1
         issues = {"host-unreachable"} if hstate["unreach"] >= cfg["unreachable_after"] else set()
-        measured = set()
+        measured, held = set(), set()
     episodes, events = hstate.setdefault("episodes", {}), []
     for issue in sorted(issues):
         episode = episodes.setdefault(issue, {"open": False})
@@ -386,7 +392,7 @@ def _observe(host: dict, cfg: dict, hstate: dict, clock: float, epoch: str) -> l
             events.append({"id": event_id, "ts": stamp, "line": line})
     for issue, episode in episodes.items():
         source = _source_of(issue)
-        if episode["open"] and issue not in issues and (source in measured if source else reached):
+        if episode["open"] and issue not in issues | held and (source in measured if source else reached):
             episode["open"] = False
     closed = sorted((e["seq"], i) for i, e in episodes.items() if not e["open"])
     for _, issue in closed[: max(0, len(closed) - MAX_CLOSED)]:
@@ -429,9 +435,17 @@ def _load_state(path: Path, inbox: str, accept_new_epoch: bool) -> dict:
     if state["version"] == 2:
         state.update(version=3, epoch=os.urandom(16).hex())
     try:
-        text = _read_inbox(inbox)
-    except RelayError:
-        text = ""  # Delivery still reports the inbox failure and retains pending events.
+        _verify_inbox(state, inbox)
+    except RelayError as exc:
+        if str(exc) == "state-stale":
+            raise
+        state.setdefault("verify_floor", {key: host.get("seq", 0) for key, host in state["hosts"].items()})
+    return state
+
+
+def _verify_inbox(state: dict, inbox: str) -> None:
+    """Verify against the earliest unscanned sequence, before any outage observations."""
+    text = _read_inbox(inbox)
     whole, tail = _lines(text)
     marker = re.compile(
         rf"<!-- brainlayer-health:bl-([a-z0-9][a-z0-9._-]{{0,63}})-{state['epoch']}-([0-9]+)-[a-z0-9._-]+ -->"
@@ -439,11 +453,14 @@ def _load_state(path: Path, inbox: str, accept_new_epoch: bool) -> dict:
     for line in whole | {tail}:
         match = marker.fullmatch(line)
         if match:
-            persisted = str(state["hosts"].get(match[1], {}).get("seq", 0))
+            floor = state.get("verify_floor")
+            persisted = str(
+                floor.get(match[1], 0) if floor is not None else state["hosts"].get(match[1], {}).get("seq", 0)
+            )
             delivered = match[2].lstrip("0") or "0"
             if (len(delivered), delivered) > (len(persisted), persisted):
                 raise RelayError("state-stale")
-    return state
+    state.pop("verify_floor", None)
 
 
 def _validate_state(state) -> None:
@@ -483,6 +500,11 @@ def _validate_state(state) -> None:
             )
             require(isinstance(episode, dict) and type(episode.get("open")) is bool)
             require(sequence(episode.get("seq")) and 0 < episode["seq"] <= host.get("seq", 0))
+    if "verify_floor" in state:
+        require(isinstance(state["verify_floor"], dict))
+        for host_id, floor in state["verify_floor"].items():
+            require(isinstance(host_id, str) and SAFE_ID.fullmatch(host_id))
+            require(sequence(floor) and floor <= state["hosts"].get(host_id, {}).get("seq", 0))
     for event in state["outbox"]:
         require(isinstance(event, dict))
         require(all(single_line(event.get(key)) for key in ("id", "ts", "line")))
@@ -615,6 +637,10 @@ def run(config_path: Path, *, clock=time.time, accept_new_epoch=False) -> int:
                 state["outbox"].extend(_observe(host, cfg, hstate, clock(), state["epoch"]))
                 status["hosts"][host["id"]] = "unreachable" if hstate.get("unreach") else "reached"
             _save_state(state_dir / "state.json", state)
+            if "verify_floor" in state:
+                # Access may recover within this run; verify before any delivery can occur.
+                _verify_inbox(state, cfg["inbox"])
+                _save_state(state_dir / "state.json", state)
             _deliver(cfg, state, state_dir / "state.json")
         except RelayError as exc:
             status["error"] = str(exc)
