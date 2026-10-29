@@ -210,7 +210,7 @@ caskroom_dir() {
 # Only execute a saved uninstall recipe if its JSON receipt and staged app link agree.
 # Legacy Ruby-only/unreadable receipts fail closed to the existing adoption path.
 registration_intact() {
-    python3 - "$(caskroom_dir)" "$REGISTERED_VERSION" "$APP_PATH" "$CASK_NAME" <<'PY'
+    python3 -I - "$(caskroom_dir)" "$REGISTERED_VERSION" "$APP_PATH" "$CASK_NAME" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -273,14 +273,39 @@ approval_prompt() {
     warn "Approval will not be carried: $*. The first launch will prompt and must be approved by a human."
 }
 
+# Every activation, including recovery after a failed upgrade, needs these gates.
+verify_app_security() {
+    local assessment
+    [[ "$DRY_RUN" -eq 0 ]] || return 0
+    if ! "$CODESIGN_BIN" --verify --deep --strict "$APP_PATH"; then
+        err "codesign verification failed"
+        return 6
+    fi
+    if ! assessment="$("$SPCTL_BIN" -a -t exec -vv "$APP_PATH" 2>&1)"; then
+        err "Gatekeeper verification failed: $assessment"
+        return 6
+    fi
+    if ! printf '%s\n' "$assessment" | grep -Fxq "$APP_PATH: accepted" ||
+       ! printf '%s\n' "$assessment" | grep -Fxq 'source=Notarized Developer ID'; then
+        err "Gatekeeper did not report accepted as Notarized Developer ID"
+        return 6
+    fi
+}
+
 carry_approval() {
-    local identity assessment value flags approved
+    local identity attributes value flags approved
     if [[ "$DRY_RUN" -eq 1 ]]; then
         if [[ "$OLD_APPROVED" -eq 1 && -n "$OLD_IDENTITY" ]]; then
             log "  approval: will be carried after signature, notarization and identity checks."
         else
             log "  approval: will not be carried; old approval or signing identity is unavailable."
         fi
+        return 0
+    fi
+    # Confirm absence by listing attributes; a failed read remains unknown.
+    if attributes="$("$XATTR_BIN" "$APP_PATH" 2>/dev/null)" &&
+       ! printf '%s\n' "$attributes" | grep -Fxq "$QUARANTINE_ATTRIBUTE"; then
+        log "New app has no quarantine attribute; no approval transfer is needed."
         return 0
     fi
     if [[ "$OLD_APPROVED" -ne 1 ]]; then
@@ -292,19 +317,6 @@ carry_approval() {
         approval_prompt "signing identity changed or could not be verified"
         return 0
     fi
-    if ! "$CODESIGN_BIN" --verify --deep --strict "$APP_PATH"; then
-        approval_prompt "codesign verification failed"
-        return 6  # Do not activate a bundle that failed signature verification.
-    fi
-    if ! assessment="$("$SPCTL_BIN" -a -t exec -vv "$APP_PATH" 2>&1)"; then
-        approval_prompt "Gatekeeper verification failed: $assessment"
-        return 6
-    fi
-    if ! printf '%s\n' "$assessment" | grep -Fxq "$APP_PATH: accepted" ||
-       ! printf '%s\n' "$assessment" | grep -Fxq 'source=Notarized Developer ID'; then
-        approval_prompt "Gatekeeper did not report accepted as Notarized Developer ID"
-        return 6
-    fi
     if ! value="$("$XATTR_BIN" -p "$QUARANTINE_ATTRIBUTE" "$APP_PATH" 2>/dev/null)" ||
        [[ ! "$value" =~ ^[[:xdigit:]]{1,8}\; ]]; then
         approval_prompt "new quarantine value is missing, unreadable or malformed"
@@ -312,7 +324,9 @@ carry_approval() {
     fi
     flags="${value%%;*}"
     printf -v approved '%0*x' "${#flags}" "$((16#$flags | 0x40))"
-    if "$XATTR_BIN" -w "$QUARANTINE_ATTRIBUTE" "$approved;${value#*;}" "$APP_PATH"; then
+    # Homebrew stamps helpers independently; skip symlinks and preserve path boundaries.
+    if find "$APP_PATH" ! -type l -print0 |
+       xargs -0 "$XATTR_BIN" -w "$QUARANTINE_ATTRIBUTE" "$approved;${value#*;}"; then
         log "Gatekeeper approval carried forward; quarantine provenance preserved."
     else
         approval_prompt "could not write the quarantine approval flag"
@@ -434,6 +448,7 @@ adopt_install() {
     # --force adopts an app already sitting at the target path. Without it brew says
     # "It seems there is already an App at '<path>'" and does nothing.
     run_cmd "$BREW_BIN" install --cask --force "$CASK_REF"
+    verify_app_security
     carry_approval
 }
 
@@ -441,6 +456,7 @@ apply_update() {
     case "$DRIFT_KIND" in
         none)
             log "Already canonical at $OFFERED_VERSION — nothing to do."
+            verify_app_security
             ;;
         missing)
             log "BrainBar is not installed. Installing $OFFERED_VERSION."
@@ -454,7 +470,26 @@ apply_update() {
                 else
                     log "  approval: will not be carried; old approval or signing identity is unavailable."
                 fi
-                run_cmd "$BREW_BIN" upgrade --cask "$CASK_REF"
+                local upgrade_exit recovery_exit
+                if run_cmd "$BREW_BIN" upgrade --cask "$CASK_REF"; then
+                    verify_app_security
+                else
+                    upgrade_exit=$?
+                    err "Homebrew upgrade failed (exit $upgrade_exit); attempting service recovery."
+                    # Homebrew may restore the app without restarting the services it stopped.
+                    if verify_app_security; then
+                        if run_cmd "${BREW_BIN%/*}/brainlayer" brainbar activate --verify; then
+                            recovery_exit=0
+                        else
+                            recovery_exit=$?
+                        fi
+                        log "Recovery activation exit: $recovery_exit"
+                    else
+                        recovery_exit=$?
+                        err "Recovery activation skipped: app security verification failed (exit $recovery_exit)."
+                    fi
+                    return "$upgrade_exit"
+                fi
                 return 0
             fi
             log "Drift detected ($DRIFT_KIND). Adopting $OFFERED_VERSION without running any uninstall recipe."
