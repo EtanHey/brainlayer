@@ -98,7 +98,7 @@ class Universe:
 
     def __exit__(self, *_):
         for thread in self.threads:
-            thread.join(timeout=3)
+            thread.join()
             assert not thread.is_alive(), "owned background writer did not stop"
         self.writer.close()
 
@@ -132,8 +132,11 @@ class Universe:
         elapsed = (time.monotonic() - started) * 1000
         assert result["status"] in {"STORED", "DUPLICATE", "MERGED", "DEFERRED"}, result
         self.receipts.append({**result, "name": name, "ack_ms": elapsed})
+        # Background embedding has no per-ack completion deadline. Join owned
+        # writers before sharing the DB again; the 30s test watchdog bounds a
+        # stuck worker. Cleanup stays outside the measured acknowledgement.
         for thread in self.threads:
-            thread.join(timeout=3)
+            thread.join()
             assert not thread.is_alive()
         return result
 

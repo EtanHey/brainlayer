@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-pytestmark = [pytest.mark.recovery_oracle, pytest.mark.timeout(30)]
+pytestmark = [pytest.mark.recovery_oracle, pytest.mark.timeout(30, method="thread")]
 
 
 @pytest.mark.parametrize("deferred_seeds", [False, True], ids=["default-seeds", "deferred-seeds"])
@@ -122,10 +122,28 @@ def test_environment_override_and_symlink_cannot_escape(world, monkeypatch):
         world.guard(link / "outside.db")
 
 
-def test_all_success_outcomes_are_accounted_for(world, monkeypatch):
+@pytest.mark.parametrize("delayed_writer", [False, True], ids=["default-writer", "delayed-writer"])
+def test_all_success_outcomes_are_accounted_for(world, monkeypatch, delayed_writer):
+    from brainlayer import runtime_store
     from brainlayer.mcp import store_handler
 
+    if delayed_writer:
+        original_open = runtime_store.open_writer_store
+        delayed = False
+
+        def open_writer(*args, **kwargs):
+            nonlocal delayed
+            if not delayed:
+                delayed = True
+                # Outlast the fixture's former 3s join, after the store commits.
+                time.sleep(3.2)
+            return original_open(*args, **kwargs)
+
+        monkeypatch.setattr(runtime_store, "open_writer_store", open_writer)
+
     first = world.store("otter")
+    if delayed_writer:
+        assert delayed, "precondition: store must start its background writer"
     world.store("otter")
     with monkeypatch.context() as merge:
         merge.setattr(store_handler, "_new_manual_chunk_id", lambda: first["chunk_id"])
