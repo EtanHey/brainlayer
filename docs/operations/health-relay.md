@@ -44,7 +44,10 @@ healthy only until the file has been seen once. Every observed issue is tracked,
   A later failure after a healthy clear opens a new episode.
 - The relay never creates the inbox. If the inbox is missing, unwritable, fails to fsync, or
   the re-read lacks a record, the run exits 1 and the event stays pending. Invalid config or a
-  corrupt `state.json` exits 2. `status.json` (overwritten each run) records `error` and `pending`.
+  corrupt `state.json` exits 2. Invalid config is rejected before any write, including when the
+  inbox resolves or aliases to state, status, lock or atomic temporary files. Corrupt state is
+  preserved byte-for-byte; the failure status has `error: "state-corrupt"` and `pending: null`.
+  `status.json` records `error` and `pending` after each run with valid configuration.
 
 ## Limits
 

@@ -69,7 +69,7 @@ def _abs(value) -> str:
 
 
 def _match(pattern, value) -> str:
-    if not isinstance(value, str) or not pattern.match(value):
+    if not isinstance(value, str) or not pattern.fullmatch(value):
         raise RelayError("config-invalid")
     return value
 
@@ -77,6 +77,18 @@ def _match(pattern, value) -> str:
 def load_config(path: Path) -> dict:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     cfg = {"inbox": _abs(raw["inbox"]), "state_dir": _abs(raw["state_dir"]), "hosts": []}
+    inbox, state_dir = Path(cfg["inbox"]), Path(cfg["state_dir"])
+    destinations = [state_dir / name for name in ("state.json", "status.json", "relay.lock")]
+    destinations += [_atomic_temp(path) for path in destinations[:2]]
+    for destination in destinations:
+        if inbox.resolve() == destination.resolve():
+            raise RelayError("config-invalid")
+        try:
+            same_file = os.path.samefile(inbox, destination)
+        except FileNotFoundError:
+            same_file = False
+        if same_file:
+            raise RelayError("config-invalid")
     for item in raw["hosts"]:
         host = {"id": _match(SAFE_ID, item["id"]), "label": _match(SAFE_LABEL, item["label"])}
         base, overrides = _abs(item["dir"]), item.get("sources", {})
@@ -102,13 +114,13 @@ def evaluate(snap: dict, seen: list):
         if read["s"] == "ok":
             try:
                 docs[name] = json.loads(read["text"])
-            except ValueError:
+            except (ValueError, RecursionError):
                 issues.add(f"source-corrupt:{name}")
         elif read["s"] != "absent":
             issues.add(f"source-{read['s']}:{name}")
     if isinstance(docs.get("job-alerts"), dict):
         issues.update(
-            f"job-alert:{k}" if SAFE_ID.match(str(k)) else "job-alert:invalid-key" for k in docs["job-alerts"]
+            f"job-alert:{k}" if SAFE_ID.fullmatch(str(k)) else "job-alert:invalid-key" for k in docs["job-alerts"]
         )
         measured.add("job-alerts")
     elif "job-alerts" in docs:
@@ -173,15 +185,49 @@ def _load_state(path: Path) -> dict:
         state = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {"version": 2, "hosts": {}, "outbox": []}
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         raise RelayError("state-corrupt") from None
-    if not (isinstance(state, dict) and isinstance(state.get("hosts"), dict) and isinstance(state.get("outbox"), list)):
-        raise RelayError("state-corrupt")
+    _validate_state(state)
     return state
 
 
+def _validate_state(state) -> None:
+    def require(valid):
+        if not valid:
+            raise RelayError("state-corrupt")
+
+    def sequence(value):
+        return type(value) is int and value >= 0
+
+    def single_line(value):
+        return isinstance(value, str) and bool(value) and not re.search(r"[\x00-\x1f\x7f]", value)
+
+    require(isinstance(state, dict))
+    require(type(state.get("version")) is int and state["version"] == 2)
+    require(isinstance(state.get("hosts"), dict) and isinstance(state.get("outbox"), list))
+    for host_id, host in state["hosts"].items():
+        require(isinstance(host_id, str) and SAFE_ID.fullmatch(host_id))
+        require(isinstance(host, dict))
+        require(sequence(host.get("seq", 0)))
+        seen, episodes = host.get("seen", []), host.get("episodes", {})
+        require(isinstance(seen, list) and all(isinstance(name, str) and name in SOURCES for name in seen))
+        require(isinstance(episodes, dict))
+        for issue, episode in episodes.items():
+            require(isinstance(issue, str) and re.fullmatch(r"[a-z0-9._-]+:[a-z0-9._-]+", issue))
+            require(isinstance(episode, dict) and type(episode.get("open")) is bool)
+            require(sequence(episode.get("seq")) and 0 < episode["seq"] <= host.get("seq", 0))
+    for event in state["outbox"]:
+        require(isinstance(event, dict))
+        require(all(single_line(event.get(key)) for key in ("id", "ts", "line")))
+        require(re.fullmatch(r"[a-z0-9][a-z0-9._-]*", event["id"]))
+
+
+def _atomic_temp(path: Path) -> Path:
+    return path.with_name(f".{path.name}.tmp")
+
+
 def _write_atomic(path: Path, document: dict) -> None:
-    tmp = path.with_name(f".{path.name}.tmp")
+    tmp = _atomic_temp(path)
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(document, handle, sort_keys=True)
         handle.flush()
@@ -277,7 +323,7 @@ def run(config_path: Path, *, clock=time.time) -> int:
         cfg = load_config(config_path)
         state_dir = Path(cfg["state_dir"])
         state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError, RelayError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError, RelayError):
         return 2
     status, code, state = {"ts": clock(), "error": None, "pending": None}, 0, None
     with _Locked(state_dir / "relay.lock"):

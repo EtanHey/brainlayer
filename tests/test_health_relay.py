@@ -6,7 +6,9 @@ import ast
 import fcntl
 import importlib.util
 import json
+import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -68,8 +70,19 @@ def _run(relay, env) -> int:
     code = relay.run(env["config"])
     after = env["inbox"].read_text()
     assert after.startswith(before), "the inbox is append-only"
-    if _status(env)["pending"] == 0:
-        assert len(_complete(env, EVENT)) <= 1
+    state_path = env["tmp"] / "state/state.json"
+    if _status(env)["pending"] is not None:
+        state = json.loads(state_path.read_text())
+        pending = {event["id"] for event in state["outbox"]}
+        whole, _ = relay._lines(after)
+        for host_id, host in state["hosts"].items():
+            for issue, episode in host.get("episodes", {}).items():
+                event_id = f"bl-{host_id}-{episode['seq']}-{issue.replace(':', '.')}"
+                if event_id in pending:
+                    continue
+                complete = _complete(env, event_id)
+                assert len(complete) == 1, "an ack requires exactly one complete alert line"
+                assert complete[0] in whole and relay._marker(event_id) in whole
     return code
 
 
@@ -269,13 +282,43 @@ def test_missing_inbox_is_never_created(relay, env):
     assert not env["inbox"].exists() and _status(env)["error"] == "inbox-unavailable"
 
 
-def test_corrupt_relay_state_fails_visibly_without_delivery(relay, env):
+@pytest.mark.parametrize(
+    "document",
+    [
+        [],
+        {"version": 2, "hosts": {"m4-max": None}, "outbox": []},
+        {"version": 2, "hosts": {}, "outbox": [{}]},
+        {"version": 2, "hosts": {"m4-max": {"seq": "broken"}}, "outbox": []},
+        *[{"version": v, "hosts": {}, "outbox": []} for v in (None, 1, 2.0, True)],
+        *[
+            {"version": 2, "hosts": {"m4-max": {field: value}}, "outbox": []}
+            for field, value in (
+                ("seq", True),
+                ("seq", -1),
+                ("seen", None),
+                ("seen", [1]),
+                ("episodes", []),
+                ("episodes", {"job-alert:x": None}),
+                ("episodes", {"job-alert:x": {"open": "yes", "seq": 1}}),
+                ("episodes", {"job-alert:x": {"open": False}}),
+                ("episodes", {"job-alert:x": {"open": True, "seq": True}}),
+            )
+        ],
+        *[
+            {"version": 2, "hosts": {}, "outbox": [{"id": EVENT, "ts": "now", "line": "alert", field: value}]}
+            for field, value in (("id", None), ("ts", 1), ("line", []), ("line", "alert\n"))
+        ],
+    ],
+)
+def test_corrupt_relay_state_fails_visibly_without_delivery(relay, env, document):
     state = env["tmp"] / "state/state.json"
     state.parent.mkdir()
-    state.write_text("[]")
+    original = json.dumps(document).encode()
+    state.write_bytes(original)
     _alerts(env, {"backup-daily": "x"})
     assert relay.run(env["config"]) == 2
-    assert _blocked(env) == [] and state.read_text() == "[]" and _status(env)["error"] == "state-corrupt"
+    assert _blocked(env) == [] and state.read_bytes() == original
+    assert _status(env)["error"] == "state-corrupt" and _status(env)["pending"] is None
 
 
 def test_invocations_serialize_on_the_relay_lock(relay, env):
@@ -323,3 +366,91 @@ def test_carrier_is_stdlib_only():
     assert imported <= allowed | {"time", "datetime", "pathlib"}
     for forbidden in ("sqlite", "apsw", "launchctl", "--heal", "osascript", "drive", "token"):
         assert forbidden not in SCRIPT.read_text().lower()
+
+
+@pytest.mark.parametrize(
+    "destination", ["state.json", "status.json", "relay.lock", ".state.json.tmp", ".status.json.tmp"]
+)
+@pytest.mark.parametrize("alias", ["direct", "resolved", "symlink", "hardlink"])
+def test_inbox_write_destination_collision_is_refused_before_any_write(relay, env, destination, alias):
+    state_dir = env["tmp"] / "state"
+    state_dir.mkdir()
+    target = state_dir / destination
+    if alias == "direct":
+        env["raw"]["inbox"] = str(target)
+        env["inbox"] = target
+        target.write_text("# shared inbox\n@orc FYI: preserve me\n")
+    elif alias == "resolved":
+        link = env["tmp"] / "state-alias"
+        link.symlink_to(state_dir, target_is_directory=True)
+        env["raw"]["inbox"] = str(link / destination)
+        env["inbox"] = target
+        target.write_text("# shared inbox\n@orc FYI: preserve me\n")
+    elif alias == "symlink":
+        target.symlink_to(env["inbox"])
+    else:
+        os.link(env["inbox"], target)
+    env["config"].write_text(json.dumps(env["raw"]))
+    _alerts(env, {"backup-daily": "x"})
+    before = env["inbox"].read_bytes()
+    names = sorted(p.name for p in state_dir.iterdir())
+    code = relay.run(env["config"])
+    assert (code, env["inbox"].read_bytes(), sorted(p.name for p in state_dir.iterdir())) == (2, before, names)
+    with pytest.raises(relay.RelayError, match="config-invalid"):
+        relay.load_config(env["config"])
+
+
+@pytest.mark.parametrize("field,value", [("id", "m4-max\n"), ("label", "M4 Max\n")])
+def test_final_newline_config_identifiers_are_refused_before_writes(relay, env, field, value):
+    env["raw"]["hosts"][0][field] = value
+    env["config"].write_text(json.dumps(env["raw"]))
+    before = env["inbox"].read_bytes()
+    assert relay.run(env["config"]) == 2
+    assert env["inbox"].read_bytes() == before and not (env["tmp"] / "state").exists()
+
+
+def test_final_newline_source_keys_do_not_starve_a_valid_alert(relay, env):
+    _alerts(env, {**{f"a{n:02d}\n": "x" for n in range(32)}, "z-critical": "x"})
+    for _ in range(3):
+        assert _run(relay, env) == 0
+        assert _status(env)["pending"] == 0
+    assert len(_blocked(env)) == 2
+    assert len(_complete(env, "bl-m4-max-2-job-alert.z-critical")) == 1
+    assert len(_complete(env, "bl-m4-max-1-job-alert.invalid-key")) == 1
+
+
+@pytest.mark.parametrize("python", [None, "/usr/bin/python3"], ids=["in-process", "python39-isolated"])
+def test_deep_source_is_corrupt_preserves_incidents_and_delivers_pending(relay, env, monkeypatch, python):
+    _alerts(env, {"backup-daily": "x"})
+    with monkeypatch.context() as patch:
+        patch.setattr(relay, "_append", lambda *args: (_ for _ in ()).throw(relay.RelayError("inbox-append-failed")))
+        assert _run(relay, env) == 1
+    deep = "[" * 1500 + "0" + "]" * 1500
+    assert len(deep.encode()) < relay.MAX_SOURCE_BYTES
+    _alerts(env, deep)
+    if python:
+        result = subprocess.run(
+            [python, "-I", str(SCRIPT), "--config", str(env["config"])], capture_output=True, text=True
+        )
+        assert result.returncode == 0, result.stderr
+    else:
+        assert _run(relay, env) == 0
+    state = json.loads((env["tmp"] / "state/state.json").read_text())
+    episodes = state["hosts"]["m4-max"]["episodes"]
+    assert episodes["job-alert:backup-daily"]["open"] is True
+    assert episodes["source-corrupt:job-alerts"]["open"] is True
+    assert not state["outbox"] and _status(env)["pending"] == 0
+    _acked_with_line_and_marker(env)
+    assert len(_complete(env, "bl-m4-max-2-source-corrupt.job-alerts")) == 1
+
+
+def test_run_helper_rejects_ack_without_a_complete_alert(relay, env, monkeypatch):
+    _alerts(env, {"backup-daily": "x"})
+
+    def drop_events(cfg, state, path):
+        state["outbox"] = []
+        relay._save_state(path, state)
+
+    monkeypatch.setattr(relay, "_deliver", drop_events)
+    with pytest.raises(AssertionError, match="an ack requires exactly one complete alert line"):
+        _run(relay, env)
