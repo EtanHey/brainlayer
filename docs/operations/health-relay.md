@@ -14,7 +14,7 @@ job inside it are dead. The `com.etanhey.*` label keeps it out of the fleet watc
 | Source (default under the host `dir`) | Issue it can open |
 |---|---|
 | `job-alerts.json` | `job-alert:<key>`, one per active key. The reason text is never copied |
-| `badge-state.json` | `badge:<code>` for **critical** active issues (warnings and suppressed are advisory; `job_alert_*` codes come from job-alerts instead); `health-stale` when `generated_at` is older than `badge_max_age_seconds` (1200) or `pending_first_run` passes `expected_first_run_by` |
+| `badge-state.json` | `badge:<code>` for **critical** active issues (warnings are advisory; suppressed codes hold existing episodes open without opening new ones; `job_alert_*` codes come from job-alerts instead); `health-stale` when `generated_at` is older than `badge_max_age_seconds` (1200) or `pending_first_run` passes `expected_first_run_by` |
 | `watcher-health.json` | `watcher-stale` when `updated_at` is older than `watcher_max_age_seconds` (600) |
 | `supervisor/jobs.json`, `pause.sentinel` | Nothing by themselves. `enabled: false`, or a current pause naming `com.brainlayer.health-check` / `com.brainlayer.watch`, suppresses that staleness alarm |
 
@@ -27,6 +27,12 @@ file, or a disabled/paused job's evidence can open issues but clears none.
 Absent badge and watcher files are held through `first_run_grace_seconds` (900). An absent
 `job-alerts.json` is healthy only until the file has been observed in any non-absent state,
 including read errors; grace does not cover it. This history rule applies to remote reads too.
+For `supervisor/jobs.json` and `pause.sentinel`, absence is healthy only until that source has
+been seen in any non-absent state. After a bad read, absence keeps its source-error episode open
+until a validated read; absence still removes all disabling/pause controls (absent pause = resumed).
+A fresh validated badge closes `badge:<code>` only when the code appears in neither `active` nor
+`suppressed`. Active → suppressed → active is one episode; a code seen only in suppressed
+creates no alert. Both lists must pass the same entry validation before any badge episode clears.
 Every observed issue is tracked, however many there are.
 
 Remote hosts are read with a fixed reader program on stdin over the existing SSH alias, using
@@ -36,6 +42,9 @@ and output (2 MiB per stdout/stderr pipe, enforced during reads; overflow kills 
 Each remote command argument is shell-quoted because SSH joins them into a shell command.
 Remote source paths are never resolved or statted locally for inbox alias checks.
 Once SSH exits and stdout is complete, a lingering stderr holder cannot delay a successful read.
+Config numbers are integers from 0 through 2147483647; booleans, fractional values, negatives
+and out-of-range values are rejected as `config-invalid` with exit 2 before any write.
+A source-less remote reader (for example a `.pyc` without its `.py`) counts as host-unreachable.
 Each source file is read with `O_NOFOLLOW`, must be a regular file, and is capped at 256 KiB.
 
 ## Delivery contract
@@ -90,7 +99,11 @@ When state exists, the relay scans the inbox once at load for complete markers f
 epoch for every host (including SSH hosts), including an unterminated final line. A marker above
 its host's persisted sequence refuses
 the run with exit 1, `error: "state-stale"` and `pending: null`. Nothing is appended and state bytes
-stay unchanged. Never restore an older `state.json`; move stale state aside and use
+stay unchanged. If the scan cannot read the inbox, the relay persists the pre-observation per-host
+sequences as `verify_floor`, retaining the earliest floor across outage runs. The next successful
+scan checks against that floor and clears it only after verification. No delivery occurs before
+that verification, even if inbox access returns within the same run. Observations remain pending.
+Never restore an older `state.json`; move stale state aside and use
 `--accept-new-epoch` instead. The flag does not bypass the stale-state check while state exists.
 
 Preserve damaged state for investigation; do not delete it as a routine repair. After investigating

@@ -374,6 +374,15 @@ def test_new_producer_decode_failures_are_corrupt_and_do_not_abort(relay, env, s
     assert _status(env)["pending"] == 0
 
 
+def _shim_pid(path):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if path.exists() and (pid := path.read_text()).isdigit():
+            return int(pid)
+        time.sleep(0.05)
+    pytest.fail("SSH shim did not publish its pid")
+
+
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])
 def test_ssh_capture_has_byte_limits_and_reaps_overflow(relay, env, monkeypatch, stream):
     # A small limit makes a real pipe overflow cheap; the shim has no descendants.
@@ -385,16 +394,16 @@ def test_ssh_capture_has_byte_limits_and_reaps_overflow(relay, env, monkeypatch,
         f"#!{sys.executable}\nimport os, sys, time\n"
         "open(os.environ['FAKE_SSH_PID'], 'w').write(str(os.getpid()))\n"
         f"os.write({1 if stream == 'stdout' else 2}, b'x' * 4096)\n"
-        "time.sleep(5)\n"
+        "time.sleep(60)\n"
     )
-    env["raw"]["ssh_timeout_seconds"] = 3
+    env["raw"]["ssh_timeout_seconds"] = 15
     env["config"].write_text(json.dumps(env["raw"]))
     _alerts(env["m4"], {"backup-daily": "x"})
     started = time.monotonic()
     assert relay.run(env["config"]) == 0
-    assert time.monotonic() - started < 1.5  # overflow, not the 3-second timeout, ends capture
+    assert time.monotonic() - started < 8  # overflow ends capture well before the 60-second blocker
     with pytest.raises(ProcessLookupError):
-        relay.os.kill(int(pid_path.read_text()), 0)
+        relay.os.kill(_shim_pid(pid_path), 0)
     assert _status(env)["hosts"]["m1-pro"] == "unreachable"
     assert _issues(env) == ["job-alert:backup-daily"]
 
@@ -497,7 +506,7 @@ def test_ssh_exited_with_stdout_complete_does_not_wait_for_stderr_eof(relay, env
     read_fd, write_fd = os.pipe()
     real_popen = subprocess.Popen
     stopped = threading.Event()
-    holder = threading.Thread(target=lambda: (stopped.wait(3), os.close(write_fd)))
+    holder = threading.Thread(target=lambda: (stopped.wait(45), os.close(write_fd)))
     holder.start()
 
     def popen(*args, **kwargs):
@@ -509,9 +518,9 @@ def test_ssh_exited_with_stdout_complete_does_not_wait_for_stderr_eof(relay, env
     monkeypatch.setattr(relay.subprocess, "Popen", popen)
     try:
         started = time.monotonic()
-        snap = relay._snapshot(relay.load_config(env["config"])["hosts"][1], {"ssh_timeout_seconds": 1})
+        snap = relay._snapshot(relay.load_config(env["config"])["hosts"][1], {"ssh_timeout_seconds": 15})
         assert snap is not None and snap["sources"]["badge"]["s"] == "ok"
-        assert time.monotonic() - started < 0.75
+        assert time.monotonic() - started < 8
     finally:
         stopped.set()
         holder.join()
@@ -521,14 +530,14 @@ def test_ssh_timeout_kills_and_reaps_the_shim(relay, env, monkeypatch):
     pid_path = env["tmp"] / "timeout-shim.pid"
     shim = Path(env["raw"]["hosts"][1]["ssh_bin"])
     shim.write_text(
-        f"#!{sys.executable}\nimport os, time\nopen({str(pid_path)!r}, 'w').write(str(os.getpid()))\ntime.sleep(30)\n"
+        f"#!{sys.executable}\nimport os, time\nopen({str(pid_path)!r}, 'w').write(str(os.getpid()))\ntime.sleep(60)\n"
     )
     host = relay.load_config(env["config"])["hosts"][1]
     started = time.monotonic()
-    assert relay._snapshot(host, {"ssh_timeout_seconds": 0.5}) is None
-    assert time.monotonic() - started < 2
+    assert relay._snapshot(host, {"ssh_timeout_seconds": 10}) is None
+    assert time.monotonic() - started < 30  # well before the shim finishes its 60-second sleep
     with pytest.raises(ProcessLookupError):
-        relay.os.kill(int(pid_path.read_text()), 0)
+        relay.os.kill(_shim_pid(pid_path), 0)
 
 
 def test_first_run_grace_only_holds_badge_and_watcher_absence(relay, env):
@@ -582,3 +591,100 @@ def test_future_first_seen_cannot_hold_grace_open(relay, env):
     (env["m4"] / "watcher-health.json").unlink()
     assert relay.run(env["config"]) == 0
     assert {"source-missing:badge", "source-missing:watcher"} <= set(_issues(env))
+
+
+@pytest.mark.parametrize("finish", ["active", "warning", "absent"])
+def test_badge_mute_preserves_episode_until_validated_absence(relay, env, finish):
+    _host(env["m4"], active=[("canary_failed", "critical")])
+    assert relay.run(env["config"]) == 0
+    original = _state(env)["hosts"]["m4-max"]["episodes"]["badge:canary-failed"]
+    _host(env["m4"])
+    badge = json.loads((env["m4"] / "badge-state.json").read_text())
+    badge["alerts"]["suppressed"] = [{"code": "canary_failed", "severity": "critical"}]
+    _badge(env["m4"], badge)
+    assert relay.run(env["config"]) == 0
+    assert _state(env)["hosts"]["m4-max"]["episodes"]["badge:canary-failed"] == original
+    active = [("canary_failed", "warning" if finish == "warning" else "critical")] if finish != "absent" else []
+    _host(env["m4"], active=active)
+    assert relay.run(env["config"]) == 0
+    episode = _state(env)["hosts"]["m4-max"]["episodes"]["badge:canary-failed"]
+    assert episode == {**original, "open": finish != "absent"}
+    assert _issues(env) == ["badge:canary-failed"]
+
+
+def test_suppressed_only_badge_never_opens_an_episode(relay, env):
+    badge = json.loads((env["m4"] / "badge-state.json").read_text())
+    badge["alerts"]["suppressed"] = [{"code": "canary_failed", "severity": "critical"}]
+    _badge(env["m4"], badge)
+    for _ in range(2):
+        assert relay.run(env["config"]) == 0
+    assert _issues(env) == []
+    assert "badge:canary-failed" not in _state(env)["hosts"]["m4-max"]["episodes"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        None,
+        {},
+        [None],
+        [{"code": 7, "severity": "critical"}],
+        [{"code": "bad\n", "severity": "critical"}],
+        [{"code": "canary_failed", "severity": "unknown"}],
+    ],
+)
+def test_badge_suppressed_schema_is_validated_before_any_clear(relay, env, bad):
+    _host(env["m4"], active=[("canary_failed", "critical")])
+    assert relay.run(env["config"]) == 0
+    _host(env["m4"])
+    badge = json.loads((env["m4"] / "badge-state.json").read_text())
+    badge["alerts"]["suppressed"] = bad
+    _badge(env["m4"], badge)
+    assert relay.run(env["config"]) == 0
+    assert "source-corrupt:badge" in _issues(env)
+    assert _state(env)["hosts"]["m4-max"]["episodes"]["badge:canary-failed"]["open"] is True
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "first_run_grace_seconds",
+        "badge_max_age_seconds",
+        "watcher_max_age_seconds",
+        "unreachable_after",
+        "ssh_timeout_seconds",
+    ),
+)
+@pytest.mark.parametrize("value", [True, False, -1, float("inf"), 10**400, 2**31, 1.5])
+def test_invalid_config_numbers_are_classified_before_writes(relay, env, field, value):
+    env["raw"][field] = value
+    env["config"].write_text(json.dumps(env["raw"]))
+    with pytest.raises(relay.RelayError, match="config-invalid"):
+        relay.load_config(env["config"])
+    assert relay.run(env["config"]) == 2
+    assert not (env["tmp"] / "state").exists() and _blocked(env) == []
+
+
+def test_sourceless_remote_reader_is_unreachable_without_crashing(relay, env, monkeypatch):
+    def no_source(function):
+        raise OSError("could not get source code")
+
+    monkeypatch.setattr(relay.inspect, "getsource", no_source)
+    for _ in range(2):
+        assert relay.run(env["config"]) == 0
+    assert _issues(env) == ["host-unreachable"]
+    assert _status(env)["hosts"]["m1-pro"] == "unreachable"
+
+
+@pytest.mark.parametrize("name", ["jobs", "pause"])
+def test_control_bad_read_then_absence_preserves_episode_until_valid_read(relay, env, name):
+    path = env["m4"] / relay.SOURCES[name]
+    path.symlink_to(path.with_name("missing-target"))
+    assert relay.run(env["config"]) == 0
+    path.unlink()
+    assert relay.run(env["config"]) == 0
+    assert _state(env)["hosts"]["m4-max"]["episodes"][f"source-unreadable:{name}"]["open"] is True
+    path.write_text(json.dumps({"labels": []} if name == "pause" else {}))
+    assert relay.run(env["config"]) == 0
+    assert _state(env)["hosts"]["m4-max"]["episodes"][f"source-unreadable:{name}"]["open"] is False
+    assert _issues(env) == [f"source-unreadable:{name}"]
