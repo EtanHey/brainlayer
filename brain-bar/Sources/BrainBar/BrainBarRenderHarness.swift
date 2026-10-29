@@ -7,6 +7,53 @@ import Vision
 
 @MainActor
 enum BrainBarRenderHarness {
+    static func renderMaintenanceRetryRow(_ model: BrainBarMaintenanceRetryModel,
+                                          name: String, directory: URL) throws {
+        try renderMaintenanceRetry(
+            BrainBarMaintenanceRetryRow(model: model).padding(24),
+            size: CGSize(width: 860, height: 340), name: name, directory: directory
+        )
+    }
+
+    static func renderMaintenanceRetryDashboard(_ model: BrainBarMaintenanceRetryModel, directory: URL) throws {
+        let panel = BrainBarDashboardPanelState()
+        panel.attentionExpanded = true
+        let view = BrainBarDashboardPreview.make(
+            collector: BrainBarDashboardFixture.makeCollector(),
+            receiptStore: BrainBarOperationReceipts(),
+            observabilityResult: BrainBarDashboardFixture.readableObservabilityResult,
+            now: BrainBarDashboardFixture.fetchedAt, panelState: panel,
+            jobAttentionReasons: ["Scheduled maintenance failed — transcript backup did not finish"],
+            maintenanceNeedsAttention: true
+        ).environment(\.brainBarMaintenanceRetry, model)
+        try renderMaintenanceRetry(view, size: CGSize(width: 980, height: 1_320),
+                                   name: "maintenance-retry-dashboard", directory: directory)
+    }
+
+    private static func renderMaintenanceRetry<V: View>(_ view: V, size: CGSize,
+                                                        name: String, directory: URL) throws {
+        let host = NSHostingView(rootView: view
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(Color.brainBarBackgroundBase)
+            .environment(\.colorScheme, .dark))
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.frame = NSRect(origin: .zero, size: size)
+        settle(host)
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            throw Failure("Retry bitmap unavailable")
+        }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        guard let png = bitmap.representation(using: .png, properties: [:]), png.count > 5_000,
+              let image = bitmap.cgImage else { throw Failure("Retry render is empty") }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        try VNImageRequestHandler(cgImage: image).perform([request])
+        let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+        guard text.contains("Retry failed steps") else { throw Failure("Retry button did not render in \(name)") }
+        try png.write(to: directory.appendingPathComponent("\(name).png"))
+        print("SNAPSHOT \(directory.path)/\(name).png")
+    }
+
     /// Uses the same off-screen AppKit bitmap and Vision inspection as the dashboard harness.
     static func renderSettingsText(_ model: BrainBarSettingsViewModel, section: BrainBarSettingsSection,
                                    directory: URL) throws -> String {

@@ -91,6 +91,7 @@ struct BrainBarWindowRootView: View {
         .background(BrainBarAppBackground())
         .environment(\.colorScheme, .dark)
         .environment(\.brainBarDriveAuth, runtime.driveAuth)
+        .environment(\.brainBarMaintenanceRetry, runtime.maintenanceRetry)
         .background(windowAttachment)
         .onPreferenceChange(BrainBarHeaderHeightKey.self) { panelState.headerHeight = $0 }
         .onAppear {
@@ -210,6 +211,7 @@ private struct BrainBarDashboardContent: View {
     var jobsChecking: Bool = false
     /// S5: the shared status snapshot's verdict; nil only for the standalone fallback dashboard.
     var statusVerdict: BrainBarStatusVerdict? = nil
+    var maintenanceNeedsAttention = false
 
     var body: some View {
         if collector.snapshotFreshnessState.isLoading {
@@ -225,7 +227,7 @@ private struct BrainBarDashboardContent: View {
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: observabilityResult,
             referenceNow: referenceNow, backupReferenceNow: backupReferenceNow, calendar: calendar, locale: locale,
             jobAttentionReasons: jobAttentionReasons, jobsChecking: jobsChecking,
-            statusVerdict: statusVerdict,
+            statusVerdict: statusVerdict, maintenanceNeedsAttention: maintenanceNeedsAttention,
             panelState: panelState ?? standalonePanelState
         )
         view.observabilityCadenceOverride = observabilityCadence
@@ -250,7 +252,8 @@ private struct BrainBarJobsDashboardContent: View {
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: model.dashboardObservabilityResult,
             observabilityCadence: model.observabilityCadence, backupReferenceNow: model.observabilityNow, panelState: panelState,
             jobAttentionReasons: model.dashboardJobAttentionReasons, jobsChecking: model.dashboardJobsChecking,
-            statusVerdict: model.publishedStatus.verdict)
+            statusVerdict: model.publishedStatus.verdict,
+            maintenanceNeedsAttention: model.publishedStatus.issues.contains { $0.component == .maintenance })
             .onChange(of: collector.isManualRefreshInProgress) { _, refreshing in
                 if refreshing {
                     model.refreshLaunchdStatus()
@@ -977,10 +980,12 @@ private struct BrainBarDashboardView: View {
     var jobAttentionReasons: [String] = []
     var jobsChecking: Bool = false
     var statusVerdict: BrainBarStatusVerdict? = nil
+    var maintenanceNeedsAttention = false
     @ObservedObject var panelState: BrainBarDashboardPanelState
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.brainBarDriveAuth) private var driveAuth
+    @Environment(\.brainBarMaintenanceRetry) private var maintenanceRetry
     @State private var previousAllCommitBuckets: [Int] = []
     @State private var previousWriteBuckets: [Int] = []
     @State private var previousWatcherBuckets: [Int] = []
@@ -1248,6 +1253,9 @@ private struct BrainBarDashboardView: View {
                 isLive: timeframe == .live
             )
         }
+        .task(id: "\(maintenanceNeedsAttention)-\(Int(receiptDisplayNow.timeIntervalSince1970 / 60))") {
+            if maintenanceNeedsAttention { await maintenanceRetry?.refresh() }
+        }
         .task(id: dbPath) {
             guard observabilityResult == nil, let dbPath else { return }
             let url = ObservabilityReader.url(dbPath: dbPath)
@@ -1306,6 +1314,10 @@ private struct BrainBarDashboardView: View {
                                 }
 #endif
                             }
+                        }
+                        if let maintenanceRetry,
+                           maintenanceNeedsAttention {
+                            BrainBarMaintenanceRetryRow(model: maintenanceRetry)
                         }
                     }
                     .padding(.top, 7)
@@ -3373,7 +3385,8 @@ enum BrainBarDashboardPreview {
         disablesAnimations: Bool = true,
         jobAttentionReasons: [String] = [],
         observabilityCadence: ObservabilityCadence? = nil,
-        colorScheme: ColorScheme = .dark
+        colorScheme: ColorScheme = .dark,
+        maintenanceNeedsAttention: Bool = false
     ) -> AnyView {
         let dashboard =
             ZStack {
@@ -3389,7 +3402,8 @@ enum BrainBarDashboardPreview {
                     calendar: calendar,
                     locale: locale,
                     panelState: panelState,
-                    jobAttentionReasons: jobAttentionReasons
+                    jobAttentionReasons: jobAttentionReasons,
+                    maintenanceNeedsAttention: maintenanceNeedsAttention
                 )
             }
             .environment(\.colorScheme, colorScheme)

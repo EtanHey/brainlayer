@@ -8,6 +8,7 @@ final class BrainBarRuntime: ObservableObject {
     /// Google Drive access for backups. It has no runner until AppDelegate installs the live one,
     /// so tests and previews never run the CLI.
     let driveAuth = BrainBarDriveAuthModel(runner: nil)
+    let maintenanceRetry = BrainBarMaintenanceRetryModel(runner: nil)
 
     @Published private(set) var collector: StatsCollector?
     @Published private(set) var database: BrainDatabase?
