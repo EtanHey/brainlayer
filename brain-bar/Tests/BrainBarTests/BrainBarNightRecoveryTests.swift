@@ -143,15 +143,99 @@ final class BrainBarNightRecoveryTests: XCTestCase {
         let text = try XCTUnwrap(snapshot(value, dot: true).attention.first { $0.id == "maintenance.night" }?.text)
         XCTAssertTrue(text.contains("Transcript backup failed"), text)
         XCTAssertTrue(text.contains("step jsonl-backup"), text)
-        XCTAssertTrue(text.contains("2 consecutive failed nights"), text)
+        XCTAssertTrue(text.contains("nightly runs have had problems 2 nights in a row"), text)
     }
 
-    func testAbandonedMessageNamesStoppedRunnerAndKeepsCount() throws {
+    func testAbandonedMessageNamesIncompleteStepAndKeepsNightCount() throws {
         let value = try history([runner("2026-10-28"), abandoned("2026-10-28"), summary("2026-10-28"),
             runner(date), abandoned(date), summary(date)])
         let text = try XCTUnwrap(snapshot(value, dot: true).attention.first { $0.id == "maintenance.night" }?.text)
-        XCTAssertTrue(text.contains("Nightly maintenance was abandoned (runner stopped)"), text)
-        XCTAssertTrue(text.contains("2 consecutive failed nights"), text)
+        XCTAssertTrue(text.contains("Nightly maintenance was cut off (step maintenance-nightly)"), text)
+        XCTAssertTrue(text.contains("nightly runs have had problems 2 nights in a row"), text)
+    }
+
+    private func issueText(_ rows: [[String: Any]], dot: Bool = false) throws -> String {
+        try XCTUnwrap(snapshot(history(rows), dot: dot).issues.first { $0.id == "maintenance.night" }?.text)
+    }
+
+    func testAbandonedDatabaseBackupNamesOnlyUnfinishedBackup() throws {
+        var interruption = abandoned(date)
+        interruption["incomplete_steps"] = ["backup-daily"]
+        interruption["reason"] = "step-orphaned"
+        let text = try issueText([runner(date), finished("maintenance-weekly", "ok", 0), interruption, summary(date)])
+        XCTAssertTrue(text.contains("Database backup was cut off (step backup-daily) at 2026-10-29 05:00 GMT+2"), text)
+        XCTAssertFalse(text.contains("maintenance"), text)
+        XCTAssertFalse(text.contains("runner stopped"), text)
+    }
+
+    func testMixedAbandonmentShowsEarlierFailureAndBothEventTimes() throws {
+        var interruption = abandoned(date)
+        interruption["incomplete_steps"] = ["backup-daily"]
+        var terminal = summary(date)
+        terminal["ts"] = timestamp(date, "04:00:00")
+        let text = try issueText([runner(date), finished("jsonl-backup"), interruption, terminal])
+        XCTAssertTrue(text.contains("Database backup was cut off (step backup-daily) at 2026-10-29 05:00 GMT+2"), text)
+        XCTAssertTrue(text.contains("Transcript backup failed (step jsonl-backup) at 2026-10-29 03:20 GMT+2"), text)
+        XCTAssertFalse(text.contains("06:00 GMT+2"), text)
+    }
+
+    func testFailureShowsStepFinishTimeRatherThanSummaryTime() throws {
+        let text = try issueText([runner(date), finished("jsonl-backup"), summary(date)])
+        XCTAssertTrue(text.contains("Transcript backup failed (step jsonl-backup) at 2026-10-29 03:20 GMT+2"), text)
+        XCTAssertFalse(text.contains("05:00 GMT+2"), text)
+    }
+
+    func testMultipleFailuresKeepTheirOwnFinishTimes() throws {
+        var later = finished("p0-counter")
+        later["ts"] = timestamp(date, "02:10:00")
+        let text = try issueText([runner(date), finished("jsonl-backup"), later, summary(date, failed: 2)])
+        XCTAssertTrue(text.contains("Transcript backup (step jsonl-backup) at 2026-10-29 03:20 GMT+2"), text)
+        XCTAssertTrue(text.contains("Memory counts (step p0-counter) at 2026-10-29 04:10 GMT+2"), text)
+    }
+
+    func testOtherDateSuccessDoesNotReplaceFailedStepTime() throws {
+        let text = try issueText([runner(date), finished("jsonl-backup"), summary(date),
+            runner("2026-10-28", kind: "recovery"), finished("jsonl-backup", "ok", 0),
+            summary("2026-10-28", failed: 0, kind: "recovery")])
+        XCTAssertTrue(text.contains("Transcript backup failed (step jsonl-backup) at 2026-10-29 03:20 GMT+2"), text)
+    }
+
+    func testDeferredOrSkippedRecoveryKeepsOriginalFailureTimeAndWording() throws {
+        for (status, code): (String, Any) in [("deferred", 75), ("skipped", NSNull())] {
+            var retry = finished("jsonl-backup", status, code)
+            retry["ts"] = timestamp(date, "07:42:00")
+            let text = try issueText([runner(date), finished("jsonl-backup"), summary(date),
+                runner(date, kind: "recovery"), retry, summary(date, failed: 0, kind: "recovery")])
+            XCTAssertTrue(text.contains("Transcript backup failed (step jsonl-backup) at 2026-10-29 03:20 GMT+2"), text)
+        }
+    }
+
+    func testAbandonmentWithoutStepInformationKeepsGenericFallback() throws {
+        var interruption = abandoned(date)
+        interruption.removeValue(forKey: "incomplete_steps")
+        let text = try issueText([runner(date), interruption, summary(date)])
+        XCTAssertTrue(text.contains("Nightly maintenance was abandoned at 2026-10-29 05:00 GMT+2"), text)
+    }
+
+    func testHeaderCannotForgetFailureBeforeAbandonmentWhenOnlyIncompleteStepsRecover() throws {
+        // Review R1's exact sequence: unterminated nightly failure, transcript recovery,
+        // abandonment, then a manual run completing only the two unfinished steps.
+        var interruption = abandoned(date)
+        interruption["incomplete_steps"] = ["jsonl-backup", "backup-daily"]
+        let rows = [runner(date), finished("p0-counter"),
+            runner(date, kind: "recovery"), finished("jsonl-backup"), summary(date, kind: "recovery"),
+            interruption, summary(date), runner(date, kind: "manual"),
+            finished("jsonl-backup", "ok", 0), finished("backup-daily", "ok", 0),
+            summary(date, failed: 0, kind: "manual")]
+        let value = try history(rows)
+        XCTAssertEqual(value.maintenanceNight?.failed, true)
+        XCTAssertEqual(value.maintenanceNight?.failedSteps, ["p0-counter"])
+        XCTAssertEqual(value.maintenanceNight?.consecutiveFailures, 1)
+        let text = try XCTUnwrap(snapshot(value, dot: false).issues.first { $0.id == "maintenance.night" }?.text)
+        XCTAssertTrue(text.contains("Memory counts failed (step p0-counter) at 2026-10-29 03:20 GMT+2"), text)
+        XCTAssertFalse(text.contains("was cut off"), text)
+        XCTAssertFalse(text.contains("jsonl-backup"), text)
+        XCTAssertFalse(text.contains("backup-daily"), text)
     }
 
     func testMalformedRowsRemainUnreadable() throws {
