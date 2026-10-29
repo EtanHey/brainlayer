@@ -3373,7 +3373,9 @@ enum BrainBarDashboardPreview {
         disablesAnimations: Bool = true,
         jobAttentionReasons: [String] = [],
         observabilityCadence: ObservabilityCadence? = nil,
-        colorScheme: ColorScheme = .dark
+        colorScheme: ColorScheme = .dark,
+        /// The shared snapshot's verdict, as the app passes it; nil renders the standalone fallback.
+        statusVerdict: BrainBarStatusVerdict? = nil
     ) -> AnyView {
         let dashboard =
             ZStack {
@@ -3389,7 +3391,8 @@ enum BrainBarDashboardPreview {
                     calendar: calendar,
                     locale: locale,
                     panelState: panelState,
-                    jobAttentionReasons: jobAttentionReasons
+                    jobAttentionReasons: jobAttentionReasons,
+                    statusVerdict: statusVerdict
                 )
             }
             .environment(\.colorScheme, colorScheme)

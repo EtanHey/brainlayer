@@ -484,7 +484,13 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                                       text: "\(group.title): awaiting first scheduled run"
                                           + (next.map { " (\(retryPhrase($0, now: now, calendar: inputs.calendar)))" } ?? ""),
                                       jobs: jobs, noticeHealth: .awaitingRun))
-                case .checking, .healthy, .skipped, .notice:
+                case .skipped:
+                    // A skipped run is not green: the Dashboard and the menu say why, as the row does.
+                    // A group configured OFF carries no reason; its row says so in its own note.
+                    guard let reason = raw.attentionReason else { break }
+                    builder.add(.init(id: "group.\(group.rawValue)", component: .jobs, severity: .notice,
+                                      text: reason, jobs: jobs, noticeHealth: .skipped))
+                case .checking, .healthy, .notice:
                     break
                 }
             }
