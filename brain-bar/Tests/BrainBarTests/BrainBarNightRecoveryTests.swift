@@ -281,6 +281,27 @@ final class BrainBarNightRecoveryTests: XCTestCase {
         XCTAssertEqual(value.maintenanceNight?.failedSteps, [])
     }
 
+    func testSignalStoppedNightIsExplainedByCutOffStepsAndClearsAfterRecovery() throws {
+        // A graceful stop writes failed=max(1, 0) with no failed rows; the stopped/skipped steps explain it.
+        for cutOff in [finished("maintenance-nightly", "stopped", -15), finished("maintenance-nightly", "skipped", NSNull())] {
+            let night = [runner(date), finished("jsonl-backup", "ok", 0), cutOff, summary(date, failed: 1)]
+            let stopped = try history(night)
+            XCTAssertEqual(stopped.maintenanceNight?.failed, true)
+            XCTAssertEqual(stopped.maintenanceNight?.failedSteps, ["maintenance-nightly"])
+            let text = snapshot(stopped, dot: false).issues.first { $0.id == "maintenance.night" }?.text ?? ""
+            XCTAssertFalse(text.contains("unknown failure"), text)
+            let recovered = try history(night + [runner(date, kind: "recovery"),
+                finished("maintenance-nightly", "ok", 0), summary(date, failed: 0, kind: "recovery")])
+            XCTAssertEqual(recovered.maintenanceNight?.failed, false)
+        }
+        // A runner failure on top of the stop still exceeds the floor and cannot be recovered away.
+        let value = try history([runner(date), finished("jsonl-backup", "ok", 0),
+            finished("maintenance-nightly", "stopped", -15), summary(date, failed: 2),
+            runner(date, kind: "recovery"), finished("maintenance-nightly", "ok", 0),
+            summary(date, failed: 0, kind: "recovery")])
+        XCTAssertEqual(value.maintenanceNight?.failed, true)
+    }
+
     func testDeferredStepWithoutExcessSummaryFailureCanRecover() throws {
         let value = try history([runner(date), finished("jsonl-backup"),
             finished("maintenance-nightly", "deferred", 75), summary(date),

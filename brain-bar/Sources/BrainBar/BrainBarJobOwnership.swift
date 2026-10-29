@@ -238,7 +238,12 @@ struct BrainBarCalendarHistory: Sendable {
                         // a runner failure. Neither kind of non-step evidence is recoverable
                         // through later step successes.
                         let failedHere = steps.values.filter { $0 == .failed }.count
-                        if unresolved.isEmpty || (!abandoned && !abandonmentSummary && (failures ?? 0) > failedHere) {
+                        // An incomplete nightly plan reports at least one failure on its own
+                        // (failed=max(1, ...)), so a signal stop is explained by its cut-off steps.
+                        let planIncomplete = steps.values.contains(.incomplete) ||
+                            (row["incomplete_steps"] as? [String])?.isEmpty == false
+                        let expected = max(planIncomplete ? 1 : 0, failedHere)
+                        if unresolved.isEmpty || (!abandoned && !abandonmentSummary && (failures ?? 0) > expected) {
                             if unknownFailures[date] == nil { unknownFailures[date] = Date(timeIntervalSince1970: ts) }
                         }
                     }
