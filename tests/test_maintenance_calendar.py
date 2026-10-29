@@ -658,8 +658,8 @@ def test_plan_keeps_weekly_receipt_dependency_and_nightly_upload_last(tmp_path, 
         "maintenance-weekly" if weekly else "maintenance-nightly",
         "jsonl-backup",
         "p0-counter",
-        "wal-checkpoint",
         *(["decay", "repair-fts"] if weekly else []),
+        "wal-checkpoint",
         *(["backup-daily"] if weekly else ["backup-daily"]),
     ]
     by_name = {step.name: step for step in plan.candidates}
@@ -911,9 +911,9 @@ def test_slow_daily_backup_and_weekly_share_one_verified_upload(request, monkeyp
         "maintenance-weekly",
         "jsonl-backup",
         "p0-counter",
-        "wal-checkpoint",
         "decay",
         "repair-fts",
+        "wal-checkpoint",
         "backup-daily",
     ]
     assert uploads == [snapshot]
