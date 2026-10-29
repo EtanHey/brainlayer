@@ -111,7 +111,7 @@ def _torn_inbox_write(relay, env, monkeypatch, cut) -> None:
 
 def _foreign_writer_after_scan(relay, env, monkeypatch, data=FOREIGN) -> None:
     """Another inbox writer appends `data` between the relay's scan and its append."""
-    real_read = relay._read_inbox
+    real_read, real_deliver = relay._read_inbox, relay._deliver
 
     def scan(path):
         text = real_read(path)
@@ -120,7 +120,12 @@ def _foreign_writer_after_scan(relay, env, monkeypatch, data=FOREIGN) -> None:
             other.write(data)
         return text
 
-    monkeypatch.setattr(relay, "_read_inbox", scan)
+    def deliver(*args):
+        monkeypatch.setattr(relay, "_deliver", real_deliver)
+        monkeypatch.setattr(relay, "_read_inbox", scan)
+        return real_deliver(*args)
+
+    monkeypatch.setattr(relay, "_deliver", deliver)
 
 
 def test_local_job_alert_reaches_the_inbox_with_identity_and_no_reason_text(relay, env):
@@ -282,7 +287,8 @@ def test_missing_inbox_is_never_created(relay, env):
     env["inbox"].unlink()
     _alerts(env, {"backup-daily": "x"})
     assert relay.run(env["config"]) == 1
-    assert not env["inbox"].exists() and _status(env)["error"] == "inbox-unavailable"
+    assert not env["inbox"].exists() and _status(env)["error"] == "state-missing"
+    assert not (env["tmp"] / "state/state.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -578,14 +584,20 @@ def test_inbox_source_alias_is_refused_before_any_write(relay, env, alias, overr
 
 
 @pytest.mark.parametrize("name", ["state.json", "status.json"])
-def test_atomic_temp_symlinks_never_truncate_their_target(relay, env, name):
+@pytest.mark.parametrize("link", ["symlink", "hardlink"])
+def test_atomic_temp_links_never_truncate_their_target(relay, env, name, link):
     target = env["tmp"] / "preserve.txt"
     target.write_bytes(b"preserve these bytes")
     destination = env["tmp"] / name
-    relay._atomic_temp(destination).symlink_to(target)
-    with pytest.raises(OSError):
-        relay._write_atomic(destination, {"x": 1})
-    assert target.read_bytes() == b"preserve these bytes" and not destination.exists()
+    tmp = relay._atomic_temp(destination)
+    if link == "symlink":
+        tmp.symlink_to(target)
+    else:
+        os.link(target, tmp)
+    relay._write_atomic(destination, {"x": 1})
+    assert target.read_bytes() == b"preserve these bytes"
+    assert json.loads(destination.read_text()) == {"x": 1}
+    assert destination.stat().st_mode & 0o777 == 0o600 and not tmp.exists()
 
 
 def test_atomic_files_are_created_private_even_under_permissive_umask(relay, env):
@@ -688,3 +700,195 @@ def test_rollback_rejects_new_state_explicitly(relay, env):
     assert result.returncode == 2
     assert _status(env)["error"] == "state-corrupt" and _status(env)["pending"] is None
     assert state_path.read_bytes() == original and _blocked(env) == []
+
+
+@pytest.mark.parametrize("fault", ["permission", "loop", "not-directory"])
+def test_inaccessible_source_does_not_block_other_hosts_or_pending(relay, env, monkeypatch, fault):
+    _alerts(env, {"backup-daily": "x"})
+    with monkeypatch.context() as patch:
+        patch.setattr(relay, "_append", lambda *args: (_ for _ in ()).throw(relay.RelayError("inbox-append-failed")))
+        assert _run(relay, env) == 1
+    other = env["tmp"] / "other"
+    other.mkdir()
+    (other / "job-alerts.json").write_text('{"restic":"x"}')
+    env["raw"]["hosts"].append({"id": "m1-pro", "label": "M1 Pro", "transport": "local", "dir": str(other)})
+    source = env["data"] / "job-alerts.json"
+    previous = env["data"].stat().st_mode & 0o777
+    if fault == "permission":
+        env["data"].chmod(0)
+    elif fault == "loop":
+        source.unlink()
+        source.symlink_to(source)
+    else:
+        source = source / "child.json"
+        env["raw"]["hosts"][0]["sources"] = {"job-alerts": str(source)}
+    env["config"].write_text(json.dumps(env["raw"]))
+    try:
+        if fault == "permission" and os.access(source, os.R_OK):
+            pytest.skip("user can bypass chmod 000")
+        assert relay.run(env["config"]) == 0
+        assert _status(env)["error"] is None and _status(env)["pending"] == 0
+        assert len(_complete(env, EVENT)) == 1
+        assert len(_complete(env, f"bl-m4-max-{EPOCH}-2-source-unreadable.job-alerts")) == 1
+        assert len(_complete(env, f"bl-m1-pro-{EPOCH}-1-job-alert.restic")) == 1
+    finally:
+        env["data"].chmod(previous)
+
+
+@pytest.mark.parametrize("name", ["state.json", "status.json", "relay.lock", ".state.json.tmp", ".status.json.tmp"])
+def test_owned_destination_samefile_errors_fail_closed(relay, env, monkeypatch, name):
+    real_samefile = relay.os.path.samefile
+
+    def inaccessible(inbox, destination):
+        if destination == env["tmp"] / "state" / name:
+            raise PermissionError("denied")
+        return real_samefile(inbox, destination)
+
+    monkeypatch.setattr(relay.os.path, "samefile", inaccessible)
+    before = env["inbox"].read_bytes()
+    assert relay.run(env["config"]) == 2
+    assert env["inbox"].read_bytes() == before and not (env["tmp"] / "state").exists()
+
+
+@pytest.mark.parametrize("accept", [False, True])
+def test_restored_older_state_refuses_recurrence_and_preserves_bytes(relay, env, monkeypatch, accept):
+    monkeypatch.setattr(relay.os, "urandom", REAL_URANDOM)
+    assert _run(relay, env) == 0
+    path = env["tmp"] / "state/state.json"
+    snapshot = path.read_bytes()
+    _alerts(env, {"backup-daily": "x"})
+    assert _run(relay, env) == 0
+    _alerts(env, {})
+    assert _run(relay, env) == 0
+    path.write_bytes(snapshot)
+    _alerts(env, {"backup-daily": "x"})
+    before = env["inbox"].read_bytes()
+    assert relay.run(env["config"], accept_new_epoch=accept) == 1
+    assert _status(env)["error"] == "state-stale" and _status(env)["pending"] is None
+    assert path.read_bytes() == snapshot and env["inbox"].read_bytes() == before
+    path.rename(path.with_name("state-stale.json"))
+    assert relay.main(["--config", str(env["config"]), "--accept-new-epoch"]) == 0
+    events = [line.split("event=")[1] for line in _blocked(env)]
+    assert len(events) == len(set(events)) == 2
+
+
+@pytest.mark.parametrize(
+    "host,epoch,seq,prefix,suffix,refused",
+    [
+        ("m4-max", EPOCH, 1, "", "\n", True),
+        ("m4-max", EPOCH, 1, "", "", True),
+        ("m4-max", EPOCH, 0, "", "\n", False),
+        ("m4-max", "02" * 16, 1, "", "\n", False),
+        ("m1-pro", EPOCH, 1, "", "\n", True),
+        ("m4-max", EPOCH, 1, "> ", "\n", False),
+        ("m4-max", EPOCH, 1, "", " partial\n", False),
+    ],
+)
+def test_stale_state_scan_matches_only_complete_markers_for_its_epoch(
+    relay, env, host, epoch, seq, prefix, suffix, refused
+):
+    assert _run(relay, env) == 0
+    path = env["tmp"] / "state/state.json"
+    before = path.read_bytes()
+    with env["inbox"].open("a") as inbox:
+        inbox.write(f"{prefix}<!-- brainlayer-health:bl-{host}-{epoch}-{seq}-job-alert.x -->{suffix}")
+    inbox_before = env["inbox"].read_bytes()
+    assert relay.run(env["config"]) == (1 if refused else 0)
+    assert _status(env)["error"] == ("state-stale" if refused else None)
+    assert env["inbox"].read_bytes() == inbox_before
+    if refused:
+        assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("name", ["state.json", "status.json"])
+def test_atomic_temp_link_planted_after_unlink_is_not_opened(relay, env, monkeypatch, name):
+    target = env["tmp"] / "preserve.txt"
+    target.write_bytes(b"preserve these bytes")
+    destination = env["tmp"] / name
+    tmp = relay._atomic_temp(destination)
+    real_open = relay.os.open
+
+    def plant(path, flags, *args, **kwargs):
+        if path == tmp:
+            os.link(target, tmp)
+        return real_open(path, flags, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(relay.os, "open", plant)
+        with pytest.raises(FileExistsError):
+            relay._write_atomic(destination, {"x": 1})
+    assert target.read_bytes() == b"preserve these bytes" and not destination.exists()
+
+
+@pytest.mark.parametrize("fault", ["permission", "missing"])
+@pytest.mark.parametrize("markers", [False, True])
+def test_bootstrap_requires_a_readable_markerless_inbox(relay, env, fault, markers):
+    if markers:
+        env["inbox"].write_text(f"# inbox\n<!-- brainlayer-health:{EVENT} -->\n")
+    before = env["inbox"].read_bytes()
+    state = env["tmp"] / "state/state.json"
+    parked = env["tmp"] / "parked-inbox.md"
+    previous = env["inbox"].stat().st_mode & 0o777
+    if fault == "permission":
+        env["inbox"].chmod(0)
+    else:
+        env["inbox"].rename(parked)
+    try:
+        if fault == "permission" and os.access(env["inbox"], os.R_OK):
+            pytest.skip("user can bypass chmod 000")
+        assert relay.run(env["config"]) == 1
+        assert not state.exists()
+        assert _status(env)["error"] == "state-missing" and _status(env)["pending"] is None
+        if fault == "missing":
+            assert not env["inbox"].exists() and parked.read_bytes() == before
+    finally:
+        if fault == "permission":
+            env["inbox"].chmod(previous)
+        else:
+            parked.rename(env["inbox"])
+    assert env["inbox"].read_bytes() == before
+    assert relay.run(env["config"]) == (1 if markers else 0)
+    assert state.exists() is not markers
+    assert env["inbox"].read_bytes() == before
+    assert _status(env)["error"] == ("state-missing" if markers else None)
+
+
+@pytest.mark.parametrize("fault", ["permission", "missing"])
+def test_explicit_new_epoch_can_recover_with_an_unreadable_inbox(relay, env, fault):
+    _alerts(env, {"backup-daily": "x"})
+    previous = env["inbox"].stat().st_mode & 0o777
+    if fault == "permission":
+        env["inbox"].chmod(0)
+    else:
+        env["inbox"].unlink()
+    try:
+        if fault == "permission" and os.access(env["inbox"], os.R_OK):
+            pytest.skip("user can bypass chmod 000")
+        assert relay.run(env["config"], accept_new_epoch=True) == 1
+        state = json.loads((env["tmp"] / "state/state.json").read_text())
+        assert len(state["outbox"]) == 1
+        assert _status(env)["error"] == ("inbox-unreadable" if fault == "permission" else "inbox-unavailable")
+    finally:
+        if fault == "permission":
+            env["inbox"].chmod(previous)
+        else:
+            env["inbox"].write_text("# inbox\n")
+    assert _run(relay, env) == 0
+    _acked_with_line_and_marker(env)
+
+
+@pytest.mark.parametrize("error", [PermissionError, NotADirectoryError, OSError])
+def test_host_source_resolve_errors_do_not_abort_other_alerts(relay, env, monkeypatch, error):
+    source = env["data"] / "job-alerts.json"
+    _alerts(env, {"backup-daily": "x"})
+    real_resolve = Path.resolve
+
+    def resolve(path, *args, **kwargs):
+        if path == source:
+            raise error("source resolution failed")
+        return real_resolve(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "resolve", resolve)
+        assert relay.run(env["config"]) == 0
+    _acked_with_line_and_marker(env)
