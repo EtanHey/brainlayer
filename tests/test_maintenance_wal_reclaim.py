@@ -191,3 +191,27 @@ def test_checkpoint_guard_contention_defers_without_waiting_under_hold(weekly, m
         assert events[-3:] == list(maintenance.DEFAULT_SERVICES)
     finally:
         guard.__exit__(None, None, None)
+
+
+@pytest.mark.parametrize("signal_exit", [SystemExit(143), KeyboardInterrupt()], ids=["sigterm", "interrupt"])
+def test_termination_during_vacuum_restores_services_without_reclaiming(weekly, monkeypatch, signal_exit):
+    config, _resident, events, _hold = weekly
+    vacuum = maintenance._vacuum
+    modes = []
+
+    def vacuum_then_terminate(*args, **kwargs):
+        vacuum(*args, **kwargs)
+        raise signal_exit
+
+    checkpoint = maintenance.checkpoint
+
+    def record(db, mode, **kwargs):
+        modes.append(mode)
+        return checkpoint(db, mode, **kwargs)
+
+    monkeypatch.setattr(maintenance, "_vacuum", vacuum_then_terminate)
+    monkeypatch.setattr(maintenance, "checkpoint", record)
+    with pytest.raises(type(signal_exit)):
+        maintenance.run_maintenance("full", config=config)
+    assert "TRUNCATE" not in modes, "termination must unwind straight to service restore"
+    assert events[-3:] == list(maintenance.DEFAULT_SERVICES)

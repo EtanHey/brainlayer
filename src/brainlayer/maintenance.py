@@ -1392,14 +1392,16 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
                 result.actions.append(f"verified_local_backup={backup.get('snapshot')}")
                 hold = booted_out.get("_supervisor_hold")
                 deadline = getattr(hold, "deadline", None)
-                phase = "vacuum-failure"
+                # _vacuum closes its connection before returning or raising. Never reclaim
+                # inside its transaction, and never renew custody just to reclaim disk space.
+                # SystemExit/KeyboardInterrupt (SIGTERM) skip the reclaim and unwind straight
+                # to service restore: a full-size TRUNCATE there would delay it by seconds.
                 try:
                     result.vacuum_before_bytes, result.vacuum_after_bytes = _vacuum(config.db_path, deadline=deadline)
-                    phase = "post-vacuum"
-                finally:
-                    # _vacuum closes its connection before returning or raising. Never reclaim
-                    # inside its transaction, and never renew custody just to reclaim disk space.
-                    result.checkpoint = _reclaim_vacuum_wal(config, deadline=deadline, phase=phase)
+                except Exception:
+                    result.checkpoint = _reclaim_vacuum_wal(config, deadline=deadline, phase="vacuum-failure")
+                    raise
+                result.checkpoint = _reclaim_vacuum_wal(config, deadline=deadline, phase="post-vacuum")
             if mode == "burn":
                 result.burn = _run_burn_until_empty(config)
                 if result.burn.failed_files:
