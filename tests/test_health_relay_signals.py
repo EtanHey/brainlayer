@@ -542,3 +542,42 @@ def test_first_run_grace_only_holds_badge_and_watcher_absence(relay, env):
     assert _issues(env) == ["source-missing:job-alerts"]
     assert relay.run(env["config"], clock=lambda: started + 3601) == 0
     assert set(_issues(env)) == {"source-missing:job-alerts", "source-missing:badge", "source-missing:watcher"}
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("first_seen", "x"),
+        ("first_seen", None),
+        ("first_seen", True),
+        ("first_seen", float("inf")),
+        ("unreach", "x"),
+        ("unreach", []),
+        ("unreach", -1),
+        ("unreach", True),
+    ],
+)
+def test_corrupt_signal_host_fields_fail_closed(relay, env, field, value):
+    assert relay.run(env["config"]) == 0
+    state_path = env["tmp"] / "state/state.json"
+    state = _state(env)
+    state["hosts"]["m4-max"][field] = value
+    state_path.write_text(json.dumps(state))
+    before, inbox = state_path.read_bytes(), env["inbox"].read_bytes()
+    assert relay.run(env["config"]) == 2
+    assert _status(env)["error"] == "state-corrupt"
+    assert state_path.read_bytes() == before and env["inbox"].read_bytes() == inbox
+
+
+def test_future_first_seen_cannot_hold_grace_open(relay, env):
+    env["raw"]["first_run_grace_seconds"] = 3600
+    env["config"].write_text(json.dumps(env["raw"]))
+    assert relay.run(env["config"]) == 0
+    state_path = env["tmp"] / "state/state.json"
+    state = _state(env)
+    state["hosts"]["m4-max"]["first_seen"] = 4102444800.0  # 2100-01-01: a clock that ran ahead
+    state_path.write_text(json.dumps(state))
+    (env["m4"] / "badge-state.json").unlink()
+    (env["m4"] / "watcher-health.json").unlink()
+    assert relay.run(env["config"]) == 0
+    assert {"source-missing:badge", "source-missing:watcher"} <= set(_issues(env))

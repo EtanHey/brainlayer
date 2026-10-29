@@ -20,6 +20,7 @@ import argparse
 import fcntl
 import inspect
 import json
+import math
 import os
 import re
 import selectors
@@ -361,7 +362,8 @@ def _observe(host: dict, cfg: dict, hstate: dict, clock: float, epoch: str) -> l
     reached = snap is not None
     if reached:
         hstate["unreach"] = 0
-        in_grace = clock - hstate["first_seen"] < cfg["first_run_grace_seconds"]
+        # A future first_seen (a clock that ran ahead) grants no grace rather than endless grace.
+        in_grace = 0 <= clock - hstate["first_seen"] < cfg["first_run_grace_seconds"]
         issues, measured = evaluate(snap, cfg, hstate.setdefault("seen", []), in_grace)
         hstate["seen"] = sorted(set(hstate["seen"]) | {n for n, r in snap["sources"].items() if r["s"] != "absent"})
     else:
@@ -464,6 +466,9 @@ def _validate_state(state) -> None:
         require(isinstance(host_id, str) and SAFE_ID.fullmatch(host_id))
         require(isinstance(host, dict))
         require(sequence(host.get("seq", 0)))
+        require(sequence(host.get("unreach", 0)))
+        first_seen = host.get("first_seen", 0.0)
+        require(type(first_seen) in (int, float) and math.isfinite(first_seen))
         seen, episodes = host.get("seen", []), host.get("episodes", {})
         require(isinstance(seen, list) and all(isinstance(name, str) and name in SOURCES for name in seen))
         require(isinstance(episodes, dict))

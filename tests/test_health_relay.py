@@ -372,7 +372,7 @@ def test_carrier_is_stdlib_only():
     imported = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     imported |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
     allowed = {"__future__", "argparse", "fcntl", "inspect", "json", "os", "re", "stat", "subprocess", "sys"}
-    assert imported <= allowed | {"time", "datetime", "pathlib", "selectors", "shlex"}
+    assert imported <= allowed | {"time", "datetime", "pathlib", "selectors", "shlex", "math"}
     for forbidden in ("sqlite", "apsw", "launchctl", "--heal", "osascript", "drive", "token"):
         assert forbidden not in SCRIPT.read_text().lower()
 
