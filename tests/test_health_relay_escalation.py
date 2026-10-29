@@ -44,6 +44,114 @@ def test_primary_immediate_escalation_once_at_threshold_after_restart(relay, tie
     assert tiered["escalation"].read_text() == delivered and len(_blocked(tiered)) == 1
 
 
+def test_primary_renamed_escalates_once_and_restored_delivery_resumes(relay, tiered):
+    assert relay.run(tiered["config"], clock=lambda: 1000) == 0
+    archived = tiered["inbox"].with_suffix(".archived")
+    tiered["inbox"].rename(archived)
+    for tick, expected in ((1300, 0), (2799, 0), (2800, 1), (4600, 1), (15400, 1)):
+        assert relay.run(tiered["config"], clock=lambda: tick) == 1
+        assert _status(tiered)["error"] == "inbox-unavailable"
+        assert tiered["escalation"].read_text().count("@orc BLOCKED:") == expected
+    delivered = tiered["escalation"].read_bytes()
+    _alerts(tiered, {"backup-daily": "x", "jsonl-backup": "x"})
+    assert relay.run(tiered["config"], clock=lambda: 15500) == 1
+    assert _status(tiered)["pending"] == 1
+    archived.rename(tiered["inbox"])
+    assert relay.run(tiered["config"], clock=lambda: 15501) == 0
+    assert len(_blocked(tiered)) == 2 and _status(tiered)["pending"] == 0
+    assert relay.run(tiered["config"], clock=lambda: 15502) == 0
+    assert len(_blocked(tiered)) == 2 and tiered["escalation"].read_bytes() == delivered
+
+
+@pytest.mark.parametrize("delivery_failure", [False, True])
+def test_ack_learned_before_primary_outage_still_suppresses(relay, tiered, monkeypatch, delivery_failure):
+    assert relay.run(tiered["config"], clock=lambda: 1000) == 0
+    _ack(tiered)
+    with monkeypatch.context() as patch:
+        if delivery_failure:
+            _alerts(tiered, {"backup-daily": "x", "scan": "x"})
+            patch.setattr(relay, "_append", lambda *args: (_ for _ in ()).throw(relay.RelayError("inbox-unavailable")))
+        assert relay.run(tiered["config"], clock=lambda: 1100) == int(delivery_failure)
+    tiered["inbox"].rename(tiered["inbox"].with_suffix(".archived"))
+    for tick in (2800, 10000):
+        assert relay.run(tiered["config"], clock=lambda: tick) == 1
+        assert _status(tiered)["error"] == "inbox-unavailable"
+        assert tiered["escalation"].read_text() == "# escalation\n"
+
+
+@pytest.mark.parametrize("error", ["inbox-unreadable", "inbox-append-failed", "inbox-ack-missing"])
+def test_primary_delivery_errors_preserved_while_escalating(relay, tiered, monkeypatch, error):
+    assert relay.run(tiered["config"], clock=lambda: 1000) == 0
+    real_read, real_deliver = relay._read_inbox, relay._deliver
+
+    def read(path):
+        if path == str(tiered["inbox"]) and error == "inbox-unreadable":
+            raise relay.RelayError(error)
+        return real_read(path)
+
+    def deliver(cfg, *args):
+        if cfg["inbox"] == str(tiered["inbox"]):
+            raise relay.RelayError(error)
+        return real_deliver(cfg, *args)
+
+    monkeypatch.setattr(relay, "_read_inbox", read)
+    monkeypatch.setattr(relay, "_deliver", deliver)
+    for tick in (2800, 10000):
+        assert relay.run(tiered["config"], clock=lambda: tick) == 1
+        assert _status(tiered)["error"] == error
+        assert tiered["escalation"].read_text().count("@orc BLOCKED:") == 1
+
+
+@pytest.mark.parametrize("error", ["state-stale", "state-corrupt", "state-commit-failed", "state-unverified"])
+def test_state_integrity_errors_never_escalate(relay, tiered, monkeypatch, error):
+    assert relay.run(tiered["config"], clock=lambda: 1000) == 0
+
+    def fail(*args):
+        raise relay.RelayError(error)
+
+    monkeypatch.setattr(relay, "_save_state" if error == "state-commit-failed" else "_verify_inbox", fail)
+    assert relay.run(tiered["config"], clock=lambda: 2800) == (2 if error == "state-corrupt" else 1)
+    assert _status(tiered)["error"] == error
+    assert tiered["escalation"].read_text() == "# escalation\n"
+
+
+def test_both_inboxes_missing_retains_primary_error_and_retries_escalation(relay, tiered):
+    assert relay.run(tiered["config"], clock=lambda: 1000) == 0
+    tiered["inbox"].rename(tiered["inbox"].with_suffix(".archived"))
+    tiered["escalation"].unlink()
+    assert relay.run(tiered["config"], clock=lambda: 2800) == 1
+    assert _status(tiered)["error"] == "inbox-unavailable" and _status(tiered)["pending"] == 1
+    tiered["escalation"].write_text("# restored\n")
+    for tick in (2801, 10000):
+        assert relay.run(tiered["config"], clock=lambda: tick) == 1
+        assert _status(tiered)["error"] == "inbox-unavailable" and _status(tiered)["pending"] == 0
+        assert tiered["escalation"].read_text().count("@orc BLOCKED:") == 1
+
+
+@pytest.mark.parametrize("value", [None, "bad", [True], ["bad\n"]])
+def test_corrupt_ack_cache_blocks_both_destinations(relay, tiered, value):
+    assert relay.run(tiered["config"], clock=lambda: 1000) == 0
+    path = tiered["tmp"] / "state/state.json"
+    state = _state(tiered)
+    state["acknowledged_event_ids"] = value
+    original = json.dumps(state)
+    path.write_text(original)
+    assert relay.run(tiered["config"], clock=lambda: 2800) == 2
+    assert _status(tiered)["error"] == "state-corrupt" and path.read_text() == original
+    assert len(_blocked(tiered)) == 1 and tiered["escalation"].read_text() == "# escalation\n"
+
+
+@pytest.mark.parametrize("key", ["mcp-transport", "brainbar-activation", "backup-snapshot"])
+def test_default_user_visible_job_alerts_escalate(relay, tiered, key):
+    _alerts(tiered, {key: "private reason"})
+    assert relay.run(tiered["config"], clock=lambda: 1000) == 0
+    assert f"] job-alert:{key} on host=" in _blocked(tiered)[0]
+    assert relay.run(tiered["config"], clock=lambda: 2799) == 0
+    assert tiered["escalation"].read_text() == "# escalation\n"
+    assert relay.run(tiered["config"], clock=lambda: 2800) == 0
+    assert tiered["escalation"].read_text().count("@orc BLOCKED:") == 1
+
+
 @pytest.mark.parametrize("ack", [f"ACK {EVENT}\n", f"ACK {EVENT}"])
 def test_lead_ack_before_threshold_is_persisted(relay, tiered, ack):
     assert relay.run(tiered["config"], clock=lambda: 1000) == 0
@@ -248,7 +356,9 @@ def test_escalation_collision_rejected_before_writes(relay, tiered, target, alia
 
 
 @pytest.mark.parametrize(
-    "code,expected", [("brain-search-canary-failed", 1), ("job-scan-failed", 0), ("slow-check", 0)]
+    "code,expected",
+    [("brain-search-canary-failed", 1), ("job-scan-failed", 0), ("slow-check", 0)]
+    + [(code, 0) for code in ("lock_holder_wedge", "queue_backed_up", "hotlane_dead", "drain_no_progress")],
 )
 def test_default_badge_visibility_policy(relay, tiered, code, expected):
     _alerts(tiered, {})
@@ -326,6 +436,7 @@ def test_v3_with_legacy_episode_id_honors_original_ack_after_inbox_outage(relay,
     with monkeypatch.context() as patch:
         patch.setattr(relay, "_read_inbox", lambda _: (_ for _ in ()).throw(relay.RelayError("inbox-unavailable")))
         assert relay.run(tiered["config"], clock=lambda: 1000) == 1
+    assert _state(tiered)["hosts"]["m4-max"]["episodes"]["job-alert:backup-daily"]["migrated"] is True
     assert relay.run(tiered["config"], clock=lambda: 2800) == 0
     assert tiered["escalation"].read_text() == "# escalation\n"
     episode = _state(tiered)["hosts"]["m4-max"]["episodes"]["job-alert:backup-daily"]

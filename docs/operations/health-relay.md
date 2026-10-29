@@ -98,6 +98,7 @@ Without `escalation`, no second destination is read or written. To enable escala
   "issues": [
     "host-unreachable", "health-stale", "watcher-stale",
     "job-alert:backup-daily", "job-alert:jsonl-backup",
+    "job-alert:mcp-transport", "job-alert:brainbar-activation", "job-alert:backup-snapshot",
     "badge:brain-search-canary-failed", "source-missing:badge"
   ]
 }
@@ -119,20 +120,31 @@ The default classes are deliberately narrow:
 | `watcher-stale` | Conversation indexing stopped reporting progress, threatening current recall |
 | `job-alert:backup-daily` | Durable database backup protection is impaired |
 | `job-alert:jsonl-backup` | Original conversation backup protection is impaired |
+| `job-alert:mcp-transport` | BrainBar MCP connections or requests are failing to recover |
+| `job-alert:brainbar-activation` | BrainBar activation failed, leaving the agent memory service unavailable |
+| `job-alert:backup-snapshot` | The database snapshot phase of daily backup protection failed |
 | `badge:brain-search-canary-failed` | The search canary reports a failed memory retrieval path |
 | `source-missing:badge` | Health evidence disappeared after grace, leaving health visibility absent |
 
 These signals indicate a user-visible service or protection gap, not proof of data loss.
 Internal classes such as `badge:job-scan-failed` and `badge:slow-check` stay in the primary collab.
+Badge codes `lock_holder_wedge`, `queue_backed_up`, `hotlane_dead`, and `drain_no_progress`
+(normalized by the relay to hyphens) also stay there: they indicate degraded operation, not a
+user-visible outage by themselves, so they are excluded from default escalation.
 
-The lead acknowledges an episode by appending exactly this whole line to the **primary** inbox:
+Orc must **not** watch the primary collab: primary lines retain `@orc BLOCKED:` for compatibility,
+so watching it would wake orc for every immediate alert. The BrainLayer lead watches that collab
+with a filter that matches `@orc` (for example `--alias @orc`), and acknowledges an episode by
+appending exactly this whole line there, in the **primary** inbox:
 
 ```text
 ACK <primary-event-id>
 ```
 
 Quoted, indented, suffixed, or partial matches do not count. An exact final line at EOF also counts.
-Acknowledgment persists in episode state and suppresses escalation for that episode; it does not
+CRLF ACK lines do not count; use LF line endings. Successfully sampled ACK event IDs persist in
+state, including when primary delivery subsequently fails, and suppress escalation through a
+later primary outage. Acknowledgment also persists in episode state; it does not
 close the issue or acknowledge primary delivery. A measured recovery closes as before. Unknown
 or stale evidence still cannot close anything and does not reset the episode timer.
 
@@ -151,9 +163,32 @@ clears or reopens an episode; a new episode after recovery gets a fresh timer an
 The escalation destination is pinned in state on first use. Changing it fails visibly with
 `escalation-destination-changed` after primary delivery, preventing pending events from being
 silently redirected. Removing the optional config pauses escalation and retains its pending
-queue; re-enabling the same destination resumes it. No escalation is sent when primary delivery
-or its state verification fails. ACKs are sampled once per tick, so a concurrent ACK arriving
+queue; re-enabling the same destination resumes it. If primary access or delivery fails
+(`inbox-unavailable`, `inbox-unreadable`, `inbox-append-failed`, or `inbox-ack-missing`), due
+escalations still run using only previously persisted ACKs. The run still exits nonzero and
+`status.error` retains the original primary error, even if escalation also fails. Primary events
+remain pending under the unchanged delivery contract. A missing primary scan retains its
+`verify_floor`; migration ID resolution waits for primary recovery. State-integrity errors,
+including `state-stale`, `state-corrupt`, and `state-commit-failed`, block escalation entirely.
+ACKs are sampled once per tick, so a concurrent ACK arriving
 after that sample may race with that tick's append.
+
+To recover from `escalation-destination-changed` when deliberately moving the destination:
+
+1. Restore the configured escalation inbox to the pinned `escalation_inbox` in `state.json`.
+   Repair access there and run normally until `escalation_outbox` is empty. Pending events may
+   instead be cancelled by exact lead ACKs in the primary or measured recovery; do not discard
+   them manually. If neither is possible, leave the pin in place and investigate.
+2. Pause relay invocations and wait for any active run to finish. Preserve a copy of state and
+   both inboxes for recovery outside the repo, with the state copy retaining private permissions.
+   Recheck that `escalation_outbox` is empty while no relay can write.
+3. Change only `escalation_inbox` in state to JSON `null`, using an atomic replacement with the
+   original permissions. Retain the epoch, sequences, both queues, `verify_floor`, ACK IDs and
+   every episode flag. Never clear `escalated`: already sent episodes must not be resent.
+4. Set config `escalation.inbox` to the new distinct, existing, writable absolute inbox and
+   resume. The next run pins that destination. Verify `status.error` is null and both queues
+   drain normally; existing delivered episodes stay delivered. Do not truncate either inbox or
+   reset the state to move a destination. Removing the optional config alone does not clear its pin.
 
 ## State recovery and rollback
 
@@ -172,8 +207,10 @@ its host's persisted sequence refuses
 the run with exit 1, `error: "state-stale"` and `pending: null`. Nothing is appended and state bytes
 stay unchanged. If the scan cannot read the inbox, the relay persists the pre-observation per-host
 sequences as `verify_floor`, retaining the earliest floor across outage runs. The next successful
-scan checks against that floor and clears it only after verification. No delivery occurs before
-that verification, even if inbox access returns within the same run. Observations remain pending.
+scan checks against that floor and clears it only after verification. No **primary** delivery
+occurs before that verification, even if inbox access returns within the same run. Observations
+remain pending; the escalation safety net may still deliver due events during primary access
+failure, using persisted ACKs only. A detected stale state blocks both destinations.
 Never restore an older `state.json`; move stale state aside and use
 `--accept-new-epoch` instead. The flag does not bypass the stale-state check while state exists.
 
@@ -189,7 +226,8 @@ alerts. Lost episode history and pending events cannot be reconstructed; current
 are observed again. The flag does not bypass corrupt-state validation or reset existing state.
 
 New writes use state **version 4**: episodes persist `opened_at`, `event_id`, `acknowledged`, and
-`escalated`; state also holds `escalation_outbox` and its pinned `escalation_inbox`. Versions 2 and 3
+`escalated`; state also holds `escalation_outbox`, its pinned `escalation_inbox`, and the
+`acknowledged_event_ids` set serialized as a list (absent in older v4 states means empty). Versions 2 and 3
 migrate on the next successful write, retaining primary pending IDs, sequences, and open/closed
 history. Since neither old version records episode opening time, migrated episodes start their
 escalation timer at migration, conservatively waiting the full threshold. Version-2 episode IDs

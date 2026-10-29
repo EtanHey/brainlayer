@@ -54,12 +54,16 @@ READ_STATES = ("ok", "absent", "unreadable", "oversize", "corrupt")
 HEALTH_LABEL, WATCH_LABEL = "com.brainlayer.health-check", "com.brainlayer.watch"
 MAX_SOURCE_BYTES, MAX_OUTPUT_BYTES, MAX_DELIVER_PER_RUN, MAX_CLOSED = 262144, 2097152, 32, 128
 CLOCK_SKEW_SECONDS = 300
+PRIMARY_INBOX_ERRORS = frozenset(("inbox-unavailable", "inbox-unreadable", "inbox-append-failed", "inbox-ack-missing"))
 ESCALATION_ISSUES = (
     "host-unreachable",
     "health-stale",
     "watcher-stale",
     "job-alert:backup-daily",
     "job-alert:jsonl-backup",
+    "job-alert:mcp-transport",
+    "job-alert:brainbar-activation",
+    "job-alert:backup-snapshot",
     "badge:brain-search-canary-failed",
     "source-missing:badge",
 )
@@ -499,7 +503,7 @@ def _load_state(path: Path, inbox: str, accept_new_epoch: bool, clock=None) -> d
     try:
         _verify_inbox(state, inbox)
     except RelayError as exc:
-        if str(exc) == "state-stale":
+        if str(exc) not in ("inbox-unavailable", "inbox-unreadable"):
             raise
         state.setdefault("verify_floor", {key: host.get("seq", 0) for key, host in state["hosts"].items()})
     return state
@@ -541,6 +545,9 @@ def _validate_state(state) -> None:
     if state["version"] >= 3 or "epoch" in state:
         require(isinstance(state.get("epoch"), str) and re.fullmatch(r"[0-9a-f]{32}", state["epoch"]))
     if state["version"] == 4:
+        acknowledged = state.get("acknowledged_event_ids", [])
+        require(isinstance(acknowledged, list))
+        require(all(isinstance(item, str) and re.fullmatch(r"[a-z0-9][a-z0-9._-]*", item) for item in acknowledged))
         require(isinstance(state.get("escalation_outbox"), list))
         require("escalation_inbox" in state)
         destination = state["escalation_inbox"]
@@ -687,24 +694,23 @@ def _deliver(cfg: dict, state: dict, state_path: Path, outbox_key="outbox") -> N
         raise RelayError("inbox-ack-missing")
 
 
-def _escalate(cfg: dict, state: dict, path: Path, clock: float) -> None:
+def _escalate(cfg: dict, state: dict, path: Path, clock: float, primary_lines=None) -> None:
     """Lead ACKs and measured recovery cancel undelivered escalations, never primary events."""
     escalation = cfg["escalation"]
     if state["escalation_inbox"] not in (None, escalation["inbox"]):
         raise RelayError("destination-changed")
     state["escalation_inbox"] = escalation["inbox"]
-    whole, tail = _lines(_read_inbox(cfg["inbox"]))
-    lines = whole | {tail}
+    acknowledged = set(state.get("acknowledged_event_ids", []))
     retained = set()
     for host in cfg["hosts"]:
         for issue, episode in state["hosts"][host["id"]].get("episodes", {}).items():
-            if episode.pop("migrated", False):
+            if primary_lines is not None and episode.pop("migrated", False):
                 # A v3 state may itself have migrated v2 episodes; resolve only after inbox recovery.
                 legacy_id = f"bl-{host['id']}-{episode['seq']}-{issue.replace(':', '.')}"
-                if _marker(episode["event_id"]) not in lines and _marker(legacy_id) in lines:
+                if _marker(episode["event_id"]) not in primary_lines and _marker(legacy_id) in primary_lines:
                     episode["event_id"] = legacy_id
             event_id = episode["event_id"]
-            if f"ACK {event_id}" in lines:
+            if event_id in acknowledged:
                 episode["acknowledged"] = True
             if not episode["open"] or episode["acknowledged"]:
                 continue
@@ -748,16 +754,36 @@ def run(config_path: Path, *, clock=time.time, accept_new_epoch=False) -> int:
                 state["outbox"].extend(_observe(host, cfg, hstate, clock(), state["epoch"]))
                 status["hosts"][host["id"]] = "unreachable" if hstate.get("unreach") else "reached"
             _save_state(state_dir / "state.json", state)
-            if "verify_floor" in state:
-                # Access may recover within this run; verify before any delivery can occur.
-                _verify_inbox(state, cfg["inbox"])
-                _save_state(state_dir / "state.json", state)
-            _deliver(cfg, state, state_dir / "state.json")
+            primary_error, primary_lines = None, None
+            try:
+                if "verify_floor" in state:
+                    # Access may recover within this run; verify before primary delivery.
+                    _verify_inbox(state, cfg["inbox"])
+                    _save_state(state_dir / "state.json", state)
+                if "escalation" in cfg:
+                    whole, tail = _lines(_read_inbox(cfg["inbox"]))
+                    primary_lines = whole | {tail}
+                    acknowledged = set(state.get("acknowledged_event_ids", []))
+                    acknowledged.update(
+                        match[1]
+                        for line in primary_lines
+                        if (match := re.fullmatch(r"ACK ([a-z0-9][a-z0-9._-]*)", line))
+                    )
+                    state["acknowledged_event_ids"] = sorted(acknowledged)
+                    _save_state(state_dir / "state.json", state)
+                _deliver(cfg, state, state_dir / "state.json")
+            except RelayError as exc:
+                if str(exc) not in PRIMARY_INBOX_ERRORS:
+                    raise
+                primary_error, primary_lines = exc, None
             if "escalation" in cfg:
                 try:
-                    _escalate(cfg, state, state_dir / "state.json", clock())
+                    _escalate(cfg, state, state_dir / "state.json", clock(), primary_lines)
                 except RelayError as exc:
-                    raise RelayError(f"escalation-{exc}") from None
+                    if primary_error is None:
+                        raise RelayError(f"escalation-{exc}") from None
+            if primary_error is not None:
+                raise primary_error
         except RelayError as exc:
             status["error"] = str(exc)
             code = 2 if str(exc) == "state-corrupt" else 1
