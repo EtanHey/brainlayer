@@ -28,6 +28,9 @@ SOCKET_PATH="${BRAINLAYER_UPDATE_SOCKET_PATH:-/tmp/brainbar.sock}"
 LAUNCHCTL_BIN="${BRAINLAYER_UPDATE_LAUNCHCTL_BIN:-/bin/launchctl}"
 DEFAULTS_BIN="${BRAINLAYER_UPDATE_DEFAULTS_BIN:-/usr/bin/defaults}"
 GIT_BIN="${BRAINLAYER_UPDATE_GIT_BIN:-git}"
+XATTR_BIN="${BRAINLAYER_UPDATE_XATTR_BIN:-/usr/bin/xattr}"
+CODESIGN_BIN="${BRAINLAYER_UPDATE_CODESIGN_BIN:-/usr/bin/codesign}"
+SPCTL_BIN="${BRAINLAYER_UPDATE_SPCTL_BIN:-/usr/sbin/spctl}"
 UI_LABEL="com.brainlayer.brainbar"
 DAEMON_LABEL="com.brainlayer.brainbar-daemon"
 
@@ -52,12 +55,12 @@ What it does:
      and the tap has no upstream tracking branch, so a bare 'git pull' fails).
   2. Detect drift: 'brew list --versions --cask $CASK_NAME' vs the real
      CFBundleShortVersionString inside $APP_PATH.
-  3. On drift, quarantine the stale Caskroom registration (a user-owned mv) and
-     'brew install --cask --force' to ADOPT the app in place.
-     It never runs 'brew upgrade'/'brew reinstall': both execute the OLD installed
-     version's uninstall recipe, read from Caskroom/<cask>/.metadata/ — never the
-     newly tapped one. A pre-fix 'delete:' stanza there shells to 'sudo rm', which
-     has no TTY over ssh, aborts, and destroys the LaunchAgents without reinstalling.
+  3. Prefer 'brew upgrade --cask' for an intact, consistent registration so Homebrew
+     inherits the existing user's Gatekeeper approval. On drift/corrupt receipts,
+     quarantine the stale registration (a reversible user-owned mv) and adopt with
+     'brew install --cask --force'. Legacy uninstall delete recipes use this recovery
+     path to avoid sudo. Carry approval on recovery only after signature, notarization
+     and signing-identity checks; preserve quarantine provenance, never strip it.
   4. Refuse BEFORE touching anything if any path we would remove is root-owned.
   5. Verify at the end: app version, cask version, formula, canonical CLI,
      PATH resolution, process, launchd services, socket. Exit non-zero and say
@@ -204,6 +207,118 @@ caskroom_dir() {
     printf '%s/Caskroom/%s\n' "$prefix" "$CASK_NAME"
 }
 
+# Only execute a saved uninstall recipe if its JSON receipt and staged app link agree.
+# Legacy Ruby-only/unreadable receipts fail closed to the existing adoption path.
+registration_intact() {
+    python3 - "$(caskroom_dir)" "$REGISTERED_VERSION" "$APP_PATH" "$CASK_NAME" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root, version, app, token = sys.argv[1:]
+root, app = Path(root), Path(app)
+try:
+    link = root / version / app.name
+    # Match Homebrew's selection across all versions by the newest timestamp.
+    latest = max((root / ".metadata").glob("*/*"), key=lambda p: p.name)
+    receipt = json.loads((latest / "Casks" / f"{token}.json").read_text())
+    tab_path = root / ".metadata/INSTALL_RECEIPT.json"
+    tab = json.loads(tab_path.read_text()) if tab_path.exists() else {}
+    artifacts = receipt.get("artifacts", tab.get("uninstall_artifacts"))
+    safe = all(not any(k in artifact for k in ("uninstall_preflight", "uninstall_postflight"))
+               and all("delete" not in stanza for stanza in artifact.get("uninstall", []))
+               for artifact in artifacts + tab.get("uninstall_artifacts", []))
+    valid = (not root.is_symlink() and latest.parent.name == version
+             and link.is_symlink() and link.resolve(strict=True) == app.resolve(strict=True)
+             and receipt.get("token", token) == token and receipt.get("version", version) == version
+             and tab.get("source", {}).get("version", version) == version
+             and not tab.get("uninstall_flight_blocks", False)
+             and {"app": [app.name]} in artifacts and safe)
+except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+PY
+}
+
+OLD_APPROVED=0
+OLD_IDENTITY=""
+QUARANTINE_ATTRIBUTE=com.apple.quarantine
+
+signing_identity() {
+    local details team identifier
+    details="$("$CODESIGN_BIN" -dv --verbose=4 "$APP_PATH" 2>&1)" || return 1
+    team="$(printf '%s\n' "$details" | sed -n 's/^TeamIdentifier=//p')"
+    identifier="$(printf '%s\n' "$details" | sed -n 's/^Identifier=//p')"
+    [[ "$team" =~ ^[A-Z0-9]+$ && "$identifier" =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+    printf '%s;%s\n' "$team" "$identifier"
+}
+
+snapshot_approval() {
+    local attributes value flags
+    [[ -d "$APP_PATH" ]] || return 0
+    OLD_IDENTITY="$(signing_identity || true)"
+    # A failed read is unknown, never evidence that quarantine is absent.
+    if attributes="$("$XATTR_BIN" "$APP_PATH" 2>/dev/null)"; then
+        if ! printf '%s\n' "$attributes" | grep -Fxq "$QUARANTINE_ATTRIBUTE"; then
+            OLD_APPROVED=1
+        elif value="$("$XATTR_BIN" -p "$QUARANTINE_ATTRIBUTE" "$APP_PATH" 2>/dev/null)" &&
+             [[ "$value" =~ ^[[:xdigit:]]{1,8}\; ]]; then
+            flags="${value%%;*}"
+            if (( (16#$flags & 0x40) != 0 )); then OLD_APPROVED=1; fi
+        fi
+    fi
+}
+
+approval_prompt() {
+    warn "Approval will not be carried: $*. The first launch will prompt and must be approved by a human."
+}
+
+carry_approval() {
+    local identity assessment value flags approved
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        if [[ "$OLD_APPROVED" -eq 1 && -n "$OLD_IDENTITY" ]]; then
+            log "  approval: will be carried after signature, notarization and identity checks."
+        else
+            log "  approval: will not be carried; old approval or signing identity is unavailable."
+        fi
+        return 0
+    fi
+    if [[ "$OLD_APPROVED" -ne 1 ]]; then
+        approval_prompt "old app was not user-approved (or approval could not be read)"
+        return 0
+    fi
+    identity="$(signing_identity || true)"
+    if [[ -z "$OLD_IDENTITY" || "$identity" != "$OLD_IDENTITY" ]]; then
+        approval_prompt "signing identity changed or could not be verified"
+        return 0
+    fi
+    if ! "$CODESIGN_BIN" --verify --deep --strict "$APP_PATH"; then
+        approval_prompt "codesign verification failed"
+        return 6  # Do not activate a bundle that failed signature verification.
+    fi
+    if ! assessment="$("$SPCTL_BIN" -a -t exec -vv "$APP_PATH" 2>&1)"; then
+        approval_prompt "Gatekeeper verification failed: $assessment"
+        return 6
+    fi
+    if ! printf '%s\n' "$assessment" | grep -Fxq "$APP_PATH: accepted" ||
+       ! printf '%s\n' "$assessment" | grep -Fxq 'source=Notarized Developer ID'; then
+        approval_prompt "Gatekeeper did not report accepted as Notarized Developer ID"
+        return 6
+    fi
+    if ! value="$("$XATTR_BIN" -p "$QUARANTINE_ATTRIBUTE" "$APP_PATH" 2>/dev/null)" ||
+       [[ ! "$value" =~ ^[[:xdigit:]]{1,8}\; ]]; then
+        approval_prompt "new quarantine value is missing, unreadable or malformed"
+        return 0
+    fi
+    flags="${value%%;*}"
+    printf -v approved '%0*x' "${#flags}" "$((16#$flags | 0x40))"
+    if "$XATTR_BIN" -w "$QUARANTINE_ATTRIBUTE" "$approved;${value#*;}" "$APP_PATH"; then
+        log "Gatekeeper approval carried forward; quarantine provenance preserved."
+    else
+        approval_prompt "could not write the quarantine approval flag"
+    fi
+}
+
 # --- rule 3: never require sudo -------------------------------------------------------------
 # Stop BEFORE destroying anything if any path we would move or replace is root-owned.
 assert_no_root_owned_paths() {
@@ -284,8 +399,11 @@ detect_state() {
 }
 
 print_state() {
+    local mode=apply
+    if [[ "$DRY_RUN" -eq 1 ]]; then mode=dry-run
+    elif [[ "$VERIFY_ONLY" -eq 1 ]]; then mode=verify-only; fi
     log "BrainBar drift-proof update"
-    log "  mode:        $([[ "$DRY_RUN" -eq 1 ]] && printf 'dry-run' || { [[ "$VERIFY_ONLY" -eq 1 ]] && printf 'verify-only' || printf 'apply'; })"
+    log "  mode:        $mode"
     log "  brew:        $BREW_BIN"
     log "  cask:        $CASK_REF"
     log "  app path:    $APP_PATH"
@@ -316,6 +434,7 @@ adopt_install() {
     # --force adopts an app already sitting at the target path. Without it brew says
     # "It seems there is already an App at '<path>'" and does nothing.
     run_cmd "$BREW_BIN" install --cask --force "$CASK_REF"
+    carry_approval
 }
 
 apply_update() {
@@ -328,6 +447,16 @@ apply_update() {
             adopt_install
             ;;
         unmanaged|stale-ledger|outdated)
+            if [[ "$DRIFT_KIND" = outdated ]] && registration_intact; then
+                log "Intact registration: using Homebrew upgrade."
+                if [[ "$OLD_APPROVED" -eq 1 && -n "$OLD_IDENTITY" ]]; then
+                    log "  approval: Homebrew will carry it after its signing identity checks."
+                else
+                    log "  approval: will not be carried; old approval or signing identity is unavailable."
+                fi
+                run_cmd "$BREW_BIN" upgrade --cask "$CASK_REF"
+                return 0
+            fi
             log "Drift detected ($DRIFT_KIND). Adopting $OFFERED_VERSION without running any uninstall recipe."
             quarantine_stale_registration
             # Keep services alive until installation succeeds. Explicit activation
@@ -425,6 +554,7 @@ main() {
         assert_no_root_owned_paths
     fi
 
+    if [[ "$DRIFT_KIND" != none ]]; then snapshot_approval; fi
     apply_update
 
     if [[ "$DRY_RUN" -eq 1 ]]; then
