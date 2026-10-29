@@ -1968,6 +1968,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "5c09fef07bad640244445a52702b8d9c01a47c2276f2917d356ec769cf5f0ded": {
+      "non_cloud_purpose": "import of subprocess for the relay's ssh reader. Health relay reads the M1's local BrainLayer health JSON files over the existing 'ssh m1' alias (BatchMode, strict host keys, bounded output); no model, network API or cloud call.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/health_relay/health_relay.py",
+        "target": "import subprocess"
+      }
+    },
     "5ccacf801317d0248eeee6af7f82ef4b4eae917c5659248c222e0b3f38b12774": {
       "non_cloud_purpose": "Existing local Python import/resource metadata or on-disk session-harvest application; no model SDK factory. Site: src/brainlayer/import_sweep.py <module>._installed_package_root importlib.util.find_spec.",
       "site": {
@@ -3044,6 +3054,16 @@
         "target": "import importlib.util"
       }
     },
+    "8708a353ddf10321addbc158724b332ce8620dbac497c11e2700e5faf7e5132d": {
+      "non_cloud_purpose": "TimeoutExpired handling bounds the ssh reader. Health relay reads the M1's local BrainLayer health JSON files over the existing 'ssh m1' alias (BatchMode, strict host keys, bounded output); no model, network API or cloud call.",
+      "site": {
+        "call_sha256": "4605f7a52ce91391d7ad1ef5b4168c29f0760c52416ba24b4cd86003446354f7",
+        "kind": "transport_call",
+        "owner": "<module>._ssh_output",
+        "path": "scripts/health_relay/health_relay.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "87ff92f466a87c97487fa94dade93ed6dbd8401d447bb13506bb409dcb892b31": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/observability_backup.py <module>.build_backups_section subprocess.SubprocessError.",
       "site": {
@@ -3908,6 +3928,16 @@
         "owner": "<module>.controls",
         "path": "scripts/retirement_probe.py",
         "target": "importlib.import_module"
+      }
+    },
+    "ad94f7c4c27906e138c3607380b88836c3d2c78345897d44ccfd4265677ff4aa": {
+      "non_cloud_purpose": "SubprocessError classifies a failed ssh read as host-unreachable. Health relay reads the M1's local BrainLayer health JSON files over the existing 'ssh m1' alias (BatchMode, strict host keys, bounded output); no model, network API or cloud call.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>._snapshot",
+        "path": "scripts/health_relay/health_relay.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "add5f30ae4d78c5a32561b87d5e8834c45dec81a235d1acf1c6bfe9825615c89": {
@@ -4786,6 +4816,16 @@
         "owner": "<module>.AutoActivator._defer_for_brew",
         "path": "src/brainlayer/brainbar_auto_activation.py",
         "target": "subprocess.SubprocessError"
+      }
+    },
+    "c8c268744dd2f92386dc2cc73fe8e5133323bf1fc359c3e82f771184e2fa0efa": {
+      "non_cloud_purpose": "Popen of /usr/bin/ssh running /usr/bin/python3 -I - on the M1. Health relay reads the M1's local BrainLayer health JSON files over the existing 'ssh m1' alias (BatchMode, strict host keys, bounded output); no model, network API or cloud call.",
+      "site": {
+        "call_sha256": "1407d46fe668fc9d5495e15a3604231ec6866e76ce8bb641ed9991b0ddcd729c",
+        "kind": "child_process",
+        "owner": "<module>._ssh_output",
+        "path": "scripts/health_relay/health_relay.py",
+        "target": "subprocess.Popen"
       }
     },
     "c9044373efd6c8fa270f8388f42d7cd9b0c28604f5c20d7243c4168f4f5de35d": {
