@@ -322,11 +322,26 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         if let night, night.failed, maintenanceJobs.contains(where: desired) {
             let next = maintenanceJobs.compactMap { observations?[$0]?.nextRunAt }.filter { $0 > now }.min()
             let retry = next.map { "next retry " + absoluteDate($0, calendar: inputs.calendar) } ?? "next retry time unavailable"
-            let outcome = night.abandoned ? "abandoned" : "failed"
+            let labels = ["jsonl-backup": "Transcript backup", "backup-daily": "Database backup",
+                "backup-snapshot": "Database snapshot", "index": "Transcript indexing",
+                "maintenance-nightly": "Nightly maintenance", "maintenance-weekly": "Weekly maintenance",
+                "wal-checkpoint": "Database checkpoint", "repair-fts": "Search index repair",
+                "decay": "Memory decay", "p0-counter": "Memory counts"]
+            let outcome: String
+            if night.abandoned {
+                outcome = "Nightly maintenance was abandoned (runner stopped)"
+            } else if night.failedSteps.count == 1, let step = night.failedSteps.first {
+                outcome = "\(labels[step] ?? "Nightly maintenance") failed (step \(step))"
+            } else if !night.failedSteps.isEmpty {
+                let steps = night.failedSteps.map { "\(labels[$0] ?? $0) (step \($0))" }.joined(separator: ", ")
+                outcome = "Nightly tasks failed: \(steps)"
+            } else {
+                outcome = "Scheduled maintenance failed"
+            }
             let count = night.consecutiveFailures >= 2 ? " (\(night.consecutiveFailures) consecutive failed nights)" : ""
             builder.add(.init(id: "maintenance.night", component: .maintenance,
                 severity: night.consecutiveFailures >= 2 ? .attention : .notice,
-                text: "Scheduled maintenance \(outcome) at \(absoluteDate(night.at, calendar: inputs.calendar))\(count) — \(retry)",
+                text: "\(outcome) at \(absoluteDate(night.at, calendar: inputs.calendar))\(count) — \(retry)",
                 jobs: Set(maintenanceJobs)))
         } else {
             // Legacy per-step failures stay visible, but can never earn a nightly-run dot.
