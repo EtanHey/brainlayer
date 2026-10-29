@@ -372,7 +372,7 @@ def test_carrier_is_stdlib_only():
     imported = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     imported |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
     allowed = {"__future__", "argparse", "fcntl", "inspect", "json", "os", "re", "stat", "subprocess", "sys"}
-    assert imported <= allowed | {"time", "datetime", "pathlib"}
+    assert imported <= allowed | {"time", "datetime", "pathlib", "selectors", "shlex"}
     for forbidden in ("sqlite", "apsw", "launchctl", "--heal", "osascript", "drive", "token"):
         assert forbidden not in SCRIPT.read_text().lower()
 
@@ -516,7 +516,7 @@ def test_state_loss_refuses_bootstrap_until_explicit_new_epoch(relay, env, monke
     _alerts(env, {"backup-daily": "x"})
     before = env["inbox"].read_bytes()
     assert relay.run(env["config"]) == 1
-    assert _status(env) == {"ts": _status(env)["ts"], "error": "state-missing", "pending": None}
+    assert _status(env) == {"ts": _status(env)["ts"], "error": "state-missing", "pending": None, "hosts": {}}
     assert env["inbox"].read_bytes() == before and not state_path.exists()
     assert relay.main(["--config", str(env["config"]), "--accept-new-epoch"]) == 0
     second = _blocked(env)[1].split("event=")[1]
@@ -643,7 +643,9 @@ def test_version_two_migrates_pending_without_rewriting_legacy_event_ids(relay, 
     assert relay.run(env["config"]) == 0
     state = json.loads(state_path.read_text())
     assert state["version"] == 3 and state["epoch"] == EPOCH
-    assert state["hosts"]["m4-max"] == host and state["outbox"] == []
+    migrated = state["hosts"]["m4-max"]
+    assert {key: migrated[key] for key in host} == host and state["outbox"] == []
+    assert migrated["unreach"] == 0 and isinstance(migrated["first_seen"], float)
     assert _blocked(env) == [legacy_line]
     _alerts(env, {})
     assert relay.run(env["config"]) == 0
@@ -729,7 +731,10 @@ def test_inaccessible_source_does_not_block_other_hosts_or_pending(relay, env, m
         assert relay.run(env["config"]) == 0
         assert _status(env)["error"] is None and _status(env)["pending"] == 0
         assert len(_complete(env, EVENT)) == 1
-        assert len(_complete(env, f"bl-m4-max-{EPOCH}-2-source-unreadable.job-alerts")) == 1
+        state = json.loads((env["tmp"] / "state/state.json").read_text())
+        episode = state["hosts"]["m4-max"]["episodes"]["source-unreadable:job-alerts"]
+        assert episode["open"] is True
+        assert len(_complete(env, f"bl-m4-max-{EPOCH}-{episode['seq']}-source-unreadable.job-alerts")) == 1
         assert len(_complete(env, f"bl-m1-pro-{EPOCH}-1-job-alert.restic")) == 1
     finally:
         env["data"].chmod(previous)
