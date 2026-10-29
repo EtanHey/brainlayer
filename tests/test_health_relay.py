@@ -18,16 +18,19 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "health_relay" / "health_relay.py"
-EVENT = "bl-m4-max-1-job-alert.backup-daily"
+REAL_URANDOM = os.urandom
+EPOCH = "01" * 16
+EVENT = f"bl-m4-max-{EPOCH}-1-job-alert.backup-daily"
 FOREIGN = "\n### Other writer\n@orc FYI: unrelated\n"
 
 
 @pytest.fixture
-def relay():
+def relay(monkeypatch):
     spec = importlib.util.spec_from_file_location("brainlayer_health_relay", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    monkeypatch.setattr(module.os, "urandom", lambda n: b"\x01" * n)
     return module
 
 
@@ -77,7 +80,7 @@ def _run(relay, env) -> int:
         whole, _ = relay._lines(after)
         for host_id, host in state["hosts"].items():
             for issue, episode in host.get("episodes", {}).items():
-                event_id = f"bl-{host_id}-{episode['seq']}-{issue.replace(':', '.')}"
+                event_id = f"bl-{host_id}-{state['epoch']}-{episode['seq']}-{issue.replace(':', '.')}"
                 if event_id in pending:
                     continue
                 complete = _complete(env, event_id)
@@ -415,11 +418,21 @@ def test_final_newline_source_keys_do_not_starve_a_valid_alert(relay, env):
         assert _run(relay, env) == 0
         assert _status(env)["pending"] == 0
     assert len(_blocked(env)) == 2
-    assert len(_complete(env, "bl-m4-max-2-job-alert.z-critical")) == 1
-    assert len(_complete(env, "bl-m4-max-1-job-alert.invalid-key")) == 1
+    assert len(_complete(env, f"bl-m4-max-{EPOCH}-2-job-alert.z-critical")) == 1
+    assert len(_complete(env, f"bl-m4-max-{EPOCH}-1-job-alert.invalid-key")) == 1
 
 
-@pytest.mark.parametrize("python", [None, "/usr/bin/python3"], ids=["in-process", "python39-isolated"])
+@pytest.mark.parametrize(
+    "python",
+    [
+        None,
+        pytest.param(
+            "/usr/bin/python3",
+            marks=pytest.mark.skipif(not os.access("/usr/bin/python3", os.X_OK), reason="no /usr/bin/python3"),
+        ),
+    ],
+    ids=["in-process", "python39-isolated"],
+)
 def test_deep_source_is_corrupt_preserves_incidents_and_delivers_pending(relay, env, monkeypatch, python):
     _alerts(env, {"backup-daily": "x"})
     with monkeypatch.context() as patch:
@@ -441,7 +454,7 @@ def test_deep_source_is_corrupt_preserves_incidents_and_delivers_pending(relay, 
     assert episodes["source-corrupt:job-alerts"]["open"] is True
     assert not state["outbox"] and _status(env)["pending"] == 0
     _acked_with_line_and_marker(env)
-    assert len(_complete(env, "bl-m4-max-2-source-corrupt.job-alerts")) == 1
+    assert len(_complete(env, f"bl-m4-max-{EPOCH}-2-source-corrupt.job-alerts")) == 1
 
 
 def test_run_helper_rejects_ack_without_a_complete_alert(relay, env, monkeypatch):
@@ -454,3 +467,206 @@ def test_run_helper_rejects_ack_without_a_complete_alert(relay, env, monkeypatch
     monkeypatch.setattr(relay, "_deliver", drop_events)
     with pytest.raises(AssertionError, match="an ack requires exactly one complete alert line"):
         _run(relay, env)
+
+
+@pytest.mark.parametrize("bad", ["unreadable", "binary-corrupt", "oversize", "{not json"])
+def test_first_bad_observation_then_absence_keeps_the_original_episode(relay, env, bad):
+    source = env["data"] / "job-alerts.json"
+
+    def bad_source():
+        _set_source(source, "unreadable" if bad == "unreadable" else "x")
+        if bad == "binary-corrupt":
+            source.write_bytes(b"\xff")
+        elif bad == "oversize":
+            source.write_bytes(b"x" * (relay.MAX_SOURCE_BYTES + 1))
+        elif bad == "{not json":
+            source.write_text(bad)
+
+    bad_source()
+    assert _run(relay, env) == 0
+    state_path = env["tmp"] / "state/state.json"
+    original = json.loads(state_path.read_text())["hosts"]["m4-max"]["episodes"]
+    issue, episode = next(iter(original.items()))
+    source.unlink()
+    assert _run(relay, env) == 0
+    host = json.loads(state_path.read_text())["hosts"]["m4-max"]
+    assert "job-alerts" in host["seen"]
+    assert host["episodes"][issue] == episode and episode["open"] is True
+    assert host["episodes"]["source-missing:job-alerts"]["open"] is True
+    bad_source()
+    assert _run(relay, env) == 0
+    assert sum(f"] {issue} " in line for line in _blocked(env)) == 1
+
+
+def test_state_loss_refuses_bootstrap_until_explicit_new_epoch(relay, env, monkeypatch):
+    monkeypatch.setattr(relay.os, "urandom", REAL_URANDOM)
+    _alerts(env, {"backup-daily": "x"})
+    assert relay.run(env["config"]) == 0
+    first = _blocked(env)[0].split("event=")[1]
+    _alerts(env, {})
+    assert relay.run(env["config"]) == 0
+    state_path = env["tmp"] / "state/state.json"
+    state_path.unlink()
+    _alerts(env, {"backup-daily": "x"})
+    before = env["inbox"].read_bytes()
+    assert relay.run(env["config"]) == 1
+    assert _status(env) == {"ts": _status(env)["ts"], "error": "state-missing", "pending": None}
+    assert env["inbox"].read_bytes() == before and not state_path.exists()
+    assert relay.main(["--config", str(env["config"]), "--accept-new-epoch"]) == 0
+    second = _blocked(env)[1].split("event=")[1]
+    assert first != second
+    state = json.loads(state_path.read_text())
+    assert re.fullmatch(r"[0-9a-f]{32}", state["epoch"])
+    assert f"-{state['epoch']}-" in second
+
+
+@pytest.mark.parametrize("suffix,refused", [("\n", True), ("", True), (" partial\n", False)])
+def test_bootstrap_checks_complete_legacy_markers_including_tail(relay, env, suffix, refused):
+    env["inbox"].write_text("# inbox\n<!-- brainlayer-health:bl-old-1-job-alert.x -->" + suffix)
+    before = env["inbox"].read_bytes()
+    assert relay.run(env["config"]) == (1 if refused else 0)
+    assert env["inbox"].read_bytes() == before
+    assert _status(env)["error"] == ("state-missing" if refused else None)
+
+
+def test_markerless_bootstraps_generate_distinct_persisted_epochs(relay, env, monkeypatch):
+    monkeypatch.setattr(relay.os, "urandom", REAL_URANDOM)
+    state_path = env["tmp"] / "state/state.json"
+    assert relay.run(env["config"]) == 0
+    first = json.loads(state_path.read_text())["epoch"]
+    assert relay.run(env["config"]) == 0
+    assert json.loads(state_path.read_text())["epoch"] == first
+    state_path.unlink()
+    assert relay.run(env["config"]) == 0
+    assert json.loads(state_path.read_text())["epoch"] != first
+
+
+@pytest.mark.parametrize("alias", ["direct", "resolved", "symlink", "hardlink"])
+@pytest.mark.parametrize("override", [False, True])
+def test_inbox_source_alias_is_refused_before_any_write(relay, env, alias, override):
+    source = env["data"] / "job-alerts.json"
+    if override:
+        source = env["tmp"] / "other-job-alerts.json"
+        source.write_text('{"backup-daily":"x"}')
+        env["raw"]["hosts"].append(
+            {
+                "id": "other",
+                "label": "Other",
+                "transport": "local",
+                "dir": str(env["tmp"]),
+                "sources": {"job-alerts": str(source)},
+            }
+        )
+    if alias == "direct":
+        inbox = source
+    elif alias == "resolved":
+        directory = env["tmp"] / "source-alias"
+        directory.symlink_to(source.parent, target_is_directory=True)
+        inbox = directory / source.name
+    else:
+        inbox = env["inbox"]
+        inbox.unlink()
+        if alias == "symlink":
+            inbox.symlink_to(source)
+        else:
+            os.link(source, inbox)
+    env["raw"]["inbox"] = str(inbox)
+    env["config"].write_text(json.dumps(env["raw"]))
+    before = source.read_bytes()
+    assert relay.run(env["config"]) == 2
+    assert source.read_bytes() == before and not (env["tmp"] / "state").exists()
+
+
+@pytest.mark.parametrize("name", ["state.json", "status.json"])
+def test_atomic_temp_symlinks_never_truncate_their_target(relay, env, name):
+    target = env["tmp"] / "preserve.txt"
+    target.write_bytes(b"preserve these bytes")
+    destination = env["tmp"] / name
+    relay._atomic_temp(destination).symlink_to(target)
+    with pytest.raises(OSError):
+        relay._write_atomic(destination, {"x": 1})
+    assert target.read_bytes() == b"preserve these bytes" and not destination.exists()
+
+
+def test_atomic_files_are_created_private_even_under_permissive_umask(relay, env):
+    destination = env["tmp"] / "private.json"
+    previous = os.umask(0)
+    try:
+        relay._write_atomic(destination, {"private": True})
+    finally:
+        os.umask(previous)
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("status_fails", [False, True])
+def test_lock_open_failure_returns_one_and_attempts_failure_status(relay, env, status_fails):
+    state_dir = env["tmp"] / "state"
+    state_dir.mkdir()
+    (state_dir / "relay.lock").symlink_to(env["tmp"] / "missing")
+    if status_fails:
+        (state_dir / ".status.json.tmp").symlink_to(env["tmp"] / "missing-status")
+    before = env["inbox"].read_bytes()
+    assert relay.run(env["config"]) == 1
+    assert env["inbox"].read_bytes() == before and not (state_dir / "state.json").exists()
+    if not status_fails:
+        assert _status(env)["error"] == "lock-open-failed" and _status(env)["pending"] is None
+
+
+def test_version_two_migrates_pending_without_rewriting_legacy_event_ids(relay, env):
+    state_path = env["tmp"] / "state/state.json"
+    state_path.parent.mkdir()
+    legacy_id = "bl-m4-max-1-job-alert.backup-daily"
+    legacy_line = f"@orc BLOCKED: legacy alert; event={legacy_id}"
+    host = {"seq": 1, "seen": ["job-alerts"], "episodes": {"job-alert:backup-daily": {"open": True, "seq": 1}}}
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "hosts": {"m4-max": host},
+                "outbox": [{"id": legacy_id, "ts": "now", "line": legacy_line}],
+            }
+        )
+    )
+    _alerts(env, {"backup-daily": "x"})
+    assert relay.run(env["config"]) == 0
+    state = json.loads(state_path.read_text())
+    assert state["version"] == 3 and state["epoch"] == EPOCH
+    assert state["hosts"]["m4-max"] == host and state["outbox"] == []
+    assert _blocked(env) == [legacy_line]
+    _alerts(env, {})
+    assert relay.run(env["config"]) == 0
+    _alerts(env, {"backup-daily": "x"})
+    assert relay.run(env["config"]) == 0
+    assert f"bl-m4-max-{EPOCH}-2-job-alert.backup-daily" in _blocked(env)[1]
+
+
+@pytest.mark.parametrize("epoch", [None, "", "bad", 42, "a" * 33])
+def test_version_three_requires_a_valid_epoch(relay, env, epoch):
+    state_path = env["tmp"] / "state/state.json"
+    state_path.parent.mkdir()
+    original = json.dumps({"version": 3, "epoch": epoch, "hosts": {}, "outbox": []})
+    state_path.write_text(original)
+    assert relay.run(env["config"]) == 2
+    assert _status(env)["error"] == "state-corrupt"
+    assert state_path.read_text() == original and _blocked(env) == []
+
+
+def test_rollback_rejects_new_state_explicitly(relay, env):
+    assert relay.run(env["config"]) == 0
+    state_path = env["tmp"] / "state/state.json"
+    result = subprocess.run(
+        ["git", "show", "9c6910f1657e50d7b5efb86a075e885cf414dd5f:scripts/health_relay/health_relay.py"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    old_script = env["tmp"] / "old-relay.py"
+    old_script.write_text(result.stdout)
+    original = state_path.read_bytes()
+    result = subprocess.run(
+        [sys.executable, "-I", str(old_script), "--config", str(env["config"])], capture_output=True
+    )
+    assert result.returncode == 2
+    assert _status(env)["error"] == "state-corrupt" and _status(env)["pending"] is None
+    assert state_path.read_bytes() == original and _blocked(env) == []

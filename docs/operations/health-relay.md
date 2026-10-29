@@ -14,11 +14,13 @@ opens a database, reads credentials, runs `health-check`, heals, or writes produ
 Any read problem opens its own issue: `source-missing|unreadable|oversize|corrupt:<source>`.
 An issue closes only on a **validated** read of its own source, so switching between
 unreadable, missing and corrupt keeps a `source-*` issue open. An absent `job-alerts.json` is
-healthy only until the file has been seen once. Every observed issue is tracked, however many.
+healthy only until the file has been observed in any non-absent state, including read errors.
+Every observed issue is tracked, however many.
 
 ## Delivery contract
 
-- Each episode gets an ID, `bl-<host>-<seq>-<issue>`. The sequence is durable and never reused.
+- Each episode gets an ID, `bl-<host>-<epoch>-<seq>-<issue>`. The random 128-bit epoch is persisted at
+  bootstrap; sequences advance within that epoch. A new bootstrap generates a fresh epoch.
   The pending event is fsynced to `state.json` **before** any append.
 - Every attempt appends **one self-contained record in a single `write`**, starting and ending
   on a line boundary:
@@ -45,9 +47,35 @@ healthy only until the file has been seen once. Every observed issue is tracked,
 - The relay never creates the inbox. If the inbox is missing, unwritable, fails to fsync, or
   the re-read lacks a record, the run exits 1 and the event stays pending. Invalid config or a
   corrupt `state.json` exits 2. Invalid config is rejected before any write, including when the
-  inbox resolves or aliases to state, status, lock or atomic temporary files. Corrupt state is
-  preserved byte-for-byte; the failure status has `error: "state-corrupt"` and `pending: null`.
+  inbox resolves or aliases to any configured host source, state, status, lock or atomic temporary
+  files. Corrupt state is preserved byte-for-byte; the failure status has `error: "state-corrupt"` and `pending: null`.
+  A lock-open failure exits 1 with `error: "lock-open-failed"` and `pending: null`; failure status
+  writes are best-effort. Atomic temp files refuse symlinks and are created with mode 0600.
   `status.json` records `error` and `pending` after each run with valid configuration.
+
+## State recovery and rollback
+
+A first-ever bootstrap works without `state.json` when the inbox has no complete relay markers.
+If state is absent and the inbox already contains a complete `<!-- brainlayer-health:<id> -->`
+line (including an unterminated final line), the run exits 1 with `error: "state-missing"` and
+`pending: null` in `status.json`. It neither appends nor creates replacement state.
+
+Preserve damaged state for investigation; do not delete it as a routine repair. After investigating
+state loss, an operator may explicitly authorize a new epoch:
+
+```sh
+python3 scripts/health_relay/health_relay.py --config /absolute/path/relay.json --accept-new-epoch
+```
+
+The flag permits bootstrap despite retained markers. Recurring issues get fresh event IDs and new
+alerts. Lost episode history and pending events cannot be reconstructed; currently active issues
+are observed again. The flag does not bypass corrupt-state validation or reset existing state.
+
+New writes use state **version 3** and require an epoch. Version 2 is still readable and upgrades
+on the next successful state write, retaining its sequences, episodes, and pending event IDs.
+New events use the new epoch. Rolling back to the version-2-only relay explicitly fails closed
+with exit 2 and `state-corrupt`, preserving the version-3 state; use the newer relay to resume.
+Do not downgrade or delete state to force a rollback.
 
 ## Limits
 
