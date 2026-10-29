@@ -271,6 +271,30 @@ final class BrainBarNightRecoveryTests: XCTestCase {
         }
     }
 
+    func testPreLaunchRunnerErrorBelongsToItsOwnSummaryNotThePreviousNight() throws {
+        let previous = "2026-10-28"
+        let undated: [String: Any] = ["event": "runner-error", "error": "OSError", "ts": timestamp(date, "01:15:30")]
+        // First row ever: the history stays readable and the failed night is reported.
+        let first = try history([undated, summary(date)])
+        XCTAssertNil(first.error)
+        XCTAssertEqual(first.maintenanceNight?.scheduledDate, date)
+        XCTAssertEqual(first.maintenanceNight?.failed, true)
+        let text = snapshot(first, dot: false).issues.first { $0.id == "maintenance.night" }?.text ?? ""
+        XCTAssertTrue(text.contains("Maintenance runner failed at 2026-10-29 03:15 GMT+2"), text)
+        // After a clean previous night, the error is not blamed on that night.
+        let clean = [runner(previous), finished("jsonl-backup", "ok", 0), finished("maintenance-nightly", "ok", 0),
+                     summary(previous, failed: 0)]
+        for error in [undated, undated.merging(["kind": "nightly", "scheduled_date": date]) { _, new in new }] {
+            let value = try history(clean + [error, summary(date)])
+            XCTAssertNil(value.error)
+            XCTAssertEqual(value.maintenanceNight?.scheduledDate, date)
+            XCTAssertEqual(value.maintenanceNight?.failed, true)
+            let previousOnly = try history(clean + [error])
+            XCTAssertEqual(previousOnly.maintenanceNight?.scheduledDate, previous)
+            XCTAssertEqual(previousOnly.maintenanceNight?.failed, false)
+        }
+    }
+
     func testRunnerErrorInUnterminatedAttemptCannotBeClearedByRecovery() throws {
         let value = try history([runner(date), finished("jsonl-backup"), summary(date),
             runner(date),

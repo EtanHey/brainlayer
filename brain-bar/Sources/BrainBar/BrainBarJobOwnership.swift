@@ -171,6 +171,8 @@ struct BrainBarCalendarHistory: Sendable {
             var unknownFailures: [String: Date] = [:]
             var runnerErrors: [String: Date] = [:]
             var abandonmentSummaries: Set<String> = []
+            var openAttempt: String? = nil
+            var pendingRunnerError: Date? = nil
             // Finished rows inherit their date from the run header. Consume each attempt at
             // its terminal row so pre-failure successes cannot prove a later recovery.
             var attemptSteps: [String: [String: AttemptStep]] = [:]
@@ -190,13 +192,27 @@ struct BrainBarCalendarHistory: Sendable {
                         attemptKinds[date] = row["kind"] as? String ?? (event == "runner" ? "nightly" : "recovery")
                         abandonmentSummaries.remove(date)
                     }
+                    openAttempt = result.latestScheduledDate
+                    pendingRunnerError = nil
                 }
                 if event == "runner-error" {
-                    guard let date = row["scheduled_date"] as? String ?? result.latestScheduledDate,
-                          let ts = row["ts"] as? Double, ts.isFinite else { throw CocoaError(.fileReadCorruptFile) }
-                    if attemptKinds[date] == "nightly", runnerErrors[date] == nil {
-                        runnerErrors[date] = Date(timeIntervalSince1970: ts)
+                    guard let ts = row["ts"] as? Double, ts.isFinite else { throw CocoaError(.fileReadCorruptFile) }
+                    let at = Date(timeIntervalSince1970: ts)
+                    // Older producers left the row undated. Inside an open attempt it belongs to that
+                    // attempt; before any header it failed pre-launch, and its own summary names it.
+                    if let date = row["scheduled_date"] as? String ?? openAttempt {
+                        if (row["kind"] as? String ?? attemptKinds[date]) == "nightly", runnerErrors[date] == nil { runnerErrors[date] = at }
+                    } else if pendingRunnerError == nil {
+                        pendingRunnerError = at
                     }
+                }
+                if event == "summary" {
+                    if let date = row["scheduled_date"] as? String, let at = pendingRunnerError,
+                       row["kind"] as? String == "nightly", runnerErrors[date] == nil {
+                        runnerErrors[date] = at
+                    }
+                    openAttempt = nil
+                    pendingRunnerError = nil
                 }
                 let nightly = row["kind"] as? String == "nightly"
                 if (nightly && (event == "summary" || event == "abandoned")) ||
