@@ -2,11 +2,14 @@
 
 import asyncio
 import datetime as dt
+import fcntl
 import json
 import logging
 import math
 import os
+import plistlib
 import signal
+import stat
 import time
 import uuid
 from contextlib import ExitStack, asynccontextmanager
@@ -14,6 +17,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
+from xml.parsers.expat import ExpatError
 
 from . import maintenance_control
 from .backup_daily import (
@@ -57,6 +61,123 @@ KEYS = {
 }
 
 
+# Existing hourly recovery runs this step without a hold or any service pause.
+# Other candidates remain scheduled until they have an explicit daytime contract.
+DAYTIME_RECOVERY_STEPS = frozenset({"jsonl-backup"})
+RECOVERY_DEFER_REASONS = {
+    "index": "It can run for a long time, so it waits for tonight's scheduled maintenance",
+    "backup-snapshot": "It must finish before 06:00, so it waits for tonight's scheduled maintenance",
+    "backup-daily": "It makes a database snapshot, so it waits for tonight's scheduled maintenance",
+    **dict.fromkeys(
+        ("maintenance-nightly", "maintenance-weekly", "repair-fts"),
+        "It pauses database writes, so it only runs between 04:00 and 06:00",
+    ),
+    **dict.fromkeys(("p0-counter", "wal-checkpoint", "decay"), "It hasn't been made safe to retry during the day yet"),
+}
+
+
+def _recovery_failure_reason(row):
+    reasons = {
+        "quiet-window-missed": "The 04:00–06:00 maintenance window closed before this step could run",
+        "maintenance-window": "Not enough time remained in the 04:00–06:00 maintenance window",
+        "index-overran-window": "Indexing ran past the end of the maintenance window",
+        "resident-writer-busy": "Another database writer was busy",
+        "disabled": "This step was disabled or paused",
+        "runner-vanished": "The scheduled runner stopped before finishing",
+    }
+    return reasons.get(row.get("reason")) or {
+        "failed": "it stopped with an error",
+        "stopped": "it stopped before finishing",
+        "skipped": "it did not run",
+        "deferred": "it was postponed",
+    }.get(row.get("status"), "it did not finish in the scheduled night")
+
+
+class RecoveryHistoryError(ValueError):
+    pass
+
+
+def recovery_refusal_reason(exc):
+    if isinstance(exc, RecoveryHistoryError):
+        return "Maintenance history is damaged or unreadable, so retry is off; tonight’s run will still happen."
+    if isinstance(exc, ConnectionError):
+        return "The maintenance supervisor is unavailable. Retry when it is running again."
+    return "Retry availability could not be checked. Check the maintenance log before trying again."
+
+
+def failed_recovery_selection(directory):
+    try:
+        return _failed_recovery_selection(directory)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RecoveryHistoryError() from exc
+
+
+def _failed_recovery_selection(directory):
+    """Replay only the newest scheduled night, then its same-date recovery records.
+
+    A missing finish is incomplete. Manual runs and other nights cannot erase failures.
+    Only damaged records in the latest night can affect its selection.
+    The actual retry must re-check this snapshot under calendar custody.
+    """
+    date, names, outcomes, current = None, [], {}, False
+    path = directory / "runs.jsonl"
+    if path.exists():
+        rows, newest = [], None
+        for line in path.read_text().splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                row = None
+            if isinstance(row, dict) and row.get("event") == "runner" and row.get("kind", "nightly") == "nightly":
+                # Older damage cannot change the newest nightly attempt. Only a header for the same
+                # or a newer date opens a new window: a later --date rerun of an older night does not.
+                stamp = row.get("scheduled_date")
+                if not isinstance(stamp, str) or newest is None or stamp >= newest:
+                    rows, newest = [], stamp if isinstance(stamp, str) else newest
+            rows.append(row)
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("event"), str):
+                raise RecoveryHistoryError()
+            event = row["event"]
+            if event == "runner" and row.get("kind", "nightly") == "nightly":
+                candidate = dt.date.fromisoformat(row["scheduled_date"]).isoformat()
+                if date is None or candidate >= date:
+                    date, names, outcomes = candidate, row["steps"], {}
+                    if not isinstance(names, list) or any(name not in NAMES for name in names):
+                        raise ValueError("Unknown scheduled steps")
+                    current = True
+                else:
+                    current = False
+            elif event in {"runner", "transcript-recovery"}:
+                current = row.get("kind") == "recovery" and row.get("scheduled_date") == date
+            elif event == "finished" and current and row.get("step") in names:
+                outcomes[row["step"]] = row
+            elif event == "summary":
+                current = False
+    failures = [
+        dict(
+            step=name,
+            reason=_recovery_failure_reason(outcomes.get(name, {})),
+        )
+        for name in names
+        if not (outcomes.get(name, {}).get("status") == "ok" and outcomes[name].get("returncode") == 0)
+    ]
+    return dict(
+        scheduled_date=date,
+        failures=failures,
+        steps=[item["step"] for item in failures if item["step"] in DAYTIME_RECOVERY_STEPS],
+        deferred=[
+            dict(
+                step=item["step"],
+                reason=RECOVERY_DEFER_REASONS[item["step"]],
+                next_run="will run in tonight's scheduled maintenance",
+            )
+            for item in failures
+            if item["step"] not in DAYTIME_RECOVERY_STEPS
+        ],
+    )
+
+
 @dataclass(frozen=True)
 class Step:
     name: str
@@ -73,6 +194,7 @@ class Step:
 class CalendarPlan:
     scheduled_date: dt.date
     candidates: tuple[Step, ...]
+    nightly_start: dt.time | None = None
 
     def select(self, last_weekly=None):
         sunday = self.scheduled_date - dt.timedelta(days=(self.scheduled_date.weekday() + 1) % 7)
@@ -89,6 +211,125 @@ class CalendarPlan:
         if weekly:
             selected[-1] = replace(selected[-1], env=selected[-1].env | {"BRAINLAYER_BACKUP_PHASE": "upload"})
         return selected
+
+
+def _configured_calendar_start(lib_dir=None):
+    # The installed package ships the launchd templates; source checkouts use the
+    # same template. An explicitly supplied lib-dir schedule takes precedence.
+    candidates = ([lib_dir / "com.brainlayer.maintenance.plist"] if lib_dir else []) + [
+        Path(__file__).parent / "launchd/com.brainlayer.maintenance.plist",
+        Path(__file__).parents[2] / "scripts/launchd/com.brainlayer.maintenance.plist",
+    ]
+    path = next((path for path in candidates if path.exists()), None)
+    if path is None:
+        raise ValueError("Nightly calendar start is unavailable")
+    with path.open("rb") as stream:
+        try:
+            interval = plistlib.load(stream)["StartCalendarInterval"]
+        except ExpatError as exc:  # Malformed XML is not a ValueError; callers handle ValueError.
+            raise ValueError("Nightly calendar start is unreadable") from exc
+    return dt.time(interval["Hour"], interval.get("Minute", 0))
+
+
+def _retry_window(plan, steps, now, guard_timeout, shutdown_timeout):
+    start = plan.nightly_start if isinstance(plan, CalendarPlan) else _configured_calendar_start()
+    if start is None:
+        raise ValueError("Nightly calendar start is unavailable")
+    duration = sum(step.timeout for step in steps) + guard_timeout + MAX_STALL_GRACE_S + 2 * shutdown_timeout
+    # Include tomorrow's reservation when a long configured bound crosses midnight.
+    for offset in (0, 1):
+        day = now + dt.timedelta(days=offset)
+        nightly = day.replace(hour=start.hour, minute=start.minute, second=0, microsecond=0)
+        pause_start = nightly - dt.timedelta(seconds=duration)
+        pause_end = nightly.replace(hour=6, minute=0)
+        if now < pause_end:
+            break
+    blocked = pause_start <= now < pause_end
+    reason = f"Retries pause from {pause_start:%H:%M} until nightly maintenance finishes at {pause_end:%H:%M}."
+    return (
+        blocked,
+        dict(
+            retry_pause_start=pause_start.isoformat(timespec="seconds"),
+            retry_pause_end=pause_end.isoformat(timespec="seconds"),
+        ),
+        reason,
+    )
+
+
+def _probe_calendar_custody(directory):
+    """Try existing locks only: no mkdir, lock creation, group replay or writes."""
+    # Never probe full-calendar: the nightly takes it outside its wait loop, so even a
+    # microsecond hold there makes the 03:15 run record already-running and skip the night.
+    # A running calendar also holds both locks below, which is what the retry admission checks.
+    with ExitStack() as locks:
+        for path in (directory, directory / "recovery-admission"):
+            if not path.exists():
+                continue
+            info = path.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise PermissionError("unsafe calendar directory")
+            try:
+                fd = os.open(path / "control.lock", os.O_RDONLY | os.O_NOFOLLOW)
+            except FileNotFoundError:
+                continue
+            locks.callback(os.close, fd)
+            info = os.fstat(fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_mode & 0o077
+                or info.st_nlink != 1
+            ):
+                raise PermissionError("unsafe calendar lock")
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+    return True
+
+
+async def _failed_recovery_admission(plan, directory, now, guard_timeout, shutdown_timeout, reply):
+    selection = await _blocking(failed_recovery_selection, directory)
+    reply.update(selection)
+    candidates = plan.candidates if isinstance(plan, CalendarPlan) else plan
+    steps = tuple(step for step in candidates if step.name in selection["steps"])
+    if {step.name for step in steps} != set(selection["steps"]):
+        raise ValueError("Recovery plan is missing a selected step")
+    blocked, window, reason = await _blocking(_retry_window, plan, steps, now, guard_timeout, shutdown_timeout)
+    reply.update(window)
+    if blocked:
+        reply.update(status="refused", reason=reason)
+    elif not selection["steps"]:
+        reply.update(status="nothing-to-retry", reason="Everything that can run during the day has already finished.")
+    else:
+        client = maintenance_control.control_client()
+        disabled = client._disabled(await _blocking(client.request), include_paused=True)
+        if any(f"com.brainlayer.{name}" in disabled for name in (*selection["steps"], "maintenance")):
+            reply.update(status="refused", reason="Maintenance or a retry step is disabled or paused")
+        else:
+            reply.update(status="ready", reason="Only failed daytime-safe steps will retry; no services pause")
+    return steps
+
+
+async def _failed_recovery_probe(plan, directory, now, guard_timeout, shutdown_timeout, reply):
+    try:
+        free = await _blocking(_probe_calendar_custody, directory)
+        # All try-locks are released before reading history or contacting the supervisor.
+        if not free:
+            try:
+                # Display-only while busy: the live run may be mid-write, so a torn line is not damage.
+                reply.update(await _blocking(failed_recovery_selection, directory))
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            reply.update(
+                status="refused", reason="Maintenance is running right now. Try again when it finishes.", steps=[]
+            )
+        else:
+            await _failed_recovery_admission(plan, directory, now, guard_timeout, shutdown_timeout, reply)
+        return 0
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+        reply.update(status="refused", reason=recovery_refusal_reason(exc), steps=[])
+        return 1
 
 
 def calendar_steps(python, cli, lib_dir, scheduled_date):
@@ -117,7 +358,12 @@ def calendar_steps(python, cli, lib_dir, scheduled_date):
         ),
     )
     steps[3].env["BRAINLAYER_JSONL_BACKUP_DRIVE_FOLDER"] = "Brain Drive/06_ARCHIVE/backups/claude-jsonl"
-    return CalendarPlan(scheduled_date, steps)
+    try:
+        start = _configured_calendar_start(lib_dir)
+    except (OSError, ValueError, KeyError, TypeError):
+        # Only retries need the start time, and they refuse without it; the nightly must still run.
+        start = None
+    return CalendarPlan(scheduled_date, steps, start)
 
 
 def record(directory, **event):
@@ -700,7 +946,13 @@ async def run_calendar(
     sleep_fn=asyncio.sleep,
     defer_after=3,
     transcript_recovery=False,
+    failed_recovery=False,
+    recovery_status=False,
+    recovery_result=None,
 ):
+    if failed_recovery and transcript_recovery:
+        raise ValueError("Choose only one recovery mode")
+    reply = recovery_result if recovery_result is not None else {}
     if guard_timeout is None:
         guard_timeout = await _blocking(configured_guard_timeout)
     if (
@@ -709,27 +961,44 @@ async def run_calendar(
     ):
         raise ValueError("invalid calendar timing")
     date = steps.scheduled_date if isinstance(steps, CalendarPlan) else scheduled_date or local_backup_date(now_fn())
+    if failed_recovery and recovery_status:
+        return await _failed_recovery_probe(steps, directory, now_fn(), guard_timeout, shutdown_timeout, reply)
     operations = {}
     token = _calendar_operations.set(operations)
     try:
         leases, custody = await _admit_calendar(
-            steps, directory, date, transcript_recovery, guard_timeout, shutdown_timeout, sleep_fn
+            steps, directory, date, transcript_recovery or failed_recovery, guard_timeout, shutdown_timeout, sleep_fn
         )
     except BaseException:
         _calendar_operations.reset(token)
         raise
     if leases is None:
+        if failed_recovery:
+            try:
+                # Display-only snapshot while busy; never use it to admit or launch work.
+                reply.update(await _blocking(failed_recovery_selection, directory))
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            reply.update(
+                status="refused", reason="Maintenance is running right now. Try again when it finishes.", steps=[]
+            )
         _calendar_operations.reset(token)
         return custody
     stop, heartbeat_stop, handlers, results = asyncio.Event(), asyncio.Event(), {}, {}
     guard, heartbeat, diagnostics = None, None, None
     active_step, runner_failed = None, 0
     planned, plan_complete = isinstance(steps, CalendarPlan), False
-    kind = "recovery" if transcript_recovery else "nightly" if planned else "manual"
+    kind = "recovery" if transcript_recovery or failed_recovery else "nightly" if planned else "manual"
     manual_failed = 0
     runner_started_at = None
     loop = asyncio.get_running_loop()
     try:
+        if failed_recovery:
+            plan = steps
+            steps = await _failed_recovery_admission(plan, directory, now_fn(), guard_timeout, shutdown_timeout, reply)
+            if reply["status"] != "ready":
+                return 0
+            date = dt.date.fromisoformat(reply["scheduled_date"])
         await _blocking(custody.recover, min(1, shutdown_timeout / 2))  # Reap stale writers before any journal scan.
         state_path = directory / "state.json"
         state = await _blocking(
@@ -749,7 +1018,7 @@ async def run_calendar(
             steps = tuple(step for step in candidates if step.name == "jsonl-backup")
             if len(steps) != 1:
                 raise ValueError("transcript recovery requires one transcript step")
-        elif planned:
+        elif planned and not failed_recovery:
             marker = dt.date.fromisoformat(state["last_weekly"]) if state.get("last_weekly") else None
             steps = steps.select(marker)
         steps = tuple(steps)
@@ -771,7 +1040,7 @@ async def run_calendar(
         await _blocking(
             record,
             directory,
-            event="transcript-recovery" if transcript_recovery else "runner",
+            event="transcript-recovery" if transcript_recovery or failed_recovery else "runner",
             kind=kind,
             guard=guard.pid,
             guard_start_time=start_time(guard.pid),
@@ -779,6 +1048,8 @@ async def run_calendar(
             ts=runner_started_at,
             scheduled_date=date.isoformat(),
         )
+        if failed_recovery:
+            reply.update(status="accepted", reason="Transcript backup retried successfully")
         if install_signals:
             for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
                 handlers[sig] = signal.getsignal(sig)
@@ -798,6 +1069,14 @@ async def run_calendar(
             code, missed, reason, step_failed = 1, False, None, False
             invocation = uuid.uuid4().hex if step.name == "backup-daily" else None
             try:
+                if failed_recovery:
+                    blocked, window, window_reason = await _blocking(
+                        _retry_window, plan, steps, now_fn(), guard_timeout, shutdown_timeout
+                    )
+                    reply.update(window)
+                    if blocked:
+                        reply.update(status="refused", reason=window_reason)
+                        break
                 bounded = step
                 if step.name == "index":
                     bounded = await _blocking(_bounded_index_step, step, now_fn(), shutdown_timeout)
@@ -807,7 +1086,7 @@ async def run_calendar(
                     code, reason = 75, "maintenance-window"
                 else:
                     step = bounded
-                    disabled = client._disabled(await _blocking(client.request), include_paused=False)
+                    disabled = client._disabled(await _blocking(client.request), include_paused=failed_recovery)
                     if f"com.brainlayer.{_service_name(step)}" in disabled or "com.brainlayer.maintenance" in disabled:
                         code, reason = 75, "disabled"
                     elif not await _window(directory, step, now_fn, sleep_fn, stop):
@@ -886,7 +1165,7 @@ async def run_calendar(
                 reason=reason,
                 replaces="maintenance-nightly" if weekly_substitution and step.name == "maintenance-weekly" else None,
                 backup_invocation_id=invocation,
-                preserve_abandonment_alerts=transcript_recovery,
+                preserve_abandonment_alerts=transcript_recovery or failed_recovery,
             )
         active_step = None
         plan_complete = bool(steps) and not stop.is_set() and len(results) == len(steps)
@@ -894,7 +1173,15 @@ async def run_calendar(
             state["last_weekly"] = (date - dt.timedelta(days=(date.weekday() + 1) % 7)).isoformat()
             await _blocking(_atomic_write, directory / "state.json", state)
         failed = sum(v == "failed" for v in results.values())
-        return int(failed > 0 or stop.is_set() or manual_failed)
+        if failed_recovery:
+            reply.update(results=results)
+            if reply.get("status") != "refused" and (
+                failed or stop.is_set() or any(value != "ok" for value in results.values())
+            ):
+                reply.update(status="failed", reason="Retry did not finish successfully; see the step results and logs")
+        return int(
+            failed > 0 or stop.is_set() or manual_failed or (failed_recovery and reply.get("status") == "failed")
+        )
     except Exception as exc:
         if active_step is not None:
             results[active_step] = "failed"
@@ -910,6 +1197,9 @@ async def run_calendar(
             kind=kind,
             scheduled_date=date.isoformat(),
         )
+        if failed_recovery:
+            reply.update(status="failed" if runner_started_at else "refused", reason=recovery_refusal_reason(exc))
+            return 1
         raise
     finally:
         try:
@@ -946,20 +1236,21 @@ async def run_calendar(
             raise
         finally:
             try:
-                await _blocking(
-                    record,
-                    directory,
-                    event="summary",
-                    kind=kind,
-                    complete=plan_complete and not runner_failed,
-                    scheduled_date=date.isoformat(),
-                    runner_started_at=runner_started_at,
-                    failed=max(
-                        int(kind == "nightly" and not plan_complete),
-                        sum(v == "failed" for v in results.values()) + runner_failed + manual_failed,
-                    ),
-                    deferred=sum(v == "deferred" for v in results.values()),
-                )
+                if not failed_recovery or runner_started_at is not None:
+                    await _blocking(
+                        record,
+                        directory,
+                        event="summary",
+                        kind=kind,
+                        complete=plan_complete and not runner_failed,
+                        scheduled_date=date.isoformat(),
+                        runner_started_at=runner_started_at,
+                        failed=max(
+                            int(kind == "nightly" and not plan_complete),
+                            sum(v == "failed" for v in results.values()) + runner_failed + manual_failed,
+                        ),
+                        deferred=sum(v == "deferred" for v in results.values()),
+                    )
                 if kind == "nightly" and plan_complete and not runner_failed:
                     try:
                         await _blocking(_retire_incomplete, directory, state, [step.name for step in steps])
