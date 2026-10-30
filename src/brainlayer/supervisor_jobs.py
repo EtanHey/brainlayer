@@ -127,6 +127,33 @@ def load_components(path: Path, socket_path: Path) -> dict[str, Component]:
         if interval and not run_at_load:
             child.retry_at = time.monotonic() + interval
         components[ALIASES[label]] = child
+    # Supervisor-only registration: legacy installs ship no second checkpoint schedule.
+    source = components.get("observability", next(iter(components.values())))
+    components.setdefault(
+        "wal-checkpoint-fallback",
+        Component(
+            (sys.executable, "-m", "brainlayer.wal_checkpoint"),
+            env={
+                key: value
+                for key, value in (os.environ | source.env).items()
+                if key
+                in {
+                    "BRAINLAYER_DB",
+                    "BRAINLAYER_JOB_ALERT_PATH",
+                    "BRAINLAYER_BACKUP_STAGING_DIR",
+                    "BRAINLAYER_FORBID_BRAINBAR_SOCKET",
+                    "BRAINLAYER_FORBID_EMBEDDING_MODEL",
+                }
+            }
+            | {"BRAINLAYER_SUPERVISOR_SOCKET": str(socket_path)},
+            interval=900,
+            run_timeout=30,
+            exit_timeout=2,
+            stdout=socket_path.with_name("wal-fallback.out.log"),
+            stderr=socket_path.with_name("wal-fallback.err.log"),
+        ),
+    )
+    components["wal-checkpoint-fallback"].retry_at = time.monotonic() + 900
     return with_brainbar_monitor(components, socket_path)
 
 

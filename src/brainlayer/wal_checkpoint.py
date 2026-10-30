@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import json
 import math
 import os
 import sqlite3
+import subprocess
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
-from .paths import get_db_path
+from .paths import get_db_path, supervisor_socket_path
 
 _VALID_CHECKPOINT_MODES = {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}
 _DEFAULT_GUARD_TIMEOUT_SECONDS = 10.0
@@ -176,3 +179,100 @@ def run_wal_checkpoint(
         "checkpointed_pages": checkpointed_pages,
         "attempts": attempts,
     }
+
+
+def periodic_checkpoint(*, high_water_bytes=256_000_000, busy_timeout_seconds=0.1, now=None):
+    """One independent tick. Busy wait is short; SQLite's actual copy I/O is not time-bounded."""
+    from . import job_alerts
+    from .drive_credentials import _atomic_write
+    from .supervisor_guard import component_gate
+
+    started = time.monotonic()
+    now = time.time() if now is None else now
+    db = resolve_db_path()
+    if db is None:
+        raise FileNotFoundError("no database found")
+    state_path = Path(db).with_name("wal-fallback.json")
+    try:
+        previous = json.loads(state_path.read_text())
+    except FileNotFoundError:
+        previous = {}
+    before = get_wal_size(db)
+    result = dict(
+        attempted_at=datetime.fromtimestamp(now, UTC).isoformat(),
+        db=db,
+        mode="TRUNCATE",
+        wal_before_bytes=before,
+        attempts=0,
+        busy=None,
+        log_pages=None,
+        checkpointed_pages=None,
+        outcome="below-high-water",
+        reason="",
+        holders=None,
+    )
+    if before >= high_water_bytes:
+        result["outcome"] = "deferred"
+        try:
+            with ExitStack() as stack:
+                result["reason"] = "heavy-maintenance-hold"
+                stack.enter_context(component_gate(supervisor_socket_path().parent))
+                result["reason"] = "snapshot-active"
+                staging = Path(
+                    os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR") or Path.home() / ".local/share/brainlayer/backups"
+                ).expanduser()
+                staging.mkdir(parents=True, exist_ok=True)
+                fd = os.open(staging / ".backup.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+                stack.callback(os.close, fd)
+                # Keep both leases through SQLite: no hold/snapshot can enter between check and use.
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                result["reason"] = "checkpoint-guard-busy"
+                result["attempts"] = 1
+                busy, pages, copied = checkpoint(
+                    db, "TRUNCATE", guard_timeout_seconds=0, busy_timeout_seconds=busy_timeout_seconds
+                )
+                result.update(
+                    busy=busy,
+                    log_pages=pages,
+                    checkpointed_pages=copied,
+                    reason="sqlite-busy" if busy else "",
+                    outcome="deferred" if busy else "reclaimed",
+                )
+        except (BlockingIOError, CheckpointGuardTimeout):
+            pass  # The independent scheduler retries on its next tick; no in-tick retry or process control.
+        except (OSError, sqlite3.Error) as exc:
+            result.update(outcome="error", reason=f"{type(exc).__name__}: {exc}")
+    after = get_wal_size(db)
+    since = previous.get("high_water_since")
+    since = (now if since is None else since) if after >= high_water_bytes else None
+    age = max(0, now - since) if since is not None else 0
+    result.update(wal_after_bytes=after, high_water_since=since, high_water_age_seconds=age)
+    if result["outcome"] == "reclaimed" and after >= high_water_bytes:
+        result.update(outcome="deferred", reason="still-high-water")
+    if age >= 1800:
+        try:
+            holders = subprocess.run(
+                ["lsof", "-nP", "-F", "pc", "--", db, f"{db}-wal", f"{db}-shm"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            result["holders"] = dict(
+                returncode=holders.returncode, output=holders.stdout[:8192], error=holders.stderr[:1024]
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            result["holders"] = dict(unmeasurable=type(exc).__name__)
+    result.update(finished_at=datetime.now(UTC).isoformat(), duration_seconds=time.monotonic() - started)
+    _atomic_write(state_path, result)
+    reason = (
+        f"BrainLayer WAL fallback: {json.dumps(result, sort_keys=True)}"
+        if age >= 1800 or result["outcome"] == "error"
+        else None
+    )
+    job_alerts.report("wal-checkpoint-fallback", reason, path=job_alerts.alert_path(db_path=Path(db)))
+    return result
+
+
+if __name__ == "__main__":
+    print(json.dumps(periodic_checkpoint(), sort_keys=True), flush=True)
