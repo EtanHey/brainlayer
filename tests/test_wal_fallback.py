@@ -185,6 +185,10 @@ def test_default_high_water_makes_only_one_short_busy_attempt(database, monkeypa
 @pytest.mark.parametrize("gate", ["maintenance", "snapshot", "calendar"])
 def test_mid_checkpoint_does_not_block_real_gate_admission(database, monkeypatch, gate):
     _, _, control, staging = database
+    (control / "maintenance.lock").touch(mode=0o600)
+    (staging / ".backup.lock").touch()
+    with Custody(control / "calendar"):
+        pass
     entered, release = threading.Event(), threading.Event()
     real = wal.checkpoint
 
