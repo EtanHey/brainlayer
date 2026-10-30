@@ -274,8 +274,8 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         XCTAssertEqual(summary.ingress.status, .live)
         XCTAssertEqual(agentLane.status, .idle)
-        XCTAssertEqual(agentLane.statusText, "No agent-origin chunks")
-        XCTAssertEqual(agentLane.lastEventText, "No agent-origin chunks in Last 30m")
+        XCTAssertEqual(agentLane.statusText, "No explicit memory-store rows")
+        XCTAssertEqual(agentLane.lastEventText, "No explicit memory-store rows in Last 30m")
     }
 
     func testWatcherOnlyBurstShowsAllCommitsWhileAgentLaneStaysIdle() {
@@ -308,7 +308,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(allCommitsLane.values, [0, 0, 0, 460])
         XCTAssertEqual(allCommitsLane.volumeText, "460 in 1h")
         XCTAssertEqual(agentLane.status, .idle)
-        XCTAssertEqual(agentLane.statusText, "No agent-origin chunks")
+        XCTAssertEqual(agentLane.statusText, "No explicit memory-store rows")
         XCTAssertEqual(watcherLane.status, .live)
     }
 
@@ -343,7 +343,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(summary.lane(for: .allCommits).status, .live)
         XCTAssertEqual(summary.lane(for: .jsonlWatcher).status, .live)
         XCTAssertEqual(agentLane.status, .idle)
-        XCTAssertEqual(agentLane.statusText, "No agent-origin chunks")
+        XCTAssertEqual(agentLane.statusText, "No explicit memory-store rows")
         XCTAssertEqual(summary.queue.storeReplayDebtDepth, 3)
         XCTAssertEqual(summary.queue.storeDepthText, "3 replay debt")
     }
@@ -374,9 +374,9 @@ final class BrainBarUXLogicTests: XCTestCase {
         let agentLane = summary.lane(for: .agentStores)
 
         XCTAssertEqual(agentLane.status, .live)
-        XCTAssertEqual(agentLane.statusText, "Agent-origin chunks landing now")
+        XCTAssertEqual(agentLane.statusText, "Explicit memory-store rows landing now")
         XCTAssertEqual(agentLane.volumeText, "2 in 1h")
-        XCTAssertEqual(agentLane.lastEventText, "2 agent-origin chunks in latest source-time bucket")
+        XCTAssertEqual(agentLane.lastEventText, "2 explicit memory-store rows in latest source-time bucket")
         XCTAssertEqual(summary.queue.storeDepthText, "5 queued")
     }
 
@@ -406,9 +406,9 @@ final class BrainBarUXLogicTests: XCTestCase {
         let agentLane = summary.lane(for: .agentStores)
 
         XCTAssertEqual(agentLane.status, .idle)
-        XCTAssertEqual(agentLane.statusText, "No agent-origin chunks")
+        XCTAssertEqual(agentLane.statusText, "No explicit memory-store rows")
         XCTAssertEqual(agentLane.volumeText, "0 in 1h")
-        XCTAssertEqual(agentLane.lastEventText, "No agent-origin chunks in Last 1h")
+        XCTAssertEqual(agentLane.lastEventText, "No explicit memory-store rows in Last 1h")
         XCTAssertEqual(summary.queue.storeDepthText, "5 queued")
     }
 
@@ -438,9 +438,9 @@ final class BrainBarUXLogicTests: XCTestCase {
         let agentLane = summary.lane(for: .agentStores)
 
         XCTAssertEqual(agentLane.status, .live)
-        XCTAssertEqual(agentLane.statusText, "Agent-origin chunks landing now")
+        XCTAssertEqual(agentLane.statusText, "Explicit memory-store rows landing now")
         XCTAssertEqual(agentLane.volumeText, "2 in 1h")
-        XCTAssertEqual(agentLane.lastEventText, "2 agent-origin chunks in latest source-time bucket")
+        XCTAssertEqual(agentLane.lastEventText, "2 explicit memory-store rows in latest source-time bucket")
         XCTAssertEqual(summary.queue.storeDepthText, "5 queued")
     }
 

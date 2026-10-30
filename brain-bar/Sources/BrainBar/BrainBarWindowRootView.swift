@@ -1571,7 +1571,7 @@ private struct BrainBarDashboardView: View {
                             }
                             Text(lane.evidencePlaceholder ?? "Evidence unavailable")
                         } else {
-                            Text("0 in window")
+                            Text(disclosure.emptyMessage)
                         }
                     }
                         .font(.system(size: 11, weight: .medium))
@@ -1581,6 +1581,12 @@ private struct BrainBarDashboardView: View {
                         .background(Color.brainBarBlack.opacity(0.65), in: RoundedRectangle(cornerRadius: 6))
                         .allowsHitTesting(false)
                 }
+            }
+            if let help = disclosure.visibleHelp {
+                Text(help)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.brainBarTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1600,7 +1606,7 @@ private struct BrainBarDashboardView: View {
     private func ingestSeriesTitle(_ series: PipelineSeries) -> String {
         switch series {
         case .allCommits: "All chunks · chunk rows"
-        case .agentStores: "Agent · chunk rows"
+        case .agentStores: "Explicit memory stores · chunk rows"
         case .jsonlWatcher: "Watcher · unique chunk IDs"
         }
     }
@@ -3302,12 +3308,18 @@ struct BrainBarDashboardChartDisclosure: Equatable {
     let statusLabel: String
     let accessibilitySummary: String
     let tooltipDisclosure: String
+    let emptyMessage: String
+    let visibleHelp: String?
 
     init(series: PipelineSeries, lane: DashboardFlowLane, timeframe: PipelineTimeframe) {
         let totalCount = lane.values.reduce(0, +)
         let windowLabel = DashboardMetricFormatter.windowLabel(minutes: timeframe.windowMinutes)
         let clockLabel: String
         let unitLabel: String
+        visibleHelp = series == .agentStores ? "Excludes transcript indexing; does not measure agent activity." : nil
+        emptyMessage = series == .agentStores
+            ? "No explicit memory-store rows in the last \(windowLabel.replacingOccurrences(of: "Last ", with: ""))"
+            : "0 in window"
 
         switch series {
         case .allCommits:
@@ -3318,12 +3330,12 @@ struct BrainBarDashboardChartDisclosure: Equatable {
             clockLabel = "source time"
             unitLabel = "chunk rows"
         case .agentStores:
-            subtitle = "Source time · chunk rows · documented agent origins"
+            subtitle = "Source time · explicit memory-store rows"
             visibleDetail = "Sources: MCP, manual, digest, precompact-hook, brain_store, pending, fallback, fallback-replay."
             accessibilityIdentifier = "brainbar.dashboard.chart.agent-origin-chunks"
             statusLabel = lane.status.label
             clockLabel = "source time"
-            unitLabel = "agent-origin chunk rows"
+            unitLabel = "explicit memory-store rows"
         case .jsonlWatcher:
             subtitle = "Ingest time · unique chunk IDs first seen in window · not additive with source-time charts"
             visibleDetail = "Live state uses a 60s process-and-flow truth window; this chart uses the selected context window."
@@ -3337,10 +3349,10 @@ struct BrainBarDashboardChartDisclosure: Equatable {
         if let placeholder = lane.evidencePlaceholder {
             let detail = lane.hasWatcherEvidence && lane.status != .running
                 ? "\(placeholder) · \(lane.lastEventText)" : placeholder
-            accessibilitySummary = "\(lane.name). \(detail). Window: \(windowLabel). Unit: \(unitLabel). Clock: \(clockLabel)."
+            accessibilitySummary = "\(lane.name). \(detail). Window: \(windowLabel). Unit: \(unitLabel). Clock: \(clockLabel)." + (visibleHelp.map { " " + $0 } ?? "")
             tooltipDisclosure = detail
         } else {
-            accessibilitySummary = "\(lane.name). Window: \(windowLabel). Count: \(DashboardMetricFormatter.integerString(totalCount)). Unit: \(unitLabel). Clock: \(clockLabel)."
+            accessibilitySummary = "\(lane.name). Window: \(windowLabel). Count: \(DashboardMetricFormatter.integerString(totalCount)). Unit: \(unitLabel). Clock: \(clockLabel)." + (visibleHelp.map { " " + $0 } ?? "")
             tooltipDisclosure = "Window: \(windowLabel) · Count: hovered value below · Unit: \(unitLabel) · Clock: \(clockLabel)"
         }
     }
