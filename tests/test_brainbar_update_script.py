@@ -573,6 +573,29 @@ def test_verify_uses_linked_keg_with_unordered_installed_versions(tmp_path: Path
     assert "(expected 1.5.79)" in result.stdout
 
 
+def test_verify_strips_linked_keg_revision_suffix(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    h.install_stubs(
+        offered="1.5.79",
+        registered="1.5.79",
+        formula="1.5.79",
+        formula_info=json.dumps({"formulae": [{"linked_keg": "1.5.79_1"}]}),
+    )
+    _make_app(h.app_path, "1.5.79")
+    _write_exec(h.bin_dir / "pgrep", "#!/usr/bin/env bash\nexit 0\n")
+    with tempfile.TemporaryDirectory(prefix="sock-", dir=REPO_ROOT / ".build.noindex") as directory:
+        socket_path = Path(directory).relative_to(REPO_ROOT) / "brainbar.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as endpoint:
+            endpoint.bind(str(socket_path))
+            result = h.run(
+                "--verify-only",
+                BRAINLAYER_UPDATE_SKIP_VERIFY="0",
+                BRAINLAYER_UPDATE_SOCKET_PATH=str(socket_path),
+            )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "(expected 1.5.79)" in result.stdout
+
+
 @pytest.mark.parametrize(
     "formula_info",
     ['{"formulae": [{"linked_keg": null}]}', '{"formulae": [{}]}', "invalid json"],

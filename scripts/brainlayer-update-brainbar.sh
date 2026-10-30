@@ -541,6 +541,7 @@ try:
     version = formulae[0]["linked_keg"]
     if not isinstance(version, str) or not re.fullmatch(r"[0-9][A-Za-z0-9._+-]*", version):
         raise ValueError("missing or invalid linked keg")
+    version = re.sub(r"_[0-9]+$", "", version)
 except Exception:
     raise SystemExit(1)
 print(version)
