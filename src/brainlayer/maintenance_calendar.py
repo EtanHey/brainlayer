@@ -17,6 +17,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
+from xml.parsers.expat import ExpatError
 
 from . import maintenance_control
 from .backup_daily import (
@@ -64,16 +65,14 @@ KEYS = {
 # Other candidates remain scheduled until they have an explicit daytime contract.
 DAYTIME_RECOVERY_STEPS = frozenset({"jsonl-backup"})
 RECOVERY_DEFER_REASONS = {
-    "index": "Indexing has a calendar runtime bound before the maintenance window",
-    "backup-snapshot": "The verified snapshot has a calendar runtime bound before 06:00",
-    "backup-daily": "Database backup may create a snapshot; daytime recovery is not admitted",
+    "index": "It can run for a long time, so it waits for tonight's scheduled maintenance",
+    "backup-snapshot": "It must finish before 06:00, so it waits for tonight's scheduled maintenance",
+    "backup-daily": "It makes a database snapshot, so it waits for tonight's scheduled maintenance",
     **dict.fromkeys(
         ("maintenance-nightly", "maintenance-weekly", "repair-fts"),
         "It pauses database writes, so it only runs between 04:00 and 06:00",
     ),
-    **dict.fromkeys(
-        ("p0-counter", "wal-checkpoint", "decay"), "This database step has not been enabled for daytime retry"
-    ),
+    **dict.fromkeys(("p0-counter", "wal-checkpoint", "decay"), "It hasn't been made safe to retry during the day yet"),
 }
 
 
@@ -123,14 +122,18 @@ def _failed_recovery_selection(directory):
     date, names, outcomes, current = None, [], {}, False
     path = directory / "runs.jsonl"
     if path.exists():
-        rows = []
+        rows, newest = [], None
         for line in path.read_text().splitlines():
             try:
                 row = json.loads(line)
             except ValueError:
                 row = None
             if isinstance(row, dict) and row.get("event") == "runner" and row.get("kind", "nightly") == "nightly":
-                rows = []  # Older damage cannot change the newest nightly attempt.
+                # Older damage cannot change the newest nightly attempt. Only a header for the same
+                # or a newer date opens a new window: a later --date rerun of an older night does not.
+                stamp = row.get("scheduled_date")
+                if not isinstance(stamp, str) or newest is None or stamp >= newest:
+                    rows, newest = [], stamp if isinstance(stamp, str) else newest
             rows.append(row)
         for row in rows:
             if not isinstance(row, dict) or not isinstance(row.get("event"), str):
@@ -164,7 +167,11 @@ def _failed_recovery_selection(directory):
         failures=failures,
         steps=[item["step"] for item in failures if item["step"] in DAYTIME_RECOVERY_STEPS],
         deferred=[
-            dict(step=item["step"], reason=RECOVERY_DEFER_REASONS[item["step"]], next_run="will run tonight at 04:00")
+            dict(
+                step=item["step"],
+                reason=RECOVERY_DEFER_REASONS[item["step"]],
+                next_run="will run in tonight's scheduled maintenance",
+            )
             for item in failures
             if item["step"] not in DAYTIME_RECOVERY_STEPS
         ],
@@ -193,13 +200,12 @@ class CalendarPlan:
         sunday = self.scheduled_date - dt.timedelta(days=(self.scheduled_date.weekday() + 1) % 7)
         weekly = last_weekly is None or last_weekly < sunday
         # Weekly full follows the local proof; both nightly and weekly put upload last.
-        names = ["index", "maintenance-nightly", "jsonl-backup", "p0-counter", "wal-checkpoint"]
+        names = ["index", "maintenance-nightly", "jsonl-backup", "p0-counter"]
         if weekly:
             names[1] = "maintenance-weekly"
             names.insert(1, "backup-snapshot")
-            names += ["decay", "repair-fts", "backup-daily"]
-        else:
-            names.append("backup-daily")
+            names += ["decay", "repair-fts"]
+        names += ["wal-checkpoint", "backup-daily"]
         by_name = {s.name: s for s in self.candidates}
         selected = [by_name[n] for n in names]
         if weekly:
@@ -218,7 +224,10 @@ def _configured_calendar_start(lib_dir=None):
     if path is None:
         raise ValueError("Nightly calendar start is unavailable")
     with path.open("rb") as stream:
-        interval = plistlib.load(stream)["StartCalendarInterval"]
+        try:
+            interval = plistlib.load(stream)["StartCalendarInterval"]
+        except ExpatError as exc:  # Malformed XML is not a ValueError; callers handle ValueError.
+            raise ValueError("Nightly calendar start is unreadable") from exc
     return dt.time(interval["Hour"], interval.get("Minute", 0))
 
 
@@ -307,7 +316,11 @@ async def _failed_recovery_probe(plan, directory, now, guard_timeout, shutdown_t
         free = await _blocking(_probe_calendar_custody, directory)
         # All try-locks are released before reading history or contacting the supervisor.
         if not free:
-            reply.update(await _blocking(failed_recovery_selection, directory))
+            try:
+                # Display-only while busy: the live run may be mid-write, so a torn line is not damage.
+                reply.update(await _blocking(failed_recovery_selection, directory))
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
             reply.update(
                 status="refused", reason="Maintenance is running right now. Try again when it finishes.", steps=[]
             )
@@ -1174,7 +1187,16 @@ async def run_calendar(
             results[active_step] = "failed"
         else:
             runner_failed = 1
-        await _blocking(record, directory, event="runner-error", step=active_step, error=type(exc).__name__)
+        # Name the attempt: a failure before the runner header has no header to inherit it from.
+        await _blocking(
+            record,
+            directory,
+            event="runner-error",
+            step=active_step,
+            error=type(exc).__name__,
+            kind=kind,
+            scheduled_date=date.isoformat(),
+        )
         if failed_recovery:
             reply.update(status="failed" if runner_started_at else "refused", reason=recovery_refusal_reason(exc))
             return 1
@@ -1202,7 +1224,15 @@ async def run_calendar(
                     signal.signal(sig, previous)
         except Exception as exc:
             runner_failed += 1
-            await _blocking(record, directory, event="runner-error", phase="cleanup", error=type(exc).__name__)
+            await _blocking(
+                record,
+                directory,
+                event="runner-error",
+                phase="cleanup",
+                error=type(exc).__name__,
+                kind=kind,
+                scheduled_date=date.isoformat(),
+            )
             raise
         finally:
             try:

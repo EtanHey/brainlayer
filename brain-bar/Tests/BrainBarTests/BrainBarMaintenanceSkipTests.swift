@@ -52,10 +52,11 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
         let deferrals = [
             (quietWindow, "outside the 04:00–06:00 quiet window"),
             ("OUTSIDE QUIET WINDOW: now=2026-09-30T00:07:23+03:00 start_hour=4 duration_minutes=120", "outside the 04:00–06:00 quiet window"),
-            ("recent queue write activity: 5 file(s) modified recently", "recent queue write activity: 5 file(s) modified recently"),
-            ("queue depth growing: before=0 after=1", "queue depth growing: before=0 after=1"),
+            ("recent queue write activity: 5 file(s) modified recently", "new memories were still being written"),
+            ("queue depth growing: before=0 after=1", "the write queue was still growing"),
             ("unexpected writer holds BrainLayer DB: pid=812 command='python3 -m brainlayer.enrich' fd=7u",
-             "unexpected writer holds BrainLayer DB: pid=812 command='python3 -m brainlayer.enrich' fd=7u"),
+             "another program was writing to the database"),
+            ("quiet window leaves no time for a bounded maintenance hold", "too little of the quiet window was left to run safely"),
         ]
         for (reason, shown) in deferrals {
             let status = maintenance(nightly: 75, completion: .completed(daysAgo(2)), records: [.maintenanceNightly: aborted(reason)])

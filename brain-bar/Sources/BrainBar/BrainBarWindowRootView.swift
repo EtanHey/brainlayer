@@ -221,7 +221,7 @@ private struct BrainBarDashboardContent: View {
         }
     }
 
-    private var dashboard: some View {
+    fileprivate var dashboard: BrainBarDashboardView {
         var view = BrainBarDashboardView(
             collector: collector, workspace: workspace, receiptStore: receiptStore,
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: observabilityResult,
@@ -246,6 +246,16 @@ private struct BrainBarJobsDashboardContent: View {
     let panelState: BrainBarDashboardPanelState
 
     var body: some View {
+        dashboard
+            .onChange(of: collector.isManualRefreshInProgress) { _, refreshing in
+                if refreshing {
+                    model.refreshLaunchdStatus()
+                    model.refreshObservabilityStatus()
+                }
+            }
+    }
+
+    fileprivate var dashboard: BrainBarDashboardContent {
         // S5: the headline and attention list are the model's ONE published snapshot, the same one
         // the menu-bar icon renders. Its sampling loop is owned by the app, not this view.
         BrainBarDashboardContent(collector: collector, workspace: workspace,
@@ -254,12 +264,6 @@ private struct BrainBarJobsDashboardContent: View {
             jobAttentionReasons: model.dashboardJobAttentionReasons, jobsChecking: model.dashboardJobsChecking,
             statusVerdict: model.publishedStatus.verdict,
             maintenanceNeedsAttention: model.publishedStatus.issues.contains { $0.component == .maintenance })
-            .onChange(of: collector.isManualRefreshInProgress) { _, refreshing in
-                if refreshing {
-                    model.refreshLaunchdStatus()
-                    model.refreshObservabilityStatus()
-                }
-            }
     }
 }
 #endif
@@ -1095,7 +1099,7 @@ private struct BrainBarDashboardView: View {
     private var currentNow: Date { referenceNow ?? Date() }
     private var currentBackupNow: Date { backupReferenceNow ?? currentNow }
 
-    private var onePagePresentation: BrainBarOnePagePresentation {
+    fileprivate var onePagePresentation: BrainBarOnePagePresentation {
         BrainBarOnePagePresentation.derive(
             snapshotFreshness: collector.snapshotFreshnessState,
             hero: heroPresentation,
@@ -3366,6 +3370,22 @@ struct BrainBarDashboardChartDisclosure: Equatable {
 /// selects the layout breakpoint: compact < 920 ≤ default < 1040 ≤ wide.
 @MainActor
 enum BrainBarDashboardPreview {
+#if BRAINBAR_UI
+    /// Observe the presentation consumed by statusStrip through the same child views as the app.
+    /// Fixture collectors/models keep this path independent of live readers and snapshot rendering.
+    static func jobsPresentation(
+        collector: StatsCollector,
+        model: BrainBarSettingsViewModel,
+        workspace: any BrainBarWorkspaceActing,
+        now: Date
+    ) -> BrainBarOnePagePresentation {
+        var content = BrainBarJobsDashboardContent(collector: collector, model: model, workspace: workspace,
+            hotkeyStatus: "Fixture", dbPath: nil, panelState: BrainBarDashboardPanelState()).dashboard
+        content.referenceNow = now
+        return content.dashboard.onePagePresentation
+    }
+#endif
+
     static var goldenCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -3390,6 +3410,8 @@ enum BrainBarDashboardPreview {
         jobAttentionReasons: [String] = [],
         observabilityCadence: ObservabilityCadence? = nil,
         colorScheme: ColorScheme = .dark,
+        /// The shared snapshot's verdict, as the app passes it; nil renders the standalone fallback.
+        statusVerdict: BrainBarStatusVerdict? = nil,
         maintenanceNeedsAttention: Bool = false
     ) -> AnyView {
         let dashboard =
@@ -3407,6 +3429,7 @@ enum BrainBarDashboardPreview {
                     locale: locale,
                     panelState: panelState,
                     jobAttentionReasons: jobAttentionReasons,
+                    statusVerdict: statusVerdict,
                     maintenanceNeedsAttention: maintenanceNeedsAttention
                 )
             }

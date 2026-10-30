@@ -377,10 +377,67 @@ def test_fractional_guard_timeout_emits_whole_second_pause_times():
         dt.datetime.fromisoformat(value)
 
 
-@pytest.mark.parametrize("template", [b"not a plist", plistlib.dumps({"Label": "x"})])
+@pytest.mark.parametrize(
+    "template",
+    [b"not a plist", b'<?xml version="1.0"?><plist><dict><key>x</dict>', plistlib.dumps({"Label": "x"})],
+)
 def test_unreadable_calendar_start_keeps_the_nightly_and_refuses_only_retry(tmp_path, template):
     (tmp_path / "com.brainlayer.maintenance.plist").write_bytes(template)
     plan = calendar.calendar_steps(sys.executable, "/unused", tmp_path, dt.date(2026, 10, 29))
     assert plan.candidates and plan.nightly_start is None
     with pytest.raises(ValueError, match="start is unavailable"):
         calendar._retry_window(plan, (), dt.datetime(2026, 10, 29, 12), 60, 10)
+
+
+def test_busy_status_with_torn_live_line_still_reports_running(retry):
+    # Bugbot r4412136117: the live nightly may be mid-write; a busy probe must not call that damage.
+    with (retry.directory / "runs.jsonl").open("a") as out:
+        out.write('{"event":')
+    with calendar.Custody(retry.directory):
+        assert retry.run(status=True) == 0
+    assert retry.result["status"] == "refused"
+    assert retry.result["reason"] == "Maintenance is running right now. Try again when it finishes."
+
+
+@pytest.mark.parametrize("outcome,expected", [("ok", "accepted"), ("failed", "failed")])
+def test_cli_cleanup_error_after_retry_keeps_the_step_outcome(monkeypatch, tmp_path, outcome, expected):
+    # Bugbot r4412136131: guard shutdown failing after the step finished must not rewrite the step result.
+    async def finished_then_cleanup_fails(*args, recovery_result, **kwargs):
+        recovery_result.update(
+            status="accepted", reason="ok", steps=["jsonl-backup"], results={"jsonl-backup": outcome}
+        )
+        raise RuntimeError("calendar guard retains unresolved custody")
+
+    monkeypatch.setattr(calendar, "run_calendar", finished_then_cleanup_fails)
+    result = CliRunner().invoke(
+        app, ["maintenance-calendar", "--recover-failed", "--state-dir", str(tmp_path / "calendar")]
+    )
+    reply = json.loads(result.stdout)
+    assert reply["status"] == expected
+    assert result.exit_code == (0 if expected == "accepted" else 1)
+    if expected == "accepted":
+        assert reply["steps"] == ["jsonl-backup"] and "cleanup" in reply["reason"]
+
+
+def test_an_older_date_rerun_after_the_newest_night_does_not_become_latest(tmp_path):
+    # Bugbot r4412136140 / R2 F5: header position is not recency; the newest scheduled date wins.
+    write_history(
+        tmp_path,
+        [
+            night("2026-10-28", steps=["jsonl-backup"]),
+            dict(event="finished", step="jsonl-backup", status="failed"),
+            night("2026-10-20", steps=["jsonl-backup"]),
+            dict(event="finished", step="jsonl-backup", status="ok", returncode=0),
+        ],
+    )
+    selection = calendar.failed_recovery_selection(tmp_path)
+    assert selection["scheduled_date"] == "2026-10-28"
+    assert selection["steps"] == ["jsonl-backup"]
+
+
+def test_deferred_steps_never_promise_a_fixed_hour(tmp_path):
+    # CodeRabbit r4420436682: most steps run from the 03:15 calendar start, not at 04:00.
+    write_history(tmp_path, [night(steps=list(calendar.NAMES))])
+    deferred = calendar.failed_recovery_selection(tmp_path)["deferred"]
+    assert deferred and all(item["next_run"] == "will run in tonight's scheduled maintenance" for item in deferred)
+    assert not any("04:00" in item["next_run"] for item in deferred)

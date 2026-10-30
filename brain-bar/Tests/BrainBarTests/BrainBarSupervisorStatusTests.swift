@@ -312,7 +312,7 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
     func testDisabledNoSpawnCalendar75NeedsAttentionUnlessConfiguredOff() {
         let history = BrainBarCalendarHistory(runs: ["jsonl-backup": .init(at: Date(), code: 75, status: "deferred")])
         let observations = Self.supervised(history: history, disabled: true).sampleActivity()
-        XCTAssertEqual(observations[.jsonlBackup]?.backupScheduleLine?.text, "Skipped — disabled")
+        XCTAssertEqual(observations[.jsonlBackup]?.backupScheduleLine?.text, "Skipped — it is turned off")
         XCTAssertEqual(observations[.jsonlBackup]?.backupScheduleLine?.tone, .neutral)
         XCTAssertEqual(BrainLayerLaunchdJobGroup.backups.status(settings: BrainLayerConfig.defaultConfig.launchdJobs,
             observations: observations, formatDate: { $0.description }).health, .unhealthy)
@@ -712,7 +712,7 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
             let deferred = try snapshot(lines, in: directory)
             XCTAssertTrue(deferred.needsAttention, "a step deferral cannot reset the nightly streak")
             let text = try XCTUnwrap(deferred.attention.first { $0.component == .maintenance }?.text)
-            XCTAssertTrue(text.contains("2 consecutive failed nights"), text)
+            XCTAssertTrue(text.contains("nightly runs have had problems 2 nights in a row"), text)
             lines.append(finished(step, 5, "ok", 0))
             lines.append(#"{"event":"summary","kind":"nightly","scheduled_date":"2026-10-26","failed":0,"ts":1784465005}"#)
             XCTAssertFalse(try snapshot(lines, in: directory).needsAttention)

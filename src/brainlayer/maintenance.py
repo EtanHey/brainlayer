@@ -43,7 +43,7 @@ from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .pipeline.code_intelligence import _pid_is_alive, _pid_start_time
 from .queue_io import get_queue_dir
-from .wal_checkpoint import checkpoint
+from .wal_checkpoint import CheckpointGuardTimeout, checkpoint, get_wal_size
 
 PAUSE_SENTINEL_PATH = DEFAULT_PAUSE_SENTINEL_PATH
 
@@ -64,6 +64,7 @@ _WATCHDOG_DISABLED_BEFORE = "_fleet_watchdog_disabled_before"
 MAINTENANCE_LOCK_TIMEOUT_SECONDS = 4 * 60 * 60
 # VACUUM is interrupted this long before its hold expires, so restore wins the calendar's cut.
 HOLD_UNWIND_S = 30.0
+POST_VACUUM_BUSY_S = 0.25
 VACUUM_PROGRESS_OPS = 100_000  # SQLite VM steps between deadline polls during VACUUM.
 # VACUUM's final copy-back into the main DB runs no VM steps, so the progress handler cannot stop
 # it: a 20.7 GB copy (MBP, 2026-10-19) overran a 60 s cutoff and completed at 328 s, 15.9 s/GB.
@@ -906,6 +907,55 @@ def _checkpoint_full(db_path: Path) -> tuple[int, int, int]:
     return checkpoint(str(db_path), "FULL")
 
 
+def _reclaim_vacuum_wal(
+    config: MaintenanceConfig, *, deadline: float | None, phase: str
+) -> tuple[int, int, int] | None:
+    """Try once before releasing custody, preserving the VACUUM outcome.
+
+    The restore reserve is only checked before starting: ``remaining`` bounds SQLite lock waiting,
+    not the checkpoint's WAL-copy I/O once it runs. The replaced FULL checkpoint had the same limit.
+    """
+    from .maintenance_control import hold_clock
+
+    started = time.monotonic()
+    event = dict(phase=phase, mode="TRUNCATE", wal_before_bytes=get_wal_size(str(config.db_path)))
+    result = None
+    busy = None
+    reason = ""
+    try:
+        remaining = POST_VACUUM_BUSY_S if deadline is None else deadline - HOLD_UNWIND_S - hold_clock()
+        if remaining <= 0:
+            reason = "hold-unwind-reserve"
+        else:
+            result = checkpoint(
+                str(config.db_path),
+                "TRUNCATE",
+                guard_timeout_seconds=0,
+                busy_timeout_seconds=min(POST_VACUUM_BUSY_S, remaining),
+            )
+            busy = result[0]
+            if busy:
+                reason = "reader-or-writer-busy"
+    except CheckpointGuardTimeout:
+        reason = "checkpoint-guard-busy"
+    except Exception as exc:
+        reason = f"{type(exc).__name__}: {exc}"
+    event.update(
+        wal_after_bytes=get_wal_size(str(config.db_path)),
+        duration_ms=(time.monotonic() - started) * 1000,
+        busy=busy,
+        deferred=bool(reason),
+        reason=reason,
+        checkpoint=result,
+    )
+    try:
+        _write_log(config.log_path, event)
+    except Exception as exc:
+        # A failed cleanup receipt must not replace the VACUUM failure or delay restoration.
+        print(f"maintenance WAL reclaim: {json.dumps(event)}; log failed: {exc}", file=sys.stderr)
+    return result
+
+
 def _file_size(path: Path) -> int:
     try:
         return path.stat().st_size
@@ -1345,10 +1395,17 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
             if mode == "full" and backup is not None:
                 result.actions.append(f"verified_local_backup={backup.get('snapshot')}")
                 hold = booted_out.get("_supervisor_hold")
-                result.vacuum_before_bytes, result.vacuum_after_bytes = _vacuum(
-                    config.db_path, deadline=getattr(hold, "deadline", None)
-                )
-                result.checkpoint = _checkpoint_full(config.db_path)
+                deadline = getattr(hold, "deadline", None)
+                # _vacuum closes its connection before returning or raising. Never reclaim
+                # inside its transaction, and never renew custody just to reclaim disk space.
+                # SystemExit/KeyboardInterrupt (SIGTERM) skip the reclaim and unwind straight
+                # to service restore: a full-size TRUNCATE there would delay it by seconds.
+                try:
+                    result.vacuum_before_bytes, result.vacuum_after_bytes = _vacuum(config.db_path, deadline=deadline)
+                except Exception:
+                    result.checkpoint = _reclaim_vacuum_wal(config, deadline=deadline, phase="vacuum-failure")
+                    raise
+                result.checkpoint = _reclaim_vacuum_wal(config, deadline=deadline, phase="post-vacuum")
             if mode == "burn":
                 result.burn = _run_burn_until_empty(config)
                 if result.burn.failed_files:

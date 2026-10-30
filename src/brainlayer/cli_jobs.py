@@ -61,9 +61,17 @@ def register(app, jobs_app):
                 raise
             from .maintenance_calendar import recovery_refusal_reason
 
-            status = "failed" if result.get("status") in {"accepted", "failed"} else "refused"
-            result.update(status=status, reason=recovery_refusal_reason(exc), steps=[])
-            code = 1
+            results = result.get("results") or {}
+            if result.get("status") == "accepted" and results and all(v == "ok" for v in results.values()):
+                # The retried steps finished and were journaled; only cleanup after them failed.
+                result.update(
+                    reason="Retried successfully; maintenance cleanup afterwards had a problem (see the log)."
+                )
+                code = 0
+            else:
+                status = "failed" if result.get("status") in {"accepted", "failed"} else "refused"
+                result.update(status=status, reason=recovery_refusal_reason(exc), steps=[])
+                code = 1
         if recover_failed:
             typer.echo(json.dumps(result, sort_keys=True))
         raise typer.Exit(code)
