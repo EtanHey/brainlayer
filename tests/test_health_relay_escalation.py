@@ -506,6 +506,8 @@ def test_escalation_collision_rejected_before_writes(relay, tiered, target, alia
     + [(code, 0) for code in ("lock_holder_wedge", "queue_backed_up", "hotlane_dead", "drain_no_progress")],
 )
 def test_default_badge_visibility_policy(relay, tiered, code, expected):
+    del tiered["raw"]["escalation"]["issues"]  # The shipped defaults, not the mechanics list.
+    tiered["config"].write_text(json.dumps(tiered["raw"]))
     _alerts(tiered, {})
     (tiered["data"] / "badge-state.json").write_text(
         json.dumps(

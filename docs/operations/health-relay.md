@@ -127,7 +127,9 @@ These signals indicate a user-visible service gap, not proof of data loss.
 Backup-protection alerts (`job-alert:backup-daily`, `job-alert:jsonl-backup`,
 `job-alert:backup-snapshot`) stay in the primary collab: memory still works while a backup fails,
 so the BrainLayer lead owns them there (orc ruling, 2026-10-30). A deployment can add them back
-with an explicit `issues` list.
+with an explicit `issues` list. Changing `issues` affects new escalations only: an escalation already
+queued for an open, unacknowledged episode is still delivered. To stop one, ACK its primary event
+before the next relay run.
 Internal classes such as `badge:job-scan-failed` and `badge:slow-check` stay in the primary collab.
 Badge codes `lock_holder_wedge`, `queue_backed_up`, `hotlane_dead`, and `drain_no_progress`
 (normalized by the relay to hyphens) also stay there: they indicate degraded operation, not a
