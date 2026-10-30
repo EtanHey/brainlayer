@@ -13,8 +13,11 @@ import plistlib
 import shlex
 import socket
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UPDATE_SCRIPT = REPO_ROOT / "scripts" / "brainlayer-update-brainbar.sh"
@@ -134,6 +137,12 @@ printf '%s\\n' "$*" >> {self.sudo_log!s}
 exit 1
 """,
         )
+        _write_exec(self.bin_dir / "xattr", "#!/usr/bin/env bash\nexit 1\n")
+        _write_exec(self.bin_dir / "codesign", "#!/usr/bin/env bash\nexit 0\n")
+        _write_exec(
+            self.bin_dir / "spctl",
+            '#!/usr/bin/env bash\nprintf "%s: accepted\\nsource=Notarized Developer ID\\n" "${@: -1}"\n',
+        )
 
     def env(self, **extra: str) -> dict[str, str]:
         env = {
@@ -144,6 +153,9 @@ exit 1
             "BRAINLAYER_UPDATE_GIT_BIN": str(self.bin_dir / "git"),
             "BRAINLAYER_UPDATE_LAUNCHCTL_BIN": str(self.bin_dir / "launchctl"),
             "BRAINLAYER_UPDATE_DEFAULTS_BIN": str(self.bin_dir / "defaults"),
+            "BRAINLAYER_UPDATE_XATTR_BIN": str(self.bin_dir / "xattr"),
+            "BRAINLAYER_UPDATE_CODESIGN_BIN": str(self.bin_dir / "codesign"),
+            "BRAINLAYER_UPDATE_SPCTL_BIN": str(self.bin_dir / "spctl"),
             "BRAINLAYER_UPDATE_BRAINBAR_APP": str(self.app_path),
             "BRAINLAYER_UPDATE_TAP_DIR": str(self.tap_dir),
             "BRAINLAYER_UPDATE_QUARANTINE_DIR": str(self.quarantine),
@@ -283,7 +295,7 @@ def test_deprecated_cask_token_env_still_sets_qualified_ref(tmp_path: Path) -> N
     assert f"cask:        {deprecated_ref}" in result.stdout
 
 
-# --- rule 2: on drift, never `brew upgrade`/`reinstall`; clear the ledger and force-adopt ---
+# --- damaged registration: clear the ledger and force-adopt ---
 
 
 def test_drift_clears_stale_caskroom_then_force_adopts(tmp_path: Path) -> None:
@@ -337,8 +349,8 @@ def test_failed_adopt_keeps_running_services_alive(tmp_path: Path) -> None:
     assert list(h.quarantine.glob("*/brainbar/1.5.2")), "stale receipt was not recoverable"
 
 
-def test_update_never_runs_brew_upgrade_or_reinstall(tmp_path: Path) -> None:
-    """upgrade/reinstall both execute the OLD saved cask's uninstall recipe."""
+def test_damaged_registration_never_runs_brew_upgrade_or_reinstall(tmp_path: Path) -> None:
+    """Only a consistent saved receipt is eligible to execute the old recipe."""
     for registered in (None, "1.5.2", "1.5.8"):
         h = _Harness(tmp_path / f"case-{registered}")
         h.install_stubs(offered="1.5.8", registered=registered)
@@ -559,8 +571,9 @@ def test_verify_warns_but_passes_non_login_path_without_homebrew_cli(tmp_path: P
     non_login_bin = tmp_path / "non-login-bin"
     _write_exec(non_login_bin / "pgrep", "#!/usr/bin/env bash\nexit 0\n")
 
-    with tempfile.TemporaryDirectory(prefix="pr729-", dir="/tmp") as socket_dir:
-        socket_path = Path(socket_dir) / "brainbar.sock"
+    with tempfile.TemporaryDirectory(prefix="sock-", dir=REPO_ROOT / ".build.noindex") as socket_dir:
+        # A relative address avoids AF_UNIX's short path limit without using /tmp.
+        socket_path = Path(socket_dir).relative_to(REPO_ROOT) / "brainbar.sock"
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as brainbar_socket:
             brainbar_socket.bind(str(socket_path))
             result = h.run(
@@ -771,3 +784,334 @@ def test_running_identity_failure_cannot_be_stale_green(tmp_path):
     result = h.run(BRAINLAYER_TEST_RUNNING_IDENTITY_EXIT="1")
     assert result.returncode != 0
     assert "green at" not in result.stdout
+
+
+# --- upgrade path and Gatekeeper approval inheritance ---
+
+
+def _approval_harness(tmp_path: Path, *, intact: bool = False) -> _Harness:
+    h = _Harness(tmp_path)
+    h.install_stubs(offered="1.5.79", registered="1.5.78" if intact else "1.5.70")
+    _make_app(h.app_path, "1.5.78")
+    if intact:
+        staged = h.caskroom / "1.5.78"
+        staged.mkdir(parents=True)
+        (staged / "BrainBar.app").symlink_to(h.app_path, target_is_directory=True)
+        receipt = h.caskroom / ".metadata/1.5.78/20261028070000.000/Casks/brainbar.json"
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text(
+            json.dumps({"token": "brainbar", "version": "1.5.78", "artifacts": [{"app": ["BrainBar.app"]}]})
+        )
+    events = tmp_path / "events"
+    installed = tmp_path / "installed"
+    brew = h.bin_dir / "brew"
+    brew.write_text(
+        brew.read_text().replace(
+            f'  "install --cask --force {CASK_REF}") exit 0 ;;',
+            f'  "install --cask --force {CASK_REF}"|"upgrade --cask {CASK_REF}") '
+            f'touch {installed}; echo install >> {events}; exit "${{BREW_UPDATE_EXIT:-0}}" ;;',
+        )
+    )
+    cli = h.bin_dir / "brainlayer"
+    cli.write_text(
+        cli.read_text()
+        .replace('if [[ "$1"', f'echo "$*" >> {events}\nif [[ "$1"', 1)
+        .replace("  exit 0", '  exit "${ACTIVATE_EXIT:-0}"')
+    )
+    _write_exec(
+        h.bin_dir / "xattr",
+        f"""#!/usr/bin/env bash
+value="${{OLD_QUARANTINE-01c1;old;Homebrew Cask;old-uuid}}"
+[[ ! -e {installed} ]] || value="${{NEW_QUARANTINE-0181;new;Homebrew Cask;new-uuid}}"
+case "$1" in
+  -w) value="$3"; printf '%s' "$value" > {tmp_path / "written-quarantine"}
+      shift 3
+      for path in "$@"; do printf '%s\\0%s\\0' "$value" "$path" >> {tmp_path / "quarantine-writes"}; done
+      echo approval >> {events}; exit "${{XATTR_WRITE_EXIT:-0}}" ;;
+  -p) [[ -n "$value" ]] || exit 1; printf '%s\\n' "$value" ;;
+  *) [[ "${{XATTR_READ_EXIT:-0}}" = 0 ]] || exit 1
+     [[ -z "$value" ]] || echo com.apple.quarantine ;;
+esac
+""",
+    )
+    _write_exec(
+        h.bin_dir / "codesign",
+        f"""#!/usr/bin/env bash
+if [[ "$1" = --verify ]]; then
+  echo "codesign $*" >> {events}
+  exit "${{CODESIGN_VERIFY_EXIT:-0}}"
+fi
+team=PPN23G925Y
+identifier=com.brainlayer.brainbar
+if [[ -e {installed} ]]; then
+  team="${{NEW_TEAM-PPN23G925Y}}"
+  identifier="${{NEW_IDENTIFIER-com.brainlayer.brainbar}}"
+fi
+printf 'TeamIdentifier=%s\\nIdentifier=%s\\n' "$team" "$identifier" >&2
+""",
+    )
+    _write_exec(
+        h.bin_dir / "spctl",
+        f"""#!/usr/bin/env bash
+echo "spctl $*" >> {events}
+printf '%s: %s\\nsource=%s\\n' "$BRAINLAYER_UPDATE_BRAINBAR_APP" "${{ASSESSMENT:-accepted}}" "${{ASSESSMENT_SOURCE:-Notarized Developer ID}}" >&2
+exit "${{SPCTL_EXIT:-0}}"
+""",
+    )
+    return h
+
+
+@pytest.mark.parametrize("old", ["01c1;old;Homebrew Cask;old-uuid", ""])
+def test_approved_app_carries_only_approval_bit_before_activation(tmp_path: Path, old: str) -> None:
+    h = _approval_harness(tmp_path)
+    result = h.run(OLD_QUARANTINE=old, NEW_QUARANTINE="0181;new;Homebrew Cask;new-uuid")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "written-quarantine").read_text() == "01c1;new;Homebrew Cask;new-uuid"
+    events = (tmp_path / "events").read_text()
+    assert "codesign --verify --deep --strict" in events
+    assert "spctl -a" in events
+    assert (
+        events.index("install")
+        < events.index("codesign")
+        < events.index("approval")
+        < events.index("brainbar activate")
+    )
+
+
+@pytest.mark.parametrize(
+    "extra, reason",
+    [
+        ({"OLD_QUARANTINE": "0181;old;Homebrew Cask;old-uuid"}, "not user-approved"),
+        ({"OLD_QUARANTINE": "invalid;old"}, "not user-approved"),
+        ({"XATTR_READ_EXIT": "1"}, "not user-approved"),
+        ({"NEW_TEAM": "OTHERTEAM"}, "identity"),
+        ({"NEW_IDENTIFIER": "com.example.other"}, "identity"),
+        ({"NEW_TEAM": "not set"}, "identity"),
+        ({"CODESIGN_VERIFY_EXIT": "1"}, "verification"),
+        ({"SPCTL_EXIT": "1"}, "verification"),
+        ({"ASSESSMENT_SOURCE": "Developer ID"}, "Notarized Developer ID"),
+        ({"ASSESSMENT": "rejected"}, "accepted"),
+        ({"NEW_QUARANTINE": "malformed"}, "quarantine"),
+    ],
+)
+def test_approval_is_not_granted_without_every_gate(tmp_path: Path, extra: dict[str, str], reason: str) -> None:
+    h = _approval_harness(tmp_path)
+    result = h.run(**extra)
+    assert not (tmp_path / "written-quarantine").exists(), result.stdout + result.stderr
+    assert reason in result.stderr
+    if any(key in extra for key in ("CODESIGN_VERIFY_EXIT", "SPCTL_EXIT", "ASSESSMENT_SOURCE", "ASSESSMENT")):
+        assert result.returncode == 6
+        assert "brainbar activate" not in (tmp_path / "events").read_text()
+    else:
+        assert "first launch will prompt" in result.stderr
+        assert "approved by a human" in result.stderr
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_intact_registration_uses_homebrew_upgrade(tmp_path: Path, dry_run: bool) -> None:
+    h = _approval_harness(tmp_path, intact=True)
+    result = h.run(*(["--dry-run"] if dry_run else []))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"upgrade --cask {CASK_REF}" in result.stdout
+    assert "install --cask --force" not in result.stdout
+    assert not h.quarantine.exists()
+    assert not (tmp_path / "written-quarantine").exists(), "Homebrew owns inheritance on upgrade"
+    if dry_run:
+        assert "approval" in result.stdout and "Homebrew" in result.stdout
+        assert "upgrade --cask" not in h.brew_calls
+    else:
+        assert f"upgrade --cask {CASK_REF}" in h.brew_calls
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_recovery_dry_run_reports_conditional_approval(tmp_path: Path, approved: bool) -> None:
+    h = _approval_harness(tmp_path)
+    result = h.run("--dry-run", OLD_QUARANTINE="01c1;x;y;z" if approved else "0181;x;y;z")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "install --cask --force" in result.stdout
+    assert "approval" in result.stdout
+    assert ("after signature, notarization and identity checks" if approved else "will not be carried") in result.stdout
+    assert not (tmp_path / "installed").exists()
+    assert not (tmp_path / "written-quarantine").exists()
+
+
+@pytest.mark.parametrize("damage", ["receipt", "link", "unsafe-recipe"])
+def test_corrupt_registration_falls_back_to_adoption(tmp_path: Path, damage: str) -> None:
+    h = _approval_harness(tmp_path, intact=True)
+    if damage == "link":
+        (h.caskroom / "1.5.78/BrainBar.app").unlink()
+    else:
+        receipt = next(h.caskroom.glob(".metadata/*/*/Casks/*.json"))
+        receipt.write_text(
+            "not json"
+            if damage == "receipt"
+            else json.dumps(
+                {
+                    "token": "brainbar",
+                    "version": "1.5.78",
+                    "artifacts": [
+                        {"app": ["BrainBar.app"]},
+                        {"uninstall": [{"delete": ["/Applications/BrainBar.app"]}]},
+                    ],
+                }
+            )
+        )
+    result = h.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"install --cask --force {CASK_REF}" in h.brew_calls
+    assert "upgrade --cask" not in h.brew_calls
+    assert h.quarantine.exists()
+
+
+def test_current_homebrew_minimal_receipt_uses_upgrade(tmp_path: Path) -> None:
+    h = _approval_harness(tmp_path, intact=True)
+    receipt = next(h.caskroom.glob(".metadata/*/*/Casks/*.json"))
+    receipt.write_text(json.dumps({"url_specs": {"only_path": "brainbar.zip"}}))
+    (h.caskroom / ".metadata/INSTALL_RECEIPT.json").write_text(
+        json.dumps(
+            {
+                "source": {"version": "1.5.78", "tap": "etanhey/layers"},
+                "uninstall_flight_blocks": False,
+                "uninstall_artifacts": [{"app": ["BrainBar.app"]}],
+            }
+        )
+    )
+    result = h.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"upgrade --cask {CASK_REF}" in h.brew_calls
+    assert not h.quarantine.exists()
+
+
+def test_failed_upgrade_does_not_retry_as_fresh_install(tmp_path: Path) -> None:
+    h = _approval_harness(tmp_path, intact=True)
+    result = h.run(BREW_UPDATE_EXIT="42")
+    assert result.returncode == 42, result.stdout + result.stderr
+    assert "install --cask" not in h.brew_calls
+    assert not h.quarantine.exists()
+    assert "brainbar activate --verify" in (tmp_path / "events").read_text()
+
+
+def test_approval_reaches_all_non_symlink_bundle_paths(tmp_path: Path) -> None:
+    h = _approval_harness(tmp_path)
+    nested = h.app_path / "Contents/MacOS/BrainBar Daemon"
+    _write_exec(nested, "#!/bin/sh\nexit 0\n")
+    (h.app_path / "Contents/.hidden resource").write_text("resource")
+    outside = tmp_path / "outside executable"
+    outside.write_text("untouched")
+    (h.app_path / "Contents/helper link").symlink_to(outside)
+    (h.app_path / "Contents/directory link").symlink_to(h.app_path / "Contents/MacOS", target_is_directory=True)
+    expected = {h.app_path, *(p for p in h.app_path.rglob("*") if not p.is_symlink())}
+
+    result = h.run(NEW_QUARANTINE="a981;new timestamp;Homebrew Cask;new-uuid")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = (tmp_path / "quarantine-writes").read_bytes().split(b"\0")[:-1]
+    writes = [(value.decode(), Path(path.decode())) for value, path in zip(fields[::2], fields[1::2])]
+    assert {path for _, path in writes} == expected
+    assert len(writes) == len(expected)
+    assert all(value == "a9c1;new timestamp;Homebrew Cask;new-uuid" for value, _ in writes)
+    assert outside.read_text() == "untouched"
+
+
+@pytest.mark.parametrize("activation_exit", [0, 17])
+def test_failed_upgrade_reports_brew_and_best_effort_activation(tmp_path: Path, activation_exit: int) -> None:
+    h = _approval_harness(tmp_path, intact=True)
+    result = h.run(BREW_UPDATE_EXIT="42", ACTIVATE_EXIT=str(activation_exit))
+    assert result.returncode == 42, result.stdout + result.stderr
+    assert "Homebrew upgrade failed (exit 42)" in result.stderr
+    assert f"Recovery activation exit: {activation_exit}" in result.stdout + result.stderr
+    events = (tmp_path / "events").read_text()
+    assert events.count("brainbar activate --verify") == 1
+    assert "brainbar verify-running" not in events
+    assert "install --cask" not in h.brew_calls
+
+
+@pytest.mark.parametrize("path", ["unapproved", "identity-change", "missing", "upgrade", "current"])
+@pytest.mark.parametrize(
+    "failure", [{"CODESIGN_VERIFY_EXIT": "1"}, {"SPCTL_EXIT": "1"}, {"ASSESSMENT_SOURCE": "Developer ID"}]
+)
+def test_every_activation_path_requires_valid_new_signature_and_notarization(
+    tmp_path: Path, path: str, failure: dict[str, str]
+) -> None:
+    h = _approval_harness(tmp_path, intact=path == "upgrade")
+    extra = {}
+    if path == "unapproved":
+        extra["OLD_QUARANTINE"] = "0181;old;Homebrew Cask;old-uuid"
+    elif path == "identity-change":
+        extra["NEW_TEAM"] = "OTHERTEAM"
+    elif path == "missing":
+        (h.app_path / "Contents/Info.plist").unlink()
+        (h.app_path / "Contents").rmdir()
+        h.app_path.rmdir()
+    elif path == "current":
+        _make_app(h.app_path, "1.5.79")
+        brew = h.bin_dir / "brew"
+        brew.write_text(brew.read_text().replace("brainbar 1.5.70", "brainbar 1.5.79"))
+    result = h.run(**extra, **failure)
+    assert result.returncode == 6, result.stdout + result.stderr
+    assert "brainbar activate" not in (tmp_path / "events").read_text()
+    assert not (tmp_path / "written-quarantine").exists()
+
+
+@pytest.mark.parametrize("intact", [False, True])
+def test_unapproved_update_checks_security_before_activation(tmp_path: Path, intact: bool) -> None:
+    h = _approval_harness(tmp_path, intact=intact)
+    result = h.run(OLD_QUARANTINE="0181;old;Homebrew Cask;old-uuid")
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = (tmp_path / "events").read_text()
+    assert events.index("install") < events.index("codesign --verify --deep --strict")
+    assert events.index("codesign --verify") < events.index("spctl -a") < events.index("brainbar activate")
+    assert not (tmp_path / "written-quarantine").exists()
+
+
+@pytest.mark.parametrize("old", ["01c1;old;Homebrew Cask;old-uuid", "0181;old;Homebrew Cask;old-uuid"])
+def test_unquarantined_new_app_does_not_warn_about_a_prompt(tmp_path: Path, old: str) -> None:
+    h = _approval_harness(tmp_path)
+    result = h.run(OLD_QUARANTINE=old, NEW_QUARANTINE="")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "first launch will prompt" not in result.stderr
+    assert "no quarantine" in result.stdout
+    assert not (tmp_path / "written-quarantine").exists()
+
+
+def test_receipt_reader_is_isolated_from_python_import_injection(tmp_path: Path) -> None:
+    h = _approval_harness(tmp_path, intact=True)
+    poison = tmp_path / "poison"
+    poison.mkdir()
+    (poison / "json.py").write_text('raise RuntimeError("injected json module")\n')
+    python_log = tmp_path / "python-args"
+    _write_exec(
+        h.bin_dir / "python3",
+        f"""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> {shlex.quote(str(python_log))}
+if [[ "$1" = - || "$1" = -I ]]; then
+    export PYTHONPATH={shlex.quote(str(poison))}
+fi
+exec {shlex.quote(sys.executable)} "$@"
+""",
+    )
+    result = h.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"upgrade --cask {CASK_REF}" in h.brew_calls
+    assert any(line.startswith("-I - ") for line in python_log.read_text().splitlines())
+
+
+@pytest.mark.parametrize("failure", [{"CODESIGN_VERIFY_EXIT": "1"}, {"SPCTL_EXIT": "1"}])
+def test_failed_upgrade_recovery_does_not_activate_an_invalid_app(tmp_path: Path, failure: dict[str, str]) -> None:
+    h = _approval_harness(tmp_path, intact=True)
+    result = h.run(BREW_UPDATE_EXIT="42", **failure)
+    assert result.returncode == 42, result.stdout + result.stderr
+    assert "Homebrew upgrade failed (exit 42)" in result.stderr
+    assert "Recovery activation skipped" in result.stderr
+    assert "brainbar activate" not in (tmp_path / "events").read_text()
+
+
+def test_nested_approval_write_failure_warns_without_stripping_quarantine(tmp_path: Path) -> None:
+    h = _approval_harness(tmp_path)
+    _write_exec(h.app_path / "Contents/MacOS/BrainBarDaemon", "#!/bin/sh\nexit 0\n")
+    result = h.run(XATTR_WRITE_EXIT="1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "could not write the quarantine approval flag" in result.stderr
+    assert "first launch will prompt" in result.stderr
+    assert "brainbar activate --verify" in (tmp_path / "events").read_text()
+    assert (tmp_path / "written-quarantine").read_text() == "01c1;new;Homebrew Cask;new-uuid"

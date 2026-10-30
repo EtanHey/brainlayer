@@ -322,11 +322,33 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         if let night, night.failed, maintenanceJobs.contains(where: desired) {
             let next = maintenanceJobs.compactMap { observations?[$0]?.nextRunAt }.filter { $0 > now }.min()
             let retry = next.map { "next retry " + absoluteDate($0, calendar: inputs.calendar) } ?? "next retry time unavailable"
-            let outcome = night.abandoned ? "abandoned" : "failed"
-            let count = night.consecutiveFailures >= 2 ? " (\(night.consecutiveFailures) consecutive failed nights)" : ""
+            let labels = ["jsonl-backup": "Transcript backup", "backup-daily": "Database backup",
+                "backup-snapshot": "Database snapshot", "index": "Transcript indexing",
+                "maintenance-nightly": "Nightly maintenance", "maintenance-weekly": "Weekly maintenance",
+                "wal-checkpoint": "Database checkpoint", "repair-fts": "Search index repair",
+                "decay": "Memory decay", "p0-counter": "Memory counts"]
+            let outcome: String
+            func stepText(_ step: String, includeOutcome: Bool) -> String {
+                let problem = night.stepProblems[step]
+                let cutOff = step == "p0-counter" ? " were cut off" : " was cut off"
+                let action = includeOutcome ? (problem?.cutOff == true ? cutOff : " failed") : ""
+                let label = labels[step] ?? (includeOutcome ? "Nightly maintenance" : step)
+                return "\(label)\(action) (step \(step)) at \(absoluteDate(problem?.at ?? night.at, calendar: inputs.calendar))"
+            }
+            if night.failedSteps.contains(where: { night.stepProblems[$0]?.cutOff == true }) {
+                outcome = night.failedSteps.map { stepText($0, includeOutcome: true) }.joined(separator: "; ")
+            } else if night.failedSteps.count == 1, let step = night.failedSteps.first {
+                outcome = stepText(step, includeOutcome: true)
+            } else if !night.failedSteps.isEmpty {
+                let steps = night.failedSteps.map { stepText($0, includeOutcome: false) }.joined(separator: ", ")
+                outcome = "Nightly tasks failed: \(steps)"
+            } else {
+                outcome = "\(night.abandoned ? "Nightly maintenance was abandoned" : "Scheduled maintenance failed") at \(absoluteDate(night.at, calendar: inputs.calendar))"
+            }
+            let count = night.consecutiveFailures >= 2 ? "; nightly runs have had problems \(night.consecutiveFailures) nights in a row" : ""
             builder.add(.init(id: "maintenance.night", component: .maintenance,
                 severity: night.consecutiveFailures >= 2 ? .attention : .notice,
-                text: "Scheduled maintenance \(outcome) at \(absoluteDate(night.at, calendar: inputs.calendar))\(count) — \(retry)",
+                text: "\(outcome)\(count) — \(retry)",
                 jobs: Set(maintenanceJobs)))
         } else {
             // Legacy per-step failures stay visible, but can never earn a nightly-run dot.

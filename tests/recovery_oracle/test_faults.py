@@ -6,7 +6,7 @@ import pytest
 
 from .faults import catch_up, cut_worker, index_batch
 
-pytestmark = [pytest.mark.recovery_oracle, pytest.mark.timeout(30)]
+pytestmark = [pytest.mark.recovery_oracle, pytest.mark.timeout(30, method="thread")]
 
 
 @pytest.mark.parametrize("fault", ["index", "encoder_raise", "encoder_stall", "drain_restart"])
