@@ -124,14 +124,18 @@ def _failed_recovery_selection(directory):
     date, names, outcomes, current = None, [], {}, False
     path = directory / "runs.jsonl"
     if path.exists():
-        rows = []
+        rows, newest = [], None
         for line in path.read_text().splitlines():
             try:
                 row = json.loads(line)
             except ValueError:
                 row = None
             if isinstance(row, dict) and row.get("event") == "runner" and row.get("kind", "nightly") == "nightly":
-                rows = []  # Older damage cannot change the newest nightly attempt.
+                # Older damage cannot change the newest nightly attempt. Only a header for the same
+                # or a newer date opens a new window: a later --date rerun of an older night does not.
+                stamp = row.get("scheduled_date")
+                if not isinstance(stamp, str) or newest is None or stamp >= newest:
+                    rows, newest = [], stamp if isinstance(stamp, str) else newest
             rows.append(row)
         for row in rows:
             if not isinstance(row, dict) or not isinstance(row.get("event"), str):
@@ -311,7 +315,11 @@ async def _failed_recovery_probe(plan, directory, now, guard_timeout, shutdown_t
         free = await _blocking(_probe_calendar_custody, directory)
         # All try-locks are released before reading history or contacting the supervisor.
         if not free:
-            reply.update(await _blocking(failed_recovery_selection, directory))
+            try:
+                # Display-only while busy: the live run may be mid-write, so a torn line is not damage.
+                reply.update(await _blocking(failed_recovery_selection, directory))
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
             reply.update(
                 status="refused", reason="Maintenance is running right now. Try again when it finishes.", steps=[]
             )
