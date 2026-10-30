@@ -11,6 +11,14 @@ private final class RetryCLI: BrainLayerCLIRunning, @unchecked Sendable {
     }
 }
 
+private final class ScriptedRetryCLI: BrainLayerCLIRunning, @unchecked Sendable {
+    var outputs: [String]
+    init(_ outputs: [String]) { self.outputs = outputs }
+    func run(_ arguments: [String], timeout: TimeInterval) -> BrainLayerCLIResult? {
+        .init(terminationStatus: 0, stdout: outputs.count > 1 ? outputs.removeFirst() : outputs[0])
+    }
+}
+
 private final class BlockingRetryCLI: BrainLayerCLIRunning, @unchecked Sendable {
     let started: XCTestExpectation
     let release = DispatchSemaphore(value: 0)
@@ -93,6 +101,22 @@ final class BrainBarMaintenanceRetryTests: XCTestCase {
         XCTAssertTrue(model.explanation.contains("nightly maintenance"))
         await model.retry()
         XCTAssertEqual(cli.calls.count, 1)
+    }
+
+    func testOutcomeClearsOnceALaterNightIsShown() async {
+        // Bugbot r4412111109: a "Done" from one night must not sit next to the next night's failure.
+        let cli = ScriptedRetryCLI([
+            #"{"status":"accepted","reason":"ok","scheduled_date":"2026-10-28"}"#,
+            #"{"status":"nothing-to-retry","reason":"Everything that can run during the day has already finished.","scheduled_date":"2026-10-28"}"#,
+            Self.ready.replacingOccurrences(of: "2026-10-28", with: "2026-10-29"),
+        ])
+        let model = BrainBarMaintenanceRetryModel(runner: cli, now: { self.noon })
+        model.setForPreview(json: Self.ready)
+        await model.retry()  // also refreshes: still the same night
+        XCTAssertEqual(model.outcome, "Done: Transcript backup retried successfully.")
+        await model.refresh()  // the next night failed
+        XCTAssertNil(model.outcome)
+        XCTAssertTrue(model.explanation.contains("Transcript backup"), model.explanation)
     }
 
     func testActionOutcomesUseSupportedCLIAndNeverClaimMalformedOutputStarted() async {

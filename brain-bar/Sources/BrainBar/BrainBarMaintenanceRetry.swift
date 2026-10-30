@@ -10,10 +10,13 @@ struct BrainBarMaintenanceRetryReceipt: Decodable, Sendable {
     var deferred: [Failure] = []
     let retryPauseStart: String?
     let retryPauseEnd: String?
+    /// The scheduled night this receipt describes.
+    let scheduledDate: String?
 
     enum CodingKeys: String, CodingKey {
         case status, reason, steps, failures, deferred
         case retryPauseStart = "retry_pause_start", retryPauseEnd = "retry_pause_end"
+        case scheduledDate = "scheduled_date"
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -24,6 +27,7 @@ struct BrainBarMaintenanceRetryReceipt: Decodable, Sendable {
         deferred = try values.decodeIfPresent([Failure].self, forKey: .deferred) ?? []
         retryPauseStart = try values.decodeIfPresent(String.self, forKey: .retryPauseStart)
         retryPauseEnd = try values.decodeIfPresent(String.self, forKey: .retryPauseEnd)
+        scheduledDate = try values.decodeIfPresent(String.self, forKey: .scheduledDate)
     }
 }
 
@@ -32,6 +36,8 @@ final class BrainBarMaintenanceRetryModel: ObservableObject {
     @Published private(set) var receipt: BrainBarMaintenanceRetryReceipt?
     @Published private(set) var isRunning = false
     @Published private(set) var outcome: String?
+    /// The night `outcome` was produced for; a receipt for another night clears it.
+    private var outcomeNight: String?
     @Published private(set) var error = "Checking retry availability…"
     private var runner: (any BrainLayerCLIRunning)?
     private let now: () -> Date
@@ -115,6 +121,7 @@ final class BrainBarMaintenanceRetryModel: ObservableObject {
             let result = await Self.run(runner, arguments: ["maintenance-calendar", "--recover-failed", "--status"], timeout: 30)
             guard sampledGeneration == generation else { return }
             receipt = parse(result)
+            if outcome != nil, let night = receipt?.scheduledDate, night != outcomeNight { outcome = nil }
             if receipt == nil { error = "Retry availability could not be checked; see the calendar log." }
         }
         refreshTask = task
@@ -127,8 +134,10 @@ final class BrainBarMaintenanceRetryModel: ObservableObject {
         isRunning = true
         if let task = refreshTask { await task.value }
         isRunning = false
+        let night = receipt?.scheduledDate
         guard canRetry else {
             outcome = "Refused: \(explanation)"
+            outcomeNight = night
             return
         }
         generation += 1
@@ -136,7 +145,9 @@ final class BrainBarMaintenanceRetryModel: ObservableObject {
         outcome = nil
         let selected = receipt?.steps ?? []
         let result = await Self.run(runner, arguments: ["maintenance-calendar", "--recover-failed"], timeout: 8_000)
+        outcomeNight = night
         if var value = parse(result) {
+            outcomeNight = value.scheduledDate ?? night
             if value.failures.isEmpty { value.failures = receipt?.failures ?? [] }
             if value.deferred.isEmpty { value.deferred = receipt?.deferred ?? [] }
             if value.status == "accepted" {
