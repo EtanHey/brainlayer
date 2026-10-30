@@ -143,8 +143,9 @@ ACK <primary-event-id>
 
 Quoted, indented, suffixed, or partial matches do not count. An exact final line at EOF also counts.
 CRLF ACK lines do not count; use LF line endings. Successfully sampled ACK event IDs persist in
-state, including when primary delivery subsequently fails, and suppress escalation through a
-later primary outage. Acknowledgment also persists in episode state; it does not
+state while their episode remains present, including when primary delivery subsequently fails,
+and suppress escalation through a later primary outage. Unrelated ACK IDs are discarded.
+Acknowledgment also persists in episode state; it does not
 close the issue or acknowledge primary delivery. A measured recovery closes as before. Unknown
 or stale evidence still cannot close anything and does not reset the episode timer.
 
@@ -169,7 +170,8 @@ escalations still run using only previously persisted ACKs. The run still exits 
 `status.error` retains the original primary error, even if escalation also fails. Primary events
 remain pending under the unchanged delivery contract. A missing primary scan retains its
 `verify_floor`; migration ID resolution waits for primary recovery. State-integrity errors,
-including `state-stale`, `state-corrupt`, and `state-commit-failed`, block escalation entirely.
+including `state-stale`, `state-corrupt`, and `state-commit-failed`, block escalation before any
+append. A commit failure after append cannot retract that record; retries use marker dedup.
 ACKs are sampled once per tick, so a concurrent ACK arriving
 after that sample may race with that tick's append.
 
@@ -233,7 +235,10 @@ history. Since neither old version records episode opening time, migrated episod
 escalation timer at migration, conservatively waiting the full threshold. Version-2 episode IDs
 retain the legacy form; newly opened episodes use the epoch form. A transient `migrated` flag
 lets a v3 state that already contains v2 episodes resolve their original IDs from inbox markers
-after inbox access recovers, preserving existing ACKs. Migration does not resend
+after inbox access recovers. It remains set until a marker establishes the ID; while unresolved,
+an exact ACK for either the reconstructed or legacy ID suppresses escalation. Rebinding re-keys
+an undelivered escalation's record and dedup ID. A record whose line was already appended
+finishes delivery under its original ID before rebinding, preserving retry dedup. Migration does not resend
 already delivered primary events. Invalid timestamps (including booleans, nonfinite and huge
 values), flags or IDs fail closed and preserve the original state bytes.
 Rolling back to a version-3-only or version-2-only relay explicitly fails closed with exit 2 and

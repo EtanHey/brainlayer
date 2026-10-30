@@ -609,6 +609,11 @@ def test_calendar_always_summarizes_unexpected_failures(tmp_path, monkeypatch, f
     rows = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
     assert rows[-1]["event"] == "summary"
     assert rows[-1]["failed"] == (2 if failure_at == "after-failure" else 1)
+    # Every runner error names its attempt; a startup failure has no header to inherit it from.
+    errors = [r for r in rows if r["event"] == "runner-error"]
+    if failure_at == "startup":
+        assert not any(r["event"] == "runner" for r in rows) and errors
+    assert all((r["scheduled_date"], r["kind"]) == (rows[-1]["scheduled_date"], rows[-1]["kind"]) for r in errors)
     assert "private-value" not in (directory / "runs.jsonl").read_text()
     assert executed == (
         [] if failure_at == "startup" else ["index", "jsonl-backup"] if failure_at == "after-failure" else ["index"]

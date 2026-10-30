@@ -1186,7 +1186,16 @@ async def run_calendar(
             results[active_step] = "failed"
         else:
             runner_failed = 1
-        await _blocking(record, directory, event="runner-error", step=active_step, error=type(exc).__name__)
+        # Name the attempt: a failure before the runner header has no header to inherit it from.
+        await _blocking(
+            record,
+            directory,
+            event="runner-error",
+            step=active_step,
+            error=type(exc).__name__,
+            kind=kind,
+            scheduled_date=date.isoformat(),
+        )
         if failed_recovery:
             reply.update(status="failed" if runner_started_at else "refused", reason=recovery_refusal_reason(exc))
             return 1
@@ -1214,7 +1223,15 @@ async def run_calendar(
                     signal.signal(sig, previous)
         except Exception as exc:
             runner_failed += 1
-            await _blocking(record, directory, event="runner-error", phase="cleanup", error=type(exc).__name__)
+            await _blocking(
+                record,
+                directory,
+                event="runner-error",
+                phase="cleanup",
+                error=type(exc).__name__,
+                kind=kind,
+                scheduled_date=date.isoformat(),
+            )
             raise
         finally:
             try:
