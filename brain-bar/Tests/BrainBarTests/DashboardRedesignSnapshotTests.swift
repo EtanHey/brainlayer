@@ -166,5 +166,8 @@ final class DashboardRedesignSnapshotTests: XCTestCase {
         let model = BrainBarMaintenanceRetryModel(runner: nil, now: { noon }, calendar: calendar)
         model.setForPreview(json: BrainBarMaintenanceRetryTests.ready)
         try BrainBarRenderHarness.renderMaintenanceRetryDashboard(model, directory: directory)
+        // Macroscope r4412051251: one failed night is a notice with no attention list; Retry must still render.
+        try BrainBarRenderHarness.renderMaintenanceRetryDashboard(model, directory: directory, attentionReasons: [],
+                                                                  name: "maintenance-retry-dashboard-notice-only")
     }
 }

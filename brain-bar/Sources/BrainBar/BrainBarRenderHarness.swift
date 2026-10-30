@@ -15,7 +15,12 @@ enum BrainBarRenderHarness {
         )
     }
 
-    static func renderMaintenanceRetryDashboard(_ model: BrainBarMaintenanceRetryModel, directory: URL) throws {
+    /// `attentionReasons: []` is a single failed night: a notice, no dot, and no attention list.
+    static func renderMaintenanceRetryDashboard(
+        _ model: BrainBarMaintenanceRetryModel, directory: URL,
+        attentionReasons: [String] = ["Scheduled maintenance failed — transcript backup did not finish"],
+        name: String = "maintenance-retry-dashboard"
+    ) throws {
         let panel = BrainBarDashboardPanelState()
         panel.attentionExpanded = true
         let view = BrainBarDashboardPreview.make(
@@ -23,11 +28,10 @@ enum BrainBarRenderHarness {
             receiptStore: BrainBarOperationReceipts(),
             observabilityResult: BrainBarDashboardFixture.readableObservabilityResult,
             now: BrainBarDashboardFixture.fetchedAt, panelState: panel,
-            jobAttentionReasons: ["Scheduled maintenance failed — transcript backup did not finish"],
+            jobAttentionReasons: attentionReasons,
             maintenanceNeedsAttention: true
         ).environment(\.brainBarMaintenanceRetry, model)
-        try renderMaintenanceRetry(view, size: CGSize(width: 980, height: 1_320),
-                                   name: "maintenance-retry-dashboard", directory: directory)
+        try renderMaintenanceRetry(view, size: CGSize(width: 980, height: 1_320), name: name, directory: directory)
     }
 
     private static func renderMaintenanceRetry<V: View>(_ view: V, size: CGSize,

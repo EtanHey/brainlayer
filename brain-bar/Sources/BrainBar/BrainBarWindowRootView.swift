@@ -1273,7 +1273,8 @@ private struct BrainBarDashboardView: View {
         case .amber: Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
         case .neutral: Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown)
         }
-        return HStack(alignment: .top, spacing: 9) {
+        return VStack(alignment: .leading, spacing: 8) {
+          HStack(alignment: .top, spacing: 9) {
             if attentionItems.isEmpty {
                 BrainBarStatusDot(color: statusColor, size: 9)
                     .font(.system(size: 13, weight: .semibold))
@@ -1315,10 +1316,6 @@ private struct BrainBarDashboardView: View {
 #endif
                             }
                         }
-                        if let maintenanceRetry,
-                           maintenanceNeedsAttention {
-                            BrainBarMaintenanceRetryRow(model: maintenanceRetry)
-                        }
                     }
                     .padding(.top, 7)
                     .padding(.leading, 20)
@@ -1335,6 +1332,13 @@ private struct BrainBarDashboardView: View {
             }
             Spacer(minLength: 8)
 
+          }
+            // Outside the attention disclosure: one failed night is only a notice (no attention
+            // list), and a retry action must not hide behind a collapsed row.
+            if let maintenanceRetry, maintenanceNeedsAttention {
+                BrainBarMaintenanceRetryRow(model: maintenanceRetry)
+                    .padding(.leading, 18)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
