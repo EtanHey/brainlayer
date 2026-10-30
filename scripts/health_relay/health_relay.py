@@ -55,15 +55,13 @@ HEALTH_LABEL, WATCH_LABEL = "com.brainlayer.health-check", "com.brainlayer.watch
 MAX_SOURCE_BYTES, MAX_OUTPUT_BYTES, MAX_DELIVER_PER_RUN, MAX_CLOSED = 262144, 2097152, 32, 128
 CLOCK_SKEW_SECONDS = 300
 PRIMARY_INBOX_ERRORS = frozenset(("inbox-unavailable", "inbox-unreadable", "inbox-append-failed", "inbox-ack-missing"))
+# Real outages only; backup-protection alerts stay in the primary collab (orc, 2026-10-30).
 ESCALATION_ISSUES = (
     "host-unreachable",
     "health-stale",
     "watcher-stale",
-    "job-alert:backup-daily",
-    "job-alert:jsonl-backup",
     "job-alert:mcp-transport",
     "job-alert:brainbar-activation",
-    "job-alert:backup-snapshot",
     "badge:brain-search-canary-failed",
     "source-missing:badge",
 )

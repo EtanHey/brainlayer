@@ -97,8 +97,7 @@ Without `escalation`, no second destination is read or written. To enable escala
   "after_seconds": 1800,
   "issues": [
     "host-unreachable", "health-stale", "watcher-stale",
-    "job-alert:backup-daily", "job-alert:jsonl-backup",
-    "job-alert:mcp-transport", "job-alert:brainbar-activation", "job-alert:backup-snapshot",
+    "job-alert:mcp-transport", "job-alert:brainbar-activation",
     "badge:brain-search-canary-failed", "source-missing:badge"
   ]
 }
@@ -111,22 +110,26 @@ escalations. Both inboxes must be distinct, existing files at delivery time. Nei
 The same path-resolution, symlink/hardlink alias, local-source and state-file collision checks
 apply to both; collisions fail before any write. Remote source paths are never statted locally.
 
-The default classes are deliberately narrow:
+The default classes are deliberately narrow: they are the real outages, where memory itself stops
+working or stops being observable.
 
 | Class | User-visible reason |
 |---|---|
 | `host-unreachable` | A host's memory services cannot be observed over the configured transport |
 | `health-stale` | Fleet health evidence stopped advancing; outages may be invisible |
 | `watcher-stale` | Conversation indexing stopped reporting progress, threatening current recall |
-| `job-alert:backup-daily` | Durable database backup protection is impaired |
-| `job-alert:jsonl-backup` | Original conversation backup protection is impaired |
 | `job-alert:mcp-transport` | BrainBar MCP connections or requests are failing to recover |
 | `job-alert:brainbar-activation` | BrainBar activation failed, leaving the agent memory service unavailable |
-| `job-alert:backup-snapshot` | The database snapshot phase of daily backup protection failed |
 | `badge:brain-search-canary-failed` | The search canary reports a failed memory retrieval path |
 | `source-missing:badge` | Health evidence disappeared after grace, leaving health visibility absent |
 
-These signals indicate a user-visible service or protection gap, not proof of data loss.
+These signals indicate a user-visible service gap, not proof of data loss.
+Backup-protection alerts (`job-alert:backup-daily`, `job-alert:jsonl-backup`,
+`job-alert:backup-snapshot`) stay in the primary collab: memory still works while a backup fails,
+so the BrainLayer lead owns them there (orc ruling, 2026-10-30). A deployment can add them back
+with an explicit `issues` list. Changing `issues` affects new escalations only: an escalation already
+queued for an open, unacknowledged episode is still delivered. To stop one, ACK its primary event
+before the next relay run.
 Internal classes such as `badge:job-scan-failed` and `badge:slow-check` stay in the primary collab.
 Badge codes `lock_holder_wedge`, `queue_backed_up`, `hotlane_dead`, and `drain_no_progress`
 (normalized by the relay to hyphens) also stay there: they indicate degraded operation, not a
