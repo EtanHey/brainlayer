@@ -38,6 +38,7 @@ struct BrainBarStatusInputs: Sendable {
     var now: Date
     var calendar: Calendar = .current
     var badge: BadgeStatePresentation? = nil
+    var vectorCheck: BrainBarVectorCheck? = nil
     /// R2-3: how the live job-alert file read went.
     enum JobAlertsState: Equatable, Sendable {
         /// The file was read; `jobAlerts` is that map.
@@ -457,6 +458,16 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                         if inputs.watcher?.isRunning == true { continue }
                         builder.add(.init(id: "watcher.heartbeat", component: .watcher,
                                           severity: .notice, text: message, jobs: [.watch]))
+                    } else if code == "missing_embeddings_scan_incomplete" {
+                        if inputs.badge?.vectorScan?.routinePartial == true, let check = inputs.vectorCheck {
+                            if check.isFresh(now: now) { continue }
+                            builder.add(.init(id: "health.vector-coverage", component: .health, severity: .notice,
+                                              text: BrainBarVectorCheck.unverified))
+                            continue
+                        }
+                        // Older producers expose a work budget in their English message.
+                        builder.add(.init(id: "health.\(code)", component: .health, severity: .notice,
+                            text: "The vector check could not finish. The current backlog is not verified by this check."))
                     } else if neutralBadgeCodes.contains(code) || severity == "warning" {
                         builder.add(.init(id: "health.\(code)", component: .health, severity: .notice, text: message))
                     } else if code == "job_scan_failed", message.contains("com.brainlayer.maintenance.plist") {
@@ -469,6 +480,11 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                     }
                 }
             }
+        }
+
+        if let check = inputs.vectorCheck, !check.isFresh(now: now) {
+            builder.add(.init(id: "health.vector-coverage", component: .health, severity: .notice,
+                              text: BrainBarVectorCheck.unverified))
         }
 
         // 8. Anything else a Jobs group flags, as neutral text on that group.

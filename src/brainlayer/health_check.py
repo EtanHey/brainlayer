@@ -1587,18 +1587,24 @@ def _run_health_check_locked(
         )
     scan = result.missing_embedding_scan
     state["missing_embedding_scan"] = asdict(scan)
-    if scan.completeness != "complete":
+    routine_partial = (
+        scan.completeness == "partial"
+        and scan.scanned > 0
+        and scan.reason in {"instruction_limit", "time_limit", "page_limit", "window_end"}
+    )
+    if scan.completeness != "complete" and not routine_partial:
         add_issue(
             "missing_embeddings_scan_incomplete",
             "warning",
-            f"missing embeddings {scan.completeness}: scanned {scan.scanned} rows ({scan.reason}); not an exact count",
+            "The vector check could not finish. The current backlog is not verified by this check.",
         )
-        if scan.missing:
-            add_issue(
-                "missing_embeddings_backlog",
-                "warning",
-                f"at least {scan.missing} missing embeddings in {scan.scanned} sampled rows",
-            )
+    if scan.completeness != "complete" and scan.missing:
+        add_issue(
+            "missing_embeddings_backlog",
+            "warning",
+            f"At least {scan.missing:,} checked chunks are waiting for vectors. "
+            "See Vector backlog for the latest full count.",
+        )
 
     hotlane_sample_advanced, hotlane_progressed = _hotlane_progress_sample(state, result.missing_vectors, now)
     if hotlane_progressed:
@@ -1978,7 +1984,15 @@ def _run_health_check_locked(
     state_payload["heal_failures"] = heal_failures
     if job_tick is not None:
         state_payload["job_lifecycle"] = job_tick.state
-    state_payload["heal_tripped"] = sorted(heal_tripped) if result.issues else []
+    state_payload["heal_tripped"] = (
+        sorted(heal_tripped)
+        if result.issues
+        else [
+            key
+            for key in sorted(heal_tripped)
+            if not hotlane_sample_advanced and key == _heal_key(config.hotlane_label, "missing_embeddings_not_draining")
+        ]
+    )
     _record_queue_notice(state_payload, queue_notice_signature)
     state_payload["ts"] = now.isoformat()
     if result.missing_vectors is not None:

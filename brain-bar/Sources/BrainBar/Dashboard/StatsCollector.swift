@@ -208,6 +208,12 @@ final class StatsCollector: ObservableObject {
     @Published private(set) var heartbeat: DashboardHeartbeat
     @Published private(set) var isSignalCoverageRefreshing = false
     @Published private(set) var lastSignalCoverageError: String?
+    @Published private(set) var lastSignalCoverageMeasuredAt: Date?
+
+    var vectorCheck: BrainBarVectorCheck {
+        .init(count: stats.signalCoverageIsAvailable ? stats.vectorBacklogCount : nil,
+              checkedAt: lastSignalCoverageMeasuredAt, error: lastSignalCoverageError)
+    }
     /// REAL windowed buckets for the shared Live/3h/24h selector. `nil` means
     /// "no wider window selected yet" — the views fall back to the live `stats`
     /// buckets (the resting 1h view). When the selector picks 3h/24h, the view
@@ -565,7 +571,6 @@ final class StatsCollector: ObservableObject {
         let provider = signalCoverageProvider
         let startDelay = signalCoverageStartDelay
         isSignalCoverageRefreshing = true
-        lastSignalCoverageError = nil
         signalCoverageTask = Task.detached(priority: .utility) { [weak self] in
             if startDelay > 0 {
                 do {
@@ -593,6 +598,7 @@ final class StatsCollector: ObservableObject {
         switch result {
         case .success(let coverage):
             stats = stats.withSignalCoverage(coverage)
+            lastSignalCoverageMeasuredAt = lastSignalCoverageAttemptedAt
             state = PipelineState.derive(daemon: daemon, stats: stats)
             lastSignalCoverageError = nil
         case .failure(let error):
@@ -1059,6 +1065,7 @@ extension StatsCollector {
         collector.state = state
         collector.heartbeat = heartbeat
         collector.lastDataFetchedAt = lastDataFetchedAt
+        collector.lastSignalCoverageMeasuredAt = stats.signalCoverageIsAvailable ? lastDataFetchedAt : nil
         collector.lastFetchError = lastFetchError
         collector.snapshotFreshnessState = snapshotFreshnessState
         return collector
