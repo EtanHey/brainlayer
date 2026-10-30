@@ -357,10 +357,15 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
             } else if !night.failedSteps.isEmpty {
                 let steps = night.failedSteps.map { stepText($0, includeOutcome: false) }.joined(separator: ", ")
                 outcome = "Nightly tasks failed: \(steps)"
-            } else if night.runnerErrorAt != nil || (night.unknownFailureAt != nil && !night.abandoned) {
-                outcome = ""
             } else {
-                outcome = "\(night.abandoned ? "Nightly maintenance was abandoned" : "Scheduled maintenance failed") at \(absoluteDate(night.at, calendar: inputs.calendar))"
+                // Each real cause once, at its own time: an abandonment that named no step, then
+                // any runner error or independent unknown failure appended below.
+                outcome = night.abandonmentFailureAt.map {
+                    "Nightly maintenance was abandoned at \(absoluteDate($0, calendar: inputs.calendar))"
+                } ?? ""
+                if outcome.isEmpty, night.runnerErrorAt == nil, night.unknownFailureAt == nil {
+                    outcome = "\(night.abandoned ? "Nightly maintenance was abandoned" : "Scheduled maintenance failed") at \(absoluteDate(night.at, calendar: inputs.calendar))"
+                }
             }
             if let at = night.runnerErrorAt {
                 outcome += (outcome.isEmpty ? "" : "; ") + "Maintenance runner failed at \(absoluteDate(at, calendar: inputs.calendar))"
@@ -484,7 +489,13 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                                       text: "\(group.title): awaiting first scheduled run"
                                           + (next.map { " (\(retryPhrase($0, now: now, calendar: inputs.calendar)))" } ?? ""),
                                       jobs: jobs, noticeHealth: .awaitingRun))
-                case .checking, .healthy, .skipped, .notice:
+                case .skipped:
+                    // A skipped run is not green: the Dashboard and the menu say why, as the row does.
+                    // A group configured OFF carries no reason; its row says so in its own note.
+                    guard let reason = raw.attentionReason else { break }
+                    builder.add(.init(id: "group.\(group.rawValue)", component: .jobs, severity: .notice,
+                                      text: reason, jobs: jobs, noticeHealth: .skipped))
+                case .checking, .healthy, .notice:
                     break
                 }
             }

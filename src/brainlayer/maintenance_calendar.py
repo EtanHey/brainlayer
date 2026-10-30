@@ -200,13 +200,12 @@ class CalendarPlan:
         sunday = self.scheduled_date - dt.timedelta(days=(self.scheduled_date.weekday() + 1) % 7)
         weekly = last_weekly is None or last_weekly < sunday
         # Weekly full follows the local proof; both nightly and weekly put upload last.
-        names = ["index", "maintenance-nightly", "jsonl-backup", "p0-counter", "wal-checkpoint"]
+        names = ["index", "maintenance-nightly", "jsonl-backup", "p0-counter"]
         if weekly:
             names[1] = "maintenance-weekly"
             names.insert(1, "backup-snapshot")
-            names += ["decay", "repair-fts", "backup-daily"]
-        else:
-            names.append("backup-daily")
+            names += ["decay", "repair-fts"]
+        names += ["wal-checkpoint", "backup-daily"]
         by_name = {s.name: s for s in self.candidates}
         selected = [by_name[n] for n in names]
         if weekly:

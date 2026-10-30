@@ -115,16 +115,19 @@ def checkpoint(
     mode: str = "TRUNCATE",
     *,
     guard_timeout_seconds: float | None = None,
+    busy_timeout_seconds: float = 10.0,
 ) -> tuple[int, int, int]:
     """Run WAL checkpoint and return (busy, log_pages, checkpointed_pages)."""
     mode = mode.upper()
     if mode not in _VALID_CHECKPOINT_MODES:
         raise ValueError(f"Invalid checkpoint mode: {mode}")
+    if not math.isfinite(busy_timeout_seconds) or busy_timeout_seconds < 0:
+        raise ValueError("busy_timeout_seconds must be finite and nonnegative")
 
     with checkpoint_guard(db_path, timeout_seconds=guard_timeout_seconds) as acquired:
         if not acquired:  # pragma: no cover - bounded acquisition resolves or raises
             raise RuntimeError("checkpoint guard was not acquired")
-        conn = sqlite3.connect(db_path, timeout=10)
+        conn = sqlite3.connect(db_path, timeout=busy_timeout_seconds)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             result = conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
