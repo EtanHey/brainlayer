@@ -1572,14 +1572,15 @@ def _run_health_check_locked(
         if result.missing_embedding_scan.completeness == "complete":
             result.missing_vectors = result.missing_embedding_scan.missing
     except sqlite3.OperationalError as exc:
-        result.missing_embedding_scan = MissingEmbeddingScan(reason=str(exc))
+        # Stable codes for BrainBar's vector notice; the exception text stays in the issue message.
+        result.missing_embedding_scan = MissingEmbeddingScan(reason="sql_error")
         add_issue(
             "missing_embeddings_count_failed",
             "warning" if _text_has_sqlite_busy_signal(exc) else "critical",
             f"could not count missing embeddings: {exc}",
         )
     except Exception as exc:
-        result.missing_embedding_scan = MissingEmbeddingScan(reason=str(exc))
+        result.missing_embedding_scan = MissingEmbeddingScan(reason="unexpected")
         add_issue(
             "missing_embeddings_count_failed",
             "critical",

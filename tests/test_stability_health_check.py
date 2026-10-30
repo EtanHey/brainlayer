@@ -2738,6 +2738,7 @@ def test_health_helpers_refuse_retired_labels_even_with_stale_configuration(labe
         ("unknown", 1864, 0, "unexpected"),
         ("partial", 1864, 0, "unexpected"),
         ("unknown", 0, 0, "SQL failure"),
+        ("unknown", 0, 0, "Unexpected failure"),
     ],
 )
 def test_vector_scan_notice_contract(tmp_path, monkeypatch, completeness, scanned, missing, reason):
@@ -2747,6 +2748,8 @@ def test_vector_scan_notice_contract(tmp_path, monkeypatch, completeness, scanne
     def sample(*args, **kwargs):
         if reason == "SQL failure":
             raise sqlite3.OperationalError("broken query")
+        if reason == "Unexpected failure":
+            raise RuntimeError("broken scan")
         return scan
 
     monkeypatch.setattr(health_check, "sample_missing_embeddings", sample)
@@ -2768,10 +2771,17 @@ def test_vector_scan_notice_contract(tmp_path, monkeypatch, completeness, scanne
             "See Vector backlog for the latest full count."
         )
     assert result.missing_vectors == (missing if completeness == "complete" else None)
+    failed = reason in {"SQL failure", "Unexpected failure"}
     saved = json.loads(state_path.read_text())["missing_embedding_scan"]
-    assert saved["scanned"] == (0 if reason == "SQL failure" else scanned)
-    assert saved["reason"] == ("broken query" if reason == "SQL failure" else reason)
-    assert ("missing_embeddings_count_failed" in issues) == (reason == "SQL failure")
+    assert saved["scanned"] == (0 if failed else scanned)
+    # BrainBar maps these stable codes to plain text; the exception text stays in the issue message.
+    stable = {"SQL failure": "sql_error", "Unexpected failure": "unexpected"}
+    assert saved["reason"] == stable.get(reason, reason)
+    assert ("missing_embeddings_count_failed" in issues) == failed
+    if failed:
+        assert ("broken query" if reason == "SQL failure" else "broken scan") in issues[
+            "missing_embeddings_count_failed"
+        ]
     assert all(
         r not in " ".join(issues.values())
         for r in ("instruction_limit", "time_limit", "page_limit", "window_end", "scanned 1864 rows")

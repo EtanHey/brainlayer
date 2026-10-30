@@ -1018,20 +1018,22 @@ struct ObservabilityLiveView: View {
 struct BrainBarVectorScan: Decodable, Equatable, Sendable {
     let completeness: String
     let scanned: Int
-    let missing: Int
+    /// Nil when the scan failed before counting (health_check.py writes `null`).
+    let missing: Int?
     let reason: String
 
     var routinePartial: Bool {
         // Keep budget reasons aligned with routine_partial in src/brainlayer/health_check.py.
-        completeness == "partial" && scanned > 0 && missing >= 0 && missing <= scanned
+        guard let missing else { return false }
+        return completeness == "partial" && scanned > 0 && missing >= 0 && missing <= scanned
             && ["instruction_limit", "time_limit", "page_limit", "window_end"].contains(reason)
     }
 
     var detail: String {
-        if completeness == "complete" {
+        if completeness == "complete", let missing {
             return "Background vector check complete. \(missing.formatted()) \(missing == 1 ? "chunk is" : "chunks are") waiting for vectors."
         }
-        guard scanned > 0 else {
+        guard scanned > 0, let missing else {
             return "The vector check could not finish. The current backlog is not verified by this check."
         }
         return "Background vector check in progress. Checked \(scanned.formatted()) \(scanned == 1 ? "chunk" : "chunks"); \(missing == 0 ? "none" : missing.formatted()) in this sample \(missing == 1 ? "is" : "are") waiting for vectors."
@@ -1042,7 +1044,7 @@ struct BrainBarVectorScan: Decodable, Equatable, Sendable {
         let url = badgeURL.deletingLastPathComponent().appendingPathComponent("health-check-state.json")
         guard let data = try? Data(contentsOf: url),
               let scan = try? JSONDecoder().decode(State.self, from: data).missing_embedding_scan,
-              scan.scanned >= 0, scan.missing >= 0, scan.missing <= scan.scanned else { return nil }
+              scan.scanned >= 0, scan.missing.map({ $0 >= 0 && $0 <= scan.scanned }) ?? true else { return nil }
         return scan
     }
 }

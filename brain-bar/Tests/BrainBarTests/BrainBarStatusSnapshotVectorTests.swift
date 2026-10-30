@@ -95,6 +95,28 @@ final class BrainBarStatusSnapshotVectorTests: XCTestCase {
         }
     }
 
+    func testFailedScanStateFromTheHealthCheckReachesTheNotice() throws {
+        // The shape health_check.py writes when the scan raises: no count, a stable reason code.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for (reason, expected) in [("sql_error", "database query failed"), ("unexpected", "stopped unexpectedly")] {
+            let state = #"{"missing_embedding_scan": {"completeness": "unknown", "missing": null, "scanned": 0, "cursor": null, "#
+                + #""measured_at": null, "age_seconds": null, "reason": "\#(reason)"}}"#
+            try Data(state.utf8).write(to: dir.appendingPathComponent("health-check-state.json"))
+            let scan = try XCTUnwrap(BrainBarVectorScan.read(beside: dir.appendingPathComponent("badge.json")))
+            XCTAssertNil(scan.missing)
+            XCTAssertFalse(scan.routinePartial)
+            var input = T.healthy()
+            input.badge = .init(badgeOn: false, reason: old, activeCodes: ["missing_embeddings_scan_incomplete"],
+                                activeMessages: [old], vectorScan: scan)
+            input.vectorCheck = .init(count: 5, checkedAt: T.now, error: nil)
+            let texts = BrainBarStatusSnapshot.derive(input).issues.map(\.text)
+            XCTAssertTrue(texts.contains { $0.contains(expected) }, "\(reason): \(texts)")
+            XCTAssertEqual(scan.detail, "The vector check could not finish. The current backlog is not verified by this check.")
+        }
+    }
+
     func testFirstCoverageAttemptDoesNotFlashAnUnverifiedNotice() {
         var input = T.healthy()
         input.vectorCheck = .init(count: nil, checkedAt: nil, error: nil)
