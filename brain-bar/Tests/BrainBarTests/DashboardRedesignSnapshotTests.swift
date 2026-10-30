@@ -138,4 +138,36 @@ final class DashboardRedesignSnapshotTests: XCTestCase {
             size: canvasSize
         )
     }
+
+    func testMaintenanceRetryStates() throws {
+        guard let outDir else { throw XCTSkip("Set BRAINBAR_SNAPSHOT_DIR to render retry states") }
+        let directory = URL(fileURLWithPath: outDir)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let noon = ISO8601DateFormatter().date(from: "2026-10-29T12:00:00Z")!
+        let four = ISO8601DateFormatter().date(from: "2026-10-29T04:30:00Z")!
+        let states: [(String, String, Bool, String?, Date)] = [
+            ("ready", BrainBarMaintenanceRetryTests.ready, false, nil, noon),
+            ("running", BrainBarMaintenanceRetryTests.ready, true, nil, noon),
+            ("quiet-window", BrainBarMaintenanceRetryTests.ready.replacingOccurrences(of: "2026-10-30", with: "2026-10-29"), false, nil, four),
+            ("window-only", #"{"status":"nothing-to-retry","reason":"Everything that can run during the day has already finished.","failures":[{"step":"maintenance-weekly","reason":"Window closed"}],"deferred":[{"step":"maintenance-weekly","reason":"It pauses database writes, so it only runs between 04:00 and 06:00"}]}"#, false, nil, noon),
+            ("refused", BrainBarMaintenanceRetryTests.ready.replacingOccurrences(of: "\"status\":\"ready\"", with: "\"status\":\"refused\"").replacingOccurrences(of: "Only daytime-safe failures retry", with: "Maintenance is running right now. Try again when it finishes."), false, "Refused: Maintenance is running right now. Try again when it finishes.", noon),
+            ("nothing", #"{"status":"nothing-to-retry","reason":"Everything that can run during the day has already finished."}"#, false, "Nothing to retry: Everything that can run during the day has already finished.", noon),
+            ("started", #"{"status":"nothing-to-retry","reason":"Everything that can run during the day has already finished.","failures":[{"step":"maintenance-weekly","reason":"Window closed"}],"deferred":[{"step":"maintenance-weekly","reason":"It pauses database writes, so it only runs between 04:00 and 06:00"}]}"#, false, "Done: Transcript backup retried successfully.", noon),
+            ("failed", BrainBarMaintenanceRetryTests.ready, false, "Failed: transcript backup stopped with an error; see its log.", noon),
+            ("finished-successfully", #"{"status":"nothing-to-retry","reason":"No failed steps remain. Everything from last night has finished."}"#, false, "Done: Transcript backup retried successfully.", noon)
+        ]
+        for (name, json, running, outcome, now) in states {
+            let model = BrainBarMaintenanceRetryModel(runner: nil, now: { now }, calendar: calendar)
+            model.setForPreview(json: json, isRunning: running, outcome: outcome)
+            try BrainBarRenderHarness.renderMaintenanceRetryRow(model, name: "maintenance-retry-\(name)", directory: directory)
+        }
+        let model = BrainBarMaintenanceRetryModel(runner: nil, now: { noon }, calendar: calendar)
+        model.setForPreview(json: BrainBarMaintenanceRetryTests.ready)
+        try BrainBarRenderHarness.renderMaintenanceRetryDashboard(model, directory: directory)
+        // Macroscope r4412051251: one failed night is a notice with no attention list; Retry must still render.
+        try BrainBarRenderHarness.renderMaintenanceRetryDashboard(model, directory: directory, attentionReasons: [],
+                                                                  name: "maintenance-retry-dashboard-notice-only")
+    }
 }
