@@ -698,6 +698,8 @@ def test_drain_busy_timeout_30s(tmp_path, monkeypatch):
 
 def test_drain_open_configures_one_connection_without_retry_loop(tmp_path, monkeypatch):
     attempts = 0
+    monkeypatch.delenv("BRAINLAYER_WAL_SIZE_LIMIT_BYTES", raising=False)
+    monkeypatch.delenv("BRAINLAYER_WAL_AUTOCHECKPOINT", raising=False)
 
     class FakeConnection:
         def __init__(self, path: str):
@@ -718,8 +720,14 @@ def test_drain_open_configures_one_connection_without_retry_loop(tmp_path, monke
             def fetchone(self):
                 return ("wal",)
 
+        def execute(self, sql, *args):
+            return self.cursor().execute(sql, *args)
+
         def cursor(self):
             return self.Cursor(self)
+
+        def close(self):
+            self.closed = True
 
         def setbusytimeout(self, timeout_ms: int) -> None:
             self.busy_timeout_ms = timeout_ms
@@ -744,7 +752,12 @@ def test_drain_open_configures_one_connection_without_retry_loop(tmp_path, monke
     assert conn.busy_timeout_ms >= 30000
     assert conn.loaded_extensions == ["sqlite_vec"]
     assert conn.extension_enabled == [True, False]
-    assert conn.executed == ["PRAGMA journal_mode", "PRAGMA synchronous = NORMAL"]
+    assert conn.executed == [
+        "PRAGMA journal_size_limit = 256000000",
+        "PRAGMA wal_autocheckpoint = 10000",
+        "PRAGMA journal_mode",
+        "PRAGMA synchronous = NORMAL",
+    ]
 
 
 def test_drain_busy_timeout_invalid_env_falls_back_to_30s(tmp_path, monkeypatch):
