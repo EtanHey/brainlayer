@@ -105,6 +105,19 @@ final class BrainBarMaintenanceRetryTests: XCTestCase {
         XCTAssertEqual(cli.calls.count, 1)
     }
 
+    func testConfirmedRetryThatLostEligibilityExplainsWhy() async {
+        // Bugbot r4420969886: the quiet window started while the confirmation was open.
+        var clock = noon
+        let cli = RetryCLI(Self.ready)
+        let model = BrainBarMaintenanceRetryModel(runner: cli, now: { clock })
+        model.setForPreview(json: Self.ready)
+        XCTAssertTrue(model.canRetry)
+        clock = ISO8601DateFormatter().date(from: "2026-10-30T04:30:00Z")!
+        await model.retry()
+        XCTAssertTrue(model.outcome?.hasPrefix("Refused: ") == true, model.outcome ?? "silent")
+        XCTAssertTrue(cli.calls.isEmpty, "nothing may launch after eligibility is lost")
+    }
+
     func testOutcomeClearsOnceALaterNightIsShown() async {
         // Bugbot r4412111109: a "Done" from one night must not sit next to the next night's failure.
         let cli = ScriptedRetryCLI([

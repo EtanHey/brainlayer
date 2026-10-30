@@ -132,7 +132,14 @@ final class BrainBarMaintenanceRetryModel: ObservableObject {
     }
 
     func retry() async {
-        guard canRetry, let runner else { return }
+        // No CLI, or a retry already running: the button is disabled; stay silent.
+        guard let runner, !isRunning else { return }
+        guard canRetry else {
+            // Eligibility was lost while the confirmation was open; say why instead of doing nothing.
+            outcome = "Refused: \(explanation)"
+            outcomeNight = receipt?.scheduledDate
+            return
+        }
         isRunning = true
         if let task = refreshTask { await task.value }
         isRunning = false
