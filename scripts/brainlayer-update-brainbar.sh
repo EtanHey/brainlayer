@@ -530,15 +530,30 @@ verify() {
     [[ "$v" = "$OFFERED_VERSION" ]] && ok=1 || ok=0
     check "cask version" "$ok" "${v:-<not registered>} (expected $OFFERED_VERSION)"
 
-    formula_version="$("$BREW_BIN" list --versions brainlayer 2>/dev/null | awk '{print $2}' || true)"
+    # Installed kegs are unordered; only linked_keg identifies the canonical CLI.
+    # Keep this local/offline even if Homebrew would otherwise refresh metadata.
+    formula_version="$(HOMEBREW_NO_AUTO_UPDATE=1 "$BREW_BIN" info --json=v2 brainlayer 2>/dev/null | python3 -c '
+import json, re, sys
+try:
+    formulae = json.load(sys.stdin)["formulae"]
+    if len(formulae) != 1:
+        raise ValueError("expected one formula")
+    version = formulae[0]["linked_keg"]
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9][A-Za-z0-9._+-]*", version):
+        raise ValueError("missing or invalid linked keg")
+    version = re.sub(r"_[0-9]+$", "", version)
+except Exception:
+    raise SystemExit(1)
+print(version)
+')" || formula_version=""
     [[ -n "$formula_version" ]] && ok=1 || ok=0
-    check "brainlayer formula" "$ok" "${formula_version:-<not installed>}"
+    check "brainlayer formula" "$ok" "${formula_version:-<linked keg undetermined>}"
 
     canonical_cli="${BREW_BIN%/*}/brainlayer"
     canonical_version="$("$canonical_cli" --version 2>/dev/null | awk 'NF {print $NF; exit}' || true)"
     [[ -n "$formula_version" && "$canonical_version" = "$formula_version" ]] && ok=1 || ok=0
     check "canonical brainlayer CLI" "$ok" \
-        "$canonical_cli ${canonical_version:-<missing>} (expected ${formula_version:-installed formula version})"
+        "$canonical_cli ${canonical_version:-<missing>} (expected ${formula_version:-linked keg undetermined})"
 
     path_cli="$(command -v brainlayer 2>/dev/null || true)"
     if [[ -z "$path_cli" ]]; then
