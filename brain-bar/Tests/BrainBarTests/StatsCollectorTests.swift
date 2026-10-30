@@ -385,6 +385,35 @@ final class StatsCollectorTests: XCTestCase {
         guard execRC == SQLITE_OK else { throw NSError(domain: "StatsCollectorTests", code: Int(execRC)) }
     }
 
+    func testCoverageSuccessTimestampSurvivesFailureAndRetry() async throws {
+        let provider = SucceedOnceCoverageProvider()
+        var clock = BrainBarStatusSnapshotTests.now
+        let hot = BrainBarDashboardFixture.makeCollector().stats
+        let collector = StatsCollector(dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: 0), agentActivityMonitor: .synthetic,
+            statsRefreshCoalesceInterval: 0, nowProvider: { clock },
+            dashboardStatsProvider: { hot }, signalCoverageProvider: provider.fetch,
+            signalCoverageStartDelay: 0)
+        defer { provider.releaseRetry.signal(); collector.stop() }
+        collector.refresh(force: true)
+        await collector.waitForFixtureRefresh()
+        let success = collector.lastSignalCoverageMeasuredAt
+        XCTAssertEqual(success, clock)
+        clock = clock.addingTimeInterval(300)
+        collector.refresh(force: true)
+        await collector.waitForFixtureRefresh()
+        XCTAssertNotNil(collector.lastSignalCoverageError)
+        XCTAssertEqual(collector.lastSignalCoverageMeasuredAt, success)
+        XCTAssertFalse(collector.vectorCheck.isFresh(now: clock))
+        collector.refresh(force: true)
+        let deadline = Date().addingTimeInterval(2)
+        while !collector.isSignalCoverageRefreshing, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(collector.isSignalCoverageRefreshing)
+        XCTAssertNotNil(collector.lastSignalCoverageError, "Starting a retry cannot clear a failed check")
+        provider.releaseRetry.signal()
+        await collector.waitForFixtureRefresh()
+    }
+
     func testHotSnapshotPublishesBeforeExactSignalCoverage() async throws {
         let hotStats = DashboardStats(
             chunkCount: 3,
@@ -439,6 +468,10 @@ final class StatsCollectorTests: XCTestCase {
             coverageProvider.waitUntilStarted(timeout: .now() + 1),
             "Exact coverage should start only after the hot snapshot can publish."
         )
+        var input = BrainBarStatusSnapshotTests.healthy()
+        input.vectorCheck = collector.vectorCheck
+        XCTAssertTrue(BrainBarStatusSnapshot.derive(input).issues.isEmpty, "The first query is still running, not failed")
+        XCTAssertEqual(collector.vectorCheck.summary(now: input.now), "Checking vector backlog…")
 
         coverageProvider.release()
         let coverageDeadline = Date().addingTimeInterval(2)
@@ -502,6 +535,9 @@ final class StatsCollectorTests: XCTestCase {
 
         XCTAssertNotNil(collector.lastSignalCoverageError)
         XCTAssertNil(collector.lastFetchError)
+        var input = BrainBarStatusSnapshotTests.healthy()
+        input.vectorCheck = collector.vectorCheck
+        XCTAssertEqual(BrainBarStatusSnapshot.derive(input).issues.filter { $0.text == BrainBarVectorCheck.unverified }.count, 1)
         XCTAssertFalse(collector.stats.signalCoverageIsAvailable)
         XCTAssertEqual(coverageProvider.callCount, 1)
 
@@ -988,5 +1024,19 @@ final class StatsCollectorTests: XCTestCase {
             64 * 1_024,
             "The launchctl runner must drain output concurrently so a full pipe cannot wedge a healthy child."
         )
+    }
+}
+
+private final class SucceedOnceCoverageProvider: @unchecked Sendable {
+    let releaseRetry = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var calls = 0
+    func fetch() throws -> BrainDatabase.SignalCoverageSnapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        calls += 1
+        if calls == 3 { releaseRetry.wait() }
+        if calls > 1 { throw SignalCoverageProviderFailure() }
+        return .init(eligibleChunkCount: 10, vectorIndexedChunkCount: 5, ftsIndexedChunkCount: 10, trigramIndexedChunkCount: 10)
     }
 }

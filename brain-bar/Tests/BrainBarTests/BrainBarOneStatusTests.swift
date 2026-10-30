@@ -21,12 +21,12 @@ final class BrainBarOneStatusTests: XCTestCase {
     }
 
     enum Fixture: CaseIterable {
-        case healthy, skippedWithReason, failedNight, recoveredNight, unreadableSource, noticeOnly
+        case healthy, skippedWithReason, failedNight, recoveredNight, unreadableSource, noticeOnly, vectorScan
 
         /// The tone every surface must show, and how the Jobs → Maintenance row must read.
         var expected: (tone: Tone, row: BrainLayerLaunchdGroupHealth) {
             switch self {
-            case .healthy, .recoveredNight: (.healthy, .healthy)
+            case .healthy, .recoveredNight, .vectorScan: (.healthy, .healthy)
             case .skippedWithReason: (.notice, .skipped)
             case .failedNight: (.attention, .unhealthy)
             case .unreadableSource: (.notice, .unknown)
@@ -121,6 +121,10 @@ final class BrainBarOneStatusTests: XCTestCase {
         case .unreadableSource:
             let unreadable = BrainLayerLaunchdJobObservation.stateOnly(.probeError("Maintenance calendar status unavailable"))
             setMaintenance([.maintenanceNightly: unreadable, .maintenanceWeekly: unreadable])
+        case .vectorScan:
+            inputs.badge = .init(badgeOn: false, reason: "old partial scan notice", activeCodes: ["missing_embeddings_scan_incomplete"],
+                activeMessages: ["missing embeddings partial: scanned 1864 rows (instruction_limit); not an exact count"],
+                activeSeverities: ["warning"], vectorScan: .init(completeness: "partial", scanned: 1864, missing: 0, reason: "instruction_limit"))
         case .noticeOnly:
             inputs.jobAlerts = BrainBarJobAlerts(active: [
                 "fleet-watchdog-hold": "BrainLayer recovered a stale fleet-watchdog hold; supervisor restored"])
@@ -134,6 +138,14 @@ final class BrainBarOneStatusTests: XCTestCase {
         let model: BrainBarSettingsViewModel
         let controller: BrainBarStatusPopoverController
         let page: BrainBarOnePagePresentation
+    }
+
+    private func collector(_ inputs: BrainBarStatusInputs) -> StatsCollector {
+        let base = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: inputs.now)
+        guard inputs.badge?.vectorScan != nil else { return base }
+        return .fixture(stats: base.stats.withSignalCoverage(.init(eligibleChunkCount: 100,
+            vectorIndexedChunkCount: 95, ftsIndexedChunkCount: 100, trigramIndexedChunkCount: 100)),
+            daemon: base.daemon, agentActivity: base.agentActivity, state: base.state, lastDataFetchedAt: inputs.now)
     }
 
     private func rig(_ inputs: BrainBarStatusInputs) throws -> Rig {
@@ -157,8 +169,9 @@ final class BrainBarOneStatusTests: XCTestCase {
         let badge = inputs.badge ?? .init(badgeOn: false, reason: "", activeCodes: [])
         model.applyHealthBadge(badge, alerts: inputs.jobAlerts ?? BrainBarJobAlerts(active: [:]))
 
-        let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: inputs.now)
+        let collector = collector(inputs)
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        if inputs.badge?.vectorScan != nil { runtime.install(collector: collector, database: nil) }
         runtime.jobsModel = model
         runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: inputs.now.addingTimeInterval(30 * 86_400)))
         let workspace = BrainBarRecordingWorkspace()
@@ -291,11 +304,25 @@ final class BrainBarOneStatusTests: XCTestCase {
             XCTAssertGreaterThan(png.count, 5_000, name)
             try png.write(to: directory.appendingPathComponent("\(name).png"), options: .atomic)
         }
-        for fixture in [Fixture.healthy, .skippedWithReason, .failedNight, .recoveredNight] {
+        for fixture in [Fixture.healthy, .skippedWithReason, .failedNight, .recoveredNight, .vectorScan] {
             let inputs = try inputs(fixture)
             let rig = try rig(inputs)
             defer { rig.controller.stop() }
-            let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: inputs.now)
+            let collector = collector(inputs)
+            if fixture == .vectorScan {
+                try write(BrainBarVectorDetailPreview.make(check: .init(count: 5, checkedAt: inputs.now, error: nil),
+                    scan: inputs.badge!.vectorScan!, now: inputs.now), width: 560, height: 240, name: "vector-details-fresh")
+                try write(BrainBarVectorDetailPreview.make(check: .init(count: 5, checkedAt: inputs.now.addingTimeInterval(-601), error: "Coverage query failed"),
+                    scan: inputs.badge!.vectorScan!, now: inputs.now), width: 560, height: 260, name: "vector-details-stale")
+                for (name, check) in [("starting", BrainBarVectorCheck(count: nil, checkedAt: nil, error: nil)),
+                                      ("unavailable", .init(count: nil, checkedAt: nil, error: "Coverage query failed")),
+                                      ("singular", .init(count: 1, checkedAt: inputs.now, error: nil))] {
+                    for width: CGFloat in [390, 560] {
+                        try write(BrainBarVectorDetailPreview.make(check: check, scan: inputs.badge!.vectorScan!, now: inputs.now),
+                                  width: width, height: 260, name: "vector-details-\(name)-\(Int(width))")
+                    }
+                }
+            }
             let icon = BrainBarStatusPopoverController.statusIconImage(stats: collector.stats,
                                                                        badgeOn: try XCTUnwrap(rig.controller.renderedStatusDotForTesting))
             let rows = rig.controller.contextMenuForTesting.items.filter { !$0.isHidden }

@@ -211,6 +211,7 @@ private struct BrainBarDashboardContent: View {
     var jobsChecking: Bool = false
     /// S5: the shared status snapshot's verdict; nil only for the standalone fallback dashboard.
     var statusVerdict: BrainBarStatusVerdict? = nil
+    var vectorScan: BrainBarVectorScan? = nil
     var maintenanceNeedsAttention = false
 
     var body: some View {
@@ -227,7 +228,7 @@ private struct BrainBarDashboardContent: View {
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: observabilityResult,
             referenceNow: referenceNow, backupReferenceNow: backupReferenceNow, calendar: calendar, locale: locale,
             jobAttentionReasons: jobAttentionReasons, jobsChecking: jobsChecking,
-            statusVerdict: statusVerdict, maintenanceNeedsAttention: maintenanceNeedsAttention,
+            statusVerdict: statusVerdict, vectorScan: vectorScan, maintenanceNeedsAttention: maintenanceNeedsAttention,
             panelState: panelState ?? standalonePanelState
         )
         view.observabilityCadenceOverride = observabilityCadence
@@ -262,7 +263,7 @@ private struct BrainBarJobsDashboardContent: View {
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: model.dashboardObservabilityResult,
             observabilityCadence: model.observabilityCadence, backupReferenceNow: model.observabilityNow, panelState: panelState,
             jobAttentionReasons: model.dashboardJobAttentionReasons, jobsChecking: model.dashboardJobsChecking,
-            statusVerdict: model.publishedStatus.verdict,
+            statusVerdict: model.publishedStatus.verdict, vectorScan: model.healthBadge?.vectorScan,
             maintenanceNeedsAttention: model.publishedStatus.issues.contains { $0.component == .maintenance })
     }
 }
@@ -984,6 +985,7 @@ private struct BrainBarDashboardView: View {
     var jobAttentionReasons: [String] = []
     var jobsChecking: Bool = false
     var statusVerdict: BrainBarStatusVerdict? = nil
+    var vectorScan: BrainBarVectorScan? = nil
     var maintenanceNeedsAttention = false
     @ObservedObject var panelState: BrainBarDashboardPanelState
 
@@ -1045,14 +1047,16 @@ private struct BrainBarDashboardView: View {
             totalCount: collector.stats.signalEligibleChunkCount,
             backlogCount: collector.stats.vectorBacklogCount,
             coveragePercent: collector.stats.vectorCoveragePercent,
-            isAvailable: collector.stats.signalCoverageIsAvailable,
+            isAvailable: collector.vectorCheck.isFresh(now: currentNow),
             isRefreshing: collector.isSignalCoverageRefreshing,
             lastError: signalCoverageError,
             locale: locale,
             accentColor: .brainBarSignalVector,
             showsDetail: true,
             vectorNetDrainRatePerHour: collector.stats.vectorNetDrainRatePerHour,
-            vectorBacklogETAHours: collector.stats.vectorBacklogETAHours
+            vectorBacklogETAHours: collector.stats.vectorBacklogETAHours,
+            vectorSummary: collector.vectorCheck.summary(now: currentNow),
+            vectorSample: vectorScan?.detail, vectorError: collector.lastSignalCoverageError
         )
     }
 
@@ -1659,7 +1663,7 @@ private struct BrainBarDashboardView: View {
             compact: layout.compactCards,
             isRefreshing: collector.isSignalCoverageRefreshing,
             lastError: signalCoverageError,
-            locale: locale,
+            locale: locale, vectorCheck: collector.vectorCheck, now: currentNow,
             isExpanded: $panelState.signalCoverageExpanded,
             isVectorDetailExpanded: $vectorSignalDetailExpanded,
             onAnimationCompleted: panelState.disclosureAnimationDidComplete
@@ -2329,6 +2333,8 @@ private struct BrainBarSignalCoveragePanel: View {
     let isRefreshing: Bool
     let lastError: String?
     let locale: Locale
+    var vectorCheck: BrainBarVectorCheck? = nil
+    var now: Date = Date()
     @Binding var isExpanded: Bool
     @Binding var isVectorDetailExpanded: Bool
     var onAnimationCompleted: () -> Void = {}
@@ -2342,14 +2348,15 @@ private struct BrainBarSignalCoveragePanel: View {
                 totalCount: stats.signalEligibleChunkCount,
                 backlogCount: stats.vectorBacklogCount,
                 coveragePercent: stats.vectorCoveragePercent,
-                isAvailable: stats.signalCoverageIsAvailable,
+                isAvailable: vectorCheck?.isFresh(now: now) ?? stats.signalCoverageIsAvailable,
                 isRefreshing: isRefreshing,
                 lastError: lastError,
                 locale: locale,
                 accentColor: .brainBarSignalVector,
                 showsDetail: true,
                 vectorNetDrainRatePerHour: stats.vectorNetDrainRatePerHour,
-                vectorBacklogETAHours: stats.vectorBacklogETAHours
+                vectorBacklogETAHours: stats.vectorBacklogETAHours,
+                vectorSummary: vectorCheck?.summary(now: now)
             ),
             BrainBarSignalCoverage(
                 name: "FTS5",
@@ -2591,6 +2598,9 @@ private struct BrainBarSignalCoverage: Identifiable {
     let showsDetail: Bool
     let vectorNetDrainRatePerHour: Double?
     let vectorBacklogETAHours: Double?
+    var vectorSummary: String? = nil
+    var vectorSample: String? = nil
+    var vectorError: String? = nil
 
     var id: String { name }
 
@@ -2663,16 +2673,16 @@ private struct BrainBarSignalCoverageRow: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-            Text(signal.presentation.missingCount.map { $0 > 0 ? "\(signal.presentation.missingText ?? "") not indexed" : " " } ?? " ")
+            Text(signal.vectorSummary ?? (signal.presentation.missingCount.map { $0 > 0 ? "\(signal.presentation.missingText ?? "") not indexed" : " " } ?? " "))
                 .font(.system(size: 10))
                 .foregroundStyle(Color.brainBarTextSecondary)
                 .monospacedDigit()
-                .lineLimit(1)
-                .frame(height: 12)
+                .lineLimit(signal.vectorSummary == nil ? 1 : 2)
+                .frame(height: signal.vectorSummary == nil ? 12 : 26)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .frame(height: compact ? 106 : 114)
+        .frame(height: (compact ? 106 : 114) + (signal.vectorSummary == nil ? 0 : 14))
         .background(BrainBarDashboardCardStyle(emphasized: isSelected, cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -2681,7 +2691,7 @@ private struct BrainBarSignalCoverageRow: View {
         .shadow(color: isSelected ? signal.accentColor.opacity(0.18) : .clear, radius: 12, y: 2)
         .scaleEffect(isSelected ? 0.98 : 1)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(signal.presentation.accessibilityLabel(for: signal.name))
+        .accessibilityLabel(signal.vectorSummary ?? signal.presentation.accessibilityLabel(for: signal.name))
         .help(signal.showsDetail ? "Show Vector backlog details" : signal.presentation.accessibilityLabel(for: signal.name))
 #if DEBUG
         .onAppear {
@@ -2750,7 +2760,10 @@ private struct BrainBarVectorSignalDetail: View {
     let compact: Bool
 
     var body: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 10) {
+            if let summary = signal.vectorSummary { Text(summary).font(.system(size: 12, weight: .semibold)) }
+            if let sample = signal.vectorSample { Text(sample).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true) }
+            if let error = signal.vectorError { Text(error).font(.system(size: 11)).fixedSize(horizontal: false, vertical: true) }
             if compact {
                 VStack(alignment: .leading, spacing: 12) {
                     metrics
@@ -2843,6 +2856,21 @@ private struct BrainBarVectorSignalDetail: View {
         NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
     }
 }
+
+#if DEBUG
+@MainActor
+enum BrainBarVectorDetailPreview {
+    static func make(check: BrainBarVectorCheck, scan: BrainBarVectorScan, now: Date) -> AnyView {
+        let indexedCount = 100 - (check.count ?? 0)
+        return AnyView(BrainBarVectorSignalDetail(signal: .init(name: "Vector", indexedCount: indexedCount, totalCount: 100,
+            backlogCount: check.count ?? 0, coveragePercent: Double(indexedCount), isAvailable: check.isFresh(now: now),
+            isRefreshing: false, lastError: check.error, locale: Locale(identifier: "en_US"),
+            accentColor: .brainBarSignalVector, showsDetail: true, vectorNetDrainRatePerHour: nil,
+            vectorBacklogETAHours: nil, vectorSummary: check.summary(now: now), vectorSample: scan.detail,
+            vectorError: check.error), compact: false))
+    }
+}
+#endif
 
 private struct BrainBarSignalDetailMetric: View {
     let label: String

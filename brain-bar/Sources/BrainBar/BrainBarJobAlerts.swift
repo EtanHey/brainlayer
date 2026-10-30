@@ -144,7 +144,8 @@ extension BadgeStatePresentation {
             reason: kept.map(\.1).joined(separator: "; "),
             activeCodes: kept.map(\.0),
             activeMessages: kept.map(\.1),
-            activeSeverities: kept.map(\.2)
+            activeSeverities: kept.map(\.2),
+            vectorScan: vectorScan
         )
     }
 }

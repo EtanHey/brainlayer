@@ -682,7 +682,7 @@ def test_missing_embedding_scan_yields_bounded_lower_bound_and_runs_canary(tmp_p
         assert result.missing_vectors is None  # Never an exact zero from an unfinished window.
         assert result.canary_ok and not result.slow_check
         codes = {issue.code for issue in result.issues}
-        assert "missing_embeddings_scan_incomplete" in codes
+        assert "missing_embeddings_scan_incomplete" not in codes
         assert ("missing_embeddings_backlog" in codes) == bool(expected_missing)
         assert not codes & {"missing_embeddings_climbing", "missing_embeddings_not_draining"}
         assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
@@ -2723,3 +2723,66 @@ def test_health_helpers_refuse_retired_labels_even_with_stale_configuration(labe
     assert health_check._launchd_label_loaded(label, runner) is None
     assert health_check._launchd_process_state(label, runner) is None
     assert commands == []
+
+
+@pytest.mark.parametrize(
+    "completeness,scanned,missing,reason",
+    [
+        ("partial", 1864, n, r)
+        for n in (0, 1, 7)
+        for r in ("instruction_limit", "time_limit", "page_limit", "window_end")
+    ]
+    + [
+        ("complete", 1864, 7, ""),
+        ("partial", 0, 0, "instruction_limit"),
+        ("unknown", 1864, 0, "unexpected"),
+        ("partial", 1864, 0, "unexpected"),
+        ("unknown", 0, 0, "SQL failure"),
+        ("unknown", 0, 0, "Unexpected failure"),
+    ],
+)
+def test_vector_scan_notice_contract(tmp_path, monkeypatch, completeness, scanned, missing, reason):
+    config, state_path, *_ = _queue_backlog_config(tmp_path, heal=False)
+    scan = health_check.MissingEmbeddingScan(completeness=completeness, scanned=scanned, missing=missing, reason=reason)
+
+    def sample(*args, **kwargs):
+        if reason == "SQL failure":
+            raise sqlite3.OperationalError("broken query")
+        if reason == "Unexpected failure":
+            raise RuntimeError("broken scan")
+        return scan
+
+    monkeypatch.setattr(health_check, "sample_missing_embeddings", sample)
+    result = _run_queue_backlog_health(config, _loaded_launchd_runner([]))
+    issues = {i.code: i.message for i in result.issues if i.code.startswith("missing_embeddings_")}
+    routine = (
+        completeness == "partial"
+        and scanned > 0
+        and reason in {"instruction_limit", "time_limit", "page_limit", "window_end"}
+    )
+    assert ("missing_embeddings_scan_incomplete" in issues) == (completeness != "complete" and not routine)
+    if "missing_embeddings_scan_incomplete" in issues:
+        assert issues["missing_embeddings_scan_incomplete"] == (
+            "The vector check could not finish. The current backlog is not verified by this check."
+        )
+    if missing and completeness != "complete":
+        assert issues["missing_embeddings_backlog"] == (
+            f"At least {missing:,} checked {'chunk is' if missing == 1 else 'chunks are'} waiting for vectors. "
+            "See Vector backlog for the latest full count."
+        )
+    assert result.missing_vectors == (missing if completeness == "complete" else None)
+    failed = reason in {"SQL failure", "Unexpected failure"}
+    saved = json.loads(state_path.read_text())["missing_embedding_scan"]
+    assert saved["scanned"] == (0 if failed else scanned)
+    # BrainBar maps these stable codes to plain text; the exception text stays in the issue message.
+    stable = {"SQL failure": "sql_error", "Unexpected failure": "unexpected"}
+    assert saved["reason"] == stable.get(reason, reason)
+    assert ("missing_embeddings_count_failed" in issues) == failed
+    if failed:
+        assert ("broken query" if reason == "SQL failure" else "broken scan") in issues[
+            "missing_embeddings_count_failed"
+        ]
+    assert all(
+        r not in " ".join(issues.values())
+        for r in ("instruction_limit", "time_limit", "page_limit", "window_end", "scanned 1864 rows")
+    )

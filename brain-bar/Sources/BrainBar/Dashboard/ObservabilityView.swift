@@ -53,6 +53,7 @@ struct BadgeStatePresentation: Equatable, Sendable {
     var activeMessages: [String] = []
     /// Empty only for legacy in-memory callers, whose active issues are critical.
     var activeSeverities: [String] = []
+    var vectorScan: BrainBarVectorScan? = nil
 
     static func failVisible(_ reason: String) -> Self {
         .init(badgeOn: true, reason: reason, activeCodes: [])
@@ -182,7 +183,8 @@ enum BadgeStateReader {
                 reason: visible.map(\.message).joined(separator: "; "),
                 activeCodes: visible.map(\.code),
                 activeMessages: visible.map(\.message),
-                activeSeverities: visible.map(\.severity)
+                activeSeverities: visible.map(\.severity),
+                vectorScan: BrainBarVectorScan.read(beside: url)
             )
         } catch {
             return .failVisible("Badge state unreadable: \(error.localizedDescription)")
@@ -1010,5 +1012,68 @@ struct ObservabilityLiveView: View {
                     result = next
                 }
             }
+    }
+}
+
+struct BrainBarVectorScan: Decodable, Equatable, Sendable {
+    let completeness: String
+    let scanned: Int
+    /// Nil when the scan failed before counting (health_check.py writes `null`).
+    let missing: Int?
+    let reason: String
+
+    var routinePartial: Bool {
+        // Keep budget reasons aligned with routine_partial in src/brainlayer/health_check.py.
+        guard let missing else { return false }
+        return completeness == "partial" && scanned > 0 && missing >= 0 && missing <= scanned
+            && ["instruction_limit", "time_limit", "page_limit", "window_end"].contains(reason)
+    }
+
+    var detail: String {
+        if completeness == "complete", let missing {
+            return "Background vector check complete. \(missing.formatted()) \(missing == 1 ? "chunk is" : "chunks are") waiting for vectors."
+        }
+        guard scanned > 0, let missing else {
+            return "The vector check could not finish. The current backlog is not verified by this check."
+        }
+        return "Background vector check in progress. Checked \(scanned.formatted()) \(scanned == 1 ? "chunk" : "chunks"); \(missing == 0 ? "none" : missing.formatted()) in this sample \(missing == 1 ? "is" : "are") waiting for vectors."
+    }
+
+    static func read(beside badgeURL: URL) -> Self? {
+        struct State: Decodable { let missing_embedding_scan: BrainBarVectorScan }
+        let url = badgeURL.deletingLastPathComponent().appendingPathComponent("health-check-state.json")
+        guard let data = try? Data(contentsOf: url),
+              let scan = try? JSONDecoder().decode(State.self, from: data).missing_embedding_scan,
+              scan.scanned >= 0, scan.missing.map({ $0 >= 0 && $0 <= scan.scanned }) ?? true else { return nil }
+        return scan
+    }
+}
+
+struct BrainBarVectorCheck: Equatable, Sendable {
+    static let unverified = "Vector backlog could not be verified. The background check is still in progress."
+    let count: Int?
+    let checkedAt: Date?
+    let error: String?
+
+    var isAwaitingFirstResult: Bool {
+        count == nil && checkedAt == nil && error == nil
+    }
+
+    func isFresh(now: Date) -> Bool {
+        guard count != nil, let checkedAt, error == nil else { return false }
+        return (0...600).contains(now.timeIntervalSince(checkedAt))
+    }
+
+    func summary(now: Date) -> String {
+        if isAwaitingFirstResult { return "Checking vector backlog…" }
+        guard let count, let checkedAt else { return Self.unverified }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "HH:mm 'UTC'"
+        let time = formatter.string(from: checkedAt)
+        return isFresh(now: now)
+            ? "\(count.formatted()) \(count == 1 ? "chunk" : "chunks") waiting for vectors · checked \(time)"
+            : "Last measured backlog: \(count.formatted()) · checked \(time)"
     }
 }

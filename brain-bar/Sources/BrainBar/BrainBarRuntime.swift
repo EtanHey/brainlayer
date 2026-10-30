@@ -17,7 +17,10 @@ final class BrainBarRuntime: ObservableObject {
     #if BRAINBAR_UI
     /// The app's one status model; it reads the Drive auth state at each publication.
     @Published var jobsModel: BrainBarSettingsViewModel? {
-        didSet { jobsModel?.attachDriveAuth(driveAuth) }
+        didSet {
+            jobsModel?.attachDriveAuth(driveAuth)
+            if let collector { jobsModel?.attachVectorCoverage(collector) }
+        }
     }
     #endif
 
@@ -37,6 +40,9 @@ final class BrainBarRuntime: ObservableObject {
         databasePath: String? = nil
     ) {
         self.collector = collector
+        #if BRAINBAR_UI
+        jobsModel?.attachVectorCoverage(collector)
+        #endif
         self.database = database
         self.databasePath = databasePath
     }

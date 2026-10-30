@@ -44,6 +44,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
     let statusSamplingPeriod: TimeInterval
     private weak var driveAuthSource: BrainBarDriveAuthModel?
     private var driveAuthCancellable: AnyCancellable?
+    private weak var vectorCollector: StatsCollector?
+    private var vectorCancellable: AnyCancellable?
 
     /// The one watcher-health truth, from this view's launchd observation plus the health file.
     var watcherStatus: WatcherHealthStatus {
@@ -428,6 +430,13 @@ final class BrainBarSettingsViewModel: ObservableObject {
         republishStatus()
     }
 
+    func attachVectorCoverage(_ collector: StatsCollector) {
+        vectorCollector = collector
+        vectorCancellable = collector.objectWillChange.receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.republishStatus() }
+        republishStatus()
+    }
+
     /// B5: derive once, with one captured time, and publish; surfaces only read `publishedStatus`.
     func republishStatus() {
         let snapshot = deriveStatus(at: now())
@@ -454,7 +463,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
                                          now: time, formatDate: BrainBarDriveAuthFormat.date)
         }
         return BrainBarStatusSnapshot.derive(BrainBarStatusInputs(
-            now: time, badge: healthBadge, jobAlerts: liveJobAlerts, jobAlertsState: liveJobAlertsState,
+            now: time, badge: healthBadge, vectorCheck: vectorCollector?.vectorCheck, jobAlerts: liveJobAlerts, jobAlertsState: liveJobAlertsState,
             watcher: watcher, watcherHeartbeatAt: file?.updatedAt, watcherFile: file, settings: config.launchdJobs,
             observations: hasCompletedLaunchdSample ? launchdObservations : nil,
             backups: backups, backupsNotice: hasCompletedObservabilityRead ? backupTruth.statusNotice : nil,
