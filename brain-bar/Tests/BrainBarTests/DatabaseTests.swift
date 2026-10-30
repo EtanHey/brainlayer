@@ -61,7 +61,7 @@ final class DatabaseTests: XCTestCase {
     func testWriterWALRecyclePolicySurvivesReopen() throws {
         for _ in 0..<2 {
             XCTAssertEqual(try db.pragma("journal_size_limit"), "256000000")
-            XCTAssertEqual(try db.pragma("wal_autocheckpoint"), "10000")
+            XCTAssertEqual(try db.pragma("wal_autocheckpoint"), "1000")
             db.close()
             db = BrainDatabase(path: tempDBPath)
         }

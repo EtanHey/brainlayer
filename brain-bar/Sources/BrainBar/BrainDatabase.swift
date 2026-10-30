@@ -3089,12 +3089,11 @@ final class BrainDatabase: @unchecked Sendable {
         } else {
             NSLog("[BrainBar] journal_mode already WAL — skipping PRAGMA")
         }
-        // Mirror Python's writer_policy.py defaults. Recycle retained allocation at
+        // Mirror Python's writer_policy.py retained-file limit. Recycle retained allocation at
         // a WAL reset; active writes and pinned readers may still need more bytes.
         try executeOnHandle(handle, sql: "PRAGMA journal_size_limit = 256000000")
-        // 10,000 pages (~41 MB at 4 KiB/page) amortizes PASSIVE checkpoint work
-        // across ingestion batches; it cannot guarantee a reset while readers pin WAL.
-        try executeOnHandle(handle, sql: "PRAGMA wal_autocheckpoint = 10000")
+        // Keep interactive stores on a 25 ms busy budget near ~4 MB checkpoints, avoiding ~41 MB commit spikes.
+        try executeOnHandle(handle, sql: "PRAGMA wal_autocheckpoint = 1000")
         try executeOnHandle(handle, sql: "PRAGMA cache_size = -64000")
         try executeOnHandle(handle, sql: "PRAGMA synchronous = NORMAL")
         try executeOnHandle(handle, sql: "PRAGMA foreign_keys = ON")

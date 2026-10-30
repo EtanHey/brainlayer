@@ -4,8 +4,9 @@ The 256 MB journal_size_limit trims retained allocation when the WAL resets;
 it cannot cap an active transaction or frames still needed by a pinned reader.
 Keep the legacy 10,000-page autocheckpoint default (~41 MB at 4 KiB/page) to
 amortize checkpoint work across ingestion batches. It attempts PASSIVE backfill,
-not guaranteed reclamation: readers can defer a reset. BrainBar mirrors these
-defaults explicitly; Python retains its deployment overrides (0 disables either
+not guaranteed reclamation: readers can defer a reset. BrainBar shares the size
+limit but uses 1,000 pages for interactive commits. Python retains its deployment
+overrides (0 disables either
 limit/autocheckpoint). Readonly connections must never call this helper.
 """
 
