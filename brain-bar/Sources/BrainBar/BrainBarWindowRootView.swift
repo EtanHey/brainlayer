@@ -91,6 +91,7 @@ struct BrainBarWindowRootView: View {
         .background(BrainBarAppBackground())
         .environment(\.colorScheme, .dark)
         .environment(\.brainBarDriveAuth, runtime.driveAuth)
+        .environment(\.brainBarMaintenanceRetry, runtime.maintenanceRetry)
         .background(windowAttachment)
         .onPreferenceChange(BrainBarHeaderHeightKey.self) { panelState.headerHeight = $0 }
         .onAppear {
@@ -210,6 +211,7 @@ private struct BrainBarDashboardContent: View {
     var jobsChecking: Bool = false
     /// S5: the shared status snapshot's verdict; nil only for the standalone fallback dashboard.
     var statusVerdict: BrainBarStatusVerdict? = nil
+    var maintenanceNeedsAttention = false
 
     var body: some View {
         if collector.snapshotFreshnessState.isLoading {
@@ -225,7 +227,7 @@ private struct BrainBarDashboardContent: View {
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: observabilityResult,
             referenceNow: referenceNow, backupReferenceNow: backupReferenceNow, calendar: calendar, locale: locale,
             jobAttentionReasons: jobAttentionReasons, jobsChecking: jobsChecking,
-            statusVerdict: statusVerdict,
+            statusVerdict: statusVerdict, maintenanceNeedsAttention: maintenanceNeedsAttention,
             panelState: panelState ?? standalonePanelState
         )
         view.observabilityCadenceOverride = observabilityCadence
@@ -260,7 +262,8 @@ private struct BrainBarJobsDashboardContent: View {
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: model.dashboardObservabilityResult,
             observabilityCadence: model.observabilityCadence, backupReferenceNow: model.observabilityNow, panelState: panelState,
             jobAttentionReasons: model.dashboardJobAttentionReasons, jobsChecking: model.dashboardJobsChecking,
-            statusVerdict: model.publishedStatus.verdict)
+            statusVerdict: model.publishedStatus.verdict,
+            maintenanceNeedsAttention: model.publishedStatus.issues.contains { $0.component == .maintenance })
     }
 }
 #endif
@@ -981,10 +984,12 @@ private struct BrainBarDashboardView: View {
     var jobAttentionReasons: [String] = []
     var jobsChecking: Bool = false
     var statusVerdict: BrainBarStatusVerdict? = nil
+    var maintenanceNeedsAttention = false
     @ObservedObject var panelState: BrainBarDashboardPanelState
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.brainBarDriveAuth) private var driveAuth
+    @Environment(\.brainBarMaintenanceRetry) private var maintenanceRetry
     @State private var previousAllCommitBuckets: [Int] = []
     @State private var previousWriteBuckets: [Int] = []
     @State private var previousWatcherBuckets: [Int] = []
@@ -1252,6 +1257,9 @@ private struct BrainBarDashboardView: View {
                 isLive: timeframe == .live
             )
         }
+        .task(id: "\(maintenanceNeedsAttention)-\(Int(receiptDisplayNow.timeIntervalSince1970 / 60))") {
+            if maintenanceNeedsAttention { await maintenanceRetry?.refresh() }
+        }
         .task(id: dbPath) {
             guard observabilityResult == nil, let dbPath else { return }
             let url = ObservabilityReader.url(dbPath: dbPath)
@@ -1269,7 +1277,8 @@ private struct BrainBarDashboardView: View {
         case .amber: Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
         case .neutral: Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown)
         }
-        return HStack(alignment: .top, spacing: 9) {
+        return VStack(alignment: .leading, spacing: 8) {
+          HStack(alignment: .top, spacing: 9) {
             if attentionItems.isEmpty {
                 BrainBarStatusDot(color: statusColor, size: 9)
                     .font(.system(size: 13, weight: .semibold))
@@ -1327,6 +1336,13 @@ private struct BrainBarDashboardView: View {
             }
             Spacer(minLength: 8)
 
+          }
+            // Outside the attention disclosure: one failed night is only a notice (no attention
+            // list), and a retry action must not hide behind a collapsed row.
+            if let maintenanceRetry, maintenanceNeedsAttention {
+                BrainBarMaintenanceRetryRow(model: maintenanceRetry)
+                    .padding(.leading, 18)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -3395,7 +3411,8 @@ enum BrainBarDashboardPreview {
         observabilityCadence: ObservabilityCadence? = nil,
         colorScheme: ColorScheme = .dark,
         /// The shared snapshot's verdict, as the app passes it; nil renders the standalone fallback.
-        statusVerdict: BrainBarStatusVerdict? = nil
+        statusVerdict: BrainBarStatusVerdict? = nil,
+        maintenanceNeedsAttention: Bool = false
     ) -> AnyView {
         let dashboard =
             ZStack {
@@ -3412,7 +3429,8 @@ enum BrainBarDashboardPreview {
                     locale: locale,
                     panelState: panelState,
                     jobAttentionReasons: jobAttentionReasons,
-                    statusVerdict: statusVerdict
+                    statusVerdict: statusVerdict,
+                    maintenanceNeedsAttention: maintenanceNeedsAttention
                 )
             }
             .environment(\.colorScheme, colorScheme)

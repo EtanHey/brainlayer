@@ -1,6 +1,17 @@
 import Darwin
-import Foundation
 import Dispatch
+import Foundation
+
+// Single vocabulary for maintenance presentation; matches night-recovery (#1550).
+enum BrainBarMaintenanceStep {
+    static let labels = ["jsonl-backup": "Transcript backup", "backup-daily": "Database backup",
+        "backup-snapshot": "Database snapshot", "index": "Transcript indexing",
+        "maintenance-nightly": "Nightly maintenance", "maintenance-weekly": "Weekly maintenance",
+        "wal-checkpoint": "Database checkpoint", "repair-fts": "Search index repair",
+        "decay": "Memory decay", "p0-counter": "Memory counts"]
+
+    static func label(_ step: String) -> String { labels[step] ?? "Maintenance step" }
+}
 
 enum BrainBarJobOwnership: Equatable, Sendable {
     case legacy, supervisor, unknown(String)
