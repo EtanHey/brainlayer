@@ -1,6 +1,8 @@
 """Tests for shared WAL checkpoint helpers."""
 
 import plistlib
+import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -47,6 +49,37 @@ def test_checkpoint_guard_timeout_env_rejects_unbounded_values(monkeypatch):
     monkeypatch.setenv("BRAINLAYER_CHECKPOINT_GUARD_TIMEOUT_SECONDS", "inf")
 
     assert wal_checkpoint._guard_timeout_seconds() == 10.0
+
+
+@pytest.mark.parametrize("timeout", [-1, float("inf"), float("nan")])
+def test_checkpoint_refuses_unbounded_busy_timeout(tmp_path, timeout):
+    from brainlayer import wal_checkpoint
+
+    with pytest.raises(ValueError, match="busy_timeout_seconds"):
+        wal_checkpoint.checkpoint(str(tmp_path / "db"), busy_timeout_seconds=timeout)
+
+
+def test_checkpoint_short_busy_timeout_with_real_reader(tmp_path, monkeypatch):
+    from brainlayer import wal_checkpoint
+
+    db = tmp_path / "db"
+    monkeypatch.setattr(wal_checkpoint, "checkpoint_lock_path", lambda _db: tmp_path / "checkpoint.lock")
+    writer = sqlite3.connect(db, isolation_level=None)
+    reader = sqlite3.connect(db, isolation_level=None)
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("CREATE TABLE t(x)")
+        reader.execute("BEGIN")
+        reader.execute("SELECT * FROM t").fetchall()
+        writer.execute("INSERT INTO t VALUES (1)")
+        started = time.monotonic()
+        busy, _, _ = wal_checkpoint.checkpoint(str(db), busy_timeout_seconds=0.02)
+        assert busy == 1 and time.monotonic() - started < 1
+        reader.execute("ROLLBACK")
+        assert wal_checkpoint.checkpoint(str(db)) == (0, 0, 0)
+    finally:
+        reader.close()
+        writer.close()
 
 
 def test_retrying_truncate_backs_off_until_checkpoint_is_not_busy(tmp_path, monkeypatch):

@@ -330,16 +330,6 @@
         "target": "subprocess.run"
       }
     },
-    "14e0f762f024d3ba238f5ed5740f4712a97bdaab2d3f667290f7022df76755e6": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/wal_checkpoint.py <module>.checkpoint",
-      "site": {
-        "call_sha256": "be5aeb12a3fe880a0e66fb4b6fba161c6a587d04fbbcce0917b27f937d1ebb41",
-        "kind": "generic_send",
-        "owner": "<module>.checkpoint",
-        "path": "src/brainlayer/wal_checkpoint.py",
-        "target": "sqlite3.connect"
-      }
-    },
     "152c44cc4ee073c1879177830c6b348f8e03be262422ab34ff6256643257ca3c": {
       "non_cloud_purpose": "Read path, size and SHA-256 fields from a saved JSON resumable-upload receipt dictionary to compare the retained local artifact identity before the existing Drive upload. Dictionary metadata lookup only; no network or cloud-model send.",
       "site": {
@@ -1666,6 +1656,16 @@
         "owner": "<module>",
         "path": "scripts/ci/crash_sweep_gate.py",
         "target": "from importlib.machinery import PathFinder"
+      }
+    },
+    "4c2d63c91d45ff3e5cff002fc599c7972d353f8df0cf5d6a0305342f752610ab": {
+      "non_cloud_purpose": "Local sqlite3.connect to the BrainLayer DB file for a WAL checkpoint (PRAGMA wal_checkpoint); no network, model or cloud call. Call text changed when the guard gained a bounded busy timeout for the post-VACUUM reclaim.",
+      "site": {
+        "call_sha256": "93168decdf7cf7596f9f43937dc0690dd49bc25d60e360c0146380bd9bdd6f8f",
+        "kind": "generic_send",
+        "owner": "<module>.checkpoint",
+        "path": "src/brainlayer/wal_checkpoint.py",
+        "target": "sqlite3.connect"
       }
     },
     "4ca3ef7c8fdf6bed5029ce4ca3f70154cc0cfb7247c3fbcc4066e30d9941d5bf": {
