@@ -468,6 +468,10 @@ final class StatsCollectorTests: XCTestCase {
             coverageProvider.waitUntilStarted(timeout: .now() + 1),
             "Exact coverage should start only after the hot snapshot can publish."
         )
+        var input = BrainBarStatusSnapshotTests.healthy()
+        input.vectorCheck = collector.vectorCheck
+        XCTAssertTrue(BrainBarStatusSnapshot.derive(input).issues.isEmpty, "The first query is still running, not failed")
+        XCTAssertEqual(collector.vectorCheck.summary(now: input.now), "Checking vector backlog…")
 
         coverageProvider.release()
         let coverageDeadline = Date().addingTimeInterval(2)
@@ -531,6 +535,9 @@ final class StatsCollectorTests: XCTestCase {
 
         XCTAssertNotNil(collector.lastSignalCoverageError)
         XCTAssertNil(collector.lastFetchError)
+        var input = BrainBarStatusSnapshotTests.healthy()
+        input.vectorCheck = collector.vectorCheck
+        XCTAssertEqual(BrainBarStatusSnapshot.derive(input).issues.filter { $0.text == BrainBarVectorCheck.unverified }.count, 1)
         XCTAssertFalse(collector.stats.signalCoverageIsAvailable)
         XCTAssertEqual(coverageProvider.callCount, 1)
 

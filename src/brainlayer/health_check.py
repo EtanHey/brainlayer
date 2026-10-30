@@ -1587,6 +1587,8 @@ def _run_health_check_locked(
         )
     scan = result.missing_embedding_scan
     state["missing_embedding_scan"] = asdict(scan)
+    # Keep budget reasons aligned with BrainBarVectorScan.routinePartial in
+    # brain-bar/Sources/BrainBar/Dashboard/ObservabilityView.swift.
     routine_partial = (
         scan.completeness == "partial"
         and scan.scanned > 0
@@ -1602,7 +1604,7 @@ def _run_health_check_locked(
         add_issue(
             "missing_embeddings_backlog",
             "warning",
-            f"At least {scan.missing:,} checked chunks are waiting for vectors. "
+            f"At least {scan.missing:,} checked {'chunk is' if scan.missing == 1 else 'chunks are'} waiting for vectors. "
             "See Vector backlog for the latest full count.",
         )
 

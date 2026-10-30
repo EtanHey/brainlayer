@@ -460,7 +460,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                                           severity: .notice, text: message, jobs: [.watch]))
                     } else if code == "missing_embeddings_scan_incomplete" {
                         if inputs.badge?.vectorScan?.routinePartial == true, let check = inputs.vectorCheck {
-                            if check.isFresh(now: now) { continue }
+                            if check.isAwaitingFirstResult || check.isFresh(now: now) { continue }
                             builder.add(.init(id: "health.vector-coverage", component: .health, severity: .notice,
                                               text: BrainBarVectorCheck.unverified))
                             continue
@@ -482,7 +482,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
             }
         }
 
-        if let check = inputs.vectorCheck, !check.isFresh(now: now) {
+        if let check = inputs.vectorCheck, !check.isAwaitingFirstResult, !check.isFresh(now: now) {
             builder.add(.init(id: "health.vector-coverage", component: .health, severity: .notice,
                               text: BrainBarVectorCheck.unverified))
         }

@@ -1022,18 +1022,19 @@ struct BrainBarVectorScan: Decodable, Equatable, Sendable {
     let reason: String
 
     var routinePartial: Bool {
+        // Keep budget reasons aligned with routine_partial in src/brainlayer/health_check.py.
         completeness == "partial" && scanned > 0 && missing >= 0 && missing <= scanned
             && ["instruction_limit", "time_limit", "page_limit", "window_end"].contains(reason)
     }
 
     var detail: String {
         if completeness == "complete" {
-            return "Background vector check complete. \(missing.formatted()) chunks are waiting for vectors."
+            return "Background vector check complete. \(missing.formatted()) \(missing == 1 ? "chunk is" : "chunks are") waiting for vectors."
         }
         guard scanned > 0 else {
             return "The vector check could not finish. The current backlog is not verified by this check."
         }
-        return "Background vector check in progress. Checked \(scanned.formatted()) chunks; \(missing == 0 ? "none" : missing.formatted()) in this sample are waiting for vectors."
+        return "Background vector check in progress. Checked \(scanned.formatted()) \(scanned == 1 ? "chunk" : "chunks"); \(missing == 0 ? "none" : missing.formatted()) in this sample \(missing == 1 ? "is" : "are") waiting for vectors."
     }
 
     static func read(beside badgeURL: URL) -> Self? {
@@ -1052,12 +1053,17 @@ struct BrainBarVectorCheck: Equatable, Sendable {
     let checkedAt: Date?
     let error: String?
 
+    var isAwaitingFirstResult: Bool {
+        count == nil && checkedAt == nil && error == nil
+    }
+
     func isFresh(now: Date) -> Bool {
         guard count != nil, let checkedAt, error == nil else { return false }
         return (0...600).contains(now.timeIntervalSince(checkedAt))
     }
 
     func summary(now: Date) -> String {
+        if isAwaitingFirstResult { return "Checking vector backlog…" }
         guard let count, let checkedAt else { return Self.unverified }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -1065,7 +1071,7 @@ struct BrainBarVectorCheck: Equatable, Sendable {
         formatter.dateFormat = "HH:mm 'UTC'"
         let time = formatter.string(from: checkedAt)
         return isFresh(now: now)
-            ? "\(count.formatted()) chunks waiting for vectors · checked \(time)"
+            ? "\(count.formatted()) \(count == 1 ? "chunk" : "chunks") waiting for vectors · checked \(time)"
             : "Last measured backlog: \(count.formatted()) · checked \(time)"
     }
 }

@@ -314,6 +314,14 @@ final class BrainBarOneStatusTests: XCTestCase {
                     scan: inputs.badge!.vectorScan!, now: inputs.now), width: 560, height: 240, name: "vector-details-fresh")
                 try write(BrainBarVectorDetailPreview.make(check: .init(count: 5, checkedAt: inputs.now.addingTimeInterval(-601), error: "Coverage query failed"),
                     scan: inputs.badge!.vectorScan!, now: inputs.now), width: 560, height: 260, name: "vector-details-stale")
+                for (name, check) in [("starting", BrainBarVectorCheck(count: nil, checkedAt: nil, error: nil)),
+                                      ("unavailable", .init(count: nil, checkedAt: nil, error: "Coverage query failed")),
+                                      ("singular", .init(count: 1, checkedAt: inputs.now, error: nil))] {
+                    for width: CGFloat in [390, 560] {
+                        try write(BrainBarVectorDetailPreview.make(check: check, scan: inputs.badge!.vectorScan!, now: inputs.now),
+                                  width: width, height: 260, name: "vector-details-\(name)-\(Int(width))")
+                    }
+                }
             }
             let icon = BrainBarStatusPopoverController.statusIconImage(stats: collector.stats,
                                                                        badgeOn: try XCTUnwrap(rig.controller.renderedStatusDotForTesting))

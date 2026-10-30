@@ -45,7 +45,7 @@ final class BrainBarStatusSnapshotVectorTests: XCTestCase {
             XCTAssertTrue(texts.contains("The vector check could not finish. The current backlog is not verified by this check."))
             XCTAssertFalse(texts.joined().contains("instruction_limit"))
         }
-        for (at, error) in [(T.now.addingTimeInterval(-601), nil), (nil, nil), (T.now, "query failed")] as [(Date?, String?)] {
+        for (at, error) in [(T.now.addingTimeInterval(-601), nil), (nil, "query failed"), (T.now, "query failed")] as [(Date?, String?)] {
             var input = T.healthy()
             input.vectorCheck = .init(count: at == nil ? nil : 5, checkedAt: at, error: error)
             input.badge = .init(badgeOn: false, reason: "SQL check failed", activeCodes: ["missing_embeddings_count_failed"], activeMessages: ["SQL check failed"])
@@ -58,6 +58,35 @@ final class BrainBarStatusSnapshotVectorTests: XCTestCase {
         XCTAssertFalse(BrainBarVectorCheck(count: 5, checkedAt: T.now.addingTimeInterval(1), error: nil).isFresh(now: T.now))
         XCTAssertEqual(BrainBarVectorScan(completeness: "complete", scanned: 1864, missing: 7, reason: "").detail,
                        "Background vector check complete. 7 chunks are waiting for vectors.")
+    }
+
+    func testFirstCoverageAttemptDoesNotFlashAnUnverifiedNotice() {
+        var input = T.healthy()
+        input.vectorCheck = .init(count: nil, checkedAt: nil, error: nil)
+        for badge in [nil, BadgeStatePresentation(badgeOn: false, reason: old,
+            activeCodes: ["missing_embeddings_scan_incomplete"], activeMessages: [old],
+            vectorScan: .init(completeness: "partial", scanned: 1864, missing: 0, reason: "instruction_limit"))] {
+            input.badge = badge
+            XCTAssertTrue(BrainBarStatusSnapshot.derive(input).issues.isEmpty)
+            XCTAssertEqual(input.vectorCheck?.summary(now: T.now), "Checking vector backlog…")
+        }
+        input.vectorCheck = .init(count: nil, checkedAt: nil, error: "query failed")
+        XCTAssertEqual(BrainBarStatusSnapshot.derive(input).issues.filter { $0.text == BrainBarVectorCheck.unverified }.count, 1)
+        input.vectorCheck = nil
+        XCTAssertTrue(BrainBarStatusSnapshot.derive(input).issues.contains { $0.text.hasPrefix("The vector check could not finish.") })
+    }
+
+    func testVectorCopyUsesSingularAndPluralChunks() {
+        for count in [0, 1, 2] {
+            let noun = count == 1 ? "chunk" : "chunks"
+            let verb = count == 1 ? "is" : "are"
+            XCTAssertEqual(BrainBarVectorCheck(count: count, checkedAt: T.now, error: nil).summary(now: T.now),
+                           "\(count) \(noun) waiting for vectors · checked 14:10 UTC")
+            XCTAssertEqual(BrainBarVectorScan(completeness: "complete", scanned: 2, missing: count, reason: "").detail,
+                           "Background vector check complete. \(count) \(noun) \(verb) waiting for vectors.")
+        }
+        XCTAssertEqual(BrainBarVectorScan(completeness: "partial", scanned: 1, missing: 1, reason: "page_limit").detail,
+                       "Background vector check in progress. Checked 1 chunk; 1 in this sample is waiting for vectors.")
     }
 
     func testStructuredScanReadAndReconciliation() throws {

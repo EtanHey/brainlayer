@@ -2845,8 +2845,9 @@ private struct BrainBarVectorSignalDetail: View {
 @MainActor
 enum BrainBarVectorDetailPreview {
     static func make(check: BrainBarVectorCheck, scan: BrainBarVectorScan, now: Date) -> AnyView {
-        AnyView(BrainBarVectorSignalDetail(signal: .init(name: "Vector", indexedCount: 95, totalCount: 100,
-            backlogCount: check.count ?? 0, coveragePercent: 95, isAvailable: check.isFresh(now: now),
+        let indexedCount = 100 - (check.count ?? 0)
+        return AnyView(BrainBarVectorSignalDetail(signal: .init(name: "Vector", indexedCount: indexedCount, totalCount: 100,
+            backlogCount: check.count ?? 0, coveragePercent: Double(indexedCount), isAvailable: check.isFresh(now: now),
             isRefreshing: false, lastError: check.error, locale: Locale(identifier: "en_US"),
             accentColor: .brainBarSignalVector, showsDetail: true, vectorNetDrainRatePerHour: nil,
             vectorBacklogETAHours: nil, vectorSummary: check.summary(now: now), vectorSample: scan.detail,

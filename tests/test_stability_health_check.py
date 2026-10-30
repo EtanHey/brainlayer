@@ -2727,7 +2727,11 @@ def test_health_helpers_refuse_retired_labels_even_with_stale_configuration(labe
 
 @pytest.mark.parametrize(
     "completeness,scanned,missing,reason",
-    [("partial", 1864, n, r) for n in (0, 7) for r in ("instruction_limit", "time_limit", "page_limit", "window_end")]
+    [
+        ("partial", 1864, n, r)
+        for n in (0, 1, 7)
+        for r in ("instruction_limit", "time_limit", "page_limit", "window_end")
+    ]
     + [
         ("complete", 1864, 7, ""),
         ("partial", 0, 0, "instruction_limit"),
@@ -2760,7 +2764,7 @@ def test_vector_scan_notice_contract(tmp_path, monkeypatch, completeness, scanne
         )
     if missing and completeness != "complete":
         assert issues["missing_embeddings_backlog"] == (
-            f"At least {missing:,} checked chunks are waiting for vectors. "
+            f"At least {missing:,} checked {'chunk is' if missing == 1 else 'chunks are'} waiting for vectors. "
             "See Vector backlog for the latest full count."
         )
     assert result.missing_vectors == (missing if completeness == "complete" else None)
