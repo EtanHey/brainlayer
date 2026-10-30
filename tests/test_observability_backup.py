@@ -1196,3 +1196,30 @@ def test_calendar_lock_loser_does_not_own_manual_upload(tmp_path):
     assert actual["local_snapshot"]["upload_state"] == "in_progress", (
         "The calendar lock loser has no owning relationship to the manual receipt"
     )
+
+
+def test_failed_identity_attempt_stays_separate_from_older_verified_snapshot():
+    verified = {
+        "backup_log_provenance": "real",
+        "attempted_at": "2026-10-28T00:00:00Z",
+        "snapshot": "/synthetic/2026-10-28.db.zst",
+        "drive_file": "2026-10-28.db.zst",
+        "local_verified": True,
+        "uploaded": True,
+        "verified": True,
+        "upload_state": "verified",
+    }
+    reason = "Backup blocked: this BrainBar version cannot confirm which database it has open. Upgrade BrainBar."
+    failed = {
+        "backup_log_provenance": "real",
+        "attempted_at": "2026-10-29T00:00:00Z",
+        "error_type": "BrainBarDatabaseIdentityUnavailableError",
+        "error": reason,
+    }
+    local = observability_backup._local_snapshot([verified, failed])
+    assert local["uploaded"] is True
+    assert local["upload_state"] == "verified"
+    assert local["upload_error"] is None
+    snapshot, error, _ = observability_backup._daily_snapshot([verified, failed])
+    assert snapshot["destination"] == "2026-10-28.db.zst"
+    assert error == f"BrainBarDatabaseIdentityUnavailableError: {reason}"

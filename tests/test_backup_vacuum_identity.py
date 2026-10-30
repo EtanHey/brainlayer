@@ -525,3 +525,39 @@ def test_promotion_returns_the_promoted_inode(tmp_path, dbs, monkeypatch):
     promoted = backup.request_brainbar_vacuum_into(target, socket_path="/x.sock", expected_db_path=configured)
 
     assert (promoted.st_dev, promoted.st_ino) == (os.stat(target).st_dev, os.stat(target).st_ino)
+
+
+@pytest.mark.parametrize(
+    "identity", [{}, {"db_dev": "1", "db_ino": 2}, {"db_dev": True, "db_ino": 2}, {"db_dev": 1, "db_ino": -1}]
+)
+def test_missing_or_invalid_identity_explains_upgrade_without_diagnosing_another_db(
+    tmp_path, dbs, monkeypatch, identity
+):
+    configured, _ = dbs
+
+    def send(_socket, request, **_kwargs):
+        target = Path(request["params"]["arguments"]["target_path"])
+        target.write_bytes(configured.read_bytes())
+        return _ok(identity)
+
+    monkeypatch.setattr(backup, "_send_brainbar_json_request", send)
+    _no_sleep(monkeypatch)
+    out = tmp_path / "out"
+    with pytest.raises(backup.BrainBarDatabaseIdentityError) as caught:
+        backup.request_brainbar_vacuum_into(out / "snap.db", socket_path="/x.sock", expected_db_path=configured)
+    assert str(caught.value) == (
+        "Backup blocked: this BrainBar version cannot confirm which database it has open. Upgrade BrainBar."
+    )
+    assert list(out.iterdir()) == []
+
+
+def test_valid_unequal_identity_explains_different_database(tmp_path, dbs, monkeypatch):
+    configured, foreign = dbs
+    monkeypatch.setattr(backup, "_send_brainbar_json_request", _fake_brainbar(foreign, [], enforce=False))
+    _no_sleep(monkeypatch)
+    out = tmp_path / "out"
+    with pytest.raises(backup.BrainBarDatabaseIdentityError) as caught:
+        backup.request_brainbar_vacuum_into(out / "snap.db", socket_path="/x.sock", expected_db_path=configured)
+    assert str(caught.value).startswith("Backup blocked: BrainBar has a different database open.")
+    assert "identity mismatch" not in str(caught.value)
+    assert list(out.iterdir()) == []
