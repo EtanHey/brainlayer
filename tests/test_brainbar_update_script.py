@@ -68,6 +68,8 @@ class _Harness:
         registered: str | None,
         cask_ref: str = CASK_REF,
         formula: str | None = "0.1.0",
+        listed_formula: str | None = None,
+        formula_info: str | None = None,
         install_exit: int = 0,
         git_exit: int = 0,
     ) -> None:
@@ -75,6 +77,9 @@ class _Harness:
         cask_name = cask_ref.rsplit("/", 1)[-1]
         listed_cmd = "printf '%s\\n' " + repr(f"brainbar {registered}") if registered else "true"
         formula_cmd = "printf '%s\\n' " + repr(f"brainlayer {formula}") if formula else "exit 1"
+        formula_info = formula_info if formula_info is not None else json.dumps({"formulae": [{"linked_keg": formula}]})
+        if listed_formula is not None:
+            formula_cmd = "printf '%s\\n' " + repr(f"brainlayer {listed_formula}")
         _write_exec(
             self.bin_dir / "brew",
             f"""#!/usr/bin/env bash
@@ -87,6 +92,7 @@ case "$*" in
   "list --versions --cask {cask_name}") {listed_cmd}; exit 0 ;;
   "info --cask --json=v2 {cask_ref}") printf '%s\\n' {info!r}; exit 0 ;;
   "list --versions brainlayer") {formula_cmd}; exit 0 ;;
+  "info --json=v2 brainlayer") printf '%s\\n' {formula_info!r}; exit 0 ;;
   "install --cask --force {cask_ref}") exit {install_exit} ;;
 esac
 exit 0
@@ -540,8 +546,45 @@ def test_verify_reports_formula_absence_and_continues_remaining_checks(tmp_path:
     result = h.run("--verify-only", BRAINLAYER_UPDATE_SKIP_VERIFY="0")
 
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "[FAIL] brainlayer formula: <not installed>" in result.stdout
+    assert "[FAIL] brainlayer formula: <linked keg undetermined>" in result.stdout
     assert "[FAIL] socket:" in result.stdout, "verification stopped at the first failed probe"
+
+
+def test_verify_uses_linked_keg_with_unordered_installed_versions(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    h.install_stubs(
+        offered="1.5.79",
+        registered="1.5.79",
+        formula="1.5.79",
+        listed_formula="1.5.69 1.5.67 1.5.79 1.5.70",
+    )
+    _make_app(h.app_path, "1.5.79")
+    _write_exec(h.bin_dir / "pgrep", "#!/usr/bin/env bash\nexit 0\n")
+    with tempfile.TemporaryDirectory(prefix="sock-", dir=REPO_ROOT / ".build.noindex") as directory:
+        socket_path = Path(directory).relative_to(REPO_ROOT) / "brainbar.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as endpoint:
+            endpoint.bind(str(socket_path))
+            result = h.run(
+                "--verify-only",
+                BRAINLAYER_UPDATE_SKIP_VERIFY="0",
+                BRAINLAYER_UPDATE_SOCKET_PATH=str(socket_path),
+            )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "(expected 1.5.79)" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "formula_info",
+    ['{"formulae": [{"linked_keg": null}]}', '{"formulae": [{}]}', "invalid json"],
+)
+def test_verify_fails_closed_when_linked_keg_is_undetermined(tmp_path: Path, formula_info: str) -> None:
+    h = _Harness(tmp_path)
+    h.install_stubs(offered="1.5.79", registered="1.5.79", formula="1.5.79", formula_info=formula_info)
+    _make_app(h.app_path, "1.5.79")
+    result = h.run("--verify-only", BRAINLAYER_UPDATE_SKIP_VERIFY="0")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "[FAIL] brainlayer formula: <linked keg undetermined>" in result.stdout
+    assert "[FAIL] canonical brainlayer CLI:" in result.stdout
 
 
 def test_verify_rejects_a_non_homebrew_brainlayer_shadow_on_path(tmp_path: Path) -> None:
