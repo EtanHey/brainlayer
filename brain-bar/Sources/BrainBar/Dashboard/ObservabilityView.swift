@@ -793,7 +793,7 @@ enum ObservabilityPresentation {
             if errorType.contains("(None, None)") {
                 return "Backup blocked: this BrainBar version cannot confirm which database it has open. Upgrade BrainBar."
             }
-            return "Backup blocked: BrainBar has a different database open. Restart BrainBar with the configured database."
+            return "Backup blocked: BrainBar has a different database open. Check the backup database path and BrainBar's configured database."
         case "db_snapshot_stale":
             let window = thresholdHours.map { "\(Int($0)) hours" } ?? "its freshness window"
             return "The database copy in Google Drive is older than \(window)"

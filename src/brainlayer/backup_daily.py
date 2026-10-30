@@ -1234,7 +1234,9 @@ def _refuse_foreign_db_on_production_socket(db_path: Path, socket_path: Path | s
     configured_db = resolve_db_path()
     if not _same_database_file(db_path, configured_db):
         raise BrainBarDatabaseIdentityError(
-            f"{BRAINBAR_DB_IDENTITY_MISMATCH}: refusing to snapshot {db_path} through the production BrainBar "
+            "Backup blocked: BrainBar has a different database open. "
+            "Check the backup database path and BrainBar's configured database. "
+            f"Details: refusing to snapshot {db_path} through the production BrainBar "
             f"socket {resolved_socket}, which serves the configured database {configured_db}; "
             "pass an isolated socket_path to back up any other database"
         )
@@ -1901,7 +1903,7 @@ def request_brainbar_vacuum_into(
                 echo = echo if isinstance(echo, dict) else {}
                 served_identity = (echo.get("db_dev"), echo.get("db_ino"))
                 expected_identity = _file_identity(resolved_expected_db)
-                identity_valid = all(type(v) is int and v >= 0 for v in served_identity) and served_identity[1] > 0
+                identity_valid = all(type(v) is int for v in served_identity) and served_identity[1] > 0
                 if not identity_valid or served_identity != expected_identity:
                     # A terminal response ends this writer. Unconfirmed and foreign snapshots
                     # both fail closed, but absence of support proves no database difference.
@@ -1914,7 +1916,7 @@ def request_brainbar_vacuum_into(
                         )
                     raise BrainBarDatabaseIdentityError(
                         "Backup blocked: BrainBar has a different database open. "
-                        "Restart BrainBar with the configured database. "
+                        "Check the backup database path and BrainBar's configured database. "
                         f"Details: expected {resolved_expected_db} {expected_identity}, "
                         f"BrainBar reported {echo.get('db_path')!r} {served_identity}; deleted the unconfirmed snapshot."
                     )

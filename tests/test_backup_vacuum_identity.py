@@ -206,9 +206,15 @@ def test_foreign_db_on_production_socket_refuses_before_any_file_or_request(tmp_
     monkeypatch.setattr(backup, "_send_brainbar_json_request", lambda *a, **kw: pytest.fail("socket reached"))
     out = tmp_path / "backups"
 
-    with pytest.raises(backup.BrainBarDatabaseIdentityError, match="production BrainBar socket"):
+    with pytest.raises(backup.BrainBarDatabaseIdentityError) as caught:
         backup.create_sqlite_backup_artifact(configured, out, date_stamp="2026-10-18")
 
+    message = str(caught.value)
+    assert message.startswith("Backup blocked: BrainBar has a different database open.")
+    assert "Check the backup database path and BrainBar's configured database." in message
+    assert "Restart" not in message
+    assert str(configured) in message and str(production) in message
+    assert "isolated socket_path" in message
     assert not out.exists()
 
 
@@ -560,4 +566,56 @@ def test_valid_unequal_identity_explains_different_database(tmp_path, dbs, monke
         backup.request_brainbar_vacuum_into(out / "snap.db", socket_path="/x.sock", expected_db_path=configured)
     assert str(caught.value).startswith("Backup blocked: BrainBar has a different database open.")
     assert "identity mismatch" not in str(caught.value)
+    assert list(out.iterdir()) == []
+
+
+@pytest.mark.parametrize("served_dev", [-42, -43])
+def test_negative_device_id_is_confirmed_and_compared(tmp_path, dbs, monkeypatch, served_dev):
+    configured, _ = dbs
+    inode = os.stat(configured).st_ino
+    monkeypatch.setattr(backup, "_file_identity", lambda _path: (-42, inode))
+    requests = []
+
+    def send(_socket, request, **_kwargs):
+        requests.append(request)
+        target = Path(request["params"]["arguments"]["target_path"])
+        target.write_bytes(configured.read_bytes())
+        return _ok({"db_dev": served_dev, "db_ino": inode})
+
+    monkeypatch.setattr(backup, "_send_brainbar_json_request", send)
+    monkeypatch.setattr(backup, "_sleep", lambda _s: None)
+    out = tmp_path / "out"
+    target = out / "snap.db"
+    if served_dev == -42:
+        backup.request_brainbar_vacuum_into(target, socket_path="/x.sock", expected_db_path=configured)
+        assert target.read_bytes() == configured.read_bytes()
+    else:
+        with pytest.raises(backup.BrainBarDatabaseIdentityError) as caught:
+            backup.request_brainbar_vacuum_into(target, socket_path="/x.sock", expected_db_path=configured)
+        assert "different database open" in str(caught.value)
+        assert "Upgrade BrainBar" not in str(caught.value)
+        assert list(out.iterdir()) == []
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("confirmed", [False, True], ids=["unconfirmed", "different"])
+def test_identity_failures_send_exactly_one_backup_request(tmp_path, dbs, monkeypatch, confirmed):
+    configured, foreign = dbs
+    requests = []
+    monkeypatch.setattr(
+        backup,
+        "_send_brainbar_json_request",
+        _fake_brainbar(foreign, requests, enforce=False, echo=confirmed),
+    )
+    # Permit a retry to reach the fake sender so the request count enforces the contract.
+    monkeypatch.setattr(backup, "_sleep", lambda _s: None)
+    out = tmp_path / "out"
+    with pytest.raises(backup.BrainBarDatabaseIdentityError):
+        backup.request_brainbar_vacuum_into(
+            out / "snap.db",
+            socket_path="/x.sock",
+            expected_db_path=configured,
+            max_attempts=3,
+        )
+    assert len(requests) == 1
     assert list(out.iterdir()) == []
