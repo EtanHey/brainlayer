@@ -403,9 +403,9 @@ def test_busy_status_with_torn_live_line_still_reports_running(retry):
 def test_cli_cleanup_error_after_retry_keeps_the_step_outcome(monkeypatch, tmp_path, outcome, expected):
     # Bugbot r4412136131: guard shutdown failing after the step finished must not rewrite the step result.
     async def finished_then_cleanup_fails(*args, recovery_result, **kwargs):
-        recovery_result.update(
-            status="accepted", reason="ok", steps=["jsonl-backup"], results={"jsonl-backup": outcome}
-        )
+        # Mirror run_calendar: the step outcome is recorded before cleanup runs.
+        status, reason = ("accepted", "ok") if outcome == "ok" else ("failed", "Retry did not finish successfully")
+        recovery_result.update(status=status, reason=reason, steps=["jsonl-backup"], results={"jsonl-backup": outcome})
         raise RuntimeError("calendar guard retains unresolved custody")
 
     monkeypatch.setattr(calendar, "run_calendar", finished_then_cleanup_fails)
@@ -415,8 +415,12 @@ def test_cli_cleanup_error_after_retry_keeps_the_step_outcome(monkeypatch, tmp_p
     reply = json.loads(result.stdout)
     assert reply["status"] == expected
     assert result.exit_code == (0 if expected == "accepted" else 1)
+    # The steps ran either way: their outcome and reason survive a later cleanup error (Bugbot r4420971555).
+    assert reply["steps"] == ["jsonl-backup"]
     if expected == "accepted":
-        assert reply["steps"] == ["jsonl-backup"] and "cleanup" in reply["reason"]
+        assert "cleanup" in reply["reason"]
+    else:
+        assert reply["reason"] == "Retry did not finish successfully"
 
 
 def test_an_older_date_rerun_after_the_newest_night_does_not_become_latest(tmp_path):
