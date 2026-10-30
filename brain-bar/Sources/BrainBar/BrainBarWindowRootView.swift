@@ -1606,7 +1606,7 @@ private struct BrainBarDashboardView: View {
     private func ingestSeriesTitle(_ series: PipelineSeries) -> String {
         switch series {
         case .allCommits: "All chunks · chunk rows"
-        case .agentStores: "Explicit memory stores · chunk rows"
+        case .agentStores: "Saved memories · chunk rows"
         case .jsonlWatcher: "Watcher · unique chunk IDs"
         }
     }
@@ -3089,7 +3089,7 @@ private struct BrainBarTimeframeButton: View {
     }
 }
 
-/// A single-series truth card for chunk rows, agent-origin chunks,
+/// A single-series truth card for chunk rows, saved memories,
 /// watcher-ingested chunks.
 ///
 /// Unlike `BrainBarFlowLaneCard` (kept for legacy `ingress`/diagnostics callers),
@@ -3316,9 +3316,9 @@ struct BrainBarDashboardChartDisclosure: Equatable {
         let windowLabel = DashboardMetricFormatter.windowLabel(minutes: timeframe.windowMinutes)
         let clockLabel: String
         let unitLabel: String
-        visibleHelp = series == .agentStores ? "Excludes transcript indexing; does not measure agent activity." : nil
+        visibleHelp = series == .agentStores ? "Memories saved by agents and hooks. Excludes transcript indexing; does not measure agent activity." : nil
         emptyMessage = series == .agentStores
-            ? "No explicit memory-store rows in the last \(windowLabel.replacingOccurrences(of: "Last ", with: ""))"
+            ? "No saved memories in the last \(DashboardMetricFormatter.shortWindowLabel(minutes: timeframe.windowMinutes))"
             : "0 in window"
 
         switch series {
@@ -3330,12 +3330,12 @@ struct BrainBarDashboardChartDisclosure: Equatable {
             clockLabel = "source time"
             unitLabel = "chunk rows"
         case .agentStores:
-            subtitle = "Source time · explicit memory-store rows"
+            subtitle = "Source time · saved memory rows"
             visibleDetail = "Sources: MCP, manual, digest, precompact-hook, brain_store, pending, fallback, fallback-replay."
             accessibilityIdentifier = "brainbar.dashboard.chart.agent-origin-chunks"
             statusLabel = lane.status.label
             clockLabel = "source time"
-            unitLabel = "explicit memory-store rows"
+            unitLabel = "saved memory rows"
         case .jsonlWatcher:
             subtitle = "Ingest time · unique chunk IDs first seen in window · not additive with source-time charts"
             visibleDetail = "Live state uses a 60s process-and-flow truth window; this chart uses the selected context window."

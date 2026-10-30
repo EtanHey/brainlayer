@@ -61,8 +61,8 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertEqual(chunkRows.name, "Chunk rows")
         XCTAssertEqual(chunkRows.sparklineLabel, "Chunk rows by source time over Last 1h")
         XCTAssertFalse(chunkRows.statusText.localizedCaseInsensitiveContains("commit"))
-        XCTAssertEqual(agentOrigin.name, "Explicit memory stores · chunk rows")
-        XCTAssertEqual(agentOrigin.sparklineLabel, "Explicit memory-store rows by source time over Last 1h")
+        XCTAssertEqual(agentOrigin.name, "Saved memories · chunk rows")
+        XCTAssertEqual(agentOrigin.sparklineLabel, "Saved memory rows by source time over Last 1h")
         XCTAssertFalse(agentOrigin.statusText.localizedCaseInsensitiveContains("MCP"))
         XCTAssertEqual(watcherIngested.name, "Watcher-ingested chunks")
         XCTAssertEqual(watcherIngested.sparklineLabel, "Watcher-ingested chunks by ingest time over Last 1h")
@@ -133,7 +133,7 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         }
         for subtitle in [
             "Source time · chunk rows",
-            "Source time · explicit memory-store rows",
+            "Source time · saved memory rows",
             "Ingest time · unique chunk IDs first seen in window · not additive with source-time charts",
         ] {
             XCTAssertTrue(dashboard.contains(subtitle), "Missing visible chart disclosure: \(subtitle)")
