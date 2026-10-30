@@ -543,7 +543,7 @@ final class DashboardTests: XCTestCase {
 
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: Date(timeIntervalSince1970: 1_764_236_400))
 
-        XCTAssertEqual(summary.ingress.primarySeriesLabel, "Agent-origin chunks")
+        XCTAssertEqual(summary.ingress.primarySeriesLabel, "Saved memory rows")
         XCTAssertEqual(summary.ingress.secondarySeriesLabel, "Watcher-ingested chunks")
         XCTAssertNil(summary.ingress.tertiarySeriesLabel)
         XCTAssertTrue(summary.ingress.tertiaryValues.isEmpty)
@@ -1302,7 +1302,7 @@ final class DashboardTests: XCTestCase {
             "pending stores: 0; durable queue: 0; repository fallback: 1; deduplicated total: 1; oldest 2m."
         )
         XCTAssertEqual(agentStores.status, .idle)
-        XCTAssertEqual(agentStores.statusText, "No agent-origin chunks")
+        XCTAssertEqual(agentStores.statusText, "No saved memory rows")
     }
 
     func testDashboardStatsCountsUnreadableFallbackAsPartialConservativeDebt() throws {

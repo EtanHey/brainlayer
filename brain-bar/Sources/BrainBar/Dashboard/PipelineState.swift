@@ -527,7 +527,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 sparklineLabel: "Ingest sources over \(windowLabel)",
                 latestBucketName: "latest source bucket",
                 accentColor: agentStoresColor,
-                primarySeriesLabel: "Agent-origin chunks",
+                primarySeriesLabel: "Saved memory rows",
                 secondaryValues: stats.recentWatcherWriteBuckets,
                 secondarySeriesLabel: "Watcher-ingested chunks",
                 secondaryAccentColor: jsonlWatcherColor,
@@ -715,7 +715,7 @@ extension DashboardFlowSummary {
                 ? agentStoreStatus(values: agentValues)
                 : .unavailable
             return DashboardFlowLane(
-                name: "Agent-origin chunks",
+                name: "Saved memories · chunk rows",
                 status: agentStatus,
                 statusText: agentStoreStatusText(
                     status: agentStatus,
@@ -739,8 +739,8 @@ extension DashboardFlowSummary {
                     windowLabel: ingress.windowLabel
                 ),
                 values: agentValues,
-                sparklineLabel: "Agent-origin chunks by source time over \(ingress.windowLabel)",
-                latestBucketName: "latest agent-origin source-time bucket",
+                sparklineLabel: "Saved memory rows by source time over \(ingress.windowLabel)",
+                latestBucketName: "latest saved memory source-time bucket",
                 accentColor: BrainBarDesignTokens.Colors.seriesAgent,
                 primarySeriesLabel: nil,
                 secondaryValues: [],
@@ -807,19 +807,19 @@ extension DashboardFlowSummary {
     ) -> String {
         switch status {
         case .live:
-            return "Agent-origin chunks landing now"
+            return "Saved memory rows landing now"
         case .recent:
-            return "Recent agent-origin chunks in \(windowLabel.lowercased())"
+            return "Recent saved memory rows in \(windowLabel.lowercased())"
         case .idle:
-            return totalEvents == 0 ? "No agent-origin chunks" : "Agent-origin chunks idle"
+            return totalEvents == 0 ? "No saved memory rows" : "Saved memory rows idle"
         case .queued:
-            return "Agent-origin chunks queued"
+            return "Saved memory rows queued"
         case .draining:
-            return "Agent-origin chunks draining"
+            return "Saved memory rows draining"
         case .unavailable:
-            return "Agent-origin chunks unavailable"
+            return "Saved memory rows unavailable"
         case .running, .attention, .stopped, .unknown:
-            return "Agent-origin chunks \(status.label)"
+            return "Saved memory rows \(status.label)"
         }
     }
 
@@ -830,15 +830,15 @@ extension DashboardFlowSummary {
         windowLabel: String
     ) -> String {
         if status == .unavailable {
-            return "Agent-origin flow evidence unavailable"
+            return "Saved memory evidence unavailable"
         }
         if totalEvents == 0 {
-            return "No agent-origin chunks in \(windowLabel)"
+            return "No saved memory rows in \(windowLabel)"
         }
         if latestBucketCount > 0 || status == .live {
-            return "\(DashboardMetricFormatter.integerString(latestBucketCount)) agent-origin chunks in latest source-time bucket"
+            return "\(DashboardMetricFormatter.integerString(latestBucketCount)) saved memory rows in latest source-time bucket"
         }
-        return "\(DashboardMetricFormatter.integerString(totalEvents)) agent-origin chunks in \(windowLabel)"
+        return "\(DashboardMetricFormatter.integerString(totalEvents)) saved memory rows in \(windowLabel)"
     }
 
     /// The watcher lane's pill is a function of the one `WatcherHealthStatus` (#1014 R1 B1): flow
