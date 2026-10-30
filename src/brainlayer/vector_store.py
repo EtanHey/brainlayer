@@ -65,6 +65,7 @@ from .kg_repo import KGMixin
 from .search_repo import SearchMixin
 from .session_repo import SessionMixin
 from .tag_normalization import ensure_tag_tombstone_schema
+from .writer_policy import configure_writer_wal_policy
 from .writer_telemetry import start_writer_span
 
 _DEFAULT_BUSY_TIMEOUT_MS = 30_000
@@ -326,23 +327,6 @@ def _read_cache_size_kb() -> int:
     return -abs(_int_env("BRAINLAYER_READ_CACHE_KB", 64_000))
 
 
-def _wal_autocheckpoint_pages() -> int:
-    return max(_int_env("BRAINLAYER_WAL_AUTOCHECKPOINT", 10_000), 0)
-
-
-def _wal_size_limit_bytes() -> int:
-    """Cap the on-disk WAL file size (bytes). 0 disables (PRAGMA -1 = unlimited).
-
-    Without this, journal_size_limit defaults to -1 and the WAL file is never
-    truncated back after a checkpoint — it stays at its high-water mark. Under
-    enrichment load with reader-pinned PASSIVE checkpoints the WAL grew to
-    multi-GB (observed 2.4-3.9GB), which starved brain_store writes ("DB busy").
-    256MB is generous headroom for the largest legitimate batch while bounding
-    the file so checkpoints stay cheap and write windows reopen promptly.
-    """
-    return max(_int_env("BRAINLAYER_WAL_SIZE_LIMIT_BYTES", 256_000_000), 0)
-
-
 def _write_synchronous_mode() -> str:
     """Return the requested safe writer durability mode; NORMAL is the WAL default."""
     mode = os.environ.get("BRAINLAYER_WRITE_SYNCHRONOUS", "NORMAL").strip().upper()
@@ -350,7 +334,8 @@ def _write_synchronous_mode() -> str:
 
 
 def _configure_writer_pragmas(conn: apsw.Connection) -> str:
-    """Use NORMAL only for WAL; retain FULL if a database is not in WAL mode."""
+    """Apply WAL recycle policy; use NORMAL only for WAL, otherwise retain FULL."""
+    configure_writer_wal_policy(conn)
     cursor = conn.cursor()
     journal_row = cursor.execute("PRAGMA journal_mode").fetchone()
     journal_mode = str(journal_row[0] if journal_row else "").lower()
@@ -842,12 +827,6 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         # WAL mode is persistent on the DB file — set it every time
         cursor.execute("PRAGMA journal_mode = WAL")
         _configure_writer_pragmas(self.conn)
-        cursor.execute(f"PRAGMA wal_autocheckpoint = {_wal_autocheckpoint_pages()}")
-        # Bound the WAL file so it truncates back after each checkpoint instead of
-        # staying at its high-water mark (default -1 = unlimited). See
-        # _wal_size_limit_bytes() for the starvation root cause this prevents.
-        _wal_limit = _wal_size_limit_bytes()
-        cursor.execute(f"PRAGMA journal_size_limit = {_wal_limit if _wal_limit > 0 else -1}")
 
         # Create tables
         cursor.execute("""

@@ -44,6 +44,7 @@ from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_se
 from .pipeline.code_intelligence import _pid_is_alive, _pid_start_time
 from .queue_io import get_queue_dir
 from .wal_checkpoint import CheckpointGuardTimeout, checkpoint, get_wal_size
+from .writer_policy import configure_writer_wal_policy
 
 PAUSE_SENTINEL_PATH = DEFAULT_PAUSE_SENTINEL_PATH
 
@@ -1036,6 +1037,7 @@ def _vacuum(db_path: Path, *, deadline: float | None = None) -> tuple[int, int]:
     before = db_path.stat().st_size
     conn = sqlite3.connect(db_path)
     try:
+        configure_writer_wal_policy(conn)
         if cutoff is not None:
             # Polled on the VACUUM's own thread: no timer race, and an expiry before the statement
             # starts still interrupts it (sqlite3_interrupt with no running statement is a no-op).

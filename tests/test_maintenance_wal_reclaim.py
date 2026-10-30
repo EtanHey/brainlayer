@@ -111,8 +111,10 @@ def test_fault_after_vacuum_commit_keeps_original_failure_and_restores(weekly, m
             return getattr(self.conn, name)
 
         def execute(self, sql):
-            self.conn.execute(sql)
-            raise original
+            result = self.conn.execute(sql)
+            if sql.strip().upper() == "VACUUM":
+                raise original
+            return result
 
         def close(self):
             self.conn.close()

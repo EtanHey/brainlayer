@@ -5,6 +5,8 @@ from typing import Any
 
 import apsw
 
+from .writer_policy import configure_writer_wal_policy
+
 ARCHIVE_THRESHOLD = 0.1
 
 
@@ -35,6 +37,7 @@ def run_decay_job(
     current_time = time.time() if now is None else now
     connection = apsw.Connection(str(db_path))
     connection.setbusytimeout(30_000)
+    configure_writer_wal_policy(connection)
     cursor = connection.cursor()
 
     last_rowid = 0
