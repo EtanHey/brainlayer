@@ -1808,6 +1808,16 @@
         "target": "import ctypes"
       }
     },
+    "51fe6840e4aa185f262ca01702f92084fd5f337aaeb4119b704eb6f1989009bc": {
+      "non_cloud_purpose": "Exception type used only to report or bound a local source-map subprocess failure; no transport invocation or cloud/model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.SourceMap.query",
+        "path": "src/brainlayer/source_map.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "52a2414f7fd22684b952f66c8cb461fda11ceb82c05ae7cc6781fd4d6f20b3a4": {
       "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>._close_socket socket.socket.",
       "site": {
@@ -2874,6 +2884,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "7fb23cb91775906bb3bafc3e1681ead20adbf855e67c74f22399e21577aa698d": {
+      "non_cloud_purpose": "Exception type used only to report or bound a local source-map subprocess failure; no transport invocation or cloud/model sender.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.run_graphify",
+        "path": "src/brainlayer/source_map.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "800da84bf99a94e9be0778b25f8ed589d3fef3dfccf9ae8205459ea70d383c95": {
       "non_cloud_purpose": "Stdlib local Unix control and CompletedProcess policy-seam metadata; no activation/network/model sender at import.",
       "site": {
@@ -3212,6 +3232,16 @@
         "path": "brain-bar/Sources/BrainBar/HybridSearchHelperClient.swift"
       }
     },
+    "8c2e41a2a03fe7411406cfcab8ad2ae0de6798b0aeeb4423cde7a6ae8c55874f": {
+      "non_cloud_purpose": "Local source-map adapter subprocess module for bounded Git reads, explicit interpreter metadata checks and pinned structural Graphify execution; no cloud/model endpoint.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/source_map.py",
+        "target": "import subprocess"
+      }
+    },
     "8c493123d5f29663faf8affb818262b594a647580837c2a0a8f27b49646d2910": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/post-commit.py <module>.main",
       "site": {
@@ -3490,6 +3520,16 @@
         "owner": "<module>.find_heavy_ml_processes",
         "path": "src/brainlayer/reembed_backfill.py",
         "target": "subprocess.run"
+      }
+    },
+    "988cbbece0206dcfeac13c8a84e33aa9447a0dfa52b3f7e73ca305e7cdd5e826": {
+      "non_cloud_purpose": "Bounded local git -C metadata/content inventory read with scrubbed Git environment and optional locks disabled; no shell, network or cloud-model request.",
+      "site": {
+        "call_sha256": "122b4dac582d4d448d2247a4c2278421afa9651ad90dcbe3af3ef0f770ad4550",
+        "kind": "child_process",
+        "owner": "<module>.git",
+        "path": "src/brainlayer/source_map.py",
+        "target": "subprocess.check_output"
       }
     },
     "98b5e9582d7fd02cfb5069a3982232ea54d805f1308184025685bb55455018d5": {
@@ -3847,6 +3887,16 @@
         "kind": "callable_reference",
         "owner": "<module>._pid_start_time",
         "path": "src/brainlayer/pipeline/code_intelligence.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
+    "a881831e3be6d3e36c13afa07cf9e94a377f6dc9855532dcb5d672e5fb86357f": {
+      "non_cloud_purpose": "Exception type used only to report or bound a local source-map subprocess failure; no transport invocation or cloud/model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.SourceMap.refresh",
+        "path": "src/brainlayer/source_map.py",
         "target": "subprocess.SubprocessError"
       }
     },
@@ -4208,6 +4258,16 @@
         "owner": "<module>._ollama_generate",
         "path": "src/brainlayer/pipeline/longitudinal_analyzer.py",
         "target": "requests.Session"
+      }
+    },
+    "b35a676e2cb6c95ccf7b53467453baa02f1f6c8e41b349e82df76cb48495b2ff": {
+      "non_cloud_purpose": "Exception type used only to report or bound a local source-map subprocess failure; no transport invocation or cloud/model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.SourceMap.doctor",
+        "path": "src/brainlayer/source_map.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "b3c5692d01029a2af49f22a547fe7cd3b2f6460e9bc1326ccf810ded1e88b434": {
@@ -5286,6 +5346,16 @@
         "target": "subprocess.run"
       }
     },
+    "e1e4659fa136292dbbab8d46575e0853da43ed3207c86f9fd015dc8fdd45e16c": {
+      "non_cloud_purpose": "Explicit pinned Graphify structural-only CLI in an owned copied cmuxlayer workspace with GRAPHIFY_BACKEND=none, private HOME/output and bounded process group; no semantic/provider model operation.",
+      "site": {
+        "call_sha256": "e25b4d44aad6e9f7148efbcdfb877770f7ed477fa959e9fabe5effa63ec7fc1f",
+        "kind": "child_process",
+        "owner": "<module>.run_graphify",
+        "path": "src/brainlayer/source_map.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "e201ff3b666e0d349fd68547f6139243594c3283c2d792d5267d5d81e53b9dd2": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
@@ -6032,6 +6102,16 @@
         "body_sha256": "1894168298f47563bb47c74859867da43642f11bae3b5944d92c15ed6a85ffe7",
         "kind": "non_python_source",
         "path": "brain-bar/Sources/BrainBar/BrainBusClient.swift"
+      }
+    },
+    "fe1f2e45098c073cbb2a4455691874e6551f30102214cb748e9df0be085a048b": {
+      "non_cloud_purpose": "Explicit isolated Python interpreter reads installed Graphify distribution bytes, version, extractor epoch and tree-sitter metadata for an identity check; no Graphify analysis/provider call.",
+      "site": {
+        "call_sha256": "95c6a2eeb31cae90ee9867e6f88780c43b58b1d426fd9e2901abf3937d466887",
+        "kind": "child_process",
+        "owner": "<module>.engine_identity",
+        "path": "src/brainlayer/source_map.py",
+        "target": "subprocess.check_output"
       }
     },
     "fef7ec01932cf5184a47e49d3d8430e0848fa37550a1b1149b5b1e922d5a9f8e": {
