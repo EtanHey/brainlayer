@@ -465,9 +465,17 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                                               text: BrainBarVectorCheck.unverified))
                             continue
                         }
-                        // Older producers expose a work budget in their English message.
-                        builder.add(.init(id: "health.\(code)", component: .health, severity: .notice,
-                            text: "The vector check could not finish. The current backlog is not verified by this check."))
+                        let scanReason = inputs.badge?.vectorScan?.reason
+                        let detail: String
+                        switch scanReason {
+                        case "sql_error": detail = "The database query failed."
+                        case "unexpected": detail = "The background scan stopped unexpectedly."
+                        case let reason? where !reason.isEmpty && !["instruction_limit", "time_limit", "page_limit", "window_end"].contains(reason):
+                            detail = "The background scan stopped: " + reason.replacingOccurrences(of: "_", with: " ") + "."
+                        default: detail = "The background scan could not finish."
+                        }
+                        builder.add(.init(id: "health.vector-coverage", component: .health, severity: .notice,
+                            text: "The vector check could not finish. The current backlog is not verified by this check. " + detail))
                     } else if neutralBadgeCodes.contains(code) || severity == "warning" {
                         builder.add(.init(id: "health.\(code)", component: .health, severity: .notice, text: message))
                     } else if code == "job_scan_failed", message.contains("com.brainlayer.maintenance.plist") {

@@ -42,7 +42,7 @@ final class BrainBarStatusSnapshotVectorTests: XCTestCase {
             input.badge?.vectorScan = scan
             input.vectorCheck = .init(count: 5, checkedAt: T.now, error: nil)
             let texts = BrainBarStatusSnapshot.derive(input).issues.map(\.text)
-            XCTAssertTrue(texts.contains("The vector check could not finish. The current backlog is not verified by this check."))
+            XCTAssertTrue(texts.contains { $0.hasPrefix("The vector check could not finish. The current backlog is not verified by this check.") })
             XCTAssertFalse(texts.joined().contains("instruction_limit"))
         }
         for (at, error) in [(T.now.addingTimeInterval(-601), nil), (nil, "query failed"), (T.now, "query failed")] as [(Date?, String?)] {
@@ -58,6 +58,41 @@ final class BrainBarStatusSnapshotVectorTests: XCTestCase {
         XCTAssertFalse(BrainBarVectorCheck(count: 5, checkedAt: T.now.addingTimeInterval(1), error: nil).isFresh(now: T.now))
         XCTAssertEqual(BrainBarVectorScan(completeness: "complete", scanned: 1864, missing: 7, reason: "").detail,
                        "Background vector check complete. 7 chunks are waiting for vectors.")
+    }
+
+    func testIncompleteScanAndCoverageNoticesShareIdentityWithoutHidingMissingRows() throws {
+        for error in [nil, "query failed"] as [String?] {
+            for reason in ["sql_error", "unexpected"] {
+                for stale in [false, true] {
+                    for scanPresent in [false, true] where stale || scanPresent {
+                        var input = T.healthy()
+                        input.vectorCheck = .init(count: 5, checkedAt: stale ? T.now.addingTimeInterval(-601) : T.now,
+                                                  error: stale ? error : nil)
+                        if scanPresent {
+                            input.badge = .init(badgeOn: false, reason: old,
+                                activeCodes: ["missing_embeddings_scan_incomplete"], activeMessages: [old],
+                                vectorScan: .init(completeness: "unknown", scanned: 10, missing: 0, reason: reason))
+                        }
+                        let issues = BrainBarStatusSnapshot.derive(input).issues
+                        XCTAssertEqual(issues.count, 1)
+                        XCTAssertEqual(issues.first?.id, "health.vector-coverage")
+                        if scanPresent {
+                            XCTAssertTrue(issues[0].text.contains(reason == "sql_error" ? "database query failed" : "stopped unexpectedly"))
+                        }
+                    }
+                }
+                var input = T.healthy()
+                input.vectorCheck = .init(count: 5, checkedAt: T.now.addingTimeInterval(-601), error: error)
+                input.badge = .init(badgeOn: false, reason: old,
+                    activeCodes: ["missing_embeddings_scan_incomplete", "missing_embeddings_backlog"],
+                    activeMessages: [old, "At least 7 checked chunks are waiting for vectors."],
+                    vectorScan: .init(completeness: "partial", scanned: 10, missing: 7, reason: reason))
+                let issues = BrainBarStatusSnapshot.derive(input).issues
+                XCTAssertEqual(issues.count, 2)
+                XCTAssertTrue(issues.contains { $0.id == "health.vector-coverage" })
+                XCTAssertTrue(issues.contains { $0.id == "health.missing_embeddings_backlog" && $0.text.contains("At least 7") })
+            }
+        }
     }
 
     func testFirstCoverageAttemptDoesNotFlashAnUnverifiedNotice() {
