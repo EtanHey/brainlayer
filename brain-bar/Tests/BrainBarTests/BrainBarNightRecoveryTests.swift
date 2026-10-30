@@ -215,6 +215,8 @@ final class BrainBarNightRecoveryTests: XCTestCase {
         interruption.removeValue(forKey: "incomplete_steps")
         let text = try issueText([runner(date), interruption, summary(date)])
         XCTAssertTrue(text.contains("Nightly maintenance was abandoned at 2026-10-29 05:00 GMT+2"), text)
+        // One cause per terminal: the abandonment already explains the night (Bugbot r4411982204).
+        XCTAssertFalse(text.contains("unknown failure"), text)
     }
 
     func testHeaderCannotForgetFailureBeforeAbandonmentWhenOnlyIncompleteStepsRecover() throws {

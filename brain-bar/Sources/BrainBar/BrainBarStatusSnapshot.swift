@@ -364,7 +364,8 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
             }
             if let at = night.runnerErrorAt {
                 outcome += (outcome.isEmpty ? "" : "; ") + "Maintenance runner failed at \(absoluteDate(at, calendar: inputs.calendar))"
-            } else if let at = night.unknownFailureAt {
+            } else if let at = night.unknownFailureAt, !night.abandoned {
+                // An abandonment already names the night's failure; don't report a second cause.
                 outcome += (outcome.isEmpty ? "" : "; ") + "Scheduled maintenance reported an unknown failure at \(absoluteDate(at, calendar: inputs.calendar))"
             }
             let count = night.consecutiveFailures >= 2 ? "; nightly runs have had problems \(night.consecutiveFailures) nights in a row" : ""
