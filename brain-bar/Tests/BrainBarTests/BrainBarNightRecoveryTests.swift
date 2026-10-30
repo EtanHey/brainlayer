@@ -150,7 +150,7 @@ final class BrainBarNightRecoveryTests: XCTestCase {
         let value = try history([runner("2026-10-28"), abandoned("2026-10-28"), summary("2026-10-28"),
             runner(date), abandoned(date), summary(date)])
         let text = try XCTUnwrap(snapshot(value, dot: true).attention.first { $0.id == "maintenance.night" }?.text)
-        XCTAssertTrue(text.contains("Nightly maintenance was cut off (step maintenance-nightly)"), text)
+        XCTAssertTrue(text.contains("Nightly maintenance (step maintenance-nightly) found cut off"), text)
         XCTAssertTrue(text.contains("nightly runs have had problems 2 nights in a row"), text)
     }
 
@@ -163,7 +163,7 @@ final class BrainBarNightRecoveryTests: XCTestCase {
         interruption["incomplete_steps"] = ["backup-daily"]
         interruption["reason"] = "step-orphaned"
         let text = try issueText([runner(date), finished("maintenance-weekly", "ok", 0), interruption, summary(date)])
-        XCTAssertTrue(text.contains("Database backup was cut off (step backup-daily) at 2026-10-29 05:00 GMT+2"), text)
+        XCTAssertTrue(text.contains("Database backup (step backup-daily) found cut off at 2026-10-29 05:00 GMT+2"), text)
         XCTAssertFalse(text.contains("maintenance"), text)
         XCTAssertFalse(text.contains("runner stopped"), text)
     }
@@ -174,7 +174,7 @@ final class BrainBarNightRecoveryTests: XCTestCase {
         var terminal = summary(date)
         terminal["ts"] = timestamp(date, "04:00:00")
         let text = try issueText([runner(date), finished("jsonl-backup"), interruption, terminal])
-        XCTAssertTrue(text.contains("Database backup was cut off (step backup-daily) at 2026-10-29 05:00 GMT+2"), text)
+        XCTAssertTrue(text.contains("Database backup (step backup-daily) found cut off at 2026-10-29 05:00 GMT+2"), text)
         XCTAssertTrue(text.contains("Transcript backup failed (step jsonl-backup) at 2026-10-29 03:20 GMT+2"), text)
         XCTAssertFalse(text.contains("06:00 GMT+2"), text)
     }
@@ -236,6 +236,164 @@ final class BrainBarNightRecoveryTests: XCTestCase {
         XCTAssertFalse(text.contains("was cut off"), text)
         XCTAssertFalse(text.contains("jsonl-backup"), text)
         XCTAssertFalse(text.contains("backup-daily"), text)
+    }
+
+    func testCoincidingCountsCannotHideRunnerFailureBehindDeferredOrInheritedSteps() throws {
+        let attempts = [
+            [runner(date), finished("jsonl-backup"), finished("maintenance-nightly", "deferred", 75), summary(date, failed: 2)],
+            [runner(date), finished("jsonl-backup"), finished("maintenance-nightly"), summary(date, failed: 2),
+             runner(date), finished("jsonl-backup"), summary(date, failed: 2)],
+        ]
+        for attempt in attempts {
+            let value = try history(attempt + [runner(date, kind: "recovery"),
+                finished("jsonl-backup", "ok", 0), finished("maintenance-nightly", "ok", 0),
+                summary(date, failed: 0, kind: "recovery")])
+            XCTAssertNil(value.error)
+            XCTAssertEqual(value.maintenanceNight?.failed, true)
+            XCTAssertEqual(value.maintenanceNight?.failedSteps, [])
+            let text = snapshot(value, dot: false).issues.first { $0.id == "maintenance.night" }?.text ?? ""
+            XCTAssertTrue(text.contains("unknown failure"), text)
+        }
+    }
+
+    func testExplicitRunnerErrorSurvivesFullStepRecoveryEvenWithoutExcessCount() throws {
+        // Producer rows have no date/kind; active-step and cleanup errors both inherit the header.
+        for details: [String: Any] in [["step": "jsonl-backup"], ["phase": "cleanup"], ["step": NSNull()]] {
+            let error = details.merging(["event": "runner-error", "error": "RuntimeError",
+                "ts": timestamp(date, "02:00:00")]) { _, new in new }
+            let value = try history([runner(date), finished("jsonl-backup"), error, summary(date),
+                runner(date, kind: "recovery"), finished("jsonl-backup", "ok", 0),
+                finished("maintenance-nightly", "ok", 0), summary(date, failed: 0, kind: "recovery")])
+            XCTAssertEqual(value.maintenanceNight?.failed, true)
+            XCTAssertEqual(value.maintenanceNight?.failedSteps, [])
+            let text = snapshot(value, dot: false).issues.first { $0.id == "maintenance.night" }?.text ?? ""
+            XCTAssertTrue(text.contains("Maintenance runner failed at 2026-10-29 04:00 GMT+2"), text)
+        }
+    }
+
+    func testPreLaunchRunnerErrorBelongsToItsOwnSummaryNotThePreviousNight() throws {
+        let previous = "2026-10-28"
+        let undated: [String: Any] = ["event": "runner-error", "error": "OSError", "ts": timestamp(date, "01:15:30")]
+        // First row ever: the history stays readable and the failed night is reported.
+        let first = try history([undated, summary(date)])
+        XCTAssertNil(first.error)
+        XCTAssertEqual(first.maintenanceNight?.scheduledDate, date)
+        XCTAssertEqual(first.maintenanceNight?.failed, true)
+        let text = snapshot(first, dot: false).issues.first { $0.id == "maintenance.night" }?.text ?? ""
+        XCTAssertTrue(text.contains("Maintenance runner failed at 2026-10-29 03:15 GMT+2"), text)
+        // After a clean previous night, the error is not blamed on that night.
+        let clean = [runner(previous), finished("jsonl-backup", "ok", 0), finished("maintenance-nightly", "ok", 0),
+                     summary(previous, failed: 0)]
+        for error in [undated, undated.merging(["kind": "nightly", "scheduled_date": date]) { _, new in new }] {
+            let value = try history(clean + [error, summary(date)])
+            XCTAssertNil(value.error)
+            XCTAssertEqual(value.maintenanceNight?.scheduledDate, date)
+            XCTAssertEqual(value.maintenanceNight?.failed, true)
+            let previousOnly = try history(clean + [error])
+            XCTAssertEqual(previousOnly.maintenanceNight?.scheduledDate, previous)
+            XCTAssertEqual(previousOnly.maintenanceNight?.failed, false)
+        }
+    }
+
+    func testRunnerErrorInUnterminatedAttemptCannotBeClearedByRecovery() throws {
+        let value = try history([runner(date), finished("jsonl-backup"), summary(date),
+            runner(date),
+            ["event": "runner-error", "phase": "cleanup", "error": "RuntimeError", "ts": timestamp(date, "02:00:00")],
+            runner(date, kind: "recovery"), finished("jsonl-backup", "ok", 0),
+            summary(date, failed: 0, kind: "recovery")])
+        XCTAssertEqual(value.maintenanceNight?.failed, true)
+        XCTAssertEqual(value.maintenanceNight?.failedSteps, [])
+    }
+
+    func testSignalStoppedNightIsExplainedByCutOffStepsAndClearsAfterRecovery() throws {
+        // A graceful stop writes failed=max(1, 0) with no failed rows; the stopped/skipped steps explain it.
+        for cutOff in [finished("maintenance-nightly", "stopped", -15), finished("maintenance-nightly", "skipped", NSNull())] {
+            let night = [runner(date), finished("jsonl-backup", "ok", 0), cutOff, summary(date, failed: 1)]
+            let stopped = try history(night)
+            XCTAssertEqual(stopped.maintenanceNight?.failed, true)
+            XCTAssertEqual(stopped.maintenanceNight?.failedSteps, ["maintenance-nightly"])
+            let text = snapshot(stopped, dot: false).issues.first { $0.id == "maintenance.night" }?.text ?? ""
+            XCTAssertFalse(text.contains("unknown failure"), text)
+            let recovered = try history(night + [runner(date, kind: "recovery"),
+                finished("maintenance-nightly", "ok", 0), summary(date, failed: 0, kind: "recovery")])
+            XCTAssertEqual(recovered.maintenanceNight?.failed, false)
+        }
+        // A runner failure on top of the stop still exceeds the floor and cannot be recovered away.
+        let value = try history([runner(date), finished("jsonl-backup", "ok", 0),
+            finished("maintenance-nightly", "stopped", -15), summary(date, failed: 2),
+            runner(date, kind: "recovery"), finished("maintenance-nightly", "ok", 0),
+            summary(date, failed: 0, kind: "recovery")])
+        XCTAssertEqual(value.maintenanceNight?.failed, true)
+    }
+
+    func testDeferredStepWithoutExcessSummaryFailureCanRecover() throws {
+        let value = try history([runner(date), finished("jsonl-backup"),
+            finished("maintenance-nightly", "deferred", 75), summary(date),
+            runner(date, kind: "recovery"), finished("jsonl-backup", "ok", 0),
+            finished("maintenance-nightly", "ok", 0), summary(date, failed: 0, kind: "recovery")])
+        XCTAssertEqual(value.maintenanceNight?.failed, false)
+    }
+
+    func testSharedCutOffDetectionTimeAppearsOnceForAllNineSteps() throws {
+        let names = ["index", "backup-snapshot", "maintenance-weekly", "jsonl-backup", "p0-counter",
+                     "wal-checkpoint", "decay", "repair-fts", "backup-daily"]
+        var interruption = abandoned(date)
+        interruption["incomplete_steps"] = names
+        let text = try issueText([runner(date), interruption, summary(date)])
+        XCTAssertTrue(text.contains("found cut off at 2026-10-29 05:00 GMT+2"), text)
+        XCTAssertEqual(text.components(separatedBy: "2026-10-29 05:00 GMT+2").count - 1, 1, text)
+        for name in names { XCTAssertTrue(text.contains("step \(name)"), text) }
+    }
+
+    func testFailedRecoveryOrManualRunCannotRefailCompleteOrRecoveredNight() throws {
+        for kind in ["recovery", "manual"] {
+            let complete = [runner(date), finished("jsonl-backup", "ok", 0), summary(date, failed: 0)]
+            let recovered = [runner(date), finished("jsonl-backup"), summary(date),
+                runner(date, kind: "recovery"), finished("jsonl-backup", "ok", 0), summary(date, failed: 0, kind: "recovery")]
+            for initial in [complete, recovered] {
+                let value = try history(initial + [runner(date, kind: kind), finished("jsonl-backup"),
+                    ["event": "runner-error", "phase": "cleanup", "error": "RuntimeError", "ts": timestamp(date, "08:00:00")],
+                    summary(date, failed: 2, kind: kind)])
+                XCTAssertEqual(value.maintenanceNight?.failed, false, kind)
+                XCTAssertEqual(value.maintenanceNight?.failedSteps, [], kind)
+                XCTAssertEqual(value.maintenanceNight?.consecutiveFailures, 0, kind)
+                XCTAssertFalse(snapshot(value, dot: false).issues.contains { $0.id == "maintenance.night" })
+            }
+        }
+    }
+
+    func testFailedRecoveryCanOnlyResolveExistingProblemsAndCannotAddNewOnes() throws {
+        let value = try history([runner(date), finished("jsonl-backup"), finished("maintenance-nightly"), summary(date, failed: 2),
+            runner(date, kind: "recovery"), finished("jsonl-backup", "ok", 0), finished("p0-counter"),
+            summary(date, kind: "recovery")])
+        XCTAssertEqual(value.maintenanceNight?.failed, true)
+        XCTAssertEqual(value.maintenanceNight?.failedSteps, ["maintenance-nightly"])
+        let cleared = try history([runner(date), finished("jsonl-backup"), summary(date),
+            runner(date, kind: "recovery"), finished("jsonl-backup", "ok", 0), finished("p0-counter"),
+            summary(date, kind: "recovery")])
+        XCTAssertEqual(cleared.maintenanceNight?.failed, false)
+    }
+
+    func testUnterminatedFailedRecoveryCannotLeakProblemsThroughNextHeader() throws {
+        let value = try history([runner(date), finished("jsonl-backup"), summary(date),
+            runner(date, kind: "recovery"), finished("p0-counter"),
+            runner(date, kind: "recovery"), finished("jsonl-backup", "ok", 0),
+            summary(date, failed: 0, kind: "recovery")])
+        XCTAssertEqual(value.maintenanceNight?.failed, false)
+        XCTAssertEqual(value.maintenanceNight?.failedSteps, [])
+    }
+
+    func testDeferralsAreNeutralAndCannotBlockActualFailureRecovery() throws {
+        for (status, code) in [("deferred", 75), ("ok", 75)] {
+            let initial = [runner(date), finished("jsonl-backup"), finished("maintenance-nightly", status, code), summary(date)]
+            let failed = try history(initial)
+            XCTAssertEqual(failed.maintenanceNight?.failedSteps, ["jsonl-backup"])
+            XCTAssertNil(failed.maintenanceNight?.stepProblems["maintenance-nightly"])
+            let recovered = try history(initial + [runner(date, kind: "recovery"), finished("jsonl-backup", "ok", 0),
+                summary(date, failed: 0, kind: "recovery")])
+            XCTAssertEqual(recovered.maintenanceNight?.failed, false)
+            XCTAssertEqual(recovered.maintenanceNight?.failedSteps, [])
+        }
     }
 
     func testMalformedRowsRemainUnreadable() throws {

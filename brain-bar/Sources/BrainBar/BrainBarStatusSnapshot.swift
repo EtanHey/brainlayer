@@ -327,23 +327,45 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                 "maintenance-nightly": "Nightly maintenance", "maintenance-weekly": "Weekly maintenance",
                 "wal-checkpoint": "Database checkpoint", "repair-fts": "Search index repair",
                 "decay": "Memory decay", "p0-counter": "Memory counts"]
-            let outcome: String
+            var outcome: String
+            func stepLabel(_ step: String) -> String { "\(labels[step] ?? step) (step \(step))" }
             func stepText(_ step: String, includeOutcome: Bool) -> String {
                 let problem = night.stepProblems[step]
-                let cutOff = step == "p0-counter" ? " were cut off" : " was cut off"
-                let action = includeOutcome ? (problem?.cutOff == true ? cutOff : " failed") : ""
+                let action = includeOutcome ? " failed" : ""
                 let label = labels[step] ?? (includeOutcome ? "Nightly maintenance" : step)
                 return "\(label)\(action) (step \(step)) at \(absoluteDate(problem?.at ?? night.at, calendar: inputs.calendar))"
             }
             if night.failedSteps.contains(where: { night.stepProblems[$0]?.cutOff == true }) {
-                outcome = night.failedSteps.map { stepText($0, includeOutcome: true) }.joined(separator: "; ")
+                // These are detection times. Group equal displayed timestamps once, while
+                // retaining each failed step's own finish time in mixed outcomes.
+                var cutOffs: [String: [String]] = [:]
+                var times: [String] = []
+                var problems: [String] = []
+                for step in night.failedSteps {
+                    if let problem = night.stepProblems[step], problem.cutOff {
+                        let time = absoluteDate(problem.at, calendar: inputs.calendar)
+                        if cutOffs[time] == nil { times.append(time) }
+                        cutOffs[time, default: []].append(stepLabel(step))
+                    } else {
+                        problems.append(stepText(step, includeOutcome: true))
+                    }
+                }
+                outcome = (times.map { "\(cutOffs[$0, default: []].joined(separator: ", ")) found cut off at \($0)" } + problems)
+                    .joined(separator: "; ")
             } else if night.failedSteps.count == 1, let step = night.failedSteps.first {
                 outcome = stepText(step, includeOutcome: true)
             } else if !night.failedSteps.isEmpty {
                 let steps = night.failedSteps.map { stepText($0, includeOutcome: false) }.joined(separator: ", ")
                 outcome = "Nightly tasks failed: \(steps)"
+            } else if night.runnerErrorAt != nil || (night.unknownFailureAt != nil && !night.abandoned) {
+                outcome = ""
             } else {
                 outcome = "\(night.abandoned ? "Nightly maintenance was abandoned" : "Scheduled maintenance failed") at \(absoluteDate(night.at, calendar: inputs.calendar))"
+            }
+            if let at = night.runnerErrorAt {
+                outcome += (outcome.isEmpty ? "" : "; ") + "Maintenance runner failed at \(absoluteDate(at, calendar: inputs.calendar))"
+            } else if let at = night.unknownFailureAt {
+                outcome += (outcome.isEmpty ? "" : "; ") + "Scheduled maintenance reported an unknown failure at \(absoluteDate(at, calendar: inputs.calendar))"
             }
             let count = night.consecutiveFailures >= 2 ? "; nightly runs have had problems \(night.consecutiveFailures) nights in a row" : ""
             builder.add(.init(id: "maintenance.night", component: .maintenance,

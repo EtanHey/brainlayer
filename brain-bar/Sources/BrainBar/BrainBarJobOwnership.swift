@@ -129,6 +129,12 @@ struct BrainBarCalendarHistory: Sendable {
         var consecutiveFailures = 0
         var failedSteps: [String] = []
         var stepProblems: [String: StepProblem] = [:]
+        var runnerErrorAt: Date? = nil
+        var unknownFailureAt: Date? = nil
+    }
+    private enum AttemptStep {
+        case succeeded, failed, incomplete, deferred
+        var isProblem: Bool { self == .failed || self == .incomplete }
     }
     /// Nightly terminals earn the dot; later same-date step completions can resolve it.
     var maintenanceNight: NightOutcome? = nil
@@ -162,10 +168,15 @@ struct BrainBarCalendarHistory: Sendable {
             var nights: [String: NightOutcome] = [:]
             var unresolvedSteps: [String: Set<String>] = [:]
             var stepProblems: [String: [String: StepProblem]] = [:]
-            var unknownFailures: Set<String> = []
+            var unknownFailures: [String: Date] = [:]
+            var runnerErrors: [String: Date] = [:]
+            var abandonmentSummaries: Set<String> = []
+            var openAttempt: String? = nil
+            var pendingRunnerError: Date? = nil
             // Finished rows inherit their date from the run header. Consume each attempt at
             // its terminal row so pre-failure successes cannot prove a later recovery.
-            var attemptSteps: [String: [String: Bool]] = [:]
+            var attemptSteps: [String: [String: AttemptStep]] = [:]
+            var attemptKinds: [String: String] = [:]
             for (ordinal, line) in String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).enumerated() {
                 guard let row = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
                 else { throw CocoaError(.fileReadCorruptFile) }
@@ -174,9 +185,34 @@ struct BrainBarCalendarHistory: Sendable {
                     starts.removeAll()
                     result.latestScheduledDate = row["scheduled_date"] as? String
                     if let date = result.latestScheduledDate {
-                        unresolvedSteps[date, default: []].formUnion((attemptSteps[date] ?? [:]).filter { !$0.value }.map(\.key))
+                        if attemptKinds[date] == "nightly" {
+                            unresolvedSteps[date, default: []].formUnion((attemptSteps[date] ?? [:]).filter { $0.value.isProblem }.map(\.key))
+                        }
                         attemptSteps[date] = [:]
+                        attemptKinds[date] = row["kind"] as? String ?? (event == "runner" ? "nightly" : "recovery")
+                        abandonmentSummaries.remove(date)
                     }
+                    openAttempt = result.latestScheduledDate
+                    pendingRunnerError = nil
+                }
+                if event == "runner-error" {
+                    guard let ts = row["ts"] as? Double, ts.isFinite else { throw CocoaError(.fileReadCorruptFile) }
+                    let at = Date(timeIntervalSince1970: ts)
+                    // Older producers left the row undated. Inside an open attempt it belongs to that
+                    // attempt; before any header it failed pre-launch, and its own summary names it.
+                    if let date = row["scheduled_date"] as? String ?? openAttempt {
+                        if (row["kind"] as? String ?? attemptKinds[date]) == "nightly", runnerErrors[date] == nil { runnerErrors[date] = at }
+                    } else if pendingRunnerError == nil {
+                        pendingRunnerError = at
+                    }
+                }
+                if event == "summary" {
+                    if let date = row["scheduled_date"] as? String, let at = pendingRunnerError,
+                       row["kind"] as? String == "nightly", runnerErrors[date] == nil {
+                        runnerErrors[date] = at
+                    }
+                    openAttempt = nil
+                    pendingRunnerError = nil
                 }
                 let nightly = row["kind"] as? String == "nightly"
                 if (nightly && (event == "summary" || event == "abandoned")) ||
@@ -189,11 +225,23 @@ struct BrainBarCalendarHistory: Sendable {
                     let failures = row["failed"] as? Int
                     guard abandoned || failures.map({ $0 >= 0 }) == true else { throw CocoaError(.fileReadCorruptFile) }
                     let previous = nights[date]
-                    let steps = attemptSteps.removeValue(forKey: date) ?? [:]
+                    // A late abandonment can describe an older nightly attempt while the
+                    // active header belongs to hourly recovery. Only its nightly evidence adds problems.
+                    let steps = nightly && attemptKinds[date] != "nightly" ? [:] : attemptSteps[date] ?? [:]
+                    // An abandonment is followed by a synthetic failed=1 summary, not a
+                    // new runner failure. Consume finished evidence only once, at either terminal.
+                    let abandonmentSummary = event == "summary" &&
+                        (row["abandoned"] as? Bool == true || abandonmentSummaries.contains(date))
+                    if abandoned { abandonmentSummaries.insert(date) }
+                    attemptSteps.removeValue(forKey: date)
+                    if event == "summary" {
+                        abandonmentSummaries.remove(date)
+                    }
                     var unresolved = unresolvedSteps[date] ?? []
-                    unresolved.subtract(steps.filter { $0.value }.map(\.key))
-                    if abandoned || (failures ?? 0) > 0 {
-                        unresolved.formUnion(steps.filter { !$0.value }.map(\.key))
+                    unresolved.subtract(steps.filter { $0.value == .succeeded }.map(\.key))
+                    // Recovery/manual attempts can only resolve existing nightly problems.
+                    if nightly && (abandoned || (failures ?? 0) > 0) {
+                        unresolved.formUnion(steps.filter { $0.value.isProblem }.map(\.key))
                         if let incomplete = row["incomplete_steps"] {
                             guard let names = incomplete as? [String] else { throw CocoaError(.fileReadCorruptFile) }
                             unresolved.formUnion(names)
@@ -201,14 +249,25 @@ struct BrainBarCalendarHistory: Sendable {
                                 stepProblems[date, default: [:]][step] = StepProblem(at: Date(timeIntervalSince1970: ts), cutOff: true)
                             }
                         }
-                        // Missing step evidence (or a runner-level failure) is not a recovery.
-                        if unresolved.isEmpty || (failures ?? 0) > unresolved.count { unknownFailures.insert(date) }
+                        // Only failed finished rows in THIS attempt explain the summary count.
+                        // Deferred/skipped/stopped steps and inherited problems cannot absorb
+                        // a runner failure. Neither kind of non-step evidence is recoverable
+                        // through later step successes.
+                        let failedHere = steps.values.filter { $0 == .failed }.count
+                        // An incomplete nightly plan reports at least one failure on its own
+                        // (failed=max(1, ...)), so a signal stop is explained by its cut-off steps.
+                        let planIncomplete = steps.values.contains(.incomplete) ||
+                            (row["incomplete_steps"] as? [String])?.isEmpty == false
+                        let expected = max(planIncomplete ? 1 : 0, failedHere)
+                        if unresolved.isEmpty || (!abandoned && !abandonmentSummary && (failures ?? 0) > expected) {
+                            if unknownFailures[date] == nil { unknownFailures[date] = Date(timeIntervalSince1970: ts) }
+                        }
                     }
                     unresolvedSteps[date] = unresolved
                     stepProblems[date] = (stepProblems[date] ?? [:]).filter { unresolved.contains($0.key) }
                     nights[date] = NightOutcome(scheduledDate: date,
                         at: nightly ? Date(timeIntervalSince1970: ts) : (previous?.at ?? Date(timeIntervalSince1970: ts)),
-                        failed: !unresolved.isEmpty || unknownFailures.contains(date),
+                        failed: !unresolved.isEmpty || unknownFailures[date] != nil || runnerErrors[date] != nil,
                         abandoned: abandoned || previous?.abandoned == true)
                 }
                 if row["event"] as? String == "spawn", let step = row["step"] as? String,
@@ -244,8 +303,8 @@ struct BrainBarCalendarHistory: Sendable {
                 let scheduledDate = row["scheduled_date"] as? String ?? result.latestScheduledDate
                 if status == "skipped", row["returncode"] is NSNull {
                     if let date = scheduledDate {
-                        attemptSteps[date, default: [:]][step] = false
-                        if stepProblems[date]?[step] == nil {
+                        attemptSteps[date, default: [:]][step] = .incomplete
+                        if attemptKinds[date] == "nightly", stepProblems[date]?[step] == nil {
                             stepProblems[date, default: [:]][step] = StepProblem(at: Date(timeIntervalSince1970: ts), cutOff: true)
                         }
                     }
@@ -255,10 +314,11 @@ struct BrainBarCalendarHistory: Sendable {
                       ["ok", "failed", "deferred", "stopped"].contains(status)
                 else { throw CocoaError(.fileReadCorruptFile) }
                 if let date = scheduledDate {
-                    attemptSteps[date, default: [:]][step] = status == "ok" && code == 0
+                    let outcome: AttemptStep = status == "deferred" || code == 75 ? .deferred :
+                        status == "ok" && code == 0 ? .succeeded : status == "failed" ? .failed : .incomplete
+                    attemptSteps[date, default: [:]][step] = outcome
                     // A retry that never ran cannot replace the original problem's time.
-                    if (status != "ok" || code != 0),
-                       stepProblems[date]?[step] == nil || (status != "deferred" && code != 75) {
+                    if attemptKinds[date] == "nightly", outcome.isProblem {
                         stepProblems[date, default: [:]][step] = StepProblem(at: Date(timeIntervalSince1970: ts), cutOff: status == "stopped")
                     }
                 }
@@ -276,6 +336,9 @@ struct BrainBarCalendarHistory: Sendable {
             var streak = 0
             for date in nights.keys.sorted() {
                 guard var night = nights[date] else { continue }
+                night.runnerErrorAt = runnerErrors[date]
+                night.unknownFailureAt = unknownFailures[date]
+                night.failed = night.failed || night.runnerErrorAt != nil || night.unknownFailureAt != nil
                 streak = night.failed ? streak + 1 : 0
                 night.consecutiveFailures = streak
                 night.failedSteps = (unresolvedSteps[date] ?? []).sorted()
