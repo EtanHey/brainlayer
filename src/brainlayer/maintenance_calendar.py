@@ -65,16 +65,14 @@ KEYS = {
 # Other candidates remain scheduled until they have an explicit daytime contract.
 DAYTIME_RECOVERY_STEPS = frozenset({"jsonl-backup"})
 RECOVERY_DEFER_REASONS = {
-    "index": "Indexing has a calendar runtime bound before the maintenance window",
-    "backup-snapshot": "The verified snapshot has a calendar runtime bound before 06:00",
-    "backup-daily": "Database backup may create a snapshot; daytime recovery is not admitted",
+    "index": "It can run for a long time, so it waits for tonight's scheduled maintenance",
+    "backup-snapshot": "It must finish before 06:00, so it waits for tonight's scheduled maintenance",
+    "backup-daily": "It makes a database snapshot, so it waits for tonight's scheduled maintenance",
     **dict.fromkeys(
         ("maintenance-nightly", "maintenance-weekly", "repair-fts"),
         "It pauses database writes, so it only runs between 04:00 and 06:00",
     ),
-    **dict.fromkeys(
-        ("p0-counter", "wal-checkpoint", "decay"), "This database step has not been enabled for daytime retry"
-    ),
+    **dict.fromkeys(("p0-counter", "wal-checkpoint", "decay"), "It hasn't been made safe to retry during the day yet"),
 }
 
 
@@ -169,7 +167,11 @@ def _failed_recovery_selection(directory):
         failures=failures,
         steps=[item["step"] for item in failures if item["step"] in DAYTIME_RECOVERY_STEPS],
         deferred=[
-            dict(step=item["step"], reason=RECOVERY_DEFER_REASONS[item["step"]], next_run="will run tonight at 04:00")
+            dict(
+                step=item["step"],
+                reason=RECOVERY_DEFER_REASONS[item["step"]],
+                next_run="will run in tonight's scheduled maintenance",
+            )
             for item in failures
             if item["step"] not in DAYTIME_RECOVERY_STEPS
         ],

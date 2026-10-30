@@ -433,3 +433,11 @@ def test_an_older_date_rerun_after_the_newest_night_does_not_become_latest(tmp_p
     selection = calendar.failed_recovery_selection(tmp_path)
     assert selection["scheduled_date"] == "2026-10-28"
     assert selection["steps"] == ["jsonl-backup"]
+
+
+def test_deferred_steps_never_promise_a_fixed_hour(tmp_path):
+    # CodeRabbit r4420436682: most steps run from the 03:15 calendar start, not at 04:00.
+    write_history(tmp_path, [night(steps=list(calendar.NAMES))])
+    deferred = calendar.failed_recovery_selection(tmp_path)["deferred"]
+    assert deferred and all(item["next_run"] == "will run in tonight's scheduled maintenance" for item in deferred)
+    assert not any("04:00" in item["next_run"] for item in deferred)
