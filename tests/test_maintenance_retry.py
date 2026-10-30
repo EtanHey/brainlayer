@@ -377,7 +377,10 @@ def test_fractional_guard_timeout_emits_whole_second_pause_times():
         dt.datetime.fromisoformat(value)
 
 
-@pytest.mark.parametrize("template", [b"not a plist", plistlib.dumps({"Label": "x"})])
+@pytest.mark.parametrize(
+    "template",
+    [b"not a plist", b'<?xml version="1.0"?><plist><dict><key>x</dict>', plistlib.dumps({"Label": "x"})],
+)
 def test_unreadable_calendar_start_keeps_the_nightly_and_refuses_only_retry(tmp_path, template):
     (tmp_path / "com.brainlayer.maintenance.plist").write_bytes(template)
     plan = calendar.calendar_steps(sys.executable, "/unused", tmp_path, dt.date(2026, 10, 29))

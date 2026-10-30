@@ -17,6 +17,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
+from xml.parsers.expat import ExpatError
 
 from . import maintenance_control
 from .backup_daily import (
@@ -218,7 +219,10 @@ def _configured_calendar_start(lib_dir=None):
     if path is None:
         raise ValueError("Nightly calendar start is unavailable")
     with path.open("rb") as stream:
-        interval = plistlib.load(stream)["StartCalendarInterval"]
+        try:
+            interval = plistlib.load(stream)["StartCalendarInterval"]
+        except ExpatError as exc:  # Malformed XML is not a ValueError; callers handle ValueError.
+            raise ValueError("Nightly calendar start is unreadable") from exc
     return dt.time(interval["Hour"], interval.get("Minute", 0))
 
 
