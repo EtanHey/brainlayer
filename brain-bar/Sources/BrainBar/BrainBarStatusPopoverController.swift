@@ -396,6 +396,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     func setLogPathsForTesting(_ paths: BrainBarBackupSources.Paths) { logPathsOverride = paths }
 #endif
     var statusDotForTesting: Bool { currentVerdict.needsAttention }
+    /// The badge input retained when the real status-item image was rendered; nil before rendering.
+    var renderedStatusDotForTesting: Bool? { lastRenderedIcon?.badgeOn }
+    func renderStatusIconForTesting(stats: BrainDatabase.DashboardStats, state: PipelineState) {
+        renderStatusIcon(stats: stats, state: state)
+    }
     func setBadgeForTesting(_ raw: BadgeStatePresentation, alertsURL: URL) {
         rawBadgePresentation = raw
         badgePresentation = raw

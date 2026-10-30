@@ -157,6 +157,7 @@ final class BrainBarOneStatusTests: XCTestCase {
         let badge = inputs.badge ?? .init(badgeOn: false, reason: "", activeCodes: [])
         model.applyHealthBadge(badge, alerts: inputs.jobAlerts ?? BrainBarJobAlerts(active: [:]))
 
+        let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: inputs.now)
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         runtime.jobsModel = model
         runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: inputs.now.addingTimeInterval(30 * 86_400)))
@@ -166,22 +167,20 @@ final class BrainBarOneStatusTests: XCTestCase {
             statusBar: TestStatusItemHost())
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
 
-        // The Dashboard as `BrainBarJobsDashboardContent` builds it: the model's published verdict.
-        let verdict = model.publishedStatus.verdict
-        let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: inputs.now)
-        let flow = DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: inputs.now)
-        let hero = BrainBarHeroPresentation.derive(flow: flow, stats: collector.stats,
-            backupTruth: .unavailable("fixture"), statusVerdict: verdict)
-        let page = BrainBarOnePagePresentation.derive(snapshotFreshness: .live(ageSeconds: 0), hero: hero,
-            observability: .readable(document), stats: collector.stats, agentActivity: collector.agentActivity,
-            now: inputs.now, statusVerdict: verdict)
+        // Exercise the production renderer without starting collector refreshes or file readers.
+        controller.renderStatusIconForTesting(stats: collector.stats, state: collector.state)
+        _ = try XCTUnwrap(controller.renderedStatusDotForTesting, "fixture icon must actually render")
+        XCTAssertNotNil(controller.statusItemForTesting.button?.image)
+
+        let page = BrainBarDashboardPreview.jobsPresentation(collector: collector, model: model,
+                                                            workspace: workspace, now: inputs.now)
         return Rig(model: model, controller: controller, page: page)
     }
 
     private func read(_ surface: Surface, _ rig: Rig) -> Reading {
         switch surface {
         case .icon:
-            return .init(tone: rig.controller.statusDotForTesting ? .attention : nil, texts: [])
+            return .init(tone: rig.controller.renderedStatusDotForTesting == true ? .attention : nil, texts: [])
         case .menuLine:
             let title = rig.controller.contextMenuForTesting.items.first?.title ?? ""
             let tone: Tone = title.hasPrefix("Needs attention:") ? .attention : title.hasPrefix("Info:") ? .notice
@@ -246,6 +245,8 @@ final class BrainBarOneStatusTests: XCTestCase {
                 }
             }
 
+            // Observe the rendered headline/reason and panel items after both forwarding points.
+            XCTAssertEqual(rig.page.status, verdict.dashboardStatus, name)
             // The panel count is the headline's count, and its items are the verdict's dots.
             XCTAssertEqual(rig.page.attentionItems, verdict.attention, name)
             if !verdict.attention.isEmpty {
@@ -296,7 +297,7 @@ final class BrainBarOneStatusTests: XCTestCase {
             defer { rig.controller.stop() }
             let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: inputs.now)
             let icon = BrainBarStatusPopoverController.statusIconImage(stats: collector.stats,
-                                                                       badgeOn: rig.controller.statusDotForTesting)
+                                                                       badgeOn: try XCTUnwrap(rig.controller.renderedStatusDotForTesting))
             let rows = rig.controller.contextMenuForTesting.items.filter { !$0.isHidden }
             let menu = AnyView(VStack(alignment: .leading, spacing: 0) {
                 Image(nsImage: icon).padding(.horizontal, 14).padding(.vertical, 6)
