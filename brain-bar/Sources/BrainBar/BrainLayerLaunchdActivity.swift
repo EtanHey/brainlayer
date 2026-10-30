@@ -79,7 +79,7 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
 
     var calendarDeferralVerdict: BrainLayerMaintenanceExit.Verdict {
         if let calendarMissedWindowReason { return .failed(calendarMissedWindowReason) }
-        if calendarDisabled { return .deferred("disabled") }
+        if calendarDisabled { return .deferred("it is turned off") }
         return BrainLayerMaintenanceExit.verdict(calendarDeferralRecord, lastRunAt: calendarStartedAt)
     }
 
@@ -236,9 +236,16 @@ enum BrainLayerMaintenanceExit {
         return "search slower than target (\(Int(value.rounded())) ms)"
     }
 
+    /// Each allowlisted gate reason in plain words, without its pids, fds or counters:
     /// `outside quiet window: now=… start_hour=4 duration_minutes=120` → `outside the 04:00–06:00 quiet window`.
     static func humanDeferral(_ reason: String) -> String {
-        guard reason.lowercased().hasPrefix("outside quiet window") else { return reason }
+        let lowered = reason.lowercased()
+        for (prefix, text) in [("recent queue write activity", "new memories were still being written"),
+                               ("queue depth growing", "the write queue was still growing"),
+                               ("unexpected writer holds brainlayer db", "another program was writing to the database"),
+                               ("quiet window leaves no time", "too little of the quiet window was left to run safely")]
+        where lowered.hasPrefix(prefix) { return text }
+        guard lowered.hasPrefix("outside quiet window") else { return reason }
         func value(_ key: String) -> Int? {
             reason.lowercased().split(separator: " ").first { $0.hasPrefix("\(key)=") }.flatMap { Int($0.dropFirst(key.count + 1)) }
         }
