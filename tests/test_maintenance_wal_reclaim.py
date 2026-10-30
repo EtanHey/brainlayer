@@ -126,9 +126,12 @@ def test_fault_after_vacuum_commit_keeps_original_failure_and_restores(weekly, m
     monkeypatch.setattr(maintenance, "_vacuum", fail_after_commit)
     checkpoint = maintenance.checkpoint
 
+    closed_at_truncate = []
+
     def check_cleanup(db, mode, **kwargs):
         if mode == "TRUNCATE":
-            assert closed == [True], "cleanup ran before VACUUM connection closed"
+            # Record, don't assert: the reclaim catches Exception, so an assert here would be swallowed.
+            closed_at_truncate.append(list(closed))
             if cleanup_fails:
                 raise sqlite3.OperationalError("cleanup fault")
         return checkpoint(db, mode, **kwargs)
@@ -137,6 +140,7 @@ def test_fault_after_vacuum_commit_keeps_original_failure_and_restores(weekly, m
     with pytest.raises(RuntimeError) as caught:
         maintenance.run_maintenance("full", config=config)
     assert caught.value is original
+    assert closed_at_truncate == [[True]], "cleanup ran before VACUUM connection closed"
     row = reclaim_row(config)
     assert row["phase"] == "vacuum-failure" and row["deferred"] is cleanup_fails
     assert events[-3:] == list(maintenance.DEFAULT_SERVICES)

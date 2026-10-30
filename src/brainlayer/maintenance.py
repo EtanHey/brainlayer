@@ -910,7 +910,11 @@ def _checkpoint_full(db_path: Path) -> tuple[int, int, int]:
 def _reclaim_vacuum_wal(
     config: MaintenanceConfig, *, deadline: float | None, phase: str
 ) -> tuple[int, int, int] | None:
-    """Try once before releasing custody; preserve the outcome and the restore reserve."""
+    """Try once before releasing custody, preserving the VACUUM outcome.
+
+    The restore reserve is only checked before starting: ``remaining`` bounds SQLite lock waiting,
+    not the checkpoint's WAL-copy I/O once it runs. The replaced FULL checkpoint had the same limit.
+    """
     from .maintenance_control import hold_clock
 
     started = time.monotonic()
