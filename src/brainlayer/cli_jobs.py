@@ -68,6 +68,13 @@ def register(app, jobs_app):
                     reason="Retried successfully; maintenance cleanup afterwards had a problem (see the log)."
                 )
                 code = 0
+            elif results:
+                # The steps ran and did not all succeed: keep their outcome and reason, not an
+                # availability error. A cleanup failure afterwards does not change what ran.
+                if result.get("status") != "failed":
+                    result.update(reason="Retry did not finish successfully; see the step results and logs")
+                result.update(status="failed")
+                code = 1
             else:
                 status = "failed" if result.get("status") in {"accepted", "failed"} else "refused"
                 result.update(status=status, reason=recovery_refusal_reason(exc), steps=[])
