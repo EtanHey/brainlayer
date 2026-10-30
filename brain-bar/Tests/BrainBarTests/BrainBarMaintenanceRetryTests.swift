@@ -69,8 +69,10 @@ final class BrainBarMaintenanceRetryTests: XCTestCase {
         XCTAssertFalse(model.details.contains("jsonl-backup"))
         XCTAssertFalse(model.details.contains("exit 1"))
         XCTAssertTrue(model.explanation.contains("Retry will run: Transcript backup"))
-        XCTAssertTrue(model.details.contains("runs tonight at 04:00"))
-        XCTAssertTrue(model.details.contains("pauses database writes"))
+        // The step's own reason carries its timing; no blanket 04:00 promise (CodeRabbit r4420436682).
+        XCTAssertTrue(model.details.contains("Weekly maintenance — it pauses database writes, so it only runs between 04:00 and 06:00."),
+                      model.details)
+        XCTAssertFalse(model.details.contains("runs tonight at 04:00"), model.details)
         XCTAssertEqual(cli.calls, [["maintenance-calendar", "--recover-failed", "--status"]])
     }
 

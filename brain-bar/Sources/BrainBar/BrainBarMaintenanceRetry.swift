@@ -87,7 +87,9 @@ final class BrainBarMaintenanceRetryModel: ObservableObject {
         (receipt?.failures ?? []).map { failure in
             let label = BrainBarMaintenanceStep.label(failure.step)
             if let deferred = receipt?.deferred.first(where: { $0.step == failure.step }) {
-                return "\(label) — runs tonight at 04:00. \(deferred.reason)."
+                // The reason carries the step's real timing; most steps run from the calendar start.
+                let reason = deferred.reason.prefix(1).lowercased() + deferred.reason.dropFirst()
+                return "\(label) — \(reason)."
             }
             let next = canRetry ? " You can retry it now." : ""
             return "\(label) didn’t finish last night (\(failure.reason)).\(next)"
@@ -211,7 +213,7 @@ struct BrainBarMaintenanceRetryRow: View {
             Button("Retry failed steps") { Task { await model.retry() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Retry only failed or incomplete daytime-safe steps from the latest scheduled night. No services will pause. Window-only steps will run tonight at 04:00.")
+            Text("Retry only failed or incomplete daytime-safe steps from the latest scheduled night. No services will pause. Steps that must wait will run in tonight's scheduled maintenance.")
         }
     }
 }
