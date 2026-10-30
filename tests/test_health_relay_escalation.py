@@ -12,11 +12,19 @@ from tests.test_health_relay import EPOCH, EVENT, _alerts, _blocked, _status
 env, relay = core.env, core.relay
 
 
+# Mechanics tests escalate backup-daily, so pin a class list that includes it; the shipped
+# defaults are covered by test_default_escalation_is_outages_only.
+MECHANICS_ISSUES = ["job-alert:backup-daily", "job-alert:mcp-transport", "badge:brain-search-canary-failed"]
+
+
 @pytest.fixture
 def tiered(env):
     env["escalation"] = env["tmp"] / "escalation.md"
     env["escalation"].write_text("# escalation\n")
-    env["raw"].update(first_run_grace_seconds=1000000, escalation={"inbox": str(env["escalation"])})
+    env["raw"].update(
+        first_run_grace_seconds=1000000,
+        escalation={"inbox": str(env["escalation"]), "issues": MECHANICS_ISSUES},
+    )
     env["config"].write_text(json.dumps(env["raw"]))
     _alerts(env, {"backup-daily": "private reason"})
     return env
@@ -262,8 +270,24 @@ def test_corrupt_ack_cache_blocks_both_destinations(relay, tiered, value):
     assert len(_blocked(tiered)) == 1 and tiered["escalation"].read_text() == "# escalation\n"
 
 
-@pytest.mark.parametrize("key", ["mcp-transport", "brainbar-activation", "backup-snapshot"])
-def test_default_user_visible_job_alerts_escalate(relay, tiered, key):
+@pytest.mark.parametrize(
+    "key,expected",
+    [("mcp-transport", 1), ("brainbar-activation", 1)]
+    + [(key, 0) for key in ("backup-daily", "jsonl-backup", "backup-snapshot")],
+)
+def test_default_escalation_is_outages_only(relay, tiered, key, expected):
+    # orc, 2026-10-30: orc-inbox gets real outages only; backup-protection alerts stay in the collab.
+    del tiered["raw"]["escalation"]["issues"]
+    tiered["config"].write_text(json.dumps(tiered["raw"]))
+    _alerts(tiered, {key: "private reason"})
+    assert relay.run(tiered["config"], clock=lambda: 1000) == 0
+    assert f"] job-alert:{key} on host=" in _blocked(tiered)[0]
+    assert relay.run(tiered["config"], clock=lambda: 10000) == 0
+    assert tiered["escalation"].read_text().count("@orc BLOCKED:") == expected
+
+
+@pytest.mark.parametrize("key", ["mcp-transport"])
+def test_user_visible_job_alerts_escalate(relay, tiered, key):
     _alerts(tiered, {key: "private reason"})
     assert relay.run(tiered["config"], clock=lambda: 1000) == 0
     assert f"] job-alert:{key} on host=" in _blocked(tiered)[0]
