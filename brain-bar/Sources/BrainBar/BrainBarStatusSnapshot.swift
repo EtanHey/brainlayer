@@ -357,15 +357,19 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
             } else if !night.failedSteps.isEmpty {
                 let steps = night.failedSteps.map { stepText($0, includeOutcome: false) }.joined(separator: ", ")
                 outcome = "Nightly tasks failed: \(steps)"
-            } else if night.runnerErrorAt != nil || (night.unknownFailureAt != nil && !night.abandoned) {
-                outcome = ""
             } else {
-                outcome = "\(night.abandoned ? "Nightly maintenance was abandoned" : "Scheduled maintenance failed") at \(absoluteDate(night.at, calendar: inputs.calendar))"
+                // Each real cause once, at its own time: an abandonment that named no step, then
+                // any runner error or independent unknown failure appended below.
+                outcome = night.abandonmentFailureAt.map {
+                    "Nightly maintenance was abandoned at \(absoluteDate($0, calendar: inputs.calendar))"
+                } ?? ""
+                if outcome.isEmpty, night.runnerErrorAt == nil, night.unknownFailureAt == nil {
+                    outcome = "\(night.abandoned ? "Nightly maintenance was abandoned" : "Scheduled maintenance failed") at \(absoluteDate(night.at, calendar: inputs.calendar))"
+                }
             }
             if let at = night.runnerErrorAt {
                 outcome += (outcome.isEmpty ? "" : "; ") + "Maintenance runner failed at \(absoluteDate(at, calendar: inputs.calendar))"
-            } else if let at = night.unknownFailureAt, !night.abandoned {
-                // An abandonment already names the night's failure; don't report a second cause.
+            } else if let at = night.unknownFailureAt {
                 outcome += (outcome.isEmpty ? "" : "; ") + "Scheduled maintenance reported an unknown failure at \(absoluteDate(at, calendar: inputs.calendar))"
             }
             let count = night.consecutiveFailures >= 2 ? "; nightly runs have had problems \(night.consecutiveFailures) nights in a row" : ""

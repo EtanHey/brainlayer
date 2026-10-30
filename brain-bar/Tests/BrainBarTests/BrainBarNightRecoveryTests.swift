@@ -219,6 +219,28 @@ final class BrainBarNightRecoveryTests: XCTestCase {
         XCTAssertFalse(text.contains("unknown failure"), text)
     }
 
+    func testLaterIndependentUnknownFailureIsNotBlamedOnAnEarlierAbandonment() throws {
+        func at(_ row: [String: Any], _ time: String) -> [String: Any] {
+            row.merging(["ts": timestamp(date, time)]) { _, new in new }
+        }
+        let synthetic = at(summary(date), "03:00:00").merging(["abandoned": true]) { _, new in new }
+        let retry = [at(runner(date), "03:30:00"), finished("maintenance-nightly", "ok", 0),
+                     at(summary(date), "04:00:00")]
+        // Review sequence: the abandonment named its step, which a later attempt recovered;
+        // that attempt then reported an unexplained failure of its own.
+        let named = try issueText([runner(date), abandoned(date), synthetic] + retry)
+        XCTAssertTrue(named.contains("Scheduled maintenance reported an unknown failure at 2026-10-29 06:00 GMT+2"), named)
+        XCTAssertFalse(named.contains("abandoned"), named)
+        // An abandonment that named nothing and a later independent failure are two causes,
+        // each shown once at its own time.
+        var interruption = abandoned(date)
+        interruption.removeValue(forKey: "incomplete_steps")
+        let both = try issueText([runner(date), interruption, synthetic] + retry)
+        XCTAssertTrue(both.contains("Nightly maintenance was abandoned at 2026-10-29 05:00 GMT+2"), both)
+        XCTAssertTrue(both.contains("Scheduled maintenance reported an unknown failure at 2026-10-29 06:00 GMT+2"), both)
+        XCTAssertEqual(both.components(separatedBy: "abandoned").count, 2, both)
+    }
+
     func testHeaderCannotForgetFailureBeforeAbandonmentWhenOnlyIncompleteStepsRecover() throws {
         // Review R1's exact sequence: unterminated nightly failure, transcript recovery,
         // abandonment, then a manual run completing only the two unfinished steps.

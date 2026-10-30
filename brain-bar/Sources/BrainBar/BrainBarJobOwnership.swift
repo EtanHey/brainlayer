@@ -131,6 +131,8 @@ struct BrainBarCalendarHistory: Sendable {
         var stepProblems: [String: StepProblem] = [:]
         var runnerErrorAt: Date? = nil
         var unknownFailureAt: Date? = nil
+        /// An abandonment that named no step: its own cause, separate from later unknown failures.
+        var abandonmentFailureAt: Date? = nil
     }
     private enum AttemptStep {
         case succeeded, failed, incomplete, deferred
@@ -169,6 +171,7 @@ struct BrainBarCalendarHistory: Sendable {
             var unresolvedSteps: [String: Set<String>] = [:]
             var stepProblems: [String: [String: StepProblem]] = [:]
             var unknownFailures: [String: Date] = [:]
+            var abandonmentFailures: [String: Date] = [:]
             var runnerErrors: [String: Date] = [:]
             var abandonmentSummaries: Set<String> = []
             var openAttempt: String? = nil
@@ -259,7 +262,10 @@ struct BrainBarCalendarHistory: Sendable {
                         let planIncomplete = steps.values.contains(.incomplete) ||
                             (row["incomplete_steps"] as? [String])?.isEmpty == false
                         let expected = max(planIncomplete ? 1 : 0, failedHere)
-                        if unresolved.isEmpty || (!abandoned && !abandonmentSummary && (failures ?? 0) > expected) {
+                        if unresolved.isEmpty && (abandoned || abandonmentSummary) {
+                            // The abandonment itself is the cause; a later attempt's failure stays separate.
+                            if abandonmentFailures[date] == nil { abandonmentFailures[date] = Date(timeIntervalSince1970: ts) }
+                        } else if unresolved.isEmpty || (!abandoned && !abandonmentSummary && (failures ?? 0) > expected) {
                             if unknownFailures[date] == nil { unknownFailures[date] = Date(timeIntervalSince1970: ts) }
                         }
                     }
@@ -267,7 +273,8 @@ struct BrainBarCalendarHistory: Sendable {
                     stepProblems[date] = (stepProblems[date] ?? [:]).filter { unresolved.contains($0.key) }
                     nights[date] = NightOutcome(scheduledDate: date,
                         at: nightly ? Date(timeIntervalSince1970: ts) : (previous?.at ?? Date(timeIntervalSince1970: ts)),
-                        failed: !unresolved.isEmpty || unknownFailures[date] != nil || runnerErrors[date] != nil,
+                        failed: !unresolved.isEmpty || unknownFailures[date] != nil || abandonmentFailures[date] != nil
+                            || runnerErrors[date] != nil,
                         abandoned: abandoned || previous?.abandoned == true)
                 }
                 if row["event"] as? String == "spawn", let step = row["step"] as? String,
@@ -338,7 +345,9 @@ struct BrainBarCalendarHistory: Sendable {
                 guard var night = nights[date] else { continue }
                 night.runnerErrorAt = runnerErrors[date]
                 night.unknownFailureAt = unknownFailures[date]
+                night.abandonmentFailureAt = abandonmentFailures[date]
                 night.failed = night.failed || night.runnerErrorAt != nil || night.unknownFailureAt != nil
+                    || night.abandonmentFailureAt != nil
                 streak = night.failed ? streak + 1 : 0
                 night.consecutiveFailures = streak
                 night.failedSteps = (unresolvedSteps[date] ?? []).sorted()
