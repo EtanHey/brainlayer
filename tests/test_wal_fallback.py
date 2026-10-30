@@ -5,17 +5,21 @@ import datetime as dt
 import fcntl
 import json
 import os
+import signal
 import sqlite3
+import subprocess
+import threading
 import time
-from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 
-from brainlayer import job_alerts
+from brainlayer import backup_daily, job_alerts, maintenance_control
 from brainlayer import maintenance_calendar as calendar
 from brainlayer import wal_checkpoint as wal
 from brainlayer.service_supervisor import Component, Supervisor
-from brainlayer.supervisor_guard import component_gate
+from brainlayer.supervisor_guard import Custody, component_gate
 from tests.test_maintenance_calendar_completion import runner as calendar_runner  # noqa: F401
 from tests.test_supervisor_jobs import short_path  # noqa: F401
 
@@ -48,20 +52,23 @@ def tick(**kwargs):
 def test_calendar_dies_before_checkpoint_independent_tick_reclaims(database, request, monkeypatch, phase):
     runner = request.getfixturevalue("calendar_runner")
     scheduler_path = request.getfixturevalue("short_path") / "s"
-    db, writer, _, _ = database
+    db, writer, control, _ = database
     executed = []
+    runner.directory = control / "calendar"
+    client = SimpleNamespace(
+        path=control / "control.sock", aliases={}, request=lambda *_a, **_k: {}, _disabled=lambda *_a, **_k: set()
+    )
+    monkeypatch.setattr(maintenance_control, "control_client", lambda: client)
+    monkeypatch.setattr(calendar, "guard_lease", lambda *_a: None)  # Fake guard, real step_hold and lease.
 
-    @asynccontextmanager
-    async def hold(_client, _guard, env, *_args):
-        yield env
-
-    async def execute(step, *_args, **_kwargs):
+    async def execute(step, env, **_kwargs):
         executed.append(step.name)
+        assert tick()["reason"] == "calendar-active"
         if phase == "maintenance-weekly":
+            assert "BRAINLAYER_MAINTENANCE_FD" in env and maintenance_control._lease_held(control)
             writer.execute("VACUUM")  # Committed, before fix 1's cleanup could execute.
         raise RuntimeError("calendar ended before reclamation")
 
-    monkeypatch.setattr(calendar, "step_hold", hold)
     monkeypatch.setattr(calendar, "_execute_step", execute)
     plan = [calendar.Step(name, ("/unused",), 60) for name in (phase, "wal-checkpoint")]
     code = (
@@ -109,7 +116,7 @@ def test_calendar_dies_before_checkpoint_independent_tick_reclaims(database, req
     assert writer.execute("SELECT length(x) FROM t").fetchone() == (65536,)
 
 
-@pytest.mark.parametrize("gate", ["reader", "maintenance", "snapshot", "checkpoint"])
+@pytest.mark.parametrize("gate", ["reader", "maintenance", "snapshot", "checkpoint", "calendar"])
 def test_bounded_defer_then_later_success(database, monkeypatch, gate):
     db, writer, control, staging = database
     reader = sqlite3.connect(db, isolation_level=None)
@@ -120,6 +127,9 @@ def test_bounded_defer_then_later_success(database, monkeypatch, gate):
     lock = None
     if gate in {"maintenance", "checkpoint"}:
         lock = component_gate(control, exclusive=True) if gate == "maintenance" else wal.checkpoint_guard(db)
+        lock.__enter__()
+    if gate == "calendar":
+        lock = Custody(control / "calendar")
         lock.__enter__()
     if gate == "snapshot":
         lock = (staging / ".backup.lock").open("a+b")
@@ -170,3 +180,89 @@ def test_default_high_water_makes_only_one_short_busy_attempt(database, monkeypa
     assert result["log_pages"] == 10 and result["checkpointed_pages"] == 5
     assert len(calls) == 1 and calls[0][0][1] == "TRUNCATE"
     assert calls[0][1] == dict(guard_timeout_seconds=0, busy_timeout_seconds=0.1)
+
+
+@pytest.mark.parametrize("gate", ["maintenance", "snapshot", "calendar"])
+def test_mid_checkpoint_does_not_block_real_gate_admission(database, monkeypatch, gate):
+    _, _, control, staging = database
+    entered, release = threading.Event(), threading.Event()
+    real = wal.checkpoint
+
+    def slow(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(wal, "checkpoint", slow)
+    client = SimpleNamespace(
+        path=control / "control.sock", aliases={}, request=lambda *_a, **_k: {}, _disabled=lambda *_a, **_k: set()
+    )
+    with ThreadPoolExecutor(1) as pool:
+        future = pool.submit(tick)
+        try:
+            assert entered.wait(5)
+            if gate == "maintenance":
+                with maintenance_control.MaintenanceHold(client) as hold:
+                    assert hold.fd is not None
+            elif gate == "snapshot":
+                run = backup_daily._serialized_backup_run(lambda staging_dir: {"ran": True})
+                assert run(staging_dir=staging) == {"ran": True}
+            else:
+                with Custody(control / "calendar"):
+                    pass
+        finally:
+            release.set()
+        assert future.result()["outcome"] == "reclaimed"
+
+
+@pytest.mark.parametrize("death", [signal.SIGTERM, signal.SIGKILL])
+def test_killed_tick_persists_attempt_and_next_tick_escalates(database, death):
+    db, _, _, _ = database
+    code = """
+import pathlib, time
+from brainlayer import wal_checkpoint as w
+def slow(*a, **k):
+    print('checkpoint-entered', flush=True)
+    time.sleep(60)
+w.checkpoint = slow
+w.periodic_checkpoint(high_water_bytes=4096, now=1000)
+"""
+    child = subprocess.Popen([os.sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    try:
+        import select
+
+        assert select.select([child.stdout], [], [], 5)[0]
+        assert child.stdout.readline().strip() == "checkpoint-entered"
+        state = json.loads(db.with_name("wal-fallback.json").read_text())
+        assert state["attempted_at"] and state["high_water_since"] == 1000 and "finished_at" not in state
+    finally:
+        child.send_signal(death)
+        child.wait(timeout=5)
+        child.stdout.close()
+    result = tick(now=2800)
+    assert result["outcome"] == "timeout" and result["high_water_age_seconds"] == 1800
+    assert result["attempts"] == 0 and result["timed_out_at"] == state["attempted_at"]
+    assert json.loads(db.with_name("wal-fallback.json").read_text()) == result
+    reason = job_alerts.active_alerts()["wal-checkpoint-fallback"]
+    assert "30 min" in reason and "timed out" in reason and "{" not in reason
+    assert tick(now=3700)["outcome"] == "reclaimed"
+    assert "wal-checkpoint-fallback" not in job_alerts.active_alerts()
+
+
+@pytest.mark.parametrize("content", ["{", "[]", '{"high_water_since": "bad"}'])
+def test_corrupt_previous_state_is_recorded_and_alerted(database, monkeypatch, content):
+    db, _, _, _ = database
+    db.with_name("wal-fallback.json").write_text(content)
+    monkeypatch.setattr(wal, "checkpoint", lambda *_a, **_k: pytest.fail("untrusted state"))
+    result = tick(now=1000)
+    assert result["outcome"] == "error" and "state" in result["reason"]
+    assert "state" in job_alerts.active_alerts()["wal-checkpoint-fallback"]
+
+
+def test_oversized_wal_defers_with_immediate_plain_language_alert(database, monkeypatch):
+    monkeypatch.setattr(wal, "get_wal_size", lambda _db: 23_000_000_000)
+    monkeypatch.setattr(wal, "checkpoint", lambda *_a, **_k: pytest.fail("supervisor would kill huge TRUNCATE"))
+    result = tick(now=1000)
+    assert result["outcome"] == "deferred" and result["reason"] == "wal-too-large" and result["attempts"] == 0
+    reason = job_alerts.active_alerts()["wal-checkpoint-fallback"]
+    assert "30 s" in reason and "calendar" in reason and "{" not in reason

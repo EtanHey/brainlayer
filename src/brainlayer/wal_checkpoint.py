@@ -11,7 +11,7 @@ import sqlite3
 import subprocess
 import time
 from collections.abc import Callable, Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -181,11 +181,41 @@ def run_wal_checkpoint(
     }
 
 
+def _fallback_defer_reason(directory):
+    from .supervisor_guard import component_gate
+
+    staging = Path(
+        os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR") or Path.home() / ".local/share/brainlayer/backups"
+    ).expanduser()
+    for path, reason in (
+        (directory / "calendar/control.lock", "calendar-active"),
+        (staging / ".backup.lock", "snapshot-active"),
+    ):
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            continue
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return reason
+        finally:
+            os.close(fd)
+    try:
+        with component_gate(directory):
+            pass
+    except BlockingIOError:
+        return "heavy-maintenance-hold"
+    # Probe and release: calendar/backup admission must never fail behind fallback I/O.
+    # A step starting after a clean probe is safe: SQLite serializes checkpoints with
+    # its own reader/writer locks (including backup snapshots); it may return BUSY.
+    return ""
+
+
 def periodic_checkpoint(*, high_water_bytes=256_000_000, busy_timeout_seconds=0.1, now=None):
     """One independent tick. Busy wait is short; SQLite's actual copy I/O is not time-bounded."""
     from . import job_alerts
     from .drive_credentials import _atomic_write
-    from .supervisor_guard import component_gate
 
     started = time.monotonic()
     now = time.time() if now is None else now
@@ -193,11 +223,25 @@ def periodic_checkpoint(*, high_water_bytes=256_000_000, busy_timeout_seconds=0.
     if db is None:
         raise FileNotFoundError("no database found")
     state_path = Path(db).with_name("wal-fallback.json")
+    state_error = ""
     try:
         previous = json.loads(state_path.read_text())
+        if not isinstance(previous, dict):
+            raise ValueError("expected object")
+        since = previous.get("high_water_since")
+        if since is not None and (type(since) not in (int, float) or not math.isfinite(since)):
+            raise ValueError("invalid high-water timestamp")
+        for key in ("attempted_at", "finished_at"):
+            if key in previous:
+                datetime.fromisoformat(previous[key])
     except FileNotFoundError:
         previous = {}
+    except (OSError, ValueError, TypeError) as exc:
+        previous, state_error = {}, f"fallback state unreadable or invalid ({type(exc).__name__})"
     before = get_wal_size(db)
+    since = previous.get("high_water_since")
+    since = (now if since is None else since) if before >= high_water_bytes else None
+    unfinished = previous.get("attempted_at") and not previous.get("finished_at")
     result = dict(
         attempted_at=datetime.fromtimestamp(now, UTC).isoformat(),
         db=db,
@@ -210,24 +254,32 @@ def periodic_checkpoint(*, high_water_bytes=256_000_000, busy_timeout_seconds=0.
         outcome="below-high-water",
         reason="",
         holders=None,
+        high_water_since=since,
     )
-    if before >= high_water_bytes:
+    # Durable intent survives SIGTERM/SIGKILL inside SQLite. The next tick reports a
+    # timeout rather than silently restarting the 1800 s high-water escalation clock.
+    _atomic_write(state_path, result)
+    if state_error:
+        result.update(outcome="error", reason=state_error)
+    elif unfinished:
+        result.update(
+            outcome="timeout",
+            reason="previous checkpoint timed out or was interrupted",
+            timed_out_at=previous["attempted_at"],
+        )
+    elif before >= high_water_bytes:
         result["outcome"] = "deferred"
         try:
-            with ExitStack() as stack:
-                result["reason"] = "heavy-maintenance-hold"
-                stack.enter_context(component_gate(supervisor_socket_path().parent))
-                result["reason"] = "snapshot-active"
-                staging = Path(
-                    os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR") or Path.home() / ".local/share/brainlayer/backups"
-                ).expanduser()
-                staging.mkdir(parents=True, exist_ok=True)
-                fd = os.open(staging / ".backup.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-                stack.callback(os.close, fd)
-                # Keep both leases through SQLite: no hold/snapshot can enter between check and use.
-                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            result["reason"] = _fallback_defer_reason(supervisor_socket_path().parent)
+            # Conservative admission cap, not a throughput promise: huge backfills can
+            # lose all progress when the 30 s supervisor budget expires. Leave those to
+            # the calendar's longer checkpoint budget and surface them immediately.
+            if not result["reason"] and before > 1_000_000_000:
+                result["reason"] = "wal-too-large"
+            if not result["reason"]:
                 result["reason"] = "checkpoint-guard-busy"
                 result["attempts"] = 1
+                _atomic_write(state_path, result)
                 busy, pages, copied = checkpoint(
                     db, "TRUNCATE", guard_timeout_seconds=0, busy_timeout_seconds=busy_timeout_seconds
                 )
@@ -243,7 +295,6 @@ def periodic_checkpoint(*, high_water_bytes=256_000_000, busy_timeout_seconds=0.
         except (OSError, sqlite3.Error) as exc:
             result.update(outcome="error", reason=f"{type(exc).__name__}: {exc}")
     after = get_wal_size(db)
-    since = previous.get("high_water_since")
     since = (now if since is None else since) if after >= high_water_bytes else None
     age = max(0, now - since) if since is not None else 0
     result.update(wal_after_bytes=after, high_water_since=since, high_water_age_seconds=age)
@@ -265,11 +316,20 @@ def periodic_checkpoint(*, high_water_bytes=256_000_000, busy_timeout_seconds=0.
             result["holders"] = dict(unmeasurable=type(exc).__name__)
     result.update(finished_at=datetime.now(UTC).isoformat(), duration_seconds=time.monotonic() - started)
     _atomic_write(state_path, result)
-    reason = (
-        f"BrainLayer WAL fallback: {json.dumps(result, sort_keys=True)}"
-        if age >= 1800 or result["outcome"] == "error"
-        else None
-    )
+    reason = None
+    if age >= 1800 or result["outcome"] in {"error", "timeout"} or result["reason"] == "wal-too-large":
+        detail = {
+            "sqlite-busy": "checkpoint blocked by active readers or writers",
+            "calendar-active": "maintenance calendar is active",
+            "snapshot-active": "backup is active",
+            "heavy-maintenance-hold": "maintenance hold is active",
+            "checkpoint-guard-busy": "another checkpoint is active",
+            "wal-too-large": "too large for a safe attempt within 30 s; needs the calendar checkpoint",
+        }.get(result["reason"], result["reason"] or "still above high water")
+        reason = (
+            f"BrainLayer WAL is {format_size(after)}; high water for {age / 60:.0f} min. "
+            f"{detail}. See wal-fallback.json for progress and diagnostics."
+        )
     job_alerts.report("wal-checkpoint-fallback", reason, path=job_alerts.alert_path(db_path=Path(db)))
     return result
 
