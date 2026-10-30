@@ -788,6 +788,14 @@ enum ObservabilityPresentation {
     static func dbSnapshotSentence(_ errorType: String, thresholdHours: Double?) -> String? {
         let code = errorType.split(separator: ":", maxSplits: 1).first.map(String.init) ?? errorType
         switch code {
+        case "BrainBarDatabaseIdentityUnavailableError":
+            return "Backup blocked: this BrainBar version cannot confirm which database it has open. Upgrade BrainBar."
+        case "BrainBarDatabaseIdentityError":
+            // Older receipts mislabeled absent fields as a difference. Preserve that distinction.
+            if errorType.contains("(None, None)") {
+                return "Backup blocked: this BrainBar version cannot confirm which database it has open. Upgrade BrainBar."
+            }
+            return "Backup blocked: BrainBar has a different database open. Check the backup database path and BrainBar's configured database."
         case "db_snapshot_stale":
             let window = thresholdHours.map { "\(Int($0)) hours" } ?? "its freshness window"
             return "The database copy in Google Drive is older than \(window)"

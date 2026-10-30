@@ -131,6 +131,8 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
                 error_type = str(pending.get("error_type") or pending.get("error_code") or "backup_error")
                 error_reason = pending.get("error") or pending.get("verification_error")
                 break
+    if error_type in {"BrainBarDatabaseIdentityError", "BrainBarDatabaseIdentityUnavailableError"} and error_reason:
+        error_type = f"{error_type}: {error_reason}"
     if "google-drive-mcp/tokens.json" in str(latest.get("error", "")):
         error_type = "drive_credentials_missing"
     elif all_errors and error_type is None:
@@ -248,10 +250,6 @@ def _local_snapshot(records: list[dict[str, Any]], *, calendar: Sequence[dict[st
     )
     if local is None:
         return None
-    failed = next(
-        (r for r in reversed(list(latest.values())) if r.get("upload_state") in {"failed", "abandoned"}), None
-    )
-    error = failed or (real[-1] if real and (real[-1].get("error") or real[-1].get("verification_error")) else {})
     terminal_error = (
         _terminal_upload_error(local, calendar)
         if local.get("upload_state") in {"pending", "in_progress"} and not local.get("uploaded")
@@ -264,7 +262,7 @@ def _local_snapshot(records: list[dict[str, Any]], *, calendar: Sequence[dict[st
         "local_verified": local.get("local_verified") is True,
         "uploaded": local.get("uploaded") is True,
         "upload_state": "failed" if terminal_error else local.get("upload_state", "pending"),
-        "upload_error": terminal_error or error.get("error") or error.get("verification_error"),
+        "upload_error": terminal_error or local.get("error") or local.get("verification_error"),
         "local_integrity": local.get("local_integrity"),
         "local_integrity_pragma": local.get("local_integrity_pragma"),
     }

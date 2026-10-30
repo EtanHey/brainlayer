@@ -406,6 +406,10 @@ class BrainBarDatabaseIdentityError(RuntimeError):
     """BrainBar serves a different database than the one this backup was aimed at."""
 
 
+class BrainBarDatabaseIdentityUnavailableError(BrainBarDatabaseIdentityError):
+    """BrainBar did not confirm its open database; no difference has been established."""
+
+
 # MCPRouter.handleBrainBackupVacuumInto refuses with this before any VACUUM INTO when the
 # request's expected_db_path does not identify the database BrainBar serves.
 BRAINBAR_DB_IDENTITY_MISMATCH = "BrainBar database identity mismatch"
@@ -1230,7 +1234,9 @@ def _refuse_foreign_db_on_production_socket(db_path: Path, socket_path: Path | s
     configured_db = resolve_db_path()
     if not _same_database_file(db_path, configured_db):
         raise BrainBarDatabaseIdentityError(
-            f"{BRAINBAR_DB_IDENTITY_MISMATCH}: refusing to snapshot {db_path} through the production BrainBar "
+            "Backup blocked: BrainBar has a different database open. "
+            "Check the backup database path and BrainBar's configured database. "
+            f"Details: refusing to snapshot {db_path} through the production BrainBar "
             f"socket {resolved_socket}, which serves the configured database {configured_db}; "
             "pass an isolated socket_path to back up any other database"
         )
@@ -1897,15 +1903,22 @@ def request_brainbar_vacuum_into(
                 echo = echo if isinstance(echo, dict) else {}
                 served_identity = (echo.get("db_dev"), echo.get("db_ino"))
                 expected_identity = _file_identity(resolved_expected_db)
-                if not all(isinstance(v, int) for v in served_identity) or served_identity != expected_identity:
-                    # Terminal response: BrainBar has stopped writing this attempt. Whatever it
-                    # vacuumed is not the configured database, so it must not survive here.
+                identity_valid = all(type(v) is int for v in served_identity) and served_identity[1] > 0
+                if not identity_valid or served_identity != expected_identity:
+                    # A terminal response ends this writer. Unconfirmed and foreign snapshots
+                    # both fail closed, but absence of support proves no database difference.
                     attempt_path.unlink(missing_ok=True)
                     _backup_attempt_completion_marker(attempt_path).unlink(missing_ok=True)
+                    if not identity_valid:
+                        raise BrainBarDatabaseIdentityUnavailableError(
+                            "Backup blocked: this BrainBar version cannot confirm which database it has open. "
+                            "Upgrade BrainBar."
+                        )
                     raise BrainBarDatabaseIdentityError(
-                        f"{BRAINBAR_DB_IDENTITY_MISMATCH}: expected {resolved_expected_db} {expected_identity}, "
-                        f"BrainBar reported {echo.get('db_path')!r} {served_identity}; deleted the unconfirmed "
-                        "snapshot. A BrainBar without open-database identity support must be upgraded."
+                        "Backup blocked: BrainBar has a different database open. "
+                        "Check the backup database path and BrainBar's configured database. "
+                        f"Details: expected {resolved_expected_db} {expected_identity}, "
+                        f"BrainBar reported {echo.get('db_path')!r} {served_identity}; deleted the unconfirmed snapshot."
                     )
             if not attempt_path.exists():
                 raise RuntimeError(f"BrainBar backup did not create snapshot: {attempt_path}")

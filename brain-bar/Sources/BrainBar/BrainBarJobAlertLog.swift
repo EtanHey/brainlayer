@@ -41,7 +41,9 @@ private struct BrainBarBackupFailureLogRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(target.job.title).font(.system(size: 12, weight: .semibold))
+                Text(target.reason).font(.system(size: 12, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
                 Spacer()
                 BrainBarBackupLogButton(job: target.job) {
                     note = .init(reason: target.reason, message: model.showBackupLog(target).message)

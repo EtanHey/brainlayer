@@ -89,6 +89,23 @@ final class BrainBarZeroWarningsTests: XCTestCase {
         }
     }
 
+    func testScheduledBackupFailureUsesPlainWordsAndRetainsLogLink() throws {
+        let at = Date(timeIntervalSince1970: Self.base)
+        let history = BrainBarCalendarHistory(runs: [
+            "backup-daily": .init(at: at, code: 1, status: "failed"),
+        ])
+        let root = try canonicalTemporaryDirectory("backup-panel", self)
+        let observation = try XCTUnwrap(BrainBarSupervisorStatusTests.supervised(history: history, logs: root)
+            .sampleActivity()[.backupDaily])
+        guard case let .failed(message) = observation.loadState else { return XCTFail("Failure must remain visible") }
+        XCTAssertEqual(message, "Scheduled database backup failed at \(at.formatted(date: .abbreviated, time: .shortened)) (exit 1)")
+        var config = BrainLayerConfig.defaultConfig
+        config.launchdJobs[.backupDaily] = .init(enabled: true, loadState: observation.loadState)
+        let target = try XCTUnwrap(BrainBarBackupLogTarget.failures(in: config).first)
+        XCTAssertEqual(target.key, "backup-daily")
+        XCTAssertEqual(target.reason, message)
+    }
+
     func testFailedSupervisorComponentKeepsAnAmberNote() {
         let provider = BrainLayerLaunchdStatusProvider(commandRunner: { command in
             if command.first == "/bin/launchctl" { return .init(terminationStatus: 0, output: "runs = 0") }
@@ -307,7 +324,7 @@ final class BrainBarZeroWarningsTests: XCTestCase {
         })
         let ticks = seen.values
         XCTAssertEqual(ticks.count, 2)
-        XCTAssertTrue(ticks[0].contains("Backup Daily: calendar result failed, exit 1"), "\(ticks[0])")
+        XCTAssertTrue(ticks[0].contains { $0.hasPrefix("Scheduled database backup failed at ") && $0.hasSuffix("(exit 1)") }, "\(ticks[0])")
         // L1: one weekly exit 76 is a deferral notice, not a "thing that needs you".
         XCTAssertFalse(ticks[0].contains { $0.contains("exit 76") }, "\(ticks[0])")
         XCTAssertEqual(ticks[1], [], "A newer ok sample must clear the reasons on the next tick")
@@ -429,6 +446,14 @@ final class BrainBarDBCopyAgeTests: XCTestCase {
 
     func testDBSnapshotErrorTypesReadAsHumanSentences() throws {
         let cases: [(String, String)] = [
+            ("BrainBarDatabaseIdentityError: BrainBar reported None (None, None)",
+             "Backup blocked: this BrainBar version cannot confirm which database it has open. Upgrade BrainBar."),
+            ("BrainBarDatabaseIdentityUnavailableError: receipt details",
+             "Backup blocked: this BrainBar version cannot confirm which database it has open. Upgrade BrainBar."),
+            ("BrainBarDatabaseIdentityError: refusing to snapshot fixture.db through the production BrainBar socket, which serves configured.db; pass an isolated socket_path to back up any other database",
+             "Backup blocked: BrainBar has a different database open. Check the backup database path and BrainBar's configured database."),
+            ("BrainBarDatabaseIdentityError: receipt details",
+             "Backup blocked: BrainBar has a different database open. Check the backup database path and BrainBar's configured database."),
             ("db_snapshot_stale: newest verified DB copy x.db.zst is 87.0 h old (threshold 36 h)",
              "The database copy in Google Drive is older than 36 hours"),
             ("db_snapshot_missing: no verified offsite DB copy on record (threshold 36 h)",
@@ -454,6 +479,47 @@ final class BrainBarDBCopyAgeTests: XCTestCase {
 /// Before/after evidence: the Jobs and Backups pages rendered from the MBP's 10-21 calendar run.
 @MainActor
 final class BrainBarZeroWarningsRenderTests: XCTestCase {
+    func testBackupIdentityFailurePanelsRenderPlainExplanation() throws {
+        guard let path = ProcessInfo.processInfo.environment["BRAINBAR_SNAPSHOT_DIR"] else {
+            throw XCTSkip("Set BRAINBAR_SNAPSHOT_DIR to render backup failures")
+        }
+        let root = try canonicalTemporaryDirectory("backup-failure-render", self)
+        let now = BrainBarDashboardFixture.fetchedAt
+        let history = BrainBarCalendarHistory(runs: [
+            "backup-daily": .init(at: now, code: 1, status: "failed"),
+        ])
+        let observations = BrainBarSupervisorStatusTests.supervised(history: history, logs: root).sampleActivity()
+        let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("fixture.env"))
+        try store.save(.defaultConfig)
+        guard case let .readable(base) = BrainBarDashboardFixture.healthyObservabilityResult else {
+            return XCTFail("Missing fixture")
+        }
+        for (name, code, expected) in [
+            ("unconfirmed", "BrainBarDatabaseIdentityUnavailableError", "cannot confirm which database it has open"),
+            ("different", "BrainBarDatabaseIdentityError", "different database open"),
+        ] {
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(base)) as? [String: Any])
+            var backups = try XCTUnwrap(json["backups"] as? [String: Any])
+            backups["errorType"] = code + ": synthetic technical receipt"
+            json["backups"] = backups
+            let doc = try JSONDecoder().decode(ObservabilityDocument.self, from: JSONSerialization.data(withJSONObject: json))
+            let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
+                launchdStatusProvider: FixedActivity(observations: observations),
+                initialLaunchdObservations: observations, refreshStatusOnLoad: false,
+                initialObservabilityResult: .readable(doc),
+                initialWatcherHealth: .readable(.init(updatedAt: now, pollCount: 50)))
+            let directory = URL(fileURLWithPath: path).appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            for section in [BrainBarSettingsSection.jobs, .backups] {
+                let text = try BrainBarRenderHarness.renderSettingsText(model, section: section, directory: directory)
+                try text.write(to: directory.appendingPathComponent("\(section.rawValue).txt"), atomically: true, encoding: .utf8)
+                XCTAssertFalse(text.contains("calendar result"), text)
+                if section == .backups { XCTAssertTrue(text.contains(expected), text) }
+                if section == .jobs { XCTAssertTrue(text.contains("Scheduled database backup failed"), text) }
+            }
+        }
+    }
+
     func testHealthyJobsAndBackupsRenderWithoutWarningText() throws {
         let root = try canonicalTemporaryDirectory("zero-warnings-render", self)
         let base: TimeInterval = 1_784_466_000

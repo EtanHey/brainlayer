@@ -770,8 +770,14 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         }
         let state: BrainLayerLaunchdLoadState
         if let run, run.status == "failed" || run.status == "stopped" || run.status == "abandoned" || (run.code != 0 && run.code != 75) {
-            state = .failed(run.status == "abandoned" ? "\(job.title): calendar run abandoned"
-                : "\(job.title): calendar result \(run.status), exit \(run.code)")
+            if job == .backupDaily {
+                let time = run.at.formatted(date: .abbreviated, time: .shortened)
+                state = .failed(run.status == "abandoned" ? "Scheduled database backup did not finish at \(time)"
+                    : "Scheduled database backup failed at \(time) (exit \(run.code))")
+            } else {
+                state = .failed(run.status == "abandoned" ? "\(job.title): calendar run abandoned"
+                    : "\(job.title): calendar result \(run.status), exit \(run.code)")
+            }
         } else { state = .loaded }
         var observation = BrainLayerLaunchdJobObservation(
             loadState: state, runs: run == nil ? 0 : nil, lastExitCode: run?.status == "abandoned" ? nil : run?.code,
