@@ -39,6 +39,37 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.80] - 2026-10-31
+
+### Health relay
+- Deliver durable, append-only alerts to the lead's inbox, with unique event identities and safe local writes. Missing or inaccessible sources no longer stop delivery or clear an incident, and stale or unverifiable bootstrap state is refused (#1541, #1542, #1543).
+- Read M1 health over SSH, including badge, watcher and pause signals. Keep muted incidents open, handle deferred stale checks, harden configuration and probes, and reconcile migrated escalation identities (#1545, #1546, #1552).
+- Escalate only user-visible outages that remain unacknowledged for over 30 minutes; backup alerts stay in the lead's collab (#1549, #1558).
+
+### Nightly maintenance and recovery
+- Retry failed daytime-safe steps under calendar custody, with confirmation and a clear outcome in BrainBar. Steps that need the nightly window remain deferred (#1555, #1556).
+
+### WAL growth fixes
+- Reclaim the weekly VACUUM's WAL before releasing the maintenance hold (#1554).
+- Add an independent checkpoint fallback that releases calendar, backup and maintenance admission probes before SQLite work. Known limit: a WAL over 1 GB is alerted, not reclaimed, until the nightly run (#1565).
+- Apply a shared WAL recycle policy to the supported Python writer paths and BrainBar: a 256 MB default recycle limit, with separate checkpoint defaults for Python and interactive BrainBar writes. The limit applies after WAL reset, not while readers pin the WAL; remaining raw writer paths are follow-up work (#1566).
+
+### BrainBar panels that no longer mislead
+- Clear a failed night after complete recovery, preserve distinct runner failures, and name the steps that actually failed or were deferred (#1550, #1553).
+- Show one cause for an abandoned night without step details, and use one status truth across the icon, menu, Jobs row and Dashboard (#1559, #1560).
+- Treat a routine partial vector scan as normal, explain when an unconfirmed BrainBar database blocks backup, and count saved memories rather than agent activity in the memory chart (#1562, #1563, #1564).
+
+### Updater
+- Preserve Gatekeeper approval across upgrades and check the linked BrainLayer keg rather than the first installed version (#1548, #1561).
+
+### Backup
+- Skip transcript sources that disappear during bundling (#1544).
+
+### Tests
+- Pin backup reclaim capability and bound producer completion on Darwin; make lock-recovery and recovery-oracle tests wait for the writes they own (#1547, #1551, #1557).
+
+Release scope: Python package + Homebrew formula + BrainBar app 1.5.80 (cask)
+
 ## [1.5.79] - 2026-10-28
 
 ### Fixed
