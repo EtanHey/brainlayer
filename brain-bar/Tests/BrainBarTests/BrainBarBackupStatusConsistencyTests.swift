@@ -25,6 +25,10 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
         XCTAssertEqual(status.error?.tone, .red)
         XCTAssertEqual(status.snapshot.tone, .green, "the older verified copy is still valid")
         XCTAssertFalse(status.error!.text.contains("snapshot pin"))
+        // The Backups page shares the measured sentence; Technical details shows only the code.
+        let page = BrainBarBackupChecks.derive(fixture.backups, now: fixture.now, locale: locale, calendar: calendar)
+        XCTAssertEqual(page.alert, status.error?.text)
+        XCTAssertEqual(page.details.first { $0.label == "Error code" }?.value, "raw_reclaim_unconfirmed")
         var inputs = BrainBarStatusInputs(now: fixture.now, calendar: calendar,
             jobAlerts: BrainBarJobAlerts(active: ["backup-daily": "Database backup failed; check the backup log"]),
             backups: .measured(fixture.backups))
