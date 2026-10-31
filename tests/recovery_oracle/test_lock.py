@@ -10,6 +10,34 @@ import pytest
 pytestmark = [pytest.mark.recovery_oracle, pytest.mark.timeout(30, method="thread")]
 
 
+@pytest.mark.parametrize("slow_acks", [1, 6])
+def test_ack_p95_uses_enough_real_receipts_for_an_isolated_slow_ack(world, monkeypatch, slow_acks):
+    from brainlayer import queue_io
+
+    monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+    enqueue = queue_io.enqueue_store
+    calls = 0
+
+    def slow_initial_acks(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls <= slow_acks:
+            time.sleep(0.6)
+        return enqueue(**kwargs)
+
+    monkeypatch.setattr(queue_io, "enqueue_store", slow_initial_acks)
+    for name in world.names:
+        world.store(name)
+    world.drain()
+    world.assert_acknowledged()
+    assert max(r["ack_ms"] for r in world.receipts) >= 600
+    if slow_acks == 1:
+        world.assert_latency()
+    else:
+        with pytest.raises(AssertionError, match="ack p95"):
+            world.assert_latency()
+
+
 @pytest.mark.parametrize("deferred_seeds", [False, True], ids=["default-seeds", "deferred-seeds"])
 def test_lock_recovery(world, monkeypatch, deferred_seeds):
     with monkeypatch.context() as seed_setup:
@@ -33,12 +61,17 @@ def test_lock_recovery(world, monkeypatch, deferred_seeds):
         with ThreadPoolExecutor(max_workers=2) as workers:
             draining = workers.submit(world.drain)
             embedding = workers.submit(world.hotlane)
-            for name in world.names[1:]:
+            batch_started = started
+            for index, name in enumerate(world.names[1:], start=2):
                 world.store(name)
+                # Preserve the original 3s producer bound per six-store batch
+                # as the p95 workload grows from six to 100 contended stores.
+                if index % 6 == 0 or index == len(world.names):
+                    assert time.monotonic() - batch_started < 3
+                    batch_started = time.monotonic()
             assert draining.result(timeout=3) == 0
             assert embedding.result(timeout=3) == 0
             assert world.hotlane_busy == 1, "hotlane did not contend for the lock"
-            assert time.monotonic() - started < 3
             time.sleep(max(0, 0.3 - (time.monotonic() - started)))
     finally:
         holder.execute("ROLLBACK")

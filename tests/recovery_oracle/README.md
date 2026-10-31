@@ -24,6 +24,41 @@ apply to this tiny fixture, not the resident corpus. Telemetry must exist; missi
 measurements fail. Negative controls skip replay, remove FTS/vectors, duplicate a row,
 and sleep in the real queue admission/locked drain path; each must trip an oracle.
 
+## Ack sampling (2026-10-31)
+
+The 500 ms ceilings are unchanged. Fault scenarios now measure 100 fresh store
+requests; lock scenarios measure those 100 contended requests plus two seeds.
+Requests cycle through the original six seeded payloads to keep the search
+corpus bounded. Each admission creates a fresh receipt/queue file; replayed
+duplicates must resolve through real aliases to their canonical identity.
+Nearest-rank p95 over the former six/eight receipts was exactly the maximum.
+At 100 samples, up to five isolated slow receipts can occur without making the
+95th percentile exceed its bound. All receipts still undergo replay, alias,
+FTS/vector round-trip and no-loss/duplicate checks; none are discarded as warmup.
+The all-status contract keeps its four receipts and strict latency check.
+
+The lock producer's three-second deadline applies to each batch of at most six
+requests as the workload grows. The drain/hotlane future deadlines, 30-second
+test watchdog, five-second catch-up bound and 500 ms drain-held bound remain.
+Two real-queue controls inject 600 ms into the first one/six acknowledgements:
+one outlier must pass p95; six outliers must fail. The existing slow-ack and
+long-lock negative controls remain unchanged. Receipts also expose `ack_max_ms`
+so p95 can be distinguished from the slowest operation.
+
+The timer includes input generation, `asyncio.run`, validation and durable queue
+publication. Fixture construction, background joins and the subsequently injected
+index/encoder/drain cuts are outside it. In a separate local profile, durable
+syncs consumed 426 of 445 ms across six handler calls; they belong inside ack
+latency and must not be mocked away. This identifies the local I/O cost, not the
+precise cause of historical Ubuntu stalls.
+
+Week-of-October-24 CI logs contained ten ack overruns (500.201–588.459 ms), five
+already on October 26, including one on main. Passing CI output captures the
+receipt JSON, so a historical uncensored distribution cannot be reconstructed.
+Ten unchanged-head local runs reproduced an index overrun at 508.014 ms; eight
+runs passed, one failed that ack bound, and one had two separate all-status
+precondition failures. The PR body records the per-run measurements.
+
 Native scope: BrainBarDaemon supports private BRAINBAR_DB_PATH/BRAINBAR_SOCKET_PATH,
 but starts a lifecycle watchdog that can kickstart the resident UI. Never launch it
 unguarded here. Existing `DaemonTerminationProcessTests` use `daemon_shutdown_guard.c`
