@@ -62,9 +62,10 @@ class Universe:
         self.hotlane_busy = 0
         self.names = ["otter", "ibis", "lynx", "mole", "puma", "yak"]
         random.Random(seed).shuffle(self.names)
-        # With six receipts nearest-rank p95 is the maximum. Use fresh stores
-        # so the tail estimate can tolerate up to five isolated slow acks.
-        self.names.extend(f"sample{index}" for index in range(94))
+        # Measure 100 independent admissions, keeping the original six-payload
+        # corpus. Every call gets a fresh durable receipt/queue file; repeating
+        # payloads also exercises alias replay without scaling search work.
+        self.names = [self.names[index % len(self.names)] for index in range(100)]
         for key, suffix in PRIVATE_PATHS.items():
             monkeypatch.setenv(key, str(self.guard(self.root / suffix)))
         for key, value in {

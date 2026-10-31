@@ -28,6 +28,9 @@ and sleep in the real queue admission/locked drain path; each must trip an oracl
 
 The 500 ms ceilings are unchanged. Fault scenarios now measure 100 fresh store
 requests; lock scenarios measure those 100 contended requests plus two seeds.
+Requests cycle through the original six seeded payloads to keep the search
+corpus bounded. Each admission creates a fresh receipt/queue file; replayed
+duplicates must resolve through real aliases to their canonical identity.
 Nearest-rank p95 over the former six/eight receipts was exactly the maximum.
 At 100 samples, up to five isolated slow receipts can occur without making the
 95th percentile exceed its bound. All receipts still undergo replay, alias,
@@ -52,7 +55,7 @@ precise cause of historical Ubuntu stalls.
 Week-of-October-24 CI logs contained ten ack overruns (500.201–588.459 ms), five
 already on October 26, including one on main. Passing CI output captures the
 receipt JSON, so a historical uncensored distribution cannot be reconstructed.
-Ten unchanged-head local runs reproduced an index overrun at 508.014 ms; seven
+Ten unchanged-head local runs reproduced an index overrun at 508.014 ms; eight
 runs passed, one failed that ack bound, and one had two separate all-status
 precondition failures. The PR body records the per-run measurements.
 
