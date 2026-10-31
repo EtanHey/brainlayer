@@ -100,7 +100,8 @@ final class BrainBarMaintenanceRetryTests: XCTestCase {
     }
 
     func testDeferredOnlyUsesLabelsAndLocalScheduledTimeForEveryStatus() throws {
-        for status in ["ready", "accepted", "refused", "nothing-to-retry", "failed"] {
+        // refused/failed keep their reason; see testRefusedRetryWithDeferredStepsStillSaysWhy.
+        for status in ["ready", "accepted", "nothing-to-retry"] {
             let model = try presentationModel(status: status, deferred: ["backup-daily"])
             XCTAssertFalse(model.showsRetryButton, status)
             XCTAssertEqual(model.details, "Database backup didn’t finish last night. It runs again automatically tonight during scheduled maintenance, after 04:30. Nothing to do now.", status)
@@ -144,6 +145,16 @@ final class BrainBarMaintenanceRetryTests: XCTestCase {
         let stale = try presentationModel(steps: ["jsonl-backup"], now: "2026-10-30T05:00:00Z")
         XCTAssertFalse(stale.showsRetryButton)
         XCTAssertEqual(stale.explanation, "Checking retry availability…")
+    }
+
+    func testRefusedRetryWithDeferredStepsStillSaysWhy() throws {
+        // A busy calendar probe refuses with steps cleared and deferred kept: the reason must show.
+        for status in ["refused", "failed"] {
+            let model = try presentationModel(status: status, steps: [], deferred: ["backup-daily"])
+            XCTAssertFalse(model.showsRetryButton, status)
+            XCTAssertEqual(model.explanation, "The maintenance supervisor is unavailable.", status)
+            XCTAssertFalse(model.details.contains("Nothing to do now"), status)
+        }
     }
 
     func testRunningRetryShowsProgressWithoutADisabledButton() throws {

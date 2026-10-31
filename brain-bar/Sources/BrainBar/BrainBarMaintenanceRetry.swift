@@ -70,6 +70,7 @@ final class BrainBarMaintenanceRetryModel: ObservableObject {
     /// The button exists only when pressing it would do something; never a disabled control.
     var showsRetryButton: Bool { canRetry }
     var showsProgress: Bool { isRunning }
+    private var refusedOrFailed: Bool { ["refused", "failed"].contains(receipt?.status) }
 
     private func localTime(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -84,7 +85,9 @@ final class BrainBarMaintenanceRetryModel: ObservableObject {
         if inWindow, let interval = pauseInterval {
             return "Retries are paused for scheduled maintenance (until \(localTime(interval.end)))."
         }
-        if receipt?.steps.isEmpty == true, receipt?.deferred.isEmpty == false { return "" }
+        // Deferred-only work is explained in `details`, unless the retry was refused or failed:
+        // then the reason must still show.
+        if receipt?.steps.isEmpty == true, receipt?.deferred.isEmpty == false, !refusedOrFailed { return "" }
         if receipt?.status == "ready" {
             if receipt?.steps.isEmpty == true { return "Nothing to retry now." }
             guard pauseInterval.map({ now() < $0.end }) == true else { return "Checking retry availability…" }
@@ -108,7 +111,7 @@ final class BrainBarMaintenanceRetryModel: ObservableObject {
                 let start = receipt.retryPauseStart.flatMap { ISO8601DateFormatter().date(from: $0) }
                 let time = start.flatMap { $0 > now() ? ", after \(localTime($0))" : nil } ?? ""
                 let next = " It runs again automatically tonight during scheduled maintenance\(time)."
-                return unfinished + next + (showsRetryButton || showsProgress ? "" : " Nothing to do now.")
+                return unfinished + next + (showsRetryButton || showsProgress || refusedOrFailed ? "" : " Nothing to do now.")
             }
             return unfinished + (canRetry && receipt.steps.contains(step) ? " You can retry it now." : "")
         }.joined(separator: "\n")
