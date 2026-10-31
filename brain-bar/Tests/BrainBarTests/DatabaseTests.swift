@@ -58,6 +58,25 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(sync, "1")
     }
 
+    func testWriterWALRecyclePolicySurvivesReopen() throws {
+        for _ in 0..<2 {
+            XCTAssertEqual(try db.pragma("journal_size_limit"), "256000000")
+            XCTAssertEqual(try db.pragma("wal_autocheckpoint"), "1000")
+            db.close()
+            db = BrainDatabase(path: tempDBPath)
+        }
+    }
+
+    func testReadonlyConnectionDoesNotReceiveWriterWALPolicy() throws {
+        _ = try db.pragma("journal_mode")
+        let reader = BrainDatabase(path: tempDBPath, openConfiguration: .init(readOnly: true))
+        defer { reader.close() }
+        for name in ["journal_size_limit", "wal_autocheckpoint"] {
+            let nativeDefault = try XCTUnwrap(sqliteScalarString(path: tempDBPath, sql: "PRAGMA \(name)"))
+            XCTAssertEqual(try reader.pragma(name), nativeDefault)
+        }
+    }
+
     // MARK: - Schema
 
     func testChunksTableExists() throws {

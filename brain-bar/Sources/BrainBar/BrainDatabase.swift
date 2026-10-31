@@ -1325,7 +1325,7 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private static let allowedPragmas: Set<String> = [
-        "journal_mode", "busy_timeout", "cache_size", "synchronous",
+        "journal_mode", "journal_size_limit", "wal_autocheckpoint", "busy_timeout", "cache_size", "synchronous",
         "wal_checkpoint", "page_count", "page_size", "freelist_count"
     ]
 
@@ -3089,6 +3089,11 @@ final class BrainDatabase: @unchecked Sendable {
         } else {
             NSLog("[BrainBar] journal_mode already WAL — skipping PRAGMA")
         }
+        // Mirror Python's writer_policy.py retained-file limit. Recycle retained allocation at
+        // a WAL reset; active writes and pinned readers may still need more bytes.
+        try executeOnHandle(handle, sql: "PRAGMA journal_size_limit = 256000000")
+        // Keep interactive stores on a 25 ms busy budget near ~4 MB checkpoints, avoiding ~41 MB commit spikes.
+        try executeOnHandle(handle, sql: "PRAGMA wal_autocheckpoint = 1000")
         try executeOnHandle(handle, sql: "PRAGMA cache_size = -64000")
         try executeOnHandle(handle, sql: "PRAGMA synchronous = NORMAL")
         try executeOnHandle(handle, sql: "PRAGMA foreign_keys = ON")

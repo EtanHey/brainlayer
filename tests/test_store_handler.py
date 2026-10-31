@@ -709,6 +709,9 @@ def test_store_busy_budget_refreshes_cold_init_timeout_between_statements(tmp_pa
 
     fake_clock = {"now": 0.0}
     seen_timeouts = []
+    executed = []
+    monkeypatch.delenv("BRAINLAYER_WAL_SIZE_LIMIT_BYTES", raising=False)
+    monkeypatch.delenv("BRAINLAYER_WAL_AUTOCHECKPOINT", raising=False)
 
     class FakeCursor:
         def __init__(self, conn):
@@ -720,9 +723,10 @@ def test_store_busy_budget_refreshes_cold_init_timeout_between_statements(tmp_pa
                 result = self.conn.exec_trace(self, sql, bindings)
                 if result is False:
                     raise apsw.ExecTraceAbort("exec trace aborted")
+            executed.append(sql)
             seen_timeouts.append(self.conn.timeout_ms)
             fake_clock["now"] += 0.04
-            if len(seen_timeouts) == 3:
+            if len(seen_timeouts) == 5:
                 raise StopInit
             return self
 
@@ -753,6 +757,9 @@ def test_store_busy_budget_refreshes_cold_init_timeout_between_statements(tmp_pa
         def loadextension(self, path):
             self.loaded_extension = path
 
+        def execute(self, sql, *args):
+            return self.cursor().execute(sql, *args)
+
         def cursor(self):
             return FakeCursor(self)
 
@@ -774,9 +781,13 @@ def test_store_busy_budget_refreshes_cold_init_timeout_between_statements(tmp_pa
     with writer_telemetry._ACTIVE_LOCK:
         assert heartbeat_path not in writer_telemetry._ACTIVE_SPANS
     assert not heartbeat_path.exists()
-    assert len(seen_timeouts) == 3
+    assert executed[2:4] == [
+        "PRAGMA journal_size_limit = 256000000",
+        "PRAGMA wal_autocheckpoint = 10000",
+    ]
+    assert len(seen_timeouts) == 5
     assert seen_timeouts[1] < seen_timeouts[0]
-    assert seen_timeouts[2] < seen_timeouts[1]
+    assert all(later < earlier for earlier, later in zip(seen_timeouts, seen_timeouts[1:]))
 
 
 def test_vector_store_init_trace_allows_expired_rollback_cleanup(monkeypatch):
