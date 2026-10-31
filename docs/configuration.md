@@ -210,10 +210,12 @@ On a staging filesystem that passes the macOS hole-punch probe, every raw snapsh
 full `integrity_check` and sentinel validation before compression. Compression hashes the raw
 stream and writes durable independent 64 MiB chunks (`zstd -3 -T1 --check` frames, or gzip -6
 members), then punches the consumed raw extents. Each punch must reduce the raw file's allocated
-blocks. Volume free space is measured immediately before and after each punch and must increase
-by at least half the punched bytes, because APFS snapshots can pin physical storage even after
-a file's block count drops. Unrelated disk usage between punches does not accumulate against
-this check. A punch that does not reclaim storage aborts with an explicit error; the 2 GiB
+blocks. For full chunks, volume free space is sampled up to five times over a two-second window
+and must increase by at least 32 MiB against the same pre-punch reading. This allows delayed
+macOS accounting while retaining a bounded safety check on a busy volume. A persistent deficit
+aborts with `raw_reclaim_unconfirmed` and records the chunk, block counts, free-space samples,
+deltas, threshold and window. It does not establish a snapshot pin. Unrelated disk usage between
+punches does not accumulate against this check. The 2 GiB
 raw-free-space floor remains enforced before writes and after punches. The archive is decoded
 as a stream and SHA-256-compared with the checked raw before publication. Subsequent local and
 Drive verification use the same SHA-256 proof; full Drive verification also compares compressed

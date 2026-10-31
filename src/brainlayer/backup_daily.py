@@ -45,6 +45,7 @@ from .paths import get_db_path, resolve_db_path
 from .socket_hygiene import refuse_production_brainbar_socket
 
 _sleep = time.sleep
+_reclaim_clock = time.monotonic
 
 DEFAULT_TOKEN_PATH = drive_credentials.DEFAULT_TOKEN_PATH
 DEFAULT_CLIENT_PATH = drive_credentials.DEFAULT_CLIENT_PATH
@@ -61,6 +62,8 @@ DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups
 MIN_RAW_FREE_BYTES = 2 * 1024 * 1024 * 1024
 COPY_CHUNK_BYTES = 1024 * 1024
 RECLAIM_CHUNK_BYTES = 64 * 1024 * 1024
+RECLAIM_WINDOW_SECONDS = 2.0
+RECLAIM_MAX_SAMPLES = 5
 FRAME_OVERHEAD_BYTES = 64 * 1024
 POST_PURGE_POLL_SECONDS = 0.5  # 60 polls give APFS up to 30s to release reclaimed bytes.
 DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "backup-daily.log"
@@ -1442,6 +1445,63 @@ def _archive_stream_sha256(source: Any, *, zstd: bool) -> str:
         return _stream_sha256(restored).hex()
 
 
+class RawReclaimUnconfirmedError(RuntimeError):
+    error_type = "raw_reclaim_unconfirmed"
+
+    def __init__(self, measurements: dict[str, Any]):
+        self.measurements = measurements
+        best_delta = max(
+            (
+                sample["delta_bytes"]
+                for sample in measurements["samples"]
+                if sample["elapsed_seconds"] <= measurements["window_seconds"]
+            ),
+            default=0,
+        )
+        mib = 1024 * 1024
+        super().__init__(
+            "Database backup stopped: raw file blocks were released, but free space rose only "
+            f"{best_delta / mib:g} MiB of the required {measurements['threshold_bytes'] / mib:g} MiB "
+            f"within {measurements['window_seconds']:g} s "
+            "(another process may be writing, or macOS is slow to report freed space)."
+        )
+
+
+def _confirm_raw_reclaim(
+    path: Path, *, offset: int, length: int, before_blocks: int, after_blocks: int, before_free: int
+) -> None:
+    """Keep one pre-punch baseline; bound both sample count and elapsed waiting."""
+    started = _reclaim_clock()
+    samples = []
+    threshold = length - length // 2
+    for index in range(RECLAIM_MAX_SAMPLES):
+        elapsed = _reclaim_clock() - started
+        if index and elapsed > RECLAIM_WINDOW_SECONDS:
+            break
+        free = shutil.disk_usage(path).free
+        elapsed = _reclaim_clock() - started
+        samples.append({"elapsed_seconds": elapsed, "free_bytes": free, "delta_bytes": free - before_free})
+        if free - before_free >= threshold and elapsed <= RECLAIM_WINDOW_SECONDS:
+            return
+        remaining = RECLAIM_WINDOW_SECONDS - elapsed
+        if remaining <= 0 or index == RECLAIM_MAX_SAMPLES - 1:
+            break
+        _sleep(min(RECLAIM_WINDOW_SECONDS / (RECLAIM_MAX_SAMPLES - 1), remaining))
+    raise RawReclaimUnconfirmedError(
+        {
+            "chunk_offset": offset,
+            "chunk_length": length,
+            "blocks_before": before_blocks,
+            "blocks_after": after_blocks,
+            "free_before": before_free,
+            "samples": samples,
+            "threshold_bytes": threshold,
+            "window_seconds": RECLAIM_WINDOW_SECONDS,
+            "elapsed_seconds": _reclaim_clock() - started,
+        }
+    )
+
+
 def _compress_reclaiming_raw(raw: Path, archive: Path, *, zstd_binary: str | None) -> str:
     """Write durable independent frames, then release their raw extents; hash before punching.
 
@@ -1480,7 +1540,6 @@ def _compress_reclaiming_raw(raw: Path, archive: Path, *, zstd_binary: str | Non
             # because no unread bytes follow it. APFS may retain its final partial block.
             before_free = shutil.disk_usage(archive.parent).free
             _punch_raw_hole(source.fileno(), offset, len(chunk))
-            freed = shutil.disk_usage(archive.parent).free - before_free
             after_blocks = os.fstat(source.fileno()).st_blocks
             if after_blocks >= before_blocks:
                 raise RuntimeError("punched raw extents not reclaimed (filesystem allocation pin)")
@@ -1488,10 +1547,14 @@ def _compress_reclaiming_raw(raw: Path, archive: Path, *, zstd_binary: str | Non
             # accumulate against reclaim. Allow half a chunk for concurrent volume activity.
             # Short tails can free less than this tolerance due to APFS accounting; they
             # retain the per-file block check above and the raw free-space floor below.
-            tolerance = len(chunk) // 2
-            if len(chunk) == RECLAIM_CHUNK_BYTES and freed < len(chunk) - tolerance:
-                raise RuntimeError(
-                    "punched raw extents not reclaimed (possible APFS snapshot pin or delayed volume reclaim)"
+            if len(chunk) == RECLAIM_CHUNK_BYTES:
+                _confirm_raw_reclaim(
+                    archive.parent,
+                    offset=offset,
+                    length=len(chunk),
+                    before_blocks=before_blocks,
+                    after_blocks=after_blocks,
+                    before_free=before_free,
                 )
             offset += len(chunk)
             _require_raw_floor(archive.parent)
@@ -3715,6 +3778,8 @@ def run_backup(
             {"error_type": getattr(exc, "error_type", type(exc).__name__), "error": _redact_upload_secrets(str(exc))}
         )
         error_code = getattr(exc, "error_code", None)
+        if isinstance(exc, RawReclaimUnconfirmedError):
+            result["raw_reclaim"] = exc.measurements
         if isinstance(error_code, str):
             result["error_code"] = error_code
         if isinstance(exc, DriveUploadStalledError):

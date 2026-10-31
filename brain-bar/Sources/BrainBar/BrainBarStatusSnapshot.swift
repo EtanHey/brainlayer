@@ -252,7 +252,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                                   noticeHealth: .unknown))
             }
             if let error = backups.errorType, !error.hasPrefix(BrainBarJobAlerts.observabilityPrefix) {
-                let text = ObservabilityPresentation.backupStatus(for: backups, now: now).error?.text ?? "Backup failed: \(error)"
+                let text = ObservabilityPresentation.backupStatus(for: backups, now: now, calendar: inputs.calendar).error?.text ?? "Backup failed: \(error)"
                 if error == "drive_credentials_restored_backup_pending" {
                     builder.add(.init(id: "backups.error", component: .backups, severity: .notice, text: text))
                 } else if !error.hasPrefix("db_snapshot_") || error.hasPrefix("db_snapshot_unverified") {
@@ -423,9 +423,16 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                                   alertKey: key, alertReason: reason))
             case let .backup(job):
                 // One failed run is one issue: the alert joins its job's run issue (Show log keeps its key).
-                if let job, builder.attachAlert(key, reason: reason, toJob: job) { continue }
+                var text = reason
+                if ["backup-daily", "backup-snapshot"].contains(key), case let .measured(backups) = inputs.backups,
+                   backups.errorType?.hasPrefix("raw_reclaim_unconfirmed:") == true {
+                    text = ObservabilityPresentation.backupStatus(for: backups, now: now, calendar: inputs.calendar).error?.text ?? reason
+                    // Join the effective alert, including a badge fallback, once per attempt.
+                    builder.issues.removeAll { $0.id == "backups.error" }
+                }
+                if let job, builder.attachAlert(key, reason: reason, toJob: job, text: text == reason ? nil : text) { continue }
                 builder.add(.init(id: job.map { "job.\($0.rawValue)" } ?? "alert.\(key)", component: .backups,
-                                  severity: .notice, text: reason, jobs: job.map { [$0] } ?? [],
+                                  severity: .notice, text: text, jobs: job.map { [$0] } ?? [],
                                   alertKey: key, alertReason: reason))
             case .drive:
                 // Drive authorization remains visible independently of backup receipt age.
@@ -622,11 +629,12 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         }
 
         /// A job alert for a job the calendar already reported: the same issue, now with Show log.
-        mutating func attachAlert(_ key: String, reason: String, toJob job: BrainLayerLaunchdJob) -> Bool {
+        mutating func attachAlert(_ key: String, reason: String, toJob job: BrainLayerLaunchdJob, text: String? = nil) -> Bool {
             guard let index = issues.firstIndex(where: { $0.id == "job.\(job.rawValue)"
                 || (["maintenance.abandoned-run", "maintenance.night"].contains($0.id) && $0.jobs.contains(job)) }) else { return false }
             issues[index].alertKey = key
             issues[index].alertReason = reason
+            if let text { issues[index].text = text }
             return true
         }
     }

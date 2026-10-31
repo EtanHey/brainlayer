@@ -17,6 +17,39 @@ FIXTURES = Path(__file__).parent / "fixtures/observability"
 NOW = datetime(2026, 9, 13, 12, tzinfo=UTC)
 
 
+@pytest.mark.parametrize("alert_key", [None, "backup-daily", "backup-snapshot", "drive-consent"])
+def test_reclaim_failure_preserves_verified_copy_and_specific_reason(tmp_path, alert_key):
+    fixture = json.loads(
+        (
+            Path(__file__).parents[1] / "brain-bar/Tests/BrainBarTests/Fixtures/backup-reclaim-unconfirmed.json"
+        ).read_text()
+    )
+    env, recorder = _two_copy_env(tmp_path, transcript_at="2026-10-31T03:00:00Z", daily=fixture["daily_records"])
+    if alert_key:
+        Path(env["BRAINLAYER_JOB_ALERT_PATH"]).write_text(
+            json.dumps({alert_key: "Database backup failed; check the backup log"})
+        )
+    now = datetime.fromisoformat(fixture["now"].replace("Z", "+00:00"))
+    result = build_backups_section(env=env, record_input=recorder, now=now)
+    assert result["db_snapshot"] == fixture["backups"]["db_snapshot"]
+    assert result["error_type"] == (
+        "job_alert:Database backup failed; check the backup log"
+        if alert_key == "drive-consent"
+        else fixture["backups"]["error_type"]
+    )
+    _assert_backups_schema(result)
+    # A later verified copy clears this stopped attempt; it was never a pending upload.
+    daily = Path(env["BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG"])
+    with daily.open("a") as handle:
+        handle.write(
+            json.dumps({"backup_log_provenance": "real", **_db_receipt("2026-10-31T08:00:00Z", "new.db.zst")}) + "\n"
+        )
+    Path(env["BRAINLAYER_JOB_ALERT_PATH"]).write_text("{}")
+    recovered = build_backups_section(env=env, record_input=recorder, now=now)
+    assert recovered["error_type"] is None
+    assert recovered["db_snapshot"]["destination"] == "new.db.zst"
+
+
 @pytest.mark.parametrize("state", ["pending", "in_progress"])
 @pytest.mark.parametrize(("status", "code"), [("stopped", 143), ("failed", 1), ("ok", 0)])
 @pytest.mark.parametrize("tail", ["", '{"event":', "bad complete row\n"])

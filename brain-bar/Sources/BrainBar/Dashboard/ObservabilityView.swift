@@ -695,6 +695,13 @@ enum ObservabilityPresentation {
         }
         let error = backups.errorType.flatMap { value -> ObservabilityStatusLine? in
             guard !value.isEmpty else { return nil }
+            let reclaimPrefix = "raw_reclaim_unconfirmed: "
+            if value.hasPrefix(reclaimPrefix) {
+                let lastVerified = backups.dbSnapshot.flatMap { $0.verified && $0.lastAt <= now ? $0.lastAt : nil }
+                let date = lastVerified.map { idleDate($0, calendar: calendar, locale: locale) } ?? "none on record"
+                let detail = DriveAuthJSON.sanitized(String(value.dropFirst(reclaimPrefix.count))) ?? "Free-space recovery could not be confirmed."
+                return .init(text: "Today's backup stopped; last verified backup: \(date). \(detail)", tone: .red)
+            }
             if value == "drive_credentials_restored_backup_pending" {
                 return .init(text: "Google Drive credentials restored — next backup pending", tone: .neutral)
             }

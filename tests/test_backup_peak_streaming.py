@@ -15,6 +15,145 @@ import pytest
 from brainlayer import backup_daily as backup
 
 
+@pytest.fixture(autouse=True)
+def reclaim_clock(monkeypatch):
+    clock = SimpleNamespace(now=0.0, sleeps=[])
+
+    def sleep(seconds):
+        clock.sleeps.append(seconds)
+        clock.now += seconds
+
+    monkeypatch.setattr(backup, "_reclaim_clock", lambda: clock.now, raising=False)
+    monkeypatch.setattr(backup, "_sleep", sleep)
+    return clock
+
+
+@pytest.mark.parametrize("deltas", [[8, 32], [0, 0, 0, 0, 32], [0, 4, 8, 16, 31]])
+def test_full_chunk_reclaim_uses_32_mib_threshold(tmp_path, monkeypatch, reclaim_clock, deltas):
+    readings = iter(deltas)
+    before = 10**12
+    monkeypatch.setattr(backup.shutil, "disk_usage", lambda _: SimpleNamespace(free=before + next(readings) * 1024**2))
+
+    def confirm():
+        backup._confirm_raw_reclaim(
+            tmp_path,
+            offset=64 * 1024**2,
+            length=64 * 1024**2,
+            before_blocks=262144,
+            after_blocks=131072,
+            before_free=before,
+        )
+
+    if max(deltas) >= 32:
+        confirm()
+    else:
+        with pytest.raises(RuntimeError, match="rose only 31 MiB of the required 32 MiB within 2 s") as failure:
+            confirm()
+        assert failure.value.measurements["chunk_offset"] == 64 * 1024**2
+    assert reclaim_clock.now <= 2
+
+
+@pytest.mark.parametrize("oversleep", [False, True])
+def test_reclaim_bounds_sample_count_even_with_stalled_or_late_clock(tmp_path, monkeypatch, reclaim_clock, oversleep):
+    samples = []
+    monkeypatch.setattr(backup.shutil, "disk_usage", lambda _: samples.append(0) or SimpleNamespace(free=10**12))
+    monkeypatch.setattr(backup, "_sleep", lambda _: setattr(reclaim_clock, "now", 2.1 if oversleep else 0))
+    with pytest.raises(RuntimeError, match="Database backup stopped"):
+        backup._confirm_raw_reclaim(
+            tmp_path, offset=0, length=64 * 1024**2, before_blocks=131072, after_blocks=0, before_free=10**12
+        )
+    assert len(samples) == (1 if oversleep else 5)
+
+
+def test_reclaim_read_after_deadline_cannot_confirm_recovery(tmp_path, monkeypatch, reclaim_clock):
+    def slow_usage(_):
+        reclaim_clock.now = 2.1
+        return SimpleNamespace(free=10**12 + 32 * 1024**2)
+
+    monkeypatch.setattr(backup.shutil, "disk_usage", slow_usage)
+    with pytest.raises(RuntimeError, match="Database backup stopped"):
+        backup._confirm_raw_reclaim(
+            tmp_path, offset=0, length=64 * 1024**2, before_blocks=131072, after_blocks=0, before_free=10**12
+        )
+    assert reclaim_clock.sleeps == []
+
+
+def test_delayed_free_space_reclaim_continues_each_chunk(punch_lane, monkeypatch, reclaim_clock):
+    source, output = punch_lane
+    volume = SimpleNamespace(free=10**12, samples=0, punches=0)
+    real_punch = backup._punch_raw_hole
+    threshold = backup.RECLAIM_CHUNK_BYTES // 2
+
+    def punch(fd, offset, length):
+        real_punch(fd, offset, length)
+        # Every chunk gets its own baseline, even when unrelated writers use space.
+        volume.before = volume.free
+        volume.samples = 0
+        volume.punches += 1
+
+    def disk_usage(path):
+        if hasattr(volume, "before"):
+            volume.samples += 1
+            volume.free = volume.before + (threshold - 1 if volume.samples == 1 else threshold)
+            if volume.samples > 2:
+                volume.free -= 1024  # Unrelated allocation before the next chunk's baseline.
+        return SimpleNamespace(free=volume.free)
+
+    monkeypatch.setattr(backup, "_punch_raw_hole", punch)
+    monkeypatch.setattr(backup.shutil, "disk_usage", disk_usage)
+    artifact = backup.create_sqlite_backup_artifact(source, output, "2026-10-26")
+    assert volume.punches > 1
+    assert reclaim_clock.sleeps == [0.5] * (source.stat().st_size // backup.RECLAIM_CHUNK_BYTES)
+    assert backup.verify_sqlite_backup_artifact(artifact)["verified"] is True
+    assert list(output.iterdir()) == [artifact.archive_path]
+
+
+def test_persistent_reclaim_deficit_records_measurements_and_cleans_attempt(punch_lane, monkeypatch, reclaim_clock):
+    source, output = punch_lane
+    monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
+    volume = SimpleNamespace(punched=False, samples=[])
+    real_punch = backup._punch_raw_hole
+    free_before = 10**12
+
+    def punch(fd, offset, length):
+        volume.blocks_before = os.fstat(fd).st_blocks
+        real_punch(fd, offset, length)
+        volume.blocks_after = os.fstat(fd).st_blocks
+        volume.punched = True
+
+    def disk_usage(path):
+        free = free_before - len(volume.samples) if volume.punched else free_before
+        if volume.punched:
+            volume.samples.append(free)
+        return SimpleNamespace(free=free)
+
+    monkeypatch.setattr(backup, "_punch_raw_hole", punch)
+    monkeypatch.setattr(backup.shutil, "disk_usage", disk_usage)
+    log = output / "receipt.jsonl"
+    with pytest.raises(RuntimeError, match="Database backup stopped: raw file blocks were released"):
+        backup.run_backup(source, staging_dir=output, date_stamp="2026-10-26", upload=False, log_path=log)
+    receipt = json.loads(log.read_text().splitlines()[-1])
+    assert receipt["error_type"] == "raw_reclaim_unconfirmed"
+    details = receipt["raw_reclaim"]
+    assert details["chunk_offset"] == 0
+    assert details["chunk_length"] == backup.RECLAIM_CHUNK_BYTES
+    assert details["blocks_before"] == volume.blocks_before
+    assert details["blocks_after"] == volume.blocks_after < volume.blocks_before
+    assert details["free_before"] == free_before
+    assert [s["free_bytes"] for s in details["samples"]] == volume.samples
+    assert [s["delta_bytes"] for s in details["samples"]] == [free - free_before for free in volume.samples]
+    assert [s["elapsed_seconds"] for s in details["samples"]] == [0, 0.5, 1, 1.5, 2]
+    assert details["threshold_bytes"] == backup.RECLAIM_CHUNK_BYTES // 2
+    assert details["window_seconds"] == reclaim_clock.now == 2
+    assert len(volume.samples) == 5
+    assert "snapshot pin" not in receipt["error"]
+    assert receipt["uploaded"] is receipt["verified"] is False
+    assert not list(output.glob("2026-10-26.db*"))
+    assert not list(output.glob("brainlayer-backup-*"))
+    with sqlite3.connect(source) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
 @pytest.mark.parametrize("full", [False, True])
 @pytest.mark.parametrize("phase", ["raw_copy", "gzip", "restore", "drive_download"])
 def test_reclaiming_phase_budget(full, phase):
@@ -353,7 +492,7 @@ def test_snapshot_pins_volume_space_despite_file_block_drop(punch_lane, monkeypa
 
     monkeypatch.setattr(backup, "_punch_raw_hole", punch)
     monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=free))
-    with pytest.raises(RuntimeError, match="punched raw extents not reclaimed.*APFS snapshot"):
+    with pytest.raises(RuntimeError, match="Database backup stopped: raw file blocks were released"):
         backup.create_sqlite_backup_artifact(source, output, "2026-10-26")
     assert punched <= 2 * backup.RECLAIM_CHUNK_BYTES
     assert list(output.iterdir()) == []
