@@ -396,3 +396,32 @@ def test_live_mode_uses_the_resolved_db_path(export, monkeypatch, tmp_path, caps
     monkeypatch.setattr("sys.argv", ["linkedin_import", str(export), "--live", "--confirm-sha256", digest])
     assert linkedin_import.main() != 0
     assert opened == [resolved]
+
+
+def test_url_and_email_owned_by_different_people_is_skipped(tmp_path):
+    """A row whose URL belongs to one person and email to another must not join them."""
+    store = VectorStore(tmp_path / "copy.db")
+    try:
+        store.upsert_entity("a", "person", "Person A", metadata={"linkedin_url": "https://linkedin.com/in/person-a"})
+        store.upsert_entity("b", "person", "Person B", metadata={"email": "b@example.invalid"})
+        before = {eid: store.get_entity(eid) for eid in ("a", "b")}
+        export = tmp_path / "connections.json"
+        export.write_text(
+            json.dumps(
+                [
+                    dict(
+                        full_name="Someone",
+                        linkedin_url="https://www.linkedin.com/in/person-a",
+                        email="b@example.invalid",
+                    )
+                ]
+            )
+        )
+        result = import_connections(store, export)
+        assert result["skipped"] == {"ambiguous_identity": 1}
+        assert result["persons"]["new"] == 0
+        assert {eid: store.get_entity(eid) for eid in ("a", "b")} == before
+        owners = list(store.conn.execute("SELECT entity_id FROM kg_entity_aliases WHERE alias = 'b@example.invalid'"))
+        assert owners in ([], [("b",)])
+    finally:
+        store.close()

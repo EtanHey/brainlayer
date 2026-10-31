@@ -234,6 +234,12 @@ def _import_rows(store, rows, sha256, started):
             skipped["invalid_linkedin_url"] += 1
             continue
         email = email_key(row.get("email"))
+        url_owners = indexes["linkedin_url"].get(url, set()) if url else set()
+        email_owners = indexes["email"].get(email, set()) if email else set()
+        if url_owners and email_owners and url_owners != email_owners:
+            # The URL and email already belong to different people: never join them.
+            skipped["ambiguous_identity"] += 1
+            continue
         match_kind, matches = next(
             (
                 (kind, indexes[kind][key])
