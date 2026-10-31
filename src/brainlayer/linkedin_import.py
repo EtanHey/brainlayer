@@ -248,6 +248,10 @@ def _import_rows(store, rows, sha256, started):
             ),
             ("name", set()),
         )
+        # One person has one LinkedIn profile: a candidate holding a different URL is a different person.
+        if matches and url and any(identities[eid]["linkedin_url"] - {url} for eid in matches):
+            skipped["ambiguous_identity"] += 1
+            continue
         name_candidates = indexes["person"].get(normalized(name), set())
         name_conflict = False
         if not matches:

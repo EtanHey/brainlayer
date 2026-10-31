@@ -425,3 +425,26 @@ def test_url_and_email_owned_by_different_people_is_skipped(tmp_path):
         assert owners in ([], [("b",)])
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("alias_only", [False, True])
+def test_email_match_never_takes_a_new_url_from_a_person_with_another_url(tmp_path, alias_only):
+    """Cross-vendor review repro (Codex on #1572): an unowned URL plus an email owned by B must not rewrite B."""
+    store = VectorStore(tmp_path / "copy.db")
+    try:
+        old_url = "https://linkedin.com/in/person-b"
+        email = "b@example.invalid"
+        metadata = {"email": email, **({} if alias_only else {"linkedin_url": old_url})}
+        store.upsert_entity("b", "person", "Person B", metadata=metadata)
+        store.add_entity_alias(old_url, "b", alias_type="linkedin_url")
+        before, before_aliases = store.get_entity("b"), store.get_entity_aliases("b")
+        export = tmp_path / "connections.json"
+        export.write_text(
+            json.dumps([dict(full_name="New Person A", linkedin_url="https://linkedin.com/in/person-a", email=email)])
+        )
+        result = import_connections(store, export)
+        assert result["skipped"] == {"ambiguous_identity": 1}
+        assert store.get_entity("b") == before
+        assert store.get_entity_aliases("b") == before_aliases
+    finally:
+        store.close()
