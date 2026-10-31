@@ -1,7 +1,7 @@
 {
   "now": "2026-10-31T09:00:00Z",
   "message": "Database backup stopped: raw file blocks were released, but free space rose only 4 MiB of the required 32 MiB within 2 s (another process may be writing, or macOS is slow to report freed space).",
-  "headline": "Today's backup stopped; last verified backup: Oct 30",
+  "headline": "Latest backup stopped; last verified backup: Oct 30",
   "daily_records": [
     {
       "attempted_at": "2026-10-30T03:00:00Z",
@@ -45,5 +45,6 @@
       "disabled_dir_present": false
     },
     "error_type": "raw_reclaim_unconfirmed: Database backup stopped: raw file blocks were released, but free space rose only 4 MiB of the required 32 MiB within 2 s (another process may be writing, or macOS is slow to report freed space)."
-  }
+  },
+  "panel_detail": "Raw file blocks were released, but free space rose only 4 MiB of the required 32 MiB within 2 s (another process may be writing, or macOS is slow to report freed space)."
 }

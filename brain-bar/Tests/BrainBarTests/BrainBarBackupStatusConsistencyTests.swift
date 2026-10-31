@@ -10,7 +10,7 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
     func testReclaimFailureShowsStoppedAttemptAndLastVerifiedBackupFromFixture() throws {
         struct Fixture: Decodable {
             let now: Date
-            let message, headline: String
+            let message, headline, panelDetail: String
             let backups: ObservabilityDocument.Backups
         }
         let decoder = JSONDecoder()
@@ -21,7 +21,7 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let status = ObservabilityPresentation.backupStatus(for: fixture.backups, locale: locale, now: fixture.now, calendar: calendar)
-        XCTAssertEqual(status.error?.text, fixture.headline + ". " + fixture.message)
+        XCTAssertEqual(status.error?.text, fixture.headline + ". " + fixture.panelDetail)
         XCTAssertEqual(status.error?.tone, .red)
         XCTAssertEqual(status.snapshot.tone, .green, "the older verified copy is still valid")
         XCTAssertFalse(status.error!.text.contains("snapshot pin"))
