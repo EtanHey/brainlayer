@@ -67,32 +67,48 @@ final class BrainBarMaintenanceRetryModel: ObservableObject {
         !isRunning && !inWindow && receipt?.status == "ready" && receipt?.steps.isEmpty == false
             && pauseInterval.map { now() < $0.end } == true
     }
+    var showsRetryButton: Bool { canRetry || isRunning }
+
+    private func localTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
     var explanation: String {
         if isRunning { return "Retrying failed steps… This retry does not pause services." }
         if inWindow, let interval = pauseInterval {
-            let formatter = DateFormatter()
-            formatter.calendar = calendar
-            formatter.timeZone = calendar.timeZone
-            formatter.dateFormat = "HH:mm"
-            return "Retries pause from \(formatter.string(from: interval.start)) until nightly maintenance finishes at \(formatter.string(from: interval.end))."
+            return "Retries are paused for scheduled maintenance (until \(localTime(interval.end)))."
         }
+        if receipt?.steps.isEmpty == true, receipt?.deferred.isEmpty == false { return "" }
         if receipt?.status == "ready" {
+            if receipt?.steps.isEmpty == true { return "Nothing to retry now." }
             guard pauseInterval.map({ now() < $0.end }) == true else { return "Checking retry availability…" }
             let labels = (receipt?.steps ?? []).map(BrainBarMaintenanceStep.label).joined(separator: ", ")
             return "Retry will run: \(labels). Nothing else pauses."
         }
+        if receipt?.status == "nothing-to-retry" { return "Everything from last night has finished. Nothing to retry." }
+        if receipt?.status == "accepted" { return "The retry finished." }
         return receipt?.reason ?? error
     }
     var details: String {
-        (receipt?.failures ?? []).map { failure in
-            let label = BrainBarMaintenanceStep.label(failure.step)
-            if let deferred = receipt?.deferred.first(where: { $0.step == failure.step }) {
-                // The reason carries the step's real timing; most steps run from the calendar start.
-                let reason = deferred.reason.prefix(1).lowercased() + deferred.reason.dropFirst()
-                return "\(label) — \(reason)."
+        guard let receipt else { return "" }
+        let deferredSteps = Set(receipt.deferred.map(\.step))
+        // Deferred work is visible even when the receipt omits it from failures.
+        let steps = receipt.failures.map(\.step) + receipt.deferred.map(\.step).filter { step in
+            !receipt.failures.contains { $0.step == step }
+        }
+        return steps.map { step in
+            let unfinished = "\(BrainBarMaintenanceStep.label(step)) didn’t finish last night."
+            if deferredSteps.contains(step), !inWindow {
+                let start = receipt.retryPauseStart.flatMap { ISO8601DateFormatter().date(from: $0) }
+                let time = start.flatMap { $0 > now() ? ", after \(localTime($0))" : nil } ?? ""
+                let next = " It runs again automatically tonight during scheduled maintenance\(time)."
+                return unfinished + next + (showsRetryButton ? "" : " Nothing to do now.")
             }
-            let next = canRetry ? " You can retry it now." : ""
-            return "\(label) didn’t finish last night (\(failure.reason)).\(next)"
+            return unfinished + (canRetry && receipt.steps.contains(step) ? " You can retry it now." : "")
         }.joined(separator: "\n")
     }
 
@@ -132,7 +148,7 @@ final class BrainBarMaintenanceRetryModel: ObservableObject {
     }
 
     func retry() async {
-        // No CLI, or a retry already running: the button is disabled; stay silent.
+        // No CLI, or a retry already running: do not launch another action.
         guard let runner, !isRunning else { return }
         guard canRetry else {
             // Eligibility was lost while the confirmation was open; say why instead of doing nothing.
@@ -206,13 +222,15 @@ struct BrainBarMaintenanceRetryRow: View {
             if !model.details.isEmpty {
                 Text(model.details).fixedSize(horizontal: false, vertical: true)
             }
-            HStack {
-                Button("Retry failed steps") { confirming = true }
-                    .disabled(!model.canRetry)
-                    .accessibilityIdentifier("brainbar.maintenance.retry-failed")
-                if model.isRunning { ProgressView().controlSize(.small) }
+            if model.showsRetryButton {
+                HStack {
+                    Button("Retry failed steps") { confirming = true }
+                        .disabled(!model.canRetry)
+                        .accessibilityIdentifier("brainbar.maintenance.retry-failed")
+                    if model.isRunning { ProgressView().controlSize(.small) }
+                }
             }
-            Text(model.explanation).foregroundStyle(.secondary)
+            if !model.explanation.isEmpty { Text(model.explanation).foregroundStyle(.secondary) }
             if let outcome = model.outcome { Text(outcome) }
         }
         .font(.system(size: 12))
