@@ -67,7 +67,9 @@ final class BrainBarMaintenanceRetryModel: ObservableObject {
         !isRunning && !inWindow && receipt?.status == "ready" && receipt?.steps.isEmpty == false
             && pauseInterval.map { now() < $0.end } == true
     }
-    var showsRetryButton: Bool { canRetry || isRunning }
+    /// The button exists only when pressing it would do something; never a disabled control.
+    var showsRetryButton: Bool { canRetry }
+    var showsProgress: Bool { isRunning }
 
     private func localTime(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -106,7 +108,7 @@ final class BrainBarMaintenanceRetryModel: ObservableObject {
                 let start = receipt.retryPauseStart.flatMap { ISO8601DateFormatter().date(from: $0) }
                 let time = start.flatMap { $0 > now() ? ", after \(localTime($0))" : nil } ?? ""
                 let next = " It runs again automatically tonight during scheduled maintenance\(time)."
-                return unfinished + next + (showsRetryButton ? "" : " Nothing to do now.")
+                return unfinished + next + (showsRetryButton || showsProgress ? "" : " Nothing to do now.")
             }
             return unfinished + (canRetry && receipt.steps.contains(step) ? " You can retry it now." : "")
         }.joined(separator: "\n")
@@ -223,12 +225,10 @@ struct BrainBarMaintenanceRetryRow: View {
                 Text(model.details).fixedSize(horizontal: false, vertical: true)
             }
             if model.showsRetryButton {
-                HStack {
-                    Button("Retry failed steps") { confirming = true }
-                        .disabled(!model.canRetry)
-                        .accessibilityIdentifier("brainbar.maintenance.retry-failed")
-                    if model.isRunning { ProgressView().controlSize(.small) }
-                }
+                Button("Retry failed steps") { confirming = true }
+                    .accessibilityIdentifier("brainbar.maintenance.retry-failed")
+            } else if model.showsProgress {
+                ProgressView().controlSize(.small)
             }
             if !model.explanation.isEmpty { Text(model.explanation).foregroundStyle(.secondary) }
             if let outcome = model.outcome { Text(outcome) }

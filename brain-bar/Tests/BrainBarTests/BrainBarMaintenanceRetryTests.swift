@@ -146,9 +146,11 @@ final class BrainBarMaintenanceRetryTests: XCTestCase {
         XCTAssertEqual(stale.explanation, "Checking retry availability…")
     }
 
-    func testRunningRetryKeepsItsButtonAndProgressText() throws {
+    func testRunningRetryShowsProgressWithoutADisabledButton() throws {
         let model = try presentationModel(steps: ["jsonl-backup"], running: true)
-        XCTAssertTrue(model.showsRetryButton)
+        // A disabled button during the run is a dead control; the spinner and text say what happens.
+        XCTAssertFalse(model.showsRetryButton)
+        XCTAssertTrue(model.showsProgress)
         XCTAssertFalse(model.canRetry)
         XCTAssertEqual(model.explanation, "Retrying failed steps… This retry does not pause services.")
     }
