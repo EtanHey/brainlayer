@@ -52,21 +52,36 @@ def test_five_rows_twice_preserve_identity_metadata_and_links(tmp_path, export):
         seed(store)
         first = import_connections(store, export)
         second = import_connections(store, export)
-        assert first["persons"] == {"new": 1, "merged": 2}
-        assert first["companies"] == {"new": 1, "merged": 1}
+        assert first["persons"] == {
+            "new": 1,
+            "merged": 2,
+            "new_name_conflict": 0,
+            "merged_by": {"linkedin_url": 1, "email": 1, "name": 0},
+        }
+        assert first["companies"] == {"new": 1, "merged": 1, "merged_by": {"name": 1}}
         assert first["relations"] == {"new": 6, "merged": 0}
         assert first["skipped"] == {"missing_name": 1, "duplicate_in_file": 1}
         assert first["duplicates_within_file"] == 1
         assert first["rows_missing_name"] == 1
-        assert second["persons"] == {"new": 0, "merged": 3}
-        assert second["companies"] == {"new": 0, "merged": 2}
+        assert second["persons"] == {
+            "new": 0,
+            "merged": 3,
+            "new_name_conflict": 0,
+            "merged_by": {"linkedin_url": 1, "email": 1, "name": 1},
+        }
+        assert second["companies"] == {"new": 0, "merged": 2, "merged_by": {"name": 2}}
         assert second["relations"] == {"new": 0, "merged": 6}
         person = store.get_entity("url-person")
         assert person["metadata"]["preserved"] is True
         assert person["metadata"]["has_messages"] is False
         assert person["metadata"]["linkedin_imports"][0]["sha256"] == hashlib.sha256(export.read_bytes()).hexdigest()
         assert len(person["metadata"]["linkedin_imports"]) == 1
-        assert {a["alias"] for a in store.get_entity_aliases("url-person")} >= {"Renamed", "Example"}
+        assert person["metadata"]["first_name"] == "Renamed"
+        assert person["metadata"]["last_name"] == "Example"
+        assert {a["alias"] for a in store.get_entity_aliases("url-person")} == {
+            "Renamed Example",
+            "https://linkedin.com/in/fake-one",
+        }
         links = store.get_entity_relations("url-person")
         assert {r["relation_type"] for r in links} == {"works_at", "linkedin_connection"}
         assert any(r["target_id"] == "owner" and r["properties"]["has_messages"] is False for r in links)
@@ -127,5 +142,198 @@ def test_existing_relation_evidence_survives_import(tmp_path, export):
         assert prior["properties"]["preserved"] is True
         assert prior["confidence"] == 0.8
         assert prior["importance"] == 0.9
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "stored,row,conflict,match_kind",
+    [
+        ({"linkedin_url": "https://linkedin.com/in/old"}, {"linkedin_url": "https://linkedin.com/in/new"}, True, None),
+        ({}, {"linkedin_url": "https://linkedin.com/in/new"}, False, "name"),
+        (
+            {"linkedin_url": "https://linkedin.com/in/same"},
+            {"linkedin_url": "https://linkedin.com/in/same"},
+            False,
+            "linkedin_url",
+        ),
+        ({"email": "old@example.invalid"}, {"email": "new@example.invalid"}, True, None),
+    ],
+)
+@pytest.mark.parametrize("alias_only", [False, True])
+def test_same_name_respects_identity_and_reruns(tmp_path, stored, row, conflict, match_kind, alias_only):
+    store = VectorStore(tmp_path / "copy.db")
+    try:
+        store.upsert_entity("existing", "person", "Collision Example", metadata={} if alias_only else stored)
+        # Cover typed identity aliases even when the metadata has no identity fields.
+        for key, value in stored.items():
+            store.add_entity_alias(value, "existing", alias_type=key)
+        export = tmp_path / "connections.json"
+        export.write_text(json.dumps([dict(full_name="Collision Example", **row)]))
+        first = import_connections(store, export)
+        assert first["persons"]["new"] == int(conflict)
+        assert first["persons"]["merged"] == int(not conflict)
+        assert first["persons"]["new_name_conflict"] == int(conflict)
+        assert first["persons"]["merged_by"] == {
+            key: int(key == match_kind) for key in ("linkedin_url", "email", "name")
+        }
+        if conflict:
+            assert store.get_entity("existing")["metadata"] == ({} if alias_only else stored)
+        second = import_connections(store, export)
+        assert second["persons"]["new"] == 0
+        # Another identity owns the original name: reruns use the conservative skip path.
+        assert second["persons"]["merged"] == int(not conflict)
+        assert second["skipped"] == ({"ambiguous_identity": 1} if conflict else {})
+        assert len(list(store.conn.execute("SELECT id FROM kg_entities WHERE entity_type='person'"))) == 1 + int(
+            conflict
+        )
+    finally:
+        store.close()
+
+
+def test_transaction_rolls_back_all_imported_entities(tmp_path, export, monkeypatch):
+    from brainlayer.kg_repo import KGMixin
+
+    store = VectorStore(tmp_path / "copy.db")
+    original = KGMixin.add_entity_alias
+
+    def fail_after_entity_write(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        raise RuntimeError("synthetic_write_failure")
+
+    monkeypatch.setattr(KGMixin, "add_entity_alias", fail_after_entity_write)
+    try:
+        with pytest.raises(RuntimeError, match="synthetic_write_failure"):
+            import_connections(store, export)
+        assert list(store.conn.execute("SELECT id FROM kg_entities")) == []
+        assert list(store.conn.execute("SELECT alias FROM kg_entity_aliases")) == []
+        assert not store.conn.in_transaction
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "flags,error",
+    [
+        (["--live"], "confirmation_required"),
+        (["--live", "--confirm-sha256", "0" * 64], "confirmation_sha256_mismatch"),
+        (["--live", "--confirm-sha256", "MATCH", "--db-copy", "copy.db"], "not allowed with argument"),
+    ],
+)
+def test_live_refusals_do_not_open_a_database(export, monkeypatch, capsys, flags, error):
+    from brainlayer import linkedin_import
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("refused live command must not open a database")
+
+    monkeypatch.setattr(linkedin_import, "open_writer_store", forbidden)
+    flags = [hashlib.sha256(export.read_bytes()).hexdigest() if f == "MATCH" else f for f in flags]
+    monkeypatch.setattr("sys.argv", ["linkedin_import", str(export), *flags])
+    try:
+        result = linkedin_import.main()
+    except SystemExit as exc:
+        result = exc.code
+    assert result != 0
+    output = capsys.readouterr()
+    assert error in output.out + output.err
+
+
+def test_email_identity_preserves_accents(tmp_path):
+    store = VectorStore(tmp_path / "copy.db")
+    try:
+        store.upsert_entity("existing", "person", "Existing", metadata={"email": "jose@example.invalid"})
+        export = tmp_path / "connections.json"
+        export.write_text(json.dumps([dict(full_name="Other", email=" JOSÉ@example.invalid ")]))
+        result = import_connections(store, export)
+        assert result["persons"]["new"] == 1
+        aliases = list(store.conn.execute("SELECT alias FROM kg_entity_aliases WHERE alias_type='email'"))
+        assert aliases == [("josé@example.invalid",)]
+    finally:
+        store.close()
+
+
+def test_identity_match_with_another_name_owner_is_skipped(tmp_path):
+    store = VectorStore(tmp_path / "copy.db")
+    try:
+        store.upsert_entity("a", "person", "Original", metadata={"linkedin_url": "https://linkedin.com/in/safe"})
+        store.upsert_entity("b", "person", "Conflicting Name", metadata={"preserved": True})
+        before = {eid: store.get_entity(eid) for eid in ("a", "b")}
+        export = tmp_path / "connections.json"
+        export.write_text(json.dumps([dict(full_name="Conflicting Name", linkedin_url="https://linkedin.com/in/safe")]))
+        result = import_connections(store, export)
+        assert result["skipped"] == {"ambiguous_identity": 1}
+        assert {eid: store.get_entity(eid) for eid in ("a", "b")} == before
+    finally:
+        store.close()
+
+
+def test_invalid_existing_url_alias_is_counted_and_ignored(tmp_path, export):
+    store = VectorStore(tmp_path / "copy.db")
+    try:
+        store.upsert_entity("existing", "person", "Existing")
+        store.add_entity_alias("https://invalid.example/profile", "existing", alias_type="linkedin_url")
+        result = import_connections(store, export)
+        assert result["invalid_existing_alias"] == 1
+        assert result["persons"]["new"] > 0
+    finally:
+        store.close()
+
+
+def test_regional_url_alias_matches_canonical_identity(tmp_path):
+    store = VectorStore(tmp_path / "copy.db")
+    try:
+        store.upsert_entity("existing", "person", "Existing")
+        store.add_entity_alias("https://il.linkedin.com/in/regional", "existing", alias_type="linkedin_url")
+        export = tmp_path / "connections.json"
+        export.write_text(
+            json.dumps([dict(full_name="New Alias", linkedin_url="https://www.linkedin.com/in/regional/")])
+        )
+        result = import_connections(store, export)
+        assert result["persons"]["merged_by"]["linkedin_url"] == 1
+        assert result["invalid_existing_alias"] == 0
+    finally:
+        store.close()
+
+
+def test_sha_mismatch_is_typed_and_contains_only_static_reason(export, monkeypatch, capsys):
+    from brainlayer import linkedin_import
+
+    monkeypatch.setattr("sys.argv", ["linkedin_import", str(export), "--live", "--confirm-sha256", "0" * 64])
+    assert linkedin_import.main() == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "error_type": "ImportRefusal",
+        "reason": "confirmation_sha256_mismatch",
+    }
+
+
+def test_unexpected_exception_text_is_never_printed(tmp_path, export, monkeypatch, capsys):
+    from brainlayer import linkedin_import
+
+    copy = tmp_path / "copy.db"
+    copy.touch()
+
+    def fail(*args, **kwargs):
+        raise ValueError("PRIVATE_SYNTHETIC_MARKER")
+
+    monkeypatch.setattr(linkedin_import, "open_writer_store", fail)
+    monkeypatch.setattr("sys.argv", ["linkedin_import", str(export), "--db-copy", str(copy)])
+    assert linkedin_import.main() == 1
+    assert json.loads(capsys.readouterr().out) == {"error_type": "ValueError", "reason": "import_failed"}
+
+
+def test_bare_name_resolution_does_not_change(tmp_path):
+    store = VectorStore(tmp_path / "copy.db")
+    try:
+        before = store.get_entity_by_alias("David")
+        export = tmp_path / "connections.json"
+        export.write_text(
+            json.dumps([dict(full_name=f"David {last}", first_name="David", last_name=last) for last in ("A", "B")])
+        )
+        import_connections(store, export)
+        assert store.get_entity_by_alias("David") == before
+        # Exact alias resolution must stay unchanged; generic FTS fuzzy search is separate.
+        for eid, metadata in store.conn.execute("SELECT id, metadata FROM kg_entities"):
+            assert json.loads(metadata)["first_name"] == "David"
+            assert {a["alias_type"] for a in store.get_entity_aliases(eid)} == {"name"}
     finally:
         store.close()

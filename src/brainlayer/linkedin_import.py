@@ -1,8 +1,8 @@
-"""Copy-only LinkedIn KG import. Output contains counts, never contact records.
+"""LinkedIn KG import with an explicit copy or SHA-confirmed live mode. Output contains counts, never contact records.
 
 Run: python -m brainlayer.linkedin_import EXPORT.json --db-copy COPY.db
 Identity matching is exact: LinkedIn URL, email, then normalized full name.
-First/last-name aliases are discoverable but never used as identity keys.
+First/last names stay in metadata; name aliases must contain multiple tokens.
 """
 
 import argparse
@@ -10,28 +10,62 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from .disk_space import measure_disk_space
+from .kg_repo import KGMixin
 from .pipeline.entity_resolution import _normalize_name
-from .runtime_store import open_writer_store
+from .runtime_store import RuntimeStoreModeError, open_writer_store
 
 SOURCE = "linkedin-export 2026-10-31 (portfolio scrub)"
-ATTRIBUTES = ("linkedin_url", "company", "position", "connected_on", "relationship_strength", "has_messages")
+ATTRIBUTES = (
+    "first_name",
+    "last_name",
+    "linkedin_url",
+    "company",
+    "position",
+    "connected_on",
+    "relationship_strength",
+    "has_messages",
+)
+
+
+class ImportRefusal(ValueError):
+    """An importer-owned static reason; never carries source values."""
+
+    def __init__(self, reason):
+        if reason not in {
+            "copy_refusal",
+            "invalid_export",
+            "disk_floor",
+            "confirmation_required",
+            "confirmation_sha256_mismatch",
+        }:
+            raise ValueError("unknown_import_reason")
+        self.reason = reason
+        super().__init__(reason)
 
 
 def normalized(value):
     return " ".join(_normalize_name(value or "").split())
 
 
+def email_key(value):
+    return (value or "").strip().casefold()
+
+
 def linkedin_key(value):
     if not value:
         return ""
     parsed = urlsplit(value if "://" in value else "https://" + value)
-    if parsed.hostname not in {"linkedin.com", "www.linkedin.com"} or not parsed.path.startswith("/in/"):
+    if not re.fullmatch(r"(?:www\.|[a-z]{2}\.)?linkedin\.com", parsed.hostname or "") or not parsed.path.startswith(
+        "/in/"
+    ):
         raise ValueError("invalid_linkedin_url")
     return "https://linkedin.com" + parsed.path.rstrip("/").casefold()
 
@@ -45,24 +79,51 @@ def require_copy(path, live=None):
     if live is not None:
         protected.append(Path(live))
     if any(path == p.expanduser().resolve() or (p.exists() and os.path.samefile(path, p)) for p in protected):
-        raise ValueError("db-copy must be a separate copy")
+        raise ImportRefusal("copy_refusal")
     return path
 
 
-def import_connections(store, export):
-    """Apply an export to an explicitly supplied store using supported KG writers.
+class _ImportGraph(KGMixin):
+    """Use the supported KG writers on one connection, including read-your-writes."""
 
-    Existing metadata is retained. Ambiguous identities are skipped for review.
-    The caller owns the store; this function never opens the canonical database.
-    """
+    def __init__(self, store):
+        self.conn, self.db_path = store.conn, store.db_path
+
+    def _read_cursor(self):
+        return self.conn.cursor()
+
+
+def import_connections(store, export):
+    """Import atomically on the caller's supported writer; never opens a database."""
     started = time.monotonic()
-    raw = Path(export).read_bytes()
+    raw = export if isinstance(export, bytes) else Path(export).read_bytes()
     rows = json.loads(raw)
     if not isinstance(rows, list):
-        raise ValueError("invalid_export")
-    provenance = {"source": SOURCE, "sha256": hashlib.sha256(raw).hexdigest()}
+        raise ImportRefusal("invalid_export")
+    store.conn.execute("BEGIN IMMEDIATE")
+    try:
+        result = _import_rows(_ImportGraph(store), rows, hashlib.sha256(raw).hexdigest(), started)
+        store.conn.execute("COMMIT")
+        return result
+    except BaseException:
+        store.conn.execute("ROLLBACK")
+        raise
+
+
+def _import_rows(store, rows, sha256, started):
+    provenance = {"source": SOURCE, "sha256": sha256}
     counts = {key: {"new": 0, "merged": 0} for key in ("persons", "companies", "relations")}
+    counts["persons"].update(merged_by=dict.fromkeys(("linkedin_url", "email", "name"), 0), new_name_conflict=0)
+    counts["companies"]["merged_by"] = {"name": 0}
     skipped = Counter()
+    invalid_existing_alias = 0
+    identities = defaultdict(lambda: defaultdict(set))
+
+    def index_identity(kind, key, eid):
+        if key:
+            indexes[kind][key].add(eid)
+            identities[eid][kind].add(key)
+
     indexes = {kind: defaultdict(set) for kind in ("person", "company", "linkedin_url", "email")}
     for eid, kind, name, meta in store.conn.execute(
         "SELECT id, entity_type, name, metadata FROM kg_entities WHERE entity_type IN ('person','company')"
@@ -70,24 +131,31 @@ def import_connections(store, export):
         indexes[kind][normalized(name)].add(eid)
         if kind == "person":
             metadata = json.loads(meta or "{}")
+            if metadata.get("linkedin_full_name"):
+                indexes[kind][normalized(metadata["linkedin_full_name"])].add(eid)
             try:
-                indexes["linkedin_url"][linkedin_key(metadata.get("linkedin_url"))].add(eid)
+                index_identity("linkedin_url", linkedin_key(metadata.get("linkedin_url")), eid)
             except ValueError:
                 pass
             contact = metadata.get("contact_info") or {}
-            indexes["email"][normalized(metadata.get("email") or contact.get("email"))].add(eid)
+            for value in (metadata.get("email"), contact.get("email")):
+                index_identity("email", email_key(value), eid)
     for alias, eid, kind in store.conn.execute(
         "SELECT a.alias, a.entity_id, a.alias_type FROM kg_entity_aliases a "
         "JOIN kg_entities e ON e.id=a.entity_id WHERE e.entity_type='person' "
         "AND a.alias_type IN ('linkedin_url','email')"
     ):
-        key = linkedin_key(alias) if kind == "linkedin_url" else normalized(alias)
-        indexes[kind][key].add(eid)
+        try:
+            key = linkedin_key(alias) if kind == "linkedin_url" else email_key(alias)
+        except ValueError:
+            invalid_existing_alias += 1
+            continue
+        index_identity(kind, key, eid)
     owner_ids = indexes["person"].get(normalized("Etan Heyman"), set())
     owner = next(iter(owner_ids)) if len(owner_ids) == 1 else None
     seen_people, seen_companies, seen_relations = set(), set(), set()
 
-    def upsert(kind, name, eid, attributes, row_number=None):
+    def upsert(kind, name, eid, attributes, row_number=None, name_conflict=False, identity_key=None):
         old = store.get_entity(eid) if eid else None
         metadata = dict(old["metadata"]) if old else {}
         metadata.update({k: v for k, v in attributes.items() if v is not None and v != ""})
@@ -98,11 +166,16 @@ def import_connections(store, export):
         if evidence not in sources:
             sources.append(evidence)
         metadata["linkedin_imports"] = sources
-        stored = store.upsert_entity(
-            eid or f"{kind}-{uuid4().hex}", kind, old["name"] if old else name, metadata=metadata
-        )
+        storage_name = old["name"] if old else name
+        if name_conflict:
+            # The KG enforces UNIQUE(type, name). Keep the original as a full-name alias.
+            suffix = hashlib.sha256(identity_key.encode()).hexdigest()[:16]
+            storage_name = f"{name} [linkedin-{suffix}]"
+            metadata["linkedin_full_name"] = name
+        stored = store.upsert_entity(eid or f"{kind}-{uuid4().hex}", kind, storage_name, metadata=metadata)
         indexes[kind][normalized(name)].add(stored)
-        store.add_entity_alias(name, stored)
+        if kind == "person" and len(name.split()) > 1:
+            store.add_entity_alias(name, stored)
         return stored
 
     def relation(source, target, kind, properties):
@@ -136,10 +209,8 @@ def import_connections(store, export):
         counts["relations"]["merged" if existing else "new"] += 1
 
     for number, row in enumerate(rows, 1):
-        from .disk_space import measure_disk_space
-
         if measure_disk_space(store.db_path.parent, include_available=False).free_now_bytes < 2 * 1024**3:
-            raise ValueError("disk_floor")
+            raise ImportRefusal("disk_floor")
         if (
             not isinstance(row, dict)
             or any(
@@ -158,31 +229,49 @@ def import_connections(store, export):
         except ValueError:
             skipped["invalid_linkedin_url"] += 1
             continue
-        email = normalized(row.get("email"))
-        matches = next(
+        email = email_key(row.get("email"))
+        match_kind, matches = next(
             (
-                indexes[kind][key]
-                for kind, key in (("linkedin_url", url), ("email", email), ("person", normalized(name)))
+                (kind, indexes[kind][key])
+                for kind, key in (("linkedin_url", url), ("email", email))
                 if key and indexes[kind].get(key)
             ),
-            set(),
+            ("name", set()),
         )
+        name_candidates = indexes["person"].get(normalized(name), set())
+        name_conflict = False
+        if not matches:
+            matches = {
+                eid
+                for eid in name_candidates
+                if not any(
+                    key and identities[eid][kind] and identities[eid][kind] != {key}
+                    for kind, key in (("linkedin_url", url), ("email", email))
+                )
+            }
+            name_conflict = bool(name_candidates and not matches)
+        if matches and name_candidates - matches:
+            skipped["ambiguous_identity"] += 1
+            continue
         if len(matches) > 1:
             skipped["ambiguous_identity"] += 1
             continue
         eid = next(iter(matches), None)
+        if eid and indexes["person"].get(normalized(store.get_entity(eid)["name"]), set()) - {eid}:
+            skipped["ambiguous_identity"] += 1
+            continue
         if eid in seen_people:
             skipped["duplicate_in_file"] += 1
             continue
-        eid = upsert("person", name, eid, {k: row.get(k) for k in ATTRIBUTES}, number)
+        eid = upsert("person", name, eid, {k: row.get(k) for k in ATTRIBUTES}, number, name_conflict, url or email)
         counts["persons"]["merged" if matches else "new"] += 1
+        counts["persons"]["new_name_conflict"] += int(name_conflict)
+        if matches:
+            counts["persons"]["merged_by"][match_kind] += 1
         seen_people.add(eid)
-        for field in ("first_name", "last_name"):
-            if row.get(field):
-                store.add_entity_alias(row[field].strip(), eid, alias_type=field)
         for kind, key in (("linkedin_url", url), ("email", email)):
             if key:
-                indexes[kind][key].add(eid)
+                index_identity(kind, key, eid)
                 store.add_entity_alias(key, eid, alias_type=kind)
         if owner and owner != eid:
             relation(
@@ -203,11 +292,13 @@ def import_connections(store, export):
         if key not in seen_companies:
             cid = upsert("company", company, cid, {})
             counts["companies"]["merged" if matches else "new"] += 1
+            counts["companies"]["merged_by"]["name"] += int(bool(matches))
             seen_companies.add(key)
         relation(eid, cid, "works_at", {"position": row.get("position")})
     return {
         **counts,
         "rows": len(rows),
+        "invalid_existing_alias": invalid_existing_alias,
         "skipped": dict(skipped),
         "owner_found": owner is not None,
         "duplicates_within_file": skipped["duplicate_in_file"],
@@ -220,20 +311,39 @@ def import_connections(store, export):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("export", type=Path)
-    parser.add_argument("--db-copy", type=Path, required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--db-copy", type=Path)
+    mode.add_argument("--live", action="store_true")
+    parser.add_argument("--confirm-sha256")
     args = parser.parse_args()
+    previous_logging_level = logging.root.manager.disable
     logging.disable(logging.CRITICAL)  # Library diagnostics can contain personal data.
     store = None
     try:
-        path = require_copy(args.db_copy)
+        if args.live and not args.confirm_sha256:
+            raise ImportRefusal("confirmation_required")
+        raw = args.export.read_bytes()  # Hash and import these same bytes; never reopen the export.
+        if args.live and hashlib.sha256(raw).hexdigest() != args.confirm_sha256:
+            raise ImportRefusal("confirmation_sha256_mismatch")
+        path = Path.home() / ".local/share/brainlayer/brainlayer.db" if args.live else require_copy(args.db_copy)
         store = open_writer_store(path)
-        print(json.dumps(import_connections(store, args.export), sort_keys=True))
-    except Exception:
-        print(json.dumps({"error": "import_failed; no row details emitted"}))
+        print(json.dumps(import_connections(store, raw), sort_keys=True))
+    except Exception as exc:
+        reason = (
+            exc.reason
+            if isinstance(exc, ImportRefusal)
+            else "invalid_export"
+            if isinstance(exc, json.JSONDecodeError)
+            else "invalid_store_mode"
+            if isinstance(exc, RuntimeStoreModeError)
+            else "import_failed"
+        )
+        print(json.dumps({"error_type": type(exc).__name__, "reason": reason}))
         return 1
     finally:
         if store is not None:
             store.close()
+        logging.disable(previous_logging_level)
     return 0
 
 
