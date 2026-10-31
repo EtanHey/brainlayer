@@ -790,6 +790,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "28aba63758cf55b045b15bee0c1e2254158de16a1a607424bf7be9bf40ce0058": {
+      "non_cloud_purpose": "Local parsing of LinkedIn profile URLs into a normalized identity key for the KG importer; no network call, no transport invocation. Site: src/brainlayer/linkedin_import.py <module> from urllib.parse import urlsplit.",
+      "site": {
+        "call_sha256": "7f6d2de520ba06bee6c9a0ce4b82e28e111014f95ae8adfe098303d46ce04b21",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/linkedin_import.py",
+        "target": "from urllib.parse import urlsplit"
+      }
+    },
     "28fc5950909db3388f89e29e6f2b5d763286c4122ff60847051b7b817691d501": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli/__init__.py <module>.setup",
       "site": {
@@ -4408,6 +4418,16 @@
         "owner": "<module>.consolidate",
         "path": "src/brainlayer/cli/__init__.py",
         "target": "import subprocess"
+      }
+    },
+    "ba9c90995581e9fabdafe34ab1ebb8beb2611c1fdacd6f540d3a6dd7dc87a4fa": {
+      "non_cloud_purpose": "Local parsing of LinkedIn profile URLs into a normalized identity key for the KG importer; no network call, no transport invocation. Site: src/brainlayer/linkedin_import.py <module>.linkedin_key urllib.parse.urlsplit.",
+      "site": {
+        "call_sha256": "2b544b7f440c3691a3e758e995428ab7b9d1aca398cc589d4876d9352693f53d",
+        "kind": "transport_call",
+        "owner": "<module>.linkedin_key",
+        "path": "src/brainlayer/linkedin_import.py",
+        "target": "urllib.parse.urlsplit"
       }
     },
     "babf9740737daee42f2494e3dbcdfb9499b1d79581aa96934e29df07545389ab": {
