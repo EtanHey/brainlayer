@@ -1,0 +1,1422 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Persistent memory for AI agents — search, think, recall across every conversation">
+      
+      
+      
+        <link rel="canonical" href="https://etanhey.github.io/brainlayer/operations/health-relay/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Independent health relay (com.etanhey.brainlayer-health-relay) - BrainLayer</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#independent-health-relay-cometanheybrainlayer-health-relay" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="BrainLayer" class="md-header__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BrainLayer
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Independent health relay (com.etanhey.brainlayer-health-relay)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="BrainLayer" class="md-nav__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    BrainLayer
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retired Enrichment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kg-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    KG Specification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../data-locations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Locations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retired Enrichment Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../local-models-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0000-template/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Template
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-sqlite-vec-over-dedicated-vector-db/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: sqlite-vec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-reciprocal-rank-fusion-for-hybrid-search/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: RRF Hybrid Search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-it-reads-per-host" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What it reads, per host
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delivery-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delivery contract
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tiered-escalation-and-lead-acknowledgment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tiered escalation and lead acknowledgment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#state-recovery-and-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        State recovery and rollback
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#not-covered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Not covered
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#install-plan-m4-only-after-review-and-merge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install plan (M4 only; after review and merge)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="independent-health-relay-cometanheybrainlayer-health-relay">Independent health relay (<code>com.etanhey.brainlayer-health-relay</code>)</h1>
+<p>One LaunchAgent on the M4 reads both Macs' health files and appends one <code>@orc BLOCKED:</code> line
+per new issue episode to its primary inbox. The live primary is the BrainLayer collab,
+<code>/Users/etanheyman/Gits/orchestrator/docs.local/collab/brainlayer-health.md</code>.
+An optional second inbox receives only prolonged, unacknowledged user-visible outages.
+Source: <code>scripts/health_relay/health_relay.py</code>, stdlib only, no BrainLayer imports. It never
+opens a database, reads credentials, runs <code>health-check</code>, heals, or writes producer state.</p>
+<p>It runs <strong>outside</strong> the BrainLayer supervisor, so it still reports when the supervisor and every
+job inside it are dead. The <code>com.etanhey.*</code> label keeps it out of the fleet watchdog's
+<code>com.brainlayer.*</code> revival glob and out of <code>supervisor/jobs.json</code>.</p>
+<h2 id="what-it-reads-per-host">What it reads, per host</h2>
+<table>
+<thead>
+<tr>
+<th>Source (default under the host <code>dir</code>)</th>
+<th>Issue it can open</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>job-alerts.json</code></td>
+<td><code>job-alert:&lt;key&gt;</code>, one per active key. The reason text is never copied</td>
+</tr>
+<tr>
+<td><code>badge-state.json</code></td>
+<td><code>badge:&lt;code&gt;</code> for <strong>critical</strong> active issues (warnings are advisory; suppressed codes hold existing episodes open without opening new ones; <code>job_alert_*</code> codes come from job-alerts instead); <code>health-stale</code> when <code>generated_at</code> is older than <code>badge_max_age_seconds</code> (1200) or <code>pending_first_run</code> passes <code>expected_first_run_by</code></td>
+</tr>
+<tr>
+<td><code>watcher-health.json</code></td>
+<td><code>watcher-stale</code> when <code>updated_at</code> is older than <code>watcher_max_age_seconds</code> (600)</td>
+</tr>
+<tr>
+<td><code>supervisor/jobs.json</code>, <code>pause.sentinel</code></td>
+<td>Nothing by themselves. <code>enabled: false</code>, or a current pause naming <code>com.brainlayer.health-check</code> / <code>com.brainlayer.watch</code>, suppresses that staleness alarm</td>
+</tr>
+</tbody>
+</table>
+<p>Any read problem opens its own issue: <code>source-missing|unreadable|oversize|corrupt:&lt;source&gt;</code>.
+A future timestamp counts as corrupt. <code>host-unreachable</code> opens after <code>unreachable_after</code> (3)
+failed SSH reads in a row and closes on the next successful read. Every other issue closes only
+on a <strong>fresh, validated</strong> read of its own source, so switching between unreadable, missing and
+corrupt keeps a <code>source-*</code> issue open. A stale or <code>pending_first_run</code> badge, a stale watcher
+file, or a disabled/paused job's evidence can open issues but clears none.
+Absent badge and watcher files are held through <code>first_run_grace_seconds</code> (900). An absent
+<code>job-alerts.json</code> is healthy only until the file has been observed in any non-absent state,
+including read errors; grace does not cover it. This history rule applies to remote reads too.
+For <code>supervisor/jobs.json</code> and <code>pause.sentinel</code>, absence is healthy only until that source has
+been seen in any non-absent state. After a bad read, absence keeps its source-error episode open
+until a validated read; absence still removes all disabling/pause controls (absent pause = resumed).
+A fresh validated badge closes <code>badge:&lt;code&gt;</code> only when the code appears in neither <code>active</code> nor
+<code>suppressed</code>. Active → suppressed → active is one episode; a code seen only in suppressed
+creates no alert. Both lists must pass the same entry validation before any badge episode clears.
+Every observed issue is tracked, however many there are.</p>
+<p>Remote hosts are read with a fixed reader program on stdin over the existing SSH alias, using
+<code>BatchMode=yes</code>, <code>StrictHostKeyChecking=yes</code> and <code>UpdateHostKeys=no</code>, with bounded time (45 s)
+and output (2 MiB per stdout/stderr pipe, enforced during reads; overflow kills and reaps SSH).
+<code>ssh_alias</code> and <code>remote_python</code> reject control characters and must fully match strict patterns.
+Each remote command argument is shell-quoted because SSH joins them into a shell command.
+Remote source paths are never resolved or statted locally for inbox alias checks.
+Once SSH exits and stdout is complete, a lingering stderr holder cannot delay a successful read.
+Config numbers are integers from 0 through 2147483647; booleans, fractional values, negatives
+and out-of-range values are rejected as <code>config-invalid</code> with exit 2 before any write.
+A source-less remote reader (for example a <code>.pyc</code> without its <code>.py</code>) counts as host-unreachable.
+Each source file is read with <code>O_NOFOLLOW</code>, must be a regular file, and is capped at 256 KiB.</p>
+<h2 id="delivery-contract">Delivery contract</h2>
+<ul>
+<li>Each episode gets an ID, <code>bl-&lt;host&gt;-&lt;epoch&gt;-&lt;seq&gt;-&lt;issue&gt;</code>. The random 128-bit epoch is persisted at
+  bootstrap; sequences advance within that epoch. A new bootstrap generates a fresh epoch.
+  The pending event is fsynced to <code>state.json</code> <strong>before</strong> any append.</li>
+<li>Every attempt appends <strong>one self-contained record in a single <code>write</code></strong>, starting and ending
+  on a line boundary:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>### BrainLayer health relay — &lt;ts&gt; — event=&lt;id&gt;
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>@orc BLOCKED: [BrainLayer &lt;label&gt;] &lt;issue&gt; on host=&lt;host&gt;; source=&lt;host&gt;:&lt;file&gt;; event=&lt;id&gt;
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>&lt;!-- brainlayer-health:&lt;id&gt; --&gt;
+</code></pre></div>
+<p>A short write fails the run and is never continued: a continuation would depend on bytes
+  another writer may already have followed.
+- An event is acknowledged only when, after an inbox <code>fsync</code> succeeds <strong>in that run</strong>, a re-read
+  of the inbox holds its exact BLOCKED line as a whole line and its marker as a whole line.
+- If the BLOCKED line is complete but the marker is missing, the relay appends a marker-only
+  record (<code>\n&lt;!-- brainlayer-health:&lt;id&gt; --&gt;\n</code>), never a suffix to someone else's bytes.
+  Anything else, including a marker with no complete line, gets the full record again.
+- Torn fragments are left where they are and never counted. The inbox is never truncated or
+  rewritten, so other writers' bytes are always preserved.
+- At most 32 events are appended per run. The rest stay pending and go out on later ticks.
+- An open episode stays open until a measured healthy read. A delivered line is never retracted.
+  A later failure after a healthy clear opens a new episode.
+- The relay never creates the inbox. If the inbox is missing, unwritable, fails to fsync, or
+  the re-read lacks a record, the run exits 1 and the event stays pending. Invalid config or a
+  corrupt <code>state.json</code> exits 2. Invalid config is rejected before any write, including when the
+  inbox resolves or aliases to any configured local host source, state, status, lock or atomic temporary
+  files. Corrupt state is preserved byte-for-byte; the failure status has <code>error: "state-corrupt"</code> and <code>pending: null</code>.
+  A lock-open failure exits 1 with <code>error: "lock-open-failed"</code> and <code>pending: null</code>; failure status
+  writes are best-effort. Atomic temp names are unlinked before exclusive creation with mode 0600;
+  planted symlinks and hardlinks cannot truncate their targets.
+  <code>status.json</code> records <code>error</code>, <code>pending</code> and per-host reachability after each run with valid configuration.</p>
+<h2 id="tiered-escalation-and-lead-acknowledgment">Tiered escalation and lead acknowledgment</h2>
+<p>Every new episode still goes to <code>inbox</code> immediately with the unchanged delivery contract above.
+Without <code>escalation</code>, no second destination is read or written. To enable escalation, configure:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">"escalation"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">"inbox"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/Users/etanheyman/Gits/orchestrator/docs.local/collab/orc-inbox.md"</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">"after_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mi">1800</span><span class="p">,</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">"issues"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="s2">"host-unreachable"</span><span class="p">,</span><span class="w"> </span><span class="s2">"health-stale"</span><span class="p">,</span><span class="w"> </span><span class="s2">"watcher-stale"</span><span class="p">,</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="s2">"job-alert:mcp-transport"</span><span class="p">,</span><span class="w"> </span><span class="s2">"job-alert:brainbar-activation"</span><span class="p">,</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="s2">"badge:brain-search-canary-failed"</span><span class="p">,</span><span class="w"> </span><span class="s2">"source-missing:badge"</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="p">}</span>
+</code></pre></div>
+<p><code>inbox</code> is required in that object. The shown threshold and patterns are the defaults when omitted.
+The threshold uses the same integer bounds as other config numbers. <code>issues</code> must be a list of
+valid regular expressions; each must <strong>fullmatch</strong> the issue class. An empty list disables new
+escalations. Both inboxes must be distinct, existing files at delivery time. Neither is created.
+The same path-resolution, symlink/hardlink alias, local-source and state-file collision checks
+apply to both; collisions fail before any write. Remote source paths are never statted locally.</p>
+<p>The default classes are deliberately narrow: they are the real outages, where memory itself stops
+working or stops being observable.</p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>User-visible reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>host-unreachable</code></td>
+<td>A host's memory services cannot be observed over the configured transport</td>
+</tr>
+<tr>
+<td><code>health-stale</code></td>
+<td>Fleet health evidence stopped advancing; outages may be invisible</td>
+</tr>
+<tr>
+<td><code>watcher-stale</code></td>
+<td>Conversation indexing stopped reporting progress, threatening current recall</td>
+</tr>
+<tr>
+<td><code>job-alert:mcp-transport</code></td>
+<td>BrainBar MCP connections or requests are failing to recover</td>
+</tr>
+<tr>
+<td><code>job-alert:brainbar-activation</code></td>
+<td>BrainBar activation failed, leaving the agent memory service unavailable</td>
+</tr>
+<tr>
+<td><code>badge:brain-search-canary-failed</code></td>
+<td>The search canary reports a failed memory retrieval path</td>
+</tr>
+<tr>
+<td><code>source-missing:badge</code></td>
+<td>Health evidence disappeared after grace, leaving health visibility absent</td>
+</tr>
+</tbody>
+</table>
+<p>These signals indicate a user-visible service gap, not proof of data loss.
+Backup-protection alerts (<code>job-alert:backup-daily</code>, <code>job-alert:jsonl-backup</code>,
+<code>job-alert:backup-snapshot</code>) stay in the primary collab: memory still works while a backup fails,
+so the BrainLayer lead owns them there (orc ruling, 2026-10-30). A deployment can add them back
+with an explicit <code>issues</code> list. Changing <code>issues</code> affects new escalations only: an escalation already
+queued for an open, unacknowledged episode is still delivered. To stop one, ACK its primary event
+before the next relay run.
+Internal classes such as <code>badge:job-scan-failed</code> and <code>badge:slow-check</code> stay in the primary collab.
+Badge codes <code>lock_holder_wedge</code>, <code>queue_backed_up</code>, <code>hotlane_dead</code>, and <code>drain_no_progress</code>
+(normalized by the relay to hyphens) also stay there: they indicate degraded operation, not a
+user-visible outage by themselves, so they are excluded from default escalation.</p>
+<p>Orc must <strong>not</strong> watch the primary collab: primary lines retain <code>@orc BLOCKED:</code> for compatibility,
+so watching it would wake orc for every immediate alert. The BrainLayer lead watches that collab
+with a filter that matches <code>@orc</code> (for example <code>--alias @orc</code>), and acknowledges an episode by
+appending exactly this whole line there, in the <strong>primary</strong> inbox:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>ACK &lt;primary-event-id&gt;
+</code></pre></div>
+<p>Quoted, indented, suffixed, or partial matches do not count. An exact final line at EOF also counts.
+CRLF ACK lines do not count; use LF line endings. Successfully sampled ACK event IDs persist in
+state while their episode remains present, including when primary delivery subsequently fails,
+and suppress escalation through a later primary outage. Unrelated ACK IDs are discarded.
+Acknowledgment also persists in episode state; it does not
+close the issue or acknowledge primary delivery. A measured recovery closes as before. Unknown
+or stale evidence still cannot close anything and does not reset the episode timer.</p>
+<p>An eligible episode open continuously for at least <code>after_seconds</code>, without a lead ACK, queues
+one event <code>&lt;primary-event-id&gt;.esc</code>. It carries one <code>@orc BLOCKED:</code> line, the same identity fields,
+and the same self-contained append-only record, durable outbox, fsync gate and marker dedup.
+Both queues use the same delivery function; each can deliver up to 32 events per tick. Primary
+delivery runs first. Escalation failure exits 1 with an <code>escalation-*</code> error in <code>status.json</code>;
+primary delivery is retained, and <code>pending</code> counts both queues. A missing or unreadable escalation
+inbox is reported even before a threshold is reached. A pending escalation retries after restart
+without duplicating a complete line, including a crash after append but before state acknowledgment.
+A lead ACK or measured recovery cancels an undelivered escalation on the next tick. Already
+appended bytes cannot be retracted, including bytes left by a failed fsync. Escalation never
+clears or reopens an episode; a new episode after recovery gets a fresh timer and escalation ID.</p>
+<p>The escalation destination is pinned in state on first use. Changing it fails visibly with
+<code>escalation-destination-changed</code> after primary delivery, preventing pending events from being
+silently redirected. Removing the optional config pauses escalation and retains its pending
+queue; re-enabling the same destination resumes it. If primary access or delivery fails
+(<code>inbox-unavailable</code>, <code>inbox-unreadable</code>, <code>inbox-append-failed</code>, or <code>inbox-ack-missing</code>), due
+escalations still run using only previously persisted ACKs. The run still exits nonzero and
+<code>status.error</code> retains the original primary error, even if escalation also fails. Primary events
+remain pending under the unchanged delivery contract. A missing primary scan retains its
+<code>verify_floor</code>; migration ID resolution waits for primary recovery. State-integrity errors,
+including <code>state-stale</code>, <code>state-corrupt</code>, and <code>state-commit-failed</code>, block escalation before any
+append. A commit failure after append cannot retract that record; retries use marker dedup.
+ACKs are sampled once per tick, so a concurrent ACK arriving
+after that sample may race with that tick's append.</p>
+<p>To recover from <code>escalation-destination-changed</code> when deliberately moving the destination:</p>
+<ol>
+<li>Restore the configured escalation inbox to the pinned <code>escalation_inbox</code> in <code>state.json</code>.
+   Repair access there and run normally until <code>escalation_outbox</code> is empty. Pending events may
+   instead be cancelled by exact lead ACKs in the primary or measured recovery; do not discard
+   them manually. If neither is possible, leave the pin in place and investigate.</li>
+<li>Pause relay invocations and wait for any active run to finish. Preserve a copy of state and
+   both inboxes for recovery outside the repo, with the state copy retaining private permissions.
+   Recheck that <code>escalation_outbox</code> is empty while no relay can write.</li>
+<li>Change only <code>escalation_inbox</code> in state to JSON <code>null</code>, using an atomic replacement with the
+   original permissions. Retain the epoch, sequences, both queues, <code>verify_floor</code>, ACK IDs and
+   every episode flag. Never clear <code>escalated</code>: already sent episodes must not be resent.</li>
+<li>Set config <code>escalation.inbox</code> to the new distinct, existing, writable absolute inbox and
+   resume. The next run pins that destination. Verify <code>status.error</code> is null and both queues
+   drain normally; existing delivered episodes stay delivered. Do not truncate either inbox or
+   reset the state to move a destination. Removing the optional config alone does not clear its pin.</li>
+</ol>
+<h2 id="state-recovery-and-rollback">State recovery and rollback</h2>
+<p>A first-ever bootstrap works without <code>state.json</code> only after successfully reading an inbox with no
+complete relay markers. An unreadable or missing inbox refuses bootstrap with exit 1,
+<code>error: "state-missing"</code> and <code>pending: null</code>; no state is created and nothing is appended.
+Restore inbox access to retry, or explicitly use <code>--accept-new-epoch</code> to authorize a new epoch.
+With that flag, an unavailable inbox still leaves delivery pending until access returns.
+If state is absent and the inbox already contains a complete <code>&lt;!-- brainlayer-health:&lt;id&gt; --&gt;</code>
+line (including an unterminated final line), the run exits 1 with <code>error: "state-missing"</code> and
+<code>pending: null</code> in <code>status.json</code>. It neither appends nor creates replacement state.</p>
+<p>When state exists, the relay scans the inbox once at load for complete markers from that state's
+epoch for every host (including SSH hosts), including an unterminated final line. A marker above
+its host's persisted sequence refuses
+the run with exit 1, <code>error: "state-stale"</code> and <code>pending: null</code>. Nothing is appended and state bytes
+stay unchanged. If the scan cannot read the inbox, the relay persists the pre-observation per-host
+sequences as <code>verify_floor</code>, retaining the earliest floor across outage runs. The next successful
+scan checks against that floor and clears it only after verification. No <strong>primary</strong> delivery
+occurs before that verification, even if inbox access returns within the same run. Observations
+remain pending; the escalation safety net may still deliver due events during primary access
+failure, using persisted ACKs only. A detected stale state blocks both destinations.
+Never restore an older <code>state.json</code>; move stale state aside and use
+<code>--accept-new-epoch</code> instead. The flag does not bypass the stale-state check while state exists.</p>
+<p>Preserve damaged state for investigation; do not delete it as a routine repair. After investigating
+state loss, an operator may explicitly authorize a new epoch:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>python3<span class="w"> </span>scripts/health_relay/health_relay.py<span class="w"> </span>--config<span class="w"> </span>/absolute/path/relay.json<span class="w"> </span>--accept-new-epoch
+</code></pre></div>
+<p>The flag permits bootstrap despite retained markers. Recurring issues get fresh event IDs and new
+alerts. Lost episode history and pending events cannot be reconstructed; currently active issues
+are observed again. The flag does not bypass corrupt-state validation or reset existing state.</p>
+<p>New writes use state <strong>version 4</strong>: episodes persist <code>opened_at</code>, <code>event_id</code>, <code>acknowledged</code>, and
+<code>escalated</code>; state also holds <code>escalation_outbox</code>, its pinned <code>escalation_inbox</code>, and the
+<code>acknowledged_event_ids</code> set serialized as a list (absent in older v4 states means empty). Versions 2 and 3
+migrate on the next successful write, retaining primary pending IDs, sequences, and open/closed
+history. Since neither old version records episode opening time, migrated episodes start their
+escalation timer at migration, conservatively waiting the full threshold. Version-2 episode IDs
+retain the legacy form; newly opened episodes use the epoch form. A transient <code>migrated</code> flag
+lets a v3 state that already contains v2 episodes resolve their original IDs from inbox markers
+after inbox access recovers. It remains set until a marker establishes the ID; while unresolved,
+an exact ACK for either the reconstructed or legacy ID suppresses escalation. Rebinding re-keys
+an undelivered escalation's record and dedup ID. A record whose line was already appended
+finishes delivery under its original ID before rebinding, preserving retry dedup. Migration does not resend
+already delivered primary events. Invalid timestamps (including booleans, nonfinite and huge
+values), flags or IDs fail closed and preserve the original state bytes.
+Rolling back to a version-3-only or version-2-only relay explicitly fails closed with exit 2 and
+<code>state-corrupt</code>, preserving version-4 state; use the newer relay to resume. Do not downgrade or
+delete state to force a rollback.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li><code>relay.lock</code> serializes relay runs only. Other writers of either inbox do not take it.
+  Self-contained records keep relay alerts intact whatever those writers do, but a torn relay
+  fragment that another writer appends to <em>without</em> a leading newline will share that writer's
+  first line. The relay's own complete record still follows.</li>
+<li>Torn fragments from an interrupted attempt remain visible in the inbox as partial lines.</li>
+</ul>
+<h2 id="not-covered">Not covered</h2>
+<ul>
+<li>A failure that starts and clears between two 5-minute polls.</li>
+<li>A calendar run that dies before writing an abandonment alert.</li>
+<li>The M4 itself, or this relay's own LaunchAgent, being down. Nothing watches the watcher.</li>
+<li>Critical issues that exist only in health-check output and never reach the badge.</li>
+<li>After an operator disables a job, its open staleness episode stays open until a fresh read:
+  disabling is not evidence of recovery.</li>
+</ul>
+<h2 id="install-plan-m4-only-after-review-and-merge">Install plan (M4 only; after review and merge)</h2>
+<ol>
+<li>Pin the reviewed bytes outside any checkout:
+   <code>git -C ~/Gits/brainlayer show &lt;merge-sha&gt;:scripts/health_relay/health_relay.py &gt; ~/.local/lib/brainlayer-health-relay/health_relay.py</code></li>
+<li>Write <code>~/.config/brainlayer-health-relay/relay.json</code> (mode 0600):
+   <code>inbox</code>, <code>state_dir</code>, and <code>hosts[]</code> entries with <code>id</code>, <code>label</code>, <code>transport</code> (<code>local</code>|<code>ssh</code>), <code>dir</code>,
+   and optional per-source overrides in <code>sources</code>. For SSH hosts, also set <code>ssh_alias</code> and
+   <code>remote_python</code>. Keep ControlPersist disabled on the <code>m1</code> alias. Use each host's <strong>own</strong> data directory: the <code>m1</code> alias logs in as a different
+   account, so the M1 <code>dir</code> is not under <code>/Users/etanheyman</code>. If <code>BRAINLAYER_DB</code>,
+   <code>BRAINLAYER_JOB_ALERT_PATH</code> or <code>BRAINLAYER_BADGE_STATE_PATH</code> are set in that host's effective
+   service environment, copy them into <code>sources</code>.</li>
+<li>Dry run against a disposable inbox file. Then read <code>status.json</code> and the disposable inbox.</li>
+<li>Render the template: replace <code>__PYTHON__</code> with <code>/usr/bin/python3</code>, <code>__SCRIPT__</code>, <code>__CONFIG__</code>
+   and <code>__LOG_DIR__</code>. Lint it with <code>plutil -lint</code>, then <code>launchctl bootstrap gui/$(id -u)</code> it.
+   Prove that <code>status.json</code> <code>ts</code> advances on schedule, and that SSH works from launchd's
+   environment (no interactive agent).</li>
+<li>Point <code>inbox</code> at the BrainLayer collab and, if enabled, <code>escalation.inbox</code> at the orc inbox
+   only within the deployment's authorization. Active issues reach the primary on the first run;
+   escalation waits for the episode threshold and honors primary ACKs.</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+  <div class="ecosystem-links">
+    <a href="https://brainlayer.etanheyman.com">BrainLayer</a>
+    <span class="sep">/</span>
+    <a href="https://voicelayer.etanheyman.com">VoiceLayer</a>
+    <span class="sep">/</span>
+    <a href="https://cmuxlayer.etanheyman.com">cmuxLayer</a>
+    <span class="sep">/</span>
+    <a href="https://github.com/EtanHey">Golems</a>
+  </div>
+  
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  <script>
+    // Inject back-to-site link into the header, after the title
+    (function() {
+      var title = document.querySelector('.md-header__title');
+      if (!title) return;
+      var link = document.createElement('a');
+      link.href = 'https://brainlayer.etanheyman.com';
+      link.className = 'header-back';
+      link.innerHTML = '&larr; Site';
+      title.after(link);
+    })();
+  </script>
+
+  </body>
+</html>
