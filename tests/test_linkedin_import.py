@@ -337,3 +337,39 @@ def test_bare_name_resolution_does_not_change(tmp_path):
             assert {a["alias_type"] for a in store.get_entity_aliases(eid)} == {"name"}
     finally:
         store.close()
+
+
+def test_full_name_alias_without_identifiers_merges_on_rerun(tmp_path):
+    store = VectorStore(tmp_path / "copy.db")
+    try:
+        store.upsert_entity("existing", "person", "Jon A. Smith")
+        # Full-name alias persisted by a prior import whose canonical name differed.
+        store.add_entity_alias("Jon Smith", "existing", alias_type="name")
+        export = tmp_path / "connections.json"
+        export.write_text(json.dumps([dict(full_name="Jon Smith")]))
+        for _ in range(2):
+            result = import_connections(store, export)
+            assert result["persons"]["new"] == 0
+            assert result["persons"]["merged_by"]["name"] == 1
+        assert list(store.conn.execute("SELECT id FROM kg_entities")) == [("existing",)]
+    finally:
+        store.close()
+
+
+def test_import_created_full_name_alias_survives_missing_identity_keys(tmp_path):
+    store = VectorStore(tmp_path / "copy.db")
+    try:
+        store.upsert_entity(
+            "existing", "person", "Jon A. Smith", metadata={"linkedin_url": "https://linkedin.com/in/name-alias"}
+        )
+        export = tmp_path / "connections.json"
+        export.write_text(json.dumps([dict(full_name="Jon Smith", linkedin_url="https://linkedin.com/in/name-alias")]))
+        assert import_connections(store, export)["persons"]["merged_by"]["linkedin_url"] == 1
+        export.write_text(json.dumps([dict(full_name="Jon Smith")]))
+        for _ in range(2):
+            result = import_connections(store, export)
+            assert result["persons"]["new"] == 0
+            assert result["persons"]["merged_by"]["name"] == 1
+        assert list(store.conn.execute("SELECT id FROM kg_entities")) == [("existing",)]
+    finally:
+        store.close()

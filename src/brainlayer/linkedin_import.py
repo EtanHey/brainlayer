@@ -143,8 +143,11 @@ def _import_rows(store, rows, sha256, started):
     for alias, eid, kind in store.conn.execute(
         "SELECT a.alias, a.entity_id, a.alias_type FROM kg_entity_aliases a "
         "JOIN kg_entities e ON e.id=a.entity_id WHERE e.entity_type='person' "
-        "AND a.alias_type IN ('linkedin_url','email')"
+        "AND a.alias_type IN ('name','linkedin_url','email')"
     ):
+        if kind == "name":
+            indexes["person"][normalized(alias)].add(eid)
+            continue
         try:
             key = linkedin_key(alias) if kind == "linkedin_url" else email_key(alias)
         except ValueError:
