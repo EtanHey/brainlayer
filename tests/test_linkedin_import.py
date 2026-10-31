@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -373,3 +374,25 @@ def test_import_created_full_name_alias_survives_missing_identity_keys(tmp_path)
         assert list(store.conn.execute("SELECT id FROM kg_entities")) == [("existing",)]
     finally:
         store.close()
+
+
+def test_live_mode_uses_the_resolved_db_path(export, monkeypatch, tmp_path, capsys):
+    """--live writes the database the services use (paths.resolve_db_path), not a hardcoded path."""
+    from brainlayer import linkedin_import
+
+    resolved = tmp_path / "configured" / "brainlayer.db"
+    opened = []
+
+    class Stop(Exception):
+        pass
+
+    def fake_open(path, *args, **kwargs):
+        opened.append(Path(path))
+        raise Stop
+
+    monkeypatch.setattr(linkedin_import, "resolve_db_path", lambda: resolved)
+    monkeypatch.setattr(linkedin_import, "open_writer_store", fake_open)
+    digest = hashlib.sha256(export.read_bytes()).hexdigest()
+    monkeypatch.setattr("sys.argv", ["linkedin_import", str(export), "--live", "--confirm-sha256", digest])
+    assert linkedin_import.main() != 0
+    assert opened == [resolved]

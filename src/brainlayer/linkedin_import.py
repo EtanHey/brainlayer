@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from .disk_space import measure_disk_space
 from .kg_repo import KGMixin
+from .paths import resolve_db_path
 from .pipeline.entity_resolution import _normalize_name
 from .runtime_store import RuntimeStoreModeError, open_writer_store
 
@@ -328,7 +329,7 @@ def main():
         raw = args.export.read_bytes()  # Hash and import these same bytes; never reopen the export.
         if args.live and hashlib.sha256(raw).hexdigest() != args.confirm_sha256:
             raise ImportRefusal("confirmation_sha256_mismatch")
-        path = Path.home() / ".local/share/brainlayer/brainlayer.db" if args.live else require_copy(args.db_copy)
+        path = resolve_db_path() if args.live else require_copy(args.db_copy)
         store = open_writer_store(path)
         print(json.dumps(import_connections(store, raw), sort_keys=True))
     except Exception as exc:
