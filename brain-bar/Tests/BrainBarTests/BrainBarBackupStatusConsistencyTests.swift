@@ -56,6 +56,28 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
         XCTAssertFalse(BrainBarStatusSnapshot.derive(inputs).issues.contains { $0.component == .backups })
     }
 
+    func testReclaimMessageKeepsADistinctLiveAlertAndNamesTheYearAcrossYears() throws {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .iso8601
+        struct Fixture: Decodable { let now: Date; let backups: ObservabilityDocument.Backups }
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "backup-reclaim-unconfirmed", withExtension: "json", subdirectory: "Fixtures"))
+        let fixture = try decoder.decode(Fixture.self, from: Data(contentsOf: url))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        // A different live alert keeps its own diagnosis; only the generic alert takes the reclaim sentence.
+        let distinct = "Google Drive authorization expired; reconnect Drive"
+        let inputs = BrainBarStatusInputs(now: fixture.now, calendar: calendar,
+            jobAlerts: BrainBarJobAlerts(active: ["backup-daily": distinct]), backups: .measured(fixture.backups))
+        let snapshot = BrainBarStatusSnapshot.derive(inputs)
+        XCTAssertEqual(snapshot.issues.first { $0.alertKey == "backup-daily" }?.text, distinct)
+        XCTAssertTrue(snapshot.issues.contains { $0.id == "backups.error" }, "the measured failure stays visible on its own")
+        // A verified backup from an earlier year names its year.
+        let newYear = try XCTUnwrap(ISO8601DateFormatter().date(from: "2027-01-02T09:00:00Z"))
+        let text = ObservabilityPresentation.backupStatus(for: fixture.backups, locale: locale, now: newYear, calendar: calendar).error?.text
+        XCTAssertTrue(text?.contains("Oct 30, 2026") == true, text ?? "nil")
+    }
+
     private func backups(age: Double = 2, error: String? = nil, verified: Bool? = true) -> ObservabilityDocument.Backups {
         .init(
             state: "measured", reason: "", inputs: [], freshness: "fresh", thresholdHours: 36,

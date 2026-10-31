@@ -698,7 +698,12 @@ enum ObservabilityPresentation {
             let reclaimPrefix = "raw_reclaim_unconfirmed: "
             if value.hasPrefix(reclaimPrefix) {
                 let lastVerified = backups.dbSnapshot.flatMap { $0.verified && $0.lastAt <= now ? $0.lastAt : nil }
-                let date = lastVerified.map { idleDate($0, calendar: calendar, locale: locale) } ?? "none on record"
+                let date = lastVerified.map { verified -> String in
+                    let day = idleDate(verified, calendar: calendar, locale: locale)
+                    // "Oct 30" alone is ambiguous once the year has turned.
+                    let year = calendar.component(.year, from: verified)
+                    return year == calendar.component(.year, from: now) ? day : "\(day), \(year)"
+                } ?? "none on record"
                 var detail = DriveAuthJSON.sanitized(String(value.dropFirst(reclaimPrefix.count))) ?? "Free-space recovery could not be confirmed."
                 // The headline already says the backup stopped; don't repeat the producer's lead-in.
                 let leadIn = "Database backup stopped: "

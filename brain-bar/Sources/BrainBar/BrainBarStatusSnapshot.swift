@@ -424,7 +424,9 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
             case let .backup(job):
                 // One failed run is one issue: the alert joins its job's run issue (Show log keeps its key).
                 var text = reason
-                if ["backup-daily", "backup-snapshot"].contains(key), case let .measured(backups) = inputs.backups,
+                // Only the generic alert takes the measured sentence; a distinct live diagnosis stays as is.
+                if ["backup-daily", "backup-snapshot"].contains(key), reason == "Database backup failed; check the backup log",
+                   case let .measured(backups) = inputs.backups,
                    backups.errorType?.hasPrefix("raw_reclaim_unconfirmed:") == true {
                     text = ObservabilityPresentation.backupStatus(for: backups, now: now, calendar: inputs.calendar).error?.text ?? reason
                     // Join the effective alert, including a badge fallback, once per attempt.
