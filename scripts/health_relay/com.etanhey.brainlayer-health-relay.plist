@@ -7,6 +7,10 @@
 <dict>
     <key>Label</key>
     <string>com.etanhey.brainlayer-health-relay</string>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>com.brainlayer.brainbar</string>
+    </array>
     <key>ProgramArguments</key>
     <array>
         <string>__PYTHON__</string>
