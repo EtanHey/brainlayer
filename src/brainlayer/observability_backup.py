@@ -131,7 +131,11 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
                 error_type = str(pending.get("error_type") or pending.get("error_code") or "backup_error")
                 error_reason = pending.get("error") or pending.get("verification_error")
                 break
-    if error_type in {"BrainBarDatabaseIdentityError", "BrainBarDatabaseIdentityUnavailableError"} and error_reason:
+    if (
+        error_type
+        in {"BrainBarDatabaseIdentityError", "BrainBarDatabaseIdentityUnavailableError", "raw_reclaim_unconfirmed"}
+        and error_reason
+    ):
         error_type = f"{error_type}: {error_reason}"
     if "google-drive-mcp/tokens.json" in str(latest.get("error", "")):
         error_type = "drive_credentials_missing"
@@ -489,7 +493,14 @@ def build_backups_section(
     resolved_alert_path = alert_path(env=env, db_path=db_path)
     job_alerts = active_alerts(resolved_alert_path)
     if job_alerts:
-        error_type = "job_alert:" + next(iter(job_alerts.values()))
+        # The generic DB job alert must not replace this attempt's measured diagnostic.
+        reclaim_failure = (error_type or "").startswith("raw_reclaim_unconfirmed:")
+        generic_db_alerts = all(
+            key in {"backup-daily", "backup-snapshot"} and reason == "Database backup failed; check the backup log"
+            for key, reason in job_alerts.items()
+        )
+        if not (reclaim_failure and generic_db_alerts):
+            error_type = "job_alert:" + next(iter(job_alerts.values()))
         alert_input = record_input(resolved_alert_path, status="read", rows_or_bytes=None)
         inputs.append(alert_input)
         if alert_input.get("status") == "future":

@@ -7,6 +7,77 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_790_769_600)
     private let locale = Locale(identifier: "en_US")
 
+    func testReclaimFailureShowsStoppedAttemptAndLastVerifiedBackupFromFixture() throws {
+        struct Fixture: Decodable {
+            let now: Date
+            let message, headline, panelDetail: String
+            let backups: ObservabilityDocument.Backups
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .iso8601
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "backup-reclaim-unconfirmed", withExtension: "json", subdirectory: "Fixtures"))
+        let fixture = try decoder.decode(Fixture.self, from: Data(contentsOf: url))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let status = ObservabilityPresentation.backupStatus(for: fixture.backups, locale: locale, now: fixture.now, calendar: calendar)
+        XCTAssertEqual(status.error?.text, fixture.headline + ". " + fixture.panelDetail)
+        XCTAssertEqual(status.error?.tone, .red)
+        XCTAssertEqual(status.snapshot.tone, .green, "the older verified copy is still valid")
+        XCTAssertFalse(status.error!.text.contains("snapshot pin"))
+        // The Backups page shares the measured sentence; Technical details shows only the code.
+        let page = BrainBarBackupChecks.derive(fixture.backups, now: fixture.now, locale: locale, calendar: calendar)
+        XCTAssertEqual(page.alert, status.error?.text)
+        XCTAssertEqual(page.details.first { $0.label == "Error code" }?.value, "raw_reclaim_unconfirmed")
+        var inputs = BrainBarStatusInputs(now: fixture.now, calendar: calendar,
+            jobAlerts: BrainBarJobAlerts(active: ["backup-daily": "Database backup failed; check the backup log"]),
+            backups: .measured(fixture.backups))
+        let snapshot = BrainBarStatusSnapshot.derive(inputs)
+        let issue = try XCTUnwrap(snapshot.issues.first { $0.alertKey == "backup-daily" })
+        XCTAssertEqual(issue.text, status.error?.text)
+        XCTAssertEqual(issue.alertReason, "Database backup failed; check the backup log")
+        XCTAssertFalse(snapshot.issues.contains { $0.id == "backups.error" }, "one notice per failed attempt")
+        inputs.settings[.backupDaily] = .init(enabled: true, loadState: .loaded)
+        inputs.observations = [.backupDaily: .init(loadState: .failed("Database backup exited 1"), runs: nil,
+            lastExitCode: 1, lastRunAt: fixture.now.addingTimeInterval(-3600), nextRunAt: nil, isContinuous: false)]
+        let calendarIssue = try XCTUnwrap(BrainBarStatusSnapshot.derive(inputs).issues.first { $0.alertKey == "backup-daily" })
+        XCTAssertEqual(calendarIssue.text, status.error?.text, "the calendar and alert share the measured sentence")
+        inputs.observations = nil
+        inputs.jobAlerts = nil
+        inputs.badge = .init(badgeOn: true, reason: "Database backup failed; check the backup log", activeCodes: ["job_alert_backup-daily"])
+        let fallback = BrainBarStatusSnapshot.derive(inputs)
+        XCTAssertEqual(fallback.issues.first { $0.alertKey == "backup-daily" }?.text, status.error?.text)
+        XCTAssertFalse(fallback.issues.contains { $0.id == "backups.error" })
+        inputs.badge = nil
+        inputs.backups = .measured(.init(state: "measured", reason: "", inputs: [], freshness: "fresh", thresholdHours: 36,
+            retentionInvariant: "PASS", survivingArchives30D: 1, errorType: nil,
+            lastVerifiedUpload: fixture.backups.lastVerifiedUpload, dbSnapshot: fixture.backups.dbSnapshot, launchd: fixture.backups.launchd))
+        inputs.jobAlerts = BrainBarJobAlerts(active: [:])
+        XCTAssertFalse(BrainBarStatusSnapshot.derive(inputs).issues.contains { $0.component == .backups })
+    }
+
+    func testReclaimMessageKeepsADistinctLiveAlertAndNamesTheYearAcrossYears() throws {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .iso8601
+        struct Fixture: Decodable { let now: Date; let backups: ObservabilityDocument.Backups }
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "backup-reclaim-unconfirmed", withExtension: "json", subdirectory: "Fixtures"))
+        let fixture = try decoder.decode(Fixture.self, from: Data(contentsOf: url))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        // A different live alert keeps its own diagnosis; only the generic alert takes the reclaim sentence.
+        let distinct = "Google Drive authorization expired; reconnect Drive"
+        let inputs = BrainBarStatusInputs(now: fixture.now, calendar: calendar,
+            jobAlerts: BrainBarJobAlerts(active: ["backup-daily": distinct]), backups: .measured(fixture.backups))
+        let snapshot = BrainBarStatusSnapshot.derive(inputs)
+        XCTAssertEqual(snapshot.issues.first { $0.alertKey == "backup-daily" }?.text, distinct)
+        XCTAssertTrue(snapshot.issues.contains { $0.id == "backups.error" }, "the measured failure stays visible on its own")
+        // A verified backup from an earlier year names its year.
+        let newYear = try XCTUnwrap(ISO8601DateFormatter().date(from: "2027-01-02T09:00:00Z"))
+        let text = ObservabilityPresentation.backupStatus(for: fixture.backups, locale: locale, now: newYear, calendar: calendar).error?.text
+        XCTAssertTrue(text?.contains("Oct 30, 2026") == true, text ?? "nil")
+    }
+
     private func backups(age: Double = 2, error: String? = nil, verified: Bool? = true) -> ObservabilityDocument.Backups {
         .init(
             state: "measured", reason: "", inputs: [], freshness: "fresh", thresholdHours: 36,
