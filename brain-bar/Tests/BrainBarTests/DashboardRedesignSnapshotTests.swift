@@ -162,6 +162,7 @@ final class DashboardRedesignSnapshotTests: XCTestCase {
             let model = BrainBarMaintenanceRetryModel(runner: nil, now: { now }, calendar: calendar)
             model.setForPreview(json: json, isRunning: running, outcome: outcome)
             try BrainBarRenderHarness.renderMaintenanceRetryRow(model, name: "maintenance-retry-\(name)", directory: directory)
+            try BrainBarRenderHarness.renderMaintenanceRetryRow(model, name: "maintenance-retry-\(name)-390", directory: directory, width: 390)
         }
         let model = BrainBarMaintenanceRetryModel(runner: nil, now: { noon }, calendar: calendar)
         model.setForPreview(json: BrainBarMaintenanceRetryTests.ready)

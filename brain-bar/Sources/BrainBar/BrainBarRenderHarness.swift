@@ -8,10 +8,11 @@ import Vision
 @MainActor
 enum BrainBarRenderHarness {
     static func renderMaintenanceRetryRow(_ model: BrainBarMaintenanceRetryModel,
-                                          name: String, directory: URL) throws {
+                                          name: String, directory: URL, width: CGFloat = 860) throws {
         try renderMaintenanceRetry(
             BrainBarMaintenanceRetryRow(model: model).padding(24),
-            size: CGSize(width: 860, height: 340), name: name, directory: directory
+            size: CGSize(width: width, height: 340), name: name, directory: directory,
+            expectsRetryButton: model.showsRetryButton
         )
     }
 
@@ -31,11 +32,13 @@ enum BrainBarRenderHarness {
             jobAttentionReasons: attentionReasons,
             maintenanceNeedsAttention: true
         ).environment(\.brainBarMaintenanceRetry, model)
-        try renderMaintenanceRetry(view, size: CGSize(width: 980, height: 1_320), name: name, directory: directory)
+        try renderMaintenanceRetry(view, size: CGSize(width: 980, height: 1_320), name: name, directory: directory,
+                                   expectsRetryButton: model.showsRetryButton)
     }
 
     private static func renderMaintenanceRetry<V: View>(_ view: V, size: CGSize,
-                                                        name: String, directory: URL) throws {
+                                                        name: String, directory: URL,
+                                                        expectsRetryButton: Bool) throws {
         let host = NSHostingView(rootView: view
             .frame(width: size.width, height: size.height, alignment: .topLeading)
             .background(Color.brainBarBackgroundBase)
@@ -53,7 +56,9 @@ enum BrainBarRenderHarness {
         request.recognitionLevel = .accurate
         try VNImageRequestHandler(cgImage: image).perform([request])
         let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
-        guard text.contains("Retry failed steps") else { throw Failure("Retry button did not render in \(name)") }
+        guard text.contains("Retry failed steps") == expectsRetryButton else {
+            throw Failure("Unexpected retry button visibility in \(name): \(text)")
+        }
         try png.write(to: directory.appendingPathComponent("\(name).png"))
         print("SNAPSHOT \(directory.path)/\(name).png")
     }

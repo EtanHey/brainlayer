@@ -60,19 +60,125 @@ final class BrainBarMaintenanceRetryTests: XCTestCase {
     nonisolated static let ready = #"{"status":"ready","reason":"Only daytime-safe failures retry","retry_pause_start":"2026-10-30T01:07:30+00:00","retry_pause_end":"2026-10-30T06:00:00+00:00","scheduled_date":"2026-10-28","steps":["jsonl-backup"],"failures":[{"step":"jsonl-backup","reason":"it stopped with an error"},{"step":"maintenance-weekly","reason":"Window closed"}],"deferred":[{"step":"maintenance-weekly","reason":"It pauses database writes, so it only runs between 04:00 and 06:00","next_run":"will run tonight at 04:00"}]}"#
     private let noon = ISO8601DateFormatter().date(from: "2026-10-29T12:00:00Z")!
 
+    // Fixed local clock: UTC 02:30 is 04:30 in the user's calendar.
+    private func presentationModel(status: String = "ready", steps: [String] = [],
+                                   deferred: [String] = [], start: String? = "2026-10-30T02:30:00Z",
+                                   now: String = "2026-10-29T12:00:00Z", running: Bool = false) throws -> BrainBarMaintenanceRetryModel {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 2 * 3600)!
+        let clock = ISO8601DateFormatter().date(from: now)!
+        var json: [String: Any] = ["status": status, "reason": "The maintenance supervisor is unavailable.",
+            "steps": steps, "deferred": deferred.map { ["step": $0, "reason": "Internal writer-stop restriction"] },
+            "retry_pause_end": "2026-10-30T04:30:00Z"]
+        json["retry_pause_start"] = start
+        let model = BrainBarMaintenanceRetryModel(runner: nil, now: { clock }, calendar: calendar)
+        model.setForPreview(json: String(decoding: try JSONSerialization.data(withJSONObject: json), as: UTF8.self),
+                            isRunning: running)
+        return model
+    }
+
+    func testEveryReceiptStatusHasAnActionOnlyWhenEligible() throws {
+        for (status, visible, sentence) in [
+            ("ready", true, "Retry will run: Transcript backup. Nothing else pauses."),
+            ("accepted", false, "The retry finished."),
+            ("refused", false, "The maintenance supervisor is unavailable."),
+            ("nothing-to-retry", false, "Everything from last night has finished. Nothing to retry."),
+            ("failed", false, "The maintenance supervisor is unavailable.")
+        ] {
+            let model = try presentationModel(status: status, steps: ["jsonl-backup"])
+            XCTAssertEqual(model.showsRetryButton, visible, status)
+            XCTAssertEqual(model.explanation, sentence, status)
+            XCTAssertEqual(model.details, "", status)
+        }
+        let empty = try presentationModel()
+        XCTAssertFalse(empty.showsRetryButton)
+        XCTAssertEqual(empty.explanation, "Nothing to retry now.")
+        XCTAssertEqual(empty.details, "")
+        let checking = BrainBarMaintenanceRetryModel(runner: nil)
+        XCTAssertFalse(checking.showsRetryButton)
+        XCTAssertEqual(checking.explanation, "Checking retry availability…")
+    }
+
+    func testDeferredOnlyUsesLabelsAndLocalScheduledTimeForEveryStatus() throws {
+        // refused/failed keep their reason; see testRefusedRetryWithDeferredStepsStillSaysWhy.
+        for status in ["ready", "accepted", "nothing-to-retry"] {
+            let model = try presentationModel(status: status, deferred: ["backup-daily"])
+            XCTAssertFalse(model.showsRetryButton, status)
+            XCTAssertEqual(model.details, "Database backup didn’t finish last night. It runs again automatically tonight during scheduled maintenance, after 04:30. Nothing to do now.", status)
+            XCTAssertEqual(model.explanation, "", status)
+        }
+        let multiple = try presentationModel(deferred: ["backup-snapshot", "maintenance-weekly"])
+        XCTAssertFalse(multiple.showsRetryButton)
+        XCTAssertEqual(multiple.details, "Database snapshot didn’t finish last night. It runs again automatically tonight during scheduled maintenance, after 04:30. Nothing to do now.\nWeekly maintenance didn’t finish last night. It runs again automatically tonight during scheduled maintenance, after 04:30. Nothing to do now.")
+    }
+
+    func testDeferredOnlyWithoutAUsableStartOmitsTheTime() throws {
+        for start in [nil, "not-a-date"] as [String?] {
+            let model = try presentationModel(deferred: ["backup-daily"], start: start)
+            XCTAssertFalse(model.showsRetryButton)
+            XCTAssertEqual(model.details, "Database backup didn’t finish last night. It runs again automatically tonight during scheduled maintenance. Nothing to do now.")
+            XCTAssertEqual(model.explanation, "")
+        }
+    }
+
+    func testStaleDeferredTimeDoesNotPromiseAPastNextRun() throws {
+        let model = try presentationModel(deferred: ["backup-daily"], now: "2026-10-30T05:00:00Z")
+        XCTAssertFalse(model.showsRetryButton)
+        XCTAssertEqual(model.details, "Database backup didn’t finish last night. It runs again automatically tonight during scheduled maintenance. Nothing to do now.")
+    }
+
+    func testMixedWorkKeepsActionAndOneTimedDeferredLine() throws {
+        let model = try presentationModel(steps: ["jsonl-backup"], deferred: ["backup-daily"])
+        XCTAssertTrue(model.showsRetryButton)
+        XCTAssertEqual(model.explanation, "Retry will run: Transcript backup. Nothing else pauses.")
+        XCTAssertEqual(model.details, "Database backup didn’t finish last night. It runs again automatically tonight during scheduled maintenance, after 04:30.")
+    }
+
+    func testPauseWindowHidesActionAndNamesLocalEndTime() throws {
+        for status in ["ready", "accepted", "refused", "nothing-to-retry", "failed"] {
+            let model = try presentationModel(status: status, steps: ["jsonl-backup"], deferred: ["backup-daily"],
+                                              now: "2026-10-30T03:00:00Z")
+            XCTAssertFalse(model.showsRetryButton, status)
+            XCTAssertEqual(model.explanation, "Retries are paused for scheduled maintenance (until 06:30).", status)
+            XCTAssertEqual(model.details, "Database backup didn’t finish last night.", status)
+        }
+        let stale = try presentationModel(steps: ["jsonl-backup"], now: "2026-10-30T05:00:00Z")
+        XCTAssertFalse(stale.showsRetryButton)
+        XCTAssertEqual(stale.explanation, "Checking retry availability…")
+    }
+
+    func testRefusedRetryWithDeferredStepsStillSaysWhy() throws {
+        // A busy calendar probe refuses with steps cleared and deferred kept: the reason must show.
+        for status in ["refused", "failed"] {
+            let model = try presentationModel(status: status, steps: [], deferred: ["backup-daily"])
+            XCTAssertFalse(model.showsRetryButton, status)
+            XCTAssertEqual(model.explanation, "The maintenance supervisor is unavailable.", status)
+            XCTAssertFalse(model.details.contains("Nothing to do now"), status)
+        }
+    }
+
+    func testRunningRetryShowsProgressWithoutADisabledButton() throws {
+        let model = try presentationModel(steps: ["jsonl-backup"], running: true)
+        // A disabled button during the run is a dead control; the spinner and text say what happens.
+        XCTAssertFalse(model.showsRetryButton)
+        XCTAssertTrue(model.showsProgress)
+        XCTAssertFalse(model.canRetry)
+        XCTAssertEqual(model.explanation, "Retrying failed steps… This retry does not pause services.")
+    }
+
     func testReadyRowListsFailuresAndWindowOnlyReason() async {
         let cli = RetryCLI(Self.ready)
-        let model = BrainBarMaintenanceRetryModel(runner: cli, now: { self.noon }, calendar: Calendar(identifier: .iso8601))
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let model = BrainBarMaintenanceRetryModel(runner: cli, now: { self.noon }, calendar: calendar)
         await model.refresh()
         XCTAssertTrue(model.canRetry)
-        XCTAssertTrue(model.details.contains("Transcript backup didn’t finish last night (it stopped with an error). You can retry it now."))
+        XCTAssertTrue(model.details.contains("Transcript backup didn’t finish last night. You can retry it now."))
         XCTAssertFalse(model.details.contains("jsonl-backup"))
         XCTAssertFalse(model.details.contains("exit 1"))
         XCTAssertTrue(model.explanation.contains("Retry will run: Transcript backup"))
-        // The step's own reason carries its timing; no blanket 04:00 promise (CodeRabbit r4420436682).
-        XCTAssertTrue(model.details.contains("Weekly maintenance — it pauses database writes, so it only runs between 04:00 and 06:00."),
-                      model.details)
-        XCTAssertFalse(model.details.contains("runs tonight at 04:00"), model.details)
+        XCTAssertTrue(model.details.contains("Weekly maintenance didn’t finish last night. It runs again automatically tonight during scheduled maintenance, after 01:07."), model.details)
+        XCTAssertEqual(model.details.components(separatedBy: "Weekly maintenance").count, 2, "one line per deferred step")
         XCTAssertEqual(cli.calls, [["maintenance-calendar", "--recover-failed", "--status"]])
     }
 
@@ -82,7 +188,7 @@ final class BrainBarMaintenanceRetryTests: XCTestCase {
             let model = BrainBarMaintenanceRetryModel(runner: cli)
             await model.refresh()
             XCTAssertFalse(model.canRetry)
-            XCTAssertEqual(model.explanation, "fixture explanation")
+            XCTAssertEqual(model.explanation, status == "nothing-to-retry" ? "Everything from last night has finished. Nothing to retry." : "fixture explanation")
             await model.retry()
             XCTAssertEqual(cli.calls.count, 1)
         }
@@ -100,7 +206,7 @@ final class BrainBarMaintenanceRetryTests: XCTestCase {
         await model.refresh()
         model.setForPreview(json: Self.ready.replacingOccurrences(of: "2026-10-30", with: "2026-10-29"))
         XCTAssertFalse(model.canRetry)
-        XCTAssertTrue(model.explanation.contains("nightly maintenance"))
+        XCTAssertEqual(model.explanation, "Retries are paused for scheduled maintenance (until 06:00).")
         await model.retry()
         XCTAssertEqual(cli.calls.count, 1)
     }
@@ -177,8 +283,8 @@ final class BrainBarMaintenanceRetryTests: XCTestCase {
         let model = BrainBarMaintenanceRetryModel(runner: RetryCLI(Self.ready), now: { late }, calendar: calendar)
         model.setForPreview(json: Self.ready.replacingOccurrences(of: "2026-10-30", with: "2026-10-29"))
         XCTAssertFalse(model.canRetry)
-        XCTAssertTrue(model.explanation.contains("01:07"))
-        XCTAssertTrue(model.explanation.contains("06:00"))
+        XCTAssertFalse(model.showsRetryButton)
+        XCTAssertEqual(model.explanation, "Retries are paused for scheduled maintenance (until 06:00).")
     }
 
     func testClickQueuesBehindInFlightStatusProbe() async {
