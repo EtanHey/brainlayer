@@ -47,6 +47,25 @@ def test_manifest_preserves_argv_env_logs_cwd_and_off(tmp_path):
     assert child.cwd == tmp_path and not child.enabled and child.exit_timeout == 30
 
 
+def test_independent_wal_fallback_registered_once_without_calendar(tmp_path, monkeypatch):
+    from brainlayer.supervisor_adapters import ALIASES, ARCHIVED
+
+    monkeypatch.setenv("BRAINLAYER_DB", str(tmp_path / "parent-db"))
+    monkeypatch.setenv("BRAINLAYER_BACKUP_STAGING_DIR", str(tmp_path / "backups"))
+    path = manifest(tmp_path, EnvironmentVariables={"BRAINLAYER_DB": str(tmp_path / "db")})
+    components = load_components(path, tmp_path / "control.sock")
+    child = components["wal-checkpoint-fallback"]
+    assert ALIASES["com.brainlayer.wal-checkpoint-fallback"] == "wal-checkpoint-fallback"
+    assert "com.brainlayer.wal-checkpoint" in ARCHIVED
+    assert child.interval == 900 and child.run_timeout == 30
+    assert child.argv == (sys.executable, "-m", "brainlayer.wal_checkpoint")
+    assert child.env["BRAINLAYER_DB"] == str(tmp_path / "db")
+    assert child.env["BRAINLAYER_BACKUP_STAGING_DIR"] == str(tmp_path / "backups")
+    assert sum(c.argv == child.argv for c in components.values()) == 1
+    inherited = load_components(manifest(tmp_path), tmp_path / "control.sock")["wal-checkpoint-fallback"]
+    assert inherited.env["BRAINLAYER_DB"] == str(tmp_path / "parent-db")
+
+
 @pytest.mark.parametrize(
     "override",
     [
@@ -224,7 +243,7 @@ def test_repository_managed_plist_keys_and_policy_are_preserved(short_path):
         assert child.policy == {
             k: v for k, v in plist.items() if k in {"SoftResourceLimits", "Nice", "LowPriorityIO", "ProcessType"}
         }
-    assert seen == set(ALIASES)
+    assert seen == set(ALIASES) - {"com.brainlayer.wal-checkpoint-fallback"}  # Supervisor-only.
 
 
 def test_cleanup_error_is_recorded_and_paused_deadline_absent(short_path):

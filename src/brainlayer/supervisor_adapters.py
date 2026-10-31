@@ -27,6 +27,7 @@ ALIASES = {
         "tier0-watchdog",
         "log-cap",
         "t3-ingest",
+        "wal-checkpoint-fallback",  # Supervisor-only; never resurrect the calendar's archived label.
     )
 }
 ALIASES.update(

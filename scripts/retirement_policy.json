@@ -1498,6 +1498,16 @@
         "target": "import subprocess"
       }
     },
+    "44e95a6378160a753582638e8ed6a5565a7d80891ddbc9dac2bfc92c30bce2fe": {
+      "non_cloud_purpose": "Bounded local lsof holder diagnostics for persistent WAL high-water; no network or cloud provider invocation.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/wal_checkpoint.py",
+        "target": "import subprocess"
+      }
+    },
     "45e22878748a1b01fb5453beef092207ae4976194d56b033331bd42603647e8d": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/index_completeness.py <module>.rollback_repair",
       "site": {
@@ -1616,6 +1626,16 @@
         "owner": "<module>.apply_policy",
         "path": "src/brainlayer/supervisor_child.py",
         "target": "ctypes.get_errno"
+      }
+    },
+    "497626333cc3ed885d93a86033b011e8d68aa743ad6bbd52eac56e4df5a278a6": {
+      "non_cloud_purpose": "Bounded local lsof holder diagnostics for persistent WAL high-water; no network or cloud provider invocation.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.periodic_checkpoint",
+        "path": "src/brainlayer/wal_checkpoint.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "4997b6e8a1b1593dc22be1f360b927424ada7ba43c6f66fd207261c94f76a626": {
@@ -2681,6 +2701,16 @@
         "kind": "child_process",
         "owner": "<module>.main.fallback",
         "path": "src/brainlayer/supervisor_adapters.py",
+        "target": "subprocess.run"
+      }
+    },
+    "73d59a8febea08b7f1bebaa87c75f52eae43a773abdd2ae76e2fb89c929145b7": {
+      "non_cloud_purpose": "Bounded local lsof holder diagnostics for persistent WAL high-water; no network or cloud provider invocation.",
+      "site": {
+        "call_sha256": "c6b92098f4b5c2f971b6233e0e6d0498e15ea3ad7725644d3e1c784365140fc9",
+        "kind": "child_process",
+        "owner": "<module>.periodic_checkpoint",
+        "path": "src/brainlayer/wal_checkpoint.py",
         "target": "subprocess.run"
       }
     },
