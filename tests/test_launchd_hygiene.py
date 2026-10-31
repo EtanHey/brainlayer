@@ -993,6 +993,7 @@ def _committed_launchagent_paths() -> list[Path]:
     """
     paths = [
         *(REPO_ROOT / "scripts/launchd").glob("*.plist"),
+        *(REPO_ROOT / "scripts/health_relay").glob("*.plist"),
         *(REPO_ROOT / "launchd").glob("*.plist"),
         *(REPO_ROOT / "brain-bar/bundle").glob("com.brainlayer.*.plist"),
     ]
@@ -1001,15 +1002,8 @@ def _committed_launchagent_paths() -> list[Path]:
 
 def _assert_associated_with_brainbar(path, plist: dict) -> None:
     associated = plist.get("AssociatedBundleIdentifiers")
-    assert associated is not None, (
-        f"{path}: LaunchAgent has no AssociatedBundleIdentifiers, so macOS attributes it to "
-        f"{plist.get('ProgramArguments', ['?'])[0]!r} and posts a per-script login notice"
-    )
-    if isinstance(associated, str):
-        associated = [associated]
-    assert isinstance(associated, list), f"{path}: AssociatedBundleIdentifiers must be a string or array"
-    assert BRAINBAR_BUNDLE_ID in associated, (
-        f"{path}: AssociatedBundleIdentifiers={associated!r} omits {BRAINBAR_BUNDLE_ID}"
+    assert associated == [BRAINBAR_BUNDLE_ID], (
+        f"{path}: AssociatedBundleIdentifiers={associated!r}; expected {[BRAINBAR_BUNDLE_ID]!r}"
     )
 
 
