@@ -39,6 +39,23 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.81] - 2026-10-31
+
+### Backup
+- Re-check free space for up to 2 seconds before stopping a backup on the raw-reclaim check, instead of failing on one immediate reading. The block-release check, the 2 GiB free-space floor and a lasting shortfall still stop it. A stopped backup now reads "Latest backup stopped; last verified backup: <date>" with the measured detail, the same on the status line, the job alert and the Backups page (#1569).
+
+### BrainBar
+- Show "Retry failed steps" only when pressing it would retry something. Otherwise say in plain words what happens next and when ("runs again automatically tonight during scheduled maintenance, after 04:30"), keep a refused retry's reason, and show only progress while a retry runs (#1570).
+- Associate the health-relay LaunchAgent with BrainBar, so it groups under the app in Login Items (#1568).
+
+### Knowledge graph
+- Add `python -m brainlayer.linkedin_import`, which imports a LinkedIn connections export as people and companies with `works_at` and `linkedin_connection` relations. It is copy-only unless run with `--live --confirm-sha256`, re-runs are idempotent, identity merges are guarded against joining different people, and output contains counts only (#1572).
+
+### Tests
+- Measure the recovery-oracle ack p95 over 100 real admissions instead of 6, so one slow fsync no longer fails CI; the 500 ms bounds are unchanged (#1571).
+
+Release scope: Python package + Homebrew formula + BrainBar app 1.5.81 (cask)
+
 ## [1.5.80] - 2026-10-31
 
 ### Health relay
