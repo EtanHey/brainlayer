@@ -64,6 +64,7 @@ DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups
 MIN_RAW_FREE_BYTES = 2 * 1024 * 1024 * 1024
 COPY_CHUNK_BYTES = 1024 * 1024
 RECLAIM_CHUNK_BYTES = 64 * 1024 * 1024
+CHUNK_TIMING_PROGRESS_INTERVAL = 8
 RECLAIM_WINDOW_SECONDS = 2.0
 RECLAIM_MAX_SAMPLES = 5
 FRAME_OVERHEAD_BYTES = 64 * 1024
@@ -176,6 +177,7 @@ class SQLiteBackupArtifact:
     compress_duration_seconds: float | None = None
     raw_sha256: str | None = None
     reclaim_basis: str | None = None
+    chunk_stage_seconds: dict[str, Any] | None = None
 
     @property
     def archive_path(self) -> Path:
@@ -1541,8 +1543,52 @@ def _confirm_raw_reclaim(
     )
 
 
+class _ChunkStageTimings:
+    """Cumulative seconds; maxima combine repeated checks within each 1-based chunk.
+
+    final_hash covers the whole archive, so its max_chunk is null. Unexecuted stages
+    remain zero with a null max_chunk. Only numeric measurements enter this payload.
+    """
+
+    def __init__(self) -> None:
+        self.data: dict[str, Any] = {"chunks": 0}
+        for stage in (
+            "compress",
+            "archive_write_sync",
+            "raw_punch",
+            "block_reduction",
+            "volume_delta",
+            "free_floor",
+            "final_hash",
+        ):
+            self.data[stage] = {"total": 0.0, "max": 0.0, "max_chunk": None}
+        self._chunk_seconds: dict[str, float] = {}
+
+    def start_chunk(self) -> None:
+        self.data["chunks"] += 1
+        self._chunk_seconds = {}
+
+    def record(self, stage: str, started: float) -> None:
+        elapsed = time.monotonic() - started
+        current = self._chunk_seconds.get(stage, 0.0) + elapsed
+        self._chunk_seconds[stage] = current
+        entry = self.data[stage]
+        entry["total"] += elapsed
+        if entry["max_chunk"] is None or current > entry["max"]:
+            entry.update(max=current, max_chunk=None if stage == "final_hash" else self.data["chunks"])
+
+    def progress(self) -> None:
+        if self.data["chunks"] % CHUNK_TIMING_PROGRESS_INTERVAL == 0:
+            print("Backup chunk timing progress: " + json.dumps({"chunk_stage_seconds": self.data}), flush=True)
+
+
 def _compress_reclaiming_raw(
-    raw: Path, archive: Path, *, zstd_binary: str | None, reclaim_basis: str = "volume_delta"
+    raw: Path,
+    archive: Path,
+    *,
+    zstd_binary: str | None,
+    reclaim_basis: str = "volume_delta",
+    timings: _ChunkStageTimings | None = None,
 ) -> str:
     """Write durable independent frames, then release their raw extents; hash before punching.
 
@@ -1550,6 +1596,7 @@ def _compress_reclaiming_raw(
     punch after selection aborts: switching to an unbudgeted full-copy path would be unsafe.
     The caller moves this run's raw into its attempt directory before destructive consumption.
     """
+    timings = timings if timings is not None else _ChunkStageTimings()
     digest = hashlib.sha256()
     with os.fdopen(os.open(raw, os.O_RDWR | os.O_NOFOLLOW), "r+b") as source, archive.open("xb") as sink:
         info = os.fstat(source.fileno())
@@ -1557,7 +1604,9 @@ def _compress_reclaiming_raw(
             raise ValueError("Cannot consume a linked or non-regular raw snapshot")
         offset = 0
         while chunk := source.read(RECLAIM_CHUNK_BYTES):
+            timings.start_chunk()
             digest.update(chunk)
+            started = time.monotonic()
             if zstd_binary is None:
                 frame = gzip.compress(chunk, compresslevel=6)
             else:
@@ -1567,29 +1616,43 @@ def _compress_reclaiming_raw(
                     capture_output=True,
                     check=True,
                 ).stdout
+            timings.record("compress", started)
             if len(frame) > len(chunk) + FRAME_OVERHEAD_BYTES:
                 raise ValueError("Compressed frame exceeds budgeted expansion")
+            started = time.monotonic()
             _require_raw_floor(archive.parent, forthcoming=len(frame))
+            timings.record("free_floor", started)
+            started = time.monotonic()
             sink.write(frame)
             sink.flush()
             if sys.platform == "darwin":
                 fcntl.fcntl(sink.fileno(), fcntl.F_FULLFSYNC)
             else:
                 os.fsync(sink.fileno())
+            timings.record("archive_write_sync", started)
+            started = time.monotonic()
             before_blocks = os.fstat(source.fileno()).st_blocks
+            timings.record("block_reduction", started)
             # Full chunks are allocation-aligned; punching the short final extent is safe
             # because no unread bytes follow it. APFS may retain its final partial block.
+            started = time.monotonic()
             before_free = shutil.disk_usage(archive.parent).free
+            timings.record("volume_delta", started)
+            started = time.monotonic()
             _punch_raw_hole(source.fileno(), offset, len(chunk))
+            timings.record("raw_punch", started)
+            started = time.monotonic()
             after_blocks = os.fstat(source.fileno()).st_blocks
             if after_blocks >= before_blocks:
                 raise RuntimeError("punched raw extents not reclaimed (filesystem allocation pin)")
+            timings.record("block_reduction", started)
             # Bracket only the punch: unrelated allocations during compression must not
             # accumulate against reclaim. Allow half a chunk for concurrent volume activity.
             # Short tails can free less than this tolerance due to APFS accounting; they
             # retain the per-file block check above and the raw free-space floor below.
             # With no snapshots, the block drop proves reclaim despite unrelated writers.
             if len(chunk) == RECLAIM_CHUNK_BYTES and reclaim_basis != "block_drop_no_snapshot":
+                started = time.monotonic()
                 _confirm_raw_reclaim(
                     archive.parent,
                     offset=offset,
@@ -1598,12 +1661,18 @@ def _compress_reclaiming_raw(
                     after_blocks=after_blocks,
                     before_free=before_free,
                 )
+                timings.record("volume_delta", started)
             offset += len(chunk)
+            started = time.monotonic()
             _require_raw_floor(archive.parent)
+            timings.record("free_floor", started)
+            timings.progress()
+    started = time.monotonic()
     raw_hash = digest.hexdigest()
     with archive.open("rb") as compressed:
         if _archive_stream_sha256(compressed, zstd=zstd_binary is not None) != raw_hash:
             raise ValueError("Raw/archive snapshot binding failed (SHA-256)")
+    timings.record("final_hash", started)
     return raw_hash
 
 
@@ -1813,6 +1882,7 @@ def create_sqlite_backup_artifact(
             compress_started = time.monotonic()
             raw_sha256 = None
             reclaim_basis = None
+            chunk_timings = None
             if reclaim_raw:
                 # Cache once for this backup, before compression starts, never per chunk.
                 snapshots = _staging_snapshots_may_exist(output_dir)
@@ -1821,8 +1891,13 @@ def create_sqlite_backup_artifact(
                 # Keep consumed extents inside the owned attempt, never at the published raw path.
                 consumed_raw = _consume_raw_in_attempt(raw_snapshot, Path(tmp))
                 print("Backup consuming verified raw snapshot; a failed attempt requires a fresh snapshot", flush=True)
+                chunk_timings = _ChunkStageTimings()
                 raw_sha256 = _compress_reclaiming_raw(
-                    consumed_raw, temp_archive, zstd_binary=zstd_binary, reclaim_basis=reclaim_basis
+                    consumed_raw,
+                    temp_archive,
+                    zstd_binary=zstd_binary,
+                    reclaim_basis=reclaim_basis,
+                    timings=chunk_timings,
                 )
             elif zstd_binary is not None:
                 _compress_zstd(zstd_binary, raw_snapshot, temp_archive, output_dir)
@@ -1868,6 +1943,7 @@ def create_sqlite_backup_artifact(
         compress_duration_seconds=compress_duration,
         raw_sha256=raw_sha256,
         reclaim_basis=reclaim_basis,
+        chunk_stage_seconds=chunk_timings.data if chunk_timings is not None else None,
     )
 
 
@@ -3539,6 +3615,7 @@ def run_backup(
                     integrity_duration_seconds=resume.get("integrity_duration_seconds"),
                     raw_sha256=resume.get("raw_sha256"),
                     reclaim_basis=resume.get("reclaim_basis"),
+                    chunk_stage_seconds=resume.get("chunk_stage_seconds"),
                 )
             for suffix in DB_SNAPSHOT_SUFFIXES:
                 target = Path(staging_dir) / f"{resolved_date_stamp}{suffix}"
@@ -3603,6 +3680,7 @@ def run_backup(
                     "integrity_duration_seconds": getattr(artifact, "integrity_duration_seconds", None),
                     "raw_sha256": getattr(artifact, "raw_sha256", None),
                     "reclaim_basis": getattr(artifact, "reclaim_basis", None),
+                    "chunk_stage_seconds": getattr(artifact, "chunk_stage_seconds", None),
                     "compressor": getattr(artifact, "compressor", None)
                     or ("zstd" if snapshot.name.endswith(ZSTD_SNAPSHOT_SUFFIX) else "gzip"),
                     "compress_duration_seconds": getattr(artifact, "compress_duration_seconds", None),

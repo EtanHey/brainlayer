@@ -17,6 +17,22 @@ FIXTURES = Path(__file__).parent / "fixtures/observability"
 NOW = datetime(2026, 9, 13, 12, tzinfo=UTC)
 
 
+def test_chunk_stage_seconds_are_accepted_by_backup_contracts(tmp_path):
+    timings = backup_daily._ChunkStageTimings().data
+    env, recorder = _two_copy_env(
+        tmp_path,
+        transcript_at="2026-09-13T00:00:00Z",
+        daily=[_db_receipt("2026-09-13T00:00:00Z", "synthetic.db.zst", chunk_stage_seconds=timings)],
+    )
+    journal = Path(env["BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG"])
+    records, noise, malformed = backup_daily._scan_backup_receipts(journal)
+    assert records[0]["chunk_stage_seconds"] == timings
+    assert noise == malformed == 0
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+    assert result["db_snapshot"]["destination"] == "synthetic.db.zst"
+    _assert_backups_schema(result)  # v1 and v2 project known fields from additive backup rows.
+
+
 @pytest.mark.parametrize("alert_key", [None, "backup-daily", "backup-snapshot", "drive-consent"])
 def test_reclaim_failure_preserves_verified_copy_and_specific_reason(tmp_path, alert_key):
     fixture = json.loads(

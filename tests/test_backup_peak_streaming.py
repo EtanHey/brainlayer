@@ -16,6 +16,48 @@ import pytest
 from brainlayer import backup_daily as backup
 
 
+def test_chunk_stage_aggregation_uses_monotonic_clock(monkeypatch):
+    clock = iter([10, 11, 20, 23, 30, 32, 40, 45, 50, 53])
+    monkeypatch.setattr(backup.time, "monotonic", lambda: next(clock))
+    timings = backup._ChunkStageTimings()
+    for _ in range(2):
+        timings.start_chunk()
+        for _ in range(2):
+            timings.record("free_floor", backup.time.monotonic())
+    timings.record("final_hash", backup.time.monotonic())
+    assert timings.data["chunks"] == 2
+    assert timings.data["free_floor"] == {"total": 11, "max": 7, "max_chunk": 2}
+    assert timings.data["final_hash"] == {"total": 3, "max": 3, "max_chunk": None}
+    assert timings.data["compress"] == {"total": 0, "max": 0, "max_chunk": None}
+
+
+@pytest.mark.parametrize("compressor", ["gzip", "zstd"])
+def test_chunk_timings_reach_log_and_periodic_stdout(punch_lane, monkeypatch, capsys, compressor):
+    source, output = punch_lane
+    monkeypatch.setenv(backup.BACKUP_COMPRESSOR_ENV, compressor)
+    monkeypatch.setattr(backup, "RECLAIM_CHUNK_BYTES", 4096)
+    monkeypatch.setattr(backup, "_staging_snapshots_may_exist", lambda _: True)
+    log = output / "backup-daily.log"
+    result = backup.run_backup(source, staging_dir=output, date_stamp="2026-10-26", upload=False, log_path=log)
+    timings = result["chunk_stage_seconds"]
+    assert timings["chunks"] == (source.stat().st_size + 4095) // 4096
+    receipts = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [r["chunk_stage_seconds"] for r in receipts if r.get("snapshot")] == [timings, timings]
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("Backup chunk timing progress: ")]
+    partials = [json.loads(line.split(": ", 1)[1])["chunk_stage_seconds"] for line in lines]
+    assert [p["chunks"] for p in partials] == list(range(8, timings["chunks"] + 1, 8))
+    assert partials  # Evidence was emitted before the final archive hash / journal row.
+    assert all(p["final_hash"]["max_chunk"] is None and p["final_hash"]["total"] == 0 for p in partials)
+    for stage, measurement in timings.items():
+        if stage != "chunks":
+            assert measurement["total"] >= measurement["max"] > 0
+            assert (
+                measurement["max_chunk"] is None
+                if stage == "final_hash"
+                else 1 <= measurement["max_chunk"] <= timings["chunks"]
+            )
+
+
 @pytest.fixture(autouse=True)
 def reclaim_clock(monkeypatch):
     clock = SimpleNamespace(now=0.0, sleeps=[])
