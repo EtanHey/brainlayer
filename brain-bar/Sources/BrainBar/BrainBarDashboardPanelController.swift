@@ -7,8 +7,8 @@ final class BrainBarWindowActivationPolicy {
     private var openWindows: Set<ObjectIdentifier> = []
     private let setPolicy: (NSApplication.ActivationPolicy) -> Void
 
-    init(setPolicy: @escaping (NSApplication.ActivationPolicy) -> Void = {
-        NSApplication.shared.setActivationPolicy($0)
+    init(setPolicy: @escaping (NSApplication.ActivationPolicy) -> Void = { policy in
+        NSApplication.shared.setActivationPolicy(policy)
     }) {
         self.setPolicy = setPolicy
     }
