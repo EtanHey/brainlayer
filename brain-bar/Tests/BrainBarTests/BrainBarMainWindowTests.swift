@@ -188,7 +188,8 @@ final class BrainBarMainWindowTests: XCTestCase {
         // inside the screen this test runs on, so AppKit has no reason to move it, and expect
         // that exact rect back: the expectation is independent of restoredFrame.
         guard let visible = NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame else {
-            return XCTFail("no screen")
+            XCTFail("no screen")
+            return
         }
         let minimum = BrainBarDashboardPanelController.minSize
         let size = NSSize(width: max(minimum.width, min(760, visible.width)),
