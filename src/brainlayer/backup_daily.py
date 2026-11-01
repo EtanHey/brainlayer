@@ -1568,6 +1568,10 @@ class _ChunkStageTimings:
             self.data[stage] = {"total": 0.0, "max": 0.0, "max_chunk": None}
         self._chunk_seconds: dict[str, float] = {}
 
+    def now(self) -> float:
+        """Stage start times come from the same clock record() reads."""
+        return self._clock()
+
     def start_chunk(self) -> None:
         self.data["chunks"] += 1
         self._chunk_seconds = {}
@@ -1609,14 +1613,14 @@ def _compress_reclaiming_raw(
         offset = 0
         while True:
             # The raw read is timed too: on a starved disk it can dominate the chunk.
-            started = time.monotonic()
+            started = timings.now()
             chunk = source.read(RECLAIM_CHUNK_BYTES)
             if not chunk:
                 break
             timings.start_chunk()
             digest.update(chunk)
             timings.record("raw_read_hash", started)
-            started = time.monotonic()
+            started = timings.now()
             if zstd_binary is None:
                 frame = gzip.compress(chunk, compresslevel=6)
             else:
@@ -1629,10 +1633,10 @@ def _compress_reclaiming_raw(
             timings.record("compress", started)
             if len(frame) > len(chunk) + FRAME_OVERHEAD_BYTES:
                 raise ValueError("Compressed frame exceeds budgeted expansion")
-            started = time.monotonic()
+            started = timings.now()
             _require_raw_floor(archive.parent, forthcoming=len(frame))
             timings.record("free_floor", started)
-            started = time.monotonic()
+            started = timings.now()
             sink.write(frame)
             sink.flush()
             if sys.platform == "darwin":
@@ -1640,18 +1644,18 @@ def _compress_reclaiming_raw(
             else:
                 os.fsync(sink.fileno())
             timings.record("archive_write_sync", started)
-            started = time.monotonic()
+            started = timings.now()
             before_blocks = os.fstat(source.fileno()).st_blocks
             timings.record("block_reduction", started)
             # Full chunks are allocation-aligned; punching the short final extent is safe
             # because no unread bytes follow it. APFS may retain its final partial block.
-            started = time.monotonic()
+            started = timings.now()
             before_free = shutil.disk_usage(archive.parent).free
             timings.record("volume_delta", started)
-            started = time.monotonic()
+            started = timings.now()
             _punch_raw_hole(source.fileno(), offset, len(chunk))
             timings.record("raw_punch", started)
-            started = time.monotonic()
+            started = timings.now()
             after_blocks = os.fstat(source.fileno()).st_blocks
             if after_blocks >= before_blocks:
                 raise RuntimeError("punched raw extents not reclaimed (filesystem allocation pin)")
@@ -1662,7 +1666,7 @@ def _compress_reclaiming_raw(
             # retain the per-file block check above and the raw free-space floor below.
             # With no snapshots, the block drop proves reclaim despite unrelated writers.
             if len(chunk) == RECLAIM_CHUNK_BYTES and reclaim_basis != "block_drop_no_snapshot":
-                started = time.monotonic()
+                started = timings.now()
                 _confirm_raw_reclaim(
                     archive.parent,
                     offset=offset,
@@ -1673,11 +1677,11 @@ def _compress_reclaiming_raw(
                 )
                 timings.record("volume_delta", started)
             offset += len(chunk)
-            started = time.monotonic()
+            started = timings.now()
             _require_raw_floor(archive.parent)
             timings.record("free_floor", started)
             timings.progress()
-    started = time.monotonic()
+    started = timings.now()
     raw_hash = digest.hexdigest()
     with archive.open("rb") as compressed:
         if _archive_stream_sha256(compressed, zstd=zstd_binary is not None) != raw_hash:

@@ -671,6 +671,19 @@ def test_short_final_chunk_tolerates_volume_accounting_deficit(punch_lane, recla
     assert raw_hash == hashlib.sha256(data).hexdigest()
 
 
+def test_stage_start_times_use_the_injected_clock(punch_lane):
+    """Both ends of every stage read one clock; a different origin must not leak in."""
+    _, output = punch_lane
+    raw, archive = output / "clock.db", output / "clock.archive"
+    raw.write_bytes(os.urandom(backup.RECLAIM_CHUNK_BYTES + 4096))
+    offset_clock = backup._ChunkStageTimings(clock=lambda: backup.time.monotonic() + 1_000.0)
+    backup._compress_reclaiming_raw(raw, archive, zstd_binary=None, timings=offset_clock)
+    assert offset_clock.data["chunks"] == 2
+    for stage, measurement in offset_clock.data.items():
+        if stage != "chunks":
+            assert 0 <= measurement["total"] < 100, (stage, measurement)
+
+
 @pytest.mark.parametrize("compressor", ["gzip", "zstd"])
 def test_background_volume_drift_does_not_abort_healthy_punches(punch_lane, reclaim_volume, monkeypatch, compressor):
     source, output = punch_lane
