@@ -164,6 +164,93 @@ def test_route_of_matches_the_trigger_predicates():
 # ── census sees both directions ──────────────────────────────────────────────
 
 
+@pytest.mark.parametrize("commit_before", ["INSERT INTO temp._ic_own_chunks_fts(", "FROM chunk_vectors_rowids v"])
+def test_doctor_census_uses_one_snapshot_during_commit(store: VectorStore, monkeypatch, commit_before):
+    """A WAL writer commits after route staging, before FTS or vector reads."""
+    from brainlayer.doctor import _index_completeness
+
+    def add_vectored(chunk_id):
+        with store.conn:
+            _add(store, chunk_id)
+            store._upsert_chunk_vector(store.conn.cursor(), chunk_id, [1.0] + [0.0] * 1023)
+
+    add_vectored("before-census")
+    assert store.conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    connect = sqlite3.connect
+    committed = False
+
+    class ConcurrentConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            nonlocal committed
+            if not committed and commit_before in sql:
+                committed = True
+                add_vectored("during-census")
+            return super().execute(sql, parameters)
+
+    def concurrent_connect(*args, **kwargs):
+        return connect(*args, factory=ConcurrentConnection, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", concurrent_connect)
+    result = _index_completeness(store.db_path, verify_payload=True)
+    assert committed, "the writer must commit between census reads"
+    assert result["total"] == 0, result
+    assert result["aux_to_chunk"]["vector_payload_checked"] == 1
+    # The next snapshot includes the committed chunk and all its indexes.
+    fresh = _index_completeness(store.db_path, verify_payload=True)
+    assert fresh["total"] == 0, fresh
+    assert fresh["aux_to_chunk"]["vector_payload_checked"] == 2
+
+
+@pytest.mark.parametrize("caller_transaction", [False, True])
+def test_census_preserves_transaction_ownership(store: VectorStore, caller_transaction):
+    conn = _sqlite(store)
+    try:
+        if caller_transaction:
+            conn.execute("CREATE TEMP TABLE caller_data(value TEXT)")
+            conn.execute("INSERT INTO caller_data VALUES ('keep')")
+            conn.commit()
+            conn.execute("BEGIN")
+            conn.execute("UPDATE chunks SET content = content WHERE 0")
+        census(conn)
+        assert conn.in_transaction is caller_transaction
+        if caller_transaction:
+            assert conn.execute("SELECT value FROM caller_data").fetchall() == [("keep",)]
+        # Reusing the connection must not encounter a nested BEGIN or stale TEMP tables.
+        census(conn)
+        assert conn.in_transaction is caller_transaction
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="sqlite3 autocommit attribute is 3.12+")
+def test_census_releases_snapshot_under_pep249_autocommit(store: VectorStore):
+    """conn.rollback() is a no-op when autocommit=True; the snapshot must still close."""
+    conn = sqlite3.connect(store.db_path, autocommit=True)
+    try:
+        census(conn)
+        assert not conn.in_transaction
+        census(conn)
+        assert not conn.in_transaction
+    finally:
+        conn.close()
+
+
+def test_census_releases_snapshot_on_error(store: VectorStore, monkeypatch):
+    from brainlayer import index_completeness
+
+    def fail(*args):
+        raise RuntimeError("injected census failure")
+
+    conn = _sqlite(store)
+    try:
+        monkeypatch.setattr(index_completeness, "_build_scratch", fail)
+        with pytest.raises(RuntimeError, match="injected census failure"):
+            census(conn)
+        assert not conn.in_transaction
+    finally:
+        conn.close()
+
+
 def test_census_finds_a_missing_row_that_counts_hide(store: VectorStore):
     """A surplus row must not mask a missing one -- the #722 lesson, in a test."""
     _add(store, "present", content="findable text")
