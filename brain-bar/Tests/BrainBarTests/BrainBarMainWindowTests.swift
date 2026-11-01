@@ -125,6 +125,97 @@ final class BrainBarMainWindowTests: XCTestCase {
         XCTAssertEqual(onSmallScreen.windowForTesting.frame, NSRect(x: 24, y: 0, width: 1_000, height: 680))
     }
 
+    func test_settings_position_and_size_survive_quit_and_relaunch() {
+        let defaults = MemoryDefaults()
+        let first = controller(defaults: defaults)
+        first.showSettings(section: .backups)
+        let visible = NSScreen.screens[0].visibleFrame
+        let size = NSSize(width: min(900, max(760, visible.width - 160)),
+            height: min(700, max(560, visible.height - 120)))
+        let saved = NSRect(x: visible.minX + min(120, max(0, visible.width - size.width)),
+            y: visible.minY + min(80, max(0, visible.height - size.height)),
+            width: size.width, height: size.height)
+        first.windowForTesting.setFrame(saved, display: true)
+        first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification,
+            object: first.windowForTesting))
+        let delegate = AppDelegate(dashboardPanel: first)
+        XCTAssertEqual(delegate.applicationShouldTerminate(NSApplication.shared), .terminateNow)
+        first.windowForTesting.setFrameOrigin(NSPoint(x: visible.minX, y: visible.minY))
+        first.windowDidMove(Notification(name: NSWindow.didMoveNotification, object: first.windowForTesting))
+        delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+
+        let relaunched = controller(defaults: defaults)
+        defer {
+            relaunched.dismiss()
+            BrainBarSettingsActions.installOpenHandler {}
+        }
+        relaunched.showSettings(section: .backups)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(relaunched.windowForTesting.frame, saved)
+    }
+
+    func test_late_geometry_events_after_close_do_not_replace_the_saved_external_display_position() {
+        let defaults = MemoryDefaults()
+        let screens = [NSRect(x: 0, y: 0, width: 1728, height: 1084),
+            NSRect(x: 1728, y: 210, width: 1920, height: 1050)]
+        let saved = NSRect(x: 2338, y: 399, width: 900, height: 640)
+        let store = BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey)
+        store.persist(frame: saved)
+        let first = controller(defaults: defaults, screens: screens)
+        first.placeWindowForTesting()
+        XCTAssertEqual(first.windowForTesting.frame, saved)
+        first.dismiss()
+
+        // AppKit can deliver geometry changes during teardown/policy changes. Once closed,
+        // these are no longer a user placement and must not replace the saved frame.
+        first.windowForTesting.setFrame(NSRect(x: 100, y: 100, width: 900, height: 640), display: false)
+        first.windowDidMove(Notification(name: NSWindow.didMoveNotification, object: first.windowForTesting))
+        first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification,
+            object: first.windowForTesting))
+        first.dismiss() // Termination can close through both status.stop() and the delegate.
+        XCTAssertEqual(store.persistedFrame(), saved)
+
+        let relaunched = controller(defaults: defaults, screens: screens)
+        relaunched.placeWindowForTesting()
+        XCTAssertEqual(relaunched.windowForTesting.frame, saved)
+        let detached = controller(defaults: defaults, screens: [screens[0]])
+        detached.placeWindowForTesting()
+        XCTAssertNotEqual(detached.windowForTesting.frame.origin, saved.origin)
+    }
+
+    func test_settings_restores_a_saved_bottom_edge_frame_when_promoted_to_regular() {
+        // Etan's real saved frame touched the bottom edge with y = -0.0. Build the same shape
+        // inside the screen this test runs on, so AppKit has no reason to move it, and expect
+        // that exact rect back: the expectation is independent of restoredFrame.
+        guard let visible = NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame else {
+            XCTFail("no screen")
+            return
+        }
+        let minimum = BrainBarDashboardPanelController.minSize
+        let size = NSSize(width: max(minimum.width, min(760, visible.width)),
+            height: max(minimum.height, min(1084, visible.height)))
+        let expected = NSRect(x: visible.maxX - size.width, y: visible.minY, width: size.width, height: size.height)
+        let bottom = expected.minY == 0 ? "-0.0" : "\(expected.minY)"
+        let defaults = MemoryDefaults()
+        defaults.values[BrainBarDashboardPanelController.frameDefaultsKey] =
+            "\(expected.minX),\(bottom),\(expected.width),\(expected.height)"
+        let app = NSApplication.shared
+        let previousPolicy = app.activationPolicy()
+        app.setActivationPolicy(.accessory)
+        let restored = BrainBarDashboardPanelController(
+            workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
+            activationPolicy: BrainBarWindowActivationPolicy(),
+            frameStore: BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey))
+        defer {
+            restored.dismiss()
+            app.setActivationPolicy(previousPolicy)
+            BrainBarSettingsActions.installOpenHandler {}
+        }
+        restored.showSettings(section: .backups)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(restored.windowForTesting.frame, expected)
+    }
+
     func test_a_saved_frame_is_kept_clamped_or_dropped_for_the_current_screens() {
         let minimum = BrainBarDashboardPanelController.minSize
         let screen = NSRect(x: 0, y: 0, width: 1_440, height: 875)
