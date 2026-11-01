@@ -1,0 +1,7 @@
+# Review bots cut back (Etan 2026-11-01): one review when the PR is ready, no re-review on every push.
+# Drafts are skipped. Evidence and decisions: orchestrator docs.local ci-hygiene plans/review-bots-cutback.md
+reviews:
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: false
