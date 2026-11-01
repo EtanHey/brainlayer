@@ -222,6 +222,19 @@ def test_census_preserves_transaction_ownership(store: VectorStore, caller_trans
         conn.close()
 
 
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="sqlite3 autocommit attribute is 3.12+")
+def test_census_releases_snapshot_under_pep249_autocommit(store: VectorStore):
+    """conn.rollback() is a no-op when autocommit=True; the snapshot must still close."""
+    conn = sqlite3.connect(store.db_path, autocommit=True)
+    try:
+        census(conn)
+        assert not conn.in_transaction
+        census(conn)
+        assert not conn.in_transaction
+    finally:
+        conn.close()
+
+
 def test_census_releases_snapshot_on_error(store: VectorStore, monkeypatch):
     from brainlayer import index_completeness
 

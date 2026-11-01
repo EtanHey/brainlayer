@@ -309,7 +309,9 @@ def census(
         return _census_snapshot(conn, verify_vector_payload=verify_vector_payload, collect_ids=collect_ids)
     finally:
         if owns_snapshot:
-            conn.rollback()
+            # SQL, not conn.rollback(): under Python 3.12+ autocommit=True the
+            # method is a no-op and would leave this BEGIN's snapshot open.
+            conn.execute("ROLLBACK")
 
 
 def _census_snapshot(
