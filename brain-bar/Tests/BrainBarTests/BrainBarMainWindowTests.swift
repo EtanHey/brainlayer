@@ -184,15 +184,23 @@ final class BrainBarMainWindowTests: XCTestCase {
     }
 
     func test_settings_restores_a_saved_bottom_edge_frame_when_promoted_to_regular() {
+        // Etan's real saved frame touched the bottom edge with y = -0.0. Build the same shape
+        // inside the screen this test runs on, so AppKit has no reason to move it, and expect
+        // that exact rect back: the expectation is independent of restoredFrame.
+        guard let visible = NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame else {
+            return XCTFail("no screen")
+        }
+        let minimum = BrainBarDashboardPanelController.minSize
+        let size = NSSize(width: max(minimum.width, min(760, visible.width)),
+            height: max(minimum.height, min(1084, visible.height)))
+        let expected = NSRect(x: visible.maxX - size.width, y: visible.minY, width: size.width, height: size.height)
+        let bottom = expected.minY == 0 ? "-0.0" : "\(expected.minY)"
         let defaults = MemoryDefaults()
-        defaults.values[BrainBarDashboardPanelController.frameDefaultsKey] = "968.0,-0.0,760.0,1084.0"
+        defaults.values[BrainBarDashboardPanelController.frameDefaultsKey] =
+            "\(expected.minX),\(bottom),\(expected.width),\(expected.height)"
         let app = NSApplication.shared
         let previousPolicy = app.activationPolicy()
         app.setActivationPolicy(.accessory)
-        let screens = NSScreen.screens.map(\.visibleFrame)
-        let expected = BrainBarDashboardPanelController.restoredFrame(
-            NSRect(x: 968, y: -0.0, width: 760, height: 1084),
-            minSize: BrainBarDashboardPanelController.minSize, visibleFrames: screens)
         let restored = BrainBarDashboardPanelController(
             workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
             activationPolicy: BrainBarWindowActivationPolicy(),
