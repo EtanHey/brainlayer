@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusPopoverController: BrainBarStatusPopoverController?
     private var collector: StatsCollector?
     private var dashboardPanel: BrainBarDashboardPanelController?
+    private let windowActivationPolicy = BrainBarWindowActivationPolicy()
     private var toggleHotkey: HotkeyManager?
     private var pendingBrainBarURLs: [URL] = []
     private var hotkeyFileWatcher: DispatchSourceFileSystemObject?
@@ -31,6 +32,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var driveAuthTimer: Timer?
     /// S5: the shared status snapshot's one sampling cadence, for the app's lifetime.
     private var statusSamplingTask: Task<Void, Never>?
+
+    override init() { super.init() }
+
+    init(dashboardPanel: BrainBarDashboardPanelController) {
+        self.dashboardPanel = dashboardPanel
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSAppleEventManager.shared().setEventHandler(
@@ -66,7 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let workspace = BrainBarWorkspace()
-        let dashboardPanel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+        let dashboardPanel = BrainBarDashboardPanelController(
+            workspace: workspace, runtime: runtime, activationPolicy: windowActivationPolicy
+        )
         self.dashboardPanel = dashboardPanel
         statusPopoverController = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
             dashboardPanelController: dashboardPanel,
@@ -110,6 +120,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[BrainBar] Runtime wired — launchMode=%@", String(describing: runtime.launchMode))
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        dashboardPanel?.prepareForClose()
+        return .terminateNow
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         statusPopoverController?.stop()
         statusPopoverController = nil
@@ -130,6 +145,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showDashboardPanel()
+        return false // The existing window was handled, including when it was minimized.
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -206,9 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showDashboardPanel() {
-        if let statusPopoverController {
-            statusPopoverController.show(nil)
-        }
+        dashboardPanel?.show()
     }
 
     // MARK: - Hotkey

@@ -1,6 +1,31 @@
 import AppKit
 import SwiftUI
 
+/// Installed by the UI shell only. Render harnesses keep their own activation policy.
+@MainActor
+final class BrainBarWindowActivationPolicy {
+    private var openWindows: Set<ObjectIdentifier> = []
+    private let setPolicy: (NSApplication.ActivationPolicy) -> Void
+
+    init(setPolicy: @escaping (NSApplication.ActivationPolicy) -> Void = {
+        NSApplication.shared.setActivationPolicy($0)
+    }) {
+        self.setPolicy = setPolicy
+    }
+
+    func windowOpened(_ window: NSWindow) {
+        let wasEmpty = openWindows.isEmpty
+        openWindows.insert(ObjectIdentifier(window))
+        if wasEmpty { setPolicy(.regular) }
+    }
+
+    /// Called after close has ordered the window out, never on focus loss or minimization.
+    func windowClosed(_ window: NSWindow) {
+        guard openWindows.remove(ObjectIdentifier(window)) != nil else { return }
+        if openWindows.isEmpty { setPolicy(.accessory) }
+    }
+}
+
 enum BrainBarDisclosureAnimation {
     enum Direction {
         case open
@@ -133,9 +158,15 @@ final class BrainBarMainWindow: NSWindow {
     /// Cmd-, from inside the window. The window handles its own key equivalents because an
     /// accessory app shows no menu bar to route them.
     var onSettingsShortcut: (() -> Void)?
+    var onClose: (() -> Void)?
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    override func close() {
+        super.close()
+        onClose?()
+    }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.type == .keyDown,
@@ -177,13 +208,16 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     private let panelState = BrainBarDashboardPanelState()
     private let frameStore: BrainBarWindowFrameStore
     private let screenFrames: () -> [NSRect]
+    private let activationPolicy: BrainBarWindowActivationPolicy?
     private var hasPlacedWindow = false
+    private var isClosingWindow = false
     /// Only used to place the very first window below the menu-bar icon.
     weak var statusItemButton: NSView?
 
     init(
         workspace: any BrainBarWorkspaceActing,
         runtime: BrainBarRuntime,
+        activationPolicy: BrainBarWindowActivationPolicy? = nil,
         frameStore: BrainBarWindowFrameStore = BrainBarWindowFrameStore(key: frameDefaultsKey),
         screenFrames: @escaping () -> [NSRect] = { NSScreen.screens.map(\.visibleFrame) }
     ) {
@@ -199,11 +233,16 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         contentViewControllerForTesting = hostingController
         self.frameStore = frameStore
         self.screenFrames = screenFrames
+        self.activationPolicy = activationPolicy
         window = Self.makeWindow(contentViewController: hostingController)
         windowForTesting = window
         super.init()
         window.delegate = self
         window.onSettingsShortcut = { [weak self] in self?.showSettings() }
+        window.onClose = { [weak self] in
+            guard let self else { return }
+            self.activationPolicy?.windowClosed(self.window)
+        }
         BrainBarSettingsActions.installOpenHandler { [weak self] in
             self?.showSettings()
         }
@@ -220,18 +259,20 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     func show(anchoredTo anchorView: NSView? = nil) {
         if panelState.selectedTab == .settings { panelState.settingsActivationRevision += 1 }
-        if !hasPlacedWindow {
+        if !hasPlacedWindow || isClosingWindow {
             placeWindow(near: anchorView ?? statusItemButton)
             hasPlacedWindow = true
         }
+        activationPolicy?.windowOpened(window)
+        if window.isMiniaturized { window.deminiaturize(nil) }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
+        isClosingWindow = false
     }
 
     func dismiss() {
-        persistFrame()
-        window.orderOut(nil)
+        window.close()
     }
 
     func showDashboard() {
@@ -280,13 +321,19 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     }
 
     private func persistFrame() {
-        guard hasPlacedWindow else { return }
+        guard hasPlacedWindow, !isClosingWindow else { return }
         frameStore.persist(frame: window.frame)
     }
 
     func windowDidEndLiveResize(_ notification: Notification) { persistFrame() }
     func windowDidMove(_ notification: Notification) { persistFrame() }
-    func windowWillClose(_ notification: Notification) { persistFrame() }
+    func windowWillClose(_ notification: Notification) { prepareForClose() }
+
+    func prepareForClose() {
+        persistFrame()
+        // Policy changes and teardown can move a closed window. Keep the last user frame.
+        isClosingWindow = true
+    }
 
     /// A real window resizes on both axes, down to the size the dashboard needs.
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
