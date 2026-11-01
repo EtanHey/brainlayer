@@ -39,6 +39,13 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.82] - 2026-11-01
+
+### Backup
+- Choose how to prove a raw-snapshot reclaim from the staging volume's APFS snapshot inventory, probed once per backup. With no snapshot, the per-file block drop proves the reclaim even while unrelated writers allocate on the same volume. That was the cause of the 2026-10-31 and 2026-11-01 nightly failures on the M4: the blocks dropped by 64 MiB, while another process consumed about 250 MB during the check. With a snapshot, or if the probe is uncertain, the re-sampled volume check still applies. The no-block-release abort and the 2 GiB free-space floor are unchanged, and the receipt records `reclaim_basis` (#1574).
+
+Release scope: Python package + Homebrew formula + BrainBar app 1.5.82 (cask)
+
 ## [1.5.81] - 2026-10-31
 
 ### Backup
