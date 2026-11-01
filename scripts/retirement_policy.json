@@ -1438,6 +1438,16 @@
         "target": "socket.socket().close"
       }
     },
+    "425f5e8e0ab9fe226b78cc7f2f0346a17eb531905d1dee4128aaaac46d3ac691": {
+      "non_cloud_purpose": "Bounded read-only staging-device identity via local /bin/df and APFS snapshot inventory via /usr/sbin/diskutil, including probe error metadata; no network or cloud/model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>._staging_snapshots_may_exist",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "42a3f3aaa43f52be8326c9e58ce2a4c4c5c00e5d2c79a34cac8661d8af497f78": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
@@ -3762,6 +3772,16 @@
         "target": "subprocess.run"
       }
     },
+    "a454ce24aaae925f6275c2510fcc25b304f560036c3d08900b38f392f4efe1ad": {
+      "non_cloud_purpose": "Bounded read-only staging-device identity via local /bin/df and APFS snapshot inventory via /usr/sbin/diskutil, including probe error metadata; no network or cloud/model sender.",
+      "site": {
+        "call_sha256": "311a7c33214343c3ff734795d4ad1be1cee5bbd8de158d5cd029c7904222f2ce",
+        "kind": "child_process",
+        "owner": "<module>._staging_snapshots_may_exist",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.run"
+      }
+    },
     "a5071046c464e0617a34b0c3cb5dc4d8a715363e6f57e8fd8b7e58c08bf82ed8": {
       "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
       "site": {
@@ -5594,6 +5614,16 @@
         "owner": "<module>.arm.sqlite_connect",
         "path": "scripts/retirement_guard.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "ed733a4eeae9b04bff7a00e86ef890545a6d958ca25f1492c1edd84d6496bbf4": {
+      "non_cloud_purpose": "Bounded read-only staging-device identity via local /bin/df and APFS snapshot inventory via /usr/sbin/diskutil, including probe error metadata; no network or cloud/model sender.",
+      "site": {
+        "call_sha256": "f651b151f8227b9f90959b9e4f6d6a4085858f080d0fd998fedb4a4392fa3387",
+        "kind": "child_process",
+        "owner": "<module>._staging_snapshots_may_exist",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.run"
       }
     },
     "ee46f0bb17fc978667bd01afbe37ace753dcdba0d3fa0edbca730ed1641d06a3": {
