@@ -39,6 +39,20 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.83] - 2026-11-01
+
+### Doctor
+- `brainlayer doctor`'s index-completeness census reads the routing, FTS and vector tables from one read snapshot. Before, each statement took its own autocommit snapshot, so chunks committed mid-census showed up as false `index_completeness_aux_to_chunk` / `vector_parity_gap` findings. That stopped the 1.5.82 M4 install. The snapshot closes with SQL `ROLLBACK`, so Python 3.12+ `autocommit=True` callers are covered too (#1576).
+
+### BrainBar
+- While its window is open, BrainBar is a regular app: it shows in the Dock and in Cmd-Tab, and the Dock icon brings the window back, even when minimized. Closing the last window returns it to menu-bar only. `LSUIElement` stays on, so launch is unchanged.
+- The window's size and position survive quit and relaunch. Geometry events that arrive after a quit or close begins no longer overwrite the saved frame (#1577).
+
+### Backup
+- The raw-reclaim compress path records per-chunk stage timings: raw read and hash, compress, archive write and full fsync, punch, block reduction, volume delta, free floor, and final hash. They go into the backup receipt as `chunk_stage_seconds`, and a progress line every 8 chunks means a run killed at its timeout still leaves partial timings. Measurement only: ordering, durability, chunk size and timeouts are unchanged. This is for the M1's nightly backup timeouts (#1578).
+
+Release scope: Python package + Homebrew formula + BrainBar app 1.5.83 (cask)
+
 ## [1.5.82] - 2026-11-01
 
 ### Backup
