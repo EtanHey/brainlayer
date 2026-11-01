@@ -246,7 +246,6 @@ def _build_scratch(conn: sqlite3.Connection, present: set[str]) -> list[str]:
     in SQLite's own temp database -- writable even when the main DB is opened
     `mode=ro` -- so the working set spills to disk and memory stays flat.
     """
-    conn.execute("PRAGMA temp_store = FILE")
     conn.execute("CREATE TEMP TABLE _ic_route (chunk_id TEXT PRIMARY KEY, route TEXT, active INTEGER)")
     conn.execute(
         f"""
@@ -296,7 +295,29 @@ def census(
     verify_vector_payload: bool = False,
     collect_ids: bool = True,
 ) -> CompletenessCensus:
-    """Measure completeness in both directions. Reads only the main database."""
+    """Measure both directions in one snapshot; only TEMP tables are written.
+
+    Autocommit callers (doctor and repair) need an explicit read transaction
+    so a concurrent WAL commit cannot split routing, FTS, and vector reads.
+    An existing transaction belongs to the caller and must stay open.
+    """
+    owns_snapshot = not conn.in_transaction
+    if owns_snapshot:
+        conn.execute("PRAGMA temp_store = FILE")
+        conn.execute("BEGIN")
+    try:
+        return _census_snapshot(conn, verify_vector_payload=verify_vector_payload, collect_ids=collect_ids)
+    finally:
+        if owns_snapshot:
+            conn.rollback()
+
+
+def _census_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    verify_vector_payload: bool,
+    collect_ids: bool,
+) -> CompletenessCensus:
     present = _table_names(conn)
     result = CompletenessCensus()
     staged = _build_scratch(conn, present)
