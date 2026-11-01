@@ -1550,7 +1550,10 @@ class _ChunkStageTimings:
     remain zero with a null max_chunk. Only numeric measurements enter this payload.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        # Injected, never monkeypatched: patching time.monotonic is process-wide and
+        # kills unrelated background threads (the writer heartbeat) mid-test.
+        self._clock = clock
         self.data: dict[str, Any] = {"chunks": 0}
         for stage in (
             "raw_read_hash",
@@ -1570,7 +1573,7 @@ class _ChunkStageTimings:
         self._chunk_seconds = {}
 
     def record(self, stage: str, started: float) -> None:
-        elapsed = time.monotonic() - started
+        elapsed = self._clock() - started
         current = self._chunk_seconds.get(stage, 0.0) + elapsed
         self._chunk_seconds[stage] = current
         entry = self.data[stage]

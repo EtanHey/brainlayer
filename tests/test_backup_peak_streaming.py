@@ -16,15 +16,20 @@ import pytest
 from brainlayer import backup_daily as backup
 
 
-def test_chunk_stage_aggregation_uses_monotonic_clock(monkeypatch):
-    clock = iter([10, 11, 20, 23, 30, 32, 40, 45, 50, 53])
-    monkeypatch.setattr(backup.time, "monotonic", lambda: next(clock))
-    timings = backup._ChunkStageTimings()
+def test_chunk_stage_aggregation_uses_monotonic_clock():
+    # Inject the clock; never patch time.monotonic, which is process-wide and kills
+    # unrelated background threads (it broke the writer heartbeat in a later test).
+    ticks = iter([10, 11, 20, 23, 30, 32, 40, 45, 50, 53])
+
+    def clock():
+        return next(ticks)
+
+    timings = backup._ChunkStageTimings(clock=clock)
     for _ in range(2):
         timings.start_chunk()
         for _ in range(2):
-            timings.record("free_floor", backup.time.monotonic())
-    timings.record("final_hash", backup.time.monotonic())
+            timings.record("free_floor", clock())
+    timings.record("final_hash", clock())
     assert timings.data["chunks"] == 2
     assert timings.data["free_floor"] == {"total": 11, "max": 7, "max_chunk": 2}
     assert timings.data["final_hash"] == {"total": 3, "max": 3, "max_chunk": None}
