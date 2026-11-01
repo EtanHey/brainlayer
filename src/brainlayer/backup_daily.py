@@ -1553,6 +1553,7 @@ class _ChunkStageTimings:
     def __init__(self) -> None:
         self.data: dict[str, Any] = {"chunks": 0}
         for stage in (
+            "raw_read_hash",
             "compress",
             "archive_write_sync",
             "raw_punch",
@@ -1603,9 +1604,15 @@ def _compress_reclaiming_raw(
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise ValueError("Cannot consume a linked or non-regular raw snapshot")
         offset = 0
-        while chunk := source.read(RECLAIM_CHUNK_BYTES):
+        while True:
+            # The raw read is timed too: on a starved disk it can dominate the chunk.
+            started = time.monotonic()
+            chunk = source.read(RECLAIM_CHUNK_BYTES)
+            if not chunk:
+                break
             timings.start_chunk()
             digest.update(chunk)
+            timings.record("raw_read_hash", started)
             started = time.monotonic()
             if zstd_binary is None:
                 frame = gzip.compress(chunk, compresslevel=6)
