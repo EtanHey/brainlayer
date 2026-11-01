@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import json
 import os
+import plistlib
 import sqlite3
 import subprocess
 import threading
@@ -26,6 +27,107 @@ def reclaim_clock(monkeypatch):
     monkeypatch.setattr(backup, "_reclaim_clock", lambda: clock.now, raising=False)
     monkeypatch.setattr(backup, "_sleep", sleep)
     return clock
+
+
+@pytest.mark.parametrize("snapshots", [False, True, None])
+@pytest.mark.parametrize("breach_floor", [False, True])
+def test_snapshot_probe_selects_reclaim_proof(punch_lane, monkeypatch, snapshots, breach_floor):
+    source, output = punch_lane
+    probes, punches = [], []
+    real_punch = backup._punch_raw_hole
+
+    def probe(path):
+        assert not punches  # Probe before compression consumes any raw extents.
+        probes.append(path)
+        return snapshots
+
+    def punch(fd, offset, length):
+        real_punch(fd, offset, length)
+        punches.append(length)
+
+    def usage(_):
+        free = backup.MIN_RAW_FREE_BYTES - 1 if breach_floor and punches else 10**12 - len(punches) * 1024**2
+        return SimpleNamespace(free=free)
+
+    monkeypatch.setattr(backup, "_staging_snapshots_may_exist", probe, raising=False)
+    monkeypatch.setattr(backup, "_punch_raw_hole", punch)
+    monkeypatch.setattr(backup.shutil, "disk_usage", usage)
+    if snapshots is not False:
+        with pytest.raises(backup.RawReclaimUnconfirmedError) as failure:
+            backup.create_sqlite_backup_artifact(source, output, "2026-10-26")
+        assert failure.value.measurements["reclaim_basis"] == "volume_delta"
+    elif breach_floor:
+        with pytest.raises(RuntimeError, match="raw free space floor breached"):
+            backup.create_sqlite_backup_artifact(source, output, "2026-10-26")
+    else:
+        result = backup.run_backup(source, staging_dir=output, date_stamp="2026-10-26", upload=False)
+        assert result["reclaim_basis"] == "block_drop_no_snapshot"
+        assert result["local_verified"] is True
+        assert result["local_integrity"] == "ok"
+        assert len(punches) > 1
+    assert probes == [output]  # One probe per backup, including multi-chunk success.
+
+
+@pytest.mark.parametrize(
+    "response, expected",
+    [
+        ({"Snapshots": []}, False),
+        ({"Snapshots": [{"SnapshotUUID": "test"}]}, True),
+        ({}, None),
+        ({"Snapshots": "unknown"}, None),
+        ({"Snapshots": [], "Error": True}, None),
+        (b"not a plist", None),
+        (b'<?xml version="1.0"?><plist><dict>', None),
+        (OSError("probe failed"), None),
+        (subprocess.CalledProcessError(1, "diskutil"), None),
+        (subprocess.TimeoutExpired("diskutil", 5), None),
+    ],
+)
+def test_staging_snapshot_probe_is_bounded_and_fail_safe(tmp_path, monkeypatch, response, expected):
+    monkeypatch.setattr(backup.sys, "platform", "darwin")
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs["timeout"] == 5
+        assert kwargs["check"] is True
+        if argv[0] == "/bin/df":
+            return SimpleNamespace(
+                stdout=b"Filesystem 512-blocks Used Available Capacity Mounted on\n/dev/disk9s2 1 1 1 1% /Volumes/staging\n"
+            )
+        assert argv == ["/usr/sbin/diskutil", "apfs", "listSnapshots", "disk9s2", "-plist"]
+        if isinstance(response, Exception):
+            raise response
+        return SimpleNamespace(stdout=response if isinstance(response, bytes) else plistlib.dumps(response))
+
+    monkeypatch.setattr(backup.subprocess, "run", run)
+    assert backup._staging_snapshots_may_exist(tmp_path) is expected
+    assert len(calls) == 2
+
+
+def test_snapshot_probe_preserves_backup_deadline(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup.sys, "platform", "darwin")
+
+    def run(*args, **kwargs):
+        raise backup.BackupTimeoutError("backup deadline")
+
+    monkeypatch.setattr(backup.subprocess, "run", run)
+    with pytest.raises(backup.BackupTimeoutError):
+        backup._staging_snapshots_may_exist(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "device_output", [b"", b"header\n", b"header\nnot-a-device 0\n", b"header\n/dev/disk9s2 0\nextra\n"]
+)
+def test_snapshot_probe_unknown_device_keeps_volume_gate(tmp_path, monkeypatch, device_output):
+    monkeypatch.setattr(backup.sys, "platform", "darwin")
+
+    def run(argv, **kwargs):
+        assert argv == ["/bin/df", "-P", str(tmp_path)]
+        return SimpleNamespace(stdout=device_output)
+
+    monkeypatch.setattr(backup.subprocess, "run", run)
+    assert backup._staging_snapshots_may_exist(tmp_path) is None
 
 
 @pytest.mark.parametrize("deltas", [[8, 32], [0, 0, 0, 0, 32], [0, 4, 8, 16, 31]])
@@ -184,6 +286,7 @@ def test_unavailable_reclamation_keeps_old_budget(full):
 
 @pytest.fixture
 def snapshot_lane(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup, "_staging_snapshots_may_exist", lambda _: None, raising=False)
     source, output = tmp_path / "source.db", tmp_path / "out"
     output.mkdir()
     with sqlite3.connect(source) as conn:

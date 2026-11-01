@@ -16,6 +16,7 @@ import inspect
 import json
 import math
 import os
+import plistlib
 import queue
 import re
 import shutil
@@ -37,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+from xml.parsers.expat import ExpatError
 
 import requests
 
@@ -173,6 +175,7 @@ class SQLiteBackupArtifact:
     compressor_fallback: str | None = None
     compress_duration_seconds: float | None = None
     raw_sha256: str | None = None
+    reclaim_basis: str | None = None
 
     @property
     def archive_path(self) -> Path:
@@ -1445,6 +1448,41 @@ def _archive_stream_sha256(source: Any, *, zstd: bool) -> str:
         return _stream_sha256(restored).hex()
 
 
+def _staging_snapshots_may_exist(path: Path) -> bool | None:
+    """Read the staging volume's APFS snapshot inventory; uncertainty keeps the volume gate."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        # df resolves the device even through macOS firmlinks (/Users is on Data).
+        # Use only its device identity, never its free/purgeable space accounting.
+        rows = (
+            subprocess.run(["/bin/df", "-P", str(path)], capture_output=True, check=True, timeout=5)
+            .stdout.decode()
+            .splitlines()
+        )
+        device = rows[1].split()[0] if len(rows) == 2 else ""
+        if not re.fullmatch(r"/dev/disk\d+s\d+", device):
+            raise ValueError("staging device is ambiguous")
+        result = subprocess.run(
+            ["/usr/sbin/diskutil", "apfs", "listSnapshots", device.removeprefix("/dev/"), "-plist"],
+            capture_output=True,
+            check=True,
+            timeout=5,
+        )
+        inventory = plistlib.loads(result.stdout)
+        if not isinstance(inventory, dict) or inventory.get("Error") or inventory.get("ExitCode", 0) != 0:
+            raise ValueError("snapshot inventory reported an error")
+        snapshots = inventory.get("Snapshots")
+        if not isinstance(snapshots, list):
+            raise ValueError("snapshot inventory is ambiguous")
+        return bool(snapshots)
+    except BackupTimeoutError:
+        raise  # Preserve the enclosing backup deadline, rather than treating it as probe uncertainty.
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError, ExpatError) as exc:
+        print(f"Backup snapshot probe unknown: {type(exc).__name__}; retaining volume reclaim check", flush=True)
+        return None
+
+
 class RawReclaimUnconfirmedError(RuntimeError):
     error_type = "raw_reclaim_unconfirmed"
 
@@ -1489,6 +1527,7 @@ def _confirm_raw_reclaim(
         _sleep(min(RECLAIM_WINDOW_SECONDS / (RECLAIM_MAX_SAMPLES - 1), remaining))
     raise RawReclaimUnconfirmedError(
         {
+            "reclaim_basis": "volume_delta",
             "chunk_offset": offset,
             "chunk_length": length,
             "blocks_before": before_blocks,
@@ -1502,7 +1541,9 @@ def _confirm_raw_reclaim(
     )
 
 
-def _compress_reclaiming_raw(raw: Path, archive: Path, *, zstd_binary: str | None) -> str:
+def _compress_reclaiming_raw(
+    raw: Path, archive: Path, *, zstd_binary: str | None, reclaim_basis: str = "volume_delta"
+) -> str:
     """Write durable independent frames, then release their raw extents; hash before punching.
 
     Concatenated gzip members and zstd frames decode to the original byte stream. A failed
@@ -1547,7 +1588,8 @@ def _compress_reclaiming_raw(raw: Path, archive: Path, *, zstd_binary: str | Non
             # accumulate against reclaim. Allow half a chunk for concurrent volume activity.
             # Short tails can free less than this tolerance due to APFS accounting; they
             # retain the per-file block check above and the raw free-space floor below.
-            if len(chunk) == RECLAIM_CHUNK_BYTES:
+            # With no snapshots, the block drop proves reclaim despite unrelated writers.
+            if len(chunk) == RECLAIM_CHUNK_BYTES and reclaim_basis != "block_drop_no_snapshot":
                 _confirm_raw_reclaim(
                     archive.parent,
                     offset=offset,
@@ -1770,11 +1812,18 @@ def create_sqlite_backup_artifact(
             temp_archive = Path(tmp) / final_archive.name
             compress_started = time.monotonic()
             raw_sha256 = None
+            reclaim_basis = None
             if reclaim_raw:
+                # Cache once for this backup, before compression starts, never per chunk.
+                snapshots = _staging_snapshots_may_exist(output_dir)
+                reclaim_basis = "block_drop_no_snapshot" if snapshots is False else "volume_delta"
+                print(f"Backup raw reclaim_basis={reclaim_basis}; snapshots_may_exist={snapshots}", flush=True)
                 # Keep consumed extents inside the owned attempt, never at the published raw path.
                 consumed_raw = _consume_raw_in_attempt(raw_snapshot, Path(tmp))
                 print("Backup consuming verified raw snapshot; a failed attempt requires a fresh snapshot", flush=True)
-                raw_sha256 = _compress_reclaiming_raw(consumed_raw, temp_archive, zstd_binary=zstd_binary)
+                raw_sha256 = _compress_reclaiming_raw(
+                    consumed_raw, temp_archive, zstd_binary=zstd_binary, reclaim_basis=reclaim_basis
+                )
             elif zstd_binary is not None:
                 _compress_zstd(zstd_binary, raw_snapshot, temp_archive, output_dir)
             else:
@@ -1818,6 +1867,7 @@ def create_sqlite_backup_artifact(
         compressor_fallback=compressor_fallback,
         compress_duration_seconds=compress_duration,
         raw_sha256=raw_sha256,
+        reclaim_basis=reclaim_basis,
     )
 
 
@@ -3488,6 +3538,7 @@ def run_backup(
                     snapshot_duration_seconds=resume.get("snapshot_duration_seconds"),
                     integrity_duration_seconds=resume.get("integrity_duration_seconds"),
                     raw_sha256=resume.get("raw_sha256"),
+                    reclaim_basis=resume.get("reclaim_basis"),
                 )
             for suffix in DB_SNAPSHOT_SUFFIXES:
                 target = Path(staging_dir) / f"{resolved_date_stamp}{suffix}"
@@ -3551,6 +3602,7 @@ def run_backup(
                     "snapshot_duration_seconds": getattr(artifact, "snapshot_duration_seconds", None),
                     "integrity_duration_seconds": getattr(artifact, "integrity_duration_seconds", None),
                     "raw_sha256": getattr(artifact, "raw_sha256", None),
+                    "reclaim_basis": getattr(artifact, "reclaim_basis", None),
                     "compressor": getattr(artifact, "compressor", None)
                     or ("zstd" if snapshot.name.endswith(ZSTD_SNAPSHOT_SUFFIX) else "gzip"),
                     "compress_duration_seconds": getattr(artifact, "compress_duration_seconds", None),
