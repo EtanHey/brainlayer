@@ -476,6 +476,8 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
         good_ticks = int(before.get("good_ticks") or 0)  # good observations since the last bad one
         deadline = _parse(before.get("catch_up_until"))
         state, note = r.state, r.note
+        if r.state != GREEN:
+            good_ticks = 0
         if state == UNKNOWN:
             unknown_ticks += 1
             base = prior_state if prior_state not in (None, UNKNOWN) else UNKNOWN
@@ -627,6 +629,7 @@ def backup_facts(receipts: Iterable[Mapping[str, Any]], *, as_of: datetime | Non
     A receipt counts once its invocation has started (``attempted_at <= as_of``). A Drive-verified
     upload also proves the local snapshot it was made from. A later receipt for the same snapshot
     that reports a verification error or a Drive md5 mismatch revokes it; "superseded" does not.
+    Local removal revokes only the local copy, including after a verified upload.
     Coverage is restored separately: a local-only success cannot restore a revoked Drive copy.
     Exact creation times from history survive filename-only receipts for the same artifact.
     """
@@ -659,6 +662,8 @@ def backup_facts(receipts: Iterable[Mapping[str, Any]], *, as_of: datetime | Non
                 offsite[key] = local[key] = created
             elif receipt.get("local_verified") is True and receipt.get("local_integrity") == "ok":
                 local[key] = created
+        if key and receipt.get("local_removed") is True:
+            local.pop(key, None)
         if (event := drive_event(receipt)) is not None and (drive is None or at >= drive[0]):
             drive = (at, event)
         if (result := integrity_result(receipt)) is not None and (integrity is None or at >= integrity[0]):

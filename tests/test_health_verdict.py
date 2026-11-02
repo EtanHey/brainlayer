@@ -674,3 +674,40 @@ def test_no_copy_cancels_an_active_backup_catch_up_window(check, fact, red):
     absent = run(woke.state, now=NOW + 5 * H + 5 * M, **{fact: None})
     assert absent.check(check).state == hv.RED
     assert "catch_up_until" not in absent.state["checks"][check]
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_search_recovery_requires_consecutive_observed_good_ticks(interrupted):
+    prior = None
+    for _ in range(3):
+        prior = run(prior, search_canary_ok=False).state
+    first = run(prior, search_canary_ok=True)
+    assert first.check("search").state == hv.RED
+    if interrupted:
+        failed = run(first.state, search_canary_ok=hv.UNOBSERVED, blind_codes=("search_canary_failed",))
+        assert failed.state["checks"]["search"]["good_ticks"] == 0
+        first = run(failed.state, search_canary_ok=True)
+        assert first.check("search").state == hv.RED
+        assert "recovering (1/2" in first.check("search").note
+    assert run(first.state, search_canary_ok=True).check("search").state == hv.GREEN
+
+
+@pytest.mark.parametrize("later_removal", [False, True])
+@pytest.mark.parametrize("surviving_local", [False, True])
+def test_removed_uploaded_snapshot_only_counts_offsite(later_removal, surviving_local):
+    receipts = []
+    if surviving_local:
+        receipts.append(
+            _receipt(
+                snapshot="/b/older.db.zst",
+                snapshot_created_at=(NOW - 2 * H).isoformat(),
+                local_verified=True,
+                local_integrity="ok",
+            )
+        )
+    receipts.append(_receipt(uploaded=True, verified=True, local_removed=not later_removal))
+    if later_removal:
+        receipts.append(_receipt(attempted_at=(NOW + M).isoformat(), local_removed=True))
+    facts = hv.backup_facts(receipts)
+    assert facts.local_verified_at == (NOW - 2 * H if surviving_local else None)
+    assert facts.offsite_verified_at == NOW - H
