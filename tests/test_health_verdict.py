@@ -105,9 +105,16 @@ def test_unreadable_receipts_keep_the_clock_aging_to_red():
     assert check.state == hv.RED and check.age_s == 55 * 3600
 
 
-def test_missing_or_never_verified_receipts_are_red_but_unreadable_is_unknown():
-    assert state("backup_local", backup_local_verified_at=None) == hv.RED
-    assert state("backup_local", backup_local_verified_at=hv.UNOBSERVED) == hv.UNKNOWN
+@pytest.mark.parametrize(("check", "fact"), [(check, fact) for check, fact, _, _ in AGE_EDGES[:3]])
+def test_missing_or_never_verified_receipts_are_red_but_unreadable_is_unknown(check, fact):
+    absent = run(**{fact: None})
+    assert absent.check(check).state == hv.RED
+    assert absent.check(check).note == "no verified copy on record"
+    alert = next(item for item in hv.badge_alerts(absent) if item["code"] == f"outcome_{check}")
+    assert alert["message"] == f"{hv.CHECK_LABELS[check]}: no verified copy on record"
+    unreadable = run(**{fact: hv.UNOBSERVED}).check(check)
+    assert unreadable.state == hv.UNKNOWN
+    assert unreadable.note == "receipts could not be read"
 
 
 def test_readable_receipts_can_replace_a_newer_persisted_clock():

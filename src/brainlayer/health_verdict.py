@@ -127,7 +127,7 @@ class Check:
     age_s: float | None
     threshold_s: float | None
     since: str | None
-    note: str
+    note: str  # bare sentence; consumers add CHECK_LABELS[name]
 
     def to_dict(self) -> dict[str, Any]:
         return {k: getattr(self, k) for k in ("name", "state", "age_s", "threshold_s", "since", "note")}
@@ -226,14 +226,13 @@ def _verified_age(
     now: datetime,
     amber: float,
     red: float,
-    what: str,
 ) -> _Raw:
     """Readable receipts own the clock; persisted state is only an unreadable-source fallback."""
     clock = _parse(prior.get("clock")) if observed is UNOBSERVED else _aware(observed)
     if clock is None:
         if observed is UNOBSERVED:
-            return _Raw(UNKNOWN, f"{what}: receipts could not be read", threshold_s=red, evidence=False)
-        return _Raw(RED, f"{what}: no verified copy on record", threshold_s=red)
+            return _Raw(UNKNOWN, "receipts could not be read", threshold_s=red, evidence=False)
+        return _Raw(RED, "no verified copy on record", threshold_s=red)
     age = max(0.0, (now - clock).total_seconds())
     state = _age_state(age, amber, red)
     note = f"newest verified copy {_hours(age)} old"
@@ -285,7 +284,7 @@ def _graced_age(
     age = max(0.0, (now - effective).total_seconds())
     state = _age_state(age, amber, red)
     graced = _RANK[state] < _RANK[_age_state(true_age, amber, red)]
-    note = f"{what}: {_hours(true_age) if true_age >= HOURS else f'{true_age / 60:.0f} min'}"
+    note = f"{what} {_hours(true_age) if true_age >= HOURS else f'{true_age / 60:.0f} min'}"
     if graced:
         note += " (the monitor was not running for part of it)"
     return _Raw(
@@ -300,35 +299,35 @@ def _graced_age(
     )
 
 
-def _counter(observed: Any, prior: Mapping[str, Any], red_failures: int, what: str, latch: bool = False) -> _Raw:
+def _counter(observed: Any, prior: Mapping[str, Any], red_failures: int, latch: bool = False) -> _Raw:
     """Consecutive failures of a canary. With ``latch``, an unrun canary keeps its last failure."""
     fails = int(prior.get("fails") or 0)
     if observed is UNOBSERVED:
         if latch and fails:
             state = RED if fails >= red_failures else AMBER
-            note = f"{what}: last {fails} run(s) failed; not run since (holds until a run succeeds)"
+            note = f"last {fails} canary run(s) failed; not run since (holds until a run succeeds)"
             return _Raw(state, note, keep={"fails": fails}, evidence=False)
-        return _Raw(UNKNOWN, f"{what}: not run this check", keep={"fails": fails}, evidence=False)
+        return _Raw(UNKNOWN, "canary not run this check", keep={"fails": fails}, evidence=False)
     fails = 0 if observed else fails + 1
     if fails == 0:
         return _Raw(GREEN, keep={"fails": 0})
     state = RED if fails >= red_failures else AMBER
-    return _Raw(state, f"{what}: failed {fails}x in a row (red at {red_failures})", keep={"fails": fails})
+    return _Raw(state, f"canary failed {fails}x in a row (red at {red_failures})", keep={"fails": fails})
 
 
 def _drive_auth(drive: Any, prior: Mapping[str, Any]) -> _Raw:
     """Confirmed access loss latches: only an observed ``ok`` (verified Drive access) clears it."""
     lost = bool(prior.get("lost"))
     if drive is UNOBSERVED:
-        return _Raw(UNKNOWN, "Drive authorization not checked", keep={"lost": lost}, evidence=False)
+        return _Raw(UNKNOWN, "authorization not checked", keep={"lost": lost}, evidence=False)
     if drive == "ok":
         return _Raw(GREEN, keep={"lost": False})
     if drive == "consent_needed" or lost:
-        note = "Drive access lost: consent needed (Reconnect in BrainBar)"
+        note = "access lost; consent needed (Reconnect in BrainBar)"
         if drive != "consent_needed":
             note += f"; latest attempt: {drive}, which does not restore access"
         return _Raw(RED, note, keep={"lost": True})
-    return _Raw(AMBER, "Drive token refresh failed; retrying", keep={"lost": False})
+    return _Raw(AMBER, "token refresh failed; retrying", keep={"lost": False})
 
 
 def _raw_checks(
@@ -343,7 +342,6 @@ def _raw_checks(
             now,
             t.backup_local_amber_s,
             t.backup_local_red_s,
-            "Local snapshot",
         ),
         "backup_offsite": _verified_age(
             facts.backup_offsite_verified_at,
@@ -351,7 +349,6 @@ def _raw_checks(
             now,
             t.backup_offsite_amber_s,
             t.backup_offsite_red_s,
-            "Drive copy",
         ),
         "transcripts": _verified_age(
             facts.transcripts_verified_at,
@@ -359,7 +356,6 @@ def _raw_checks(
             now,
             t.transcripts_amber_s,
             t.transcripts_red_s,
-            "Transcript archive",
         ),
     }
     raw["drive_auth"] = _drive_auth(facts.drive_auth, p("drive_auth"))
@@ -367,7 +363,7 @@ def _raw_checks(
     raw["integrity"] = (
         _Raw(UNKNOWN, "no confirmed integrity result on record", evidence=False)
         if integrity is UNOBSERVED
-        else _Raw(RED, "integrity check confirmed corruption in the newest snapshot")
+        else _Raw(RED, "corruption confirmed in the newest snapshot")
         if integrity == "corrupt"
         else _Raw(GREEN)
     )
@@ -378,7 +374,7 @@ def _raw_checks(
     if clock is None:
         raw["ingest"] = _Raw(UNKNOWN, "watcher heartbeat not observed", threshold_s=t.ingest_red_s, evidence=False)
     else:
-        r = _graced_age(clock, now, resumed_at, t.ingest_amber_s, t.ingest_red_s, "watcher heartbeat age", True)
+        r = _graced_age(clock, now, resumed_at, t.ingest_amber_s, t.ingest_red_s, "heartbeat age is", True)
         r.evidence = r.evidence and watcher is not None  # an observed heartbeat, fresh by its real age
         if watcher is None:
             r.note = f"watcher heartbeat not observed; {r.note}"
@@ -393,7 +389,7 @@ def _raw_checks(
         resumed_at,
         t.embedding_amber_s,
         t.embedding_red_s,
-        "embedding backlog not shrinking for",
+        "backlog has not shrunk for",
     )
     pending = _stall_age(
         facts.oldest_pending_store_at,
@@ -402,12 +398,10 @@ def _raw_checks(
         resumed_at,
         t.stores_amber_s,
         t.stores_red_s,
-        "oldest pending store waiting",
+        "oldest pending store has waited",
     )
     prior_stores = p("stores")
-    canary = _counter(
-        facts.store_canary_ok, prior_stores, t.canary_red_failures, "store canary (store then retrieve)", latch=True
-    )
+    canary = _counter(facts.store_canary_ok, prior_stores, t.canary_red_failures, latch=True)
     parts = [pending] + ([canary] if canary.state != UNKNOWN else [])
     known = [r for r in parts if r.state != UNKNOWN] or parts
     worst = max(known, key=lambda r: _RANK[r.state])
@@ -426,7 +420,7 @@ def _raw_checks(
         evidence=evidence,
         graced=pending.graced,
     )
-    raw["search"] = _counter(facts.search_canary_ok, p("search"), t.canary_red_failures, "brain_search canary")
+    raw["search"] = _counter(facts.search_canary_ok, p("search"), t.canary_red_failures)
 
     disk = (facts.disk_free_bytes, facts.disk_peak_bytes, facts.disk_floor_bytes)
     if any(value is UNOBSERVED or value is None for value in disk):
@@ -442,7 +436,7 @@ def _raw_checks(
         else:
             raw["disk"] = _Raw(GREEN)
     raw["monitor"] = (
-        _Raw(UNKNOWN, "health check could not look: " + ", ".join(sorted(set(facts.blind_codes))), evidence=False)
+        _Raw(UNKNOWN, "could not look: " + ", ".join(sorted(set(facts.blind_codes))), evidence=False)
         if facts.blind_codes
         else _Raw(GREEN)
     )
