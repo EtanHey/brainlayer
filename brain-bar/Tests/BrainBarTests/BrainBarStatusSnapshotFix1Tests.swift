@@ -184,7 +184,7 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
             let snapshot = BrainBarStatusSnapshot.derive(inputs)
             XCTAssertTrue(snapshot.isChecking, "partial \(index)")
             XCTAssertNotEqual(snapshot.dashboardStatus.headline, "All good", "partial \(index)")
-            XCTAssertNotEqual(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict), "Nothing needs attention",
+            XCTAssertNotEqual(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict), "All good",
                               "partial \(index)")
         }
     }

@@ -17,25 +17,35 @@ enum BrainBarRenderHarness {
     }
 
     /// Off-screen capture of the controller's popover rows, with its real status icon.
-    static func renderHealthVerdictPopover(_ snapshot: BrainBarStatusSnapshot, directory: URL,
-                                          name: String, width: CGFloat) throws {
+    static func renderHealthVerdictPopover(_ snapshot: BrainBarStatusSnapshot,
+                                          backupLines: [ObservabilityStatusLine], directory: URL,
+                                          name: String) throws {
+        let width = BrainBarStatusPopoverController.menuWidth
         let rows = snapshot.healthVerdict.map {
             BrainBarStatusPopoverController.verdictRows($0, details: snapshot.notices.map(\.text))
-        } ?? snapshot.issues.map(\.text)
+        }
+            ?? snapshot.issues.map { BrainBarStatusPopoverController.VerdictRow(
+                text: $0.text, state: $0.severity == .attention ? .red : nil) }
         let icon = BrainBarStatusPopoverController.statusIconImage(
             stats: BrainBarDashboardFixture.makeCollector().stats,
             badgeOn: snapshot.verdict.dot != .green, dot: snapshot.verdict.dot)
         let menu = VStack(alignment: .leading, spacing: 10) {
             HStack { Image(nsImage: icon); Text("BrainBar").fontWeight(.semibold) }
             Divider()
-            Text(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict)).foregroundStyle(.secondary)
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                BrainBarStatusPopoverController.verdictDetailRow(row, width: width - 32)
+            Text(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict)).fontWeight(.semibold)
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                BrainBarStatusPopoverController.verdictDetailRow(row, width: width - 28,
+                    separator: index > 0 && row.state == nil && rows[index - 1].state != nil)
+            }
+            ForEach(Array(backupLines.enumerated()), id: \.offset) { _, line in
+                Text(line.text).foregroundStyle(Color(nsColor: BrainBarStatusPopoverController.backupReceiptColor(
+                    line.tone, verdictMode: snapshot.healthVerdict != nil)))
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Divider()
             Text("Open Dashboard")
             Text("Settings…")
-        }.font(.system(size: 13)).padding(16).frame(width: width, alignment: .leading)
+        }.font(.system(size: 13)).padding(14).frame(width: width, alignment: .leading)
             .background(Color(nsColor: .windowBackgroundColor))
         let host = NSHostingView(rootView: menu)
         host.appearance = NSAppearance(named: .darkAqua)

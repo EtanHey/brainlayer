@@ -68,7 +68,7 @@ struct BrainBarHealthVerdict: Codable, Equatable, Sendable {
     }
 }
 
-struct BrainBarUIStatusReceipt: Codable, Equatable {
+struct BrainBarUIStatusReceipt: Codable, Equatable, Sendable {
     let renderedAt: Date
     let dot: BrainBarRenderedDot
     let source: String
@@ -76,6 +76,11 @@ struct BrainBarUIStatusReceipt: Codable, Equatable {
     let reasons: [String]
     let appVersion: String
     let gitCommit: String
+
+    func hasSameContent(as other: Self) -> Bool {
+        dot == other.dot && source == other.source && verdictEvaluatedAt == other.verdictEvaluatedAt
+            && reasons == other.reasons && appVersion == other.appVersion && gitCommit == other.gitCommit
+    }
 
     static func url(dbPath: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
         BadgeStateReader.url(dbPath: dbPath, environment: environment).deletingLastPathComponent()
@@ -92,4 +97,34 @@ struct BrainBarUIStatusReceipt: Codable, Equatable {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]).write(to: url, options: .atomic)
     }
+}
+
+/// All publication state and file I/O belong to this serial utility queue.
+final class BrainBarUIStatusPublisher: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.brainlayer.brainbar.ui-status", qos: .utility)
+    private var lastReceipt: BrainBarUIStatusReceipt?
+    private var lastURL: URL?
+    private let writer: @Sendable (BrainBarUIStatusReceipt, URL) throws -> Void
+
+    init(writer: @escaping @Sendable (BrainBarUIStatusReceipt, URL) throws -> Void = { try $0.write(to: $1) }) {
+        self.writer = writer
+    }
+
+    func publish(_ receipt: BrainBarUIStatusReceipt, to url: URL) {
+        queue.async { [self] in
+            if let previous = lastReceipt, lastURL == url,
+               previous.hasSameContent(as: receipt),
+               (0..<300).contains(receipt.renderedAt.timeIntervalSince(previous.renderedAt)) { return }
+            do {
+                try writer(receipt, url)
+                lastReceipt = receipt
+                lastURL = url
+            } catch {
+                NSLog("BrainBar UI status receipt write failed: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    /// Drain on shutdown so the final receipt cannot outlive its runtime directory.
+    func flush() { queue.sync {} }
 }

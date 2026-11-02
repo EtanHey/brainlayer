@@ -86,6 +86,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         /// The button's appearance, and the app's (SwiftUI resolves the icon's colors from it).
         let appearance: NSAppearance.Name?, appAppearance: NSAppearance.Name?, increaseContrast: Bool
     }
+    private let statusPublisher = BrainBarUIStatusPublisher()
     private var lastRenderedIcon: RenderedIcon?
     private var appearanceObservation: NSKeyValueObservation?
     private var appAppearanceObservation: NSKeyValueObservation?
@@ -132,16 +133,14 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     /// The menu's first row from the shared snapshot (S5).
     nonisolated static func statusLineTitle(for verdict: BrainBarStatusVerdict) -> String {
-        if verdict.needsAttention {
-            let reason = verdict.attention.joined(separator: "; ")
-            return statusLineTitle(for: BadgeStatePresentation(badgeOn: true, reason: reason, activeCodes: []))
+        if verdict.isChecking && !verdict.needsAttention && verdict.dotOverride == nil {
+            return "Checking status…"
         }
-        if !verdict.notices.isEmpty {
-            let reason = verdict.notices.joined(separator: "; ")
-            return statusLineTitle(for: BadgeStatePresentation(badgeOn: false, reason: reason, activeCodes: [],
-                                                               activeMessages: verdict.notices))
+        return switch verdict.dot {
+        case .red: "Needs attention"
+        case .amber: "Check soon"
+        case .green: "All good"
         }
-        return verdict.isChecking ? "Checking status…" : "Nothing needs attention"
     }
 
     /// The failing job behind an active job-alert badge code (`job_alert_<key>`), or nil.
@@ -198,6 +197,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         runtimeCancellables.removeAll()
         collectorCancellables.removeAll()
         statusModelCancellables.removeAll()
+        statusPublisher.flush()
         badgeReadGeneration = UUID()
         appearanceObservation?.invalidate()
         appearanceObservation = nil
@@ -263,10 +263,12 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         let badge = badgePresentation
         if let health = badge.healthVerdict, health.isFresh(now: Date()) {
             return .init(attention: health.checks.filter { $0.state == .red && health.dot == .red }.map(\.text),
-                         notices: Self.verdictRows(health), isChecking: false, dotOverride: health.renderedDot)
+                         notices: Self.verdictRows(health).map(\.text), isChecking: false, dotOverride: health.renderedDot)
         }
-        return badge.badgeOn ? .init(attention: [badge.reason], notices: [], isChecking: false)
-            : .init(attention: [], notices: badge.activeMessages, isChecking: false)
+        var notices = badge.healthVerdict.map { [$0.fallbackNotice(now: Date())] } ?? []
+        if badge.healthVerdictUnreadable { notices.append("Health check result could not be read") }
+        return badge.badgeOn ? .init(attention: [badge.reason], notices: notices, isChecking: false)
+            : .init(attention: [], notices: notices + badge.activeMessages, isChecking: false)
     }
 
     private func renderCurrentStatus() {
@@ -361,21 +363,49 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         publishRenderedStatus()
     }
 
-    nonisolated static func verdictRows(_ verdict: BrainBarHealthVerdict, details: [String] = []) -> [String] {
-        let primary = verdict.checks.filter { $0.state != .green }.map(\.text) + verdict.notes.map(\.message)
-        return primary + details.filter { !primary.contains($0) }
+    struct VerdictRow: Equatable {
+        let text: String
+        var state: BrainBarHealthVerdict.State? = nil
     }
 
-    static func verdictDetailRow(_ text: String, width: CGFloat) -> some View {
-        Text(text).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
-            .frame(width: width, alignment: .leading)
+    nonisolated static func verdictRows(_ verdict: BrainBarHealthVerdict, details: [String] = []) -> [VerdictRow] {
+        let primary = verdict.checks.filter { $0.state != .green }.map {
+            VerdictRow(text: $0.text, state: verdict.dot == .green ? nil : $0.state)
+        } + verdict.notes.map { VerdictRow(text: $0.message) }
+        let shown = Set(primary.map(\.text))
+        return primary + details.filter { !shown.contains($0) }.map { VerdictRow(text: $0) }
+    }
+
+    static let menuWidth: CGFloat = 390
+    static let menuContentWidth: CGFloat = menuWidth - 28
+
+    static func backupReceiptColor(_ tone: ObservabilityStatusTone, verdictMode: Bool) -> NSColor {
+        if verdictMode { return .secondaryLabelColor }
+        return switch tone {
+        case .green: BrainBarDesignTokens.Colors.statusOK
+        case .red: BrainBarDesignTokens.Colors.statusError
+        case .neutral: BrainBarDesignTokens.Colors.statusUnknown
+        }
+    }
+
+    static func verdictDetailRow(_ row: VerdictRow, width: CGFloat, separator: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if separator { Divider() }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let state = row.state {
+                    Circle().fill(state == .red ? Color.red : Color.orange).frame(width: 6, height: 6)
+                }
+                Text(row.text).foregroundStyle(row.state == nil ? .secondary : .primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }.font(.system(size: 13)).frame(width: width, alignment: .leading)
     }
 
     private func publishRenderedStatus() {
         guard let dbPath = runtime.databasePath else { return }
         var health = badgePresentation.healthVerdict
 #if BRAINBAR_UI
-        if let model = runtime.jobsModel { health = model.healthBadge?.healthVerdict }
+        if let model = runtime.jobsModel { health = model.publishedStatus.healthVerdict ?? model.healthBadge?.healthVerdict }
 #endif
         let verdict = currentVerdict
         var reasons = verdict.dotOverride == nil ? verdict.attention
@@ -386,8 +416,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
             reasons: verdict.dot == .green ? [] : reasons,
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
             gitCommit: Bundle.main.object(forInfoDictionaryKey: "GitCommit") as? String ?? "unknown")
-        do { try receipt.write(to: BrainBarUIStatusReceipt.url(dbPath: dbPath)) }
-        catch { NSLog("BrainBar UI status receipt write failed: %@", error.localizedDescription) }
+        statusPublisher.publish(receipt, to: BrainBarUIStatusReceipt.url(dbPath: dbPath))
     }
 
     /// The system Increase Contrast setting (High Contrast reaches the icon through it).
@@ -432,6 +461,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #if BRAINBAR_UI
     func setLogPathsForTesting(_ paths: BrainBarBackupSources.Paths) { logPathsOverride = paths }
 #endif
+    func flushStatusReceiptForTesting() { statusPublisher.flush() }
     var statusDotForTesting: Bool { currentVerdict.needsAttention }
     /// The badge input retained when the real status-item image was rendered; nil before rendering.
     var renderedStatusDotForTesting: Bool? { lastRenderedIcon?.badgeOn }
@@ -513,11 +543,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
                 item.identifier = NSUserInterfaceItemIdentifier("brainbar.menu.backup.\(index)")
                 item.isEnabled = false
                 item.toolTip = "observability.json · database snapshot creation / transcript upload receipt · shared check clock"
-                let color: NSColor = switch line.tone {
-                case .green: BrainBarDesignTokens.Colors.statusOK
-                case .red: BrainBarDesignTokens.Colors.statusError
-                case .neutral: BrainBarDesignTokens.Colors.statusUnknown
-                }
+                let color = Self.backupReceiptColor(line.tone, verdictMode: verdict.dotOverride != nil)
                 item.attributedTitle = NSAttributedString(string: line.text, attributes: [.foregroundColor: color])
                 menu.insertItem(item, at: 1 + index)
                 backupReceiptItems.append(item)
@@ -530,12 +556,15 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #if BRAINBAR_UI
         if let model = runtime.jobsModel { health = model.publishedStatus.healthVerdict }
 #endif
-        let rows = health.map { Self.verdictRows($0, details: verdict.notices) } ?? verdict.notices.filter { $0.hasPrefix("Health check result") }
-        for (index, text) in rows.enumerated() {
-            let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
+        let rows = health.map { Self.verdictRows($0, details: verdict.notices) }
+            ?? (verdict.attention.map { VerdictRow(text: $0, state: .red) }
+                + verdict.notices.map { VerdictRow(text: $0) })
+        for (index, detail) in rows.enumerated() {
+            let item = NSMenuItem(title: detail.text, action: nil, keyEquivalent: "")
             item.isEnabled = false
-            item.toolTip = text
-            let row = NSHostingView(rootView: Self.verdictDetailRow(text, width: 390)
+            item.toolTip = detail.text
+            let row = NSHostingView(rootView: Self.verdictDetailRow(detail, width: Self.menuContentWidth,
+                separator: index > 0 && detail.state == nil && rows[index - 1].state != nil)
                 .padding(.horizontal, 14).padding(.vertical, 4))
             row.frame.size = row.fittingSize
             item.view = row
@@ -543,6 +572,8 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
             verdictItems.append(item)
         }
         statusLineItem.title = Self.statusLineTitle(for: verdict)
+        statusLineItem.attributedTitle = NSAttributedString(string: statusLineItem.title,
+            attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.labelColor])
         // The row's tooltip keeps every current reason: dot issues first, then neutral notices.
         let fullReason = (verdict.attention + verdict.notices).joined(separator: "; ")
         statusLineItem.toolTip = fullReason.isEmpty ? nil : fullReason

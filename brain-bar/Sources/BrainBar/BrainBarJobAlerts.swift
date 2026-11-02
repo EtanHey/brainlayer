@@ -146,7 +146,8 @@ extension BadgeStatePresentation {
             activeMessages: kept.map(\.1),
             activeSeverities: kept.map(\.2),
             vectorScan: vectorScan,
-            healthVerdict: healthVerdict
+            healthVerdict: healthVerdict,
+            healthVerdictUnreadable: healthVerdictUnreadable
         )
     }
 }

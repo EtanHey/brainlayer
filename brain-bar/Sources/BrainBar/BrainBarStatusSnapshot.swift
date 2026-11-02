@@ -578,6 +578,10 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
             issues.insert(.init(id: "verdict.stale", component: .health, severity: .notice,
                                 text: verdict.fallbackNotice(now: now)), at: 0)
         }
+        if inputs.badge?.healthVerdictUnreadable == true {
+            issues.insert(.init(id: "verdict.unreadable", component: .health, severity: .notice,
+                                text: "Health check result could not be read"), at: 0)
+        }
         return Self(issues: issues, isChecking: incomplete)
     }
 
