@@ -24,7 +24,10 @@ dict walking, no BrainLayer imports. It shares the documented evidence rules, no
 - transcripts verified: `jsonl-backup.log` rows with `verified` and status `uploaded`/`no-op`/`created`;
 - Drive auth: `DriveCredentialError` / "Drive access expired" gives `consent_needed`; a verified upload gives `ok`.
 
-Every event carries `known_from = attempted_at` and `known_by = attempted_at + 8h`, because receipts record
+Backup events follow file order with `known_from = max(attempted_at seen so far)`; copied terminal
+receipts retain old attempt times and cannot affect earlier hours. The replay passes only the journal
+prefix known at each hour. Other events use their own `attempted_at`. Every event carries
+`known_by = known_from + 8h`, because receipts record
 when an invocation started, not when it wrote the row, and carry no completion field. Eight hours is an
 upper bound, not an estimate: it is the longest default run limit of the two writers (backup-daily
 `DEFAULT_BACKUP_TIMEOUT_SECONDS`, 8 h; the jsonl-backup wrapper, 2 h), and a run killed at its limit

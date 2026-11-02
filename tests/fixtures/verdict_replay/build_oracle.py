@@ -4,8 +4,9 @@ Deliberately separate code from brainlayer.health_verdict: plain dict walking, n
 from brainlayer. Each event names its evidence (file:line).
 
 Completion bound: receipts record when an invocation started, not when it wrote the row, and the
-fixtures carry no completion field. So an event is known_from=attempted_at and
-known_by=attempted_at+8h. Eight hours is the longest default run limit of the two writers
+fixtures carry no completion field. A copied terminal receipt can retain an old attempted_at.
+In journal order, known_from is the maximum attempted_at seen so far, and known_by=known_from+8h.
+Eight hours is the longest default run limit of the two writers
 (backup-daily: DEFAULT_BACKUP_TIMEOUT_SECONDS = 8 h; jsonl-backup: 2 h wrapper default). An
 invocation that ran past its limit was killed before it could write a verified row, so 8 h is an
 upper bound, not an estimate; the oracle calls every hour inside the bound unknown.
@@ -56,8 +57,12 @@ def events_for(d: Path, mac: str) -> list[dict]:
     drive_snapshots = {}
     creation_times = {}
     f = f"{mac}-backup-daily.log"
-    for n, line in enumerate((d / f).read_text().splitlines(), 1):
-        r = json.loads(line)
+    # Copied terminal receipts keep old attempt times; the journal order dates their writes.
+    known_from = None
+    rows = [(n, json.loads(line)) for n, line in enumerate((d / f).read_text().splitlines(), 1)]
+    for n, r in rows:
+        if r.get("attempted_at"):
+            known_from = max(known_from or ts(r["attempted_at"]), ts(r["attempted_at"]))
         if r.get("backup_log_provenance") != "real" or not r.get("attempted_at"):
             continue
         err = f"{r.get('error_type') or ''} {r.get('error') or ''}"
@@ -65,7 +70,7 @@ def events_for(d: Path, mac: str) -> list[dict]:
             add(
                 "drive_auth",
                 "consent_needed" if "expired" in err.lower() else "refresh_failed",
-                r["attempted_at"],
+                iso(known_from),
                 n,
                 f,
                 err[:80],
@@ -80,13 +85,13 @@ def events_for(d: Path, mac: str) -> list[dict]:
             add(
                 "backup_offsite",
                 "verified",
-                r["attempted_at"],
+                iso(known_from),
                 n,
                 f,
                 "uploaded+verified " + Path(r["snapshot"]).name,
                 created(r),
             )
-            add("drive_auth", "ok", r["attempted_at"], n, f, "verified Drive upload")
+            add("drive_auth", "ok", iso(known_from), n, f, "verified Drive upload")
         key = r.get("snapshot")
         if key:
             stamp = created(r) if r.get("snapshot_created_at") else (creation_times.get(key) or created(r))
@@ -102,18 +107,22 @@ def events_for(d: Path, mac: str) -> list[dict]:
                     snapshots[key] = stamp
                 elif r.get("local_verified") is True and r.get("local_integrity") == "ok":
                     snapshots[key] = stamp
-            if r.get("local_removed") is True:
+            if (
+                r.get("local_verified") is False
+                or r.get("upload_state") in {"abandoned", "superseded"}
+                or r.get("local_removed") is True
+            ):
                 snapshots.pop(key, None)
             newest = max([*snapshots.values(), *drive_snapshots.values()], default=None)
             if newest != before or up or (r.get("local_verified") is True and not revoked):
                 why = "newest verified snapshot " + Path(key).name
                 if r.get("local_removed") is True and key in drive_snapshots:
                     why += "; local copy removed after Drive verification"
-                add("backup_local", "verified" if newest else "none", r["attempted_at"], n, f, why, newest)
+                add("backup_local", "verified" if newest else "none", iso(known_from), n, f, why, newest)
         if isinstance(r.get("local_integrity"), str) and r["local_integrity"] not in ("ok", "skipped", ""):
-            add("integrity", "corrupt?", r["attempted_at"], n, f, r["local_integrity"][:80])
+            add("integrity", "corrupt?", iso(known_from), n, f, r["local_integrity"][:80])
         elif r.get("local_integrity") == "ok":
-            add("integrity", "ok", r["attempted_at"], n, f, f"{r.get('local_integrity_pragma')} ok")
+            add("integrity", "ok", iso(known_from), n, f, f"{r.get('local_integrity_pragma')} ok")
     f = f"{mac}-jsonl-backup.log"
     for n, line in enumerate((d / f).read_text().splitlines(), 1):
         r = json.loads(line)
@@ -123,6 +132,13 @@ def events_for(d: Path, mac: str) -> list[dict]:
                 add("drive_auth", "ok", r["attempted_at"], n, f, "verified Drive upload")
         if "Drive access expired" in str(r.get("error")):
             add("drive_auth", "consent_needed", r["attempted_at"], n, f, str(r["error"])[:80])
+    # The final receipt at an invocation timestamp determines its surviving clock.
+    clocks = {(e["check"], e["known_from"]): e for e in ev if e["check"] == "backup_local"}
+    ev = [
+        e
+        for e in ev
+        if e["check"] != "backup_local" or e["value_at"] == clocks[(e["check"], e["known_from"])]["value_at"]
+    ]
     ev.sort(key=lambda e: (e["check"], e["known_from"]))
     return ev
 

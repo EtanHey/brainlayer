@@ -715,7 +715,7 @@ def test_removed_uploaded_snapshot_still_counts_as_verified(later_removal, survi
     verdict = run(**facts.facts_kwargs())
     assert hv.CHECK_LABELS["backup_local"] == "Database snapshot (verified)"
     assert "newest verified snapshot" in verdict.check("backup_local").note
-    assert "local copy removed after Drive verification" in verdict.check("backup_local").note
+    assert "local copy unavailable after Drive verification" in verdict.check("backup_local").note
     assert facts.offsite_verified_at == NOW - H
 
 
@@ -738,3 +738,57 @@ def test_removed_snapshot_without_its_own_upload_drops_from_clock(surviving_loca
     facts = hv.backup_facts(receipts)
     assert facts.local_verified_at == (NOW - 2 * H if surviving_local else None)
     assert facts.offsite_verified_at == (NOW - 2 * H if surviving_local else None)
+
+
+@pytest.mark.parametrize(
+    "invalidation",
+    [
+        {"local_verified": False},
+        {"upload_state": "abandoned"},
+        {"upload_state": "superseded"},
+        {"upload_state": "abandoned", "local_verified": False, "error_code": "local_snapshot_invalid"},
+    ],
+)
+@pytest.mark.parametrize("uploaded", [False, True])
+def test_invalidated_local_snapshot_requires_surviving_verified_upload(invalidation, uploaded):
+    receipts = [
+        _receipt(local_verified=True, local_integrity="ok", uploaded=uploaded, verified=uploaded),
+        _receipt(attempted_at=(NOW + M).isoformat(), **invalidation),
+    ]
+    facts = hv.backup_facts(receipts)
+    assert facts.local_verified_at == (NOW - H if uploaded else None)
+    assert facts.offsite_verified_at == (NOW - H if uploaded else None)
+    assert run(**facts.facts_kwargs()).check("backup_local").state == (hv.GREEN if uploaded else hv.RED)
+
+
+def test_superseded_stall_does_not_return_after_newer_upload_revoked():
+    stall = _receipt(
+        snapshot="/b/stall.db.zst",
+        snapshot_created_at=(NOW - 3 * H).isoformat(),
+        local_verified=True,
+        local_integrity="ok",
+    )
+    uploaded = _receipt(uploaded=True, verified=True)
+    facts = hv.backup_facts(
+        [
+            stall,
+            uploaded,
+            {
+                **stall,
+                "attempted_at": (NOW + M).isoformat(),
+                "local_verified": False,
+                "upload_state": "superseded",
+                "local_removed": False,
+            },
+            {**uploaded, "attempted_at": (NOW + 2 * M).isoformat(), "drive_md5_match": False},
+        ]
+    )
+    assert facts.local_verified_at is None
+    assert facts.offsite_verified_at is None
+    assert run(**facts.facts_kwargs()).check("backup_local").state == hv.RED
+
+
+@pytest.mark.parametrize("clock", [None, hv.UNOBSERVED])
+def test_removal_suffix_requires_observed_snapshot_clock(clock):
+    check = run(backup_local_verified_at=clock, backup_snapshot_local_removed=True).check("backup_local")
+    assert "local copy unavailable" not in check.note
