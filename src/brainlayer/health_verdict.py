@@ -102,6 +102,7 @@ class Facts:
 
     now: datetime
     backup_local_verified_at: Any = UNOBSERVED
+    backup_snapshot_local_removed: bool = False
     backup_offsite_verified_at: Any = UNOBSERVED
     transcripts_verified_at: Any = UNOBSERVED
     drive_auth: Any = UNOBSERVED  # "ok" | "refresh_failed" | "consent_needed"
@@ -161,7 +162,7 @@ CHECK_ORDER = (
     "monitor",
 )
 CHECK_LABELS = {
-    "backup_local": "Local database backup",
+    "backup_local": "Database snapshot (verified)",
     "backup_offsite": "Offsite (Drive) database backup",
     "transcripts": "Transcript backup",
     "drive_auth": "Drive authorization",
@@ -358,6 +359,9 @@ def _raw_checks(
             t.transcripts_red_s,
         ),
     }
+    raw["backup_local"].note = raw["backup_local"].note.replace("verified copy", "verified snapshot")
+    if facts.backup_snapshot_local_removed:
+        raw["backup_local"].note += "; local copy removed after Drive verification"
     raw["drive_auth"] = _drive_auth(facts.drive_auth, p("drive_auth"))
     integrity = facts.integrity
     raw["integrity"] = (
@@ -476,6 +480,8 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
         good_ticks = int(before.get("good_ticks") or 0)  # good observations since the last bad one
         deadline = _parse(before.get("catch_up_until"))
         state, note = r.state, r.note
+        if r.state != GREEN:
+            good_ticks = 0
         if state == UNKNOWN:
             unknown_ticks += 1
             base = prior_state if prior_state not in (None, UNKNOWN) else UNKNOWN
@@ -611,22 +617,25 @@ class BackupFacts:
     offsite_verified_at: datetime | None
     drive: tuple[datetime, str] | None  # (receipt time, drive_event) of the newest Drive outcome
     integrity: Any
+    snapshot_local_removed: bool = False
 
     def facts_kwargs(self) -> dict[str, Any]:
         """Authoritative backup observations for the policy, after a successful receipt read."""
         return {
             "backup_local_verified_at": self.local_verified_at,
+            "backup_snapshot_local_removed": self.snapshot_local_removed,
             "backup_offsite_verified_at": self.offsite_verified_at,
             "integrity": self.integrity,
         }
 
 
 def backup_facts(receipts: Iterable[Mapping[str, Any]], *, as_of: datetime | None = None) -> BackupFacts:
-    """Newest verified local and Drive copies from ``backup-daily.log`` receipts, any trigger.
+    """Newest verified snapshot (local or Drive) and Drive copies from ``backup-daily.log`` receipts, any trigger.
 
     A receipt counts once its invocation has started (``attempted_at <= as_of``). A Drive-verified
     upload also proves the local snapshot it was made from. A later receipt for the same snapshot
     that reports a verification error or a Drive md5 mismatch revokes it; "superseded" does not.
+    Local removal drops the snapshot clock only without a verified Drive copy of that snapshot.
     Coverage is restored separately: a local-only success cannot restore a revoked Drive copy.
     Exact creation times from history survive filename-only receipts for the same artifact.
     """
@@ -659,12 +668,17 @@ def backup_facts(receipts: Iterable[Mapping[str, Any]], *, as_of: datetime | Non
                 offsite[key] = local[key] = created
             elif receipt.get("local_verified") is True and receipt.get("local_integrity") == "ok":
                 local[key] = created
+        if key and receipt.get("local_removed") is True:
+            local.pop(key, None)
         if (event := drive_event(receipt)) is not None and (drive is None or at >= drive[0]):
             drive = (at, event)
         if (result := integrity_result(receipt)) is not None and (integrity is None or at >= integrity[0]):
             integrity = (at, result)
+    snapshots = {**offsite, **local}
+    newest = max(snapshots.values(), default=None)
     return BackupFacts(
-        local_verified_at=max(local.values(), default=None),
+        local_verified_at=newest,
+        snapshot_local_removed=newest is not None and not any(created == newest for created in local.values()),
         offsite_verified_at=max(offsite.values(), default=None),
         drive=drive,
         integrity=integrity[1] if integrity else UNOBSERVED,
