@@ -91,7 +91,13 @@ def _oracle_state(events: list[dict], check: str, at: datetime) -> str:
             return {"ok": hv.GREEN, "consent_needed": hv.RED, "refresh_failed": hv.AMBER}.get(last, hv.RED)
         if not known:
             return hv.UNKNOWN  # no history for this period, not evidence that no copy existed
-        newest = max(datetime.fromisoformat(e["value_at"]) for e in known)
+        if check == "backup_local":
+            latest = max(known, key=lambda e: e["known_from"])
+            if latest["value_at"] is None:
+                return hv.RED
+            newest = datetime.fromisoformat(latest["value_at"])
+        else:
+            newest = max(datetime.fromisoformat(e["value_at"]) for e in known)
         age = (at - newest).total_seconds()
         amber, red = (hours * 3600 for hours in ORACLE_LIMITS_H[check])
         return hv.RED if age > red else hv.AMBER if age > amber else hv.GREEN
@@ -180,3 +186,42 @@ def test_oracle_limits_are_pinned_independently_of_production_defaults():
     known = {**event, "known_from": "2026-10-20T00:00:00Z", "known_by": "2026-10-20T00:00:00Z"}
     assert _oracle_state([known], "backup_local", datetime(2026, 10, 22, 6, tzinfo=UTC)) == hv.AMBER  # 54 h
     assert _oracle_state([known], "backup_local", datetime(2026, 10, 22, 6, 1, tzinfo=UTC)) == hv.RED
+
+
+@pytest.mark.parametrize("uploaded", [False, True])
+def test_oracle_snapshot_removal_requires_its_own_verified_drive_copy(tmp_path, uploaded):
+    import runpy
+
+    builder = runpy.run_path(str(FIXTURES / "build_oracle.py"))
+    rows = [
+        {
+            "backup_log_provenance": "real",
+            "attempted_at": "2026-10-20T00:00:00Z",
+            "snapshot": "/b/older.db.zst",
+            "snapshot_created_at": "2026-10-19T00:00:00Z",
+            "uploaded": True,
+            "verified": True,
+            "local_removed": True,
+        },
+        {
+            "backup_log_provenance": "real",
+            "attempted_at": "2026-10-21T00:00:00Z",
+            "snapshot": "/b/newer.db.zst",
+            "snapshot_created_at": "2026-10-20T00:00:00Z",
+            "local_verified": True,
+            "local_integrity": "ok",
+            "uploaded": uploaded,
+            "verified": uploaded,
+        },
+        {
+            "backup_log_provenance": "real",
+            "attempted_at": "2026-10-21T01:00:00Z",
+            "snapshot": "/b/newer.db.zst",
+            "local_removed": True,
+        },
+    ]
+    (tmp_path / "m4-backup-daily.log").write_text("\n".join(json.dumps(row) for row in rows))
+    (tmp_path / "m4-jsonl-backup.log").write_text("")
+    events = builder["events_for"](tmp_path, "m4")
+    snapshots = [e for e in events if e["check"] == "backup_local"]
+    assert snapshots[-1]["value_at"] == ("2026-10-20T00:00:00Z" if uploaded else "2026-10-19T00:00:00Z")

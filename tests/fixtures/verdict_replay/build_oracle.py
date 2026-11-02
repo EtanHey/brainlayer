@@ -52,6 +52,9 @@ def events_for(d: Path, mac: str) -> list[dict]:
     def add(*args, **kw):
         ev.append(event(*args, **kw))
 
+    snapshots = {}
+    drive_snapshots = {}
+    creation_times = {}
     f = f"{mac}-backup-daily.log"
     for n, line in enumerate((d / f).read_text().splitlines(), 1):
         r = json.loads(line)
@@ -84,16 +87,29 @@ def events_for(d: Path, mac: str) -> list[dict]:
                 created(r),
             )
             add("drive_auth", "ok", r["attempted_at"], n, f, "verified Drive upload")
-        if r.get("snapshot") and (up or (r.get("local_verified") is True and r.get("local_integrity") == "ok")):
-            add(
-                "backup_local",
-                "verified",
-                r["attempted_at"],
-                n,
-                f,
-                "verified snapshot " + Path(r["snapshot"]).name,
-                created(r),
-            )
+        key = r.get("snapshot")
+        if key:
+            stamp = created(r) if r.get("snapshot_created_at") else (creation_times.get(key) or created(r))
+            creation_times[key] = stamp
+            before = max([*snapshots.values(), *drive_snapshots.values()], default=None)
+            revoked = bool(r.get("verification_error")) or r.get("drive_md5_match") is False
+            if revoked:
+                snapshots.pop(key, None)
+                drive_snapshots.pop(key, None)
+            else:
+                if up:
+                    drive_snapshots[key] = stamp
+                    snapshots[key] = stamp
+                elif r.get("local_verified") is True and r.get("local_integrity") == "ok":
+                    snapshots[key] = stamp
+            if r.get("local_removed") is True:
+                snapshots.pop(key, None)
+            newest = max([*snapshots.values(), *drive_snapshots.values()], default=None)
+            if newest != before or up or (r.get("local_verified") is True and not revoked):
+                why = "newest verified snapshot " + Path(key).name
+                if r.get("local_removed") is True and key in drive_snapshots:
+                    why += "; local copy removed after Drive verification"
+                add("backup_local", "verified" if newest else "none", r["attempted_at"], n, f, why, newest)
         if isinstance(r.get("local_integrity"), str) and r["local_integrity"] not in ("ok", "skipped", ""):
             add("integrity", "corrupt?", r["attempted_at"], n, f, r["local_integrity"][:80])
         elif r.get("local_integrity") == "ok":

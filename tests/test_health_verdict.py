@@ -109,9 +109,11 @@ def test_unreadable_receipts_keep_the_clock_aging_to_red():
 def test_missing_or_never_verified_receipts_are_red_but_unreadable_is_unknown(check, fact):
     absent = run(**{fact: None})
     assert absent.check(check).state == hv.RED
-    assert absent.check(check).note == "no verified copy on record"
+    assert absent.check(check).note == (
+        "no verified snapshot on record" if check == "backup_local" else "no verified copy on record"
+    )
     alert = next(item for item in hv.badge_alerts(absent) if item["code"] == f"outcome_{check}")
-    assert alert["message"] == f"{hv.CHECK_LABELS[check]}: no verified copy on record"
+    assert alert["message"] == f"{hv.CHECK_LABELS[check]}: {absent.check(check).note}"
     unreadable = run(**{fact: hv.UNOBSERVED}).check(check)
     assert unreadable.state == hv.UNKNOWN
     assert unreadable.note == "receipts could not be read"
@@ -694,7 +696,7 @@ def test_search_recovery_requires_consecutive_observed_good_ticks(interrupted):
 
 @pytest.mark.parametrize("later_removal", [False, True])
 @pytest.mark.parametrize("surviving_local", [False, True])
-def test_removed_uploaded_snapshot_only_counts_offsite(later_removal, surviving_local):
+def test_removed_uploaded_snapshot_still_counts_as_verified(later_removal, surviving_local):
     receipts = []
     if surviving_local:
         receipts.append(
@@ -709,5 +711,30 @@ def test_removed_uploaded_snapshot_only_counts_offsite(later_removal, surviving_
     if later_removal:
         receipts.append(_receipt(attempted_at=(NOW + M).isoformat(), local_removed=True))
     facts = hv.backup_facts(receipts)
-    assert facts.local_verified_at == (NOW - 2 * H if surviving_local else None)
+    assert facts.local_verified_at == NOW - H
+    verdict = run(**facts.facts_kwargs())
+    assert hv.CHECK_LABELS["backup_local"] == "Database snapshot (verified)"
+    assert "newest verified snapshot" in verdict.check("backup_local").note
+    assert "local copy removed after Drive verification" in verdict.check("backup_local").note
     assert facts.offsite_verified_at == NOW - H
+
+
+@pytest.mark.parametrize("surviving_local", [False, True])
+def test_removed_snapshot_without_its_own_upload_drops_from_clock(surviving_local):
+    receipts = (
+        [
+            _receipt(
+                snapshot="/b/older.db.zst",
+                snapshot_created_at=(NOW - 2 * H).isoformat(),
+                uploaded=True,
+                verified=True,
+                local_removed=True,
+            )
+        ]
+        if surviving_local
+        else []
+    )
+    receipts.extend([_receipt(local_verified=True, local_integrity="ok"), _receipt(local_removed=True)])
+    facts = hv.backup_facts(receipts)
+    assert facts.local_verified_at == (NOW - 2 * H if surviving_local else None)
+    assert facts.offsite_verified_at == (NOW - 2 * H if surviving_local else None)
