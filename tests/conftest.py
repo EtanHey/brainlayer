@@ -790,7 +790,9 @@ def _install_runtime_write_guards() -> None:
     """Refuse production runtime writes before collection, including captured aliases."""
 
     def refuse(path, writing):
-        if writing and _is_protected_runtime_path(path):
+        # Same exemption contract as the canonical-DB guard: only a test deliberately marked
+        # `integration`/`live` may write real runtime state (desktop notifications stay forbidden).
+        if writing and not _DbGuardState.suspended and _is_protected_runtime_path(path):
             raise RuntimeError(f"suite hygiene: production BrainLayer runtime write refused: {path}")
 
     def wrap_open(opener):
