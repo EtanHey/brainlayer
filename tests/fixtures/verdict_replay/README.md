@@ -16,8 +16,10 @@ Drive file ids, md5s and sizes are kept. Rows are re-serialized with sorted keys
 tests/fixtures/verdict_replay`). It is deliberately separate code from `brainlayer.health_verdict`: plain
 dict walking, no BrainLayer imports. It shares the documented evidence rules, not the parser:
 
-- local copy verified: `local_verified` with `local_integrity == "ok"`, or a Drive-verified upload (which
-  proves the snapshot it came from); value time = `snapshot_created_at`, else the artifact date at 00:00Z;
+- database snapshot verified (key `backup_local`): `local_verified` with `local_integrity == "ok"`, or a Drive-verified upload (which
+  proves the snapshot it came from). Removal preserves this clock only while a verified Drive copy
+  of that same snapshot exists; otherwise it falls back to the newest surviving verified snapshot.
+  Snapshot events carry the resulting clock, including `none` when no copy survives; value time = `snapshot_created_at`, else the artifact date at 00:00Z;
 - Drive copy verified: `uploaded` and `verified`, no md5 mismatch or verification error;
 - transcripts verified: `jsonl-backup.log` rows with `verified` and status `uploaded`/`no-op`/`created`;
 - Drive auth: `DriveCredentialError` / "Drive access expired" gives `consent_needed`; a verified upload gives `ok`.
