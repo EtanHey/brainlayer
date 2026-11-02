@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -210,6 +211,92 @@ def test_restart_with_lost_state_reads_facts_afresh_and_kept_state_continues():
     two = run(run(search_canary_ok=False).state, now=NOW + 5 * M, search_canary_ok=False)
     assert run(two.state, now=NOW + 10 * M, search_canary_ok=False).check("search").state == hv.RED
     assert run(None, now=NOW + 10 * M, search_canary_ok=False).check("search").state == hv.AMBER
+
+
+AGING_PIPES = [
+    ("embedding", "embedding_stalled_since"),
+    ("stores", "oldest_pending_store_at"),
+    ("ingest", "watcher_updated_at"),
+]
+WAKE_ONCE = hv.Thresholds(
+    embedding_amber_s=3600,
+    embedding_red_s=7200,
+    stores_amber_s=3600,
+    stores_red_s=7200,
+    ingest_amber_s=3600,
+    ingest_red_s=7200,
+    sleep_gap_s=3600,
+    wake_grace_s=10800,
+)
+
+
+@pytest.mark.parametrize(("check", "fact"), AGING_PIPES)
+@pytest.mark.parametrize("observed", [True, False], ids=["observed", "unobserved"])
+def test_wake_once_repeated_gaps_do_not_renew_an_episode(check, fact, observed):
+    prior, seen, ages = None, [], []
+    for hour in (0, 1, 3, 5, 7):
+        value = NOW if observed or hour == 0 else hv.UNOBSERVED
+        verdict = run(prior, WAKE_ONCE, now=NOW + hour * H, **{fact: value})
+        prior = verdict.state
+        seen.append(verdict.check(check).state)
+        ages.append(verdict.check(check).age_s)
+    # The first resume at hour 3 earns a window through hour 6. Later gaps cannot move it.
+    assert seen == [hv.GREEN, hv.GREEN, hv.GREEN, hv.AMBER, hv.RED]
+    assert ages == [0, 3600, 0, 7200, 7 * 3600]
+
+
+@pytest.mark.parametrize(("check", "fact"), AGING_PIPES)
+def test_wake_once_fresh_clock_after_wake_gets_its_own_window(check, fact):
+    prior = run(thresholds=WAKE_ONCE, **{fact: NOW if check == "ingest" else None}).state
+    woke = NOW + 3 * H
+    prior = run(prior, WAKE_ONCE, now=woke, **{fact: woke if check == "ingest" else None}).state
+    fresh = woke + 5 * M
+    prior = run(prior, WAKE_ONCE, now=fresh, **{fact: fresh}).state
+    seen = []
+    for at in (woke + 2 * H, woke + 4 * H, woke + 6 * H):
+        verdict = run(prior, WAKE_ONCE, now=at, **{fact: fresh})
+        prior = verdict.state
+        seen.append(verdict.check(check).state)
+    assert seen == [hv.GREEN, hv.AMBER, hv.RED]
+
+
+@pytest.mark.parametrize(("check", "fact"), AGING_PIPES)
+def test_wake_once_new_episode_after_recovery_is_eligible_again(check, fact):
+    prior = None
+    for hour in (0, 1, 3, 5, 7):
+        prior = run(prior, WAKE_ONCE, now=NOW + hour * H, **{fact: NOW}).state
+    recovered_at = NOW + 8 * H
+    good = recovered_at if check == "ingest" else None
+    for at in (recovered_at, recovered_at + 5 * M):
+        recovered = run(prior, WAKE_ONCE, now=at, **{fact: good})
+        prior = recovered.state
+    assert recovered.check(check).state == hv.GREEN
+    fresh = recovered_at + 10 * M
+    prior = run(prior, WAKE_ONCE, now=fresh, **{fact: fresh}).state
+    seen = []
+    for hour in (10, 12, 14):
+        verdict = run(prior, WAKE_ONCE, now=NOW + hour * H, **{fact: fresh})
+        prior = verdict.state
+        seen.append(verdict.check(check).state)
+    assert seen == [hv.GREEN, hv.AMBER, hv.RED]
+
+
+@pytest.mark.parametrize(("check", "fact"), AGING_PIPES)
+def test_wake_once_deadline_survives_restart_and_expiry(check, fact, tmp_path):
+    prior = run(thresholds=WAKE_ONCE, **{fact: NOW}).state
+    first = run(prior, WAKE_ONCE, now=NOW + 3 * H, **{fact: NOW})
+    path = tmp_path / "verdict-state.json"
+    path.write_text(json.dumps(first.state))
+    prior = json.loads(path.read_text())
+    seen = []
+    for hour in (5, 7, 9):
+        verdict = run(prior, WAKE_ONCE, now=NOW + hour * H, **{fact: NOW})
+        path.write_text(json.dumps(verdict.state))
+        prior = json.loads(path.read_text())
+        seen.append(verdict.check(check).state)
+    assert seen == [hv.AMBER, hv.RED, hv.RED]
+    assert prior["checks"][check]["grace_clock"] == hv._iso(NOW)
+    assert prior["checks"][check]["grace_until"] == hv._iso(NOW + 6 * H)
 
 
 # --- Independent failure injections ----------------------------------------------------------
