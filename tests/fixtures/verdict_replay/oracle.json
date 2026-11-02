@@ -275,27 +275,51 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:50 newest verified snapshot 2026-10-25.db.zst",
+    "evidence": "m1-backup-daily.log:40 newest verified snapshot 2026-10-25.db.zst",
     "known_by": "2026-10-25T10:01:51.685698Z",
     "known_from": "2026-10-25T02:01:51.685698Z",
     "value": "verified",
-    "value_at": "2026-10-24T01:00:57.902416Z"
+    "value_at": "2026-10-25T01:45:16.563474Z"
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:51 newest verified snapshot 2026-10-26.db.zst",
+    "evidence": "m1-backup-daily.log:41 newest verified snapshot 2026-10-25.db.zst",
+    "known_by": "2026-10-25T10:01:51.685698Z",
+    "known_from": "2026-10-25T02:01:51.685698Z",
+    "value": "verified",
+    "value_at": "2026-10-25T01:45:16.563474Z"
+   },
+   {
+    "check": "backup_local",
+    "evidence": "m1-backup-daily.log:42 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-26T10:00:30.012345Z",
     "known_from": "2026-10-26T02:00:30.012345Z",
     "value": "verified",
-    "value_at": "2026-10-24T01:00:57.902416Z"
+    "value_at": "2026-10-26T02:00:30.538833Z"
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:52 newest verified snapshot 2026-10-27.db.zst",
+    "evidence": "m1-backup-daily.log:43 newest verified snapshot 2026-10-26.db.zst",
+    "known_by": "2026-10-26T10:00:30.012345Z",
+    "known_from": "2026-10-26T02:00:30.012345Z",
+    "value": "verified",
+    "value_at": "2026-10-26T02:00:30.538833Z"
+   },
+   {
+    "check": "backup_local",
+    "evidence": "m1-backup-daily.log:44 newest verified snapshot 2026-10-27.db.zst",
     "known_by": "2026-10-27T10:00:31.392519Z",
     "known_from": "2026-10-27T02:00:31.392519Z",
     "value": "verified",
-    "value_at": "2026-10-24T01:00:57.902416Z"
+    "value_at": "2026-10-27T02:00:32.077071Z"
+   },
+   {
+    "check": "backup_local",
+    "evidence": "m1-backup-daily.log:45 newest verified snapshot 2026-10-27.db.zst",
+    "known_by": "2026-10-27T10:00:31.392519Z",
+    "known_from": "2026-10-27T02:00:31.392519Z",
+    "value": "verified",
+    "value_at": "2026-10-27T02:00:32.077071Z"
    },
    {
     "check": "backup_local",
@@ -1307,14 +1331,6 @@
    },
    {
     "check": "integrity",
-    "evidence": "m1-backup-daily.log:50 integrity_check ok",
-    "known_by": "2026-10-25T10:01:51.685698Z",
-    "known_from": "2026-10-25T02:01:51.685698Z",
-    "value": "ok",
-    "value_at": null
-   },
-   {
-    "check": "integrity",
     "evidence": "m1-backup-daily.log:42 quick_check ok",
     "known_by": "2026-10-26T10:00:30.012345Z",
     "known_from": "2026-10-26T02:00:30.012345Z",
@@ -1331,14 +1347,6 @@
    },
    {
     "check": "integrity",
-    "evidence": "m1-backup-daily.log:51 quick_check ok",
-    "known_by": "2026-10-26T10:00:30.012345Z",
-    "known_from": "2026-10-26T02:00:30.012345Z",
-    "value": "ok",
-    "value_at": null
-   },
-   {
-    "check": "integrity",
     "evidence": "m1-backup-daily.log:44 quick_check ok",
     "known_by": "2026-10-27T10:00:31.392519Z",
     "known_from": "2026-10-27T02:00:31.392519Z",
@@ -1348,14 +1356,6 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:45 quick_check ok",
-    "known_by": "2026-10-27T10:00:31.392519Z",
-    "known_from": "2026-10-27T02:00:31.392519Z",
-    "value": "ok",
-    "value_at": null
-   },
-   {
-    "check": "integrity",
-    "evidence": "m1-backup-daily.log:52 quick_check ok",
     "known_by": "2026-10-27T10:00:31.392519Z",
     "known_from": "2026-10-27T02:00:31.392519Z",
     "value": "ok",
@@ -1388,6 +1388,30 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:49 quick_check ok",
+    "known_by": "2026-10-29T10:03:44.836824Z",
+    "known_from": "2026-10-29T02:03:44.836824Z",
+    "value": "ok",
+    "value_at": null
+   },
+   {
+    "check": "integrity",
+    "evidence": "m1-backup-daily.log:50 integrity_check ok",
+    "known_by": "2026-10-29T10:03:44.836824Z",
+    "known_from": "2026-10-29T02:03:44.836824Z",
+    "value": "ok",
+    "value_at": null
+   },
+   {
+    "check": "integrity",
+    "evidence": "m1-backup-daily.log:51 quick_check ok",
+    "known_by": "2026-10-29T10:03:44.836824Z",
+    "known_from": "2026-10-29T02:03:44.836824Z",
+    "value": "ok",
+    "value_at": null
+   },
+   {
+    "check": "integrity",
+    "evidence": "m1-backup-daily.log:52 quick_check ok",
     "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "ok",

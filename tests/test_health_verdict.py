@@ -715,7 +715,7 @@ def test_removed_uploaded_snapshot_still_counts_as_verified(later_removal, survi
     verdict = run(**facts.facts_kwargs())
     assert hv.CHECK_LABELS["backup_local"] == "Database snapshot (verified)"
     assert "newest verified snapshot" in verdict.check("backup_local").note
-    assert "local copy removed after Drive verification" in verdict.check("backup_local").note
+    assert "local copy unavailable after Drive verification" in verdict.check("backup_local").note
     assert facts.offsite_verified_at == NOW - H
 
 
@@ -791,4 +791,4 @@ def test_superseded_stall_does_not_return_after_newer_upload_revoked():
 @pytest.mark.parametrize("clock", [None, hv.UNOBSERVED])
 def test_removal_suffix_requires_observed_snapshot_clock(clock):
     check = run(backup_local_verified_at=clock, backup_snapshot_local_removed=True).check("backup_local")
-    assert "local copy removed" not in check.note
+    assert "local copy unavailable" not in check.note
