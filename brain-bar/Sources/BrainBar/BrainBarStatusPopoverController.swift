@@ -377,10 +377,12 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         var state: BrainBarHealthVerdict.State? = nil
     }
 
-    nonisolated static func verdictRows(_ verdict: BrainBarHealthVerdict) -> [VerdictRow] {
-        verdict.checks.filter { $0.state != .green }.map {
+    nonisolated static func verdictRows(_ verdict: BrainBarHealthVerdict, details: [String] = []) -> [VerdictRow] {
+        let primary = verdict.checks.filter { $0.state != .green }.map {
             VerdictRow(text: $0.text, state: verdict.dot == .green ? nil : $0.state)
         } + verdict.notes.map { VerdictRow(text: $0.message) }
+        let shown = Set(primary.map(\.text))
+        return primary + details.filter { !shown.contains($0) }.map { VerdictRow(text: $0) }
     }
 
     static let menuWidth: CGFloat = 390
@@ -563,7 +565,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #if BRAINBAR_UI
         if let model = runtime.jobsModel { health = model.publishedStatus.healthVerdict }
 #endif
-        let rows = health.map(Self.verdictRows)
+        let rows = health.map { Self.verdictRows($0, details: verdict.notices) }
             ?? (verdict.attention.map { VerdictRow(text: $0, state: .red) }
                 + verdict.notices.map { VerdictRow(text: $0) })
         for (index, detail) in rows.enumerated() {

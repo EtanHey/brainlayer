@@ -21,7 +21,9 @@ enum BrainBarRenderHarness {
                                           backupLines: [ObservabilityStatusLine], directory: URL,
                                           name: String) throws {
         let width = BrainBarStatusPopoverController.menuWidth
-        let rows = snapshot.healthVerdict.map(BrainBarStatusPopoverController.verdictRows)
+        let rows = snapshot.healthVerdict.map {
+            BrainBarStatusPopoverController.verdictRows($0, details: snapshot.notices.map(\.text))
+        }
             ?? snapshot.issues.map { BrainBarStatusPopoverController.VerdictRow(
                 text: $0.text, state: $0.severity == .attention ? .red : nil) }
         let icon = BrainBarStatusPopoverController.statusIconImage(
