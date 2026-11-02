@@ -2526,6 +2526,16 @@
         "target": "subprocess.run"
       }
     },
+    "6da71977a4879c361b834757353ed4fd0a4b27e672c88534ec79d8ab91e50461": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._freelist_ratio",
+      "site": {
+        "call_sha256": "9ebe55bed7c78d8f311698247379aa9ece36b10006644b5eb904c00ca3836131",
+        "kind": "generic_send",
+        "owner": "<module>._freelist_ratio",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "6dcda7b3618524cd94f99273d26091b632623db8eae8df6b911843a64eeeaf75": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jobs.py <module> subprocess.CompletedProcess.",
       "site": {
