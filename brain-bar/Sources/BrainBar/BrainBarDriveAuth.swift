@@ -5,7 +5,7 @@ import Foundation
 //   brainlayer backup auth --status --json → {"state":"valid"|"expiring"|"missing"|"invalid",
 //                                            "reason":…, "expires_at":…, "days_left":…}
 //   brainlayer backup auth --json          → {"status":"ok"|"cancelled"|"timeout"|"error", "reason":…}
-// It never reads the token file and never shows a token.
+// It only stats the token file; it never reads its contents and never shows a token.
 
 struct BrainLayerCLIResult: Equatable, Sendable {
     let terminationStatus: Int32
@@ -384,6 +384,7 @@ final class BrainBarDriveAuthModel: ObservableObject {
     private let now: @Sendable () -> Date
     /// Bumped by every status read; a read that a newer one has overtaken is dropped.
     private var statusGeneration = 0
+    private var staleRefreshInFlight = false
 
     nonisolated static let statusArguments = ["backup", "auth", "--status", "--json"]
     nonisolated static let reconnectArguments = ["backup", "auth", "--json"]
@@ -418,8 +419,11 @@ final class BrainBarDriveAuthModel: ObservableObject {
     }
 
     /// Re-checks when the last check is older than `maxAge` (the status command starts Python).
-    func refreshIfStale(maxAge: TimeInterval = 600) async {
-        if let lastCheckedAt, now().timeIntervalSince(lastCheckedAt) < maxAge { return }
+    func refreshIfStale(maxAge: TimeInterval = 60) async {
+        guard !staleRefreshInFlight else { return }
+        if let lastCheckedAt, now().timeIntervalSince(lastCheckedAt) <= maxAge { return }
+        staleRefreshInFlight = true
+        defer { staleRefreshInFlight = false }
         await refreshStatus()
     }
 
@@ -453,4 +457,54 @@ final class BrainBarDriveAuthModel: ObservableObject {
         lastCheckedAt = now()
     }
 #endif
+}
+
+/// Metadata-only sampling survives atomic replacement and absent parent directories. A change
+/// must settle for one second before requesting status; unchanged/missing files do no CLI work.
+@MainActor
+final class DriveTokenStatusSampler {
+    struct Stamp: Equatable {
+        let inode: UInt64
+        let modified: Date
+    }
+
+    static func tokenURL(environment: [String: String] = ProcessInfo.processInfo.environment,
+                         home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+        if let path = environment["BRAINLAYER_DRIVE_TOKEN_PATH"], !path.isEmpty {
+            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        }
+        return home.appendingPathComponent(".config/brainlayer/drive-tokens.json")
+    }
+
+    static func stamp(url: URL) -> Stamp? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let inode = attributes[.systemFileNumber] as? NSNumber,
+              let modified = attributes[.modificationDate] as? Date else { return nil }
+        return Stamp(inode: inode.uint64Value, modified: modified)
+    }
+
+    private let readStamp: () -> Stamp?
+    private let now: () -> Date
+    private let refresh: () async -> Void
+    private var previous: Stamp?
+    private var changedAt: Date?
+
+    init(readStamp: @escaping () -> Stamp?, now: @escaping () -> Date = Date.init,
+         refresh: @escaping () async -> Void) {
+        self.readStamp = readStamp
+        self.now = now
+        self.refresh = refresh
+        previous = readStamp()
+    }
+
+    func sample() async {
+        let current = readStamp()
+        if current != previous {
+            previous = current
+            changedAt = now()
+        }
+        guard let changedAt, now().timeIntervalSince(changedAt) >= 1 else { return }
+        self.changedAt = nil
+        await refresh()
+    }
 }

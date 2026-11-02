@@ -495,6 +495,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === contextMenuForTesting, !isStopped else { return }
         isMenuTracking = true
+        Task { [driveAuth = runtime.driveAuth] in await driveAuth.refreshIfStale() }
     }
 
     func menuDidClose(_ menu: NSMenu) {

@@ -13,6 +13,86 @@ final class BrainBarDriveAuthTests: XCTestCase {
                                      formatDate: { ISO8601DateFormatter().string(from: $0) })
     }
 
+    private final class Clock: @unchecked Sendable {
+        var date = Date(timeIntervalSince1970: 0)
+    }
+
+    @MainActor
+    func test_menu_freshness_uses_sixty_seconds() async {
+        let clock = Clock()
+        let runner = ScriptedRunner(statuses: [result(#"{"state":"valid"}"#), result(#"{"state":"valid"}"#)], reconnect: nil)
+        let model = BrainBarDriveAuthModel(runner: runner, now: { clock.date })
+        await model.refreshStatus()
+        clock.date += 60
+        await model.refreshIfStale()
+        XCTAssertEqual(runner.calls.count, 1)
+        clock.date += 1
+        await model.refreshIfStale()
+        XCTAssertEqual(runner.calls.count, 2)
+    }
+
+    @MainActor
+    func test_token_replacement_debounces_and_clears_warning() async {
+        let clock = Clock()
+        let runner = ScriptedRunner(statuses: [result(#"{"state":"expiring"}"#), result(#"{"state":"valid"}"#)], reconnect: nil)
+        let model = BrainBarDriveAuthModel(runner: runner, now: { clock.date })
+        await model.refreshStatus()
+        XCTAssertTrue(model.presentation(formatDate: { _ in "" }).needsAttention)
+        var stamp: DriveTokenStatusSampler.Stamp? = .init(inode: 1, modified: clock.date)
+        let sampler = DriveTokenStatusSampler(readStamp: { stamp }, now: { clock.date }) {
+            await model.refreshStatus()
+        }
+        stamp = .init(inode: 2, modified: clock.date)
+        await sampler.sample()
+        XCTAssertEqual(runner.calls.count, 1)
+        clock.date += 1
+        await sampler.sample()
+        XCTAssertEqual(runner.calls.count, 2)
+        XCTAssertEqual(model.status.state, .valid)
+        XCTAssertFalse(model.presentation(formatDate: { _ in "" }).needsAttention)
+        await sampler.sample()
+        XCTAssertEqual(runner.calls.count, 2)
+    }
+
+    @MainActor
+    func test_metadata_sampler_detects_atomic_replace_and_mtime_without_reading_contents() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("fake-token")
+        try Data().write(to: url)
+        let first = try XCTUnwrap(DriveTokenStatusSampler.stamp(url: url))
+        try Data().write(to: url, options: .atomic)
+        let replaced = try XCTUnwrap(DriveTokenStatusSampler.stamp(url: url))
+        XCTAssertNotEqual(first.inode, replaced.inode)
+        try FileManager.default.setAttributes([.modificationDate: replaced.modified.addingTimeInterval(5)], ofItemAtPath: url.path)
+        let touched = try XCTUnwrap(DriveTokenStatusSampler.stamp(url: url))
+        XCTAssertEqual(replaced.inode, touched.inode)
+        XCTAssertNotEqual(replaced.modified, touched.modified)
+    }
+
+    @MainActor
+    func test_missing_token_is_idle_and_creation_is_detected() async {
+        let clock = Clock()
+        var stamp: DriveTokenStatusSampler.Stamp?
+        var refreshes = 0
+        let sampler = DriveTokenStatusSampler(readStamp: { stamp }, now: { clock.date }) { refreshes += 1 }
+        for _ in 0..<100 {
+            clock.date += 2
+            await sampler.sample()
+        }
+        XCTAssertEqual(refreshes, 0)
+        stamp = .init(inode: 1, modified: clock.date)
+        await sampler.sample()
+        clock.date += 2
+        await sampler.sample()
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertNil(DriveTokenStatusSampler.stamp(url: URL(fileURLWithPath: "/nonexistent-s26/token.json")))
+        XCTAssertEqual(DriveTokenStatusSampler.tokenURL(environment: [:], home: URL(fileURLWithPath: "/test-home")).path,
+                       "/test-home/.config/brainlayer/drive-tokens.json")
+        XCTAssertEqual(DriveTokenStatusSampler.tokenURL(environment: ["BRAINLAYER_DRIVE_TOKEN_PATH": "/custom/token"]).path, "/custom/token")
+    }
+
     // MARK: status contract (`--status --json`)
 
     func test_status_states_parse_from_the_cli_contract() {

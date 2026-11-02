@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var uiHeartbeatTimer: DispatchSourceTimer?
     private var daemonWatchdog: BrainBarLifecycleWatchdog?
     private var driveAuthTimer: Timer?
+    private var driveTokenSamplingTask: Task<Void, Never>?
     /// S5: the shared status snapshot's one sampling cadence, for the app's lifetime.
     private var statusSamplingTask: Task<Void, Never>?
 
@@ -109,6 +110,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Google Drive access for backups: checked at launch and every 30 minutes, so the
         // reconnect deadline appears at least 48 hours before expiry without opening Backups.
         runtime.driveAuth.install(runner: ProcessBrainLayerCLIRunner())
+        let tokenURL = DriveTokenStatusSampler.tokenURL()
+        let tokenSampler = DriveTokenStatusSampler(readStamp: { DriveTokenStatusSampler.stamp(url: tokenURL) }) {
+            [driveAuth = runtime.driveAuth] in await driveAuth.refreshStatus()
+        }
+        driveTokenSamplingTask = Task {
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                await tokenSampler.sample()
+            }
+        }
         runtime.maintenanceRetry.install(runner: ProcessBrainLayerCLIRunner())
         Task { [driveAuth = runtime.driveAuth] in await driveAuth.refreshStatus() }
         driveAuthTimer = Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { [weak self] _ in
@@ -134,6 +145,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         uiHeartbeatTimer = nil
         daemonWatchdog?.stop()
         daemonWatchdog = nil
+        driveTokenSamplingTask?.cancel()
+        driveTokenSamplingTask = nil
         driveAuthTimer?.invalidate()
         driveAuthTimer = nil
         statusSamplingTask?.cancel()
