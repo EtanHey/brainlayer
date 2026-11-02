@@ -12,7 +12,7 @@ and never clears red without the evidence section 3d names. Everything lives in
 
 ## 1. Does your change touch the verified code?
 
-Run `python3 formal/backup-verdict/check.sh --list` and open `coverage.json`. Your change is in
+Run `formal/backup-verdict/check.sh --list` and open `coverage.json`. Your change is in
 scope if it edits any file under `sources`, or any `path:line` under `actions`. Look out
 especially for `_verified_age`, `evaluate()`'s unknown / hold / hysteresis / wake-grace branches,
 `backup_facts`, `badge_alerts`, `_recent_local_verified_backup`, the VACUUM `deferred` paths in
