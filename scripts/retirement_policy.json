@@ -1618,6 +1618,16 @@
         "target": "socket.socket().send"
       }
     },
+    "4801d06e630383403d493981ebc949565f4a03de5233d9e9233195d074a8855b": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/doctor.py local supervisor control socket read for doctor child liveness; no cloud model transport.",
+      "site": {
+        "call_sha256": "a6a5a823e696de2d7b8b2de528f9a77605f6b7c5c9b71cedf36b2aff641e4825",
+        "kind": "generic_send",
+        "owner": "<module>.run_doctor",
+        "path": "src/brainlayer/doctor.py",
+        "target": "service_runner.request"
+      }
+    },
     "4898f8475525eb19152098cd119c73abf2fd7bfe14ca550692c42485657e8337": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -2516,6 +2526,16 @@
         "target": "subprocess.run"
       }
     },
+    "6da71977a4879c361b834757353ed4fd0a4b27e672c88534ec79d8ab91e50461": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._freelist_ratio",
+      "site": {
+        "call_sha256": "9ebe55bed7c78d8f311698247379aa9ece36b10006644b5eb904c00ca3836131",
+        "kind": "generic_send",
+        "owner": "<module>._freelist_ratio",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "6dcda7b3618524cd94f99273d26091b632623db8eae8df6b911843a64eeeaf75": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jobs.py <module> subprocess.CompletedProcess.",
       "site": {
@@ -2832,6 +2852,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/supervisor_guard.py",
         "target": "import ctypes"
+      }
+    },
+    "7a8bb12e818170ca589287e033d8c74657b8646a9c413d341ccf273fbf99a19c": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/doctor.py subprocess import for local OS checks and supervisor service-status results; no cloud model transport.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/doctor.py",
+        "target": "import subprocess"
       }
     },
     "7ba0e37e2731db44fade41addea21c2574b2052290ce42c477b65550bacc2e85": {
@@ -3360,6 +3390,16 @@
         "owner": "<module>.get_mcp_processes",
         "path": "scripts/cleanup_stale_mcp.py",
         "target": "subprocess.SubprocessError"
+      }
+    },
+    "8f0a78aefdb665657ccb4e8ccb2c61f16967c322b8a29b6b569337eb52732558": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/doctor.py synthetic CompletedProcess result for a live supervised child; no process launch or cloud model transport.",
+      "site": {
+        "call_sha256": "7ade17dd9014e8dea9966c744cfbdc484552f44affbfb0d494900aed870fec99",
+        "kind": "transport_call",
+        "owner": "<module>.run_doctor.service_status",
+        "path": "src/brainlayer/doctor.py",
+        "target": "subprocess.CompletedProcess"
       }
     },
     "90527e4bc3ac91388ddd254c9e76671904968e73cb1d74defb6c6ce6f7a63970": {
