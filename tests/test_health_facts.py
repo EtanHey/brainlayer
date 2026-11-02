@@ -223,13 +223,15 @@ def test_paused_drain_holds_its_queue_and_the_clock_restarts_at_resume(tmp_path:
 
 
 def test_embedding_stall_starts_when_the_backlog_stops_shrinking() -> None:
-    assert hf.embedding_fact(0, {}, NOW) == (None, {"count": 0, "since": None})
-    since, state = hf.embedding_fact(5, {}, NOW)
-    assert since == NOW
+    window = NOW - timedelta(hours=24)
+    assert hf.embedding_fact(0, {}, NOW, window) == (None, {"count": 0, "since": None, "window_start": None})
+    since, state = hf.embedding_fact(5, {}, NOW, window)
+    assert since == NOW and state["window_start"] == window.isoformat()
     later = NOW + timedelta(hours=2)
-    assert hf.embedding_fact(7, state, later)[0] == NOW  # growing: still not shrinking since NOW
-    assert hf.embedding_fact(4, state, later)[0] == later  # shrank: progress
-    assert hf.embedding_fact(UNOBSERVED, state, later) == (UNOBSERVED, state)
+    assert hf.embedding_window_start(state, later) == window  # anchored while the backlog is outstanding
+    assert hf.embedding_fact(7, state, later, window)[0] == NOW  # growing: still not shrinking since NOW
+    assert hf.embedding_fact(4, state, later, window)[0] == later  # shrank: progress
+    assert hf.embedding_fact(UNOBSERVED, state, later, window) == (UNOBSERVED, state)
 
 
 def test_embedding_counts_recent_unvectored_chunks(tmp_path: Path) -> None:
@@ -310,5 +312,253 @@ def test_maintenance_records_the_nightly_store_round_trip_receipt(tmp_path: Path
             db_path=tmp_path / "x.db", store_roundtrip_fn=broken, store_roundtrip_path=tmp_path / "r.json"
         )
     )
-    assert failed["ok"] is None and "vec0 unavailable" in failed["reason"]  # never fails maintenance
+    assert failed["ok"] is False and "vec0 unavailable" in failed["reason"]  # never fails maintenance
     assert maintenance.MaintenanceConfig().store_roundtrip_fn is None  # library callers opt in
+
+
+# --- Review R1 regressions (each fails on deab4c7c) -------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["light", "full"])
+def test_scheduled_no_config_run_records_the_store_round_trip_once_after_resume(tmp_path, monkeypatch, mode):
+    """B1: the decorated, config-less entry point main() calls must enable doctor's round trip."""
+    import subprocess
+
+    from brainlayer import maintenance
+
+    real_config = maintenance.MaintenanceConfig
+    receipt = tmp_path / "store-roundtrip.json"
+    temp = {
+        "db_path": tmp_path / "brainlayer.db",
+        "queue_dir": tmp_path / "queue",
+        "quarantine_root": tmp_path / "quarantine",
+        "log_path": tmp_path / "maintenance.log",
+        "backup_staging_dir": tmp_path / "staging",
+        "store_roundtrip_path": receipt,
+    }
+    monkeypatch.setattr(maintenance, "MaintenanceConfig", lambda **kw: real_config(**{**temp, **kw}))
+    events: list[str] = []
+    monkeypatch.setattr(maintenance, "run_command", lambda args, **_kw: subprocess.CompletedProcess(args, 0, "", ""))
+    monkeypatch.setattr(maintenance, "PAUSE_SENTINEL_PATH", tmp_path / "pause.sentinel")
+    monkeypatch.setattr(maintenance, "_assert_running_merged_code", lambda _root: None)
+    monkeypatch.setattr(maintenance, "_run_gates", lambda _config: None)
+    monkeypatch.setattr(maintenance, "_weekly_backup", lambda _config: None)
+    monkeypatch.setattr(maintenance, "_quiesce_services", lambda *_args: events.append("quiesce"))
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service, **_kw: False)
+    monkeypatch.setattr(maintenance, "_resume_services", lambda *_args: events.append("resume") or [])
+    monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _path: (0, 0, 0))
+    monkeypatch.setattr(maintenance, "_verify_search_latency", lambda _path: 1.0)
+    monkeypatch.setattr(maintenance, "_emit_telemetry", lambda _event: None)
+    monkeypatch.setattr(
+        maintenance, "_doctor_roundtrip", lambda db: events.append(f"roundtrip:{db}") or (True, 0.1, "vector_retrieved")
+    )
+
+    maintenance.run_maintenance(mode)
+
+    assert events == ["quiesce", "resume", f"roundtrip:{temp['db_path']}"]  # once, after services resume
+    assert json.loads(receipt.read_text())["ok"] is True
+    logged = json.loads(temp["log_path"].read_text().splitlines()[-1])["store_roundtrip"]
+    assert logged["ok"] is True and logged["reason"] == "vector_retrieved"
+
+    # Explicit library opt-out still holds, and burn never runs it.
+    events.clear()
+    maintenance.run_maintenance(mode, config=real_config(**{**temp, "store_roundtrip_fn": None}))
+    maintenance.run_maintenance("burn", config=real_config(**{**temp, "store_roundtrip_fn": lambda _db: 1 / 0}))
+    assert not any(event.startswith("roundtrip") for event in events)
+
+
+def _unblock_fifo(path: Path) -> None:
+    try:
+        os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+    except OSError:
+        pass
+
+
+def _collect_in_thread(config, timeout: float, wait_s: float = 3.0):
+    import threading
+
+    out: dict = {}
+    worker = threading.Thread(
+        target=lambda: out.update(
+            facts=hf.collect_facts(config, HealthCheckResult(checked_at="", ok=True), None, NOW, timeout=timeout)[0]
+        ),
+        daemon=True,
+    )
+    started = time.monotonic()
+    worker.start()
+    worker.join(wait_s)
+    return out.get("facts"), time.monotonic() - started
+
+
+@pytest.mark.parametrize(
+    ("source", "field"),
+    [("drive_token_path", "drive_auth"), ("pending_stores_path", "oldest_pending_store_at")],
+)
+def test_a_read_that_never_returns_is_bounded_by_the_shared_deadline(tmp_path, source, field) -> None:
+    """B2: a FIFO with no writer blocks open() forever, like a stalled mount; it must not hold the tick."""
+    config = _config(tmp_path)
+    fifo = getattr(config, source)
+    fifo.unlink(missing_ok=True)
+    os.mkfifo(fifo)
+    try:
+        facts, elapsed = _collect_in_thread(config, timeout=0.3)
+        assert facts is not None, f"collect_facts still blocked on {source} after {elapsed:.1f}s"
+        assert elapsed < 1.5
+        assert getattr(facts, field) is UNOBSERVED
+        assert facts.backup_local_verified_at == NOW - timedelta(hours=1)  # the rest still report
+    finally:
+        _unblock_fifo(fifo)
+
+
+def test_a_stuck_collector_worker_cannot_keep_the_producer_process_alive(tmp_path) -> None:
+    """B2: an abandoned worker must not be joined at interpreter exit."""
+    import subprocess
+    import sys
+
+    script = (
+        "import threading, time\n"
+        "import brainlayer.health_facts as hf\n"
+        "got = hf._run_bounded({'stuck': threading.Event().wait, 'ok': lambda: 7}, time.monotonic() + 0.2)\n"
+        "print(got['stuck'] is hf.UNOBSERVED, got['ok'])\n"
+    )
+    src = str(Path(hf.__file__).resolve().parents[1])  # the source tree under test
+    env = {**os.environ, "PYTHONPATH": src + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    started = time.monotonic()
+    try:
+        done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=20, env=env)
+    except subprocess.TimeoutExpired:
+        pytest.fail("the producer process stayed alive behind a stuck collector worker")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split() == ["True", "7"]
+    assert time.monotonic() - started < 20
+
+
+def _gib(n: float) -> int:
+    return int(n * 1024**3)
+
+
+@pytest.mark.parametrize(
+    ("evidence", "dot"),
+    [
+        (None, "red"),  # no capability evidence: budget the larger (legacy) requirement
+        ("legacy", "red"),  # the staging filesystem fell back to legacy last time
+        ("reclaim", "green"),  # the last backup here reclaimed its raw: the smaller budget applies
+    ],
+)
+def test_disk_budgets_the_mode_the_next_backup_will_use(tmp_path, monkeypatch, evidence, dot) -> None:
+    """B3: 30 GiB Available sits between the reclaim (~22 GiB) and legacy (~42 GiB) budgets."""
+    from types import SimpleNamespace
+
+    from brainlayer import backup_daily as bd
+    from brainlayer import disk_space
+
+    config = _config(tmp_path)
+    monkeypatch.setattr(bd, "_database_logical_size_bytes", lambda _db: _gib(20))
+    monkeypatch.setattr(bd, "_estimated_gzip_bytes", lambda _dir, _size: _gib(10))
+    monkeypatch.setattr(bd, "_should_run_full_verify", lambda _date: True)
+    monkeypatch.setattr(disk_space, "measure_disk_space", lambda _path: SimpleNamespace(available_bytes=_gib(30)))
+    probes: list = []
+    monkeypatch.setattr(bd, "_probe_raw_reclamation", lambda *a: probes.append(a) or (True, None))
+    reclaim = bd._peak_backup_required_bytes(_gib(20), _gib(10), full=True, reclaim_raw=True)
+    legacy = bd._peak_backup_required_bytes(_gib(20), _gib(10), full=True, reclaim_raw=False)
+    assert reclaim + 2 * bd.MIN_RAW_FREE_BYTES < _gib(30) < legacy
+    if evidence is not None:
+        snapshot = str(config.backup_staging_dir / "2026-11-02.db.zst")
+        basis = "volume_delta" if evidence == "reclaim" else None
+        config.backup_log_path.write_text(
+            json.dumps(backup_receipt(NOW - timedelta(hours=1), snapshot=snapshot, reclaim_basis=basis)) + "\n"
+        )
+
+    facts, _ = _collect(config)
+
+    assert facts.disk_peak_bytes == (reclaim if evidence == "reclaim" else legacy)
+    assert evaluate(facts).check("disk").state == dot
+    assert probes == []  # never the write-based hole-punch probe on a health tick
+
+
+def test_reclaim_capability_needs_an_artifact_receipt_for_this_staging_dir(tmp_path) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    here = {"snapshot": str(staging / "a.db.zst")}
+    assert hf.reclaim_capability([], staging) is None
+    assert hf.reclaim_capability([{**here}], staging) is None  # pre-reclaim receipt: no evidence
+    assert hf.reclaim_capability([{**here, "reclaim_basis": "block_drop_no_snapshot"}], staging) is True
+    assert hf.reclaim_capability([{**here, "reclaim_basis": None}], staging) is False
+    elsewhere = {"snapshot": "/Volumes/other/a.db.zst", "reclaim_basis": "volume_delta"}
+    assert hf.reclaim_capability([{**here, "reclaim_basis": None}, elsewhere], staging) is None
+    assert hf.disk_budget(40, 20, None) == 40 and hf.disk_budget(40, 20, True) == 20
+
+
+def test_embedding_stall_does_not_recover_when_its_rows_age_out(tmp_path) -> None:
+    """B4: time advances, nothing in the DB changes, the stuck row must stay counted."""
+    config = _config(tmp_path)
+    with sqlite3.connect(config.db_path) as conn:
+        conn.execute(
+            "INSERT INTO chunks (id, content, created_at) VALUES ('stuck', 'x', ?)",
+            ((NOW - timedelta(hours=23, minutes=55)).isoformat(),),
+        )
+    state, verdict_state, seen = None, None, []
+    ticks = [NOW + timedelta(minutes=m) for m in range(0, 12, 2)]  # the row ages out at minute 5
+    ticks += [NOW + timedelta(minutes=m) for m in range(20, 7 * 60 + 1, 10)]  # continuous ticks for 7 h
+    for at in ticks:
+        result = HealthCheckResult(checked_at=at.isoformat(), ok=True, canary_ok=True, canary_status="results")
+        facts, state = hf.collect_facts(config, result, state, at)
+        verdict = evaluate(facts, prior=verdict_state)
+        verdict_state = verdict.state
+        seen.append((state["embedding"]["count"], facts.embedding_stalled_since, verdict.check("embedding").state))
+    assert [count for count, _, _ in seen] == [1] * len(ticks)
+    assert all(since == NOW for _, since, _ in seen)
+    assert seen[3][2] == "green" and seen[-1][2] == "red"  # under an hour, then a real 7 h stall
+
+    # Only completion (or a lifecycle change) repays it.
+    later = NOW + timedelta(hours=7, minutes=5)
+    with sqlite3.connect(config.db_path) as conn:
+        conn.execute("INSERT INTO chunk_vectors_rowids (id) VALUES ('stuck')")
+    facts, done = hf.collect_facts(config, HealthCheckResult(checked_at="", ok=True), state, later)
+    assert facts.embedding_stalled_since is None and done["embedding"]["count"] == 0
+
+
+def test_embedding_lifecycle_change_repays_the_stall(tmp_path) -> None:
+    config = _config(tmp_path)
+    with sqlite3.connect(config.db_path) as conn:
+        conn.execute("INSERT INTO chunks (id, content, created_at) VALUES ('s', 'x', ?)", (NOW.isoformat(),))
+    _, state = _collect(config)
+    with sqlite3.connect(config.db_path) as conn:
+        conn.execute("UPDATE chunks SET archived_at = ? WHERE id = 's'", (NOW.isoformat(),))
+    facts, _ = hf.collect_facts(config, HealthCheckResult(checked_at="", ok=True), state, NOW + timedelta(hours=30))
+    assert facts.embedding_stalled_since is None
+
+
+def test_a_newer_raising_probe_replaces_an_older_success(tmp_path) -> None:
+    """B5: the newest attempt is the evidence; a raise is a timestamped failed attempt."""
+    from brainlayer import maintenance
+
+    receipt_path = tmp_path / "store-roundtrip.json"
+    old = {"checked_at": (datetime.now(UTC) - timedelta(hours=1)).isoformat(), "ok": True, "reason": "vector_retrieved"}
+    receipt_path.write_text(json.dumps(old))
+
+    def raising(_db):
+        raise RuntimeError("new probe failed")
+
+    config = maintenance.MaintenanceConfig(
+        db_path=tmp_path / "x.db", store_roundtrip_fn=raising, store_roundtrip_path=receipt_path
+    )
+    attempt = maintenance._store_roundtrip(config)  # does not raise: maintenance never fails on it
+    on_disk = json.loads(receipt_path.read_text())
+    assert attempt == on_disk and on_disk["ok"] is False and "new probe failed" in on_disk["reason"]
+    assert on_disk["checked_at"] > old["checked_at"]
+    assert hf.store_canary_fact(receipt_path, datetime.now(UTC), None)[0] is False
+
+
+def test_an_unrecordable_attempt_leaves_no_stale_success_standing(tmp_path, monkeypatch) -> None:
+    from brainlayer import maintenance
+
+    receipt_path = tmp_path / "store-roundtrip.json"
+    receipt_path.write_text(json.dumps({"checked_at": datetime.now(UTC).isoformat(), "ok": True}))
+    monkeypatch.setattr(hf, "write_store_roundtrip_receipt", lambda *_a, **_kw: 1 / 0)
+    config = maintenance.MaintenanceConfig(
+        db_path=tmp_path / "x.db", store_roundtrip_fn=lambda _db: (True, 0.1, "ok"), store_roundtrip_path=receipt_path
+    )
+    attempt = maintenance._store_roundtrip(config)
+    assert attempt["ok"] is None and "not recorded" in attempt["reason"]
+    assert hf.store_canary_fact(receipt_path, datetime.now(UTC), None)[0] is UNOBSERVED
