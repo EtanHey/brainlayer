@@ -1080,6 +1080,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "3335ddbaf4ffeecc23b3889c245b789c6aef1b36266a15bbb14865640abaa14e": {
+      "non_cloud_purpose": "Stdlib-only gated local child resource policy: inspect errno or call the current process libSystem setiopolicy_np for Darwin disk I/O priority; no dynamic library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "fd2e5768445f456ee386121be506cc6f812ec53016700424fc3cbf65351ee7d7",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.set_disk_io_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.CDLL"
+      }
+    },
     "3354534443c8aec1d19f20a5d91733d9a02765baea5af7ceba21be0cec92bd75": {
       "non_cloud_purpose": "Read only the local per-boot session identity for maintenance hold generations: Darwin libc sysctlbyname kern.bootsessionuuid (string buffer), or Linux boot_id file. No subprocess/network/model sender.",
       "site": {
@@ -1678,16 +1688,6 @@
         "target": "importlib.metadata.distribution"
       }
     },
-    "4951fa1f75dbd1c3b04cb512d692c4300c5a778ef679e3ae9bbda5e80a0dca92": {
-      "non_cloud_purpose": "Stdlib-only gated local child resource policy: inspect errno or call the current process libSystem setiopolicy_np for Darwin disk I/O priority; no dynamic library path, model, cloud or network sender.",
-      "site": {
-        "call_sha256": "b037058c64dab853f827856d2585d3484b629d9cd4ba21b222a5a772db393c35",
-        "kind": "transport_call",
-        "owner": "<module>.apply_policy",
-        "path": "src/brainlayer/supervisor_child.py",
-        "target": "ctypes.get_errno"
-      }
-    },
     "497626333cc3ed885d93a86033b011e8d68aa743ad6bbd52eac56e4df5a278a6": {
       "non_cloud_purpose": "Bounded local lsof holder diagnostics for persistent WAL high-water; no network or cloud provider invocation.",
       "site": {
@@ -1898,6 +1898,16 @@
         "target": "import ctypes"
       }
     },
+    "51fc6809efa0648c51cddef33938f90800c3de95865588c0ddac7a7a9e1f8ddd": {
+      "non_cloud_purpose": "Stdlib-only gated local child resource policy: inspect errno or call the current process libSystem setiopolicy_np for Darwin disk I/O priority; no dynamic library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "b037058c64dab853f827856d2585d3484b629d9cd4ba21b222a5a772db393c35",
+        "kind": "transport_call",
+        "owner": "<module>.backup_io_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.get_errno"
+      }
+    },
     "52a2414f7fd22684b952f66c8cb461fda11ceb82c05ae7cc6781fd4d6f20b3a4": {
       "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>._close_socket socket.socket.",
       "site": {
@@ -1906,6 +1916,16 @@
         "owner": "<module>._close_socket",
         "path": "src/brainlayer/mcp_stdio_bridge.py",
         "target": "socket.socket"
+      }
+    },
+    "530376cda31bd3a7e52e15b0ef6a88e0026d84d6643375cc2a2d44213f6603da": {
+      "non_cloud_purpose": "Stdlib-only gated local child resource policy: inspect errno or call the current process libSystem setiopolicy_np for Darwin disk I/O priority; no dynamic library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "fd2e5768445f456ee386121be506cc6f812ec53016700424fc3cbf65351ee7d7",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.backup_io_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.CDLL"
       }
     },
     "53101cdebfd3a6850500057e0ebfa5ef3eab69c2a6c223c94a6356546f298269": {
@@ -2388,6 +2408,16 @@
         "target": "import subprocess"
       }
     },
+    "6787e1e17f1c0294268d1877eee465e037ed6775537f68deb29d597912e9b7e9": {
+      "non_cloud_purpose": "Stdlib-only gated local child resource policy: inspect errno or call the current process libSystem setiopolicy_np for Darwin disk I/O priority; no dynamic library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "b037058c64dab853f827856d2585d3484b629d9cd4ba21b222a5a772db393c35",
+        "kind": "transport_call",
+        "owner": "<module>.set_disk_io_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.get_errno"
+      }
+    },
     "67d441d26675f16651da35262ac1e6709af9bb49e88c521dd0ff577a7cf4f262": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/build_observability_fixture.py <module>._build_db",
       "site": {
@@ -2416,16 +2446,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/kg_session_finish.py",
         "target": "import subprocess"
-      }
-    },
-    "6908a30b18c7963cc2fe8a68548eecc7f7cf8740f9d73d03f23ebc76097349d8": {
-      "non_cloud_purpose": "Stdlib-only gated local child resource policy: inspect errno or call the current process libSystem setiopolicy_np for Darwin disk I/O priority; no dynamic library path, model, cloud or network sender.",
-      "site": {
-        "call_sha256": "fd2e5768445f456ee386121be506cc6f812ec53016700424fc3cbf65351ee7d7",
-        "kind": "dynamic_code_or_import",
-        "owner": "<module>.apply_policy",
-        "path": "src/brainlayer/supervisor_child.py",
-        "target": "ctypes.CDLL"
       }
     },
     "698a99706adc5b2c0b9cbf88cc98536240295abaeb8183245ecb3c121de25900": {
