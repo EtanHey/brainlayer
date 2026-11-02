@@ -1107,7 +1107,9 @@ def _maintenance_lock(db_path: Path):
 def _serialize_maintenance(func: Callable[..., MaintenanceResult]) -> Callable[..., MaintenanceResult]:
     @functools.wraps(func)
     def wrapped(mode: str, *, config: MaintenanceConfig | None = None, dry_run: bool = False) -> MaintenanceResult:
-        resolved = config or MaintenanceConfig()
+        # No config = the scheduled run (main(), which the maintenance calendar runs): it records
+        # the nightly store round trip. A caller that passes a config opts in or out explicitly.
+        resolved = config if config is not None else MaintenanceConfig(store_roundtrip_fn=_doctor_roundtrip)
         if dry_run:
             return func(mode, config=resolved, dry_run=True)
         with _maintenance_lock(resolved.db_path):
@@ -1324,11 +1326,10 @@ def _weekly_backup(config: MaintenanceConfig) -> dict[str, Any]:
 
 @_serialize_maintenance
 def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_run: bool = False) -> MaintenanceResult:
-    _assert_running_merged_code((config or MaintenanceConfig()).repo_root)
+    config = config or MaintenanceConfig()  # The decorator always resolves it; direct callers too.
+    _assert_running_merged_code(config.repo_root)
     if mode not in {"light", "full", "burn"}:
         raise ValueError(f"unsupported maintenance mode: {mode}")
-    # The default config is the scheduled run's: it records the nightly store round trip.
-    config = config or MaintenanceConfig(store_roundtrip_fn=_doctor_roundtrip)
     _run_gates(config)
 
     result = MaintenanceResult(mode=mode, dry_run=dry_run)
@@ -1482,14 +1483,35 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
 
 
 def _store_roundtrip(config: MaintenanceConfig) -> dict[str, Any]:
-    """Run one persisted store-then-retrieve and record its receipt; never fails maintenance."""
+    """Run one persisted store-then-retrieve and record it as the newest attempt; never fails maintenance.
+
+    Every attempt replaces the receipt, so an older success can never stand for a newer attempt:
+    a probe that raises (or returns something that is not a result) is recorded as a timestamped
+    failed attempt. Only when the receipt itself cannot be written is the outcome unrecorded;
+    then the old receipt is removed, so the store canary reads "unobserved", not a stale success.
+    """
     from .health_facts import store_roundtrip_path, write_store_roundtrip_receipt
 
+    started = time.monotonic()
     try:
         ok, latency, reason = config.store_roundtrip_fn(config.db_path)
-        path = config.store_roundtrip_path or store_roundtrip_path(config.db_path)
-        return write_store_roundtrip_receipt(path, ok=ok, reason=reason, latency_seconds=latency)
+        if not isinstance(ok, bool):
+            raise TypeError(f"round trip returned ok={ok!r}")
+        outcome = {"ok": ok, "reason": str(reason), "latency_seconds": float(latency)}
     except Exception as exc:
+        outcome = {
+            "ok": False,
+            "reason": f"round trip raised: {type(exc).__name__}: {exc}",
+            "latency_seconds": time.monotonic() - started,
+        }
+    path = config.store_roundtrip_path or store_roundtrip_path(config.db_path)
+    try:
+        return write_store_roundtrip_receipt(path, **outcome)
+    except Exception as exc:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
         return {"ok": None, "reason": f"round trip not recorded: {type(exc).__name__}: {exc}"[:500]}
 
 
