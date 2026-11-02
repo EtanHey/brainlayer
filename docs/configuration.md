@@ -254,15 +254,25 @@ runs in the backup's process group, so the calendar's process-group stop reaches
 failure stops consumption and cleans the attempt; the legacy streaming child is also killed and
 reaped on timeout, stop or free-space floor breach.
 
-Weekly VACUUM requires a local verified snapshot of the same database, created since local midnight
+Weekly VACUUM first reads the freelist/page-count ratio through a read-only connection. Below
+`BRAINLAYER_VACUUM_FREELIST_RATIO` (default **0.10**, range 0–1), VACUUM is `not_needed`: the rest
+of full maintenance completes with exit **0**, clears the maintenance alert, and advances the weekly
+calendar marker. The calendar still takes its snapshot before maintenance for the final upload-only step.
+
+When needed, weekly VACUUM requires a local verified snapshot of the same database, created since local midnight
 and at most `BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS` old (default **6**, shared by snapshot reuse and
 the maintenance gate). Only the latest receipt for each snapshot counts, with raw `integrity_check: ok`.
 The receipt binds SHA-256, size and path; missing, altered, unverified, failed remote verification,
 future or yesterday's copies cannot authorize VACUUM. Remote upload is not part of that gate.
-Calendar runs without that proof skip VACUUM with exit **76**. A standalone full run may create a
+Calendar runs without that proof defer VACUUM with exit **75**. A standalone full run may create a
 local snapshot under the daily supervisor within the remaining quiet window. A held backup lock
 still waits up to two hours in a standalone run; a calendar step, whose writers are already paused,
-never waits and skips VACUUM with exit **76**. Quiet-window, queue-idle and writer checks run again after backup;
+never waits and defers VACUUM with exit **75**. Snapshot failures, timeouts and holds too short to
+start VACUUM also defer it, preserving the reason and clearing a stale `maintenance-full` alert.
+Deferred runs leave the weekly marker unchanged, so the next night retries; the calendar retains
+its existing notice threshold for consecutive deferrals. VACUUM errors, expiry during VACUUM and
+full-maintenance restore failures remain failures with exit **76** and an alert.
+Quiet-window, queue-idle and writer checks run again after backup;
 post-backup gate failure skips service bootout and all DB maintenance with exit **76**.
 
 Every writer pause (a supervisor `MaintenanceHold`) is bounded. It lasts at most

@@ -65,6 +65,18 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
         }
     }
 
+    func testOptionalVacuumDeferralIsNeutralButRollbackAndRestoreStayFailures() {
+        let reason = "tonight's local verified snapshot unavailable; VACUUM skipped"
+        XCTAssertEqual(maintenance(weekly: 75, completion: .completed(daysAgo(2)),
+                                   records: [.maintenanceWeekly: aborted(reason)]).health, .skipped)
+        XCTAssertFalse(BrainLayerMaintenanceExit.isDeliberateDeferral("maintenance hold expired during VACUUM; VACUUM rolled back"))
+        XCTAssertFalse(BrainLayerMaintenanceExit.isDeliberateDeferral(reason + "; failed to resume 1 launchd service: watch"))
+        let failure = maintenance(weekly: 76, completion: .completed(daysAgo(2)),
+                                  records: [.maintenanceWeekly: aborted("VACUUM failed (OperationalError)")])
+        XCTAssertEqual(failure.health, .unhealthy)
+        XCTAssertTrue(failure.attentionReason?.contains("VACUUM failed (OperationalError)") == true)
+    }
+
     /// `MaintenanceAbort` defaults to 75 for real failures too (21 live nightly aborts were
     /// `failed to resume N launchd services`). Anything not on the allowlist is attention.
     func testAnyExit75ReasonOffTheAllowlistIsAttention() {
@@ -311,7 +323,7 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
             """.utf8),
             "/logs/weekly.out.log": Data("""
             {"reason": "recent queue write activity: 5 file(s) modified recently", "status": "aborted"}
-            {"reason": "\(quietWindow)", "status": "aborted"}
+            {"reason": "\(quietWindow)", "status": "deferred"}
 
             """.utf8),
             "/logs/nightly.out.log": Data("""

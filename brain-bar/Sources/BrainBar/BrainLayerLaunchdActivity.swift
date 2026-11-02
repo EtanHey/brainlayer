@@ -154,7 +154,7 @@ struct BrainLayerMaintenanceEvidence: Equatable, Sendable {
 enum BrainLayerMaintenanceExit {
     /// `MaintenanceAbort`'s default code: a gate deferral, but also real failures (#1040).
     static let deferred: Int32 = 75
-    /// The weekly VACUUM was skipped because the fresh backup failed.
+    /// A genuine weekly VACUUM failure (older releases also used this for backup skips).
     static let vacuumSkipped: Int32 = 76
     /// A weekly pass older than this, with only skips since, is attention.
     static let staleCompletion: TimeInterval = 8 * 86_400
@@ -163,7 +163,7 @@ enum BrainLayerMaintenanceExit {
     static let recordClockSlack: TimeInterval = 5
     static let recordLatestAfterStart: TimeInterval = 4 * 3_600 + 15 * 60
 
-    /// The deliberate deferrals `maintenance.py` raises with exit 75 before any service is quiesced
+    /// The deliberate gate and optional VACUUM deferrals `maintenance.py` raises with exit 75
     /// (`_check_quiet_window`, `_check_idle`, `_check_lsof_clean`, a refused window-bound hold), matched whole and
     /// case-insensitively. Every other 75 reason is attention: this is an allowlist, not a blacklist.
     static let deliberateDeferrals = [
@@ -172,6 +172,16 @@ enum BrainLayerMaintenanceExit {
         #"^queue depth growing: before=\d+ after=\d+$"#,
         #"^unexpected writer holds brainlayer db: pid=\d+ command=.+ fd=\S+$"#,
         #"^quiet window leaves no time for a bounded maintenance hold$"#,
+        #"^tonight's local verified snapshot unavailable; VACUUM skipped$"#,
+        #"^fresh weekly backup (?:timed out|exited -?\d+|returned no receipt \(\d+ stderr bytes\)); VACUUM skipped$"#,
+        #"^weekly backup failed \([A-Za-z_][A-Za-z_0-9]*\); VACUUM skipped$"#,
+        #"^weekly local snapshot was not verified; VACUUM skipped$"#,
+        #"^backup (?:custody unavailable|running during held calendar step|wait timed out); VACUUM skipped$"#,
+        #"^backup (?:lock|receipt) unreadable \([A-Za-z_][A-Za-z_0-9]*\); VACUUM skipped$"#,
+        #"^local snapshot changed before (?:quiesce|VACUUM); VACUUM skipped$"#,
+        #"^no quiet-window time remains for fresh backup; VACUUM skipped$"#,
+        #"^maintenance hold expires before VACUUM could unwind; VACUUM skipped$"#,
+        #"^maintenance hold leaves too little time for VACUUM \(estimate \d+s, \d+s left\); VACUUM skipped$"#,
     ]
 
     static func isDeliberateDeferral(_ reason: String) -> Bool {
@@ -354,6 +364,10 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
                         return nil
                     }
                     if self == .maintenance, code == BrainLayerMaintenanceExit.vacuumSkipped {
+                        if let reason = BrainLayerMaintenanceExit.thisRunsReason(maintenance.runRecords[job], lastRunAt: observation.lastRunAt),
+                           !reason.hasSuffix("; VACUUM skipped") {
+                            return "\(job.humanGroupLabel) maintenance failed\(when): \(reason)"
+                        }
                         let detail = BrainLayerMaintenanceExit.thisRunsReason(
                             maintenance.runRecords[job], lastRunAt: observation.lastRunAt
                         ).map { reason in

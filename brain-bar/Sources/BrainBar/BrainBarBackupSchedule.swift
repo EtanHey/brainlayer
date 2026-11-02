@@ -193,12 +193,14 @@ struct BackupIncompleteAttempt: Equatable, Sendable {
 }
 
 enum BackupLogReader {
-    /// A completed full pass: its final (non-dry-run) row records the VACUUM it ran. Newer rows carry
+    /// A completed full pass records VACUUM bytes or explicitly reports it was not needed.
+    /// Older rows carry
     /// `backup_status: "verified"`; rows from before #1002 carry no backup_status at all. A final row
     /// whose backup was unavailable or whose post-backup gate failed aborted before VACUUM.
     private static func isCompletedFullPass(_ row: [String: Any]) -> Bool {
-        guard row["mode"] as? String == "full", row["dry_run"] as? Bool == false,
-              row["vacuum_after_bytes"] is NSNumber else { return false }
+        guard row["mode"] as? String == "full", row["dry_run"] as? Bool == false else { return false }
+        if row["status"] as? String == "completed", row["vacuum"] as? String == "not_needed" { return true }
+        guard row["vacuum_after_bytes"] is NSNumber else { return false }
         let status = row["backup_status"] as? String
         return status == nil || status == "verified"
     }
