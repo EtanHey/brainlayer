@@ -503,9 +503,9 @@ class TestStoreMemory:
             project="brainlayer",
         )
 
-        canonical_content = store.conn.cursor().execute(
-            "SELECT content FROM chunks WHERE id = ?", (first["id"],)
-        ).fetchone()[0]
+        canonical_content = (
+            store.conn.cursor().execute("SELECT content FROM chunks WHERE id = ?", (first["id"],)).fetchone()[0]
+        )
         assert second["id"] == first["id"]
         assert " ".join(first_words) in canonical_content
         assert " ".join(second_words) in canonical_content
