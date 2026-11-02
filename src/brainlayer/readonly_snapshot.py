@@ -190,9 +190,13 @@ def take_snapshot(db_path, target_path, *, deadline_s, wal_budget_bytes, min_fre
         except OSError as exc:
             cancel("cleanup_error")
             detail += f"; cleanup retained unconfirmed files: {exc}"
-        if reason and published and _is_owned(target, owned):
-            target.unlink()
-            _sync_directory(target.parent)
+        if reason and published:
+            try:
+                if _is_owned(target, owned):
+                    target.unlink()
+                    _sync_directory(target.parent)
+            except OSError as exc:
+                detail += f"; rollback failed for {target}: {exc}"
     return SnapshotResult(time.monotonic() - started, written, peak, reason, detail)
 
 

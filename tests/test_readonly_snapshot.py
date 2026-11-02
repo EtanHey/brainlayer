@@ -155,3 +155,27 @@ def test_cleanup_failure_rolls_back_publication(db, monkeypatch):
     monkeypatch.setattr(snap, "_sync_directory", fail)
     assert take(db).reason == "cleanup_error"
     clean(db)
+
+
+@pytest.mark.parametrize("failure", ["unlink", "fsync"])
+def test_rollback_failure_is_reported(db, monkeypatch, failure):
+    target = db.parent / "out.db"
+    unlink = snap.Path.unlink
+
+    def sync(path):
+        if not list(db.parent.glob(".readonly-snapshot-*")) or target.exists():
+            raise OSError("injected fsync failure")
+
+    def remove(path, *args, **kwargs):
+        if path == target and failure == "unlink":
+            raise PermissionError("injected unlink failure")
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(snap, "_sync_directory", sync)
+    monkeypatch.setattr(snap.Path, "unlink", remove)
+    result = take(db)
+    assert result.reason == "io_error"
+    assert "rollback failed for" in result.detail and str(target) in result.detail
+    assert target.exists() == (failure == "unlink")
+    assert not list(db.parent.glob(".readonly-snapshot-*"))
+    assert not any(t.name == "snapshot-budget" for t in threading.enumerate())
