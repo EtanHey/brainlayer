@@ -640,8 +640,8 @@ class _DbGuardState:
     suspended = False
 
 
-def _sqlite_target_path(target: object) -> Path | None:
-    """The filesystem path a sqlite3/apsw target names, or None when it names no local file.
+def _sqlite_target_text(target: object) -> str | None:
+    """The filesystem path text a sqlite3/apsw/open target names, or None when it names no local file.
 
     `file:` URIs are parsed rather than fed to `Path`. BrainLayer's read paths open the DB as
     `file:{db_path}?mode=ro` almost everywhere (`backup_daily`, `maintenance`, `kg_judge`,
@@ -661,18 +661,54 @@ def _sqlite_target_path(target: object) -> Path | None:
         text = urllib.request.url2pathname(parsed.path)
         if not text or text.startswith(":"):
             return None
+    return text
+
+
+def _sqlite_target_path(target: object) -> Path | None:
+    """The filesystem path a sqlite3/apsw target names, resolved; None when it names no local file.
+
+    `file:` URIs are parsed rather than fed to `Path` (see `_sqlite_target_text`).
+    """
+    text = _sqlite_target_text(target)
+    if text is None:
+        return None
     try:
         return Path(text).expanduser().resolve(strict=False)
     except (OSError, ValueError, RuntimeError):
         return None
 
 
+def _within(path: Path, roots: tuple[Path, ...]) -> bool:
+    return any(path == root or root in path.parents for root in roots)
+
+
+def _protected_roots() -> tuple[Path, ...]:
+    """Each protected root as written AND resolved, so a symlinked root stays protected (CodeRabbit)."""
+    roots = list(_PROTECTED_BRAINLAYER_ROOTS)
+    for root in _PROTECTED_BRAINLAYER_ROOTS:
+        try:
+            roots.append(root.resolve(strict=False))
+        except (OSError, RuntimeError):
+            pass
+    return tuple(dict.fromkeys(roots))
+
+
 def _is_protected_runtime_path(candidate: object) -> bool:
-    """Whether *candidate* names a file inside the real user's BrainLayer runtime state."""
-    resolved = _sqlite_target_path(candidate)
-    if resolved is None:
+    """Whether *candidate* names a file inside the real user's BrainLayer runtime state.
+
+    Checked both resolved (a symlink elsewhere that points INTO a root) and lexically (a path
+    inside a root whose own symlink points OUT of it), against roots as written and resolved.
+    """
+    text = _sqlite_target_text(candidate)
+    if text is None:
         return False
-    return any(resolved == root or root in resolved.parents for root in _PROTECTED_BRAINLAYER_ROOTS)
+    roots = _protected_roots()
+    try:
+        lexical = Path(os.path.abspath(Path(text).expanduser()))
+    except (OSError, ValueError, RuntimeError):
+        lexical = None
+    resolved = _sqlite_target_path(candidate)
+    return any(p is not None and _within(p, roots) for p in (lexical, resolved))
 
 
 def _refuse_protected_db(target: object, opener: str) -> None:

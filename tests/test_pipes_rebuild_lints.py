@@ -195,3 +195,22 @@ def test_health_check_hits_write_guard():
 
     with pytest.raises(RuntimeError, match="production BrainLayer runtime write refused"):
         run_health_check(HealthCheckConfig(state_path=Path(PROTECTED) / "logs/health-check-state.json"))
+
+
+def test_symlinked_protected_root_stays_protected(tmp_path, monkeypatch):
+    """CodeRabbit #1603: a root that is itself a symlink must not let resolved writes through."""
+    import tests.conftest as guard
+
+    real_root = tmp_path / "real-runtime"
+    real_root.mkdir()
+    link_root = tmp_path / "home" / ".local" / "share" / "brainlayer"
+    link_root.parent.mkdir(parents=True)
+    link_root.symlink_to(real_root, target_is_directory=True)
+    monkeypatch.setattr(guard, "_PROTECTED_BRAINLAYER_ROOTS", (link_root,))
+
+    assert guard._is_protected_runtime_path(real_root / "job-alerts.json")  # resolved target of the root
+    assert guard._is_protected_runtime_path(link_root / "job-alerts.json")  # lexical path through the root
+    escaped = tmp_path / "elsewhere.json"
+    (real_root / "out").symlink_to(escaped)
+    assert guard._is_protected_runtime_path(link_root / "out")  # inside the root, even if it points out
+    assert not guard._is_protected_runtime_path(tmp_path / "unrelated.json")
