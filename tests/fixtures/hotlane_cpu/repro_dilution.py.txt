@@ -1,0 +1,17 @@
+import sys, json
+from pathlib import Path
+sys.path.insert(0, "src"); sys.path.insert(0, ".")
+sys.platform = "darwin"
+from brainlayer.hotlane_budget import HotlaneCpuSampler
+from scripts import hotlane_cpu_ratchet as r
+d = Path(sys.argv[1]); d.mkdir(parents=True, exist_ok=True)
+clock, cpu = [0.0], [0.0]
+s = HotlaneCpuSampler(d / "x.db", clock=lambda: clock[0], cpu_clock=lambda: cpu[0])
+# 540 s yielded under high load, ~2% CPU (hot slice only)
+for t in range(10, 541, 10):
+    clock[0] = t; cpu[0] += 0.2; s.observe("high load")
+# load drops; backlog resumes for 60 s at 150% CPU
+for t in range(550, 601, 10):
+    clock[0] = t; cpu[0] += 15; s.observe("running", 16)
+p = json.loads(s.path.read_text())
+print("window", p["window_seconds"], "cpu%", round(p["cpu_percent"],1), "encoded", p["backlog_encoded"], "->", r.read_report(s.path))

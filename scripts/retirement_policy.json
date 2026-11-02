@@ -180,6 +180,16 @@
         "target": "requests.Session().send"
       }
     },
+    "0c7db1728d61622ee64397d86320e55a9694e6ec9c4321da97d7a644553ed86c": {
+      "non_cloud_purpose": "S22 read-only /usr/sbin/sysctl for Apple CPU brand and performance-core count; argv only, no shell or cloud sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/hotlane_brainbar_daemon.py",
+        "target": "import subprocess"
+      }
+    },
     "0d7e89af6f62a00ebad507484b106a79557fd3caef904abc09e8c79b916aa1ef": {
       "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.rpc self.send.",
       "site": {
@@ -580,6 +590,16 @@
         "target": "client.connect"
       }
     },
+    "1d97971828089c566519f43d96a7d58b17fc0610894e1bb8c6d29e63a27079f1": {
+      "non_cloud_purpose": "S22 read-only ps sampling of an explicitly named installed hotlane PID for the ten-minute CPU budget; argv only, no shell or cloud sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/hotlane_cpu_ratchet.py",
+        "target": "import subprocess"
+      }
+    },
     "1dbae240c09cdf5aec0a7705e0d65cbbdd6e3ddef3d11435fd732e2af945e3ea": {
       "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
       "site": {
@@ -768,6 +788,16 @@
         "owner": "<module>.init",
         "path": "src/brainlayer/cli/__init__.py",
         "target": "import subprocess"
+      }
+    },
+    "251576db1284c1b37daf25872edd206aa54312eaec30c1a74559fd4fd64a35f8": {
+      "non_cloud_purpose": "S22 SQLite mode=ro connection to the explicitly named local DB, counting eligible missing vectors for the installed CPU budget; never writes or sends data.",
+      "site": {
+        "call_sha256": "0241e85bdb55b3a583996681a0a6db09ae00751f4ac702fcf5ce69ee7396958a",
+        "kind": "generic_send",
+        "owner": "<module>.backlog",
+        "path": "scripts/hotlane_cpu_ratchet.py",
+        "target": "sqlite3.connect"
       }
     },
     "253de0d62b459ed6f9591ed1a62f25c883074a82fd02fc5b555f90502f2ddb53": {
@@ -3074,6 +3104,16 @@
         "target": "subprocess.check_output"
       }
     },
+    "826c4e569d07b33e6100eed4108c04d56c5c751b6ea3f01723a47575a4697243": {
+      "non_cloud_purpose": "S22 read-only pinned /bin/ps sampling of an explicitly named installed hotlane PID for CPU audit and live producer identity; argv only, no shell or cloud sender.",
+      "site": {
+        "call_sha256": "c38d321fc00a3a40e49e58c73f2ecfc1c838e48e453de3b5e53737860ee09c86",
+        "kind": "child_process",
+        "owner": "<module>.ps_sample",
+        "path": "scripts/hotlane_cpu_ratchet.py",
+        "target": "subprocess.check_output"
+      }
+    },
     "82a1a243a54ad83580d2c44c99867aee6f5930a253271e4ddd5d3dda6883ba13": {
       "non_cloud_purpose": "Subprocess timeout/error class reference for bounded own-process cleanup and explicit failed receipts; no transport invocation. Site: <module>.Bridge.__exit__ subprocess.TimeoutExpired.",
       "site": {
@@ -3750,6 +3790,16 @@
         "owner": "<module>.ps_sample",
         "path": "scripts/sprint_gate.py",
         "target": "subprocess.run"
+      }
+    },
+    "9e5a01fed464d2af61e192eb5ccc24b011c03645489f042ee3e4416a650036a8": {
+      "non_cloud_purpose": "S22 local subprocess exception type used to fail closed when pinned /bin/ps cannot verify the live hotlane producer PID; no process launch or network sender at this reference.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.read_live_report",
+        "path": "scripts/hotlane_cpu_ratchet.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "9e87eef5434c6c0016c89467c88999480208496d6a0062660b9441dde772329f": {
@@ -4508,6 +4558,16 @@
         "owner": "<module>.HybridSearchHelper.serve_forever",
         "path": "src/brainlayer/brainbar_hybrid_helper.py",
         "target": "socket.socket().bind"
+      }
+    },
+    "ba2ed36e644da7968bd61a512f46d322513f8ba8e7839e78ce68d1539d6ad6e4": {
+      "non_cloud_purpose": "S22 read-only /usr/sbin/sysctl for Apple CPU brand and performance-core count; argv only, no shell or cloud sender.",
+      "site": {
+        "call_sha256": "3f5f399e61bc9a0d5d5175bc3c3668685f329023bb4bcac6c956d6edc4ef0fda",
+        "kind": "child_process",
+        "owner": "<module>._sysctl",
+        "path": "scripts/hotlane_brainbar_daemon.py",
+        "target": "subprocess.check_output"
       }
     },
     "ba6e61a03dbe573db8b9952b30d1e5eb53d6a8f3ee1313d291a74f0e4d95d6b9": {

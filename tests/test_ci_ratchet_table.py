@@ -679,13 +679,13 @@ def test_hosted_render_labels_local_only_coverage(tmp_path: Path) -> None:
     rows = ratchet.collect(probe, CORPUS)
     rendered = ratchet.render(rows, probe, None, NOW)
 
-    for name in ("mapped bytes", "search p50/p95", "idle CPU", "fallback replay debt"):
+    for name in ("mapped bytes", "search p50/p95", "idle CPU", "hotlane backlog CPU", "fallback replay debt"):
         rendered_row = next(line for line in rendered.splitlines() if line.startswith(f"| {name} |"))
         assert "local-only; not enforced by hosted CI" in rendered_row
         assert row(rows, name).value in rendered_row
         assert row(rows, name).notes in rendered_row
     assert (
-        "Hosted success gives no verdict on mapped bytes, search p50/p95, idle CPU, or fallback replay debt."
+        "Hosted success gives no verdict on mapped bytes, search p50/p95, idle CPU, hotlane backlog CPU, or fallback replay debt."
     ) in rendered
     assert "2026-09-03" in rendered
     assert CORPUS["latency_baseline_ms"]["captured_at"] in rendered

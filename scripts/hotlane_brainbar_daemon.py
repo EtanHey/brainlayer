@@ -13,8 +13,11 @@ import argparse
 import inspect
 import json
 import logging
+import math
 import os
 import signal
+import subprocess
+import sys
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -25,6 +28,7 @@ import sqlite_vec
 
 from brainlayer._helpers import serialize_f32
 from brainlayer.embeddings import get_embedding_model
+from brainlayer.hotlane_budget import HotlaneCpuSampler
 from brainlayer.paths import get_db_path
 from brainlayer.store import embed_hot_chunk, embed_pending_chunks
 from brainlayer.vector_store import VectorStore, skip_connection_hooks, temporary_write_busy_timeout_ms
@@ -155,11 +159,65 @@ class CycleResult(NamedTuple):
     enrich_failed: int = 0
     enrich_daily_cap_reached: bool = False
     deferred: int = 0
+    backlog_encoded: int = 0
 
 
 class EmbedCandidate(NamedTuple):
     chunk_id: str
     content: str
+
+
+def _sysctl(name: str) -> str:
+    return subprocess.check_output(["/usr/sbin/sysctl", "-n", name], text=True, timeout=5).strip()
+
+
+def _performance_cores() -> int:
+    if sys.platform == "darwin":
+        return max(1, int(_sysctl("hw.perflevel0.physicalcpu")))
+    return os.cpu_count() or 1
+
+
+def _backlog_max_load() -> float:
+    value = float(os.environ.get("BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD", "") or _performance_cores())
+    if not math.isfinite(value) or value < 0:
+        raise ValueError("BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD must be finite and nonnegative")
+    return value
+
+
+def setup_cpu_budget(db_path: Path) -> dict:
+    """CPU-only priority: never request Darwin background or a disk I/O policy."""
+    policy = {"policy": "not applicable", "platform": sys.platform}
+    if sys.platform == "darwin":
+        os.setpriority(os.PRIO_PROCESS, 0, 20)
+        policy.update(policy="nice", nice=os.getpriority(os.PRIO_PROCESS, 0))
+    default_threads = 1 if sys.platform == "darwin" and "Apple M1" in _sysctl("machdep.cpu.brand_string") else 2
+    threads = int(os.environ.get("BRAINLAYER_HOTLANE_THREADS", str(default_threads)))
+    if threads < 1:
+        raise ValueError("BRAINLAYER_HOTLANE_THREADS must be positive")
+    for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "OPENBLAS_NUM_THREADS"):
+        os.environ[name] = str(threads)
+    # embeddings.py imports sentence_transformers/torch only when the model first encodes.
+    import torch
+
+    torch.set_num_threads(threads)
+    policy.update(threads=torch.get_num_threads(), backlog_max_load=_backlog_max_load(), pid=os.getpid())
+    receipt = db_path.parent / "hotlane-budget.json"
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    temporary = receipt.with_suffix(".tmp")
+    temporary.write_text(json.dumps(policy, sort_keys=True) + "\n")
+    temporary.replace(receipt)
+    LOGGER.info("hotlane CPU budget %s receipt=%s", json.dumps(policy, sort_keys=True), receipt)
+    return policy
+
+
+def _backlog_yield_reason(db_path: Path, max_load: float) -> str:
+    if (db_path.parent / "hotlane.pause").exists():
+        return "pause marker"
+    try:
+        load = os.getloadavg()[0]
+    except OSError:
+        return "load unavailable"
+    return "high load" if load > max_load else ""
 
 
 class PendingCandidateScanState:
@@ -925,9 +983,10 @@ def _run_split_cycle(
     hot_rows = [candidate for candidate in hot_rows if needs_embedding(candidate)]
     pending_rows = [candidate for candidate in pending_rows if needs_embedding(candidate)]
     vectors = metrics.run("encode", _embed_candidates, hot_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn)
-    vectors.extend(
-        metrics.run("encode", _embed_candidates, pending_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn)
+    backlog_vectors = metrics.run(
+        "encode", _embed_candidates, pending_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn
     )
+    vectors.extend(backlog_vectors)
     fresh_ids = {vector.chunk_id for vector in vectors}
     vectors = [vector for vector in carried if vector.chunk_id not in fresh_ids] + vectors
     if vectors:
@@ -970,11 +1029,11 @@ def _run_split_cycle(
             )
             metrics.finish("deferred")
             _warn_retired_enrichment(enrich_limit, enrich_since_hours, enrich_fn)
-            return CycleResult(embedded=embedded, deferred=len(unwritten))
+            return CycleResult(embedded=embedded, deferred=len(unwritten), backlog_encoded=len(backlog_vectors))
 
     _warn_retired_enrichment(enrich_limit, enrich_since_hours, enrich_fn)
     metrics.finish()
-    return CycleResult(embedded=embedded)
+    return CycleResult(embedded=embedded, backlog_encoded=len(backlog_vectors))
 
 
 def _warn_retired_enrichment(limit: int, since_hours: int, callback: object) -> None:
@@ -1062,6 +1121,7 @@ def run(
     queue_dir: Path | None = None,
     queue_depth_fn: Callable[[Path], int] = _queue_depth,
     high_priority_queue_depth_fn: Callable[[Path], int] = _high_priority_queue_depth,
+    cpu_sampler: HotlaneCpuSampler | None = None,
 ) -> None:
     model = _create_embedding_model(model_factory, device=embedding_device)
     embed_batch_fn = getattr(model, "embed_texts", None)
@@ -1078,10 +1138,16 @@ def run(
     queue_dir_was_explicit = queue_dir is not None
     queue_dir = queue_dir or _default_queue_dir()
     last_backlog = time_fn() - backlog_interval
+    last_backlog_duty = last_backlog + backlog_interval
+    max_backlog_wait = float(os.environ.get("BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS", "300"))
+    if not math.isfinite(max_backlog_wait) or max_backlog_wait <= 0:
+        raise ValueError("BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS must be finite and positive")
     _warn_retired_enrichment(enrich_limit, enrich_since_hours, None)
     if enrich_limit > 0:
         LOGGER.warning("Ignoring retired hotlane enrichment interval=%s", enrich_interval)
     queue_backpressure_active = False
+    backlog_max_load = _backlog_max_load()
+    backlog_yield_reason = ""
     backlog_slice_logged = False
     hot_candidate_scanner = HotCandidateScanner()
     cycles = 0
@@ -1098,11 +1164,23 @@ def run(
             queue_has_high_priority_backlog = queue_has_backlog and high_priority_queue_depth_fn(queue_dir) > 0
             cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
             cycle_recent_limit = recent_limit
+            reason = _backlog_yield_reason(db_path, backlog_max_load) if backlog_batch else ""
+            if reason == "high load" and now - last_backlog_duty >= max_backlog_wait:
+                # Reserve the existing backlog lane; never lift store-queue backpressure.
+                reason = ""
+                cycle_backlog_batch = backlog_batch
+            if reason != backlog_yield_reason:
+                LOGGER.info("backlog embedding %s", f"yielding: {reason}" if reason else "resumed")
+                backlog_yield_reason = reason
+            if reason:
+                cycle_backlog_batch = 0
             if queue_has_high_priority_backlog:
                 if not queue_backpressure_active:
                     LOGGER.info("durable high-priority queue has backlog; suppressing hot embedding")
                 queue_backpressure_active = True
                 if cycle_backlog_batch <= 0:
+                    if cpu_sampler is not None:
+                        cpu_sampler.observe("store queue")
                     cycles += 1
                     # Backpressure is not idleness: hold the configured cadence so the
                     # reserved backlog slice resumes on time.
@@ -1121,6 +1199,8 @@ def run(
                 backlog_slice_logged = False
             if cycle_backlog_batch > 0:
                 last_backlog = now
+                last_backlog_duty = now
+            cycle_start = cpu_sampler.begin_cycle() if cpu_sampler is not None else None
             if cycle_fn is run_cycle:
                 result = _run_split_cycle(
                     db_path=db_path,
@@ -1151,10 +1231,15 @@ def run(
             # nothing (the hot slice is deliberately suppressed to yield to the drain),
             # so it must not be treated as idle -- backing off there would slow recovery.
             did_work = bool(result.embedded) or queue_has_backlog
+            if cpu_sampler is not None:
+                state = reason or ("running" if result.backlog_encoded else "waiting")
+                cpu_sampler.observe(state, result.backlog_encoded, cycle_start=cycle_start)
             if result.embedded:
                 LOGGER.info("embedded=%d", result.embedded)
         except Exception:
             LOGGER.exception("hotlane adapter cycle failed")
+            if cpu_sampler is not None:
+                cpu_sampler.observe("error")
             cycles += 1
             # A raised cycle is a RETRY, not an idle cycle (PR #735 review, macroscope):
             # it already slept its own backoff here, and letting it fall through to the
@@ -1192,16 +1277,23 @@ def main() -> None:
         LOGGER.warning("Hotlane enrichment options are retired and ignored; continuing local embedding")
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    run(
-        db_path=args.db,
-        interval=max(args.interval, 0.25),
-        recent_limit=max(args.recent_limit, 1),
-        backlog_interval=max(args.backlog_interval, 1.0),
-        backlog_batch=min(max(args.backlog_batch, 0), MAX_BACKLOG_BATCH),
-        enrich_interval=0.0,
-        enrich_limit=0,
-        enrich_since_hours=0,
-    )
+    setup_cpu_budget(args.db)
+    sampler = HotlaneCpuSampler(args.db)
+    sampler.start()
+    try:
+        run(
+            db_path=args.db,
+            interval=max(args.interval, 0.25),
+            recent_limit=max(args.recent_limit, 1),
+            backlog_interval=max(args.backlog_interval, 1.0),
+            backlog_batch=min(max(args.backlog_batch, 0), MAX_BACKLOG_BATCH),
+            enrich_interval=0.0,
+            enrich_limit=0,
+            enrich_since_hours=0,
+            cpu_sampler=sampler,
+        )
+    finally:
+        sampler.close()
 
 
 if __name__ == "__main__":

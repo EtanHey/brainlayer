@@ -2156,3 +2156,40 @@ def test_ci_workflow_missing_named_contract_escalates(tmp_path, missing):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "unmapped: .github/workflows/ci.yml" in result.stdout
     assert f"{test_root}/ -v" in pytest_log.read_text().splitlines()[0]
+
+
+def test_changed_only_scope_maps_hotlane_budget_to_its_owners(tmp_path: Path) -> None:
+    """S22: unmapped, hotlane_budget.py escalated a changed-only push to the full suite (11,541
+    tests) and timed out the 1,800 s heavy-suite slot."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    owners = (
+        "test_hotlane_cpu_budget.py",
+        "test_hotlane_cpu_active_budget.py",
+        "test_hotlane_backpressure.py",
+        "test_hotlane_brainbar_daemon.py",
+    )
+    for name in owners:
+        (test_root / name).write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "src/brainlayer/hotlane_budget.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    logged = pytest_log.read_text()
+    for name in owners:
+        assert str(test_root / name) in logged
+    assert "unmapped: src/brainlayer/hotlane_budget.py" not in result.stdout + result.stderr
+    assert "falling back to full pytest unit suite" not in result.stdout
+    assert f"{test_root}/ -v" not in logged

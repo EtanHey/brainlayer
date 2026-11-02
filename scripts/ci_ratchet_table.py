@@ -251,6 +251,7 @@ class Probe:
     search_latency: SearchLatencyMeasurement | None = None
     search_latency_unavailable: str | None = None
     search_latency_problem: str | None = None
+    hotlane_cpu_report: Path | None = None
 
     @classmethod
     def detect(
@@ -268,6 +269,7 @@ class Probe:
         attestation_unresolved: str | None = None,
         attestations: Path | None = None,
         fallback_gits_root: Path | None = None,
+        hotlane_cpu_report: Path | None = None,
     ) -> Probe:
         selected = select_wheel(wheel, wheel_glob)
         signature = select_signature(signature_report, signature_unavailable)
@@ -311,6 +313,7 @@ class Probe:
             search_latency_problem=latency.problem,
             fallback_gits_root=resolved_fallback_root,
             fallback_root_source=fallback_root_source,
+            hotlane_cpu_report=hotlane_cpu_report,
         )
 
 
@@ -1739,6 +1742,23 @@ def row_pre_push_delete(probe: Probe, _corpus: dict) -> Row:
     return Row(name, GREEN if passed else RED, value, method, notes)
 
 
+def row_hotlane_cpu(probe: Probe, _corpus: dict) -> Row:
+    from scripts.hotlane_cpu_ratchet import ROW, read_live_report, read_report
+
+    status, value = (
+        read_report(probe.hotlane_cpu_report)
+        if probe.hotlane_cpu_report is not None
+        else read_live_report(probe.db_path, probe.os_name)
+    )
+    return Row(
+        ROW,
+        status,
+        value,
+        "CPU/wall for backlog-encoding cycles · rolling 600 s · installed Mac",
+        "Default budget 60% of one core; BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT overrides. At least 30s of active backlog cycles required; yielded time excluded. Measures installed code.",
+    )
+
+
 # `row_commit_provenance` leads: every other row's value belongs to the commit it names, so a
 # reader has to see that sha before reading a number measured against it. `baseline attestation`
 # is second for the same reason: it names what the numbers are measured AGAINST.
@@ -1751,6 +1771,7 @@ ROW_BUILDERS = (
     row_mapped_bytes,
     row_search_latency,
     row_idle_cpu,
+    row_hotlane_cpu,
     row_signature_valid,
 )
 
@@ -1840,7 +1861,9 @@ def collect(probe: Probe, corpus: dict) -> list[Row]:
 # --------------------------------------------------------------------------------------------
 
 
-LOCAL_ONLY_ROWS = frozenset({"mapped bytes", "search p50/p95", "idle CPU", "fallback replay debt"})
+LOCAL_ONLY_ROWS = frozenset(
+    {"mapped bytes", "search p50/p95", "idle CPU", "hotlane backlog CPU", "fallback replay debt"}
+)
 
 
 def escape_cell(text: str) -> str:
@@ -1869,7 +1892,7 @@ def render(rows: list[Row], probe: Probe, run_url: str | None, now: datetime) ->
         "`n/a — <reason>` instead of a number; baselines in **Notes** name their own machine, "
         "method and date and were **not** measured here.",
         "",
-        "Hosted success gives no verdict on mapped bytes, search p50/p95, idle CPU, or fallback replay debt.",
+        "Hosted success gives no verdict on mapped bytes, search p50/p95, idle CPU, hotlane backlog CPU, or fallback replay debt.",
         "",
         "| Row | Status | Value (measured by this run) | Method | Notes |",
         "| --- | --- | --- | --- | --- |",
@@ -2175,6 +2198,7 @@ def main(argv: list[str] | None = None) -> int:
         "--watcher-heartbeat-report", type=Path, help="Actual private producer/compiled consumer evidence"
     )
     parser.add_argument("--watcher-heartbeat-unavailable", help="Explicit reason the native probe was not triggered")
+    parser.add_argument("--hotlane-cpu-report", type=Path, help="Ten-minute installed-Mac ps/backlog evidence")
     parser.add_argument("--out", type=Path, help="Also write the rendered table here")
     attest = parser.add_argument_group(
         "attesting (main runs only)",
@@ -2202,6 +2226,7 @@ def main(argv: list[str] | None = None) -> int:
         args.attestation_unresolved,
         args.attestations,
         args.fallback_gits_root,
+        args.hotlane_cpu_report,
     )
     rows = collect(probe, corpus)
     # Main's baseline attestor calibrates the original resource rows, not UI evidence.

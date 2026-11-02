@@ -70,6 +70,35 @@ checks its own `BRAINLAYER_LAUNCHD_*_ENABLED` gate before exec.
 | `BRAINLAYER_LAUNCHD_REPAIR_FTS_ENABLED` | `1` | `com.brainlayer.repair-fts` |
 | `BRAINLAYER_LAUNCHD_WAL_CHECKPOINT_ENABLED` | `1` | `com.brainlayer.wal-checkpoint` |
 
+### Hotlane CPU budget
+
+On macOS the hotlane sets its own CPU nice value to 20, without changing disk I/O policy.
+`BRAINLAYER_HOTLANE_THREADS` caps torch and BLAS threads (default 1 on Apple M1, 2 otherwise).
+`BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD` sets the one-minute load ceiling (default performance-core count).
+`BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS` (default 300) guarantees a reserved backlog batch
+at least every five minutes under high load. This uses the existing backlog lane and never lifts hot-slice backpressure.
+A `hotlane.pause` file beside the resolved database also pauses backlog embedding; removing it resumes work.
+The pause marker overrides minimum duty completely.
+Hot embedding continues during these pauses unless store-queue backpressure suppresses it.
+Startup records the applied settings in `hotlane-budget.json`
+beside that database and in the log.
+
+The daemon also writes `hotlane-cpu.json` beside the resolved database. It records a rolling ten-minute
+CPU-time delta, backlog vectors actually encoded, and current running/yield/pause state, with no full-DB scans.
+For the budget, it separately sums `backlog_cpu_seconds` and `backlog_wall_seconds` only around
+completed cycles that encode backlog vectors. Yielded intervals contribute to neither sum;
+only complete cycles wholly within the rolling window are retained.
+The ratchet table automatically reads this file on a Mac and verifies its live installed PID with `ps`.
+`BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT` defaults to 60% of one core and compares against
+`100 * backlog_cpu_seconds / backlog_wall_seconds`. Less than 30 seconds of active backlog work,
+an incomplete window, or a current pause marker is `n/a`, never GREEN. High load after a minimum-duty
+batch does not dilute its measured CPU rate or invalidate sufficient active evidence.
+The budget is unmeasured until installed; hosted CI cannot produce installed-Mac evidence.
+An optional independent `ps` audit remains available via
+`python scripts/hotlane_cpu_ratchet.py --pid PID --db DB --out REPORT.json` and the table's
+`--hotlane-cpu-report REPORT.json` override. A `ps`-only report is diagnostic `n/a` for the budget:
+without active-cycle CPU/wall timing, it cannot certify a pass or an overrun.
+
 ### Privacy
 
 | Variable | Default | Description |
