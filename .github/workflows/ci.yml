@@ -413,6 +413,8 @@ jobs:
       # restart 10.6–20.1s, revert 6.9–18.5s. Observed maxima × all 128 shards
       # estimate 2245s serial; 2400s bounds this gate independently, while
       # xdist uses available CPUs. The unit job keeps its existing 1800s bound.
+      # S24 expands restart to 40 shards (136 total) to retain <=30 cuts/item
+      # under Python 3.12 pre-push as well as Python 3.13 CI.
       - name: Exhaustive crash sweeps
         if: needs.changes.outputs.crash_sweeps == 'true'
         env:
