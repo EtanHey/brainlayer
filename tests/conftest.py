@@ -10,9 +10,11 @@ for _git_env_key in tuple(os.environ):
     if _git_env_key.startswith("GIT_"):
         os.environ.pop(_git_env_key, None)
 
+import builtins
 import functools
 import hashlib
 import importlib
+import io
 import shutil
 import sqlite3
 import subprocess
@@ -226,6 +228,7 @@ def pytest_configure(config):
     temp_root.mkdir(parents=True, exist_ok=True)
     os.environ["PYTEST_DEBUG_TEMPROOT"] = str(temp_root)
     _install_db_open_guards()
+    _install_runtime_write_guards()
     helper = Path(__file__).resolve().parent / "socket_hygiene" / "sitecustomize.py"
     if helper.is_file():
         spec = importlib.util.spec_from_file_location("_brainlayer_test_socket_hygiene", helper)
@@ -781,3 +784,34 @@ def test_user() -> str:
     Set BRAINLAYER_TEST_USER to your real username for local filesystem tests.
     """
     return os.environ.get("BRAINLAYER_TEST_USER", "janedev")
+
+
+def _install_runtime_write_guards() -> None:
+    """Refuse production runtime writes before collection, including captured aliases."""
+
+    def refuse(path, writing):
+        if writing and _is_protected_runtime_path(path):
+            raise RuntimeError(f"suite hygiene: production BrainLayer runtime write refused: {path}")
+
+    def wrap_open(opener):
+        @functools.wraps(opener)
+        def guarded(file, mode="r", *args, **kwargs):
+            refuse(file, any(flag in mode for flag in "wax+"))
+            return opener(file, mode, *args, **kwargs)
+
+        guarded._brainlayer_write_guard = True
+        return guarded
+
+    for module in (builtins, io):
+        if not getattr(module.open, "_brainlayer_write_guard", False):
+            module.open = wrap_open(module.open)
+    if not getattr(os.open, "_brainlayer_write_guard", False):
+        original_os_open = os.open
+
+        @functools.wraps(original_os_open)
+        def guarded_os_open(path, flags, *args, **kwargs):
+            refuse(path, flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
+            return original_os_open(path, flags, *args, **kwargs)
+
+        guarded_os_open._brainlayer_write_guard = True
+        os.open = guarded_os_open
