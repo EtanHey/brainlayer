@@ -13,6 +13,12 @@ from types import SimpleNamespace
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolate_host_load(monkeypatch):
+    # Queue scheduling tests measure queue state, independently of the host's current load.
+    monkeypatch.setenv("BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD", "1000000")
+
+
 def _load_hotlane_module():
     importlib.invalidate_caches()
     sys.modules.pop("scripts.hotlane_brainbar_daemon", None)

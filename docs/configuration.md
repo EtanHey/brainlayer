@@ -70,6 +70,20 @@ checks its own `BRAINLAYER_LAUNCHD_*_ENABLED` gate before exec.
 | `BRAINLAYER_LAUNCHD_REPAIR_FTS_ENABLED` | `1` | `com.brainlayer.repair-fts` |
 | `BRAINLAYER_LAUNCHD_WAL_CHECKPOINT_ENABLED` | `1` | `com.brainlayer.wal-checkpoint` |
 
+### Hotlane CPU budget
+
+On macOS the hotlane sets its own CPU nice value to 20, without changing disk I/O policy.
+`BRAINLAYER_HOTLANE_THREADS` caps torch and BLAS threads (default 1 on Apple M1, 2 otherwise).
+`BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD` sets the one-minute load ceiling (default performance-core count).
+A `hotlane.pause` file beside the resolved database also pauses backlog embedding; removing it resumes work.
+Hot embedding continues during these pauses. Startup records the applied settings in `hotlane-budget.json`
+beside that database and in the log.
+
+On an installed Mac, `python scripts/hotlane_cpu_ratchet.py --pid PID --db DB --out REPORT.json`
+reads the daemon's CPU time and backlog over ten minutes. Pass the report to
+`scripts/ci_ratchet_table.py --hotlane-cpu-report REPORT.json`. Nonempty backlog with CPU above
+`BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT` (default 60% of one core) fails; absent measurements report `n/a`.
+
 ### Privacy
 
 | Variable | Default | Description |

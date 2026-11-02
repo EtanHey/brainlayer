@@ -10,11 +10,15 @@ Python enrichment arguments are accepted for compatibility but cannot invoke a m
 from __future__ import annotations
 
 import argparse
+import ctypes
 import inspect
 import json
 import logging
+import math
 import os
 import signal
+import subprocess
+import sys
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -160,6 +164,63 @@ class CycleResult(NamedTuple):
 class EmbedCandidate(NamedTuple):
     chunk_id: str
     content: str
+
+
+def _sysctl(name: str) -> str:
+    return subprocess.check_output(["/usr/sbin/sysctl", "-n", name], text=True, timeout=5).strip()
+
+
+def _performance_cores() -> int:
+    if sys.platform == "darwin":
+        return max(1, int(_sysctl("hw.perflevel0.physicalcpu")))
+    return os.cpu_count() or 1
+
+
+def _backlog_max_load() -> float:
+    value = float(os.environ.get("BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD", "") or _performance_cores())
+    if not math.isfinite(value) or value < 0:
+        raise ValueError("BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD must be finite and nonnegative")
+    return value
+
+
+def setup_cpu_budget(db_path: Path) -> dict:
+    """CPU-only priority: never request Darwin background or a disk I/O policy."""
+    policy = {"policy": "not applicable", "platform": sys.platform}
+    if sys.platform == "darwin":
+        library = ctypes.CDLL(None, use_errno=True)
+        library.setpriority.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_int]
+        library.setpriority.restype = ctypes.c_int
+        if library.setpriority(os.PRIO_PROCESS, 0, 20) == -1:
+            raise OSError(ctypes.get_errno(), "hotlane CPU nice policy failed")
+        policy.update(policy="nice", nice=os.getpriority(os.PRIO_PROCESS, 0))
+    default_threads = 1 if sys.platform == "darwin" and "Apple M1" in _sysctl("machdep.cpu.brand_string") else 2
+    threads = int(os.environ.get("BRAINLAYER_HOTLANE_THREADS", str(default_threads)))
+    if threads < 1:
+        raise ValueError("BRAINLAYER_HOTLANE_THREADS must be positive")
+    for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "OPENBLAS_NUM_THREADS"):
+        os.environ[name] = str(threads)
+    # embeddings.py imports sentence_transformers/torch only when the model first encodes.
+    import torch
+
+    torch.set_num_threads(threads)
+    policy.update(threads=torch.get_num_threads(), backlog_max_load=_backlog_max_load(), pid=os.getpid())
+    receipt = db_path.parent / "hotlane-budget.json"
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    temporary = receipt.with_suffix(".tmp")
+    temporary.write_text(json.dumps(policy, sort_keys=True) + "\n")
+    temporary.replace(receipt)
+    LOGGER.info("hotlane CPU budget %s receipt=%s", json.dumps(policy, sort_keys=True), receipt)
+    return policy
+
+
+def _backlog_yield_reason(db_path: Path, max_load: float) -> str:
+    if (db_path.parent / "hotlane.pause").exists():
+        return "pause marker"
+    try:
+        load = os.getloadavg()[0]
+    except OSError:
+        return "load unavailable"
+    return "high load" if load > max_load else ""
 
 
 class PendingCandidateScanState:
@@ -1082,6 +1143,8 @@ def run(
     if enrich_limit > 0:
         LOGGER.warning("Ignoring retired hotlane enrichment interval=%s", enrich_interval)
     queue_backpressure_active = False
+    backlog_max_load = _backlog_max_load()
+    backlog_yield_reason = ""
     backlog_slice_logged = False
     hot_candidate_scanner = HotCandidateScanner()
     cycles = 0
@@ -1098,7 +1161,13 @@ def run(
             queue_has_high_priority_backlog = queue_has_backlog and high_priority_queue_depth_fn(queue_dir) > 0
             cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
             cycle_recent_limit = recent_limit
-            if queue_has_high_priority_backlog:
+            reason = _backlog_yield_reason(db_path, backlog_max_load) if backlog_batch else ""
+            if reason != backlog_yield_reason:
+                LOGGER.info("backlog embedding %s", f"yielding: {reason}" if reason else "resumed")
+                backlog_yield_reason = reason
+            if reason:
+                cycle_backlog_batch = 0
+            if queue_has_high_priority_backlog and not reason:
                 if not queue_backpressure_active:
                     LOGGER.info("durable high-priority queue has backlog; suppressing hot embedding")
                 queue_backpressure_active = True
@@ -1192,6 +1261,7 @@ def main() -> None:
         LOGGER.warning("Hotlane enrichment options are retired and ignored; continuing local embedding")
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
+    setup_cpu_budget(args.db)
     run(
         db_path=args.db,
         interval=max(args.interval, 0.25),

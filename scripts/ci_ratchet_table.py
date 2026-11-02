@@ -78,7 +78,7 @@ import sys
 import tempfile
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -251,6 +251,7 @@ class Probe:
     search_latency: SearchLatencyMeasurement | None = None
     search_latency_unavailable: str | None = None
     search_latency_problem: str | None = None
+    hotlane_cpu_report: Path | None = None
 
     @classmethod
     def detect(
@@ -1739,6 +1740,19 @@ def row_pre_push_delete(probe: Probe, _corpus: dict) -> Row:
     return Row(name, GREEN if passed else RED, value, method, notes)
 
 
+def row_hotlane_cpu(probe: Probe, _corpus: dict) -> Row:
+    from scripts.hotlane_cpu_ratchet import ROW, read_report
+
+    status, value = read_report(probe.hotlane_cpu_report)
+    return Row(
+        ROW,
+        status,
+        value,
+        "ps CPU-time delta · 600 s · installed Mac",
+        "Default budget 60% of one core; BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT overrides. Measures installed code.",
+    )
+
+
 # `row_commit_provenance` leads: every other row's value belongs to the commit it names, so a
 # reader has to see that sha before reading a number measured against it. `baseline attestation`
 # is second for the same reason: it names what the numbers are measured AGAINST.
@@ -1751,6 +1765,7 @@ ROW_BUILDERS = (
     row_mapped_bytes,
     row_search_latency,
     row_idle_cpu,
+    row_hotlane_cpu,
     row_signature_valid,
 )
 
@@ -2175,6 +2190,7 @@ def main(argv: list[str] | None = None) -> int:
         "--watcher-heartbeat-report", type=Path, help="Actual private producer/compiled consumer evidence"
     )
     parser.add_argument("--watcher-heartbeat-unavailable", help="Explicit reason the native probe was not triggered")
+    parser.add_argument("--hotlane-cpu-report", type=Path, help="Ten-minute installed-Mac ps/backlog evidence")
     parser.add_argument("--out", type=Path, help="Also write the rendered table here")
     attest = parser.add_argument_group(
         "attesting (main runs only)",
@@ -2203,6 +2219,7 @@ def main(argv: list[str] | None = None) -> int:
         args.attestations,
         args.fallback_gits_root,
     )
+    probe = replace(probe, hotlane_cpu_report=args.hotlane_cpu_report)
     rows = collect(probe, corpus)
     # Main's baseline attestor calibrates the original resource rows, not UI evidence.
     # Every normal/PR collector run requires this render row, including absent reports.
