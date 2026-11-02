@@ -23,6 +23,7 @@ import ast
 import datetime as dt
 import importlib.util
 import json
+import re
 import sys
 import types
 from pathlib import Path
@@ -75,6 +76,14 @@ def _tla_record(value: str) -> dict[str, str]:
     return out
 
 
+def _acc_rev(acc: str) -> list[str]:
+    """The per-snapshot ``rev`` sequence of the reader fold, e.g. ``<<"approx", "none">>``."""
+    match = re.search(r"rev\s*\|->\s*<<([^>]*)>>", acc)
+    if match is None:
+        raise ValueError(f"trace acc has no rev sequence: {acc!r}")  # fail closed, never guess
+    return [part.strip().strip('"') for part in match.group(1).split(",")]
+
+
 def ops_from_trace(states: list[tuple[str, dict[str, str]]]) -> list[dict]:
     """Receipts appended and ticks taken, in trace order, from TLC's state sequence."""
     ops: list[dict] = []
@@ -84,7 +93,10 @@ def ops_from_trace(states: list[tuple[str, dict[str, str]]]) -> list[dict]:
             before, after = _tla_seq(previous["lastLoc"]), _tla_seq(values["lastLoc"])
             created = [int(x) for x in _tla_seq(values["created"])]
             snap = next(i for i, (a, b) in enumerate(zip(before, after), 1) if a != b)
-            exact = '"approx"' not in values.get("acc", "") or '"approx"' in previous.get("acc", "")
+            # Only a revocation can be filename-only ("approx"), and it marks ITS snapshot's rev
+            # entry. Read that entry, not "approx anywhere": an earlier snapshot's marker must not
+            # make a later approximate revocation replay as exact (Macroscope, #1601).
+            exact = _acc_rev(values.get("acc", ""))[snap - 1] != "approx"
             ops.append(
                 {
                     "op": "receipt",

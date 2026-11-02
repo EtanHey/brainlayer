@@ -244,3 +244,29 @@ def test_every_backup_bug_case_is_replayed():
             assert case.get("prefix") and case.get("fixed_here") in ("yes", "no"), case["name"]
         if case.get("simulate"):
             assert case["expect"] in ("conforms", "diverges") and not case.get("prefix"), case["name"]
+
+
+def _world(now, last_loc, acc_rev, created="<<0, 1>>"):
+    return {
+        "now": str(now),
+        "lastLoc": last_loc,
+        "created": created,
+        "acc": f'[local |-> {{}}, off |-> {{}}, rev |-> {acc_rev}]',
+    }
+
+
+def test_second_approximate_revocation_stays_approximate():
+    """Macroscope #1601: snapshot 1's approx marker must not make snapshot 2's approx revoke exact."""
+    states = [
+        ("Init", _world(0, '<<"none", "none">>', '<<"none", "none">>')),
+        ("World", _world(1, '<<"revoke", "none">>', '<<"approx", "none">>')),
+        ("World", _world(2, '<<"revoke", "revoke">>', '<<"approx", "approx">>')),
+        ("World", _world(3, '<<"revoke", "upload_ok">>', '<<"approx", "none">>')),
+    ]
+    ops = replay.ops_from_trace(states)
+    assert [(o["snap"], o["exact"]) for o in ops] == [(1, False), (2, False), (2, True)]
+
+
+def test_trace_without_a_rev_sequence_fails_closed():
+    with pytest.raises(ValueError, match="no rev sequence"):
+        replay._acc_rev("[local |-> {}, off |-> {}]")
