@@ -1421,7 +1421,7 @@ private struct BrainBarDashboardView: View {
                             isUnmeasured: counts.indexedTodayUnavailableText == "not measured yet today")
                     }
                 }
-                .frame(minHeight: counts.indexedToday == nil ? 18 : 52, alignment: .topLeading)
+                .frame(height: 52, alignment: .topLeading)
                 // Gated on agentWritesCount alone: a missing indexedToday must not hide a
                 // MEASURED brain_store count. One unknown never erases a known.
                 Group {
