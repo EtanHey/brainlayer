@@ -113,7 +113,7 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
                             file: StaticString = #filePath, line: UInt = #line) -> (BrainBarStatusSnapshot, Surfaces) {
         let (snapshot, value) = surfaces(inputs)
         XCTAssertEqual(value.icon, dot, "\(name): icon dot", file: file, line: line)
-        XCTAssertEqual(value.menu == "Needs attention", dot, "\(name): menu says \(value.menu)", file: file, line: line)
+        XCTAssertEqual(value.menu.hasPrefix("Needs attention:"), dot, "\(name): menu says \(value.menu)", file: file, line: line)
         XCTAssertEqual(value.dashboard.tone == .amber, dot, "\(name): dashboard \(value.dashboard)", file: file, line: line)
         XCTAssertEqual(!value.dashboardItems.isEmpty, dot, "\(name): dashboard items \(value.dashboardItems)", file: file, line: line)
         let unhealthyJobs = value.jobs.values.contains { $0.health == .unhealthy }
@@ -130,7 +130,7 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
 
     func testHealthyFixtureIsAllGoodEverywhere() {
         let (_, value) = Self.assertAgree(Self.healthy(), dot: false, "healthy")
-        XCTAssertEqual(value.menu, "All good")
+        XCTAssertEqual(value.menu, "Nothing needs attention")
         XCTAssertEqual(value.dashboard.headline, "All good")
         XCTAssertEqual(value.dashboard.tone, .green)
         XCTAssertEqual(value.backups.badge, .healthy)
@@ -158,7 +158,7 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         XCTAssertEqual(notice?.text, "Scheduled maintenance failed at 2026-10-26 04:00 GMT+2 — next retry 2026-10-27 03:15 GMT+2")
         XCTAssertEqual(snapshot.notices.filter { $0.jobs.contains(.maintenanceWeekly) }.count, 1,
                        "the job alert and the calendar failure are ONE issue: \(snapshot.notices)")
-        XCTAssertEqual(value.menu, "All good")
+        XCTAssertTrue(value.menu.hasPrefix("Info: Scheduled maintenance failed at 2026-10-26 04:00"), value.menu)
         XCTAssertNotEqual(value.dashboard.headline, "All good")
         XCTAssertEqual(value.dashboard.reason, "Scheduled maintenance failed at 2026-10-26 04:00 GMT+2 — next retry 2026-10-27 03:15 GMT+2")
         XCTAssertEqual(value.jobs[.maintenance]?.health, .notice)
@@ -175,7 +175,7 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         }
         let (_, value) = Self.assertAgree(inputs, dot: false, "schedule unreadable")
         XCTAssertNotEqual(value.dashboard.headline, "All good")
-        XCTAssertEqual(value.menu, "All good")
+        XCTAssertTrue(value.menu.hasPrefix("Info:"), value.menu)
     }
 
     func testProbeErrorAndUnknownBadgeAreNeutralNeverADot() {
@@ -205,7 +205,7 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         inputs.badge = .init(badgeOn: false, reason: "queue backed up", activeCodes: ["queue_backed_up"],
                              activeMessages: ["queue backed up"], activeSeverities: ["warning"])
         let (_, value) = Self.assertAgree(inputs, dot: false, "warning badge")
-        XCTAssertEqual(value.menu, "All good")
+        XCTAssertEqual(value.menu, "Info: queue backed up")
     }
 
     func testDriveAuthProblemsAreNoticesUntilTheBackupAgeLimit() {

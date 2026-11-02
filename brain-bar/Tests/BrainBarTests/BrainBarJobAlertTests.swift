@@ -324,8 +324,7 @@ final class BrainBarJobAlertTests: XCTestCase {
         let snapshot = model.publishedStatus
         XCTAssertFalse(snapshot.needsAttention, "\(snapshot.issues)")
         XCTAssertFalse(controller.statusDotForTesting, "icon")
-        XCTAssertEqual(controller.contextMenuForTesting.items.first?.title, "All good", "menu")
-        XCTAssertTrue(controller.contextMenuForTesting.items.contains { $0.title == reason }, "Full notice row")
+        XCTAssertEqual(controller.contextMenuForTesting.items.first?.title, "Info: \(reason)", "menu")
         XCTAssertEqual(controller.statusItemForTesting.button?.toolTip, "BrainBar")
         XCTAssertEqual(model.groupStatus(.backups).health, .notice, "Jobs")
         XCTAssertEqual(model.backupsHealth(drive: nil).badge, .notice, "Backups")
@@ -336,7 +335,7 @@ final class BrainBarJobAlertTests: XCTestCase {
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
         XCTAssertFalse(model.publishedStatus.needsAttention)
         XCTAssertFalse(controller.statusDotForTesting)
-        XCTAssertEqual(controller.contextMenuForTesting.items.first?.title, "All good")
+        XCTAssertEqual(controller.contextMenuForTesting.items.first?.title, "Nothing needs attention")
         XCTAssertNotEqual(model.groupStatus(.backups).health, .unhealthy)
         XCTAssertNotEqual(model.backupsHealth(drive: nil).badge, .attention)
     }
@@ -345,7 +344,7 @@ final class BrainBarJobAlertTests: XCTestCase {
         var inputs = BrainBarStatusSnapshotTests.healthy()
         inputs.jobAlerts = BrainBarJobAlerts(active: ["fleet-watchdog-hold": "BrainLayer recovered a stale fleet-watchdog hold; supervisor restored"])
         let (_, surfaces) = BrainBarStatusSnapshotTests.assertAgree(inputs, dot: false, "watchdog recovery")
-        XCTAssertEqual(surfaces.menu, "All good")
+        XCTAssertEqual(surfaces.menu.hasPrefix("Info:"), true, surfaces.menu)
     }
 
 }
@@ -719,7 +718,7 @@ final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
             alertsURL: alertsURL
         )
         status.menuNeedsUpdate(status.contextMenuForTesting)
-        XCTAssertEqual(status.contextMenuForTesting.items.first?.title, "All good")
+        XCTAssertEqual(status.contextMenuForTesting.items.first?.title, "Nothing needs attention")
         XCTAssertEqual(status.statusItemForTesting.button?.toolTip, "BrainBar", "the icon's tooltip follows the menu")
     }
 }
