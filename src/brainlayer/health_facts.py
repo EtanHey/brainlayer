@@ -1,0 +1,421 @@
+"""Collectors for the outcome verdict: one health tick's ``Facts`` from files that already exist.
+
+Read-only and cheap. Every collector runs under one shared timeout; a collector that fails,
+times out or meets a malformed source yields UNOBSERVED and never raises past this module.
+The policy that turns these facts into the dot lives in ``health_verdict``.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import time
+from collections.abc import Callable, Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor, wait
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+from typing import TYPE_CHECKING, Any
+
+from .health_verdict import UNOBSERVED, Facts, Note, backup_facts, transcript_facts
+
+if TYPE_CHECKING:
+    from .health_check import HealthCheckConfig, HealthCheckResult
+
+COLLECTOR_TIMEOUT_S = 5.0
+RECEIPT_TAIL_BYTES = 4 * 1024 * 1024
+STORE_ROUNDTRIP_MAX_AGE_S = 36 * 3600
+STORE_ROUNDTRIP_FILE = "store-roundtrip.json"
+EMBEDDING_WINDOW_HOURS = 24
+DRIVE_CONSENT_DAYS = 7  # Same testing-app consent lifetime drive_credentials.credential_status uses.
+
+# "Couldn't look" codes: the monitor's own blind spots, never an outcome.
+BLIND_CODES = frozenset(
+    {
+        "process_snapshot_failed",
+        "job_scan_failed",
+        "slow_check",
+        "health_check_busy",
+        "job_state_unknown",
+        "supervisor_control_unavailable",
+    }
+)
+# Outcome codes that already have a verdict check: their message becomes context on that check,
+# and the check's own facts decide its state.
+CHECK_FOR_CODE = {
+    **dict.fromkeys(
+        (
+            "hotlane_dead",
+            "hotlane_backlog_disabled",
+            "hotlane_unloaded",
+            "missing_embeddings_climbing",
+            "missing_embeddings_not_draining",
+            "missing_embeddings_backlog",
+            "missing_embeddings_count_failed",
+            "missing_embeddings_scan_incomplete",
+        ),
+        "embedding",
+    ),
+    **dict.fromkeys(("watcher_stalled", "watch_unloaded", "t3_ingest_unhealthy"), "ingest"),
+    **dict.fromkeys(
+        (
+            "queue_backed_up",
+            "drain_no_progress",
+            "drain_liveness_stalled",
+            "drain_progress_stalled",
+            "drain_progress_unknown",
+            "lock_holder_wedge",
+            "drain_unloaded",
+            "pending_stores_count_failed",
+        ),
+        "stores",
+    ),
+    "brain_search_canary_failed": "search",
+    **dict.fromkeys(
+        (
+            "jsonl_backup_attempt_missing",
+            "jsonl_backup_attempt_invalid",
+            "jsonl_backup_attempt_absent_multiple_nights",
+            "jsonl_backup_attempt_stale",
+            "jsonl_backup_attempt_failed",
+        ),
+        "transcripts",
+    ),
+    "backup_daily_verification_failed": "backup_local",
+}
+
+
+def _aware(value: Any) -> datetime | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return datetime.fromtimestamp(value, UTC)
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.astimezone(UTC).isoformat() if value is not None else None
+
+
+def read_receipts(path: Path, *, tail_bytes: int = RECEIPT_TAIL_BYTES) -> list[dict[str, Any]]:
+    """JSONL receipts from the end of ``path``. Missing file = observed, none on record.
+
+    A torn or malformed line is skipped; a non-empty file with no readable receipt raises,
+    so the caller reports UNOBSERVED rather than "no copy on record".
+    """
+    try:
+        with path.expanduser().open("rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, size - tail_bytes))
+            raw = handle.read()
+    except FileNotFoundError:
+        return []
+    lines = raw.splitlines()[1:] if size > tail_bytes else raw.splitlines()
+    receipts = []
+    for line in lines:
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            receipts.append(value)
+    if not receipts and any(line.strip() for line in lines):
+        raise ValueError(f"no readable receipt in {path}")
+    return receipts
+
+
+def drive_auth_fact(token_path: Path, now: datetime, events: Iterable[tuple[datetime, str] | None]) -> str:
+    """Offline Drive authorization: token file shape plus the newest Drive outcome in receipts.
+
+    No network refresh. A missing token, a token without refresh authorization or an expired
+    consent is lost access. Otherwise the newest receipt event after the last consent decides.
+    """
+    try:
+        token = json.loads(token_path.expanduser().read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return "consent_needed"
+    if not isinstance(token, dict):
+        raise ValueError("Drive token is not an object")
+    if not token.get("refresh_token"):
+        return "consent_needed"
+    consented = _aware(token.get("consented_at"))
+    if consented is not None and now >= consented + timedelta(days=DRIVE_CONSENT_DAYS):
+        return "consent_needed"
+    known = [event for event in events if event is not None and (consented is None or event[0] > consented)]
+    return max(known, key=lambda event: event[0])[1] if known else "ok"
+
+
+def watcher_fact(path: Path) -> datetime | None:
+    try:
+        payload = json.loads(path.expanduser().read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    updated = _aware(payload.get("updated_at")) if isinstance(payload, dict) else None
+    if updated is None:
+        raise ValueError("watcher-health.json has no updated_at")
+    return updated
+
+
+def oldest_pending_store(
+    pending_path: Path, queue_dir: Path | None, *, not_before: Iterable[datetime | None] = ()
+) -> datetime | None:
+    """Oldest store still waiting: BrainBar's replay file, then the durable drain queue.
+
+    ``queue_dir=None`` leaves the durable queue out (its lane is paused or deliberately held).
+    Queue files age from the latest of their mtime and ``not_before`` (drain progress, pause end),
+    so a pipe that is moving is not reported as stuck behind one old file.
+    """
+    oldest: list[datetime] = []
+    try:
+        with pending_path.expanduser().open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                queued = _aware(record.get("queued_at")) or _aware(record.get("queued_at_epoch"))
+                if queued is None:
+                    raise ValueError("pending store without queued_at")
+                oldest.append(queued)
+                break  # Append-only: the first record is the oldest.
+    except FileNotFoundError:
+        pass
+    if queue_dir is not None:
+        try:
+            mtimes = [path.stat().st_mtime for path in queue_dir.expanduser().glob("*.jsonl")]
+        except FileNotFoundError:
+            mtimes = []
+        if mtimes:
+            floor = max((t for t in not_before if t is not None), default=None)
+            start = datetime.fromtimestamp(min(mtimes), UTC)
+            oldest.append(max(start, floor) if floor is not None else start)
+    return min(oldest, default=None)
+
+
+def store_roundtrip_path(db_path: Path) -> Path:
+    return db_path.expanduser().resolve().parent / STORE_ROUNDTRIP_FILE
+
+
+def write_store_roundtrip_receipt(path: Path, *, ok: bool, reason: str, latency_seconds: float) -> dict[str, Any]:
+    """Atomically persist the newest persisted store-then-retrieve result (doctor's round trip)."""
+    receipt = {
+        "checked_at": datetime.now(UTC).isoformat(),
+        "ok": bool(ok),
+        "reason": str(reason)[:500],
+        "latency_seconds": round(float(latency_seconds), 4),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False) as tmp:
+        json.dump(receipt, tmp, sort_keys=True)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+    os.replace(tmp.name, path)
+    return receipt
+
+
+def store_canary_fact(path: Path, now: datetime, seen: str | None) -> tuple[Any, str | None]:
+    """The newest round-trip receipt as the store canary; older than 36 h is UNOBSERVED.
+
+    A failure counts once per receipt (a nightly failure must not be counted again every tick);
+    afterwards it is UNOBSERVED and the verdict's latch holds it. A success is current positive
+    evidence for as long as the receipt is fresh, so it is reported every tick.
+    """
+    try:
+        receipt = json.loads(path.expanduser().read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return UNOBSERVED, seen
+    checked = _aware(receipt.get("checked_at")) if isinstance(receipt, dict) else None
+    if checked is None or not isinstance(receipt.get("ok"), bool):
+        raise ValueError("store round-trip receipt is malformed")
+    if (now - checked).total_seconds() > STORE_ROUNDTRIP_MAX_AGE_S or (
+        not receipt["ok"] and receipt["checked_at"] == seen
+    ):
+        return UNOBSERVED, seen
+    return receipt["ok"], receipt["checked_at"]
+
+
+_UNVECTORED_SQL = """
+    SELECT COUNT(*) FROM chunks c
+    LEFT JOIN chunk_vectors_rowids r ON r.id = c.id
+    WHERE r.id IS NULL AND c.created_at >= ? AND c.content IS NOT NULL AND c.content != ''
+      AND c.archived_at IS NULL AND c.superseded_by IS NULL AND c.aggregated_into IS NULL
+"""
+
+
+def recent_unvectored(db_path: Path, now: datetime, deadline: float) -> int:
+    """Chunks from the last day still waiting for a vector (doctor's query; ``created_at`` is indexed)."""
+    conn = sqlite3.connect(f"file:{db_path.expanduser()}?mode=ro", uri=True, timeout=0.5)
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+        cutoff = (now - timedelta(hours=EMBEDDING_WINDOW_HOURS)).isoformat()
+        return int(conn.execute(_UNVECTORED_SQL, (cutoff,)).fetchone()[0])
+    finally:
+        conn.close()
+
+
+def embedding_fact(count: Any, prior: Mapping[str, Any], now: datetime) -> tuple[Any, dict[str, Any]]:
+    """Backlog not shrinking while non-empty: the stall starts at the last tick it shrank or appeared."""
+    if count is UNOBSERVED:
+        return UNOBSERVED, dict(prior)
+    if count == 0:
+        return None, {"count": 0, "since": None}
+    before, since = prior.get("count"), _aware(prior.get("since"))
+    if not isinstance(before, int) or before == 0 or since is None or count < before:
+        since = now
+    return since, {"count": count, "since": _iso(since)}
+
+
+def disk_fact(db_path: Path, staging_dir: Path) -> tuple[int, int, int]:
+    """(Available bytes, the next backup's own space requirement, the raw floor) for the staging volume.
+
+    Uses backup_daily's peak budget. The requirement is the smaller of its two modes, so red means
+    the next backup cannot run in either.
+    """
+    from . import backup_daily as bd
+    from .disk_space import measure_disk_space
+
+    db_size = bd._database_logical_size_bytes(db_path)
+    gzip_size = bd._estimated_gzip_bytes(staging_dir, db_size)
+    full = bd._should_run_full_verify(None)
+    peak = min(bd._peak_backup_required_bytes(db_size, gzip_size, full=full, reclaim_raw=r) for r in (False, True))
+    return measure_disk_space(staging_dir).available_bytes, peak, bd.MIN_RAW_FREE_BYTES
+
+
+def _run_bounded(jobs: Mapping[str, Callable[[], Any]], timeout: float) -> dict[str, Any]:
+    executor = ThreadPoolExecutor(max_workers=len(jobs), thread_name_prefix="brainlayer-health-facts")
+    futures = {name: executor.submit(job) for name, job in jobs.items()}
+    wait(futures.values(), timeout=timeout)
+    executor.shutdown(wait=False, cancel_futures=True)
+    out: dict[str, Any] = {}
+    for name, future in futures.items():
+        try:
+            out[name] = future.result(timeout=0) if future.done() else UNOBSERVED
+        except Exception:
+            out[name] = UNOBSERVED
+    return out
+
+
+def classify_issues(result: HealthCheckResult) -> tuple[tuple[str, ...], tuple[Note, ...], dict[str, str]]:
+    """Split health-check issues into blind codes, notes, and context for the check each one feeds."""
+    blind: list[str] = []
+    notes: list[Note] = []
+    context: dict[str, list[str]] = {}
+    for issue in result.issues:
+        if issue.code in BLIND_CODES:
+            blind.append(issue.code)
+        elif check := CHECK_FOR_CODE.get(issue.code):
+            context.setdefault(check, []).append(issue.message[:200])
+        else:
+            notes.append(Note(issue.code, issue.message))
+    return tuple(blind), tuple(notes), {name: "; ".join(dict.fromkeys(msgs)) for name, msgs in context.items()}
+
+
+def search_canary_fact(result: HealthCheckResult, now: datetime) -> Any:
+    """The canary health_check already ran. A failure excused by a valid snapshot episode is unobserved."""
+    from .badge_state import _expected_episode
+
+    if result.canary_status is None:
+        return UNOBSERVED
+    if result.canary_ok:
+        return True
+    excused = any(
+        issue.code == "brain_search_canary_failed" and _expected_episode(issue, now) for issue in result.issues
+    )
+    return UNOBSERVED if excused else False
+
+
+def collect_facts(
+    config: HealthCheckConfig,
+    result: HealthCheckResult,
+    prior: Mapping[str, Any] | None,
+    now: datetime,
+    *,
+    timeout: float = COLLECTOR_TIMEOUT_S,
+) -> tuple[Facts, dict[str, Any]]:
+    """Build one tick's Facts. ``prior`` is the collectors' own persisted state; returns its successor."""
+    from .backup_daily import _backup_log_path
+    from .drive_credentials import resolve_paths
+    from .pause import pause_applies_to_label, pause_sentinel_state
+
+    prior = prior if isinstance(prior, Mapping) else {}
+    deadline = time.monotonic() + timeout
+    backup_log = config.backup_log_path or _backup_log_path(None, db_path=config.db_path)
+    staging = config.backup_staging_dir
+    got = _run_bounded(
+        {
+            "backup": lambda: backup_facts(read_receipts(backup_log)),
+            "transcripts": lambda: transcript_facts(read_receipts(config.jsonl_backup_log_path)),
+            "watcher": lambda: watcher_fact(config.watcher_health_path),
+            "pause": lambda: pause_sentinel_state(config.pause_sentinel_path, now),
+            "drain": lambda: json.loads(config.drain_health_path.expanduser().read_text(encoding="utf-8")),
+            "canary": lambda: store_canary_fact(
+                config.store_roundtrip_path or store_roundtrip_path(config.db_path), now, prior.get("store_canary_seen")
+            ),
+            "unvectored": lambda: recent_unvectored(config.db_path, now, deadline),
+            "disk": lambda: disk_fact(config.db_path, staging),
+        },
+        timeout,
+    )
+    backup, transcripts = got["backup"], got["transcripts"]
+    try:
+        drive_events = [
+            backup.drive if backup is not UNOBSERVED else None,
+            transcripts[1] if transcripts is not UNOBSERVED else None,
+        ]
+        drive_auth = drive_auth_fact(config.drive_token_path or resolve_paths()[0], now, drive_events)
+    except Exception:
+        drive_auth = UNOBSERVED
+
+    pause_payload, pause_active, _ = got["pause"] if got["pause"] is not UNOBSERVED else ({}, False, False)
+    paused = lambda label: pause_active and pause_applies_to_label(pause_payload, label)  # noqa: E731
+    drain_paused = paused(config.drain_label)
+    pause_seen = now if drain_paused else _aware(prior.get("drain_paused_seen_at"))
+    drain = got["drain"] if isinstance(got["drain"], dict) else {}
+    try:
+        pending = oldest_pending_store(
+            config.pending_stores_path,
+            None if drain_paused else config.queue_dir,
+            not_before=(_aware(drain.get("last_progress_at")), pause_seen),
+        )
+    except Exception:
+        pending = UNOBSERVED
+    canary, canary_seen = (
+        got["canary"] if got["canary"] is not UNOBSERVED else (UNOBSERVED, prior.get("store_canary_seen"))
+    )
+    stalled_since, embedding_state = embedding_fact(got["unvectored"], prior.get("embedding") or {}, now)
+    free, peak, floor = got["disk"] if got["disk"] is not UNOBSERVED else (UNOBSERVED,) * 3
+    blind, notes, context = classify_issues(result)
+    if drain_paused:
+        context["stores"] = "; ".join(filter(None, ("drain paused by maintenance", context.get("stores"))))
+
+    # Identity and revocation travel with the clocks, so an invalidated copy cannot stay the clock.
+    backup_kwargs = (
+        backup.facts_kwargs()
+        if backup is not UNOBSERVED
+        else dict.fromkeys(("backup_local_verified_at", "backup_offsite_verified_at", "integrity"), UNOBSERVED)
+    )
+    facts = Facts(
+        now=now,
+        **backup_kwargs,
+        transcripts_verified_at=transcripts[0] if transcripts is not UNOBSERVED else UNOBSERVED,
+        drive_auth=drive_auth,
+        watcher_updated_at=got["watcher"],
+        ingest_paused=paused(config.watch_label),
+        oldest_pending_store_at=pending,
+        store_canary_ok=canary,
+        search_canary_ok=search_canary_fact(result, now),
+        embedding_stalled_since=stalled_since,
+        disk_free_bytes=free,
+        disk_peak_bytes=peak,
+        disk_floor_bytes=floor,
+        blind_codes=blind,
+        notes=notes,
+        check_notes=context,
+    )
+    state = {"store_canary_seen": canary_seen, "embedding": embedding_state, "drain_paused_seen_at": _iso(pause_seen)}
+    return facts, state

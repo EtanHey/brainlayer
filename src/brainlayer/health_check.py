@@ -149,6 +149,14 @@ class HealthCheckConfig:
         default_factory=lambda: Path("~/.local/share/brainlayer/drain-health.json").expanduser()
     )
     t3_health_path: Path | None = None
+    backup_log_path: Path | None = None  # None: backup_daily's own resolution beside the DB
+    backup_staging_dir: Path = field(
+        default_factory=lambda: Path(
+            os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", "~/.local/share/brainlayer/backups")
+        ).expanduser()
+    )
+    drive_token_path: Path | None = None  # None: drive_credentials' own resolution
+    store_roundtrip_path: Path | None = None  # None: store-roundtrip.json beside the DB
     jsonl_backup_log_path: Path = field(
         default_factory=lambda: Path(
             os.environ.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(DEFAULT_JSONL_BACKUP_LOG_PATH))

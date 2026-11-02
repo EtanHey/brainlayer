@@ -168,6 +168,11 @@ class MaintenanceConfig:
     backup_wait_timeout_seconds: float = 2 * 60 * 60
     backup_wait_poll_seconds: float = 30
     backup_reuse_max_age_hours: float = field(default_factory=local_backup_max_age_hours)
+    # Nightly persisted store-then-retrieve (doctor's round trip); its receipt is the verdict's
+    # store canary, so health_check never writes to the database. None = skipped; run_maintenance's
+    # default config (main(), which the maintenance calendar runs) sets doctor's round trip.
+    store_roundtrip_fn: Callable[[Path], tuple[bool, float, str]] | None = None
+    store_roundtrip_path: Path | None = None
 
 
 def run_command(args: Sequence[str], *, check: bool = True, timeout=None) -> subprocess.CompletedProcess[str]:
@@ -1322,7 +1327,8 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
     _assert_running_merged_code((config or MaintenanceConfig()).repo_root)
     if mode not in {"light", "full", "burn"}:
         raise ValueError(f"unsupported maintenance mode: {mode}")
-    config = config or MaintenanceConfig()
+    # The default config is the scheduled run's: it records the nightly store round trip.
+    config = config or MaintenanceConfig(store_roundtrip_fn=_doctor_roundtrip)
     _run_gates(config)
 
     result = MaintenanceResult(mode=mode, dry_run=dry_run)
@@ -1444,9 +1450,13 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
             f"post-maintenance search latency above target: {result.search_latency_ms:.1f}ms > "
             f"{SEARCH_LATENCY_TARGET_MS:.1f}ms"
         )
+    store_roundtrip = (
+        _store_roundtrip(config) if mode in ("light", "full") and config.store_roundtrip_fn is not None else None
+    )
     event = {
         "mode": mode,
         "dry_run": False,
+        "store_roundtrip": store_roundtrip,
         "stale_queue": asdict(result.stale_queue),
         "burn": asdict(result.burn) if result.burn else None,
         "checkpoint": result.checkpoint,
@@ -1469,6 +1479,24 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
         # backup was unavailable and the destructive VACUUM phase was skipped.
         raise backup_abort
     return result
+
+
+def _store_roundtrip(config: MaintenanceConfig) -> dict[str, Any]:
+    """Run one persisted store-then-retrieve and record its receipt; never fails maintenance."""
+    from .health_facts import store_roundtrip_path, write_store_roundtrip_receipt
+
+    try:
+        ok, latency, reason = config.store_roundtrip_fn(config.db_path)
+        path = config.store_roundtrip_path or store_roundtrip_path(config.db_path)
+        return write_store_roundtrip_receipt(path, ok=ok, reason=reason, latency_seconds=latency)
+    except Exception as exc:
+        return {"ok": None, "reason": f"round trip not recorded: {type(exc).__name__}: {exc}"[:500]}
+
+
+def _doctor_roundtrip(db_path: Path) -> tuple[bool, float, str]:
+    from .doctor import DEFAULT_ROUNDTRIP_TIMEOUT_SECONDS, _roundtrip_probe
+
+    return _roundtrip_probe(db_path, DEFAULT_ROUNDTRIP_TIMEOUT_SECONDS)
 
 
 def _result_to_dict(result: MaintenanceResult) -> dict[str, Any]:
