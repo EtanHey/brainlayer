@@ -14,9 +14,17 @@ from brainlayer.vector_store import VectorStore
 
 
 @pytest.mark.parametrize("canonical_kind", ["long-merged", "short", "long-first-merge"])
-@pytest.mark.parametrize("merge_api", ["duplicate", "same-id"])
-def test_duplicate_merge_invalidates_only_when_embedding_input_changes(tmp_path, caplog, canonical_kind, merge_api):
-    from brainlayer.dedupe import _merged_content, merge_duplicate_chunk, merge_existing_chunk_content
+@pytest.mark.parametrize("merge_api", ["duplicate", "same-id", "upsert"])
+def test_duplicate_merge_invalidates_only_when_embedding_input_changes(
+    tmp_path, caplog, monkeypatch, canonical_kind, merge_api
+):
+    from brainlayer.dedupe import (
+        DuplicateHit,
+        _merged_content,
+        compute_dedupe_fields,
+        merge_duplicate_chunk,
+        merge_existing_chunk_content,
+    )
     from brainlayer.embeddings import MAX_PASSAGE_CHARS, embedding_input
 
     original = ("original " * 2000).strip() if canonical_kind != "short" else "short original"
@@ -46,8 +54,23 @@ def test_duplicate_merge_invalidates_only_when_embedding_input_changes(tmp_path,
                     mechanism="simhash",
                     hamming_distance_value=1,
                 )
-            else:
+            elif merge_api == "same-id":
                 changed = merge_existing_chunk_content(store.conn, chunk_id="canonical", incoming=values)
+            else:
+                monkeypatch.setattr(
+                    "brainlayer.vector_store.find_duplicate",
+                    lambda *args, **kwargs: (
+                        DuplicateHit("canonical", "simhash", 1),
+                        compute_dedupe_fields(incoming, values["created_at"]),
+                    ),
+                )
+                changed = (
+                    store.upsert_chunks(
+                        [{**values, "id": "new-original", "metadata": {}, "source_file": "test"}],
+                        [[0.5] * 1024],
+                    )
+                    == 1
+                )
 
         merged, created_at, seen_count = store.conn.execute(
             "SELECT content,created_at,seen_count FROM chunks WHERE id='canonical'"

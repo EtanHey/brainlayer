@@ -60,6 +60,7 @@ from .dedupe import (
     merge_existing_chunk_seen,
     resolve_chunk_id,
 )
+from .embeddings import embedding_input
 from .ingest_guard import reject_recursive_mcp_output
 from .kg_repo import KGMixin
 from .search_repo import SearchMixin
@@ -2643,11 +2644,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 hamming_distance_value=duplicate.hamming_distance,
                                 archive_existing_duplicate=duplicate_row_exists is not None,
                             )
-                            if content_changed:
-                                # Incoming/previous vectors cannot describe the merged body.
-                                # Leave it pending for canonical-content embedding by hotlane.
-                                self._delete_chunk_vector(cursor, duplicate.canonical_chunk_id)
-                            elif embedding is not None:
+                            # The merge owns invalidation by embedding_input. An incoming
+                            # vector describes the original, never a changed merged body.
+                            if not content_changed and embedding is not None:
                                 self._insert_current_chunk_vector(
                                     cursor, duplicate.canonical_chunk_id, chunk["content"], embedding
                                 )
@@ -2699,6 +2698,12 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                         metadata_json = prepared.get("metadata")
                         if not isinstance(metadata_json, str):
                             metadata_json = json.dumps(chunk.get("metadata") or {})
+                        # Plain same-id replacements bypass the merge decision. Compare
+                        # the stored and prepared bodies under this same writer lock.
+                        previous = cursor.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+                        same_embedding_input = previous is not None and embedding_input(previous[0]) == embedding_input(
+                            prepared["content"]
+                        )
                         cursor.execute(
                             f"""
                             INSERT INTO chunks
@@ -2798,7 +2803,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 *([prepared.get("source_class")] if has_source_class else []),
                             ),
                         )
-                        if embedding is None:
+                        if same_embedding_input:
+                            if embedding is not None:
+                                self._insert_current_chunk_vector(cursor, chunk_id, prepared["content"], embedding)
+                        elif embedding is None:
                             self._delete_chunk_vector(cursor, chunk_id)
                         else:
                             self._upsert_chunk_vector(cursor, chunk_id, embedding)

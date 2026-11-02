@@ -24,9 +24,11 @@ logger = logging.getLogger(__name__)
 # Use bge-large-en-v1.5 for high-quality embeddings (1024 dims, 63.5 MTEB score)
 DEFAULT_MODEL = "BAAI/bge-large-en-v1.5"
 EMBEDDING_DIM = 1024  # bge-large dimension
-# BGE reads 512 WordPiece tokens (typically ~2,000 characters). An 8,192-char
-# prefix leaves 4x that usual window while bounding tokenizer work on merged
-# originals. The model still applies its exact token limit after this bound.
+# BGE reads 512 WordPiece tokens (typically ~2,000 characters). This 8,192-char
+# bound covers ordinary text, but sparse-token inputs can be cut sooner: code
+# indented by 32 spaces can span ~11,474 chars in that token window. Safety comes
+# from encoding and comparing this exact prefix, not from covering every token.
+# The model still applies its native token limit after this character bound.
 MAX_PASSAGE_CHARS = 8192
 MAX_QUERY_CHARS = 2000  # generous cap for query strings only (avoids degenerate inputs)
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
