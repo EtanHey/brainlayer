@@ -96,6 +96,8 @@ BACKUP_LOCAL_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS"
 BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
 BACKUP_INVOCATION_ENV = "BRAINLAYER_BACKUP_INVOCATION_ID"
+# Fields supervisor_child.backup_io_policy() measures for the current process (S3).
+_IO_POLICY_KEYS = frozenset({"io_policy", "io_policy_errors", "iopol", "darwin_background", "nice"})
 BACKUP_SQLITE_CHECK_TIMEOUT_ENV = "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS"
 BACKUP_DRIVE_RETENTION_ENV = "BRAINLAYER_BACKUP_DRIVE_RETENTION"
 DRIVE_UPLOAD_DEADLINE_FLOOR_ENV = "BRAINLAYER_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS"
@@ -3515,6 +3517,7 @@ def run_backup(
     remove_local_after_upload: bool = True,
     deadline_monotonic: float | None = None,
     phase: str = "all",
+    io_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if phase not in {"all", "snapshot", "upload"}:
         raise ValueError("backup phase must be all, snapshot, or upload")
@@ -3545,6 +3548,7 @@ def run_backup(
         "retention_deleted": [],
         "local_gzip_retention_deleted": [],
     }
+    result.update(io_policy or {"io_policy": "unknown"})
     invocation = os.environ.get(BACKUP_INVOCATION_ENV, "")
     if re.fullmatch(r"[0-9a-f]{32}", invocation):
         result["backup_invocation_id"] = invocation  # This body runs only after staging-lock admission.
@@ -3572,7 +3576,10 @@ def run_backup(
         if upload:
             get_drive_credentials()
         attempted_at = result["attempted_at"]
-        result.update({k: v for k, v in receipt.items() if k not in {"backup_invocation_id", "drive_auth_probe"}})
+        # The receipt records THIS run's process policy (S3); an earlier run's must not leak in.
+        dropped = {"backup_invocation_id", "drive_auth_probe", *_IO_POLICY_KEYS}
+        result.update({k: v for k, v in receipt.items() if k not in dropped})
+        result.update(io_policy or {"io_policy": "unknown"})
         result.update(status="reused", attempted_at=attempted_at)
         if upload:
             result["drive_auth_probe"] = "ok"
@@ -4013,6 +4020,9 @@ def run_backup(
 
 
 def _run_backup_process(timeout_seconds: int) -> int:
+    from brainlayer.supervisor_child import backup_io_policy
+
+    io_policy = backup_io_policy()
     previous_alarm_handler = None
     previous_alarm_handler = signal.getsignal(signal.SIGALRM)
     previous_term_handler = signal.getsignal(signal.SIGTERM)
@@ -4028,6 +4038,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
 
         def run_phase():
             return run_backup(
+                io_policy=io_policy,
                 deadline_monotonic=run_deadline,
                 phase=os.environ.get("BRAINLAYER_BACKUP_PHASE", "all"),
                 staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
@@ -4066,6 +4077,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
                     "error_type": "BackupStoppedError",
                     "error": _redact_upload_secrets(str(exc)),
                     "stop_signal": signal.Signals(exc.signum).name,
+                    **io_policy,
                 },
             )
         return 128 + exc.signum

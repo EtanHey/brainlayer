@@ -48,6 +48,8 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             if state == "green", source == "verdict" {
                 XCTAssertTrue(snapshot.notices.contains { $0.id == "database.copy" })
                 XCTAssertTrue(snapshot.attention.isEmpty)
+                XCTAssertTrue(BrainBarStatusPopoverController.verdictRows(try XCTUnwrap(snapshot.healthVerdict),
+                    details: snapshot.notices.map(\.text)).map(\.text).contains("Database: no verified copy on record"))
             }
         }
         var legacy = BrainBarStatusSnapshotTests.healthy()
@@ -144,8 +146,10 @@ final class BrainBarHealthVerdictTests: XCTestCase {
     func testVerdictRowHierarchyAndQuietBackupReceipts() throws {
         for state in ["red", "amber", "green"] {
             let health = try XCTUnwrap(badge(state).healthVerdict)
-            let rows = BrainBarStatusPopoverController.verdictRows(health)
-            XCTAssertEqual(rows.last?.state, nil, "Notes are secondary")
+            let rows = BrainBarStatusPopoverController.verdictRows(health, details: ["Database: no verified copy on record"])
+            XCTAssertEqual(rows.last?.state, nil, "Swift diagnostics are secondary")
+            XCTAssertEqual(rows.last?.text, "Database: no verified copy on record")
+            XCTAssertEqual(rows[rows.count - 2].state, nil, "Notes are secondary")
             if state == "green" {
                 XCTAssertTrue(rows.allSatisfy { $0.state == nil })
             } else {
