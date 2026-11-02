@@ -17,7 +17,7 @@ try:
 except ImportError:
     CHROMADB_AVAILABLE = False
 
-from .embeddings import get_embedding_model
+from .embeddings import embedding_input, get_embedding_model
 from .runtime_store import OfflineMigrator, ReadonlyStore, resolve_offline_database_path
 
 logger = logging.getLogger(__name__)
@@ -127,7 +127,7 @@ def migrate_from_chromadb(sqlite_path: Path) -> bool:
 
                     for rb_start in range(0, len(need_reembed), 32):
                         rb_indices = need_reembed[rb_start : rb_start + 32]
-                        rb_texts = [chunks[idx]["content"] for idx in rb_indices]
+                        rb_texts = [embedding_input(chunks[idx]["content"]) for idx in rb_indices]
                         try:
                             rb_embs = embedding_model._load_model().encode(
                                 rb_texts, convert_to_numpy=True, show_progress_bar=False

@@ -6,11 +6,12 @@ characters), so the old cap discarded ~75 % of the model's capacity.
 
 These tests verify:
 1. Content beyond 512 chars is no longer truncated before encode().
-2. encode() is called with the full content for short AND long texts.
+2. Ordinary passages reach encode() intact; oversized inputs use bounded prefixes.
 3. embed_query() caps only at MAX_QUERY_CHARS (not 512 chars).
 4. Timing for long-content embedding is within acceptable range.
 """
 
+import logging
 import time
 from unittest.mock import MagicMock
 
@@ -18,8 +19,10 @@ import numpy as np
 import pytest
 
 from brainlayer.embeddings import (
+    MAX_PASSAGE_CHARS,
     MAX_QUERY_CHARS,
     EmbeddingModel,
+    embedding_input,
 )
 from brainlayer.pipeline.chunk import Chunk
 from brainlayer.pipeline.classify import ContentType
@@ -58,6 +61,31 @@ def test_embedding_progress_callback_exceptions_propagate():
 
 
 # ── Tests ────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("entrypoint", ["embed_chunks", "embed_texts"])
+def test_oversized_passages_bound_encoder_input_and_preserve_originals(entrypoint, caplog):
+    contents = ["short", "x" * MAX_PASSAGE_CHARS, "prefix " * 44000, "א" * 300000]
+    originals = contents.copy()
+    chunks = [_make_chunk(content, str(index)) for index, content in enumerate(contents)]
+    model = EmbeddingModel()
+    model._model = MagicMock()
+    model._model.encode.side_effect = _fake_encode
+
+    with caplog.at_level(logging.INFO, logger="brainlayer.embeddings"):
+        getattr(model, entrypoint)(chunks if entrypoint == "embed_chunks" else contents)
+
+    assert model._model.encode.call_args.args[0] == [text[:MAX_PASSAGE_CHARS] for text in originals]
+    assert contents == originals
+    assert [chunk.content for chunk in chunks] == originals
+    assert sum("truncated=1" in record.message for record in caplog.records) == 2
+
+
+def test_embedding_input_builder_is_deterministic_and_keeps_ordinary_passages(caplog):
+    texts = ["", "word " * 1000, "x" * MAX_PASSAGE_CHARS]
+    assert [embedding_input(text) for text in texts] == texts
+    assert [embedding_input(embedding_input(text)) for text in texts] == texts
+    assert not caplog.records
 
 
 class TestNoCharacterTruncation:
