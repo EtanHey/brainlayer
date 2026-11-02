@@ -39,6 +39,15 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.85] - 2026-11-02
+
+### Supervisor
+- Resource policy follows the keg. On an already-consolidated Mac, `install.sh consolidate` re-derives each component's `Nice`, `LowPriorityIO`, `ProcessType` and `SoftResourceLimits` from the new keg's launchd templates, through a journaled policy-reconcile transition. Before this, `supervisor/jobs.json` kept whatever policy it was first copied with, so plist policy changes never deployed.
+  - Only those four keys change. Commands, environment, paths and schedules stay journal-pinned, and every existing custody check still refuses a manifest change the reconcile did not journal.
+  - A crash at any point leaves the old or the new verifiable state. Recovery restarts the supervisor and requires readiness. A TLA+ model is checked with TLC in CI.
+  - A component with no keg template keeps its pinned policy and is logged. Off macOS, pinned policies are kept, because the templates carry Darwin-only keys (#1607).
+- This delivers 1.5.84's hotlane change (#1604). On the next install, the hotlane's `LowPriorityIO` flips to false, and the supervisor resets the inherited disk-I/O throttle, so a throttled reader no longer holds the SQLite write lock in front of foreground writers.
+
 ## [1.5.84] - 2026-11-02
 
 The pipes rebuild. The BrainBar dot now answers one question, "is my memory at risk, or has a pipe stopped, right now?", from outcomes, not from job events. The rules behind it are model-checked.
