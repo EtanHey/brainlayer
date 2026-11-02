@@ -195,7 +195,7 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             previousIcon = icon
             controller.menuNeedsUpdate(controller.contextMenuForTesting)
             if state != "green" {
-                XCTAssertTrue(controller.contextMenuForTesting.items.contains { $0.title == "Local database backup: Fixture backup age" })
+                XCTAssertTrue(controller.contextMenuForTesting.items.contains { $0.title == "Database snapshot (verified): Fixture backup age" })
             }
             controller.flushStatusReceiptForTesting()
             let url = BrainBarUIStatusReceipt.url(dbPath: root.appendingPathComponent("fixture.db").path, environment: [:])
@@ -209,7 +209,7 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             XCTAssertEqual((json["reasons"] as? [String])?.isEmpty, state == "green")
             if state != "green" {
                 XCTAssertEqual(BrainBarStatusPopoverController.verdictRows(health).map(\.text),
-                    ["Local database backup: Fixture backup age", "Weekly maintenance deferred"])
+                    ["Database snapshot (verified): Fixture backup age", "Weekly maintenance deferred"])
             }
         }
         controller.setBadgeForTesting(.failVisible("Legacy failure"), alertsURL: root.appendingPathComponent("job-alerts.json"))
