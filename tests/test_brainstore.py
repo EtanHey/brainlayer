@@ -503,9 +503,15 @@ class TestStoreMemory:
             project="brainlayer",
         )
 
-        merged_embedding_calls = [call for call in calls if "\n\n2. " in call[0]]
+        canonical_content = (
+            store.conn.cursor().execute("SELECT content FROM chunks WHERE id = ?", (first["id"],)).fetchone()[0]
+        )
         assert second["id"] == first["id"]
-        assert merged_embedding_calls
+        assert " ".join(first_words) in canonical_content
+        assert " ".join(second_words) in canonical_content
+        assert canonical_content not in {" ".join(first_words), " ".join(second_words)}
+        merged_embedding_calls = [call for call in calls if call[0] == canonical_content]
+        assert len(merged_embedding_calls) == 1
         assert all(autocommit for _, autocommit in merged_embedding_calls)
 
 

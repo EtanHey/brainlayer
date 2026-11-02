@@ -401,10 +401,11 @@ def test_b1_failed_store_canary_latches_until_a_successful_round_trip():
     failed = {"oldest_pending_store_at": None, "store_canary_ok": False}
     quiet = {"oldest_pending_store_at": None}  # queue empty, canary not run this tick
     ok = {"oldest_pending_store_at": None, "store_canary_ok": True}
-    steps = [failed] * 3 + [quiet, quiet, ok, quiet, quiet, ok]
+    steps = [failed] * 3 + [quiet, quiet, ok, quiet, quiet, ok, ok]
     seen = [v.check("stores").state for v in _ticks(None, [(NOW + i * 5 * M, f) for i, f in enumerate(steps)])]
     # Reviewer's executed repro was amber, amber, red, red, GREEN: the empty queue cleared a failed canary.
-    assert seen == [hv.AMBER, hv.AMBER, hv.RED, hv.RED, hv.RED, hv.RED, hv.RED, hv.RED, hv.GREEN]
+    # Unobserved ticks interrupt recovery; only the final adjacent successes clear red.
+    assert seen == [hv.AMBER, hv.AMBER] + [hv.RED] * 7 + [hv.GREEN]
 
 
 def test_b1_canary_and_queue_evidence_are_persisted_separately():
@@ -792,3 +793,47 @@ def test_superseded_stall_does_not_return_after_newer_upload_revoked():
 def test_removal_suffix_requires_observed_snapshot_clock(clock):
     check = run(backup_local_verified_at=clock, backup_snapshot_local_removed=True).check("backup_local")
     assert "local copy unavailable" not in check.note
+
+
+@pytest.mark.parametrize(
+    ("check", "bad", "amber"),
+    [
+        ("ingest", {"watcher_updated_at": NOW - H}, {"watcher_updated_at": NOW - 20 * M}),
+        ("stores", {"oldest_pending_store_at": NOW - H}, {"oldest_pending_store_at": NOW - 20 * M}),
+    ],
+)
+def test_f1_hysteresis_red_holds_on_observed_amber(check, bad, amber):
+    prior = None
+    for _ in range(3):
+        prior = run(prior, **bad).state
+    assert prior["checks"][check]["state"] == hv.RED
+    result = run(prior, now=NOW + M, **amber)
+    assert result.check(check).state == hv.RED
+    assert result.state["checks"][check]["good_ticks"] == 0
+
+
+def test_f2_unobserved_fresh_ingest_resets_recovery():
+    red = run(watcher_updated_at=NOW - H)
+    first = run(red.state, now=NOW + M, watcher_updated_at=NOW + M)
+    assert first.state["checks"]["ingest"]["good_ticks"] == 1
+    blind = run(first.state, now=NOW + 2 * M)
+    assert blind.check("ingest").state == hv.RED
+    assert blind.state["checks"]["ingest"]["good_ticks"] == 0
+    next_good = run(blind.state, now=NOW + 3 * M, watcher_updated_at=NOW + 3 * M)
+    assert next_good.check("ingest").state == hv.RED
+    assert run(next_good.state, now=NOW + 4 * M, watcher_updated_at=NOW + 4 * M).check("ingest").state == hv.GREEN
+
+
+def test_f3_graced_stale_ingest_resets_recovery():
+    red = run(watcher_updated_at=NOW - H)
+    first = run(red.state, now=NOW + M, watcher_updated_at=NOW + M)
+    assert first.state["checks"]["ingest"]["good_ticks"] == 1
+    woke = run(first.state, now=NOW + 3 * H, watcher_updated_at=NOW + M)
+    assert woke.check("ingest").state == hv.RED
+    assert woke.state["checks"]["ingest"]["good_ticks"] == 0
+    next_good = run(woke.state, now=NOW + 3 * H + M, watcher_updated_at=NOW + 3 * H + M)
+    assert next_good.check("ingest").state == hv.RED
+    assert (
+        run(next_good.state, now=NOW + 3 * H + 2 * M, watcher_updated_at=NOW + 3 * H + 2 * M).check("ingest").state
+        == hv.GREEN
+    )
