@@ -3637,10 +3637,6 @@ def run_backup(
             if created and local_backup_date(created) == local_backup_date(now) and _local_snapshot_intact(local):
                 return reuse(local)
         if phase == "upload" and local is None:
-            if remote is not None:
-                reuse(remote)
-                result["upload_state"] = "nothing_pending"
-                return result
             nothing_pending = True
             result["upload_state"] = "nothing_pending"
             return result

@@ -102,6 +102,13 @@ def test_r1_remote_reuse_probes_current_drive_consent(same_date, monkeypatch, ph
         raise DriveCredentialError("Drive access expired: Reconnect in BrainBar")
 
     monkeypatch.setattr(backup, "get_drive_credentials", expired)
+    before = lane.log.read_bytes()
+    if phase == "upload":
+        result = backup.run_backup(db_path=lane.db, staging_dir=lane.staging, log_path=lane.log, phase=phase)
+        assert result["upload_state"] == "nothing_pending"
+        assert lane.log.read_bytes() == before
+        assert lane.probes == []
+        return
     with pytest.raises(DriveCredentialError, match="Drive access expired"):
         backup.run_backup(db_path=lane.db, staging_dir=lane.staging, log_path=lane.log, phase=phase)
     assert lane.probes == ["expired"]
@@ -125,7 +132,14 @@ def test_r1_reuse_drive_event_requires_todays_probe(same_date, phase):
         error="Drive access expired: Reconnect in BrainBar",
     )
     backup._append_json_log(lane.log, expired)
+    before = lane.log.read_bytes()
     result = backup.run_backup(db_path=lane.db, staging_dir=lane.staging, log_path=lane.log, phase=phase)
+    if phase == "upload":
+        assert result["upload_state"] == "nothing_pending"
+        assert lane.log.read_bytes() == before
+        assert lane.probes == []
+        assert hv.backup_facts(backup._read_backup_receipts(lane.log)).drive[1] == "consent_needed"
+        return
     assert result["status"] == "reused"
     assert result["snapshot_created_at"] == lane.receipt["snapshot_created_at"]
     facts = hv.backup_facts(backup._read_backup_receipts(lane.log))
@@ -179,7 +193,7 @@ def test_r1_invalidated_local_proof_cannot_satisfy_snapshot(same_date, monkeypat
         ("local", "snapshot", True),
     ],
 )
-def test_same_date_verified_archive_reused(tmp_path, monkeypatch, phase, proof, present):
+def test_same_date_verified_archive_reused(tmp_path, monkeypatch, capsys, phase, proof, present):
     monkeypatch.setenv("HOME", str(tmp_path))
     db = tmp_path / "source.db"
     staging = tmp_path / "backups"
@@ -212,7 +226,8 @@ def test_same_date_verified_archive_reused(tmp_path, monkeypatch, phase, proof, 
     monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_FOLDER", "test-folder")
     monkeypatch.setattr(backup, "_backup_log_path", lambda *a, **kw: log)
-    monkeypatch.setattr(backup, "get_drive_credentials", lambda: object())
+    probes = []
+    monkeypatch.setattr(backup, "get_drive_credentials", lambda: probes.append("credentials") or object())
     monkeypatch.setattr(backup, "create_sqlite_backup_artifact", lambda *a, **kw: pytest.fail("new snapshot"))
     if not present:
         archive.unlink()  # Drive proof also works after normal local reclamation.
@@ -222,8 +237,15 @@ def test_same_date_verified_archive_reused(tmp_path, monkeypatch, phase, proof, 
     monkeypatch.delenv(backup.BACKUP_SUPERVISED_CHILD_ENV, raising=False)
     monkeypatch.setattr(backup, "_supervise_backup_process", backup._run_backup_process)
     monkeypatch.setattr(job_alerts, "report", lambda key, message: alerts.append(message))
+    before = log.read_bytes()
     assert backup.main() == 0
     assert alerts == [None]
+    if phase == "upload":
+        result = json.loads(capsys.readouterr().out.splitlines()[-1])
+        assert result["upload_state"] == "nothing_pending"
+        assert log.read_bytes() == before
+        assert probes == []
+        return
     result = json.loads(log.read_text().splitlines()[-1])
     assert result["status"] == "reused"
     assert result["snapshot"] == str(archive)
