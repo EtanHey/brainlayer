@@ -53,7 +53,7 @@ def test_backup_child_passes_effective_policy_to_receipt(monkeypatch, tmp_path):
     run = Mock(return_value={"verified": False})
     monkeypatch.setattr(backup_daily, "run_backup", run)
     monkeypatch.setenv("BRAINLAYER_BACKUP_PHASE", "snapshot")
-    assert backup_daily._run_backup_process(30) == 0
+    assert backup_daily._run_backup_process(30) == 1
     reset.assert_called_once_with()
     assert run.call_args.kwargs["io_policy"] == effective
     assert run.call_args.kwargs["phase"] == "snapshot"
