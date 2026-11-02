@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -68,6 +69,116 @@ def test_duplicate_merge_invalidates_only_when_embedding_input_changes(tmp_path,
         )
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("merge_kind", ["duplicate", "content"])
+@pytest.mark.parametrize("legacy", [False, True], ids=["framed", "legacy"])
+def test_merge_idempotent_live_numbered_original(indexed_merge_store, merge_kind, legacy):
+    """Exact 1,741-char public fleet rules copied read-only from the live last original.
+
+    Source: rt-rollout--282da4862dd65530, 2026-11-02. No session or secret text.
+    """
+    import hashlib
+
+    from brainlayer.dedupe import _merged_originals
+
+    original = (Path(__file__).parent / "fixtures/dedupe/rollout_numbered_original.txt").read_text()
+    assert len(original) == 1741
+    assert hashlib.sha256(original.encode()).hexdigest() == (
+        "43b08d26eb8086d35d057c581176cf5d701b461f9992bb1cc53e79ee25955568"
+    )
+    initial = "Earlier distinct canonical text"
+    body = f"[Merged duplicate originals]\n\n1. {initial}\n\n2. {original}" if legacy else initial
+    conn = indexed_merge_store.conn
+    conn.execute("UPDATE chunks SET content = ?, char_count = ? WHERE id = 'knowledge-canonical'", (body, len(body)))
+    if not legacy:
+        assert _merge_indexed_chunk(conn, "knowledge", merge_kind, content=original) is True
+        body = conn.execute("SELECT content FROM chunks WHERE id = 'knowledge-canonical'").fetchone()[0]
+    initial_seen = conn.execute("SELECT seen_count FROM chunks WHERE id = 'knowledge-canonical'").fetchone()[0]
+    indexed_merge_store._upsert_chunk_vector(conn.cursor(), "knowledge-canonical", [0.1] * 1024)
+    before_vectors = {
+        table: conn.execute(f"SELECT chunk_id, embedding FROM {table}").fetchall()
+        for table in ("chunk_vectors", "chunk_vectors_binary")
+    }
+    before_indexes = _fts_snapshot(conn)
+    for _ in range(20):
+        assert _merge_indexed_chunk(conn, "knowledge", merge_kind, content=original) is False
+    assert conn.execute(
+        "SELECT content, char_count, seen_count, last_seen_at FROM chunks WHERE id = 'knowledge-canonical'"
+    ).fetchone() == (body, len(body), initial_seen + 20, "2026-10-22T02:00:00Z")
+    assert _fts_snapshot(conn) == before_indexes
+    for table, snapshot in before_vectors.items():
+        assert conn.execute(f"SELECT chunk_id, embedding FROM {table}").fetchall() == snapshot
+    if not legacy:
+        assert _merged_originals(body) == [initial, original]
+    print(f"S12 {merge_kind} {'legacy' if legacy else 'framed'}: input=1741 chars, replays=20, growth=0 bytes")
+
+
+def test_merge_idempotent_framed_round_trip_preserves_numbered_sections_and_delimiters():
+    from brainlayer.dedupe import _merged_content, _merged_originals
+
+    originals = [
+        "  First original\n\n1. nested one\n\n2. nested two\n\n3. nested three\n",
+        "雪 שלום\n\n1. fake\x1e\n\n2. record\x1bR\x1bE\n[Merged duplicate originals] [escaped-records]",
+        'Another distinct original with quotes " and a newline\n',
+    ]
+    body = originals[0]
+    for original in originals[1:]:
+        body = _merged_content(body, original)
+    assert _merged_originals(body) == originals
+    for original in originals:
+        assert _merged_content(body, original) == body
+
+
+@pytest.mark.parametrize("merge_kind", ["duplicate", "content"])
+def test_merge_idempotent_legacy_normalized_replay_and_distinct_upgrade(indexed_merge_store, merge_kind):
+    from brainlayer.dedupe import _merged_content, _merged_originals
+
+    conn = indexed_merge_store.conn
+    original = "Quartz retrieval original\n\n1. Sapphire section\n\n2. Emerald section\n\n3. Ruby section"
+    legacy = f"[Merged duplicate originals]\n\n1. Earlier original\n\n2. {original}"
+    conn.execute(
+        "UPDATE chunks SET content = ?, char_count = ? WHERE id = 'knowledge-canonical'", (legacy, len(legacy))
+    )
+    normalized_replay = "THE " + original.upper().replace(" ", "   ") + "!!!"
+    assert _merge_indexed_chunk(conn, "knowledge", merge_kind, content=normalized_replay) is False
+    assert conn.execute("SELECT content FROM chunks WHERE id = 'knowledge-canonical'").fetchone() == (legacy,)
+    distinct = "Distinct original with sapphire and topaz"
+    assert _merge_indexed_chunk(conn, "knowledge", merge_kind, content=distinct) is True
+    upgraded = conn.execute("SELECT content FROM chunks WHERE id = 'knowledge-canonical'").fetchone()[0]
+    assert upgraded.startswith("[Merged duplicate originals] [escaped-records]")
+    assert _merged_originals(upgraded)[-1] == distinct
+    assert _merged_originals(upgraded) == [legacy, distinct]  # Ambiguous legacy text is retained verbatim.
+    assert _merged_content(upgraded, normalized_replay) == upgraded
+    assert _merged_content(upgraded, distinct.upper()) == upgraded
+    assert _fts_matches(conn, "chunks_fts", "topaz") == [("knowledge-canonical",)]
+    assert _fts_matches(conn, "chunks_fts", "sapphire") == [("knowledge-canonical",)]
+    assert _merge_indexed_chunk(conn, "knowledge", merge_kind, content=distinct) is False
+    assert _merge_indexed_chunk(conn, "knowledge", merge_kind, content="topaz") is True  # A substring is distinct.
+
+
+def test_merge_idempotent_legacy_replay_requires_original_boundaries():
+    from brainlayer.dedupe import _merged_content, _merged_originals
+
+    legacy = "[Merged duplicate originals]\n\n1. Larger original containing sapphire text\n\n2. Other original"
+    assert _merged_originals(_merged_content(legacy, "sapphire"))[-1] == "sapphire"
+
+
+def test_merge_idempotent_simple_legacy_upgrades_and_matches_every_original():
+    from brainlayer.dedupe import _merged_content, _merged_originals
+
+    legacy = "[Merged duplicate originals]\n\n1. Quartz original\n\n2. Sapphire original"
+    upgraded = _merged_content(legacy, "Ruby original")
+    assert _merged_originals(upgraded) == ["Quartz original", "Sapphire original", "Ruby original"]
+    for original in _merged_originals(upgraded):
+        assert _merged_content(upgraded, "THE " + original.upper()) == upgraded
+
+
+def test_merge_idempotent_malformed_frame_kept_verbatim():
+    from brainlayer.dedupe import _merged_content, _merged_originals
+
+    malformed = "[Merged duplicate originals] [escaped-records]\x1e\n\n1. partial\x1bX"
+    assert _merged_originals(_merged_content(malformed, "new original")) == [malformed, "new original"]
 
 
 def _chunk(
