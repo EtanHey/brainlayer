@@ -1107,6 +1107,62 @@ def test_write_embedded_vectors_path_upserts_without_vectorstore_writer_pidfile(
         readonly_store.close()
 
 
+@pytest.mark.parametrize("chunk_count", [1, 2])
+def test_oversized_backlog_drains_in_one_hotlane_pass(tmp_path, caplog, chunk_count):
+    import numpy as np
+
+    from brainlayer.embeddings import MAX_PASSAGE_CHARS, EmbeddingModel
+    from brainlayer.reembed_backfill import count_unvectored_chunks
+    from brainlayer.vector_store import VectorStore
+
+    hotlane = _load_hotlane_module()
+    db_path = tmp_path / "oversized.db"
+    content = "passage " * 38400  # Exactly 300 KiB of stored text per chunk.
+    store = VectorStore(db_path)
+    store.conn.cursor().executemany(
+        "INSERT INTO chunks (id, content, metadata, source_file, source) VALUES (?, ?, '{}', 'test', 'test')",
+        [(f"oversized-{index}", content) for index in range(chunk_count)],
+    )
+    assert count_unvectored_chunks(store) == chunk_count
+    store.close()
+    encoded = []
+
+    class BoundedEncoder:
+        def encode(self, texts, **_kwargs):
+            assert all(len(text) <= MAX_PASSAGE_CHARS for text in texts)
+            encoded.extend(texts)
+            return np.ones((len(texts), 1024), dtype=np.float32)
+
+    model = EmbeddingModel()
+    model._model = BoundedEncoder()
+    with caplog.at_level(logging.INFO, logger="brainlayer.embeddings"):
+        hotlane.run(
+            db_path=db_path,
+            interval=1,
+            recent_limit=0,
+            backlog_interval=30,
+            backlog_batch=4,
+            enrich_interval=0,
+            enrich_limit=0,
+            enrich_since_hours=0,
+            model_factory=lambda **_kwargs: model,
+            max_cycles=1,
+            sleep_fn=lambda _seconds: None,
+            queue_dir=tmp_path / "queue",
+        )
+
+    assert encoded == [content[:MAX_PASSAGE_CHARS]] * chunk_count
+    assert sum("truncated=1" in record.message for record in caplog.records) == chunk_count
+    store = VectorStore(db_path, readonly=True)
+    try:
+        assert count_unvectored_chunks(store) == 0
+        assert list(store.conn.cursor().execute("SELECT content FROM chunks")) == [(content,)] * chunk_count
+        for table in ("chunk_vectors", "chunk_vectors_binary"):
+            assert store.conn.cursor().execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == chunk_count
+    finally:
+        store.close()
+
+
 def test_split_cycle_embeds_all_hot_candidates_before_writer_revalidation(tmp_path):
     hotlane = _load_hotlane_module()
     db_path = tmp_path / "brainlayer.db"

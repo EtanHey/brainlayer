@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import shutil
 import sqlite3
@@ -9,6 +10,87 @@ from brainlayer._helpers import serialize_f32
 from brainlayer.vector_store import VectorStore
 
 # Repair (c): duplicate merge archives via archived_at only.
+
+
+@pytest.mark.parametrize("canonical_kind", ["long-merged", "short", "long-first-merge"])
+@pytest.mark.parametrize("merge_api", ["duplicate", "same-id", "upsert"])
+def test_duplicate_merge_invalidates_only_when_embedding_input_changes(
+    tmp_path, caplog, monkeypatch, canonical_kind, merge_api
+):
+    from brainlayer.dedupe import (
+        DuplicateHit,
+        _merged_content,
+        compute_dedupe_fields,
+        merge_duplicate_chunk,
+        merge_existing_chunk_content,
+    )
+    from brainlayer.embeddings import MAX_PASSAGE_CHARS, embedding_input
+
+    original = ("original " * 2000).strip() if canonical_kind != "short" else "short original"
+    content = _merged_content(original, "earlier distinct original") if canonical_kind == "long-merged" else original
+    incoming = "new distinct near-duplicate original"
+    if canonical_kind != "short":
+        assert len(content) > MAX_PASSAGE_CHARS
+    store = VectorStore(tmp_path / "merge-prefix.db")
+    try:
+        store.conn.execute(
+            "INSERT INTO chunks (id,content,metadata,source_file,created_at) VALUES ('canonical',?,'{}','test',?)",
+            (content, "2026-10-31T00:00:00Z"),
+        )
+        store._upsert_chunk_vector(store.conn.cursor(), "canonical", [0.25] * 1024)
+        vectors_before = {
+            table: store.conn.execute(f"SELECT embedding FROM {table} WHERE chunk_id='canonical'").fetchone()
+            for table in ("chunk_vectors", "chunk_vectors_binary")
+        }
+        with caplog.at_level(logging.INFO, logger="brainlayer.dedupe"):
+            values = {"content": incoming, "created_at": "2026-11-02T00:00:00Z"}
+            if merge_api == "duplicate":
+                changed = merge_duplicate_chunk(
+                    store.conn,
+                    canonical_id="canonical",
+                    duplicate_id="new-original",
+                    incoming=values,
+                    mechanism="simhash",
+                    hamming_distance_value=1,
+                )
+            elif merge_api == "same-id":
+                changed = merge_existing_chunk_content(store.conn, chunk_id="canonical", incoming=values)
+            else:
+                monkeypatch.setattr(
+                    "brainlayer.vector_store.find_duplicate",
+                    lambda *args, **kwargs: (
+                        DuplicateHit("canonical", "simhash", 1),
+                        compute_dedupe_fields(incoming, values["created_at"]),
+                    ),
+                )
+                changed = (
+                    store.upsert_chunks(
+                        [{**values, "id": "new-original", "metadata": {}, "source_file": "test"}],
+                        [[0.5] * 1024],
+                    )
+                    == 1
+                )
+
+        merged, created_at, seen_count = store.conn.execute(
+            "SELECT content,created_at,seen_count FROM chunks WHERE id='canonical'"
+        ).fetchone()
+        assert changed is True
+        assert original in merged and incoming in merged
+        if canonical_kind == "long-merged":
+            assert "earlier distinct original" in merged
+        assert len(merged) > len(content)
+        assert (created_at, seen_count) == ("2026-10-31T00:00:00Z", 2)
+        retained = canonical_kind == "long-merged"
+        assert (embedding_input(content) == embedding_input(merged)) is retained
+        for table, before in vectors_before.items():
+            after = store.conn.execute(f"SELECT embedding FROM {table} WHERE chunk_id='canonical'").fetchone()
+            assert after == (before if retained else None)
+        assert ("skipped_invalidation=1" in caplog.text) is retained
+        assert store.conn.execute("SELECT COUNT(*) FROM dedupe_audit WHERE chunk_id_kept='canonical'").fetchone() == (
+            1,
+        )
+    finally:
+        store.close()
 
 
 def _chunk(

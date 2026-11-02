@@ -3,7 +3,7 @@
   "events": [
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:1 verified snapshot 2026-10-12.db.gz",
+    "evidence": "m1-backup-daily.log:1 newest verified snapshot 2026-10-12.db.gz; local copy removed after Drive verification",
     "known_by": "2026-10-12T08:17:07.410031Z",
     "known_from": "2026-10-12T00:17:07.410031Z",
     "value": "verified",
@@ -11,7 +11,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:2 verified snapshot 2026-10-13.db.gz",
+    "evidence": "m1-backup-daily.log:2 newest verified snapshot 2026-10-13.db.gz; local copy removed after Drive verification",
     "known_by": "2026-10-13T08:17:06.792479Z",
     "known_from": "2026-10-13T00:17:06.792479Z",
     "value": "verified",
@@ -19,7 +19,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:3 verified snapshot 2026-10-14.db.gz",
+    "evidence": "m1-backup-daily.log:3 newest verified snapshot 2026-10-14.db.gz; local copy removed after Drive verification",
     "known_by": "2026-10-14T08:17:06.923615Z",
     "known_from": "2026-10-14T00:17:06.923615Z",
     "value": "verified",
@@ -27,7 +27,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:4 verified snapshot 2026-10-15.db.gz",
+    "evidence": "m1-backup-daily.log:4 newest verified snapshot 2026-10-15.db.gz; local copy removed after Drive verification",
     "known_by": "2026-10-15T12:20:33.349677Z",
     "known_from": "2026-10-15T04:20:33.349677Z",
     "value": "verified",
@@ -35,7 +35,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:8 verified snapshot 2026-10-17.db.gz",
+    "evidence": "m1-backup-daily.log:8 newest verified snapshot 2026-10-17.db.gz; local copy removed after Drive verification",
     "known_by": "2026-10-18T04:19:06.294420Z",
     "known_from": "2026-10-17T20:19:06.294420Z",
     "value": "verified",
@@ -43,7 +43,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:9 verified snapshot 2026-10-18.db.gz",
+    "evidence": "m1-backup-daily.log:9 newest verified snapshot 2026-10-18.db.gz; local copy removed after Drive verification",
     "known_by": "2026-10-18T12:20:24.708392Z",
     "known_from": "2026-10-18T04:20:24.708392Z",
     "value": "verified",
@@ -51,7 +51,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:12 verified snapshot 2026-10-19.db.gz",
+    "evidence": "m1-backup-daily.log:12 newest verified snapshot 2026-10-19.db.gz; local copy removed after Drive verification",
     "known_by": "2026-10-19T08:45:36.055135Z",
     "known_from": "2026-10-19T00:45:36.055135Z",
     "value": "verified",
@@ -59,7 +59,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:13 verified snapshot 2026-10-20.db.gz",
+    "evidence": "m1-backup-daily.log:13 newest verified snapshot 2026-10-20.db.gz",
     "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "verified",
@@ -67,7 +67,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:14 verified snapshot 2026-10-20.db.gz",
+    "evidence": "m1-backup-daily.log:14 newest verified snapshot 2026-10-20.db.gz",
     "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "verified",
@@ -75,7 +75,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:15 verified snapshot 2026-10-20.db.gz",
+    "evidence": "m1-backup-daily.log:15 newest verified snapshot 2026-10-20.db.gz",
     "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "verified",
@@ -83,7 +83,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:16 verified snapshot 2026-10-20.db.gz",
+    "evidence": "m1-backup-daily.log:16 newest verified snapshot 2026-10-20.db.gz",
     "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "verified",
@@ -91,7 +91,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:17 verified snapshot 2026-10-20.db.gz",
+    "evidence": "m1-backup-daily.log:17 newest verified snapshot 2026-10-20.db.gz; local copy removed after Drive verification",
     "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "verified",
@@ -99,7 +99,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:18 verified snapshot 2026-10-21.db.zst",
+    "evidence": "m1-backup-daily.log:18 newest verified snapshot 2026-10-21.db.zst",
     "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "verified",
@@ -107,7 +107,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:19 verified snapshot 2026-10-21.db.zst",
+    "evidence": "m1-backup-daily.log:19 newest verified snapshot 2026-10-21.db.zst",
     "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "verified",
@@ -115,7 +115,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:20 verified snapshot 2026-10-21.db.zst",
+    "evidence": "m1-backup-daily.log:20 newest verified snapshot 2026-10-21.db.zst",
     "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "verified",
@@ -123,7 +123,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:21 verified snapshot 2026-10-21.db.zst",
+    "evidence": "m1-backup-daily.log:21 newest verified snapshot 2026-10-21.db.zst",
     "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "verified",
@@ -131,7 +131,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:22 verified snapshot 2026-10-21.db.zst",
+    "evidence": "m1-backup-daily.log:22 newest verified snapshot 2026-10-21.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "verified",
@@ -139,7 +139,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:23 verified snapshot 2026-10-22.db.zst",
+    "evidence": "m1-backup-daily.log:23 newest verified snapshot 2026-10-22.db.zst",
     "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "verified",
@@ -147,7 +147,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:24 verified snapshot 2026-10-22.db.zst",
+    "evidence": "m1-backup-daily.log:24 newest verified snapshot 2026-10-22.db.zst",
     "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "verified",
@@ -155,7 +155,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:25 verified snapshot 2026-10-22.db.zst",
+    "evidence": "m1-backup-daily.log:25 newest verified snapshot 2026-10-22.db.zst",
     "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "verified",
@@ -163,7 +163,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:26 verified snapshot 2026-10-22.db.zst",
+    "evidence": "m1-backup-daily.log:26 newest verified snapshot 2026-10-22.db.zst",
     "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "verified",
@@ -171,7 +171,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:27 verified snapshot 2026-10-22.db.zst",
+    "evidence": "m1-backup-daily.log:27 newest verified snapshot 2026-10-22.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "verified",
@@ -179,7 +179,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:28 verified snapshot 2026-10-23.db.zst",
+    "evidence": "m1-backup-daily.log:28 newest verified snapshot 2026-10-23.db.zst",
     "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "verified",
@@ -187,7 +187,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:29 verified snapshot 2026-10-23.db.zst",
+    "evidence": "m1-backup-daily.log:29 newest verified snapshot 2026-10-23.db.zst",
     "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "verified",
@@ -195,7 +195,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:30 verified snapshot 2026-10-23.db.zst",
+    "evidence": "m1-backup-daily.log:30 newest verified snapshot 2026-10-23.db.zst",
     "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "verified",
@@ -203,7 +203,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:31 verified snapshot 2026-10-23.db.zst",
+    "evidence": "m1-backup-daily.log:31 newest verified snapshot 2026-10-23.db.zst",
     "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "verified",
@@ -211,7 +211,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:32 verified snapshot 2026-10-23.db.zst",
+    "evidence": "m1-backup-daily.log:32 newest verified snapshot 2026-10-23.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "verified",
@@ -219,7 +219,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:33 verified snapshot 2026-10-24.db.zst",
+    "evidence": "m1-backup-daily.log:33 newest verified snapshot 2026-10-24.db.zst",
     "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "verified",
@@ -227,7 +227,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:34 verified snapshot 2026-10-24.db.zst",
+    "evidence": "m1-backup-daily.log:34 newest verified snapshot 2026-10-24.db.zst",
     "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "verified",
@@ -235,7 +235,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:35 verified snapshot 2026-10-24.db.zst",
+    "evidence": "m1-backup-daily.log:35 newest verified snapshot 2026-10-24.db.zst",
     "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "verified",
@@ -243,7 +243,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:36 verified snapshot 2026-10-24.db.zst",
+    "evidence": "m1-backup-daily.log:36 newest verified snapshot 2026-10-24.db.zst",
     "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "verified",
@@ -251,7 +251,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:37 verified snapshot 2026-10-24.db.zst",
+    "evidence": "m1-backup-daily.log:37 newest verified snapshot 2026-10-24.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "verified",
@@ -259,7 +259,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:38 verified snapshot 2026-10-25.db.zst",
+    "evidence": "m1-backup-daily.log:38 newest verified snapshot 2026-10-25.db.zst",
     "known_by": "2026-10-25T09:45:15.949887Z",
     "known_from": "2026-10-25T01:45:15.949887Z",
     "value": "verified",
@@ -267,7 +267,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:39 verified snapshot 2026-10-25.db.zst",
+    "evidence": "m1-backup-daily.log:39 newest verified snapshot 2026-10-25.db.zst",
     "known_by": "2026-10-25T09:45:15.949887Z",
     "known_from": "2026-10-25T01:45:15.949887Z",
     "value": "verified",
@@ -275,7 +275,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:40 verified snapshot 2026-10-25.db.zst",
+    "evidence": "m1-backup-daily.log:40 newest verified snapshot 2026-10-25.db.zst",
     "known_by": "2026-10-25T10:01:51.685698Z",
     "known_from": "2026-10-25T02:01:51.685698Z",
     "value": "verified",
@@ -283,7 +283,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:41 verified snapshot 2026-10-25.db.zst",
+    "evidence": "m1-backup-daily.log:41 newest verified snapshot 2026-10-25.db.zst",
     "known_by": "2026-10-25T10:01:51.685698Z",
     "known_from": "2026-10-25T02:01:51.685698Z",
     "value": "verified",
@@ -291,7 +291,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:42 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m1-backup-daily.log:42 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-26T10:00:30.012345Z",
     "known_from": "2026-10-26T02:00:30.012345Z",
     "value": "verified",
@@ -299,7 +299,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:43 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m1-backup-daily.log:43 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-26T10:00:30.012345Z",
     "known_from": "2026-10-26T02:00:30.012345Z",
     "value": "verified",
@@ -307,7 +307,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:44 verified snapshot 2026-10-27.db.zst",
+    "evidence": "m1-backup-daily.log:44 newest verified snapshot 2026-10-27.db.zst",
     "known_by": "2026-10-27T10:00:31.392519Z",
     "known_from": "2026-10-27T02:00:31.392519Z",
     "value": "verified",
@@ -315,7 +315,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:45 verified snapshot 2026-10-27.db.zst",
+    "evidence": "m1-backup-daily.log:45 newest verified snapshot 2026-10-27.db.zst",
     "known_by": "2026-10-27T10:00:31.392519Z",
     "known_from": "2026-10-27T02:00:31.392519Z",
     "value": "verified",
@@ -323,7 +323,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:46 verified snapshot 2026-10-29.db.zst",
+    "evidence": "m1-backup-daily.log:46 newest verified snapshot 2026-10-29.db.zst",
     "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "verified",
@@ -331,7 +331,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:47 verified snapshot 2026-10-29.db.zst",
+    "evidence": "m1-backup-daily.log:47 newest verified snapshot 2026-10-29.db.zst",
     "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "verified",
@@ -339,7 +339,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:48 verified snapshot 2026-10-29.db.zst",
+    "evidence": "m1-backup-daily.log:48 newest verified snapshot 2026-10-29.db.zst",
     "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "verified",
@@ -347,7 +347,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:49 verified snapshot 2026-10-29.db.zst",
+    "evidence": "m1-backup-daily.log:49 newest verified snapshot 2026-10-29.db.zst",
     "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "verified",
@@ -355,7 +355,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:53 verified snapshot 2026-10-29.db.zst",
+    "evidence": "m1-backup-daily.log:53 newest verified snapshot 2026-10-29.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "verified",
@@ -363,7 +363,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:58 verified snapshot 2026-10-30.db.zst",
+    "evidence": "m1-backup-daily.log:58 newest verified snapshot 2026-10-30.db.zst",
     "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "verified",
@@ -371,7 +371,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:59 verified snapshot 2026-10-30.db.zst",
+    "evidence": "m1-backup-daily.log:59 newest verified snapshot 2026-10-30.db.zst",
     "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "verified",
@@ -379,7 +379,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:60 verified snapshot 2026-10-30.db.zst",
+    "evidence": "m1-backup-daily.log:60 newest verified snapshot 2026-10-30.db.zst",
     "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "verified",
@@ -387,7 +387,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:61 verified snapshot 2026-10-30.db.zst",
+    "evidence": "m1-backup-daily.log:61 newest verified snapshot 2026-10-30.db.zst",
     "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "verified",
@@ -395,7 +395,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:62 verified snapshot 2026-10-30.db.zst",
+    "evidence": "m1-backup-daily.log:62 newest verified snapshot 2026-10-30.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "verified",
@@ -403,7 +403,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:63 verified snapshot 2026-10-31.db.zst",
+    "evidence": "m1-backup-daily.log:63 newest verified snapshot 2026-10-31.db.zst",
     "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "verified",
@@ -411,7 +411,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:64 verified snapshot 2026-10-31.db.zst",
+    "evidence": "m1-backup-daily.log:64 newest verified snapshot 2026-10-31.db.zst",
     "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "verified",
@@ -419,7 +419,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:65 verified snapshot 2026-10-31.db.zst",
+    "evidence": "m1-backup-daily.log:65 newest verified snapshot 2026-10-31.db.zst",
     "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "verified",
@@ -427,7 +427,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:66 verified snapshot 2026-10-31.db.zst",
+    "evidence": "m1-backup-daily.log:66 newest verified snapshot 2026-10-31.db.zst",
     "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "verified",
@@ -435,7 +435,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:67 verified snapshot 2026-10-31.db.zst",
+    "evidence": "m1-backup-daily.log:67 newest verified snapshot 2026-10-31.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "verified",
@@ -443,7 +443,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:70 verified snapshot 2026-11-02.db.zst",
+    "evidence": "m1-backup-daily.log:70 newest verified snapshot 2026-11-02.db.zst",
     "known_by": "2026-11-02T07:56:17.189845Z",
     "known_from": "2026-11-01T23:56:17.189845Z",
     "value": "verified",
@@ -451,7 +451,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:71 verified snapshot 2026-11-02.db.zst",
+    "evidence": "m1-backup-daily.log:71 newest verified snapshot 2026-11-02.db.zst",
     "known_by": "2026-11-02T07:56:17.189845Z",
     "known_from": "2026-11-01T23:56:17.189845Z",
     "value": "verified",
@@ -459,7 +459,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:72 verified snapshot 2026-11-02.db.zst",
+    "evidence": "m1-backup-daily.log:72 newest verified snapshot 2026-11-02.db.zst",
     "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "verified",
@@ -467,7 +467,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:73 verified snapshot 2026-11-02.db.zst",
+    "evidence": "m1-backup-daily.log:73 newest verified snapshot 2026-11-02.db.zst",
     "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "verified",
@@ -475,7 +475,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:74 verified snapshot 2026-11-02.db.zst",
+    "evidence": "m1-backup-daily.log:74 newest verified snapshot 2026-11-02.db.zst",
     "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "verified",
@@ -483,7 +483,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:75 verified snapshot 2026-11-02.db.zst",
+    "evidence": "m1-backup-daily.log:75 newest verified snapshot 2026-11-02.db.zst",
     "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "verified",
@@ -491,7 +491,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m1-backup-daily.log:76 verified snapshot 2026-11-02.db.zst",
+    "evidence": "m1-backup-daily.log:76 newest verified snapshot 2026-11-02.db.zst; local copy removed after Drive verification",
     "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "verified",
@@ -1331,14 +1331,6 @@
    },
    {
     "check": "integrity",
-    "evidence": "m1-backup-daily.log:50 integrity_check ok",
-    "known_by": "2026-10-25T10:01:51.685698Z",
-    "known_from": "2026-10-25T02:01:51.685698Z",
-    "value": "ok",
-    "value_at": null
-   },
-   {
-    "check": "integrity",
     "evidence": "m1-backup-daily.log:42 quick_check ok",
     "known_by": "2026-10-26T10:00:30.012345Z",
     "known_from": "2026-10-26T02:00:30.012345Z",
@@ -1355,14 +1347,6 @@
    },
    {
     "check": "integrity",
-    "evidence": "m1-backup-daily.log:51 quick_check ok",
-    "known_by": "2026-10-26T10:00:30.012345Z",
-    "known_from": "2026-10-26T02:00:30.012345Z",
-    "value": "ok",
-    "value_at": null
-   },
-   {
-    "check": "integrity",
     "evidence": "m1-backup-daily.log:44 quick_check ok",
     "known_by": "2026-10-27T10:00:31.392519Z",
     "known_from": "2026-10-27T02:00:31.392519Z",
@@ -1372,14 +1356,6 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:45 quick_check ok",
-    "known_by": "2026-10-27T10:00:31.392519Z",
-    "known_from": "2026-10-27T02:00:31.392519Z",
-    "value": "ok",
-    "value_at": null
-   },
-   {
-    "check": "integrity",
-    "evidence": "m1-backup-daily.log:52 quick_check ok",
     "known_by": "2026-10-27T10:00:31.392519Z",
     "known_from": "2026-10-27T02:00:31.392519Z",
     "value": "ok",
@@ -1412,6 +1388,30 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:49 quick_check ok",
+    "known_by": "2026-10-29T10:03:44.836824Z",
+    "known_from": "2026-10-29T02:03:44.836824Z",
+    "value": "ok",
+    "value_at": null
+   },
+   {
+    "check": "integrity",
+    "evidence": "m1-backup-daily.log:50 integrity_check ok",
+    "known_by": "2026-10-29T10:03:44.836824Z",
+    "known_from": "2026-10-29T02:03:44.836824Z",
+    "value": "ok",
+    "value_at": null
+   },
+   {
+    "check": "integrity",
+    "evidence": "m1-backup-daily.log:51 quick_check ok",
+    "known_by": "2026-10-29T10:03:44.836824Z",
+    "known_from": "2026-10-29T02:03:44.836824Z",
+    "value": "ok",
+    "value_at": null
+   },
+   {
+    "check": "integrity",
+    "evidence": "m1-backup-daily.log:52 quick_check ok",
     "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "ok",
@@ -1704,7 +1704,7 @@
   "events": [
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:2 verified snapshot 2026-10-12.db.gz",
+    "evidence": "m4-backup-daily.log:2 newest verified snapshot 2026-10-12.db.gz; local copy removed after Drive verification",
     "known_by": "2026-10-12T18:29:41.153914Z",
     "known_from": "2026-10-12T10:29:41.153914Z",
     "value": "verified",
@@ -1712,7 +1712,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:4 verified snapshot 2026-10-13.db.gz",
+    "evidence": "m4-backup-daily.log:4 newest verified snapshot 2026-10-13.db.gz; local copy removed after Drive verification",
     "known_by": "2026-10-13T09:23:51.476569Z",
     "known_from": "2026-10-13T01:23:51.476569Z",
     "value": "verified",
@@ -1720,7 +1720,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:5 verified snapshot 2026-10-14.db.gz",
+    "evidence": "m4-backup-daily.log:5 newest verified snapshot 2026-10-14.db.gz; local copy removed after Drive verification",
     "known_by": "2026-10-14T08:17:06.639646Z",
     "known_from": "2026-10-14T00:17:06.639646Z",
     "value": "verified",
@@ -1728,7 +1728,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:6 verified snapshot 2026-10-15.db.gz",
+    "evidence": "m4-backup-daily.log:6 newest verified snapshot 2026-10-15.db.gz; local copy removed after Drive verification",
     "known_by": "2026-10-15T08:15:39.246798Z",
     "known_from": "2026-10-15T00:15:39.246798Z",
     "value": "verified",
@@ -1736,7 +1736,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:8 verified snapshot 2026-10-17.db.gz",
+    "evidence": "m4-backup-daily.log:8 newest verified snapshot 2026-10-17.db.gz; local copy removed after Drive verification",
     "known_by": "2026-10-17T08:23:04.907038Z",
     "known_from": "2026-10-17T00:23:04.907038Z",
     "value": "verified",
@@ -1744,7 +1744,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:14 verified snapshot 2026-10-21.db.zst",
+    "evidence": "m4-backup-daily.log:14 newest verified snapshot 2026-10-21.db.zst",
     "known_by": "2026-10-21T08:45:11.640789Z",
     "known_from": "2026-10-21T00:45:11.640789Z",
     "value": "verified",
@@ -1752,7 +1752,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:15 verified snapshot 2026-10-21.db.zst",
+    "evidence": "m4-backup-daily.log:15 newest verified snapshot 2026-10-21.db.zst",
     "known_by": "2026-10-21T08:45:11.640789Z",
     "known_from": "2026-10-21T00:45:11.640789Z",
     "value": "verified",
@@ -1760,7 +1760,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:16 verified snapshot 2026-10-21.db.zst",
+    "evidence": "m4-backup-daily.log:16 newest verified snapshot 2026-10-21.db.zst",
     "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "verified",
@@ -1768,7 +1768,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:17 verified snapshot 2026-10-21.db.zst",
+    "evidence": "m4-backup-daily.log:17 newest verified snapshot 2026-10-21.db.zst",
     "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "verified",
@@ -1776,7 +1776,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:18 verified snapshot 2026-10-21.db.zst",
+    "evidence": "m4-backup-daily.log:18 newest verified snapshot 2026-10-21.db.zst",
     "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "verified",
@@ -1784,7 +1784,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:19 verified snapshot 2026-10-21.db.zst",
+    "evidence": "m4-backup-daily.log:19 newest verified snapshot 2026-10-21.db.zst",
     "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "verified",
@@ -1792,7 +1792,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:20 verified snapshot 2026-10-21.db.zst",
+    "evidence": "m4-backup-daily.log:20 newest verified snapshot 2026-10-21.db.zst",
     "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "verified",
@@ -1800,7 +1800,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:22 verified snapshot 2026-10-22.db.zst",
+    "evidence": "m4-backup-daily.log:22 newest verified snapshot 2026-10-22.db.zst",
     "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "verified",
@@ -1808,7 +1808,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:23 verified snapshot 2026-10-22.db.zst",
+    "evidence": "m4-backup-daily.log:23 newest verified snapshot 2026-10-22.db.zst",
     "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "verified",
@@ -1816,7 +1816,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:24 verified snapshot 2026-10-22.db.zst",
+    "evidence": "m4-backup-daily.log:24 newest verified snapshot 2026-10-22.db.zst",
     "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "verified",
@@ -1824,7 +1824,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:25 verified snapshot 2026-10-22.db.zst",
+    "evidence": "m4-backup-daily.log:25 newest verified snapshot 2026-10-22.db.zst",
     "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "verified",
@@ -1832,7 +1832,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:26 verified snapshot 2026-10-22.db.zst",
+    "evidence": "m4-backup-daily.log:26 newest verified snapshot 2026-10-22.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "verified",
@@ -1840,7 +1840,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:27 verified snapshot 2026-10-23.db.zst",
+    "evidence": "m4-backup-daily.log:27 newest verified snapshot 2026-10-23.db.zst",
     "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "verified",
@@ -1848,7 +1848,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:28 verified snapshot 2026-10-23.db.zst",
+    "evidence": "m4-backup-daily.log:28 newest verified snapshot 2026-10-23.db.zst",
     "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "verified",
@@ -1856,7 +1856,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:29 verified snapshot 2026-10-23.db.zst",
+    "evidence": "m4-backup-daily.log:29 newest verified snapshot 2026-10-23.db.zst",
     "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "verified",
@@ -1864,7 +1864,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:30 verified snapshot 2026-10-23.db.zst",
+    "evidence": "m4-backup-daily.log:30 newest verified snapshot 2026-10-23.db.zst",
     "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "verified",
@@ -1872,7 +1872,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:31 verified snapshot 2026-10-23.db.zst",
+    "evidence": "m4-backup-daily.log:31 newest verified snapshot 2026-10-23.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "verified",
@@ -1880,7 +1880,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:32 verified snapshot 2026-10-24.db.zst",
+    "evidence": "m4-backup-daily.log:32 newest verified snapshot 2026-10-24.db.zst",
     "known_by": "2026-10-24T09:14:59.421349Z",
     "known_from": "2026-10-24T01:14:59.421349Z",
     "value": "verified",
@@ -1888,7 +1888,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:33 verified snapshot 2026-10-24.db.zst",
+    "evidence": "m4-backup-daily.log:33 newest verified snapshot 2026-10-24.db.zst",
     "known_by": "2026-10-24T09:14:59.421349Z",
     "known_from": "2026-10-24T01:14:59.421349Z",
     "value": "verified",
@@ -1896,7 +1896,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:34 verified snapshot 2026-10-24.db.zst",
+    "evidence": "m4-backup-daily.log:34 newest verified snapshot 2026-10-24.db.zst",
     "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "verified",
@@ -1904,7 +1904,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:35 verified snapshot 2026-10-24.db.zst",
+    "evidence": "m4-backup-daily.log:35 newest verified snapshot 2026-10-24.db.zst",
     "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "verified",
@@ -1912,7 +1912,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:36 verified snapshot 2026-10-24.db.zst",
+    "evidence": "m4-backup-daily.log:36 newest verified snapshot 2026-10-24.db.zst",
     "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "verified",
@@ -1920,7 +1920,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:37 verified snapshot 2026-10-24.db.zst",
+    "evidence": "m4-backup-daily.log:37 newest verified snapshot 2026-10-24.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "verified",
@@ -1928,7 +1928,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:40 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:40 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-26T16:30:02.645488Z",
     "known_from": "2026-10-26T08:30:02.645488Z",
     "value": "verified",
@@ -1936,7 +1936,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:41 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:41 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-26T16:30:02.645488Z",
     "known_from": "2026-10-26T08:30:02.645488Z",
     "value": "verified",
@@ -1944,7 +1944,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:42 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:42 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "verified",
@@ -1952,7 +1952,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:43 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:43 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "verified",
@@ -1960,7 +1960,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:44 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:44 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "verified",
@@ -1968,7 +1968,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:45 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:45 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "verified",
@@ -1976,7 +1976,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:46 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:46 newest verified snapshot 2026-10-26.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "verified",
@@ -1984,7 +1984,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:47 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:47 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-26T23:52:36.705498Z",
     "known_from": "2026-10-26T15:52:36.705498Z",
     "value": "verified",
@@ -1992,7 +1992,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:48 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:48 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-26T23:52:36.705498Z",
     "known_from": "2026-10-26T15:52:36.705498Z",
     "value": "verified",
@@ -2000,7 +2000,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:49 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:49 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "verified",
@@ -2008,7 +2008,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:50 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:50 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "verified",
@@ -2016,7 +2016,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:51 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:51 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "verified",
@@ -2024,7 +2024,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:52 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:52 newest verified snapshot 2026-10-26.db.zst",
     "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "verified",
@@ -2032,7 +2032,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:53 verified snapshot 2026-10-26.db.zst",
+    "evidence": "m4-backup-daily.log:53 newest verified snapshot 2026-10-26.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "verified",
@@ -2040,7 +2040,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:55 verified snapshot 2026-10-27.db.zst",
+    "evidence": "m4-backup-daily.log:55 newest verified snapshot 2026-10-27.db.zst",
     "known_by": "2026-10-27T12:46:58.500008Z",
     "known_from": "2026-10-27T04:46:58.500008Z",
     "value": "verified",
@@ -2048,7 +2048,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:56 verified snapshot 2026-10-27.db.zst",
+    "evidence": "m4-backup-daily.log:56 newest verified snapshot 2026-10-27.db.zst",
     "known_by": "2026-10-27T12:46:58.500008Z",
     "known_from": "2026-10-27T04:46:58.500008Z",
     "value": "verified",
@@ -2056,7 +2056,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:57 verified snapshot 2026-10-27.db.zst",
+    "evidence": "m4-backup-daily.log:57 newest verified snapshot 2026-10-27.db.zst",
     "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "verified",
@@ -2064,7 +2064,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:58 verified snapshot 2026-10-27.db.zst",
+    "evidence": "m4-backup-daily.log:58 newest verified snapshot 2026-10-27.db.zst",
     "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "verified",
@@ -2072,7 +2072,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:59 verified snapshot 2026-10-27.db.zst",
+    "evidence": "m4-backup-daily.log:59 newest verified snapshot 2026-10-27.db.zst",
     "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "verified",
@@ -2080,7 +2080,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:60 verified snapshot 2026-10-27.db.zst",
+    "evidence": "m4-backup-daily.log:60 newest verified snapshot 2026-10-27.db.zst",
     "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "verified",
@@ -2088,7 +2088,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:61 verified snapshot 2026-10-27.db.zst",
+    "evidence": "m4-backup-daily.log:61 newest verified snapshot 2026-10-27.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "verified",
@@ -2096,7 +2096,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:62 verified snapshot 2026-10-28.db.zst",
+    "evidence": "m4-backup-daily.log:62 newest verified snapshot 2026-10-28.db.zst",
     "known_by": "2026-10-28T09:44:46.517628Z",
     "known_from": "2026-10-28T01:44:46.517628Z",
     "value": "verified",
@@ -2104,7 +2104,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:63 verified snapshot 2026-10-28.db.zst",
+    "evidence": "m4-backup-daily.log:63 newest verified snapshot 2026-10-28.db.zst",
     "known_by": "2026-10-28T09:44:46.517628Z",
     "known_from": "2026-10-28T01:44:46.517628Z",
     "value": "verified",
@@ -2112,7 +2112,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:64 verified snapshot 2026-10-28.db.zst",
+    "evidence": "m4-backup-daily.log:64 newest verified snapshot 2026-10-28.db.zst",
     "known_by": "2026-10-28T11:27:22.804557Z",
     "known_from": "2026-10-28T03:27:22.804557Z",
     "value": "verified",
@@ -2120,7 +2120,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:65 verified snapshot 2026-10-28.db.zst",
+    "evidence": "m4-backup-daily.log:65 newest verified snapshot 2026-10-28.db.zst",
     "known_by": "2026-10-28T11:27:22.804557Z",
     "known_from": "2026-10-28T03:27:22.804557Z",
     "value": "verified",
@@ -2128,7 +2128,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:66 verified snapshot 2026-10-28.db.zst",
+    "evidence": "m4-backup-daily.log:66 newest verified snapshot 2026-10-28.db.zst",
     "known_by": "2026-10-28T11:27:22.804557Z",
     "known_from": "2026-10-28T03:27:22.804557Z",
     "value": "verified",
@@ -2136,7 +2136,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:67 verified snapshot 2026-10-28.db.zst",
+    "evidence": "m4-backup-daily.log:67 newest verified snapshot 2026-10-28.db.zst",
     "known_by": "2026-10-28T11:27:22.804557Z",
     "known_from": "2026-10-28T03:27:22.804557Z",
     "value": "verified",
@@ -2144,7 +2144,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:68 verified snapshot 2026-10-28.db.zst",
+    "evidence": "m4-backup-daily.log:68 newest verified snapshot 2026-10-28.db.zst",
     "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "verified",
@@ -2152,7 +2152,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:69 verified snapshot 2026-10-28.db.zst",
+    "evidence": "m4-backup-daily.log:69 newest verified snapshot 2026-10-28.db.zst",
     "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "verified",
@@ -2160,7 +2160,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:70 verified snapshot 2026-10-28.db.zst",
+    "evidence": "m4-backup-daily.log:70 newest verified snapshot 2026-10-28.db.zst",
     "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "verified",
@@ -2168,7 +2168,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:71 verified snapshot 2026-10-28.db.zst",
+    "evidence": "m4-backup-daily.log:71 newest verified snapshot 2026-10-28.db.zst",
     "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "verified",
@@ -2176,7 +2176,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:73 verified snapshot 2026-10-29.db.zst",
+    "evidence": "m4-backup-daily.log:73 newest verified snapshot 2026-10-29.db.zst",
     "known_by": "2026-10-29T09:44:49.422902Z",
     "known_from": "2026-10-29T01:44:49.422902Z",
     "value": "verified",
@@ -2184,7 +2184,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:74 verified snapshot 2026-10-29.db.zst",
+    "evidence": "m4-backup-daily.log:74 newest verified snapshot 2026-10-29.db.zst",
     "known_by": "2026-10-29T09:44:49.422902Z",
     "known_from": "2026-10-29T01:44:49.422902Z",
     "value": "verified",
@@ -2192,7 +2192,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:75 verified snapshot 2026-10-29.db.zst",
+    "evidence": "m4-backup-daily.log:75 newest verified snapshot 2026-10-29.db.zst",
     "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "verified",
@@ -2200,7 +2200,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:76 verified snapshot 2026-10-29.db.zst",
+    "evidence": "m4-backup-daily.log:76 newest verified snapshot 2026-10-29.db.zst",
     "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "verified",
@@ -2208,7 +2208,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:77 verified snapshot 2026-10-29.db.zst",
+    "evidence": "m4-backup-daily.log:77 newest verified snapshot 2026-10-29.db.zst",
     "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "verified",
@@ -2216,7 +2216,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:78 verified snapshot 2026-10-29.db.zst",
+    "evidence": "m4-backup-daily.log:78 newest verified snapshot 2026-10-29.db.zst",
     "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "verified",
@@ -2224,7 +2224,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:79 verified snapshot 2026-10-29.db.zst",
+    "evidence": "m4-backup-daily.log:79 newest verified snapshot 2026-10-29.db.zst",
     "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "verified",
@@ -2232,7 +2232,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:81 verified snapshot 2026-10-30.db.zst",
+    "evidence": "m4-backup-daily.log:81 newest verified snapshot 2026-10-30.db.zst",
     "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "verified",
@@ -2240,7 +2240,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:82 verified snapshot 2026-10-30.db.zst",
+    "evidence": "m4-backup-daily.log:82 newest verified snapshot 2026-10-30.db.zst",
     "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "verified",
@@ -2248,7 +2248,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:83 verified snapshot 2026-10-30.db.zst",
+    "evidence": "m4-backup-daily.log:83 newest verified snapshot 2026-10-30.db.zst",
     "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "verified",
@@ -2256,7 +2256,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:84 verified snapshot 2026-10-30.db.zst",
+    "evidence": "m4-backup-daily.log:84 newest verified snapshot 2026-10-30.db.zst",
     "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "verified",
@@ -2264,7 +2264,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:85 verified snapshot 2026-10-30.db.zst",
+    "evidence": "m4-backup-daily.log:85 newest verified snapshot 2026-10-30.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "verified",
@@ -2272,7 +2272,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:87 verified snapshot 2026-10-31.db.zst",
+    "evidence": "m4-backup-daily.log:87 newest verified snapshot 2026-10-31.db.zst",
     "known_by": "2026-10-31T18:20:35.217257Z",
     "known_from": "2026-10-31T10:20:35.217257Z",
     "value": "verified",
@@ -2280,7 +2280,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:88 verified snapshot 2026-10-31.db.zst",
+    "evidence": "m4-backup-daily.log:88 newest verified snapshot 2026-10-31.db.zst",
     "known_by": "2026-10-31T18:20:35.217257Z",
     "known_from": "2026-10-31T10:20:35.217257Z",
     "value": "verified",
@@ -2288,7 +2288,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:89 verified snapshot 2026-10-31.db.zst",
+    "evidence": "m4-backup-daily.log:89 newest verified snapshot 2026-10-31.db.zst",
     "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "verified",
@@ -2296,7 +2296,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:90 verified snapshot 2026-10-31.db.zst",
+    "evidence": "m4-backup-daily.log:90 newest verified snapshot 2026-10-31.db.zst",
     "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "verified",
@@ -2304,7 +2304,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:91 verified snapshot 2026-10-31.db.zst",
+    "evidence": "m4-backup-daily.log:91 newest verified snapshot 2026-10-31.db.zst",
     "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "verified",
@@ -2312,7 +2312,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:92 verified snapshot 2026-10-31.db.zst",
+    "evidence": "m4-backup-daily.log:92 newest verified snapshot 2026-10-31.db.zst",
     "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "verified",
@@ -2320,7 +2320,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:93 verified snapshot 2026-10-31.db.zst",
+    "evidence": "m4-backup-daily.log:93 newest verified snapshot 2026-10-31.db.zst; local copy removed after Drive verification",
     "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "verified",
@@ -2328,7 +2328,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:95 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:95 newest verified snapshot 2026-11-01.db.zst",
     "known_by": "2026-11-01T12:35:35.021591Z",
     "known_from": "2026-11-01T04:35:35.021591Z",
     "value": "verified",
@@ -2336,7 +2336,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:96 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:96 newest verified snapshot 2026-11-01.db.zst",
     "known_by": "2026-11-01T12:35:35.021591Z",
     "known_from": "2026-11-01T04:35:35.021591Z",
     "value": "verified",
@@ -2344,7 +2344,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:97 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:97 newest verified snapshot 2026-11-01.db.zst",
     "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "verified",
@@ -2352,7 +2352,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:98 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:98 newest verified snapshot 2026-11-01.db.zst",
     "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "verified",
@@ -2360,7 +2360,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:99 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:99 newest verified snapshot 2026-11-01.db.zst",
     "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "verified",
@@ -2368,7 +2368,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:100 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:100 newest verified snapshot 2026-11-01.db.zst",
     "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "verified",
@@ -2376,7 +2376,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:101 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:101 newest verified snapshot 2026-11-01.db.zst; local copy removed after Drive verification",
     "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "verified",
@@ -2384,7 +2384,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:102 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:102 newest verified snapshot 2026-11-01.db.zst",
     "known_by": "2026-11-02T01:00:09.510517Z",
     "known_from": "2026-11-01T17:00:09.510517Z",
     "value": "verified",
@@ -2392,7 +2392,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:103 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:103 newest verified snapshot 2026-11-01.db.zst",
     "known_by": "2026-11-02T01:00:09.510517Z",
     "known_from": "2026-11-01T17:00:09.510517Z",
     "value": "verified",
@@ -2400,7 +2400,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:104 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:104 newest verified snapshot 2026-11-01.db.zst",
     "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "verified",
@@ -2408,7 +2408,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:105 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:105 newest verified snapshot 2026-11-01.db.zst",
     "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "verified",
@@ -2416,7 +2416,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:106 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:106 newest verified snapshot 2026-11-01.db.zst",
     "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "verified",
@@ -2424,7 +2424,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:107 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:107 newest verified snapshot 2026-11-01.db.zst",
     "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "verified",
@@ -2432,7 +2432,7 @@
    },
    {
     "check": "backup_local",
-    "evidence": "m4-backup-daily.log:108 verified snapshot 2026-11-01.db.zst",
+    "evidence": "m4-backup-daily.log:108 newest verified snapshot 2026-11-01.db.zst; local copy removed after Drive verification",
     "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "verified",

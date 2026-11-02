@@ -40,6 +40,46 @@ def _is_insert_chunk_statement(statement: str) -> bool:
     return "INSERT INTO CHUNKS" in " ".join(statement.upper().split())
 
 
+@pytest.mark.parametrize("prefix_changed", [False, True], ids=["suffix-only", "prefix-change"])
+@pytest.mark.parametrize("provide_embedding", [False, True], ids=["deferred", "fresh-vector"])
+@pytest.mark.parametrize("allow_duplicate", [False, True], ids=["ordinary", "t3"])
+def test_same_id_content_update_invalidates_only_changed_embedding_input(
+    isolated_store, prefix_changed, provide_embedding, allow_duplicate
+):
+    from brainlayer.embeddings import MAX_PASSAGE_CHARS, embedding_input
+
+    original = "original passage " * 1000
+    updated = ("changed " + original if prefix_changed else original) + "new suffix"
+    assert len(original) > MAX_PASSAGE_CHARS
+    assert (embedding_input(original) != embedding_input(updated)) is prefix_changed
+    # Same-id rows are excluded by find_duplicate; allow_duplicate also exercises
+    # the T3 route that bypasses duplicate lookup entirely.
+    chunk = {**_chunk("canonical", original), "allow_duplicate": allow_duplicate}
+    isolated_store.upsert_chunks([chunk], [_embedding(1)])
+    tables = ("chunk_vectors", "chunk_vectors_binary")
+    before = {
+        table: isolated_store.conn.execute(f"SELECT embedding FROM {table} WHERE chunk_id='canonical'").fetchone()
+        for table in tables
+    }
+    assert all(before.values())
+
+    isolated_store.upsert_chunks(
+        [{**chunk, "content": updated, "char_count": len(updated)}],
+        [_embedding(-2) if provide_embedding else None],
+    )
+
+    assert isolated_store.conn.execute("SELECT content FROM chunks WHERE id='canonical'").fetchone() == (updated,)
+    assert isolated_store.conn.execute("SELECT COUNT(*) FROM dedupe_audit").fetchone() == (0,)
+    for table in tables:
+        after = isolated_store.conn.execute(f"SELECT embedding FROM {table} WHERE chunk_id='canonical'").fetchone()
+        if not prefix_changed:
+            assert after == before[table]
+        elif provide_embedding:
+            assert after is not None and after != before[table]
+        else:
+            assert after is None
+
+
 def test_upsert_chunks_commits_large_batches_in_bounded_transactions(isolated_store, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_INDEX_TXN_BATCH", "2")
     statements: list[str] = []

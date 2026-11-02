@@ -22,7 +22,9 @@ from brainlayer.badge_state import (
     write_badge_state,
 )
 from brainlayer.health_check import HealthCheckConfig, HealthCheckResult, HealthIssue, run_health_check
+from brainlayer.health_verdict import CHECK_ORDER
 from brainlayer.job_lifecycle_health import JobTick
+from tests.verdict_evidence import write_evidence
 
 FIXTURE = Path(__file__).parent / "fixtures/badge-state/badge-state-v1.json"
 PENDING_FIXTURE = Path(__file__).parent / "fixtures/badge-state/badge-state-pending-v1.json"
@@ -45,8 +47,30 @@ def _run_minimal_health_check(
     heal: bool = False,
     canary_response: dict | None = None,
     now_fn=lambda: datetime.now(UTC),
+    evidence_at: datetime | None = None,
+    evidence: bool = True,
 ) -> HealthCheckResult:
+    """``evidence`` writes fresh outcome receipts, so only the condition under test can move the dot.
+
+    The outcome sources always resolve inside ``tmp_path``; ``evidence=False`` leaves them as they are.
+    """
     db_path = tmp_path / "brainlayer.db"
+    overrides = {
+        "backup_log_path": tmp_path / "backup-daily.log",
+        "drive_token_path": tmp_path / "drive-tokens.json",
+        "store_roundtrip_path": tmp_path / "store-roundtrip.json",
+        "backup_staging_dir": tmp_path,
+    }
+    if evidence:
+        if not (tmp_path / "backup.log").exists():
+            attempt = {
+                "attempted_at": (evidence_at or datetime.now(UTC)).isoformat(),
+                "status": "no-op",
+                "verified": True,
+            }
+            (tmp_path / "backup.log").write_text(json.dumps(attempt) + "\n")
+        overrides = write_evidence(tmp_path, evidence_at or datetime.now(UTC))
+        overrides.pop("jsonl_backup_log_path")
     with sqlite3.connect(db_path) as connection:
         connection.executescript(
             """
@@ -60,7 +84,8 @@ def _run_minimal_health_check(
                 status TEXT DEFAULT 'active',
                 enriched_at TEXT,
                 enrich_status TEXT,
-                char_count INTEGER
+                char_count INTEGER,
+                created_at TEXT
             );
             CREATE TABLE IF NOT EXISTS chunk_vectors_rowids (id TEXT PRIMARY KEY, chunk_id INTEGER);
             INSERT OR IGNORE INTO chunks (id, content) VALUES ('chunk-1', 'content');
@@ -84,10 +109,10 @@ def _run_minimal_health_check(
             source_jsonl_globs=[],
             queue_dir=tmp_path / "queue",
             offsets_path=tmp_path / "offsets.json",
-            watcher_health_path=tmp_path / "watcher-health.json",
             drain_health_path=tmp_path / "drain-health.json",
             t3_health_path=tmp_path / "t3-health.json",
             jsonl_backup_log_path=tmp_path / "backup.log",
+            **{"watcher_health_path": tmp_path / "watcher-health.json", **overrides},
         ),
         ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4",
         socket_request_fn=lambda *_args: (
@@ -98,7 +123,13 @@ def _run_minimal_health_check(
     )
 
 
-def test_failed_job_heals_reach_unsuppressible_badge_and_incident_log(tmp_path: Path, monkeypatch, caplog) -> None:
+def _blind_alert(document: dict) -> dict:
+    """ "Couldn't look" codes are the monitor check: a warning, never the red dot."""
+    assert document["alerts"]["badge_on"] is False
+    return next(alert for alert in document["alerts"]["active"] if alert["code"] == "outcome_monitor")
+
+
+def test_failed_job_heals_are_a_note_and_reach_incident_log(tmp_path: Path, monkeypatch, caplog) -> None:
     message = "com.brainlayer.watch: crashloop, last exit code 1; 3 heal attempts failed to restore a healthy job"
     monkeypatch.setattr(
         health_check,
@@ -113,12 +144,12 @@ def test_failed_job_heals_reach_unsuppressible_badge_and_incident_log(tmp_path: 
     result = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=tmp_path)
     document = json.loads(badge_path.read_text(encoding="utf-8"))
     assert "job_failure" in [issue.code for issue in result.issues]
-    assert document["alerts"]["active"][-1]["message"] == message
-    assert document["alerts"]["badge_on"] is True
+    assert document["alerts"]["active"][-1] == {"code": "job_failure", "severity": "warning", "message": message}
+    assert document["alerts"]["badge_on"] is False  # Job history is a note; outcomes decide the dot.
     assert "condition=job_failure" in caplog.text and "timestamp=" in caplog.text
 
 
-def test_corrupt_health_state_keeps_badge_on_with_reason(tmp_path: Path, monkeypatch) -> None:
+def test_corrupt_health_state_is_unknown_with_reason_not_red(tmp_path: Path, monkeypatch) -> None:
     scans = []
 
     def scan(*_args, **_kwargs):
@@ -130,7 +161,7 @@ def test_corrupt_health_state_keeps_badge_on_with_reason(tmp_path: Path, monkeyp
     badge_path = tmp_path / "badge-state.json"
     result = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=tmp_path)
     assert any(issue.code == "job_state_unknown" for issue in result.issues)
-    assert json.loads(badge_path.read_text())["alerts"]["badge_on"] is True
+    assert "job_state_unknown" in _blind_alert(json.loads(badge_path.read_text()))["message"]
     assert "state_corrupt" in json.loads((tmp_path / "health-state.json").read_text())
     recovered = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=tmp_path)
     assert all(issue.code != "job_state_unknown" for issue in recovered.issues)
@@ -140,12 +171,12 @@ def test_corrupt_health_state_keeps_badge_on_with_reason(tmp_path: Path, monkeyp
     assert len(scans) == 2
 
 
-def test_non_object_nested_job_state_fails_closed(tmp_path: Path) -> None:
+def test_non_object_nested_job_state_is_reported_unknown(tmp_path: Path) -> None:
     (tmp_path / "health-state.json").write_text('{"job_lifecycle":[]}', encoding="utf-8")
     badge_path = tmp_path / "badge-state.json"
     result = _run_minimal_health_check(tmp_path, badge_path)
     assert any(issue.code == "job_state_unknown" for issue in result.issues)
-    assert json.loads(badge_path.read_text())["alerts"]["badge_on"] is True
+    assert "job_state_unknown" in _blind_alert(json.loads(badge_path.read_text()))["message"]
 
 
 def test_prior_corruption_stays_visible_when_fresh_job_scan_fails(tmp_path: Path, monkeypatch) -> None:
@@ -157,7 +188,8 @@ def test_prior_corruption_stays_visible_when_fresh_job_scan_fails(tmp_path: Path
     badge_path = tmp_path / "badge-state.json"
     result = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=tmp_path)
     assert {issue.code for issue in result.issues} >= {"job_state_unknown", "job_scan_failed"}
-    assert json.loads(badge_path.read_text())["alerts"]["badge_on"] is True
+    message = _blind_alert(json.loads(badge_path.read_text()))["message"]
+    assert "job_scan_failed" in message and "job_state_unknown" in message
     assert json.loads(state_path.read_text())["state_corrupt"] == "prior unreadable state"
 
 
@@ -432,7 +464,22 @@ def test_completed_health_check_publishes_badge_contract(tmp_path: Path) -> None
     result = _run_minimal_health_check(tmp_path, output)
 
     document = json.loads(output.read_text(encoding="utf-8"))
-    assert document == build_badge_state_document(result)
+    assert result.issues == []
+    assert set(document) == {"schema_version", "generated_at", "alerts", "verdict"}
+    assert document["alerts"] == {
+        "state": "measured",
+        "reason": "",
+        "inputs": [],
+        "badge_on": False,
+        "active": [],
+        "suppressed": [],
+    }
+    assert set(document["verdict"]) == {"dot", "checks", "notes", "evaluated_at"}
+    assert document["verdict"]["dot"] == "green" and document["verdict"]["notes"] == []
+    assert [c["name"] for c in document["verdict"]["checks"]] == list(CHECK_ORDER)
+    assert all(
+        set(c) == {"name", "state", "age_s", "threshold_s", "since", "note"} for c in document["verdict"]["checks"]
+    )
 
 
 def test_failed_badge_publish_removes_prior_calm_document(tmp_path: Path, monkeypatch) -> None:
@@ -443,7 +490,7 @@ def test_failed_badge_publish_removes_prior_calm_document(tmp_path: Path, monkey
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr("brainlayer.badge_state.write_badge_state", fail_write)
-    result = _run_minimal_health_check(tmp_path, output)
+    result = _run_minimal_health_check(tmp_path, output, evidence=False)
 
     issue_codes = {issue.code for issue in result.issues}
     assert "jsonl_backup_attempt_missing" in issue_codes
@@ -460,7 +507,7 @@ def test_retired_service_json_codes_are_not_suppressible():
         assert f"`{code}`" in unreleased
 
 
-def test_partial_job_scan_keeps_critical_badge_and_persists_known_heal(tmp_path: Path, monkeypatch):
+def test_partial_job_scan_is_unknown_and_persists_known_heal(tmp_path: Path, monkeypatch):
     import plistlib
 
     from brainlayer.job_lifecycle_health import scan_job_lifecycle
@@ -514,9 +561,69 @@ def test_partial_job_scan_keeps_critical_badge_and_persists_known_heal(tmp_path:
     saved = json.loads(state_path.read_text())["job_lifecycle"]
     assert saved["com.brainlayer.aaa"] == unknown
     assert saved["com.brainlayer.watch"]["attempts"] == 1
-    document = json.loads(badge_path.read_text())
-    assert document["alerts"]["badge_on"] is True
-    assert any(alert["code"] == "job_scan_failed" for alert in document["alerts"]["active"])
+    assert "job_scan_failed" in _blind_alert(json.loads(badge_path.read_text()))["message"]
     assert [args[-1] for args in commands if args[:2] == ["launchctl", "kickstart"]] == [
         f"gui/{os.getuid()}/com.brainlayer.watch"
     ]
+
+
+# --- S1b: the dot is the outcome verdict ---------------------------------------------------
+
+
+def _assert_old_reader_invariant(document: dict) -> None:
+    """BrainBar 1.5.83 reads only the schema-1 envelope: badge_on == any(severity != warning)."""
+    alerts = document["alerts"]
+    assert alerts["badge_on"] == any(a["severity"] != "warning" for a in alerts["active"])
+    assert alerts["badge_on"] == (document["verdict"]["dot"] == "red")
+    assert all(a["severity"] == "warning" for a in alerts["active"] if a["code"].startswith("job_alert_"))
+
+
+def _tick(tmp_path: Path, now: datetime, **kwargs) -> dict:
+    badge_path = tmp_path / "badge-state.json"
+    _run_minimal_health_check(tmp_path, badge_path, now_fn=lambda: now, evidence_at=now, **kwargs)
+    document = json.loads(badge_path.read_text())
+    _assert_old_reader_invariant(document)
+    return document
+
+
+def test_job_alert_beside_fresh_verified_backup_is_a_note_not_the_dot(tmp_path: Path) -> None:
+    now = datetime(2026, 11, 2, 6, tzinfo=UTC)
+    alerts = tmp_path / "job-alerts.json"
+    alerts.write_text(json.dumps({"maintenance-full": "tonight's local verified snapshot unavailable; VACUUM skipped"}))
+    document = _tick(tmp_path, now, job_alert_path=alerts)
+    assert document["alerts"]["badge_on"] is False
+    assert document["verdict"]["dot"] in ("green", "amber")
+    note = {
+        "code": "job_alert_maintenance-full",
+        "message": "tonight's local verified snapshot unavailable; VACUUM skipped",
+    }
+    assert document["verdict"]["notes"] == [note]
+    assert {**note, "severity": "warning"} in document["alerts"]["active"]
+    state = json.loads((tmp_path / "health-state.json").read_text())
+    assert state["verdict"] and state["verdict_collectors"]  # persisted for the next tick
+
+
+def test_backup_older_than_54_hours_lights_the_dot(tmp_path: Path) -> None:
+    now = datetime(2026, 11, 2, 6, tzinfo=UTC)
+    write_evidence(tmp_path, now, backup_age=timedelta(hours=55))  # everything else is fresh
+    (tmp_path / "backup.log").write_text(
+        json.dumps({"attempted_at": now.isoformat(), "status": "no-op", "verified": True})
+    )
+    document = _tick(tmp_path, now, evidence=False)
+    assert document["alerts"]["badge_on"] is True and document["verdict"]["dot"] == "red"
+    check = next(c for c in document["verdict"]["checks"] if c["name"] == "backup_local")
+    assert check["state"] == "red" and check["age_s"] > 54 * 3600
+    assert {"code": "outcome_backup_local", "severity": "critical"}.items() <= document["alerts"]["active"][0].items()
+
+
+def test_collector_failure_is_unknown_and_holds_a_prior_red(tmp_path: Path) -> None:
+    now = datetime(2026, 11, 2, 6, tzinfo=UTC)
+    _tick(tmp_path, now)
+    (tmp_path / "drive-tokens.json").unlink()  # Drive access lost: red
+    first = _tick(tmp_path, now + timedelta(minutes=5), evidence=False)
+    assert first["verdict"]["dot"] == "red"
+    (tmp_path / "drive-tokens.json").write_text("{not json")  # the collector cannot look
+    held = _tick(tmp_path, now + timedelta(minutes=10), evidence=False)
+    drive = next(c for c in held["verdict"]["checks"] if c["name"] == "drive_auth")
+    assert drive["state"] == "red" and "not checked" in drive["note"] and "holds" in drive["note"]
+    assert held["alerts"]["badge_on"] is True
