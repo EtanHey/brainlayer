@@ -8,14 +8,25 @@ case re-runs with `formal/backup-verdict/check.sh --case <name>`, which writes t
 **Replay.** Every `BackupVerdict` counterexample also runs, receipt by receipt and tick by tick,
 through the real `backup_facts()` and `evaluate()` of the named pre-fix commit, then of the
 current tree (`replay.py`). "Reproduces at the pre-fix ref" means the real code reaches the same
-false state, and every tick's backup states equal the model's. `ingest` counterexamples (#1583 B2,
-S1a-5 F1–F3) replay the same way, heartbeat by heartbeat, through the real `evaluate()`. The other
-pipe and dot counterexamples are not replayed (see README, "What is not covered").
+false state, and every tick's backup states equal the model's. Counterexamples on the three stall
+checks (`ingest`, `embedding`, `stores`) replay the same way through the real `evaluate()`, fact by
+fact. That covers #1583 B2, S1a-5 F1–F3 and the renewable-grace bug. A replayed case passes only
+when the pre-fix ref reproduces it **and** agrees on every tick. The current tree must reproduce it
+exactly while the fix is not there (`fixed_here: "no"`). A missing trace, a trace without a tick,
+or a failed replay is an error, never a pass (REV-FTLA1-R1 B2). The `drive_auth` and dot
+counterexamples are not replayed (see README, "What is not covered").
 
-**Conformance.** Beyond the counterexamples, `conform-ingest-*` replay 3,000 random TLC behaviours
-(`-simulate`, depth 60, seed 7; 8,934 ticks) of the `ingest` model through real code. The pre-S1a-5
-model agrees with main 67d23f14 on every tick. The S1a-5 model agrees with the S1a-5 head 4e07651b
-on every tick (0 of 3,000 diverging). Against main, which still lacks the fix, it diverges.
+**Conformance.** Beyond the counterexamples, `conform-*` cases replay 3,000 random TLC behaviours per
+check (`-simulate`, one worker, depth 60, seed 7) through real code. These are the counts per check:
+
+| Model | Code | ingest (8,934 ticks) | embedding (17,955) | stores (11,861) |
+|---|---|---|---|---|
+| main (renewable grace, no S1a-5) | 67d23f14 | 0 diverging | 0 diverging | 0 diverging |
+| S1a-5 (renewable grace) | 4e07651b | 0 diverging | — | — |
+| S1a-5 + S1a-6 (one window per episode) | **8eecb5ee** | **0 diverging** | **0 diverging** | **0 diverging** |
+| S1a-5 + S1a-6 | main 67d23f14 / de545db2 | 218 of 3,000 | 160 of 3,000 | 212 of 3,000 |
+
+Zero trace files, zero parsed ticks, or a file that parses to nothing is an error.
 
 ## Tonight's bugs: each pre-fix switch gives a counterexample
 
@@ -36,6 +47,9 @@ on every tick (0 of 3,000 diverging). Against main, which still lacks the fix, i
 | `bug-1587-B4-backlog-ages-out` | #1587 B4 | RedHoldsUntilEvidence | (pipe model) |
 | `bug-1587-B5-stale-canary-success` | #1587 B5 | RedHoldsUntilEvidence | (pipe model) |
 | `bug-1583-S1-alert-lights-dot` | #1583 S1 | NoStuckAlert | (dot model) |
+| `bug-renewable-grace` | S1a-6 (8eecb5ee) | NoFalseGreenStall | 67d23f14 reproduces → **still on main**; fixed at 8eecb5ee |
+| `bug-renewable-grace-ingest` | S1a-6 (8eecb5ee) | NoFalseGreenStall | 67d23f14 reproduces → **still on main**; fixed at 8eecb5ee |
+| `bug-renewable-grace-stores` | S1a-6 (8eecb5ee) | NoFalseGreenStall | 67d23f14 reproduces → **still on main**; fixed at 8eecb5ee |
 | `bug-s1a5-F1-red-to-amber` | S1a-5 (4e07651b) | RedHoldsUntilEvidence | 67d23f14 reproduces → **still on main**; fixed at 4e07651b |
 | `bug-s1a5-F2-unobserved-tick-keeps-count` | S1a-5 (4e07651b) | RedToGreenNeedsConsecutive | 67d23f14 reproduces → **still on main**; fixed at 4e07651b |
 | `bug-s1a5-F3-graced-stale-keeps-count` | S1a-5 (4e07651b) | RedClearsToGreenOnlyOnEvidence | 67d23f14 reproduces → **still on main**; fixed at 4e07651b |
@@ -117,11 +131,15 @@ Fix (#1595): `if r.state != GREEN: good_ticks = 0` before every branch. The Macr
 Replay at 12b9ddd4 (main before #1596): reproduces. At main 67d23f14: does not.
 
 ### #1596: a deleted superseded stall comes back as the clock
-1. Snapshot 1 is a local-only stall. Snapshot 2 is taken at hour 1.
-2. `_reclaim_superseded_local` deletes snapshot 1 (`upload_state: superseded`). Snapshot 2 is then revoked.
+1. Snapshot 1 is a local-only stall. Snapshot 2 is taken at hour 1, and is uploaded and verified.
+2. That verified upload lets `_reclaim_superseded_local` delete snapshot 1
+   (`upload_state: superseded`); it runs only after a newer verified upload
+   (`backup_daily.py:3209-3211`). Snapshot 2's Drive copy is then revoked (md5 mismatch).
 3. The tick shows `backup_local` **green** on snapshot 1, which was deleted.
 
-Replay at 12b9ddd4: reproduces. At main 67d23f14: does not.
+Replay at 12b9ddd4: reproduces, tick for tick. At main: does not. (REV-FTLA1-R1 noted that R2's
+version superseded without a newer upload, which the producer cannot emit. `Supersede` now requires
+the newer verified upload, and the trace above is producer-reachable.)
 
 ### #1587 B4: an embedding stall clears when its rows age out
 1. The embed backlog stalls at hour 0. At hour 3 it has not shrunk for 3 h: `embedding` red.
@@ -170,6 +188,29 @@ The old module docstring allowed this ("no bad one between"); section 3d's "cons
 3. The watcher restarts. One fresh tick makes 2 of 2: **green**.
 
 This broke the code's own rule as well: an observed bad heartbeat sat between the two good ones. S1a-5's `or r.graced` is the fix.
+
+## Found by review, fixed by S1a-6 (branch fix/wake-grace-once, 8eecb5ee): renewable wake grace
+
+REV-FTLA1-R1 B1 found that the model computed embedding (and pending stores) from the raw clock,
+while the real code routes them through `_stall_age` → `_graced_age`. That path softens the age
+after a monitoring gap, and every later gap renews it. The plan's section 3d wake-grace ruling sets
+one window per stall episode, keyed by the clock value and never renewed. All three stall checks now
+take the real path in the model (`GracedAge`, evidence suppressed while graced). `GraceOnce` mirrors
+S1a-6's persisted `grace_clock` / `grace_started_at` / `grace_until`. New invariant
+**NoFalseGreenStall**: a stall whose true age is past red is non-red only inside one wake window,
+the window of the first resume seen while it was over red.
+
+### `bug-renewable-grace`: the reviewer's trace, green ×5 on a stopped embedder
+Scripted schedule (`TickAt = {0, 1, 3, 5, 7}`, every tick observes the backlog):
+1. Hour 0: the tick sees a clear backlog (green). The backlog stalls at hour 0, and no vector is written after that.
+2. Hour 1: stall age 1 h, green.
+3. Hour 3: true age 3 h, past red (2 h). It is a resume, so grace counts from 3: **green**. The window runs to 6.
+4. Hour 5: another gap, and today's code renews `resumed_at` to 5: **green**.
+5. Hour 7: past the first window, but the next gap renews it again: **green**. NoFalseGreenStall breaks.
+
+Real code at 67d23f14 gives green at all five ticks (tick for tick). At 8eecb5ee the hour-7 tick is
+red. `bug-renewable-grace-ingest` and `-stores` are the same bug on a dead watcher and on a stuck
+pending store (shortest TLC paths); both reproduce at 67d23f14 and not at 8eecb5ee.
 
 ## Design limit and scratch breaks
 

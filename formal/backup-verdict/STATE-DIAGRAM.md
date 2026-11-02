@@ -2,8 +2,9 @@
 
 Every red box sits on a transition TLC walked when a pre-fix switch was on. Each one is labelled
 with the PR that removed it, and its counterexample is in [COUNTEREXAMPLES.md](COUNTEREXAMPLES.md).
-The three `S1a-5` boxes are bugs this model found itself (F1–F3), fixed by S1a-5 (4e07651b, not yet
-on main). Run `formal/backup-verdict/check.sh` to reproduce every box.
+The three `S1a-5` boxes are bugs this model found itself (F1–F3), fixed by S1a-5 (4e07651b). The
+`S1a-6` box is renewable wake grace, found by the R1 review once the model took the real
+`_graced_age` path, and fixed by S1a-6 (8eecb5ee). Neither fix is on main yet. Run `formal/backup-verdict/check.sh` to reproduce every box.
 
 ## 1. Receipts and the snapshot check (`BackupVerdict.tla`)
 
@@ -100,6 +101,12 @@ stateDiagram-v2
     Recovering --> Red: bad, unobserved or graced tick (count resets, #1595, S1a-5)
     Recovering --> Green: observed good tick 2 of 2
     Red --> Red: hysteresis check observes amber (stays red, S1a-5)
+    Green --> Graced: stall past red right after a monitoring gap (one wake window)
+    Graced --> Red: the episode's one window ends (S1a-6, never renewed)
+    Graced --> Green: the stall clears (a new episode)
+    state "S1a-6: every gap renews wake grace on a stopped embedder, stuck store or dead watcher" as s1a6
+    Graced --> s1a6
+    s1a6 --> Graced
     Red --> Green: drive_auth: observed ok. embedding: vectors written
 
     state "#1583 R1 B1: empty queue repays a failed store canary" as b1583b1
@@ -131,7 +138,7 @@ stateDiagram-v2
     Recovering --> f3
     f3 --> Green
 
-    class b1583b1,b1583b2,b1583b4,b1595r,b1587b4,b1587b5,f1,f2,f3 bug
+    class b1583b1,b1583b2,b1583b4,b1595r,b1587b4,b1587b5,f1,f2,f3,s1a6 bug
 ```
 
 ## 4. The dot (`DotTable.tla`, plan §3d)
@@ -166,8 +173,8 @@ stateDiagram-v2
 | `drive_auth` | ok | refresh failed | consent needed | an observed `ok` | `PipeVerdict` Focus=drive |
 | `integrity` | ok | — | corrupt | a clean result | `DotTable` two-state class |
 | `ingest` | fresh | > 10 min | > 30 min | 2 consecutive good ticks, advancing heartbeat | `PipeVerdict` Focus=ingest (S1a-5 F1–F3; conformance vs real code) |
-| `embedding` | progressing | — | not shrinking > 6 h | vectors written | `PipeVerdict` Focus=embedding |
-| `stores` | ≤ 15 min, canary ok | 15–45 min or 1 fail | > 45 min or 3 fails | canary success, then 2 good ticks | `PipeVerdict` Focus=stores |
+| `embedding` | progressing | — | not shrinking > 6 h | vectors written | `PipeVerdict` Focus=embedding (S1a-6 grace; conformance vs real code) |
+| `stores` | ≤ 15 min, canary ok | 15–45 min or 1 fail | > 45 min or 3 fails | canary success, then 2 good ticks | `PipeVerdict` Focus=stores (S1a-6 grace; conformance vs real code) |
 | `search` | ok | 1–2 fails | 3 fails | 2 consecutive good ticks | `DotTable` hysteresis class |
 | `disk` | ≥ peak + 2× floor | < peak + 2× floor | < peak | space recovered | `DotTable` aging class |
 | `monitor` | — | 3+ blind ticks | never | a good observation | `DotTable` MonitorNeverRed |

@@ -1,8 +1,9 @@
 # Backup verdict verification (TLA+)
 
-Status: **all-fixes models pass. Every bug fixed tonight reproduces when its pre-fix switch is on,
-including F1–F3 (`ingest` hysteresis), which this model found and S1a-5 (4e07651b) fixes. Main
-still has F1–F3 until S1a-5 merges.**
+Status: **all-fixes models pass. Every bug fixed tonight reproduces when its pre-fix switch is on.
+That includes F1–F3 (`ingest` hysteresis, found here, fixed by S1a-5 4e07651b) and renewable wake
+grace (found by review R1, fixed by S1a-6 8eecb5ee). Main still has both until #1600 and S1a-6
+merge.**
 
 The promise: the BrainBar dot is red exactly when memory is at risk or a pipe has stopped (plan
 section 3d). The harm when it breaks: a green dot with no restorable backup, or a red dot that
@@ -38,11 +39,13 @@ digest-pinned (sha256 `936a2620…0e88`, the same jar as the local one).
 | Module | Models | Properties |
 |---|---|---|
 | `BackupVerdict.tla` | backup-daily receipts (snapshot, upload, removal after a verified upload, abandoned, superseded, revoked, local-only re-verify), `backup_facts()`, `_verified_age`, `evaluate()` for `backup_local` and `backup_offsite` with wake grace, monitoring gaps, unreadable-log ticks, and the weekly VACUUM gate | `NoFalseGreen`, `RedHoldsUntilEvidence`, `TruthfulSnapshotLabel`, `VacuumNeedsFreshSnapshot`, and `NoFalseGreenStrict` (a documented design limit) |
-| `PipeVerdict.tla` | `evaluate()` for `drive_auth` (latch), `ingest` (heartbeat, wake grace, hysteresis), `stores` (pending queue + latched round-trip canary + hysteresis), `embedding` (anchored stall) | `RedHoldsUntilEvidence` (section 3d's "what clears red"), `RedToGreenNeedsConsecutive`, `RedClearsToGreenOnlyOnEvidence` (the docstring's weaker reading) |
+| `PipeVerdict.tla` | `evaluate()` for `drive_auth` (latch), and for `ingest`, `embedding` and `stores` (pending queue + latched round-trip canary), all three through `_stall_age` → `_graced_age` with wake grace (renewable today, one window per episode under S1a-6), plus hysteresis | `RedHoldsUntilEvidence` (section 3d's "what clears red"), `RedToGreenNeedsConsecutive`, `RedClearsToGreenOnlyOnEvidence` (the docstring's weaker reading) |
 | `DotTable.tla` | the dot over all 11 checks (five behaviour classes), `badge_alerts()`, and the job-alert lifecycle (`maintenance.main` → `job_alerts.report`) | `NoStuckAlert` (a job alert never lights the dot; dot red ⇔ some check red; all green ⇒ dot green), `MonitorNeverRed`, `AlertClears` (liveness: a clean run clears its alert) |
 
 The properties in one sentence each:
 - **NoFalseGreen**: a non-red backup check means a verified copy of its kind still exists within the red age, as far as the last readable receipts show. The only exception is one bounded, non-renewable wake-grace window for the same real copy aging out during a gap.
+- **NoFalseGreenStall**: an ingest heartbeat, embedding stall or pending store whose true age is
+  past red is non-red only inside one wake-grace window, and a later gap never renews it.
 - **RedHoldsUntilEvidence**: a red check leaves red only on the evidence section 3d names (a new verified receipt; an observed Drive `ok`; vectors written; N consecutive good ticks).
 - **TruthfulSnapshotLabel**: the snapshot check never claims a local copy that is gone, and its "local copy removed" note is true when shown.
 - **VacuumNeedsFreshSnapshot**: VACUUM runs only with a verified local snapshot at most 6 h old, and a deferred weekly run (exit 75) never advances `last_weekly`.
@@ -69,7 +72,8 @@ not yet merged is `fixed_here: "no"`, and fails once the fix lands until someone
   Amber and green are both "not red".
 - `PipeVerdict` explores one check's world per config (`Focus`). `evaluate()` couples checks only
   through `ticked_at` / `resumed_at`, which every config keeps. Pending-store amber ages are not
-  modelled, so F1's store variant is checked only through S1a-5's shared rule, not by a trace.
+  modelled through the real `_stall_age` → `_graced_age` path (amber and red ages), as are
+  embedding and ingest.
 - `DotTable` takes each class's state freely from its section 3d columns. How each class gets
   there is checked in the two modules above. `transcripts`, `integrity`, `search` and `disk` are
   covered only at this class level.
@@ -78,8 +82,12 @@ not yet merged is `fixed_here: "no"`, and fails once the fix lands until someone
 
 - The collectors that build `Facts` from files (`health_facts.py`, #1587) are modelled only for
   #1587 B4 and B5, and are not on main. File reads, timeouts and the 4 MiB tail are out of scope.
-- Only `ingest` pipe traces are replayed against code: they carry the tick's observation
-  (`lastObs`). `drive_auth`, `stores`, `embedding` and dot traces are not replayed yet.
+- `ingest`, `embedding` and `stores` traces are replayed against code (they carry each tick's
+  observation, `lastObs`). `drive_auth` and dot traces are not replayed.
+- `Supersede` requires a newer verified upload, as `_reclaim_superseded_local` does. The custody
+  guards and same-local-day / artifact-identity eligibility checks of the producer, and the VACUUM
+  gate's same-local-day check, are not modelled: the receipt reader is checked against a superset
+  of what the producer emits.
 - BrainBar's Swift rendering, the installed app, and real launchd timing.
 
 ## Keeping it in step

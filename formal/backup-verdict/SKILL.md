@@ -56,8 +56,12 @@ shortest path in plain words.
   record it in `COUNTEREXAMPLES.md`, and tell the lead. F1–F3 went this way: found as findings,
   fixed by S1a-5, now `bug-s1a5-*` cases.
 
-When S1a-5 merges, flip `fixed_here` to `"yes"` on the three `bug-s1a5-*` cases, and set
-`conform-ingest-fixed`'s expectation to `"conforms"`. The run fails until you do.
+When #1600 (S1a-5) merges: flip `fixed_here` to `"yes"` on the three `bug-s1a5-*` cases, set
+`conform-ingest-s1a5` to expect `"conforms"`, and move the `health_verdict.py` pin.
+When S1a-6 merges: flip `fixed_here` to `"yes"` on the three `bug-renewable-grace*` cases, set
+`conform-ingest-s1a6`, `conform-embedding-s1a6` and `conform-stores-s1a6` to `"conforms"`, and
+re-pin. The `conform-*-main` cases name 67d23f14 explicitly, so they keep checking the old model
+against the old code. The run fails until each flip is made.
 
 ## 4. Intended behaviour change
 

@@ -80,12 +80,11 @@
         "src/brainlayer/health_verdict.py:273-300 (_graced_age)"
       ],
       "StoresRaw": [
-        "src/brainlayer/health_verdict.py:398-427",
+        "src/brainlayer/health_verdict.py:398-426 (pending via _stall_age, latched canary, evidence = not pending.graced and ...)",
         "src/brainlayer/health_verdict.py:303-316 (_counter, latch)"
       ],
       "EmbRaw": [
-        "src/brainlayer/health_verdict.py:389-397",
-        "src/brainlayer/health_verdict.py:247-270 (_stall_age)"
+        "src/brainlayer/health_verdict.py:389-397 (embedding via _stall_age)"
       ],
       "Hold": [
         "src/brainlayer/health_verdict.py:476-507 (main 67d23f14: ObservedHysteresis=FALSE)",
@@ -97,6 +96,13 @@
       ],
       "VectorsWritten": [
         "src/brainlayer/health_facts.py:264-304 (embedding_window_start anchors the window; embedding_fact)"
+      ],
+      "GracedAge": [
+        "src/brainlayer/health_verdict.py:273-300 (main 67d23f14 _graced_age: renewable resumed_at; GraceOnce=FALSE)",
+        "S1a-6 8eecb5ee health_verdict.py:275-316 (grace_clock/grace_started_at/grace_until, one window per clock value, expired window kept; GraceOnce=TRUE)"
+      ],
+      "StallAge": [
+        "src/brainlayer/health_verdict.py:247-270 (_stall_age)"
       ]
     },
     "DotTable": {
@@ -121,7 +127,9 @@
     "tick": "One evaluate() call reads every fact, then writes the whole persisted state. Facts are read at the tick's hour; receipts appended at the same hour after the tick wait for the next tick.",
     "time": "Integer logical hours. Ordering kept: Grace <= VacAge < RedSnap < RedOff (real 2 h <= 6 h < 54 h < 78 h). Amber age thresholds are not modelled for backups (amber and green are both not red).",
     "canary": "CanaryRed is 2 in the model (3 in production); the latch and owed-repayment logic do not depend on the count.",
-    "focus": "PipeVerdict explores one check's world per config (Focus); evaluate() couples checks only through ticked_at/resumed_at, which every config keeps."
+    "focus": "PipeVerdict explores one check's world per config (Focus); evaluate() couples checks only through ticked_at/resumed_at, which every config keeps.",
+    "grace": "Wake grace for ingest, embedding and pending stores is one action inside the tick (_graced_age). GraceOnce persists the window per check exactly as S1a-6's keep dict: written only on ticks that run _graced_age, so a cleared or unknown clock drops it.",
+    "simulation": "Conformance cases run TLC -simulate with one worker (num is per worker), 3,000 traces, depth 60, seed 7."
   },
   "bounds": {
     "BackupVerdict": {
@@ -130,7 +138,9 @@
       "hours": 6
     },
     "PipeVerdict": {
-      "hours": 7
+      "hours": 7,
+      "checks_per_run": 1,
+      "simulated_traces_per_conformance_case": 3000
     },
     "DotTable": {
       "behaviour_classes": 5,
@@ -142,5 +152,12 @@
     "branch": "fix/verdict-hysteresis-observed",
     "sha": "4e07651b1f3f2ae34ff4817e4065591fdec377d8",
     "note": "not on main; conform-ingest-fixed and bug-s1a5-* run against it with --src-ref 4e07651b"
-  }
+  },
+  "s1a6": {
+    "branch": "fix/wake-grace-once",
+    "sha": "8eecb5ee1ca029cfdaf0da1e9f84a90a16b4afc4",
+    "stacked_on": "4e07651b (S1a-5)",
+    "note": "not on main; conform-*-s1a6, bug-renewable-grace* and bug-s1a5-* run against it with --src-ref 8eecb5ee"
+  },
+  "merged_main": "de545db2 (#1598, test-only; no covered source changed since 67d23f14)"
 }
