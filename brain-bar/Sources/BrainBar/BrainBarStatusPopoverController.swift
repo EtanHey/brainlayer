@@ -133,14 +133,23 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     /// The menu's first row from the shared snapshot (S5).
     nonisolated static func statusLineTitle(for verdict: BrainBarStatusVerdict) -> String {
-        if verdict.isChecking && !verdict.needsAttention && verdict.dotOverride == nil {
-            return "Checking status…"
+        if let dot = verdict.dotOverride {
+            return switch dot {
+            case .red: "Needs attention"
+            case .amber: "Check soon"
+            case .green: "All good"
+            }
         }
-        return switch verdict.dot {
-        case .red: "Needs attention"
-        case .amber: "Check soon"
-        case .green: "All good"
+        if verdict.needsAttention {
+            let reason = verdict.attention.joined(separator: "; ")
+            return statusLineTitle(for: BadgeStatePresentation(badgeOn: true, reason: reason, activeCodes: []))
         }
+        if !verdict.notices.isEmpty {
+            let reason = verdict.notices.joined(separator: "; ")
+            return statusLineTitle(for: BadgeStatePresentation(badgeOn: false, reason: reason, activeCodes: [],
+                                                               activeMessages: verdict.notices))
+        }
+        return verdict.isChecking ? "Checking status…" : "Nothing needs attention"
     }
 
     /// The failing job behind an active job-alert badge code (`job_alert_<key>`), or nil.

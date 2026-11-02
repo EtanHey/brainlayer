@@ -39,6 +39,11 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             let snapshot = BrainBarStatusSnapshot.derive(inputs)
             XCTAssertEqual(snapshot.verdict.dot, expected, "\(state), age \(age)")
             XCTAssertEqual(snapshot.healthVerdict == nil ? "fallback" : "verdict", source)
+            if source == "fallback" {
+                XCTAssertTrue(snapshot.verdict.needsAttention, "An expired or future verdict cannot hide a missing copy")
+                XCTAssertTrue(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict)
+                    .hasPrefix("Needs attention: "), "Fallback keeps the Swift failure headline")
+            }
             if age == 901 { XCTAssertTrue(snapshot.notices.contains { $0.text == "Health check result is 15 min old" }) }
             if state == "green", source == "verdict" {
                 XCTAssertTrue(snapshot.notices.contains { $0.id == "database.copy" })
