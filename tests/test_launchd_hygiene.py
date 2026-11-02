@@ -94,11 +94,16 @@ def test_active_daemon_launchd_hygiene_matrix():
         # Standard, not Background or Adaptive (Etan, 2026-09-24): Background pins the embedder at
         # scheduler priority 4 (~5.6 vectors/min), and Adaptive only leaves Background on XPC activity,
         # which this daemon never has. Nice 10 still yields to foreground work.
+        # LowPriorityIO is explicitly FALSE (S23, 2026-11-02): the hotlane holds the SQLite write
+        # lock while it reads pages, and a throttled reader inside that transaction blocks every
+        # foreground writer (S0 measured 7-14x from darwin I/O throttling). Explicit false, not a
+        # deleted key: supervisor_child.apply_policy resets I/O only when the key is present, and
+        # the supervisor itself runs I/O-throttled, so a missing key would inherit the throttle.
         "scripts/launchd/com.brainlayer.hotlane-brainbar.plist": {
             "ProcessType": "Standard",
             "Nice": 10,
             "ExitTimeOut": 30,
-            "LowPriorityIO": True,
+            "LowPriorityIO": False,
             "KeepAlive": True,
             "ThrottleInterval": 5,
         },

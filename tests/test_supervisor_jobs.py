@@ -340,3 +340,24 @@ def test_successful_control_reap_clears_retry_before_restart(short_path, monkeyp
         assert child.cleanup is None and child.process is replacement
 
     asyncio.run(scenario())
+
+
+def test_hotlane_job_resets_inherited_io_throttle():
+    """S23: the hotlane's supervisor policy carries an explicit LowPriorityIO=False.
+
+    apply_policy resets I/O to IOPOL_DEFAULT only when the key is present, and the supervisor
+    itself runs I/O-throttled, so a missing key would leave the child inheriting the throttle.
+    test_supervisor_child.test_explicit_policy_clears_inherited_io_in_private_child proves the
+    reset in a real child; this pins that the repository plist actually requests it.
+    """
+    import plistlib
+    from pathlib import Path
+
+    from brainlayer.supervisor_jobs import resource_policy
+
+    plist = plistlib.loads(
+        (Path(__file__).resolve().parents[1] / "scripts/launchd/com.brainlayer.hotlane-brainbar.plist").read_bytes()
+    )
+    policy = resource_policy(plist)
+    assert policy["LowPriorityIO"] is False
+    assert policy["ProcessType"] == "Standard"
