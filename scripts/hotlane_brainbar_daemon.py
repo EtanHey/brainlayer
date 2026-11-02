@@ -1200,6 +1200,7 @@ def run(
             if cycle_backlog_batch > 0:
                 last_backlog = now
                 last_backlog_duty = now
+            cycle_start = cpu_sampler.begin_cycle() if cpu_sampler is not None else None
             if cycle_fn is run_cycle:
                 result = _run_split_cycle(
                     db_path=db_path,
@@ -1232,7 +1233,7 @@ def run(
             did_work = bool(result.embedded) or queue_has_backlog
             if cpu_sampler is not None:
                 state = reason or ("running" if result.backlog_encoded else "waiting")
-                cpu_sampler.observe(state, result.backlog_encoded)
+                cpu_sampler.observe(state, result.backlog_encoded, cycle_start=cycle_start)
             if result.embedded:
                 LOGGER.info("embedded=%d", result.embedded)
         except Exception:

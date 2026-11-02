@@ -106,6 +106,12 @@ def test_backlog_drains_without_duplicate_encoding_across_pause_and_load(hotlane
         if i < 6:
             add_hot(i)
 
+    def embed(text):
+        encoded.append(text)
+        clock[0] += 10
+        cpu_clock[0] += 0.5
+        return [0.25] * 1024
+
     add_hot(0)
     hotlane.run(
         db_path=db,
@@ -116,7 +122,7 @@ def test_backlog_drains_without_duplicate_encoding_across_pause_and_load(hotlane
         enrich_interval=0,
         enrich_limit=0,
         enrich_since_hours=0,
-        model_factory=lambda: SimpleNamespace(embed_query=lambda text: encoded.append(text) or [0.25] * 1024),
+        model_factory=lambda: SimpleNamespace(embed_query=embed),
         queue_depth_fn=lambda _: 0,
         high_priority_queue_depth_fn=lambda _: 0,
         time_fn=lambda: 100.0,
@@ -136,7 +142,8 @@ def test_backlog_drains_without_duplicate_encoding_across_pause_and_load(hotlane
         "backlog embedding resumed",
     ]
     payload = json.loads((tmp_path / "hotlane-cpu.json").read_text())
-    assert payload["window_seconds"] == 600 and payload["cpu_percent"] == 5
+    assert payload["window_seconds"] >= 600
+    assert payload["backlog_wall_seconds"] == 40 and payload["backlog_cpu_seconds"] == 2
     assert payload["backlog_encoded"] > 0
     monkeypatch.setattr(ratchet, "ps_sample", lambda _: (("start", "installed"), 30))
     probe = SimpleNamespace(hotlane_cpu_report=None, db_path=db, os_name="Darwin")
@@ -145,7 +152,7 @@ def test_backlog_drains_without_duplicate_encoding_across_pause_and_load(hotlane
     assert ci_ratchet_table.row_hotlane_cpu(probe, {}).status == ci_ratchet_table.NA
 
 
-def test_ratchet_collects_full_ps_window_and_fails_build_row(tmp_path, monkeypatch):
+def test_ratchet_ps_audit_cannot_certify_an_active_backlog_budget(tmp_path, monkeypatch):
     monkeypatch.setattr(ratchet.sys, "platform", "darwin")
     ticks = iter([0, 600])
     samples = iter(range(61))
@@ -161,16 +168,17 @@ def test_ratchet_collects_full_ps_window_and_fails_build_row(tmp_path, monkeypat
     report = tmp_path / "cpu.json"
     report.write_text(json.dumps(ratchet.measure(123, tmp_path / "private.db")))
     status, value = ratchet.read_report(report)
-    assert status == ci_ratchet_table.RED and "70.0%" in value
+    assert status == ci_ratchet_table.NA and "70.0%" in value
+    assert "lacks active backlog CPU/wall timing" in value
     assert (
-        ci_ratchet_table.row_hotlane_cpu(SimpleNamespace(hotlane_cpu_report=report), {}).status == ci_ratchet_table.RED
+        ci_ratchet_table.row_hotlane_cpu(SimpleNamespace(hotlane_cpu_report=report), {}).status == ci_ratchet_table.NA
     )
     monkeypatch.setattr(ratchet, "measure", lambda *_: json.loads(report.read_text()))
     output = tmp_path / "cli.json"
     monkeypatch.setattr(sys, "argv", ["ratchet", "--pid", "123", "--db", "private.db", "--out", str(output)])
-    assert ratchet.main() == 1
+    assert ratchet.main() == 0
     monkeypatch.setenv("BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT", "80")
-    assert ratchet.read_report(report)[0] == ci_ratchet_table.GREEN
+    assert ratchet.read_report(report)[0] == ci_ratchet_table.NA
     payload = json.loads(report.read_text())
     payload["window_seconds"] = 599
     report.write_text(json.dumps(payload))
@@ -249,7 +257,7 @@ def test_high_load_minimum_duty_never_overrides_pause_or_queue_backpressure(
         assert all(c["recent_limit"] == 0 for c in calls)
 
 
-def test_daemon_sampler_rolls_window_and_marks_yielded_work_unmeasured(tmp_path, monkeypatch):
+def test_daemon_sampler_rolls_active_work_without_diluting_it_during_yields(tmp_path, monkeypatch):
     from brainlayer.hotlane_budget import HotlaneCpuSampler
 
     monkeypatch.setattr(sys, "platform", "darwin")
@@ -265,10 +273,11 @@ def test_daemon_sampler_rolls_window_and_marks_yielded_work_unmeasured(tmp_path,
     monkeypatch.setenv("BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT", "60")
     for state in ("pause marker", "high load", "load unavailable", "store queue", "error"):
         sampler.observe(state)
-        assert ratchet.read_report(sampler.path)[0] == ci_ratchet_table.NA
+        # Instantaneous state cannot change the measured active-cycle ratio.
+        assert ratchet.read_report(sampler.path)[0] == ci_ratchet_table.GREEN
     clock[0], cpu[0] = 1200, 600
     sampler.observe("waiting")
-    assert "no observed backlog encoding" in ratchet.read_report(sampler.path)[1]
+    assert "backlog ran 0s, not enough to measure" in ratchet.read_report(sampler.path)[1]
     assert len(sampler.samples) == 2
 
 

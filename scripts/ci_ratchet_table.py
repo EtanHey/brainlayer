@@ -1754,8 +1754,8 @@ def row_hotlane_cpu(probe: Probe, _corpus: dict) -> Row:
         ROW,
         status,
         value,
-        "daemon process CPU-time delta · rolling 600 s · installed Mac",
-        "Default budget 60% of one core; BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT overrides. Measures installed code.",
+        "CPU/wall for backlog-encoding cycles · rolling 600 s · installed Mac",
+        "Default budget 60% of one core; BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT overrides. At least 30s of active backlog cycles required; yielded time excluded. Measures installed code.",
     )
 
 

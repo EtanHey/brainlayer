@@ -85,13 +85,19 @@ beside that database and in the log.
 
 The daemon also writes `hotlane-cpu.json` beside the resolved database. It records a rolling ten-minute
 CPU-time delta, backlog vectors actually encoded, and current running/yield/pause state, with no full-DB scans.
+For the budget, it separately sums `backlog_cpu_seconds` and `backlog_wall_seconds` only around
+completed cycles that encode backlog vectors. Yielded intervals contribute to neither sum;
+only complete cycles wholly within the rolling window are retained.
 The ratchet table automatically reads this file on a Mac and verifies its live installed PID with `ps`.
-`BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT` defaults to 60% of one core and fails the row when exceeded
-with observed backlog encoding. Paused/yielded work, an incomplete window, or no encoding is `n/a`, never GREEN.
+`BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT` defaults to 60% of one core and compares against
+`100 * backlog_cpu_seconds / backlog_wall_seconds`. Less than 30 seconds of active backlog work,
+an incomplete window, or a current pause marker is `n/a`, never GREEN. High load after a minimum-duty
+batch does not dilute its measured CPU rate or invalidate sufficient active evidence.
 The budget is unmeasured until installed; hosted CI cannot produce installed-Mac evidence.
 An optional independent `ps` audit remains available via
 `python scripts/hotlane_cpu_ratchet.py --pid PID --db DB --out REPORT.json` and the table's
-`--hotlane-cpu-report REPORT.json` override.
+`--hotlane-cpu-report REPORT.json` override. A `ps`-only report is diagnostic `n/a` for the budget:
+without active-cycle CPU/wall timing, it cannot certify a pass or an overrun.
 
 ### Privacy
 

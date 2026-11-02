@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROW = "hotlane backlog CPU"
+MIN_BACKLOG_WALL_SECONDS = 30
 
 
 def installed(command):
@@ -98,8 +99,9 @@ def read_report(path):
         # Arrivals can mask a real drain; that is unmeasured, never a guessed pass.
         if not any(after < before for before, after in zip(pending, pending[1:])):
             return "n/a", "n/a — no observed backlog drain; yielded/paused work is not a budget measurement"
-        return ("RED" if cpu > budget else "GREEN"), (
-            f"{cpu:.1f}% / {budget:g}% budget over {window:.1f}s; backlog {pending[0]} → {pending[-1]}"
+        return "n/a", (
+            "n/a — ps audit lacks active backlog CPU/wall timing; "
+            f"process CPU {cpu:.1f}% over {window:.1f}s; backlog {pending[0]} → {pending[-1]}"
         )
     except (OSError, ValueError, KeyError, TypeError) as error:
         return "RED", f"invalid hotlane CPU report: {error}"
@@ -107,6 +109,7 @@ def read_report(path):
 
 def daemon_verdict(payload):
     cpu, window, encoded = payload["cpu_percent"], payload["window_seconds"], payload["backlog_encoded"]
+    backlog_cpu, backlog_wall = payload["backlog_cpu_seconds"], payload["backlog_wall_seconds"]
     budget = float(os.environ.get("BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT", "60"))
     age = (datetime.now(timezone.utc) - datetime.fromisoformat(payload["measured_at"])).total_seconds()
     state = payload["backlog_state"]
@@ -115,8 +118,12 @@ def daemon_verdict(payload):
         or payload["platform"] != "darwin"
         or type(payload["pid"]) is not int
         or payload["pid"] <= 0
-        or not all(type(x) in (int, float) and math.isfinite(x) and x >= 0 for x in (cpu, window, budget))
+        or not all(
+            type(x) in (int, float) and math.isfinite(x) and x >= 0
+            for x in (cpu, window, budget, backlog_cpu, backlog_wall)
+        )
         or type(encoded) is not int
+        or backlog_wall > window
         or encoded < 0
         or not 0 <= age <= 60
         or state
@@ -132,14 +139,16 @@ def daemon_verdict(payload):
         }
     ):
         raise ValueError("invalid or stale daemon CPU evidence")
-    value = f"{cpu:.1f}% / {budget:g}% budget over {window:.1f}s; backlog encoded={encoded}; state={state}"
-    if state in {"high load", "pause marker", "load unavailable", "store queue", "error"}:
-        return "n/a", f"n/a — backlog yielded/paused or unavailable: {value}"
     if window < 600:
-        return "n/a", f"n/a — warming the installed ten-minute window: {value}"
-    if not encoded:
-        return "n/a", f"n/a — no observed backlog encoding: {value}"
-    return ("RED" if cpu > budget else "GREEN"), value
+        return "n/a", f"n/a — warming the installed ten-minute window: {window:g}s"
+    if backlog_wall < MIN_BACKLOG_WALL_SECONDS or not encoded:
+        return (
+            "n/a",
+            f"n/a — backlog ran {backlog_wall:g}s, not enough to measure (minimum {MIN_BACKLOG_WALL_SECONDS}s)",
+        )
+    active_cpu = 100 * backlog_cpu / backlog_wall
+    value = f"{active_cpu:.1f}% / {budget:g}% budget; backlog ran {backlog_wall:g}s in {window:.1f}s; backlog encoded={encoded}; state={state}"
+    return ("RED" if active_cpu > budget else "GREEN"), value
 
 
 def read_live_report(db, os_name):
