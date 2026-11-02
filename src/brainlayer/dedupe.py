@@ -407,31 +407,47 @@ def _latest_timestamp(*values: Any) -> str:
 
 
 _MERGED_MARKER = "[Merged duplicate originals]"
-_MERGED_V2 = _MERGED_MARKER + " [escaped-records]"
 _LEGACY_HEADING_RE = re.compile(r"(?:^|\n\n)(\d+)\. ")
-_ORIGINAL_FRAME_RE = re.compile(r"\n\n(\d+)\. ")
-_RECORD_SEPARATOR = "\x1e"
-_RECORD_ESCAPE = "\x1b"
+_ORIGINAL_NUMBER_RE = re.compile(r"(\d+)\. ")
+# Printable Control Pictures (U+241E, U+241B), never raw control bytes: every
+# reader (previews, snippets, expand, exports, BrainBar) shows the stored body
+# as-is, so the framing must already be readable and terminal-safe.
+_RECORD_SEPARATOR = "␞"
+_RECORD_ESCAPE = "␛"
+_RECORD_BOUNDARY = "\n\n" + _RECORD_SEPARATOR + " "
+_FRAMED_PREFIX = _MERGED_MARKER + _RECORD_BOUNDARY
+
+
+def _is_legacy_merged(content: str) -> bool:
+    return content.startswith(_MERGED_MARKER) and not content.startswith(_FRAMED_PREFIX)
+
+
+def _whitespace_normalized(content: str) -> str:
+    """Identity for "is this original already present?": exact text, whitespace collapsed.
+
+    Case, punctuation, stopwords and non-Latin scripts stay significant, so two
+    different texts are never treated as the same original.
+    """
+    return " ".join(content.split())
 
 
 def _merged_originals(content: str) -> list[str]:
-    """Read escaped records, or best-effort legacy numbered originals.
+    """Read framed records, or best-effort legacy numbered originals.
 
-    Only record separators and escape characters are escaped, leaving normal
-    text readable/searchable. No length/count metadata changes numeric facts
-    used by duplicate lookup. Preserve malformed framing rather than lose text.
+    A framed body is the marker plus ``"\n\n␞ N. <original>"`` per record.
+    Inside an original only U+241E and U+241B are escaped (as U+241B + ``R`` /
+    ``E``), leaving normal text readable/searchable. No length/count metadata
+    changes numeric facts used by duplicate lookup. Malformed framing is kept
+    verbatim rather than losing text.
     """
-    if content.startswith(_MERGED_V2):
+    if content.startswith(_FRAMED_PREFIX):
         originals = []
-        records = content[len(_MERGED_V2) :].split(_RECORD_SEPARATOR)
-        if records[0]:
-            return [content]
-        for record in records[1:]:
-            frame = _ORIGINAL_FRAME_RE.match(record)
+        for record in content[len(_MERGED_MARKER) :].split(_RECORD_BOUNDARY)[1:]:
+            frame = _ORIGINAL_NUMBER_RE.match(record)
             if frame is None or frame[1] != str(len(originals) + 1):
                 return [content]
             escaped = record[frame.end() :]
-            if re.search(_RECORD_ESCAPE + r"(?![ER])", escaped):
+            if _RECORD_SEPARATOR in escaped or re.search(_RECORD_ESCAPE + r"(?![ER])", escaped):
                 return [content]
             originals.append(
                 escaped.replace(_RECORD_ESCAPE + "R", _RECORD_SEPARATOR).replace(_RECORD_ESCAPE + "E", _RECORD_ESCAPE)
@@ -449,54 +465,49 @@ def _merged_originals(content: str) -> list[str]:
     return [content]
 
 
-def _legacy_has_original(content: str, normalized_incoming: str) -> bool:
+def _legacy_has_original(content: str, incoming: str) -> bool:
     """Match whole legacy originals even when their own numbered sections split.
 
-    Legacy boundaries are ambiguous. Compare spans between candidate headings,
-    retaining internal heading numbers in the token stream. Only a span starting
-    and ending at a candidate boundary counts, never a substring of an original.
+    Legacy boundaries are ambiguous. Compare whitespace tokens of spans between
+    candidate headings, keeping internal ``N.`` headings in the token stream.
+    Only a span starting and ending at a candidate boundary counts, never a
+    substring of an original. Empty incoming text never matches.
     """
+    incoming_tokens = incoming.split()
+    if not incoming_tokens:
+        return False
     numbered = content[len(_MERGED_MARKER) :].strip()
     headings = list(_LEGACY_HEADING_RE.finditer(numbered))
     tokens: list[str] = []
     starts = []
     ends = set()
     for index, heading in enumerate(headings):
-        tokens.append(heading[1])
+        tokens.append(f"{heading[1]}.")
         starts.append(len(tokens))
         end = headings[index + 1].start() if index + 1 < len(headings) else len(numbered)
-        tokens.extend(normalize_for_exact_hash(numbered[heading.end() : end]).split())
+        tokens.extend(numbered[heading.end() : end].split())
         ends.add(len(tokens))
-    incoming_tokens = normalized_incoming.split()
     size = len(incoming_tokens)
     return any(start + size in ends and tokens[start : start + size] == incoming_tokens for start in starts)
 
 
 def _merged_content(existing: str, incoming: str) -> str:
-    normalized_incoming = normalize_for_exact_hash(incoming)
-    if normalize_for_exact_hash(existing) == normalized_incoming:
+    target = _whitespace_normalized(incoming)
+    if not target or _whitespace_normalized(existing) == target:
         return existing
-    if (
-        existing.startswith(_MERGED_MARKER)
-        and not existing.startswith(_MERGED_V2)
-        and _legacy_has_original(existing, normalized_incoming)
-    ):
+    if _is_legacy_merged(existing) and _legacy_has_original(existing, incoming):
         return existing
     originals = _merged_originals(existing)
-    if any(
-        normalize_for_exact_hash(original) == normalized_incoming
-        or (
-            original.startswith(_MERGED_MARKER)
-            and not original.startswith(_MERGED_V2)
-            and _legacy_has_original(original, normalized_incoming)
-        )
-        for original in originals
-    ):
+    if any(_whitespace_normalized(original) == target for original in originals):
+        return existing
+    # Only record 1 can be an upgraded ambiguous legacy body. A later record that
+    # merely starts with the marker is an ordinary original, matched exactly.
+    if len(originals) > 1 and _is_legacy_merged(originals[0]) and _legacy_has_original(originals[0], incoming):
         return existing
     originals.append(incoming)
-    return _MERGED_V2 + "".join(
-        _RECORD_SEPARATOR
-        + f"\n\n{index}. "
+    return _MERGED_MARKER + "".join(
+        _RECORD_BOUNDARY
+        + f"{index}. "
         + original.replace(_RECORD_ESCAPE, _RECORD_ESCAPE + "E").replace(_RECORD_SEPARATOR, _RECORD_ESCAPE + "R")
         for index, original in enumerate(originals, start=1)
     )
