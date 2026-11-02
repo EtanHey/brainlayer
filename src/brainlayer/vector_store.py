@@ -209,6 +209,12 @@ def _set_busy_timeout_hook(conn: apsw.Connection) -> None:
     APSW bestpractice hooks (connection_optimize) run PRAGMA optimize inside
     the Connection() constructor. Without busy_timeout set first, this PRAGMA
     fails with BusyError when other processes hold the DB lock.
+
+    Caveat (S17, 2026-11-02): ``apsw.bestpractice.recommended`` starts with
+    ``connection_busy_timeout``, which runs after this hook and resets the
+    timeout to 100 ms before ``connection_optimize`` runs. Callers that need
+    their own budget inside the constructor wrap the open in
+    ``skip_connection_hooks("connection_busy_timeout", ...)``.
     """
     timeout_ms = _read_busy_timeout_ms() if conn.readonly("main") else _write_busy_timeout_ms()
     conn.setbusytimeout(timeout_ms)
@@ -228,12 +234,40 @@ _CONNECTION_MAINTENANCE_HOOKS = {
 
 def _apply_brainlayer_best_practices(connection: apsw.Connection) -> None:
     skip_maintenance = bool(getattr(_CONNECTION_HOOK_STATE, "skip_maintenance", False))
+    skipped_names = getattr(_CONNECTION_HOOK_STATE, "skip_hook_names", frozenset())
     for hook in apsw.bestpractice.recommended:
         if not hook.__name__.startswith("connection_"):
             continue
         if skip_maintenance and hook in _CONNECTION_MAINTENANCE_HOOKS:
             continue
+        if hook.__name__ in skipped_names:
+            continue
         hook(connection)
+
+
+@contextmanager
+def skip_connection_hooks(*hook_names: str):
+    """Skip APSW best-practice connection hooks, by name, for connections opened in this block.
+
+    Thread-local, like ``skip_maintenance``. Names are matched against
+    ``apsw.bestpractice.recommended`` entries, so an APSW release without a
+    named hook is not an error.
+
+    Hot writers pass ``connection_optimize`` (``PRAGMA optimize`` takes the
+    write lock inside the ``Connection()`` constructor, before the caller can
+    react) and ``connection_busy_timeout``: that hook resets the timeout
+    ``_set_busy_timeout_hook`` installed to APSW's 100 ms, so every statement
+    the constructor runs would otherwise wait 100 ms, not the caller's budget.
+    """
+    previous = getattr(_CONNECTION_HOOK_STATE, "skip_hook_names", None)
+    _CONNECTION_HOOK_STATE.skip_hook_names = frozenset(previous or ()) | frozenset(hook_names)
+    try:
+        yield
+    finally:
+        if previous is None:
+            delattr(_CONNECTION_HOOK_STATE, "skip_hook_names")
+        else:
+            _CONNECTION_HOOK_STATE.skip_hook_names = previous
 
 
 _SQLITE_LOG_LOCK = threading.RLock()

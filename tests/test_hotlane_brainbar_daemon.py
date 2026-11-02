@@ -768,7 +768,8 @@ def test_split_cycle_bootstraps_missing_db_before_readonly_open(tmp_path):
 
 @pytest.mark.parametrize("committed_prefix", [0, 1])
 @pytest.mark.parametrize("lock_error", ["BusyError", "LockedError"])
-def test_split_cycle_retries_pending_batch_after_busy_write(tmp_path, monkeypatch, committed_prefix, lock_error):
+def test_split_cycle_carries_vectors_over_after_busy_write(tmp_path, monkeypatch, committed_prefix, lock_error):
+    """S17: a lock error carries the computed vectors to the next cycle instead of raising them away."""
     hotlane = _load_hotlane_module()
     db_path = tmp_path / "brainlayer.db"
     conn = sqlite3.connect(db_path)
@@ -793,39 +794,64 @@ def test_split_cycle_retries_pending_batch_after_busy_write(tmp_path, monkeypatc
     )
     state = hotlane.PendingCandidateScanState()
     monkeypatch.setattr(hotlane, "PENDING_CANDIDATE_SCAN_STATE", state)
+    carryover = hotlane.VectorCarryover()
     writes = []
+    embedded_texts = []
 
     def write_vectors(_path, vectors):
         chunk_ids = [vector.chunk_id for vector in vectors]
         writes.append(chunk_ids)
+        inserted = 0
+        # Like the real writer, a chunk that already has a vector is skipped, not rewritten.
         for chunk_id in chunk_ids[:committed_prefix] if len(writes) == 1 else chunk_ids:
-            conn.execute("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", (chunk_id,))
+            inserted += conn.execute("INSERT OR IGNORE INTO chunk_vectors_rowids (id) VALUES (?)", (chunk_id,)).rowcount
         conn.commit()
         if len(writes) == 1:
             raise getattr(hotlane.apsw, lock_error)("database is locked")
-        return len(chunk_ids)
+        return inserted
+
+    def embed_one(text):
+        embedded_texts.append(text)
+        return [0.0]
+
+    def embed_batch(texts):
+        embedded_texts.extend(texts)
+        return [[0.0] for _text in texts]
 
     def cycle():
         return hotlane._run_split_cycle(
             db_path=db_path,
             vector_store_cls=lambda _path, readonly=False: SimpleNamespace(conn=conn, close=lambda: None),
-            embed_fn=lambda _text: [0.0],
-            embed_batch_fn=lambda texts: [[0.0] for _text in texts],
+            embed_fn=embed_one,
+            embed_batch_fn=embed_batch,
             recent_limit=0,
             backlog_batch=2,
             enrich_limit=0,
             enrich_since_hours=8760,
             write_vectors_fn=write_vectors,
+            carryover=carryover,
         )
 
     try:
-        with pytest.raises(getattr(hotlane.apsw, lock_error), match="database is locked"):
-            cycle()
+        first = cycle()
+        assert first.embedded == 0
+        assert first.deferred == 2
+        assert [vector.chunk_id for vector in carryover.peek()] == ["a", "b"]
         assert state.active is False
         assert state.after_created_at is None
         assert state.after_rowid == 0
-        assert cycle().embedded == 2
-        assert writes == [["a", "b"], (["a", "b"] if committed_prefix == 0 else ["b", "c"])]
+
+        second = cycle()
+        assert second.embedded == 2
+        assert second.deferred == 0
+        assert len(carryover) == 0
+        # The carried vectors are reused, never recomputed: only "c" is embedded fresh.
+        assert embedded_texts == (["text a", "text b"] if committed_prefix == 0 else ["text a", "text b", "text c"])
+        assert writes == [["a", "b"], (["a", "b"] if committed_prefix == 0 else ["a", "b", "c"])]
+        remaining = conn.execute(
+            "SELECT c.id FROM chunks c LEFT JOIN chunk_vectors_rowids r ON r.id = c.id WHERE r.id IS NULL ORDER BY c.id"
+        ).fetchall()
+        assert remaining == ([("c",)] if committed_prefix == 0 else [])
     finally:
         conn.close()
 

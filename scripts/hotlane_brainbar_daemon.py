@@ -27,7 +27,7 @@ from brainlayer._helpers import serialize_f32
 from brainlayer.embeddings import get_embedding_model
 from brainlayer.paths import get_db_path
 from brainlayer.store import embed_hot_chunk, embed_pending_chunks
-from brainlayer.vector_store import VectorStore
+from brainlayer.vector_store import VectorStore, skip_connection_hooks, temporary_write_busy_timeout_ms
 from brainlayer.writer_telemetry import IngestMetrics, start_writer_span
 
 LOGGER = logging.getLogger("brainlayer.hotlane_brainbar")
@@ -40,6 +40,16 @@ MAX_BACKLOG_BATCH = 16
 DEFAULT_HOTLANE_WRITE_BUSY_TIMEOUT_MS = 1000
 MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 VECTOR_WRITE_YIELD_SECONDS = 0.005
+# S17 (2026-11-02): a busy writer slot must never cost an embedded batch. The write retries
+# inside the cycle (each try waits up to the hotlane busy timeout at BEGIN IMMEDIATE), then
+# whatever is still unwritten is carried to the next cycle instead of being discarded.
+HOTLANE_WRITE_ATTEMPTS = 3
+HOTLANE_WRITE_RETRY_BACKOFF_SECONDS = 0.25
+MAX_CARRIED_VECTORS = 64
+# Hooks the hotlane writer never runs in its Connection() constructor. `connection_optimize`
+# runs PRAGMA optimize (a write lock) on every open; `connection_busy_timeout` would reset the
+# constructor's busy timeout to APSW's 100 ms. connection_wal and the rest still run.
+HOTLANE_SKIPPED_CONNECTION_HOOKS = ("connection_optimize", "connection_busy_timeout")
 
 # Incident 2026-08-24: the loop slept a fixed `interval` (1.0s) whether or not a cycle
 # did any work, so an idle hotlane kept probing once per second forever. Idle cycles now
@@ -144,6 +154,7 @@ class CycleResult(NamedTuple):
     enrich_skipped: int = 0
     enrich_failed: int = 0
     enrich_daily_cap_reached: bool = False
+    deferred: int = 0
 
 
 class EmbedCandidate(NamedTuple):
@@ -167,6 +178,66 @@ class EmbeddedVector(NamedTuple):
     chunk_id: str
     content: str
     embedding: list[float]
+
+
+class HotlaneVectorWriteDeferred(Exception):
+    """The writer slot stayed busy through every attempt; ``remaining`` was not written."""
+
+    def __init__(self, *, written: int, remaining: list[EmbeddedVector], attempts: int, cause: BaseException):
+        super().__init__(f"{type(cause).__name__}: {cause} (after {attempts} attempts, {len(remaining)} unwritten)")
+        self.written = written
+        self.remaining = remaining
+        self.attempts = attempts
+        self.cause = cause
+
+
+class VectorCarryover:
+    """Computed vectors whose write was deferred by a busy writer slot (S17).
+
+    Held in memory for the next cycle so a lock never costs the embedding work. The
+    writer re-checks each chunk's content and vector state at write time, so a stale
+    entry (content edited, or vectorized meanwhile) is skipped, never written wrongly.
+    Bounded: past ``capacity`` the oldest entries are dropped, loudly and counted. A
+    dropped vector loses only compute; its chunk stays unvectored and is re-embedded.
+    """
+
+    def __init__(self, capacity: int = MAX_CARRIED_VECTORS) -> None:
+        self.capacity = capacity
+        self._vectors: OrderedDict[str, EmbeddedVector] = OrderedDict()
+        self.carried_total = 0
+        self.dropped_total = 0
+
+    def __len__(self) -> int:
+        return len(self._vectors)
+
+    def put(self, vectors: list[EmbeddedVector]) -> int:
+        for vector in vectors:
+            self._vectors.pop(vector.chunk_id, None)
+            self._vectors[vector.chunk_id] = vector
+        self.carried_total += len(vectors)
+        dropped = 0
+        while len(self._vectors) > self.capacity:
+            self._vectors.popitem(last=False)
+            dropped += 1
+        if dropped:
+            self.dropped_total += dropped
+            LOGGER.warning(
+                "hotlane carry-over full; dropped %d oldest computed vectors (chunks stay unvectored and "
+                "will be re-embedded) capacity=%d dropped_total=%d",
+                dropped,
+                self.capacity,
+                self.dropped_total,
+            )
+        return dropped
+
+    def peek(self) -> list[EmbeddedVector]:
+        return list(self._vectors.values())
+
+    def clear(self) -> None:
+        self._vectors.clear()
+
+
+VECTOR_CARRYOVER = VectorCarryover()
 
 
 def _candidates_from_scanned_rows(
@@ -546,11 +617,20 @@ def _hotlane_write_busy_timeout_ms() -> int:
 
 
 def _open_hotlane_write_connection(db_path: Path) -> apsw.Connection:
-    conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READWRITE)
-    conn.setbusytimeout(_hotlane_write_busy_timeout_ms())
-    conn.enableloadextension(True)
-    conn.loadextension(sqlite_vec.loadable_path())
-    conn.enableloadextension(False)
+    timeout_ms = _hotlane_write_busy_timeout_ms()
+    # S17: the constructor runs the connection hooks. Without this, PRAGMA optimize took the
+    # write lock on every cycle at APSW's 100 ms timeout and threw away the embedded batch
+    # (1,264 of 1,430 logged cycle failures). The hotlane timeout covers the hooks that do run.
+    with skip_connection_hooks(*HOTLANE_SKIPPED_CONNECTION_HOOKS), temporary_write_busy_timeout_ms(timeout_ms):
+        conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READWRITE)
+    try:
+        conn.setbusytimeout(timeout_ms)
+        conn.enableloadextension(True)
+        conn.loadextension(sqlite_vec.loadable_path())
+        conn.enableloadextension(False)
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
@@ -592,9 +672,56 @@ def _upsert_chunk_vector_raw(
         )
 
 
+class _WriteProgress:
+    def __init__(self) -> None:
+        self.written = 0
+        self.processed = 0
+
+
 def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: list[EmbeddedVector]) -> int:
+    """Write vectors one transaction each; retry busy/locked failures, never drop the batch.
+
+    Each vector is its own transaction, so a lock error part-way leaves earlier vectors
+    committed; the retry resumes at the first unprocessed vector. After
+    ``HOTLANE_WRITE_ATTEMPTS`` busy failures it raises ``HotlaneVectorWriteDeferred``
+    carrying what is still unwritten, for the caller to keep for the next cycle.
+    """
+    remaining = list(vectors)
+    written = 0
+    for attempt in range(1, HOTLANE_WRITE_ATTEMPTS + 1):
+        if not remaining:
+            break
+        progress = _WriteProgress()
+        try:
+            _write_embedded_vectors_once(store_or_path, remaining, progress)
+        except (apsw.BusyError, apsw.LockedError) as exc:
+            written += progress.written
+            remaining = remaining[progress.processed :]
+            if attempt == HOTLANE_WRITE_ATTEMPTS:
+                raise HotlaneVectorWriteDeferred(
+                    written=written, remaining=remaining, attempts=attempt, cause=exc
+                ) from exc
+            LOGGER.info(
+                "hotlane vector write busy; retrying attempt=%d/%d unwritten=%d error_type=%s",
+                attempt + 1,
+                HOTLANE_WRITE_ATTEMPTS,
+                len(remaining),
+                type(exc).__name__,
+            )
+            _sleep(HOTLANE_WRITE_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+            continue
+        written += progress.written
+        remaining = []
+    return written
+
+
+def _write_embedded_vectors_once(
+    store_or_path: VectorStore | Path | str,
+    vectors: list[EmbeddedVector],
+    progress: _WriteProgress,
+) -> None:
     if not vectors:
-        return 0
+        return
 
     conn: apsw.Connection | None = None
     db_path: Path | None
@@ -666,6 +793,8 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
                     metrics.committed([{"queued_at": metadata.get("ingest_queued_at"), "metadata": metadata}])
                 metrics.finish("commit")
                 count += rows_touched
+                progress.written = count
+                progress.processed = vector_index + 1
                 telemetry_span.finish("commit", rows_touched=rows_touched)
                 if vector_index < len(vectors) - 1:
                     _sleep(VECTOR_WRITE_YIELD_SECONDS)
@@ -676,6 +805,7 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
                 telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
                 if isinstance(exc, (apsw.BusyError, apsw.LockedError)):
                     raise
+                progress.processed = vector_index + 1
                 LOGGER.error(
                     "hotlane vector write skipped chunk_id=%s error_type=%s error=%s",
                     chunk_id,
@@ -691,7 +821,6 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
             from brainlayer.search_repo import clear_hybrid_search_cache
 
             clear_hybrid_search_cache(db_path)
-    return count
 
 
 def _open_store(
@@ -751,9 +880,14 @@ def _run_split_cycle(
     candidate_rows_fn: Callable[..., list[EmbedCandidate]] = _candidate_chunk_rows,
     pending_rows_fn: Callable[..., list[EmbedCandidate]] = _pending_chunk_rows_with_resume,
     write_vectors_fn: Callable[..., int] = _write_embedded_vectors,
+    carryover: VectorCarryover | None = None,
 ) -> CycleResult:
+    carryover = VECTOR_CARRYOVER if carryover is None else carryover
     metrics = IngestMetrics("hotlane", "hotlane")
     embedded = 0
+    # Peek, not take: a scan or encode failure later in this cycle must not lose them.
+    carried = carryover.peek()
+    carried_by_id = {vector.chunk_id: vector for vector in carried}
     hot_rows: list[EmbedCandidate] = []
     pending_rows: list[EmbedCandidate] = []
     pending_scan_state = PENDING_CANDIDATE_SCAN_STATE if pending_rows_fn is _pending_chunk_rows_with_resume else None
@@ -778,15 +912,27 @@ def _run_split_cycle(
 
     seen_hot_ids = {candidate.chunk_id for candidate in hot_rows}
     pending_rows = [candidate for candidate in pending_rows if candidate.chunk_id not in seen_hot_ids]
+
+    def needs_embedding(candidate: EmbedCandidate) -> bool:
+        # A carried vector for the same content is reused, not recomputed.
+        carried_vector = carried_by_id.get(candidate.chunk_id)
+        return carried_vector is None or carried_vector.content != candidate.content
+
+    hot_rows = [candidate for candidate in hot_rows if needs_embedding(candidate)]
+    pending_rows = [candidate for candidate in pending_rows if needs_embedding(candidate)]
     vectors = metrics.run("encode", _embed_candidates, hot_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn)
     vectors.extend(
         metrics.run("encode", _embed_candidates, pending_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn)
     )
+    fresh_ids = {vector.chunk_id for vector in vectors}
+    vectors = [vector for vector in carried if vector.chunk_id not in fresh_ids] + vectors
     if vectors:
         try:
             embedded += metrics.run("write", write_vectors_fn, db_path, vectors)
+            carryover.clear()
         except Exception as exc:
-            is_lock_error = isinstance(exc, (apsw.BusyError, apsw.LockedError))
+            deferred = exc if isinstance(exc, HotlaneVectorWriteDeferred) else None
+            is_lock_error = deferred is not None or isinstance(exc, (apsw.BusyError, apsw.LockedError))
             if is_lock_error and pending_scan_checkpoint is not None and pending_scan_state is not None:
                 # Earlier one-row commits stay indexed; retry only rows still missing vectors.
                 pending_scan_state.active, pending_scan_state.after_created_at, pending_scan_state.after_rowid = (
@@ -798,8 +944,29 @@ def _run_split_cycle(
                     [candidate.chunk_id for candidate in pending_rows],
                     type(exc).__name__,
                 )
-            metrics.finish("error")
-            raise
+            if not is_lock_error:
+                metrics.finish("error")
+                raise
+            # S17: a busy writer slot never costs the embedded batch. A writer that does not
+            # report progress gets all of its vectors carried; its writes are idempotent
+            # because each one re-checks that the chunk still lacks a vector.
+            unwritten = deferred.remaining if deferred is not None else vectors
+            embedded += deferred.written if deferred is not None else 0
+            carryover.clear()
+            carryover.put(unwritten)
+            LOGGER.warning(
+                "hotlane vector write deferred: writer slot busy; carrying %d computed vectors to the next "
+                "cycle written=%d carried_now=%d carried_total=%d dropped_total=%d error=%s",
+                len(unwritten),
+                embedded,
+                len(carryover),
+                carryover.carried_total,
+                carryover.dropped_total,
+                exc,
+            )
+            metrics.finish("deferred")
+            _warn_retired_enrichment(enrich_limit, enrich_since_hours, enrich_fn)
+            return CycleResult(embedded=embedded, deferred=len(unwritten))
 
     _warn_retired_enrichment(enrich_limit, enrich_since_hours, enrich_fn)
     metrics.finish()
