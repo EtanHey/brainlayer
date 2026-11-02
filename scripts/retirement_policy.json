@@ -190,6 +190,16 @@
         "target": "self.send"
       }
     },
+    "0db2d3254ef3deea5776f4f37797b8777246f8d520cdceb671df1b60439d009c": {
+      "non_cloud_purpose": "In-process bounded OrderedDict buffer (VectorCarryover.put) that carries already-computed local embedding vectors to the next hotlane cycle when the SQLite writer slot is busy; no network, model, cloud or IPC sender.",
+      "site": {
+        "call_sha256": "2fe1bbc784f135d6e00f2b7f093729e26fd421ffd134388d16de2ffb00b21bb7",
+        "kind": "generic_send",
+        "owner": "<module>._run_split_cycle",
+        "path": "scripts/hotlane_brainbar_daemon.py",
+        "target": "carryover.put"
+      }
+    },
     "0e8c13e6830758247d49a3f3c1336f20000b2a1d2e5c2c95f5c12619d07c412c": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cli/__init__.py <module>._run_launchctl",
       "site": {
