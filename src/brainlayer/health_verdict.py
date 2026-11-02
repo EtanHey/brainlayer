@@ -11,10 +11,9 @@ skipped job while a verified backup exists is a note, never a dot. So:
   outcome it damages (an aging backup, a stopped pipe).
 - "Couldn't look" is unknown, never red. Unknown keeps the last known state and turns amber
   after ``unknown_amber_ticks`` consecutive ticks. A known red holds until positive evidence.
-- Safety clocks never freeze. Ages run from the newest verified timestamp, which is persisted
-  and only ever moves forward, so a failed observation keeps the clock aging. The one exception
-  is explicit revocation: a copy the receipts invalidate stops being the clock, and the newest
-  surviving copy (if any) takes over.
+- Readable receipts are authoritative for backup clocks, including absent or revoked copies.
+  Only an unobserved receipt source falls back to the last verified timestamp; its age keeps
+  running while the source is unreadable.
 - Recovery needs real evidence. Backups go green on the first verified receipt; ingest, stores
   and search need ``recovery_good_ticks`` good observations with no bad one between. A tick with
   no new evidence (an unobserved fact, or an age that only looks fresh because the monitor was not
@@ -104,9 +103,6 @@ class Facts:
     now: datetime
     backup_local_verified_at: Any = UNOBSERVED
     backup_offsite_verified_at: Any = UNOBSERVED
-    backup_local_id: str | None = None  # identity (snapshot path) of the copy behind *_verified_at
-    backup_offsite_id: str | None = None
-    backup_revoked: tuple[tuple[str, datetime | None], ...] = ()  # (snapshot, created) the receipts invalidated
     transcripts_verified_at: Any = UNOBSERVED
     drive_auth: Any = UNOBSERVED  # "ok" | "refresh_failed" | "consent_needed"
     integrity: Any = UNOBSERVED  # "ok" | "corrupt" (confirmed results only)
@@ -224,17 +220,6 @@ def _hours(seconds: float) -> str:
     return f"{seconds / HOURS:.1f} h"
 
 
-def _is_revoked(clock: datetime, clock_id: Any, revoked: Iterable[tuple[str, datetime | None]]) -> bool:
-    """Is the persisted copy one the receipts explicitly invalidated (by identity, else by time)?"""
-    for key, created in revoked:
-        if isinstance(clock_id, str) and clock_id:
-            if clock_id == key:
-                return True
-        elif created is not None and _aware(created) == clock:
-            return True
-    return False
-
-
 def _verified_age(
     observed: Any,
     prior: Mapping[str, Any],
@@ -242,27 +227,13 @@ def _verified_age(
     amber: float,
     red: float,
     what: str,
-    observed_id: str | None = None,
-    revoked: tuple[tuple[str, datetime | None], ...] = (),
 ) -> _Raw:
-    """Age of the newest verified copy. The persisted clock only moves forward, except that an
-    explicitly revoked copy is dropped and the newest observed surviving copy takes over."""
-    persisted = _parse(prior.get("clock"))
-    persisted_id = prior.get("clock_id")
-    note_revoked = ""
-    if persisted is not None and observed is not UNOBSERVED and _is_revoked(persisted, persisted_id, revoked):
-        persisted, persisted_id = None, None
-        note_revoked = "; the previously newest copy was revoked by a later receipt"
-    seen = _aware(observed)
-    if seen is not None and (persisted is None or seen >= persisted):
-        clock, clock_id = seen, observed_id
-    else:
-        clock, clock_id = persisted, persisted_id
-    keep = {"clock_id": clock_id if isinstance(clock_id, str) else None}
+    """Readable receipts own the clock; persisted state is only an unreadable-source fallback."""
+    clock = _parse(prior.get("clock")) if observed is UNOBSERVED else _aware(observed)
     if clock is None:
         if observed is UNOBSERVED:
-            return _Raw(UNKNOWN, f"{what}: receipts could not be read", threshold_s=red, keep=keep, evidence=False)
-        return _Raw(RED, f"{what}: no verified copy on record{note_revoked}", threshold_s=red, keep=keep)
+            return _Raw(UNKNOWN, f"{what}: receipts could not be read", threshold_s=red, evidence=False)
+        return _Raw(RED, f"{what}: no verified copy on record", threshold_s=red)
     age = max(0.0, (now - clock).total_seconds())
     state = _age_state(age, amber, red)
     note = f"newest verified copy {_hours(age)} old"
@@ -270,7 +241,7 @@ def _verified_age(
         note += " (receipts unreadable this check; age runs from the last verified copy)"
     if state != GREEN:
         note += f" (amber after {_hours(amber)}, red after {_hours(red)})"
-    return _Raw(state, note + note_revoked, age, red, clock, amber, keep, evidence=observed is not UNOBSERVED)
+    return _Raw(state, note, age, red, clock, amber, evidence=observed is not UNOBSERVED)
 
 
 def _stall_age(
@@ -373,8 +344,6 @@ def _raw_checks(
             t.backup_local_amber_s,
             t.backup_local_red_s,
             "Local snapshot",
-            facts.backup_local_id,
-            facts.backup_revoked,
         ),
         "backup_offsite": _verified_age(
             facts.backup_offsite_verified_at,
@@ -383,8 +352,6 @@ def _raw_checks(
             t.backup_offsite_amber_s,
             t.backup_offsite_red_s,
             "Drive copy",
-            facts.backup_offsite_id,
-            facts.backup_revoked,
         ),
         "transcripts": _verified_age(
             facts.transcripts_verified_at,
@@ -539,12 +506,19 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
             elif state != GREEN or prior_state not in (AMBER, RED):
                 good_ticks = 0
             if name in _WAKE_GRACE:
-                if r.state in (GREEN, AMBER):
-                    deadline = None  # a verified copy inside the limits ends the catch-up episode
-                elif state == RED and prior_state != RED:
-                    if deadline is None and resumed_at is not None:
-                        # One catch-up window per episode, from the first wake that found it red.
-                        # Later gaps never move it.
+                same_copy = r.clock is not None and r.clock == _parse(before.get("clock"))
+                if not same_copy or r.state in (GREEN, AMBER):
+                    deadline = None  # loss/replacement of the copy ends its catch-up episode
+                if state == RED and prior_state != RED and same_copy:
+                    expired_at = r.clock + timedelta(seconds=r.threshold_s)
+                    if (
+                        deadline is None
+                        and ticked is not None
+                        and resumed_at is not None
+                        and ticked <= expired_at < resumed_at
+                    ):
+                        # Only this verified clock crossing red during a gap earns grace.
+                        # A revoked copy exposing an older clock never does; later gaps cannot renew it.
                         deadline = resumed_at + timedelta(seconds=t.wake_grace_s)
                     if deadline is not None and now <= deadline:
                         state = AMBER
@@ -643,18 +617,12 @@ class BackupFacts:
     offsite_verified_at: datetime | None
     drive: tuple[datetime, str] | None  # (receipt time, drive_event) of the newest Drive outcome
     integrity: Any
-    local_id: str | None = None  # snapshot behind local_verified_at
-    offsite_id: str | None = None
-    revoked: tuple[tuple[str, datetime | None], ...] = ()  # (snapshot, created) invalidated by a later receipt
 
     def facts_kwargs(self) -> dict[str, Any]:
-        """The backup fields of :class:`Facts`, with identity and revocation, for the policy."""
+        """Authoritative backup observations for the policy, after a successful receipt read."""
         return {
             "backup_local_verified_at": self.local_verified_at,
             "backup_offsite_verified_at": self.offsite_verified_at,
-            "backup_local_id": self.local_id,
-            "backup_offsite_id": self.offsite_id,
-            "backup_revoked": self.revoked,
             "integrity": self.integrity,
         }
 
@@ -665,14 +633,14 @@ def backup_facts(receipts: Iterable[Mapping[str, Any]], *, as_of: datetime | Non
     A receipt counts once its invocation has started (``attempted_at <= as_of``). A Drive-verified
     upload also proves the local snapshot it was made from. A later receipt for the same snapshot
     that reports a verification error or a Drive md5 mismatch revokes it; "superseded" does not.
-    Revocations are reported so the policy can drop a persisted clock that rests on that copy;
-    a later verified receipt for the same snapshot reinstates it.
+    Coverage is restored separately: a local-only success cannot restore a revoked Drive copy.
+    Exact creation times from history survive filename-only receipts for the same artifact.
     """
     from .backup_daily import _snapshot_created_time
 
     local: dict[str, datetime] = {}
     offsite: dict[str, datetime] = {}
-    revoked: dict[str, datetime | None] = {}
+    created_by_snapshot: dict[str, datetime] = {}
     drive: tuple[datetime, str] | None = None
     integrity: tuple[datetime, str] | None = None
     for receipt in receipts:
@@ -683,32 +651,29 @@ def backup_facts(receipts: Iterable[Mapping[str, Any]], *, as_of: datetime | Non
             continue
         key = receipt.get("snapshot") if isinstance(receipt.get("snapshot"), str) else None
         created = _snapshot_created_time(receipt)
+        if key:
+            if "snapshot_created_at" not in receipt:
+                created = created_by_snapshot.get(key, created)
+            if created is not None:
+                created_by_snapshot[key] = created
         is_revoked = bool(receipt.get("verification_error")) or receipt.get("drive_md5_match") is False
         if key and is_revoked:
-            gone = local.pop(key, None)
+            local.pop(key, None)
             offsite.pop(key, None)
-            revoked[key] = created or gone
         elif key and created is not None:
             if receipt.get("uploaded") is True and receipt.get("verified") is True:
                 offsite[key] = local[key] = created
-                revoked.pop(key, None)
             elif receipt.get("local_verified") is True and receipt.get("local_integrity") == "ok":
                 local[key] = created
-                revoked.pop(key, None)
         if (event := drive_event(receipt)) is not None and (drive is None or at >= drive[0]):
             drive = (at, event)
         if (result := integrity_result(receipt)) is not None and (integrity is None or at >= integrity[0]):
             integrity = (at, result)
-    local_id = max(local, key=local.__getitem__, default=None)
-    offsite_id = max(offsite, key=offsite.__getitem__, default=None)
     return BackupFacts(
-        local_verified_at=local[local_id] if local_id else None,
-        offsite_verified_at=offsite[offsite_id] if offsite_id else None,
+        local_verified_at=max(local.values(), default=None),
+        offsite_verified_at=max(offsite.values(), default=None),
         drive=drive,
         integrity=integrity[1] if integrity else UNOBSERVED,
-        local_id=local_id,
-        offsite_id=offsite_id,
-        revoked=tuple(sorted(revoked.items())),
     )
 
 
