@@ -232,24 +232,96 @@ CASES: list[dict[str, str]] = [
         "pr": "S1a-5 F3",
         "what": "a stale heartbeat seen inside wake grace does not reset recovery",
     },
+    {
+        "name": "bug-renewable-grace",
+        "module": "PipeVerdict",
+        "prefix": "67d23f14",
+        "fixed_here": "no",
+        "expect": "NoFalseGreenStall",
+        "pr": "S1a-6",
+        "what": "embedding: green x5 while the true stall age is past red from tick 3 (reviewer trace)",
+    },
+    {
+        "name": "bug-renewable-grace-ingest",
+        "module": "PipeVerdict",
+        "prefix": "67d23f14",
+        "fixed_here": "no",
+        "expect": "NoFalseGreenStall",
+        "pr": "S1a-6",
+        "what": "ingest: every gap renews the grace on a dead watcher",
+    },
+    {
+        "name": "bug-renewable-grace-stores",
+        "module": "PipeVerdict",
+        "prefix": "67d23f14",
+        "fixed_here": "no",
+        "expect": "NoFalseGreenStall",
+        "pr": "S1a-6",
+        "what": "stores: every gap renews the grace on a stuck pending store",
+    },
     # --- conformance: random model behaviours replayed through the real evaluate() ---------
     {
-        "name": "conform-ingest-prefix",
+        "name": "conform-ingest-main",
         "module": "PipeVerdict",
         "expect": "conforms",
         "pr": "",
-        "prefix": "67d23f14",
+        "against": "67d23f14",
         "simulate": "3000,60,7",
-        "what": "pre-S1a-5 ingest model agrees with main 67d23f14 on every tick",
+        "what": "ingest: the model of main (renewable grace, no S1a-5) agrees with 67d23f14 on every tick",
     },
     {
-        "name": "conform-ingest-fixed",
+        "name": "conform-embedding-main",
+        "module": "PipeVerdict",
+        "expect": "conforms",
+        "pr": "",
+        "against": "67d23f14",
+        "simulate": "3000,60,7",
+        "what": "embedding: the model of main (renewable grace, no S1a-5) agrees with 67d23f14 on every tick",
+    },
+    {
+        "name": "conform-stores-main",
+        "module": "PipeVerdict",
+        "expect": "conforms",
+        "pr": "",
+        "against": "67d23f14",
+        "simulate": "3000,60,7",
+        "what": "stores: the model of main (renewable grace, no S1a-5) agrees with 67d23f14 on every tick",
+    },
+    {
+        "name": "conform-ingest-s1a5",
         "module": "PipeVerdict",
         "expect": "diverges",
         "pr": "S1a-5",
-        "simulate": "3000,60,7",
         "fixed_here": "no",
-        "what": "S1a-5 ingest model vs this tree; flip to conforms once S1a-5 merges",
+        "simulate": "3000,60,7",
+        "what": "ingest with S1a-5 hysteresis (renewable grace) vs this tree; conforms at 4e07651b",
+    },
+    {
+        "name": "conform-ingest-s1a6",
+        "module": "PipeVerdict",
+        "expect": "diverges",
+        "pr": "S1a-6",
+        "fixed_here": "no",
+        "simulate": "3000,60,7",
+        "what": "ingest: all fixes (S1a-5 + S1a-6 one-window grace) vs this tree; conforms at 8eecb5ee",
+    },
+    {
+        "name": "conform-embedding-s1a6",
+        "module": "PipeVerdict",
+        "expect": "diverges",
+        "pr": "S1a-6",
+        "fixed_here": "no",
+        "simulate": "3000,60,7",
+        "what": "embedding: all fixes (S1a-5 + S1a-6 one-window grace) vs this tree; conforms at 8eecb5ee",
+    },
+    {
+        "name": "conform-stores-s1a6",
+        "module": "PipeVerdict",
+        "expect": "diverges",
+        "pr": "S1a-6",
+        "fixed_here": "no",
+        "simulate": "3000,60,7",
+        "what": "stores: all fixes (S1a-5 + S1a-6 one-window grace) vs this tree; conforms at 8eecb5ee",
     },
     # --- current-code findings (reported, not fixed here) ----------------------------------
     {
@@ -410,7 +482,9 @@ def run_case(case: dict[str, str], out: Path) -> dict[str, object]:
         module.name,
     ]
     if case.get("simulate"):
+        # -simulate num is per worker: one worker keeps the trace count and seed reproducible.
         traces, depth, seed = case["simulate"].split(",")
+        command[command.index("-workers") + 1] = "1"
         command[-1:-1] = ["-simulate", f"file={work}/tr,num={traces}", "-depth", depth, "-seed", seed]
     started = time.monotonic()
     proc = subprocess.run(command, cwd=work, capture_output=True, text=True, timeout=CASE_TIMEOUT_S)
@@ -427,14 +501,17 @@ def run_case(case: dict[str, str], out: Path) -> dict[str, object]:
     if trace:
         (out / f"{case['name']}.trace.txt").write_text(render_trace(trace) + "\n")
     replays = {}
-    if trace and case.get("prefix"):
-        if case["module"] == "BackupVerdict":
+    if case.get("prefix"):
+        if not trace:
+            missing = {"error": "no counterexample trace to replay"}
+            replays = {"prefix": missing, "src": missing}
+        elif case["module"] == "BackupVerdict":
             replays = {"prefix": replay(case, trace, case["prefix"], out), "src": replay(case, trace, SRC_REF, out)}
         else:
             states = [values for _, values in trace]
             replays = {
-                "prefix": replay_ingest(case, [states], case["prefix"], out),
-                "src": replay_ingest(case, [states], SRC_REF, out),
+                "prefix": replay_pipe(case, [states], case["prefix"], out),
+                "src": replay_pipe(case, [states], SRC_REF, out),
             }
     distinct = re.findall(r"(\d+) distinct states found", text.replace(",", ""))
     version = re.search(r"TLC2 Version (\S+)", text)
@@ -477,6 +554,8 @@ def replay(case: dict[str, str], states: list, ref: str | None, out: Path) -> di
 
     constants = {k: int(v) if v.lstrip("-").isdigit() else v for k, v in cfg_constants(case["name"]).items()}
     payload = {"constants": constants, "ops": rp.ops_from_trace(states)}
+    if not any(op["op"] == "tick" for op in payload["ops"]):
+        return {"ref": ref or "working tree", "error": "counterexample has no health tick to replay"}
     proc = subprocess.run(
         [sys.executable, "-S", str(HERE / "replay.py"), "--run", str(source_tree(ref, out))],
         input=json.dumps(payload),
@@ -488,6 +567,8 @@ def replay(case: dict[str, str], states: list, ref: str | None, out: Path) -> di
     if proc.returncode != 0:
         return {"ref": ref or "working tree", "error": proc.stderr.strip().splitlines()[-1:]}
     ticks = json.loads(proc.stdout)
+    if not ticks:
+        return {"ref": ref or "working tree", "error": "replay returned no tick"}
     last = ticks[-1]
     if case["expect"] == "TruthfulSnapshotLabel":
         reproduces = (
@@ -501,61 +582,92 @@ def replay(case: dict[str, str], states: list, ref: str | None, out: Path) -> di
     return {"ref": ref or "working tree", "reproduces": reproduces, "conforms": conforms, "ticks": ticks}
 
 
-def replay_ingest(case: dict[str, str], traces: list, ref: str | None, out: Path) -> dict[str, object]:
-    """Feed each trace's heartbeat observations to the real evaluate() at ref; compare ingest per tick."""
+def replay_pipe(case: dict[str, str], traces: list, ref: str | None, out: Path) -> dict[str, object]:
+    """Feed each trace's observations to the real evaluate() at ref; compare the focused check per tick.
+
+    Fails closed: no trace, a trace that parsed to no state, or a replay that returns a different
+    number of runs is an error, never conformance.
+    """
     sys.path.insert(0, str(HERE))
     import replay as rp  # noqa: PLC0415 - sibling script
 
+    where = ref or "working tree"
+    if not traces or any(len(states) < 2 for states in traces):
+        return {"ref": where, "error": "no trace (or a trace with no step) to replay"}
     constants = {k: int(v) if v.lstrip("-").isdigit() else v for k, v in cfg_constants(case["name"]).items()}
-    payload = {"constants": constants, "traces": [rp.ingest_ops(states) for states in traces]}
+    focus = constants["Focus"].strip('"')
+    ops = [rp.pipe_ops(states, focus) for states in traces]
+    payload = {"constants": constants, "focus": focus, "traces": ops}
     proc = subprocess.run(
-        [sys.executable, "-S", str(HERE / "replay.py"), "--run-ingest", str(source_tree(ref, out))],
+        [sys.executable, "-S", str(HERE / "replay.py"), "--run-pipe", str(source_tree(ref, out))],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
-        timeout=300,
+        timeout=600,
         cwd=out,
     )
     if proc.returncode != 0:
-        return {"ref": ref or "working tree", "error": proc.stderr.strip().splitlines()[-1:]}
-    runs = [ticks for ticks in json.loads(proc.stdout) if ticks]
-    diverging = [ticks for ticks in runs if any(t["src"] != t["model"] for t in ticks)]
-    last = runs[0][-1] if runs else None
+        return {"ref": where, "error": proc.stderr.strip().splitlines()[-1:]}
+    runs = json.loads(proc.stdout)
+    if len(runs) != len(traces):
+        return {"ref": where, "error": f"replayed {len(runs)} of {len(traces)} traces"}
+    ticks = sum(len(run) for run in runs)
+    if ticks == 0:
+        return {"ref": where, "error": "no health tick in any trace"}
+    diverging = [run for run in runs if any(t["src"] != t["model"] for t in run)]
+    last = runs[0][-1] if runs[0] else None
     return {
-        "ref": ref or "working tree",
-        "reproduces": bool(last) and last["src"] == last["model"],
+        "ref": where,
+        "reproduces": last is not None and last["src"] == last["model"],
         "conforms": not diverging,
         "traces": len(runs),
-        "ticks": sum(len(ticks) for ticks in runs),
+        "ticks": ticks,
         "diverging": len(diverging),
         "first_divergence": diverging[0] if diverging else None,
     }
 
 
 def simulate_conformance(case: dict[str, str], work: Path, text: str, code: int, out: Path) -> tuple[str, dict]:
-    """Random behaviours of the model, replayed through the real code: do they agree on every tick?"""
+    """Random behaviours of the model, replayed through the real code: do they agree on every tick?
+
+    Fails closed: TLC must have succeeded, written at least one trace file, every file must parse,
+    and at least one health tick must be compared; anything else is "error".
+    """
     sys.path.insert(0, str(HERE))
     import replay as rp  # noqa: PLC0415 - sibling script
 
     if code != 0 or "Error:" in text:
-        return "error", {}
+        return "error", {"error": "TLC simulation did not succeed"}
     files = sorted(work.glob("tr_*"))
+    if not files:
+        return "error", {"error": "simulation wrote no trace file"}
     traces = [rp.parse_sim_file(f.read_text()) for f in files]
-    ref = case.get("prefix") or SRC_REF
-    result = replay_ingest(case, traces, ref, out)
+    if any(not states for states in traces):
+        return "error", {"error": "a simulation trace file parsed to no state"}
+    result = replay_pipe(case, traces, case.get("against") or SRC_REF, out)
     if "error" in result:
         return "error", result
     return ("conforms" if result["conforms"] else "diverges"), result
 
 
 def replay_matches(case: dict[str, str], replays: dict) -> bool:
-    """The pre-fix ref must reproduce; this tree must reproduce exactly when the fix is not here yet."""
-    if not replays:
-        return True
-    prefix, src = replays["prefix"], replays["src"]
-    if prefix.get("reproduces") is not True or "reproduces" not in src:
+    """A case with a pre-fix ref needs both replays, without error.
+
+    The pre-fix ref must reproduce the counterexample and agree with the model on every tick. This
+    tree must reproduce it exactly when the fix is not here yet (fixed_here "no"), and then also
+    agree on every tick; once fixed, it is expected to differ.
+    """
+    if not case.get("prefix"):
+        return not replays
+    prefix, src = replays.get("prefix") or {}, replays.get("src") or {}
+    if "error" in prefix or "error" in src or "reproduces" not in prefix or "reproduces" not in src:
         return False
-    return src["reproduces"] == (case.get("fixed_here") == "no")
+    if prefix["reproduces"] is not True or prefix.get("conforms") is not True:
+        return False
+    still_here = case.get("fixed_here") == "no"
+    if src["reproduces"] != still_here:
+        return False
+    return src.get("conforms") is True if still_here else True
 
 
 def sync_report() -> list[str]:

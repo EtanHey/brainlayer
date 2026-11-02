@@ -166,20 +166,81 @@ def test_replay_runs_real_source_without_the_package(tmp_path):
 @pytest.mark.parametrize(
     ("fixed_here", "prefix", "src", "ok"),
     [
-        ("yes", True, False, True),  # pre-fix ref reproduces, this tree has the fix
-        ("yes", True, True, False),  # the fix regressed in this tree
-        ("no", True, True, True),  # fix not merged yet: still reproduces here
-        ("no", True, False, False),  # fix landed: flip fixed_here
-        ("yes", False, False, False),  # the model no longer describes the pre-fix code
+        ("yes", (True, True), (False, False), True),  # pre-fix ref reproduces tick for tick; fixed here
+        ("yes", (True, True), (True, True), False),  # the fix regressed in this tree
+        ("no", (True, True), (True, True), True),  # fix not merged yet: still reproduces here
+        ("no", (True, True), (True, False), False),  # still here, but this tree disagrees on a tick
+        ("no", (True, True), (False, False), False),  # fix landed: flip fixed_here
+        ("yes", (False, True), (False, False), False),  # the model no longer describes the pre-fix code
+        ("yes", (True, False), (False, False), False),  # divergent historical prefix (REV-FTLA1-R1 B2)
     ],
 )
 def test_replay_ratchet(fixed_here, prefix, src, ok):
-    case = {"fixed_here": fixed_here}
-    replays = {"prefix": {"reproduces": prefix}, "src": {"reproduces": src}}
+    case = {"prefix": "abc", "fixed_here": fixed_here}
+    replays = {
+        "prefix": {"reproduces": prefix[0], "conforms": prefix[1]},
+        "src": {"reproduces": src[0], "conforms": src[1]},
+    }
     assert checker.replay_matches(case, replays) is ok
+
+
+def test_a_required_replay_cannot_be_skipped():
+    """REV-FTLA1-R1 B2: replay_matches({}) must not pass a case that names a pre-fix ref."""
+    assert checker.replay_matches({"prefix": "abc", "fixed_here": "yes"}, {}) is False
+    assert checker.replay_matches({}, {}) is True  # no replay required, none given
+    error = {"prefix": {"error": "x"}, "src": {"reproduces": False, "conforms": False}}
+    assert checker.replay_matches({"prefix": "abc", "fixed_here": "yes"}, error) is False
+
+
+def test_absent_counterexample_trace_fails_a_replayed_case(tmp_path, monkeypatch):
+    """TLC reports the violation but no trace parses: the replayed bug case must not match."""
+    monkeypatch.setattr(checker, "wait_for_load", lambda: {})
+    case = next(c for c in checker.CASES if c["name"] == "bug-1596-abandoned")
+    text = "TLC2 Version 2.19\nError: Invariant NoFalseGreen is violated.\n"
+    with patch.object(checker.subprocess, "run", return_value=subprocess.CompletedProcess([], 12, text, "")):
+        result = checker.run_case(case, tmp_path)
+    assert result["got"] == "NoFalseGreen"
+    assert result["matched"] is False
+    assert "error" in result["replay"]["prefix"]
+
+
+def _simulation_case():
+    return next(c for c in checker.CASES if c["name"] == "conform-ingest-main")
+
+
+def test_simulation_with_zero_files_is_an_error(tmp_path):
+    got, detail = checker.simulate_conformance(_simulation_case(), tmp_path, "Finished", 0, tmp_path)
+    assert got == "error" and "no trace file" in detail["error"]
+
+
+def test_simulation_with_zero_ticks_is_an_error(tmp_path):
+    state = (
+        "STATE_{n} ==\n/\\ now = {n}\n/\\ lastTick = -1\n"
+        '/\\ lastObs = [hb |-> "unobs", canary |-> "unobs", drive |-> "unobs", queue |-> "unobs", emb |-> "unobs"]\n'
+        '/\\ st = [ingest |-> "none", drive |-> "none", stores |-> "none", embedding |-> "none"]\n'
+        "/\\ hb = 0\n\n"
+    )
+    (tmp_path / "tr_0_0").write_text("".join(state.format(n=n) for n in (0, 1, 2)))
+    got, detail = checker.simulate_conformance(_simulation_case(), tmp_path, "Finished", 0, tmp_path)
+    assert got == "error" and "no health tick" in str(detail["error"])
+
+
+def test_simulation_file_that_parses_to_nothing_is_an_error(tmp_path):
+    (tmp_path / "tr_0_0").write_text("---- MODULE tr ----\n====\n")
+    got, _ = checker.simulate_conformance(_simulation_case(), tmp_path, "Finished", 0, tmp_path)
+    assert got == "error"
+
+
+def test_backup_replay_receipts_carry_iso_times():
+    """A shadowed helper once turned attempted_at into a list, and the reader saw no receipt."""
+    body = replay.receipt({"kind": "local_ok", "snap": 1, "hour": 2, "created": 1, "exact": True})
+    assert isinstance(body["attempted_at"], str) and body["attempted_at"].startswith("2026-11-02T")
+    assert isinstance(body["snapshot_created_at"], str)
 
 
 def test_every_backup_bug_case_is_replayed():
     for case in checker.CASES:
         if case["name"].startswith("bug-") and case["module"] == "BackupVerdict":
             assert case.get("prefix") and case.get("fixed_here") in ("yes", "no"), case["name"]
+        if case.get("simulate"):
+            assert case["expect"] in ("conforms", "diverges") and not case.get("prefix"), case["name"]

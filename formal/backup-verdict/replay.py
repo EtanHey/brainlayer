@@ -13,7 +13,7 @@ _parse_snapshot_date bodies, extracted from that source's backup_daily.py. Nothi
 file, a database or a socket.
 
     python3 -S replay.py --run <dir with health_verdict.py and backup_daily.py> < ops.json
-    python3 -S replay.py --run-ingest <same dir> < ops.json     (PipeVerdict ingest ticks)
+    python3 -S replay.py --run-pipe <same dir> < ops.json       (PipeVerdict stall-check ticks)
 """
 
 from __future__ import annotations
@@ -215,49 +215,88 @@ def parse_sim_file(text: str) -> list[dict[str, str]]:
     return states
 
 
-def ingest_ops(states: list[dict[str, str]]) -> list[dict]:
-    """One op per health tick (lastTick changes on every tick and nothing else)."""
+def _fact_at(hour_value: str) -> list:
+    return ["at", int(hour_value)] if int(hour_value) >= 0 else ["none"]
+
+
+def pipe_ops(states: list[dict[str, str]], focus: str) -> list[dict]:
+    """One op per health tick (lastTick changes on every tick and nothing else), with the facts
+    that tick observed for the focused check, as evaluate() receives them."""
     ops = []
     for before, after in zip(states, states[1:]):
         if after.get("lastTick") == before.get("lastTick"):
             continue
-        seen = _tla_record(after["lastObs"])["hb"] == "seen"
-        ops.append(
-            {
-                "hour": int(after["now"]),
-                "heartbeat": int(after["hb"]) if seen else None,
-                "model": _tla_record(after["st"])["ingest"],
-            }
-        )
+        obs = _tla_record(after["lastObs"])
+        facts: dict[str, list] = {}
+        if focus == "ingest":
+            facts["watcher_updated_at"] = ["at", int(after["hb"])] if obs["hb"] == "seen" else ["unobs"]
+        elif focus == "embedding":
+            e = obs["emb"]
+            facts["embedding_stalled_since"] = (
+                ["unobs"] if e == "unobs" else ["none"] if e == "clear" else _fact_at(after["stallSince"])
+            )
+        elif focus == "stores":
+            q, k = obs["queue"], obs["canary"]
+            facts["oldest_pending_store_at"] = (
+                ["unobs"] if q == "unobs" else ["none"] if q == "empty" else _fact_at(after["pendStart"])
+            )
+            facts["store_canary_ok"] = ["unobs"] if k == "unobs" else ["bool", k == "ok"]
+        else:
+            raise ValueError(f"no pipe replay for {focus}")
+        ops.append({"hour": int(after["now"]), "facts": facts, "model": _tla_record(after["st"])[focus]})
     return ops
 
 
-def run_ingest(src: Path, payload: dict, hv: types.ModuleType | None = None) -> list[dict]:
-    """The real evaluate() for ingest, fed the same heartbeat observations tick by tick."""
+def ingest_ops(states: list[dict[str, str]]) -> list[dict]:
+    return pipe_ops(states, "ingest")
+
+
+def run_pipe(src: Path, payload: dict, hv: types.ModuleType | None = None) -> list[dict]:
+    """The real evaluate() for one pipe check, fed the same observations tick by tick."""
     hv = hv or _load(src)
-    c = payload["constants"]
-    t = hv.Thresholds(
-        ingest_amber_s=c["IngestAmber"] * HOUR,
-        ingest_red_s=c["IngestRed"] * HOUR,
-        sleep_gap_s=c["Gap"] * HOUR,
-        wake_grace_s=c["Grace"] * HOUR,
-        recovery_good_ticks=c["GoodTicks"],
-        unknown_amber_ticks=c["UnknownAmber"],
-    )
+    c, focus = payload["constants"], payload["focus"]
+    fields = {
+        "ingest_amber_s": c["IngestAmber"] * HOUR,
+        "ingest_red_s": c["IngestRed"] * HOUR,
+        "embedding_amber_s": c["EmbedAmber"] * HOUR,
+        "embedding_red_s": c["EmbedRed"] * HOUR,
+        "stores_amber_s": c["StoreAmber"] * HOUR,
+        "stores_red_s": c["StoreRed"] * HOUR,
+        "canary_red_failures": c["CanaryRed"],
+        "sleep_gap_s": c["Gap"] * HOUR,
+        "wake_grace_s": c["Grace"] * HOUR,
+        "recovery_good_ticks": c["GoodTicks"],
+        "unknown_amber_ticks": c["UnknownAmber"],
+    }
+    t = hv.Thresholds(**fields)
+
+    def value(fact: list):
+        kind = fact[0]
+        if kind == "unobs":
+            return hv.UNOBSERVED
+        if kind == "none":
+            return None
+        if kind == "bool":
+            return fact[1]
+        return BASE + dt.timedelta(hours=fact[1])
+
     prior = None
     out = []
     for op in payload["ops"]:
         now = BASE + dt.timedelta(hours=op["hour"])
-        seen = op["heartbeat"]
-        watcher = BASE + dt.timedelta(hours=seen) if seen is not None else hv.UNOBSERVED
-        verdict = hv.evaluate(hv.Facts(now=now, watcher_updated_at=watcher), prior, t)
+        facts = {name: value(fact) for name, fact in op["facts"].items()}
+        verdict = hv.evaluate(hv.Facts(now=now, **facts), prior, t)
         prior = verdict.state
-        out.append({"hour": op["hour"], "model": op["model"], "src": verdict.check("ingest").state})
+        out.append({"hour": op["hour"], "model": op["model"], "src": verdict.check(focus).state})
     return out
 
 
+def run_ingest(src: Path, payload: dict, hv: types.ModuleType | None = None) -> list[dict]:
+    return run_pipe(src, {"focus": "ingest", **payload}, hv)
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] not in ("--run", "--run-ingest"):
+    if len(sys.argv) != 3 or sys.argv[1] not in ("--run", "--run-pipe"):
         sys.exit(__doc__)
     payload = json.load(sys.stdin)
     if sys.argv[1] == "--run":
@@ -265,4 +304,4 @@ if __name__ == "__main__":
     else:  # one payload carries every trace, so one interpreter replays them all
         hv = _load(Path(sys.argv[2]))
         traces = payload["traces"]
-        print(json.dumps([run_ingest(Path(sys.argv[2]), {**payload, "ops": ops}, hv) for ops in traces]))
+        print(json.dumps([run_pipe(Path(sys.argv[2]), {**payload, "ops": ops}, hv) for ops in traces]))

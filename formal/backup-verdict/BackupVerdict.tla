@@ -206,10 +206,10 @@ Abandon(s) ==                   \* _local_upload_receipt: local file missing or 
     /\ file' = [file EXCEPT ![s] = FALSE]
     /\ UNCHANGED <<now, created>>
 
-Supersede(s) ==                 \* _reclaim_superseded_local: unlink a never-uploaded stall
-    /\ "supersede" \in Kinds
+Supersede(s) ==                 \* _reclaim_superseded_local: unlink a never-uploaded stall,
+    /\ "supersede" \in Kinds     \* run only after a NEWER snapshot's verified upload
     /\ s \in Taken /\ file[s] /\ ~OffOK(lastOff, s)
-    /\ \E t \in Taken : t > s
+    /\ \E t \in Taken : t > s /\ OffOK(lastOff, t)
     /\ AddReceipt([kind |-> "supersede", snap |-> s, exact |-> TRUE])
     /\ file' = [file EXCEPT ![s] = FALSE]
     /\ UNCHANGED <<now, created>>
