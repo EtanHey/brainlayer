@@ -21,6 +21,61 @@ from tests.test_weekly_local_gate import local_lane  # noqa: F401
 from tests.test_weekly_local_gate_r2 import local_clock  # noqa: F401
 
 WEEKLY_BACKUP = maintenance._weekly_backup
+RECENT_WEEKLY_BACKUP = maintenance._recent_weekly_verified_backup
+
+
+@pytest.mark.parametrize("present,age_hours", [(False, 1), (True, 1), (True, 7)])
+def test_r1_snapshot_reuse_preserves_weekly_vacuum_gate(
+    weekly, local_lane, local_clock, monkeypatch, capsys, present, age_hours
+):
+    config, _, _, _ = weekly
+    # A manual full run left today's verified Drive copy, possibly reclaimed locally.
+    local_clock("UTC", dt.datetime(2026, 10, 29, 8, 0) - dt.timedelta(hours=age_hours))
+    original = backup.run_backup(**local_lane, phase="snapshot")
+    verified = dict(original, uploaded=True, verified=True, drive_file={"id": "verified-copy"})
+    backup._append_json_log(local_lane["log_path"], verified)
+    archive = Path(original["snapshot"])
+    if not present:
+        archive.unlink()
+    now = local_clock("UTC", dt.datetime(2026, 10, 29, 8, 0))
+    config.db_path = local_lane["db_path"]
+    config.backup_staging_dir = local_lane["staging_dir"]
+    config.backup_log_path = local_lane["log_path"]
+    config.now_fn = lambda: now
+    monkeypatch.setenv("HOME", str(config.db_path.parent))
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(config.db_path.with_name("alerts.json")))
+    monkeypatch.setenv("BRAINLAYER_CALENDAR_STEP", "1")
+    monkeypatch.setattr(maintenance, "MaintenanceConfig", lambda: config)
+    monkeypatch.setattr(maintenance, "_weekly_backup", WEEKLY_BACKUP)
+    monkeypatch.setattr(maintenance, "_recent_weekly_verified_backup", RECENT_WEEKLY_BACKUP)
+    monkeypatch.setattr(maintenance, "_freelist_ratio", lambda _: 0.5)
+    monkeypatch.setattr(maintenance, "_doctor_roundtrip", lambda _: (True, 0, ""), raising=False)
+    vacuum = maintenance._vacuum
+    vacuum_calls = []
+
+    def real_vacuum(*args, **kwargs):
+        vacuum_calls.append(True)
+        return vacuum(*args, **kwargs)
+
+    monkeypatch.setattr(maintenance, "_vacuum", real_vacuum)
+    if age_hours > 6:
+        # A new attempted_at cannot freshen old bytes or authorize an overwrite.
+        before = archive.read_bytes()
+        with pytest.raises(FileExistsError):
+            backup.run_backup(**local_lane, phase="snapshot")
+        assert archive.read_bytes() == before
+        capsys.readouterr()
+        assert maintenance.main(["--full"]) == 75
+        assert vacuum_calls == []
+        assert json.loads(capsys.readouterr().out)["status"] == "deferred"
+    else:
+        result = backup.run_backup(**local_lane, phase="snapshot")
+        assert backup._local_snapshot_intact(result)
+        assert result["snapshot_created_at"] == (original["snapshot_created_at"] if present else now.isoformat())
+        capsys.readouterr()
+        assert maintenance.main(["--full"]) == 0
+        assert vacuum_calls == [True]
+        assert json.loads(capsys.readouterr().out)["vacuum"] == "completed"
 
 
 @pytest.mark.parametrize("cause", ["snapshot", "timeout", "short-hold", "vacuum-error", "restore-error"])

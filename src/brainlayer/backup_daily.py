@@ -3035,11 +3035,13 @@ def _recent_verified_backup_for_reuse(
     snapshot_names: tuple[str, ...] | None = None,
 ) -> dict[str, Any] | None:
     try:
-        receipts = _read_backup_receipts(log_path)
+        receipts = _read_backup_receipts(log_path, strict=True)
     except (OSError, ValueError):
         return None
     now = now.astimezone(dt.UTC)
-    for receipt in reversed(receipts):
+    # An older pass cannot restore proof revoked by a later receipt for these bytes.
+    latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
+    for receipt in reversed(list(latest.values())):
         try:
             created = _snapshot_created_time(receipt)
         except (ValueError, KeyError, TypeError):
@@ -3060,6 +3062,8 @@ def _recent_verified_backup_for_reuse(
             and receipt.get("uploaded") is True
             and receipt.get("verified") is True
             and "error_type" not in receipt
+            and not receipt.get("verification_error")
+            and receipt.get("drive_md5_match") is not False
             and isinstance(drive_file, dict)
             and isinstance(drive_file.get("id"), str)
             and dt.timedelta(0) <= age <= dt.timedelta(hours=max_age_hours)
@@ -3103,6 +3107,9 @@ def _recent_local_verified_backup(
             and receipt.get("local_integrity") == "ok"
             and receipt.get("local_integrity_pragma") == "integrity_check"
             and not receipt.get("verification_error")
+            and receipt.get("drive_md5_match") is not False
+            and receipt.get("local_removed") is not True
+            and receipt.get("upload_state") not in {"abandoned", "superseded"}
             and not (receipt.get("uploaded") is True and receipt.get("verified") is not True)
         ):
             return receipt
@@ -3554,6 +3561,18 @@ def run_backup(
             }
         )
 
+    def reuse(receipt: Mapping[str, Any]) -> dict[str, Any]:
+        # Probe before copying historical success flags: an auth failure must be a
+        # current failure receipt, not a newly dated claim that Drive worked.
+        if upload:
+            get_drive_credentials()
+        attempted_at = result["attempted_at"]
+        result.update({k: v for k, v in receipt.items() if k not in {"backup_invocation_id", "drive_auth_probe"}})
+        result.update(status="reused", attempted_at=attempted_at)
+        if upload:
+            result["drive_auth_probe"] = "ok"
+        return result
+
     try:
         resolved_machine_id = _validate_machine_id(machine_id) if machine_id is not None else resolve_machine_id()
         resolved_folder_parts = (
@@ -3576,11 +3595,8 @@ def run_backup(
                 str(Path(staging_dir) / f"{resolved_date_stamp}{suffix}") for suffix in DB_SNAPSHOT_SUFFIXES
             ),
         )
-        if remote is not None and phase != "upload":
-            attempted_at = result["attempted_at"]
-            result.update({k: v for k, v in remote.items() if k != "backup_invocation_id"})
-            result.update(status="reused", attempted_at=attempted_at)
-            return result
+        if remote is not None and phase == "all":
+            return reuse(remote)
         result["local_gzip_retention_deleted"] = _sweep_verified_local_archives(
             resolved_log_path, Path(staging_dir), result, remove_local=remove_local_after_upload
         )
@@ -3619,15 +3635,11 @@ def run_backup(
             created = _snapshot_created_time(local)
             now = dt.datetime.fromisoformat(result["attempted_at"])
             if created and local_backup_date(created) == local_backup_date(now) and _local_snapshot_intact(local):
-                attempted_at = result["attempted_at"]
-                result.update({k: v for k, v in local.items() if k != "backup_invocation_id"})
-                result.update(status="reused", attempted_at=attempted_at)
-                return result
+                return reuse(local)
         if phase == "upload" and local is None:
             if remote is not None:
-                attempted_at = result["attempted_at"]
-                result.update({k: v for k, v in remote.items() if k != "backup_invocation_id"})
-                result.update(status="reused", attempted_at=attempted_at, upload_state="nothing_pending")
+                reuse(remote)
+                result["upload_state"] = "nothing_pending"
                 return result
             nothing_pending = True
             result["upload_state"] = "nothing_pending"
