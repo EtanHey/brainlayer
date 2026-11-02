@@ -456,7 +456,7 @@ def test_calendar_weekly_never_waits_for_a_running_backup_under_hold(tmp_path, m
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with pytest.raises(maintenance.MaintenanceAbort, match="backup running") as exc:
             maintenance._weekly_backup(config)
-    assert exc.value.code == 76
+    assert exc.value.code == 75
 
 
 # VACUUM (real SQLite) --------------------------------------------------------------------
@@ -497,7 +497,7 @@ def test_vacuum_refuses_when_hold_expires_before_it_could_unwind(vacuum_db):
     before = _rows(vacuum_db)
     with pytest.raises(maintenance.MaintenanceAbort, match="hold expires") as exc:
         maintenance._vacuum(vacuum_db, deadline=hold_clock() + maintenance.HOLD_UNWIND_S - 1)
-    assert exc.value.code == 76 and _rows(vacuum_db) == before
+    assert exc.value.code == 75 and _rows(vacuum_db) == before
 
 
 def test_vacuum_never_starts_without_time_to_finish(vacuum_db, monkeypatch):
@@ -507,7 +507,7 @@ def test_vacuum_never_starts_without_time_to_finish(vacuum_db, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_VACUUM_SECONDS_PER_GB", str(3600 / size_gb))  # Estimate: one hour.
     with pytest.raises(maintenance.MaintenanceAbort, match="too little time for VACUUM") as exc:
         maintenance._vacuum(vacuum_db, deadline=hold_clock() + maintenance.HOLD_UNWIND_S + 1800)
-    assert exc.value.code == 76 and _rows(vacuum_db) == before and _free_pages(vacuum_db) > 0
+    assert exc.value.code == 75 and _rows(vacuum_db) == before and _free_pages(vacuum_db) > 0
     monkeypatch.setenv("BRAINLAYER_VACUUM_SECONDS_PER_GB", str(60 / size_gb))  # Estimate: one minute.
     maintenance._vacuum(vacuum_db, deadline=hold_clock() + maintenance.HOLD_UNWIND_S + 1800)
     assert _free_pages(vacuum_db) == 0
@@ -598,6 +598,7 @@ def test_run_maintenance_bounds_vacuum_and_hold_by_config_window(tmp_path, monke
         monkeypatch.setattr(maintenance, name, lambda *_a, **_k: None)
     monkeypatch.setattr(maintenance, "_service_is_loaded", lambda *_a, **_k: True)
     monkeypatch.setattr(maintenance, "_quiesce_services", quiesce)
+    monkeypatch.setattr(maintenance, "_freelist_ratio", lambda _path: 0.5)
     monkeypatch.setattr(maintenance, "_weekly_backup", lambda _c: receipt)
     monkeypatch.setattr(maintenance, "_recent_weekly_verified_backup", lambda _c: receipt)
     monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _db: (0, 0, 0))

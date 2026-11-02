@@ -192,7 +192,7 @@ struct BrainBarBackupSources: Sendable {
             let row = (try? JSONSerialization.jsonObject(with: Data(newest.utf8))) as? [String: Any],
             let status = row["status"] as? String
         else { return .unavailable("the newest record in \(log.lastPathComponent) is incomplete") }
-        guard status == "aborted" else {
+        guard status == "aborted" || status == "deferred" else {
             let warnings = (row["warnings"] as? [Any])?.compactMap { $0 as? String } ?? []
             return .notAnAbort(writtenAt: writtenAt, warnings: status == "ok" ? warnings : [])
         }

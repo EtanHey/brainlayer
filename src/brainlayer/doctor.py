@@ -8,10 +8,12 @@ indexes.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shlex
 import sqlite3
+import subprocess
 import sys
 import time
 import uuid
@@ -67,12 +69,30 @@ from .retired_services import LEGACY_ENRICHMENT_HOLD_LABEL
 from .search_repo import clear_hybrid_search_cache
 from .vector_store import VectorStore
 
+# Pipes rebuild plan (2026-11-02), S1a health_verdict embedding_red_s = 6 * HOURS (PR #1583).
+# Doctor uses creation age, not time since vector invalidation.
+# A bulk re-embed can stay fatal until its old chunks drain.
+DEFAULT_EMBEDDING_GRACE_HOURS = 6.0
 DEFAULT_RECENT_WINDOW_HOURS = 24
 DEFAULT_ROUNDTRIP_TIMEOUT_SECONDS = 60.0
 DEFAULT_QUEUE_WARNING_COUNT = 25
 DEFAULT_QUEUE_MOVEMENT_SAMPLE_SECONDS = 10.0
 DOCTOR_PROBE_PROJECT = "brainlayer-doctor"
 LEGACY_PYTHON_MCP_FIX = json.dumps({"mcpServers": {"brainlayer": {"command": stable_mcp_bridge_command()}}})
+
+
+def _embedding_grace_from_env() -> float:
+    try:
+        return float(os.environ.get("BRAINLAYER_EMBEDDING_GRACE_HOURS", DEFAULT_EMBEDDING_GRACE_HOURS))
+    except ValueError as exc:
+        raise ValueError("BRAINLAYER_EMBEDDING_GRACE_HOURS must be numeric, finite and non-negative") from exc
+
+
+def _running_from_source_checkout() -> bool:
+    root = Path(__file__).resolve().parents[2]
+    prefix = Path(sys.prefix).resolve()
+    in_keg = any(p.parent.name == "brainlayer" and p.parent.parent.name == "Cellar" for p in (prefix, *prefix.parents))
+    return (root / ".git").exists() and not in_keg
 
 
 def default_version_check_path() -> Path:
@@ -275,6 +295,7 @@ class DoctorConfig:
     hotlane_label: str = DEFAULT_HOTLANE_LABEL
     watch_label: str = DEFAULT_WATCH_LABEL
     drain_label: str = DEFAULT_DRAIN_LABEL
+    embedding_grace_hours: float = field(default_factory=_embedding_grace_from_env)
     recent_window_hours: int = DEFAULT_RECENT_WINDOW_HOURS
     roundtrip_timeout_seconds: float = DEFAULT_ROUNDTRIP_TIMEOUT_SECONDS
     roundtrip_probe_enabled: bool = True
@@ -295,6 +316,10 @@ class DoctorConfig:
     #: the canonical DB). Doctor decodes the validity bitmaps only, which is
     #: cheap; the full payload sweep belongs to the census script.
     index_completeness_verify_payload: bool = False
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.embedding_grace_hours) or self.embedding_grace_hours < 0:
+            raise ValueError("BRAINLAYER_EMBEDDING_GRACE_HOURS (embedding_grace_hours) must be finite and non-negative")
 
 
 @dataclass
@@ -427,6 +452,41 @@ def _recent_unvectored_chunks(db_path: Path, now: datetime, window_hours: int) -
             (cutoff,),
         ).fetchone()
     return int(row[0] if row else 0)
+
+
+def _unvectored_age_stats(db_path: Path, now: datetime, window_hours: int | None = None) -> tuple[float, int]:
+    """Return oldest known age and the count with unknown creation age."""
+    # EXCEPT bounds all-time content reads to missing IDs; a LEFT JOIN scans all content.
+    # The recent path can instead use the created_at index.
+    with _ro_conn(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT c.created_at FROM chunks c
+            """
+            + (
+                "LEFT JOIN chunk_vectors_rowids r ON r.id = c.id WHERE r.id IS NULL AND "
+                if window_hours is not None
+                else "JOIN (SELECT id FROM chunks EXCEPT SELECT id FROM chunk_vectors_rowids) m ON m.id = c.id WHERE "
+            )
+            + """
+              c.content IS NOT NULL AND c.content != ''
+              AND c.archived_at IS NULL AND c.superseded_by IS NULL AND c.aggregated_into IS NULL
+            """
+            + (" AND c.created_at >= ?" if window_hours is not None else ""),
+            ((now - timedelta(hours=window_hours)).isoformat(),) if window_hours is not None else (),
+        )
+        ages = []
+        unknown_age_count = 0
+        for (created_at,) in rows:
+            if created_at is None:
+                unknown_age_count += 1
+                continue
+            created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            ages.append((now - created).total_seconds() / 3600)
+    # The hotlane may finish the backlog between count and age reads.
+    return max(0.0, max(ages, default=0.0)), unknown_age_count
 
 
 def _index_completeness(db_path: Path, *, verify_payload: bool = False) -> dict[str, Any]:
@@ -646,6 +706,7 @@ def _check_brainbar_version_consistency(
     version_check_required: bool,
     command_runner: CommandRunner,
 ) -> None:
+    failure_severity = "info" if _running_from_source_checkout() else "fatal"
     if not version_check_path.is_file():
         severity = "fatal" if version_check_required else "warning"
         result.issues.append(
@@ -664,7 +725,7 @@ def _check_brainbar_version_consistency(
         result.issues.append(
             DoctorIssue(
                 "brainbar_version_check_failed",
-                "fatal",
+                failure_severity,
                 f"BrainBar version consistency check could not run: {exc}",
                 {"path": str(version_check_path), "exception": repr(exc)},
             )
@@ -680,7 +741,7 @@ def _check_brainbar_version_consistency(
     result.issues.append(
         DoctorIssue(
             "brainbar_version_check_failed",
-            "fatal",
+            failure_severity,
             f"BrainBar version consistency check failed: {detail}",
             {
                 "path": str(version_check_path),
@@ -767,11 +828,15 @@ def run_doctor(
                 config.recent_window_hours,
             )
             if result.recent_unvectored_chunks > 0:
-                fatal(
+                oldest_age, _ = _unvectored_age_stats(config.db_path, now, config.recent_window_hours)
+                report = fatal if oldest_age > config.embedding_grace_hours else warning
+                report(
                     "recent_unvectored_chunks",
                     "recent active chunks are missing chunk_vectors_rowids rows",
                     count=result.recent_unvectored_chunks,
                     window_hours=config.recent_window_hours,
+                    oldest_age_hours=oldest_age,
+                    grace_hours=config.embedding_grace_hours,
                 )
         except Exception as exc:
             fatal("recent_vector_coverage_failed", f"could not check recent vector coverage: {exc}")
@@ -779,10 +844,20 @@ def run_doctor(
         try:
             result.missing_vectors = count_missing_embeddings(config.db_path)
             if result.missing_vectors and result.missing_vectors > 0:
-                fatal(
+                oldest_age, unknown_age_count = _unvectored_age_stats(config.db_path, now)
+                if unknown_age_count:
+                    warning(
+                        "unvectored_age_unknown",
+                        "active unvectored chunks have unknown creation age",
+                        count=unknown_age_count,
+                    )
+                report = fatal if oldest_age > config.embedding_grace_hours else warning
+                report(
                     "vector_parity_gap",
                     "active chunks are missing chunk_vectors_rowids rows",
                     count=result.missing_vectors,
+                    oldest_age_hours=oldest_age,
+                    grace_hours=config.embedding_grace_hours,
                 )
         except Exception as exc:
             fatal("vector_parity_failed", f"could not check vector parity: {exc}")
@@ -853,6 +928,36 @@ def run_doctor(
                     reason=reason,
                 )
 
+    from .supervisor_adapters import SupervisorCommands, adapt_commands
+
+    service_runner = adapt_commands(
+        command_runner,
+        config.pause_sentinel_path,
+        required=(config.hotlane_label, config.watch_label, config.drain_label),
+        tolerate_unavailable=True,
+        discover_ownership=True,
+    )
+
+    # Use the authenticated control adapter's state, without its healer policy
+    # that also considers disabled/paused children "loaded".
+    states = {}
+    if isinstance(service_runner, SupervisorCommands) and not service_runner.control_error:
+        try:
+            states = service_runner.request()
+        except (OSError, ValueError, KeyError, TypeError, OverflowError, RuntimeError):
+            pass  # The existing launchd failure remains visible below.
+
+    def service_status(args):
+        standalone = command_runner(args)
+        if standalone.returncode == 0:
+            return standalone
+        label = args[-1].rsplit("/", 1)[-1]
+        if isinstance(service_runner, SupervisorCommands):
+            state = states.get(service_runner.aliases.get(label), {})
+            if state.get("configured") and not state.get("paused") and state.get("pid"):
+                return subprocess.CompletedProcess(args, 0, "", "")
+        return standalone
+
     drain_loaded: bool | None = None
     for label, code, message in (
         (config.hotlane_label, "hotlane_unloaded", "hot-lane launchd label is not loaded"),
@@ -865,7 +970,7 @@ def run_doctor(
                 label=label,
                 issue_code=code,
                 message=message,
-                command_runner=command_runner,
+                command_runner=service_status,
             )
             if code == "drain_unloaded":
                 drain_loaded = loaded

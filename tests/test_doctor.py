@@ -401,6 +401,9 @@ def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path, monkeypatch, mode):
     )
 
     assert result.chunk_count > 0
+    assert result.recent_unvectored_chunks == 0
+    assert result.missing_vectors == 0
+    assert not any(i.code in {"recent_unvectored_chunks", "vector_parity_gap"} for i in result.issues)
     if mode == "dev":
         assert result.cli_path_shadow["state"] == "skipped"
     if mode == "unexpected":
@@ -563,7 +566,9 @@ def test_run_doctor_can_skip_roundtrip_probe_for_bounded_status_gate(tmp_path, m
     assert not [issue for issue in result.issues if issue.code == "roundtrip_vector_probe_failed"]
 
 
-def test_run_doctor_fails_loudly_when_brainbar_version_check_fails(tmp_path):
+@pytest.mark.parametrize("source_checkout", [False, True])
+def test_run_doctor_fails_loudly_when_brainbar_version_check_fails(tmp_path, monkeypatch, source_checkout):
+    monkeypatch.setattr("brainlayer.doctor._running_from_source_checkout", lambda: source_checkout)
     from brainlayer.doctor import run_doctor
 
     db_path = tmp_path / "healthy.db"
@@ -591,10 +596,11 @@ def test_run_doctor_fails_loudly_when_brainbar_version_check_fails(tmp_path):
         now_fn=lambda: NOW,
     )
 
-    issue = next(issue for issue in result.issues if issue.code == "brainbar_version_check_failed")
-    assert result.exit_code == 1
-    assert result.ok is False
-    assert issue.severity == "fatal"
+    issue = next((issue for issue in result.issues if issue.code == "brainbar_version_check_failed"), None)
+    assert issue is not None
+    assert result.exit_code == (0 if source_checkout else 1)
+    assert result.ok is source_checkout
+    assert issue.severity == ("info" if source_checkout else "fatal")
     assert "cask drift" in issue.message
 
 
@@ -620,7 +626,9 @@ def test_run_doctor_warns_when_brainbar_version_check_script_is_missing(tmp_path
     assert result.ok is True
 
 
-def test_run_doctor_reports_brainbar_version_check_runner_exception(tmp_path):
+@pytest.mark.parametrize("source_checkout", [False, True])
+def test_run_doctor_reports_brainbar_version_check_runner_exception(tmp_path, monkeypatch, source_checkout):
+    monkeypatch.setattr("brainlayer.doctor._running_from_source_checkout", lambda: source_checkout)
     from brainlayer.doctor import run_doctor
 
     db_path = tmp_path / "healthy.db"
@@ -645,9 +653,10 @@ def test_run_doctor_reports_brainbar_version_check_runner_exception(tmp_path):
         now_fn=lambda: NOW,
     )
 
-    issue = next(issue for issue in result.issues if issue.code == "brainbar_version_check_failed")
-    assert issue.severity == "fatal"
-    assert result.exit_code == 1
+    issue = next((issue for issue in result.issues if issue.code == "brainbar_version_check_failed"), None)
+    assert issue is not None
+    assert issue.severity == ("info" if source_checkout else "fatal")
+    assert result.exit_code == (0 if source_checkout else 1)
     assert "runner unavailable" in issue.message
 
 
@@ -1219,22 +1228,38 @@ def test_record_deploy_provenance_rejects_unreadable_plist(tmp_path, plist_conte
     assert not (provenance_dir / "com.example.invalid.json").exists()
 
 
-def test_run_doctor_exits_nonzero_for_recent_unvectored_chunk(tmp_path):
+@pytest.mark.parametrize(
+    "age_hours,grace_hours,severity",
+    [(1 / 6, 6, "warning"), (6, 6, "warning"), (6.01, 6, "fatal"), (25, 6, "fatal"), (2, 1, "fatal")],
+)
+def test_run_doctor_embedding_lag_grace(tmp_path, age_hours, grace_hours, severity):
     from brainlayer.doctor import run_doctor
 
     db_path = tmp_path / "missing-vector.db"
     _build_db(db_path, missing_recent_vector=True)
-
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE chunks SET created_at = ? WHERE id NOT IN (SELECT id FROM chunk_vectors_rowids)",
+            ((NOW - timedelta(hours=age_hours)).isoformat(),),
+        )
+    config = _doctor_config(tmp_path, db_path)
+    config.embedding_grace_hours = grace_hours
     result = run_doctor(
-        _doctor_config(tmp_path, db_path),
+        config,
         ps_output_fn=_hotlane_ps,
         command_runner=_loaded_launchctl,
         now_fn=lambda: NOW,
     )
 
-    assert result.exit_code == 1
-    assert result.ok is False
-    assert any(issue.code == "recent_unvectored_chunks" for issue in result.issues)
+    assert result.exit_code == (1 if severity == "fatal" else 0)
+    assert result.ok is (severity != "fatal")
+    issues = {issue.code: issue for issue in result.issues}
+    codes = ["vector_parity_gap"] + (["recent_unvectored_chunks"] if age_hours <= 24 else [])
+    for code in codes:
+        assert issues[code].severity == severity
+        assert issues[code].details["oldest_age_hours"] == pytest.approx(age_hours)
+        assert issues[code].details["count"] == 1
+    assert result.recent_unvectored_chunks == (1 if age_hours <= 24 else 0)
 
 
 def test_run_doctor_fails_loudly_when_required_launchd_label_is_not_loaded(tmp_path):
@@ -1998,3 +2023,111 @@ def test_doctor_does_not_expect_retired_enrichment_services(tmp_path, label):
     payload = json.loads(json.dumps(result.to_dict()))
     assert "enrichment_backlog" in payload
     assert payload["enrichment_backlog"] is None
+
+
+@pytest.mark.parametrize(
+    "state", ["running", "dead", "legacy", "unavailable", "disabled", "paused", "legacy_with_supervisor"]
+)
+def test_doctor_consolidated_service_invariant(tmp_path, monkeypatch, state):
+    from brainlayer import supervisor_adapters
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "healthy.db"
+    _build_db(db_path)
+    monkeypatch.setattr(supervisor_adapters, "supervisor_owns_jobs", lambda: state != "legacy")
+
+    def status(self):
+        if state == "unavailable":
+            raise OSError("control socket unavailable")
+        return {
+            name: {
+                "configured": state != "disabled",
+                "paused": state == "paused",
+                "pid": 123 if state in {"running", "disabled", "paused"} else None,
+                "starts": 1,
+                "exit_timeout": 5,
+            }
+            for name in ("hotlane", "watch", "drain")
+        }
+
+    monkeypatch.setattr(supervisor_adapters.SupervisorCommands, "request", status)
+
+    def runner(args):
+        return SimpleNamespace(
+            returncode=0 if state in {"legacy", "legacy_with_supervisor"} else 113, stdout="", stderr=""
+        )
+
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path), ps_output_fn=_hotlane_ps, command_runner=runner, now_fn=lambda: NOW
+    )
+    unloaded = {issue.code for issue in result.issues if issue.code.endswith("_unloaded")}
+    assert unloaded == (
+        set()
+        if state in {"running", "legacy", "legacy_with_supervisor"}
+        else {"hotlane_unloaded", "watch_unloaded", "drain_unloaded"}
+    )
+
+
+@pytest.mark.parametrize("checkout,keg,expected", [(True, False, True), (True, True, False), (False, False, False)])
+def test_doctor_source_checkout_detection(tmp_path, monkeypatch, checkout, keg, expected):
+    from brainlayer import doctor
+
+    root = tmp_path / "source"
+    root.mkdir()
+    if checkout:
+        (root / ".git").write_text("gitdir: /unused/worktree")
+    monkeypatch.setattr(doctor, "__file__", str(root / "src/brainlayer/doctor.py"))
+    prefix = tmp_path / ("Cellar/brainlayer/1.5.84/libexec/venv" if keg else "venv")
+    monkeypatch.setattr(doctor.sys, "prefix", str(prefix))
+    assert doctor._running_from_source_checkout() is expected
+
+
+def test_doctor_embedding_grace_env(monkeypatch):
+    from brainlayer.doctor import DoctorConfig
+
+    monkeypatch.setenv("BRAINLAYER_EMBEDDING_GRACE_HOURS", "2.5")
+    assert DoctorConfig().embedding_grace_hours == 2.5
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-1", "oops"])
+def test_doctor_embedding_grace_rejects_invalid_env(monkeypatch, value):
+    from brainlayer.doctor import DoctorConfig
+
+    monkeypatch.setenv("BRAINLAYER_EMBEDDING_GRACE_HOURS", value)
+    with pytest.raises(ValueError, match="BRAINLAYER_EMBEDDING_GRACE_HOURS"):
+        DoctorConfig()
+
+
+@pytest.mark.parametrize("old_age", [7, 25, None])
+def test_doctor_fresh_backlog_does_not_hide_old_or_unknown_age(tmp_path, old_age):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "mixed-backlog.db"
+    _build_db(db_path, missing_recent_vector=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE chunks SET created_at = ? WHERE id = 'doctor-recent-missing-vector'",
+            ((NOW - timedelta(minutes=10)).isoformat(),),
+        )
+        conn.execute("DELETE FROM chunk_vectors_rowids WHERE id = 'doctor-healthy-1'")
+        conn.execute(
+            "UPDATE chunks SET created_at = ? WHERE id = 'doctor-healthy-1'",
+            ((NOW - timedelta(hours=old_age)).isoformat() if old_age is not None else None,),
+        )
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path),
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+    issues = {issue.code: issue for issue in result.issues}
+    assert "vector_parity_failed" not in issues
+    assert issues["vector_parity_gap"].details["count"] == 2
+    if old_age is None:
+        assert result.exit_code == 0
+        assert issues["unvectored_age_unknown"].severity == "warning"
+        assert issues["unvectored_age_unknown"].details["count"] == 1
+    else:
+        assert result.exit_code == 1
+        assert issues["vector_parity_gap"].severity == "fatal"
+        assert issues["vector_parity_gap"].details["oldest_age_hours"] == old_age

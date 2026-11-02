@@ -343,6 +343,8 @@ def test_scheduled_no_config_run_records_the_store_round_trip_once_after_resume(
     monkeypatch.setattr(maintenance, "_assert_running_merged_code", lambda _root: None)
     monkeypatch.setattr(maintenance, "_run_gates", lambda _config: None)
     monkeypatch.setattr(maintenance, "_weekly_backup", lambda _config: None)
+    # #1582: full probes the freelist before the hold; a low ratio takes its no-VACUUM completion path.
+    monkeypatch.setattr(maintenance, "_freelist_ratio", lambda _path: 0.0)
     monkeypatch.setattr(maintenance, "_quiesce_services", lambda *_args: events.append("quiesce"))
     monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service, **_kw: False)
     monkeypatch.setattr(maintenance, "_resume_services", lambda *_args: events.append("resume") or [])
