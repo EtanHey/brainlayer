@@ -12,6 +12,16 @@
         "target": "channel.sendall"
       }
     },
+    "0055a10ff33d61f2a7511f901a9fd98a34b37ef00f22490af13ef1f834996d3f": {
+      "non_cloud_purpose": "Local SQLite file-control integer and pointer for open-source inode custody; no library loading, network or model sender.",
+      "site": {
+        "call_sha256": "22648dc4f24e0ff050fc1901be95cc0a8efd64893e9a612888044c0e3cb2fdc7",
+        "kind": "transport_call",
+        "owner": "<module>._source_matches",
+        "path": "src/brainlayer/readonly_snapshot.py",
+        "target": "ctypes.c_int"
+      }
+    },
     "00db5ec85f9abd52c6d5d9ff6ed45c08d7a6b8cc3151b4371a1965a59c0c6dc3": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls socket.socket.",
       "site": {
@@ -1250,6 +1260,16 @@
         "target": "subprocess.Popen"
       }
     },
+    "3a5ca0010da60c36d12b1d4d9d9cda3aa49cfa09b8259098ae0392461dbfc589": {
+      "non_cloud_purpose": "Local SQLite file-control integer and pointer for open-source inode custody; no library loading, network or model sender.",
+      "site": {
+        "call_sha256": "783f4edefdfe881018806dcddfb07148ed6267bbf90a7eb0a5fcc8a4e74e4467",
+        "kind": "transport_call",
+        "owner": "<module>._source_matches",
+        "path": "src/brainlayer/readonly_snapshot.py",
+        "target": "ctypes.addressof"
+      }
+    },
     "3b1ef3bc7d845a1c69ffd7f38b372442d4d221bb30e2140da7eace267966bd2e": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/brain_graph.py <module>.build_entity_session_edges",
       "site": {
@@ -1855,6 +1875,16 @@
         "kind": "import_binding",
         "owner": "<module>",
         "path": "src/brainlayer/supervisor_child.py",
+        "target": "import ctypes"
+      }
+    },
+    "51f3406a09fcb048394d2d80659c1d3a6e3fcb9b32206bd33cf21fa647fd71d7": {
+      "non_cloud_purpose": "Local SQLite file-control integer and pointer for open-source inode custody; no library loading, network or model sender.",
+      "site": {
+        "call_sha256": "669c8db7bfb9b4e64a7aa5f9239cbd229a5c460f228936e83d225f5ab2176b82",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/readonly_snapshot.py",
         "target": "import ctypes"
       }
     },
