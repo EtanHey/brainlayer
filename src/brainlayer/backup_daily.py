@@ -96,6 +96,8 @@ BACKUP_LOCAL_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS"
 BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
 BACKUP_INVOCATION_ENV = "BRAINLAYER_BACKUP_INVOCATION_ID"
+# Fields supervisor_child.backup_io_policy() measures for the current process (S3).
+_IO_POLICY_KEYS = frozenset({"io_policy", "io_policy_errors", "iopol", "darwin_background", "nice"})
 BACKUP_SQLITE_CHECK_TIMEOUT_ENV = "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS"
 BACKUP_DRIVE_RETENTION_ENV = "BRAINLAYER_BACKUP_DRIVE_RETENTION"
 DRIVE_UPLOAD_DEADLINE_FLOOR_ENV = "BRAINLAYER_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS"
@@ -3590,7 +3592,9 @@ def run_backup(
             created = _snapshot_created_time(local)
             now = dt.datetime.fromisoformat(result["attempted_at"])
             if created and local_backup_date(created) == local_backup_date(now) and _local_snapshot_intact(local):
-                result.update(local)
+                # The receipt records THIS run's process policy; an earlier run's must not leak in.
+                result.update({k: v for k, v in local.items() if k not in _IO_POLICY_KEYS})
+                result.update(io_policy or {"io_policy": "unknown"})
                 return result
         if phase == "upload" and local is None:
             nothing_pending = True

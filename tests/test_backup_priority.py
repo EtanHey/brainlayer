@@ -3,7 +3,9 @@
 import ctypes
 from unittest.mock import Mock, call
 
+from brainlayer import backup_daily as backup
 from brainlayer import supervisor_child as policy
+from tests.test_weekly_local_gate import local_lane  # noqa: F401  (pytest fixture)
 
 
 def test_backup_resets_and_reads_policy(monkeypatch):
@@ -92,3 +94,16 @@ def test_maintenance_policy_keeps_background(monkeypatch):
     assert setter.call_args_list == [call(policy.os.PRIO_PROCESS, 0, 10), call(4, 0, 0x1000)]
     disk.assert_called_once_with(3)
     reset.assert_not_called()
+
+
+def test_same_day_snapshot_reuse_records_this_runs_policy(local_lane):  # noqa: F811  (imported fixture)
+    """CodeRabbit #1597: a reused receipt must not carry an earlier run's process policy."""
+    throttled = {"io_policy": "background", "iopol": 4, "darwin_background": 1, "nice": 10}
+    first = backup.run_backup(**local_lane, phase="snapshot", io_policy=throttled)
+    assert first["darwin_background"] == 1
+
+    current = {"io_policy": "default", "iopol": 0, "darwin_background": 0, "nice": 0}
+    second = backup.run_backup(**local_lane, phase="snapshot", io_policy=current)
+    assert second["snapshot"] == first["snapshot"], "same-day snapshot must be reused"
+    assert {k: second[k] for k in current} == current
+    assert "io_policy_errors" not in second
