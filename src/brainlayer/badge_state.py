@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .health_check import HealthCheckResult, HealthIssue
+    from .health_verdict import Verdict
 
 SCHEMA_VERSION = 1
 BADGE_STATE_ENV = "BRAINLAYER_BADGE_STATE_PATH"
@@ -90,8 +91,17 @@ def _expected_episode(issue: HealthIssue, now: datetime) -> dict[str, Any] | Non
     }
 
 
-def build_badge_state_document(result: HealthCheckResult, *, now: datetime | None = None) -> dict[str, Any]:
-    """Keep all alerts; only explicit bounded evidence can excuse a critical."""
+def build_badge_state_document(
+    result: HealthCheckResult, *, now: datetime | None = None, verdict: Verdict | None = None
+) -> dict[str, Any]:
+    """The schema-1 badge document.
+
+    With a verdict, the dot is the verdict: ``alerts.active`` is ``badge_alerts(verdict)`` (only a
+    red check is critical, so ``badge_on == (dot == red)`` and the 1.5.83 reader's invariant
+    ``badge_on == any(severity != "warning")`` both hold), and the additive top-level ``verdict``
+    object is the contract BrainBar renders (S2). Without one (the verdict failed), every issue
+    stays visible and only explicit bounded evidence can excuse a critical.
+    """
 
     now = now or datetime.fromisoformat(result.checked_at.replace("Z", "+00:00"))
     if now.tzinfo is None:
@@ -103,18 +113,29 @@ def build_badge_state_document(result: HealthCheckResult, *, now: datetime | Non
             suppressed.append({**payload, "episode": episode})
         else:
             active.append(payload)
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "generated_at": _iso_utc(result.checked_at),
-        "alerts": {
-            "state": "measured",
-            "reason": "",
-            "inputs": [],
-            "badge_on": any(issue["severity"] != "warning" for issue in active),
-            "active": active,
-            "suppressed": suppressed,
-        },
+    document: dict[str, Any] = {"schema_version": SCHEMA_VERSION, "generated_at": _iso_utc(result.checked_at)}
+    if verdict is not None:
+        from .health_verdict import RED, badge_alerts
+
+        active = badge_alerts(verdict)
+        document["verdict"] = {
+            "dot": verdict.dot,
+            "checks": [check.to_dict() for check in verdict.checks],
+            "notes": [{"code": note.code, "message": note.message} for note in verdict.notes],
+            "evaluated_at": _iso_utc(now.isoformat()),
+        }
+        badge_on = verdict.dot == RED
+    else:
+        badge_on = any(issue["severity"] != "warning" for issue in active)
+    document["alerts"] = {
+        "state": "measured",
+        "reason": "",
+        "inputs": [],
+        "badge_on": badge_on,
+        "active": active,
+        "suppressed": suppressed,
     }
+    return document
 
 
 def build_pending_first_run_document(now: datetime) -> dict[str, Any]:
