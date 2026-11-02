@@ -15,7 +15,8 @@ From the repository root, with Python 3.11+ and Java 17:
 formal/backup-verdict/check.sh                 # every case, about 3 minutes, one TLC worker
 formal/backup-verdict/check.sh --case bug-1596 # cases whose name starts with this
 formal/backup-verdict/check.sh --list          # the case table
-formal/backup-verdict/check.sh --src-ref 7505f8b1  # replay counterexamples against a ref
+formal/backup-verdict/check.sh --src-ref <ref>     # replay counterexamples against another ref
+formal/backup-verdict/check.sh --require-sync     # also fail when a covered source changed (CI runs this)
 ```
 
 TLC is `~/.local/bin/tlc` (wrapper around `~/.local/share/tlaplus/tla2tools-1.7.4.jar`), or `TLC=<path>`,
@@ -54,8 +55,8 @@ AST-extracted. Nothing touches a file, a database or a socket. A bug case passes
 counterexample reproduces at the pre-fix commit, **and** the current tree reproduces it exactly
 when the case says the fix is not here yet (`fixed_here`). So a code change that brings a fixed
 bug back fails the default run (exit 1). This was checked by putting `#1583 B5`'s persisted max
-back into the working tree: `bug-1583-B5` failed, and passed again once restored. `bug-1596-*` are
-`fixed_here: "no"` until #1596 merges, and then fail until someone flips them.
+back into the working tree: `bug-1583-B5` failed, and passed again once restored. A case for a fix
+not yet merged is `fixed_here: "no"`, and fails once the fix lands until someone flips it.
 
 ## Scope and bounds
 
@@ -83,10 +84,9 @@ back into the working tree: `bug-1583-B5` failed, and passed again once restored
 ## Keeping it in step
 
 `coverage.json` pins each covered source by sha256, maps each modelled action to path:line, and
-records bounds and atomicity. `health_verdict.py` is pinned at #1596's head 7505f8b1, which the
-all-fixes configs describe. On main (12b9ddd4) the checker prints `SYNC STALE` for it, and
-`bug-1596-*` replays as "still in this source", until #1596 merges. Then flip their `fixed_here`
-and move the pin. When covered code changes:
+records bounds and atomicity. Every source is pinned at main 67d23f14. CI runs `--require-sync`,
+so any change to a covered source fails this job until someone re-confirms the model and moves the
+pin. When covered code changes:
 re-read the mapped lines, update the model or add a switch, rerun, and only then move the pin.
 See [SKILL.md](SKILL.md).
 

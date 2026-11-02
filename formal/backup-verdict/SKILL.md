@@ -30,7 +30,7 @@ made `bug-1583-B5` FAIL (exit 1), and restoring the line made it pass.
 
 Each line reads `ok|FAIL <case>: expected X, got Y`. Under a bug case, `replay at <ref>` says
 whether the real code at the pre-fix commit reproduces the counterexample, and at the current tree
-whether it still does. Exit 0 with a `SYNC STALE` line means the models still hold, but someone must
+whether it still does. A `SYNC STALE` line (exit 1 under `--require-sync`, which CI uses) means someone must
 confirm the model describes the changed source (step 4).
 
 ## 3. A real bug, or a modelling error?
@@ -69,8 +69,7 @@ shortest path in plain words.
 
 ## Coverage record
 
-- Sources and sync: `coverage.json` (`health_verdict.py` at 7505f8b1, #1596 head; the rest at main
-  12b9ddd4).
+- Sources and sync: `coverage.json`, every source at main 67d23f14.
 - Checker: `check.py` (`CASES` is the table), `replay.py` (real-code replay), `test_check.py` (probes).
 - Bounds: 2 snapshots, 5 receipts, 6 logical hours (backups); 7 hours, one check per run (pipes);
   5 classes, unbounded (dot).

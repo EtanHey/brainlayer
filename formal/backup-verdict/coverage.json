@@ -1,57 +1,118 @@
 {
-  "sync_note": "health_verdict.py is pinned at #1596's head (7505f8b1), which the all-fixes configs describe. Main 12b9ddd4 has #1595 but not #1596, so check.py prints SYNC STALE for it until #1596 merges; on main today, case bug-1596-* describes the live code. Every other source is pinned at main 12b9ddd4.",
+  "sync_note": "All sources pinned at main 67d23f14 (#1596 merged), confirmed 2026-11-02T06:45Z: health_verdict.py is byte-identical to the #1596 head the all-fixes configs were built from, and maintenance.py's change since 12b9ddd4 is #1587's store round trip, which PipeVerdict's RoundTrip action models (ReceiptReplaced).",
   "sources": {
     "src/brainlayer/health_verdict.py": {
-      "sha": "7505f8b1a74f7dfd3a2c3eab47c8d86d8162c355",
+      "sha": "67d23f14",
       "sha256": "e1e87b1e98005fb98dd11cda8b4a7c8096e16ae837e247a8e6ff44978842d3b7"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "12b9ddd4",
+      "sha": "67d23f14",
       "sha256": "8f3cd0736b49165b541cdcf2b82b85e67cc2485188ee4a68152688a9173345c2"
     },
     "src/brainlayer/maintenance.py": {
-      "sha": "12b9ddd4",
-      "sha256": "5f385c86233f778d7713df7249ac0543f51a4b2f0028174fd358e81c8aa59f89"
+      "sha": "67d23f14",
+      "sha256": "cdc7748d68108d686e8945b1890e1914f96957aeefb4e3035c5e8f501e9b8c05"
     },
     "src/brainlayer/maintenance_calendar.py": {
-      "sha": "12b9ddd4",
+      "sha": "67d23f14",
       "sha256": "3cb4692f4c572c77d7272acc1156ef6fe89a4a7ee16e0c9c410499ea834de899"
     },
     "src/brainlayer/job_alerts.py": {
-      "sha": "12b9ddd4",
+      "sha": "67d23f14",
       "sha256": "c5cc184acddbb820b0bb29af4b466b01ab64b322851e1f0f6aea4627772aedfe"
+    },
+    "src/brainlayer/health_facts.py": {
+      "sha": "67d23f14",
+      "sha256": "76562ee6364296c023536fb868f670e7dcb7818f8653d9c8228117b970b40e96"
     }
   },
-  "line_refs_at": "health_verdict.py lines are at 7505f8b1; the rest at 12b9ddd4",
+  "line_refs_at": "every path:line is at main 67d23f14",
   "actions": {
     "BackupVerdict": {
-      "TakeSnapshot": ["src/brainlayer/backup_daily.py:3071-3094 (local verified receipt shape)", "src/brainlayer/maintenance_calendar.py:199-213 (backup-snapshot step)"],
-      "Upload": ["src/brainlayer/backup_daily.py:3870-3872 (verified receipt appended before reclamation)"],
-      "RemoveAfterUpload": ["src/brainlayer/backup_daily.py:3881-3888 (local_removed on the verified receipt)"],
-      "Abandon": ["src/brainlayer/backup_daily.py:3250-3290 (_local_upload_receipt, upload_state abandoned)"],
-      "Supersede": ["src/brainlayer/backup_daily.py:3209-3247 (_reclaim_superseded_local)"],
-      "Revoke": ["src/brainlayer/health_verdict.py:663 (verification_error or drive_md5_match False)"],
-      "LocalReverify": ["src/brainlayer/health_verdict.py:668-670 (local-only success)"],
-      "Reader": ["src/brainlayer/health_verdict.py:632-690 (backup_facts)"],
-      "Clock": ["src/brainlayer/health_verdict.py:224-245 (_verified_age)"],
-      "Eval": ["src/brainlayer/health_verdict.py:456-545 (evaluate: unknown, hold, wake grace)", "src/brainlayer/health_verdict.py:508-526 (same_copy grace)"],
-      "Tick": ["src/brainlayer/health_verdict.py:465-470 (ticked_at, resumed_at)"],
-      "Weekly": ["src/brainlayer/maintenance.py:1380-1400 (freelist gate, deferred)", "src/brainlayer/backup_daily.py:3071-3094 (_recent_local_verified_backup)", "src/brainlayer/maintenance_calendar.py:767 (exit 75 is deferred)", "src/brainlayer/maintenance_calendar.py:1172-1174 (last_weekly only on ok)"]
+      "TakeSnapshot": [
+        "src/brainlayer/backup_daily.py:3071-3094 (local verified receipt shape)",
+        "src/brainlayer/maintenance_calendar.py:199-213 (backup-snapshot step)"
+      ],
+      "Upload": [
+        "src/brainlayer/backup_daily.py:3870-3872 (verified receipt appended before reclamation)"
+      ],
+      "RemoveAfterUpload": [
+        "src/brainlayer/backup_daily.py:3881-3888 (local_removed on the verified receipt)"
+      ],
+      "Abandon": [
+        "src/brainlayer/backup_daily.py:3250-3290 (_local_upload_receipt, upload_state abandoned)"
+      ],
+      "Supersede": [
+        "src/brainlayer/backup_daily.py:3209-3247 (_reclaim_superseded_local)"
+      ],
+      "Revoke": [
+        "src/brainlayer/health_verdict.py:663 (verification_error or drive_md5_match False)"
+      ],
+      "LocalReverify": [
+        "src/brainlayer/health_verdict.py:668-670 (local-only success)"
+      ],
+      "Reader": [
+        "src/brainlayer/health_verdict.py:632-690 (backup_facts)"
+      ],
+      "Clock": [
+        "src/brainlayer/health_verdict.py:224-245 (_verified_age)"
+      ],
+      "Eval": [
+        "src/brainlayer/health_verdict.py:456-545 (evaluate: unknown, hold, wake grace)",
+        "src/brainlayer/health_verdict.py:508-526 (same_copy grace)"
+      ],
+      "Tick": [
+        "src/brainlayer/health_verdict.py:465-470 (ticked_at, resumed_at)"
+      ],
+      "Weekly": [
+        "src/brainlayer/maintenance.py:1388-1408 (freelist gate, deferred)",
+        "src/brainlayer/backup_daily.py:3071-3094 (_recent_local_verified_backup)",
+        "src/brainlayer/maintenance_calendar.py:767 (exit 75 is deferred)",
+        "src/brainlayer/maintenance_calendar.py:1172-1174 (last_weekly only on ok)"
+      ]
     },
     "PipeVerdict": {
-      "DriveRaw": ["src/brainlayer/health_verdict.py:319-331 (_drive_auth)"],
-      "IngestRaw": ["src/brainlayer/health_verdict.py:375-387", "src/brainlayer/health_verdict.py:273-300 (_graced_age)"],
-      "StoresRaw": ["src/brainlayer/health_verdict.py:398-427", "src/brainlayer/health_verdict.py:303-316 (_counter, latch)"],
-      "EmbRaw": ["src/brainlayer/health_verdict.py:389-397", "src/brainlayer/health_verdict.py:247-270 (_stall_age)"],
-      "Hold": ["src/brainlayer/health_verdict.py:476-507"],
-      "RoundTrip": ["#1587 health_facts.py store_canary_ok (not on main; receipt replaced on every attempt)"],
-      "VectorsWritten": ["#1587 health_facts.py embedding_stalled_since (not on main; anchored window)"]
+      "DriveRaw": [
+        "src/brainlayer/health_verdict.py:319-331 (_drive_auth)"
+      ],
+      "IngestRaw": [
+        "src/brainlayer/health_verdict.py:375-387",
+        "src/brainlayer/health_verdict.py:273-300 (_graced_age)"
+      ],
+      "StoresRaw": [
+        "src/brainlayer/health_verdict.py:398-427",
+        "src/brainlayer/health_verdict.py:303-316 (_counter, latch)"
+      ],
+      "EmbRaw": [
+        "src/brainlayer/health_verdict.py:389-397",
+        "src/brainlayer/health_verdict.py:247-270 (_stall_age)"
+      ],
+      "Hold": [
+        "src/brainlayer/health_verdict.py:476-507"
+      ],
+      "RoundTrip": [
+        "src/brainlayer/maintenance.py:1544-1575 (_store_roundtrip: every attempt replaces the receipt)",
+        "src/brainlayer/health_facts.py:218-262 (receipt write, store_canary_fact)"
+      ],
+      "VectorsWritten": [
+        "src/brainlayer/health_facts.py:264-304 (embedding_window_start anchors the window; embedding_fact)"
+      ]
     },
     "DotTable": {
-      "Hold": ["src/brainlayer/health_verdict.py:476-507"],
-      "Dot": ["src/brainlayer/health_verdict.py:546-547"],
-      "Badge": ["src/brainlayer/health_verdict.py:556-573 (badge_alerts)", "src/brainlayer/health_verdict.py:576-578 (notes_from_job_alerts)"],
-      "Run": ["src/brainlayer/maintenance.py:1561-1605 (main: report on fail / clean / VACUUM-skipped deferral)", "src/brainlayer/job_alerts.py:61-100 (report)"]
+      "Hold": [
+        "src/brainlayer/health_verdict.py:476-507"
+      ],
+      "Dot": [
+        "src/brainlayer/health_verdict.py:546-547"
+      ],
+      "Badge": [
+        "src/brainlayer/health_verdict.py:556-573 (badge_alerts)",
+        "src/brainlayer/health_verdict.py:576-578 (notes_from_job_alerts)"
+      ],
+      "Run": [
+        "src/brainlayer/maintenance.py:1612-1656 (main: report on fail / clean / VACUUM-skipped deferral)",
+        "src/brainlayer/job_alerts.py:61-100 (report)"
+      ]
     }
   },
   "atomicity": {
@@ -62,8 +123,18 @@
     "focus": "PipeVerdict explores one check's world per config (Focus); evaluate() couples checks only through ticked_at/resumed_at, which every config keeps."
   },
   "bounds": {
-    "BackupVerdict": {"snapshots": 2, "receipts": 5, "hours": 6},
-    "PipeVerdict": {"hours": 7},
-    "DotTable": {"behaviour_classes": 5, "jobs": 3, "unbounded_time": true}
+    "BackupVerdict": {
+      "snapshots": 2,
+      "receipts": 5,
+      "hours": 6
+    },
+    "PipeVerdict": {
+      "hours": 7
+    },
+    "DotTable": {
+      "behaviour_classes": 5,
+      "jobs": 3,
+      "unbounded_time": true
+    }
   }
 }

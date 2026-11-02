@@ -168,7 +168,7 @@ CASES: list[dict[str, str]] = [
         "name": "bug-1596-abandoned",
         "module": "BackupVerdict",
         "prefix": "12b9ddd4",
-        "fixed_here": "no",
+        "fixed_here": "yes",
         "expect": "NoFalseGreen",
         "pr": "#1596",
         "what": "an abandoned snapshot still counts",
@@ -177,7 +177,7 @@ CASES: list[dict[str, str]] = [
         "name": "bug-1596-superseded",
         "module": "BackupVerdict",
         "prefix": "12b9ddd4",
-        "fixed_here": "no",
+        "fixed_here": "yes",
         "expect": "NoFalseGreen",
         "pr": "#1596",
         "what": "a deleted superseded stall comes back as the clock",
@@ -262,6 +262,7 @@ COVERED = (
     "src/brainlayer/maintenance.py",
     "src/brainlayer/maintenance_calendar.py",
     "src/brainlayer/job_alerts.py",
+    "src/brainlayer/health_facts.py",
 )
 
 _VIOLATION = re.compile(r"Error: (?:Invariant|Action property) (\w+) is violated")

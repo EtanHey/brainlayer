@@ -25,8 +25,8 @@ not replayed (see README, "What is not covered").
 | `bug-1589-B5c-legacy-identity` | #1589 B5c | NoFalseGreen | 7f7f6245 reproduces → fixed |
 | `bug-1595-local-removed` | #1595 | TruthfulSnapshotLabel | d9d7bff1 reproduces → fixed |
 | `bug-1595-recovery-reset` | #1595 | RedHoldsUntilEvidence | (pipe model) |
-| `bug-1596-abandoned` | #1596 | NoFalseGreen | 12b9ddd4 reproduces → **still on main**; fixed at #1596 head 7505f8b1 |
-| `bug-1596-superseded` | #1596 | NoFalseGreen | 12b9ddd4 reproduces → **still on main**; fixed at #1596 head 7505f8b1 |
+| `bug-1596-abandoned` | #1596 | NoFalseGreen | 12b9ddd4 reproduces → fixed (main 67d23f14) |
+| `bug-1596-superseded` | #1596 | NoFalseGreen | 12b9ddd4 reproduces → fixed (main 67d23f14) |
 | `bug-1587-B4-backlog-ages-out` | #1587 B4 | RedHoldsUntilEvidence | (pipe model) |
 | `bug-1587-B5-stale-canary-success` | #1587 B5 | RedHoldsUntilEvidence | (pipe model) |
 | `bug-1583-S1-alert-lights-dot` | #1583 S1 | NoStuckAlert | (dot model) |
@@ -105,14 +105,14 @@ Fix (#1595): `if r.state != GREEN: good_ticks = 0` before every branch. The Macr
 2. Its upload finds the local file missing: `upload_state: abandoned, local_verified: false`.
 3. The tick shows `backup_local` **green** on snapshot 1. No verified copy exists anywhere.
 
-Replay at 12b9ddd4 (main today): **reproduces**. At the #1596 head 7505f8b1: does not.
+Replay at 12b9ddd4 (main before #1596): reproduces. At main 67d23f14: does not.
 
 ### #1596: a deleted superseded stall comes back as the clock
 1. Snapshot 1 is a local-only stall. Snapshot 2 is taken at hour 1.
 2. `_reclaim_superseded_local` deletes snapshot 1 (`upload_state: superseded`). Snapshot 2 is then revoked.
 3. The tick shows `backup_local` **green** on snapshot 1, which was deleted.
 
-Replay at 12b9ddd4 (main today): **reproduces**. At 7505f8b1: does not.
+Replay at 12b9ddd4: reproduces. At main 67d23f14: does not.
 
 ### #1587 B4: an embedding stall clears when its rows age out
 1. The embed backlog stalls at hour 0. At hour 3 it has not shrunk for 3 h: `embedding` red.

@@ -56,13 +56,15 @@ jobs:
               - 'src/brainlayer/maintenance.py'
               - 'src/brainlayer/maintenance_calendar.py'
               - 'src/brainlayer/job_alerts.py'
+              - 'src/brainlayer/health_facts.py'
               - '.github/workflows/ci.yml'
 
   backup-verdict-tla:
     # TLA+ ratchet for backup -> snapshot -> VACUUM -> dot (formal/backup-verdict/README.md).
     # All-fixes models must pass; every pre-fix switch must still produce its counterexample,
     # and each backup counterexample must reproduce in the real pre-fix source by replay.
-    # A change to a covered source prints SYNC STALE: re-confirm the model, then move the pin.
+    # --require-sync: a change to a covered source fails here until the model is re-confirmed
+    # against it and coverage.json's pin is moved (formal/backup-verdict/SKILL.md).
     name: TLA+ backup verdict
     needs: changes
     if: needs.changes.outputs.backup_verdict_tla == 'true'
@@ -102,7 +104,7 @@ jobs:
         env:
           TLC_JAR: ${{ runner.temp }}/tla2tools.jar
           TLC_WORKERS: "2"
-        run: python3 formal/backup-verdict/check.py
+        run: python3 formal/backup-verdict/check.py --require-sync
 
   swift:
     name: swift (macos-15)
