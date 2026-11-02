@@ -6,7 +6,6 @@ struct BadgeStateDocument: Codable, Sendable {
     let schemaVersion: Int
     let generatedAt: Date
     let alerts: Alerts
-    var verdict: BrainBarHealthVerdict? = nil
 
     struct Alerts: Codable, Sendable {
         let state: String
@@ -56,6 +55,7 @@ struct BadgeStatePresentation: Equatable, Sendable {
     var activeSeverities: [String] = []
     var vectorScan: BrainBarVectorScan? = nil
     var healthVerdict: BrainBarHealthVerdict? = nil
+    var healthVerdictUnreadable = false
 
     static func failVisible(_ reason: String) -> Self {
         .init(badgeOn: true, reason: reason, activeCodes: [])
@@ -191,11 +191,25 @@ enum BadgeStateReader {
                 )
             }
             var result = legacyPresentation()
-            result.healthVerdict = document.verdict
+            let verdict = try? decoder.decode(BadgeVerdictEnvelope.self, from: data)
+            result.healthVerdict = verdict?.verdict
+            result.healthVerdictUnreadable = verdict?.unreadable ?? false
             return result
         } catch {
             return .failVisible("Badge state unreadable: \(error.localizedDescription)")
         }
+    }
+}
+
+/// Verdict schema evolution must never discard valid legacy alerts.
+private struct BadgeVerdictEnvelope: Decodable {
+    let verdict: BrainBarHealthVerdict?
+    let unreadable: Bool
+    enum CodingKeys: String, CodingKey { case verdict }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        verdict = try? values.decode(BrainBarHealthVerdict.self, forKey: .verdict)
+        unreadable = values.contains(.verdict) && verdict == nil
     }
 }
 
