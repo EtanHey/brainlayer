@@ -65,7 +65,7 @@ def test_probe_d_failed_verification_cannot_fall_back_to_earlier_good_receipt(lo
     monkeypatch.setenv("BRAINLAYER_CALENDAR_STEP", "1")
     with pytest.raises(maintenance.MaintenanceAbort) as exc:
         maintenance._weekly_backup(config_for(local_lane, tmp_path))
-    assert exc.value.code == 76
+    assert exc.value.code == 75
     calls = []
     monkeypatch.setattr(
         backup,
