@@ -361,8 +361,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         publishRenderedStatus()
     }
 
-    nonisolated static func verdictRows(_ verdict: BrainBarHealthVerdict) -> [String] {
-        verdict.checks.filter { $0.state != .green }.map(\.text) + verdict.notes.map(\.message)
+    nonisolated static func verdictRows(_ verdict: BrainBarHealthVerdict, details: [String] = []) -> [String] {
+        let primary = verdict.checks.filter { $0.state != .green }.map(\.text) + verdict.notes.map(\.message)
+        return primary + details.filter { !primary.contains($0) }
     }
 
     static func verdictDetailRow(_ text: String, width: CGFloat) -> some View {
@@ -529,7 +530,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #if BRAINBAR_UI
         if let model = runtime.jobsModel { health = model.publishedStatus.healthVerdict }
 #endif
-        let rows = health.map(Self.verdictRows) ?? verdict.notices.filter { $0.hasPrefix("Health check result") }
+        let rows = health.map { Self.verdictRows($0, details: verdict.notices) } ?? verdict.notices.filter { $0.hasPrefix("Health check result") }
         for (index, text) in rows.enumerated() {
             let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
             item.isEnabled = false

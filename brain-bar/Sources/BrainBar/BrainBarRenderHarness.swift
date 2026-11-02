@@ -19,8 +19,9 @@ enum BrainBarRenderHarness {
     /// Off-screen capture of the controller's popover rows, with its real status icon.
     static func renderHealthVerdictPopover(_ snapshot: BrainBarStatusSnapshot, directory: URL,
                                           name: String, width: CGFloat) throws {
-        let rows = snapshot.healthVerdict.map(BrainBarStatusPopoverController.verdictRows)
-            ?? snapshot.issues.map(\.text)
+        let rows = snapshot.healthVerdict.map {
+            BrainBarStatusPopoverController.verdictRows($0, details: snapshot.notices.map(\.text))
+        } ?? snapshot.issues.map(\.text)
         let icon = BrainBarStatusPopoverController.statusIconImage(
             stats: BrainBarDashboardFixture.makeCollector().stats,
             badgeOn: snapshot.verdict.dot != .green, dot: snapshot.verdict.dot)

@@ -41,6 +41,8 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             if state == "green", source == "verdict" {
                 XCTAssertTrue(snapshot.notices.contains { $0.id == "database.copy" })
                 XCTAssertTrue(snapshot.attention.isEmpty)
+                XCTAssertTrue(BrainBarStatusPopoverController.verdictRows(try XCTUnwrap(snapshot.healthVerdict),
+                    details: snapshot.notices.map(\.text)).contains("Database: no verified copy on record"))
             }
         }
         var legacy = BrainBarStatusSnapshotTests.healthy()
