@@ -1,13 +1,13 @@
 {
-  "sync_note": "All sources pinned at main 62f55b09 (#1600 S1a-5 and #1602 S1a-6 merged), confirmed 2026-11-02 by re-reading every mapped line. health_verdict.py equals S1a-6's 8eecb5ee except #1599's drive_event hunk (a reused receipt reports Drive ok only on a live auth probe), which PipeVerdict's abstract drive observation already respects. backup_daily.py's #1599 same-date reuse re-asserts a still-valid verification (the latest receipt per snapshot, never revoked, removed, abandoned or superseded): an idempotent receipt to both the truth and the reader fold, and its tightened _recent_local_verified_backup is the latest-receipt gate the model uses.",
+  "sync_note": "All sources pinned at main 62f55b09 (#1600 S1a-5 and #1602 S1a-6 merged), confirmed 2026-11-02 by re-reading every mapped line. health_verdict.py equals S1a-6's 8eecb5ee except #1599's drive_event hunk (a reused receipt reports Drive ok only on a live auth probe), which PipeVerdict's abstract drive observation already respects. backup_daily.py's #1599 same-date reuse re-asserts a still-valid verification (the latest receipt per snapshot, never revoked, removed, abandoned or superseded): an idempotent receipt to both the truth and the reader fold, and its tightened _recent_local_verified_backup is the latest-receipt gate the model uses. Re-pinned backup_daily.py at main ad50657e after #1597 (S3): its hunks are in run_backup's reuse() closure (I/O-policy keys), _run_backup_process and a new constant; every mapped range is byte-identical, shifted +2 (functions) / +7 (run_backup receipt lines). No model change.",
   "sources": {
     "src/brainlayer/health_verdict.py": {
       "sha": "62f55b09",
       "sha256": "d8c237ea4b5b3868eeab4c2abffde53aa2ea52d2a2765a9b8df7983756b355cb"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "62f55b09",
-      "sha256": "e64a7650bc50d1577cbf57e53442f835c113062736255263da95fcf8f8203836"
+      "sha": "ad50657e",
+      "sha256": "638e8e631d89fae684c983b155fdbd5ec19607ceb5b0bf7bf22fe1a87c3c779f"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "62f55b09",
@@ -30,20 +30,20 @@
   "actions": {
     "BackupVerdict": {
       "TakeSnapshot": [
-        "src/brainlayer/backup_daily.py:3095-3121 (local verified receipt shape)",
+        "src/brainlayer/backup_daily.py:3097-3123 (local verified receipt shape)",
         "src/brainlayer/maintenance_calendar.py:199-213 (backup-snapshot step)"
       ],
       "Upload": [
-        "src/brainlayer/backup_daily.py:3923 (verified receipt appended before reclamation)"
+        "src/brainlayer/backup_daily.py:3930 (verified receipt appended before reclamation)"
       ],
       "RemoveAfterUpload": [
-        "src/brainlayer/backup_daily.py:3930-3940 (local_removed on the verified receipt)"
+        "src/brainlayer/backup_daily.py:3937-3947 (local_removed on the verified receipt)"
       ],
       "Abandon": [
-        "src/brainlayer/backup_daily.py:3277-3320 (_local_upload_receipt, upload_state abandoned)"
+        "src/brainlayer/backup_daily.py:3279-3322 (_local_upload_receipt, upload_state abandoned)"
       ],
       "Supersede": [
-        "src/brainlayer/backup_daily.py:3236-3274 (_reclaim_superseded_local; returns unless the newer result is uploaded and verified)"
+        "src/brainlayer/backup_daily.py:3238-3276 (_reclaim_superseded_local; returns unless the newer result is uploaded and verified)"
       ],
       "Revoke": [
         "src/brainlayer/health_verdict.py:695 (verification_error or drive_md5_match False)"
@@ -66,7 +66,7 @@
       ],
       "Weekly": [
         "src/brainlayer/maintenance.py:1388-1408 (freelist gate, deferred)",
-        "src/brainlayer/backup_daily.py:3095-3121 (_recent_local_verified_backup: latest receipt per snapshot; #1599 also excludes md5 mismatch, local_removed, abandoned, superseded)",
+        "src/brainlayer/backup_daily.py:3097-3123 (_recent_local_verified_backup: latest receipt per snapshot; #1599 also excludes md5 mismatch, local_removed, abandoned, superseded)",
         "src/brainlayer/maintenance_calendar.py:767 (exit 75 is deferred)",
         "src/brainlayer/maintenance_calendar.py:1172-1174 (last_weekly only on ok)"
       ]
