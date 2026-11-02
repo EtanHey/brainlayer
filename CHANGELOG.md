@@ -39,6 +39,36 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.84] - 2026-11-02
+
+The pipes rebuild. The BrainBar dot now answers one question, "is my memory at risk, or has a pipe stopped, right now?", from outcomes, not from job events. The rules behind it are model-checked.
+
+### Health and the BrainBar dot
+- The dot is the outcome verdict: a pure function of the measured facts (verified local and offsite copies, transcripts, Drive auth, integrity, ingest, embedding, stores, search, disk, monitor). A failed or skipped job alone is a note, never a red dot. Checks it cannot observe are unknown, not red (#1583, #1587, #1588).
+- Backup receipts are authoritative. Revocation (`verification_error`, `drive_md5_match: false`) beats any persisted maximum, and a local copy removed after a verified upload still counts as safe (#1589, #1595). Abandoned and superseded snapshots do not count (#1596).
+- Recovery needs evidence. Red on ingest, stores or search clears only after 2 consecutive observed good checks; an amber-age tick, an unobserved tick or a wake-grace tick does not count (#1600).
+- Wake grace is one window per stall episode, never renewed, so a Mac that sleeps between short wakes can no longer keep a stalled embedder, a stuck store queue or a dead watcher green (#1602).
+- BrainBar renders the verdict and publishes its UI status. Fresh verdicts drive the dot, while the Swift diagnostic rows stay visible (#1584, #1585).
+
+### Backup and maintenance
+- The nightly backup lifts the darwin-background CPU and disk throttling it inherited from launchd. Integrity was running 7.4× and zstd 14× slower under it, which caused the nightly timeouts. Receipts record the run's own `io_policy`, `iopol` and `darwin_background`, including on reuse (#1597).
+- A verified archive with the same date is reused instead of failing the nightly with a target conflict (#1599).
+- A bounded read-only snapshot primitive (`VACUUM INTO` from a read-only connection) is added, and rollback failures are reported (#1592, #1593).
+- Weekly VACUUM is optional: below a 10% freelist it is not needed, and with no fresh snapshot it is deferred without raising a maintenance alert (#1582).
+
+### Hotlane and embeddings
+- A busy writer slot never discards computed vectors. They carry to the next cycle, and the `BusyError` contract is kept (#1594).
+- CPU budget: the hotlane runs at nice 20 with torch threads capped (2 on M4, 1 on M1). The backlog yields under high load or a `hotlane.pause` marker without losing or duplicating vectors, keeps store-queue backpressure, and still gets one batch every 300 s. A rolling CPU producer and an installed-Mac ratchet row measure CPU only while the backlog runs (#1605).
+- The hotlane is no longer disk-I/O throttled: `LowPriorityIO` is explicitly false, so the supervisor resets the inherited throttle. A throttled reader holding the write lock was blocking foreground writers (#1604).
+- Merging into an existing chunk no longer deletes its vector unless the embedding input changed (#1590), and redelivering an identical original is idempotent (#1591).
+
+### Doctor
+- Supervisor children are recognized, and the source version checks run (#1581). A fresh embedding backlog no longer reads as a fatal lag (#1586).
+
+### Verification
+- A TLA+ model of backup → snapshot → VACUUM → dot, plus the hotlane's grace and hysteresis, is checked with TLC in CI. Every bug fixed tonight reproduces as a counterexample at its pre-fix commit, and the fixed code conforms to the model tick for tick across 3,000 simulated behaviours per check (#1601).
+- Every bug fixed tonight is a lint rule or ratchet row, including a suite guard that stops tests writing the real home's job alerts or logs (#1603). The recovery oracle converges before its timeout (#1598).
+
 ## [1.5.83] - 2026-11-01
 
 ### Doctor
