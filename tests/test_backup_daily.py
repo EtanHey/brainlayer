@@ -38,8 +38,9 @@ def _mock_macos_available(monkeypatch, amount):
 def _stable_backup_machine_id(monkeypatch, tmp_path):
     monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
     monkeypatch.setenv("BRAINBAR_SOCKET_PATH", str(tmp_path / "no-brainbar.sock"))
-    from brainlayer import backup_daily
+    from brainlayer import backup_daily, supervisor_child
 
+    monkeypatch.setattr(supervisor_child, "backup_io_policy", lambda: {"io_policy": "default"})
     # This suite pins the legacy capacity/restore path; the reclaiming path has its own suite.
     monkeypatch.setattr(backup_daily, "_probe_raw_reclamation", lambda _path: (False, "legacy-path fixture"))
     monkeypatch.setattr(disk_space, "_important_usage_capacity_bytes", lambda _path: None)
@@ -260,8 +261,11 @@ def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_removes_raw_snapsho
         date_stamp="2026-06-05",
         upload=True,
         remove_local_after_upload=True,
+        io_policy={"io_policy": "default", "nice": 5},
     )
 
+    assert result["io_policy"] == "default"
+    assert result["nice"] == 5
     assert uploads == [staging_dir / f"2026-06-05{suffix}"]
     assert result["verified"] is True
     assert result["compressor"] == compressor

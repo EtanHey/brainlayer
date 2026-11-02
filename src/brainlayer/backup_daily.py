@@ -3488,6 +3488,7 @@ def run_backup(
     remove_local_after_upload: bool = True,
     deadline_monotonic: float | None = None,
     phase: str = "all",
+    io_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if phase not in {"all", "snapshot", "upload"}:
         raise ValueError("backup phase must be all, snapshot, or upload")
@@ -3518,6 +3519,7 @@ def run_backup(
         "retention_deleted": [],
         "local_gzip_retention_deleted": [],
     }
+    result.update(io_policy or {"io_policy": "unknown"})
     invocation = os.environ.get(BACKUP_INVOCATION_ENV, "")
     if re.fullmatch(r"[0-9a-f]{32}", invocation):
         result["backup_invocation_id"] = invocation  # This body runs only after staging-lock admission.
@@ -3961,6 +3963,9 @@ def run_backup(
 
 
 def _run_backup_process(timeout_seconds: int) -> int:
+    from brainlayer.supervisor_child import backup_io_policy
+
+    io_policy = backup_io_policy()
     previous_alarm_handler = None
     previous_alarm_handler = signal.getsignal(signal.SIGALRM)
     previous_term_handler = signal.getsignal(signal.SIGTERM)
@@ -3976,6 +3981,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
 
         def run_phase():
             return run_backup(
+                io_policy=io_policy,
                 deadline_monotonic=run_deadline,
                 phase=os.environ.get("BRAINLAYER_BACKUP_PHASE", "all"),
                 staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
