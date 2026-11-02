@@ -12,6 +12,7 @@ import os
 import re
 import shlex
 import sqlite3
+import subprocess
 import sys
 import time
 import uuid
@@ -73,6 +74,13 @@ DEFAULT_QUEUE_WARNING_COUNT = 25
 DEFAULT_QUEUE_MOVEMENT_SAMPLE_SECONDS = 10.0
 DOCTOR_PROBE_PROJECT = "brainlayer-doctor"
 LEGACY_PYTHON_MCP_FIX = json.dumps({"mcpServers": {"brainlayer": {"command": stable_mcp_bridge_command()}}})
+
+
+def _running_from_source_checkout() -> bool:
+    root = Path(__file__).resolve().parents[2]
+    prefix = Path(sys.prefix).resolve()
+    in_keg = any(p.parent.name == "brainlayer" and p.parent.parent.name == "Cellar" for p in (prefix, *prefix.parents))
+    return (root / ".git").exists() and not in_keg
 
 
 def default_version_check_path() -> Path:
@@ -646,6 +654,7 @@ def _check_brainbar_version_consistency(
     version_check_required: bool,
     command_runner: CommandRunner,
 ) -> None:
+    failure_severity = "info" if _running_from_source_checkout() else "fatal"
     if not version_check_path.is_file():
         severity = "fatal" if version_check_required else "warning"
         result.issues.append(
@@ -664,7 +673,7 @@ def _check_brainbar_version_consistency(
         result.issues.append(
             DoctorIssue(
                 "brainbar_version_check_failed",
-                "fatal",
+                failure_severity,
                 f"BrainBar version consistency check could not run: {exc}",
                 {"path": str(version_check_path), "exception": repr(exc)},
             )
@@ -680,7 +689,7 @@ def _check_brainbar_version_consistency(
     result.issues.append(
         DoctorIssue(
             "brainbar_version_check_failed",
-            "fatal",
+            failure_severity,
             f"BrainBar version consistency check failed: {detail}",
             {
                 "path": str(version_check_path),
@@ -853,6 +862,36 @@ def run_doctor(
                     reason=reason,
                 )
 
+    from .supervisor_adapters import SupervisorCommands, adapt_commands
+
+    service_runner = adapt_commands(
+        command_runner,
+        config.pause_sentinel_path,
+        required=(config.hotlane_label, config.watch_label, config.drain_label),
+        tolerate_unavailable=True,
+        discover_ownership=True,
+    )
+
+    # Use the authenticated control adapter's state, without its healer policy
+    # that also considers disabled/paused children "loaded".
+    states = {}
+    if isinstance(service_runner, SupervisorCommands) and not service_runner.control_error:
+        try:
+            states = service_runner.request()
+        except (OSError, ValueError, KeyError, TypeError, OverflowError, RuntimeError):
+            pass  # The existing launchd failure remains visible below.
+
+    def service_status(args):
+        standalone = command_runner(args)
+        if standalone.returncode == 0:
+            return standalone
+        label = args[-1].rsplit("/", 1)[-1]
+        if isinstance(service_runner, SupervisorCommands):
+            state = states.get(service_runner.aliases.get(label), {})
+            if state.get("configured") and not state.get("paused") and state.get("pid"):
+                return subprocess.CompletedProcess(args, 0, "", "")
+        return standalone
+
     drain_loaded: bool | None = None
     for label, code, message in (
         (config.hotlane_label, "hotlane_unloaded", "hot-lane launchd label is not loaded"),
@@ -865,7 +904,7 @@ def run_doctor(
                 label=label,
                 issue_code=code,
                 message=message,
-                command_runner=command_runner,
+                command_runner=service_status,
             )
             if code == "drain_unloaded":
                 drain_loaded = loaded
