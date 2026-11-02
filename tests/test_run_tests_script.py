@@ -2163,7 +2163,12 @@ def test_changed_only_scope_maps_hotlane_budget_to_its_owners(tmp_path: Path) ->
     tests) and timed out the 1,800 s heavy-suite slot."""
     test_root = tmp_path / "tests"
     test_root.mkdir()
-    owners = ("test_hotlane_cpu_budget.py", "test_hotlane_backpressure.py", "test_hotlane_brainbar_daemon.py")
+    owners = (
+        "test_hotlane_cpu_budget.py",
+        "test_hotlane_cpu_active_budget.py",
+        "test_hotlane_backpressure.py",
+        "test_hotlane_brainbar_daemon.py",
+    )
     for name in owners:
         (test_root / name).write_text("test placeholder\n")
 

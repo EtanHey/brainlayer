@@ -443,7 +443,7 @@ map_changed_files_to_pytests() {
         # S22: the hotlane CPU budget/sampler is covered by these, not a test_hotlane_budget.py.
         # Unmapped, it escalated a changed-only push to the full suite and timed out heavy-suite.
         mapped=1
-        for rel in test_hotlane_cpu_budget.py test_hotlane_backpressure.py test_hotlane_brainbar_daemon.py; do
+        for rel in test_hotlane_cpu_budget.py test_hotlane_cpu_active_budget.py test_hotlane_backpressure.py test_hotlane_brainbar_daemon.py; do
           if [ -f "$TEST_ROOT/$rel" ]; then append_unique "$TEST_ROOT/$rel"; else mapped=0; fi
         done
         ;;
