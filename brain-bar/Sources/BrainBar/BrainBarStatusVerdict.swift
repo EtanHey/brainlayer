@@ -47,7 +47,7 @@ struct BrainBarHealthVerdict: Codable, Equatable, Sendable {
         let note: String
         var text: String { "\(Self.labels[name] ?? name): \(note.isEmpty ? state.rawValue : note)" }
         static let labels = [
-            "backup_local": "Local database backup", "backup_offsite": "Offsite (Drive) database backup",
+            "backup_local": "Database snapshot (verified)", "backup_offsite": "Offsite (Drive) database backup",
             "transcripts": "Transcript backup", "drive_auth": "Drive authorization", "integrity": "Database integrity",
             "ingest": "Transcript ingest", "embedding": "Embedding", "stores": "Memory stores",
             "search": "Memory search", "disk": "Disk space for backups", "monitor": "Health monitor",

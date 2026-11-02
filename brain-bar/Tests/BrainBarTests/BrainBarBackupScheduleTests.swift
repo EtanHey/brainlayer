@@ -157,6 +157,17 @@ final class BrainBarBackupScheduleTests: XCTestCase {
         )
     }
 
+    func testShortHoldDeferralExplainsWhyVacuumWasSkipped() {
+        let log = Data(#"{"ts":"2026-11-02T01:40:00Z","mode":"full","dry_run":false,"backup_status":"local_verified","vacuum":"deferred"}"#.utf8)
+        XCTAssertEqual(
+            BackupLogReader.lastIncompleteAttempt(.weeklyMaintenance, log: log)?.reason,
+            "not enough maintenance time left for VACUUM; VACUUM skipped"
+        )
+        XCTAssertTrue(BrainLayerMaintenanceExit.isDeliberateDeferral(
+            "freelist probe failed: OperationalError; VACUUM skipped"
+        ))
+    }
+
     // MARK: #1015 review round 1
 
     private func calendarPlist(_ entry: String) -> Data {
