@@ -120,7 +120,6 @@ def catch_up(world, timeout):
         world.hotlane()
         depth, missing = backlog(world)
         elapsed = time.monotonic() - started
-        assert elapsed <= timeout, f"backlog did not converge in {timeout}s: queue={depth}, missing={missing}"
         if depth == missing == 0:
             world.assert_roundtrip()
             return {
@@ -130,6 +129,7 @@ def catch_up(world, timeout):
                 "missing_after": missing,
                 "catch_up_ms": round(elapsed * 1000, 3),
             }
+        assert elapsed <= timeout, f"backlog did not converge in {timeout}s: queue={depth}, missing={missing}"
         time.sleep(0.01)
 
 

@@ -76,3 +76,34 @@ def test_lock_measurement_rejects_missing_transaction_evidence(world, monkeypatc
     path.write_text("".join(json.dumps(event) + "\n" for event in events))
     with pytest.raises(AssertionError, match="missing.*drain"):
         world.lock_holds()
+
+
+@pytest.mark.parametrize("converges", [True, False])
+def test_catch_up_slow_final_iteration(monkeypatch, converges):
+    from types import SimpleNamespace
+
+    from . import faults
+
+    clock = SimpleNamespace(now=0.0)
+    state = SimpleNamespace(pending=1, checked=False)
+
+    def drain():
+        clock.now += 6
+        if converges:
+            state.pending = 0
+
+    def roundtrip():
+        state.checked = True
+
+    world = SimpleNamespace(drain=drain, hotlane=lambda: None, assert_roundtrip=roundtrip)
+    monkeypatch.setattr(faults.time, "monotonic", lambda: clock.now)
+    monkeypatch.setattr(faults, "backlog", lambda _: (state.pending, state.pending))
+    if converges:
+        metrics = catch_up(world, timeout=5)
+        assert metrics["catch_up_ms"] == 6000
+        assert metrics["queue_after"] == metrics["missing_after"] == 0
+        assert state.checked
+    else:
+        with pytest.raises(AssertionError, match="backlog did not converge in 5s: queue=1, missing=1"):
+            catch_up(world, timeout=5)
+        assert not state.checked

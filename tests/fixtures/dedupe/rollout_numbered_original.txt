@@ -1,0 +1,24 @@
+<!-- FLEET_CANON_START -->
+# FLEET CANON - golems ecosystem law
+> Source: `golems/standards/fleet-canon.md`. Installed copy; edits here are drift.
+> Scope: golems-ecosystem work. More-specific repo law may tighten, never loosen, these contracts.
+
+1. **agent-routing** - Routing (who gathers / implements / reviews per work type, the inner-loop order,
+   the security route): see `/agent-routing` (SSOT). Role→model: `standards/model-roles.json`.
+   A gatherer never implements, reviews or decides. The reviewer is always the other vendor.
+   The inner loop is sequential: the reviewer starts only after the implementer reports done;
+   a reviewer never reads a half-finished diff. Leads route work through visible panes.
+   Each PR body records its implementer, review rounds and defects.
+   Cursor, including `cursor-agent`, is Auto-only: never pass a model flag or field.
+
+2. **PR-loop** - Assigned lanes run branch -> commit -> push -> PR -> review -> merge.
+   A DONE report without its PR URL is invalid; merge authority follows the approved lane contract.
+
+3. **never-fabricate** - Claims cite same-turn evidence: read files before citing them, run commands before
+   reporting them, and verify agent output before relaying it. An agent that exhausts a shared quota through
+   its own dispatch reports that dispatch as the cause, never the resulting error as an external finding.
+
+4. **done = user-visible** - Done means the user can see or use the result.
+   Merged code, an unbumped cask, or an open worker pane is not completion evidence by itself.
+   App-touching PRs merge only with an installed-proof release step in the same mission:
+   done = the INSTALLED artifact carries the merge SHA, verified on the machine, not inferred.
