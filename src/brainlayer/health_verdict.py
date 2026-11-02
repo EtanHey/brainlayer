@@ -15,13 +15,14 @@ skipped job while a verified backup exists is a note, never a dot. So:
   Only an unobserved receipt source falls back to the last verified timestamp; its age keeps
   running while the source is unreadable.
 - Recovery needs real evidence. Backups go green on the first verified receipt; ingest, stores
-  and search need ``recovery_good_ticks`` good observations with no bad one between. A tick with
+  and search need ``recovery_good_ticks`` consecutive observed good ticks. A tick with
   no new evidence (an unobserved fact, or an age that only looks fresh because the monitor was not
-  running) never counts as good and never improves a known amber or red.
+  running) resets recovery and never improves a known amber or red.
 - Latches: a failed store canary stays failed until a store canary succeeds; confirmed Drive
   access loss stays red until Drive access is observed ``ok``.
 - Wake grace: after a monitoring gap, a backup that just crossed red gets one catch-up window,
-  whose deadline is persisted and never renewed by a later gap.
+  whose deadline is persisted and never renewed by a later gap. Heartbeat and stall clocks
+  likewise get at most one wake window per clock value, then return to their true age.
 """
 
 from __future__ import annotations
@@ -252,6 +253,7 @@ def _stall_age(
     amber: float,
     red: float,
     what: str,
+    wake_grace_s: float,
 ) -> _Raw:
     """Age of an ongoing stall (oldest pending store, embed backlog not shrinking).
 
@@ -267,21 +269,34 @@ def _stall_age(
         start = _aware(observed)
     if start is None:
         return _Raw(GREEN, "", 0.0, red, None, evidence=observed is not UNOBSERVED)
-    return _graced_age(start, now, resumed_at, amber, red, what, observed is not UNOBSERVED)
+    return _graced_age(start, prior, now, resumed_at, amber, red, what, observed is not UNOBSERVED, wake_grace_s)
 
 
 def _graced_age(
     start: datetime,
+    prior: Mapping[str, Any],
     now: datetime,
     resumed_at: datetime | None,
     amber: float,
     red: float,
     what: str,
     observed: bool,
+    wake_grace_s: float,
 ) -> _Raw:
-    """State of an aging clock, with wake grace that can soften a fresh stall but never prove recovery."""
+    """One persisted wake window per clock value; grace never proves recovery."""
+    grace_at = deadline = None
+    if prior.get("grace_clock") == _iso(start):
+        grace_at = _parse(prior.get("grace_started_at"))
+        deadline = _parse(prior.get("grace_until"))
+    if deadline is None and resumed_at is not None and start < resumed_at:
+        grace_at = resumed_at
+        deadline = grace_at + timedelta(seconds=wake_grace_s)
+    keep = {}
+    if deadline is not None:
+        # Keep expired windows too: another gap in this episode cannot grant a new one.
+        keep = {"grace_clock": _iso(start), "grace_started_at": _iso(grace_at), "grace_until": _iso(deadline)}
     true_age = max(0.0, (now - start).total_seconds())
-    effective = max(start, resumed_at) if resumed_at is not None else start
+    effective = max(start, grace_at) if grace_at is not None and deadline is not None and now <= deadline else start
     age = max(0.0, (now - effective).total_seconds())
     state = _age_state(age, amber, red)
     graced = _RANK[state] < _RANK[_age_state(true_age, amber, red)]
@@ -295,6 +310,7 @@ def _graced_age(
         red,
         start,
         amber,
+        keep=keep,
         evidence=observed and not graced,
         graced=graced,
     )
@@ -378,7 +394,17 @@ def _raw_checks(
     if clock is None:
         raw["ingest"] = _Raw(UNKNOWN, "watcher heartbeat not observed", threshold_s=t.ingest_red_s, evidence=False)
     else:
-        r = _graced_age(clock, now, resumed_at, t.ingest_amber_s, t.ingest_red_s, "heartbeat age is", True)
+        r = _graced_age(
+            clock,
+            p("ingest"),
+            now,
+            resumed_at,
+            t.ingest_amber_s,
+            t.ingest_red_s,
+            "heartbeat age is",
+            True,
+            t.wake_grace_s,
+        )
         r.evidence = r.evidence and watcher is not None  # an observed heartbeat, fresh by its real age
         if watcher is None:
             r.note = f"watcher heartbeat not observed; {r.note}"
@@ -394,6 +420,7 @@ def _raw_checks(
         t.embedding_amber_s,
         t.embedding_red_s,
         "backlog has not shrunk for",
+        t.wake_grace_s,
     )
     pending = _stall_age(
         facts.oldest_pending_store_at,
@@ -403,6 +430,7 @@ def _raw_checks(
         t.stores_amber_s,
         t.stores_red_s,
         "oldest pending store has waited",
+        t.wake_grace_s,
     )
     prior_stores = p("stores")
     canary = _counter(facts.store_canary_ok, prior_stores, t.canary_red_failures, latch=True)
@@ -420,7 +448,7 @@ def _raw_checks(
         pending.threshold_s,
         pending.clock,  # the stall start persists even while the canary decides the state
         pending.amber_s if worst is pending else None,
-        {**canary.keep, "canary_owed": owed},
+        {**pending.keep, **canary.keep, "canary_owed": owed},
         evidence=evidence,
         graced=pending.graced,
     )
@@ -477,10 +505,10 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
         before = prior_checks.get(name) if isinstance(prior_checks.get(name), Mapping) else {}
         prior_state = before.get("state") if before.get("state") in _RANK else None
         unknown_ticks = int(before.get("unknown_ticks") or 0)
-        good_ticks = int(before.get("good_ticks") or 0)  # good observations since the last bad one
+        good_ticks = int(before.get("good_ticks") or 0)  # consecutive observed good ticks
         deadline = _parse(before.get("catch_up_until"))
         state, note = r.state, r.note
-        if r.state != GREEN:
+        if r.state != GREEN or not r.evidence or r.graced:
             good_ticks = 0
         if state == UNKNOWN:
             unknown_ticks += 1
@@ -497,6 +525,8 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
                 # Nothing new was observed (or the age only looks fresh because the monitor was
                 # not running): a known amber or red holds, and this is not a good tick.
                 state, note = prior_state, f"{note}; {prior_state} holds until positive evidence".lstrip("; ")
+            elif name in _HYSTERESIS and prior_state == RED and state == AMBER:
+                state, note = RED, f"{note}; red holds until consecutive observed good checks"
             elif name in _HYSTERESIS and state == GREEN and prior_state in (AMBER, RED):
                 good_ticks += 1
                 if good_ticks < t.recovery_good_ticks:
@@ -589,10 +619,12 @@ def _receipt_time(receipt: Mapping[str, Any]) -> datetime | None:
 
 
 def drive_event(receipt: Mapping[str, Any]) -> str | None:
-    """ "ok" for a verified Drive upload, a failure state for a Drive credential error, else None."""
+    """Current upload/auth outcomes only; historical reuse alone says nothing about Drive today."""
     text = " ".join(str(receipt.get(k) or "") for k in ("error_type", "error_code", "error")).lower()
     if "drivecredentialerror" in text or "drive access expired" in text or "drive token" in text:
         return "consent_needed" if any(marker in text for marker in _CONSENT_MARKERS) else "refresh_failed"
+    if receipt.get("status") == "reused":
+        return "ok" if receipt.get("drive_auth_probe") == "ok" else None
     if receipt.get("uploaded") is True and receipt.get("verified") is True:
         return "ok"
     return None
