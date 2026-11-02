@@ -18,6 +18,7 @@ jobs:
     outputs:
       brain_bar: ${{ steps.filter.outputs.brain_bar }}
       launchd: ${{ steps.filter.outputs.launchd }}
+      backup_verdict_tla: ${{ steps.filter.outputs.backup_verdict_tla }}
       crash_sweeps: ${{ steps.sweeps.outputs.required }}
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +49,80 @@ jobs:
               - 'src/brainlayer/pause.py'
               - 'tests/test_fleet_watchdog.py'
               - '.github/workflows/ci.yml'
+            backup_verdict_tla:
+              - 'formal/backup-verdict/**'
+              - 'src/brainlayer/health_verdict.py'
+              - 'src/brainlayer/backup_daily.py'
+              - 'src/brainlayer/maintenance.py'
+              - 'src/brainlayer/maintenance_calendar.py'
+              - 'src/brainlayer/job_alerts.py'
+              - 'src/brainlayer/health_facts.py'
+              - '.github/workflows/ci.yml'
+
+  backup-verdict-tla:
+    # TLA+ ratchet for backup -> snapshot -> VACUUM -> dot (formal/backup-verdict/README.md).
+    # All-fixes models must pass; every pre-fix switch must still produce its counterexample,
+    # and each backup counterexample must reproduce in the real pre-fix source by replay.
+    # --require-sync: a change to a covered source fails here until the model is re-confirmed
+    # against it and coverage.json's pin is moved (formal/backup-verdict/SKILL.md).
+    name: TLA+ backup verdict
+    needs: changes
+    if: needs.changes.outputs.backup_verdict_tla == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Two replay refs are #1583 PR-branch heads (672c9f97, 7f7f6245), not on main.
+      # conform-ingest-s1a5 replays against #1600's head 4e07651b, which a squash merge leaves off main.
+      - name: Fetch replay refs
+        run: |
+          git fetch --no-tags origin +refs/pull/1583/head:refs/remotes/pull/1583
+          git fetch --no-tags origin +refs/pull/1600/head:refs/remotes/pull/1600
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install TLC 1.7.4 (pinned digest)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/tla2tools.jar" \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $RUNNER_TEMP/tla2tools.jar" | sha256sum -c -
+
+      - name: Checker probes
+        run: |
+          python3 -m pip install pytest
+          python3 -m pytest -q formal/backup-verdict/test_check.py -p no:cacheprovider -o pythonpath=
+
+      - name: Model-check every case
+        env:
+          TLC_JAR: ${{ runner.temp }}/tla2tools.jar
+          TLC_WORKERS: "2"
+        run: python3 formal/backup-verdict/check.py --require-sync
+
+      # A failing case must be diagnosable: keep each case's TLC log, trace and results.json.
+      - name: Upload TLC logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-verdict-tlc-logs
+          path: |
+            .build.noindex/backup-verdict/*/*.log
+            .build.noindex/backup-verdict/*/*.trace.txt
+            .build.noindex/backup-verdict/*/results.json
+          # .build.noindex is a dot-directory; upload-artifact@v4 skips hidden paths by default, which
+          # would upload nothing and leave a flake undiagnosable (Macroscope, #1601).
+          include-hidden-files: true
+          retention-days: 14
 
   swift:
     name: swift (macos-15)
