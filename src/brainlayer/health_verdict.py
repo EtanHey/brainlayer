@@ -591,10 +591,12 @@ def _receipt_time(receipt: Mapping[str, Any]) -> datetime | None:
 
 
 def drive_event(receipt: Mapping[str, Any]) -> str | None:
-    """ "ok" for a verified Drive upload, a failure state for a Drive credential error, else None."""
+    """Current upload/auth outcomes only; historical reuse alone says nothing about Drive today."""
     text = " ".join(str(receipt.get(k) or "") for k in ("error_type", "error_code", "error")).lower()
     if "drivecredentialerror" in text or "drive access expired" in text or "drive token" in text:
         return "consent_needed" if any(marker in text for marker in _CONSENT_MARKERS) else "refresh_failed"
+    if receipt.get("status") == "reused":
+        return "ok" if receipt.get("drive_auth_probe") == "ok" else None
     if receipt.get("uploaded") is True and receipt.get("verified") is True:
         return "ok"
     return None
