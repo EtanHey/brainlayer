@@ -215,6 +215,8 @@ enum BackupLogReader {
             if isCompletedFullPass(row) { return nil }
             guard let at = isoDate(row["ts"]) else { continue }
             let reason = switch row["backup_status"] as? String {
+            case "local_verified" where row["vacuum"] as? String == "deferred":
+                "not enough maintenance time left for VACUUM; VACUUM skipped"
             case "unavailable": "backup unavailable, VACUUM skipped"
             case "gates_failed": "post-backup safety gate failed, VACUUM skipped"
             case let status?: "backup \(status), VACUUM skipped"

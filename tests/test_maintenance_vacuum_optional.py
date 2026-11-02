@@ -198,3 +198,44 @@ def test_consecutive_nights_retry_weekly_then_select_light_and_keep_upload_input
     assert any(r.get("status") == "deferred" for r in receipts)
     assert any(r.get("vacuum") == "not_needed" and r["status"] == "completed" for r in receipts)
     capsys.readouterr()
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "recent queue write activity: 1 file(s) modified recently",
+        "outside quiet window: now=12:00 start_hour=3 duration_minutes=60",
+    ],
+)
+def test_gate_deferral_preserves_prior_vacuum_failure(weekly, monkeypatch, capsys, reason):
+    config, _, events, _ = weekly
+    monkeypatch.setattr(maintenance, "MaintenanceConfig", lambda: config)
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(config.db_path.with_name("alerts.json")))
+    prior = "VACUUM failed (OperationalError)"
+    job_alerts.report("maintenance-full", prior)
+
+    def defer(_):
+        raise maintenance.MaintenanceAbort(reason)
+
+    monkeypatch.setattr(maintenance, "_run_gates", defer)
+    assert maintenance.main(["--full"]) == 75
+    assert json.loads(capsys.readouterr().out) == {"status": "deferred", "reason": reason}
+    assert job_alerts.active_alerts()["maintenance-full"] == prior
+    assert events == []
+
+
+def test_freelist_probe_failure_defers_before_hold(weekly, monkeypatch, capsys):
+    config, _, events, _ = weekly
+    monkeypatch.setattr(maintenance, "MaintenanceConfig", lambda: config)
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(config.db_path.with_name("alerts.json")))
+    job_alerts.report("maintenance-full", "stale snapshot failure")
+
+    def fail(_):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(maintenance, "_freelist_ratio", fail)
+    assert maintenance.main(["--full"]) == 75
+    reason = "freelist probe failed: OperationalError; VACUUM skipped"
+    assert json.loads(capsys.readouterr().out) == {"status": "deferred", "reason": reason}
+    assert job_alerts.active_alerts() == {}
+    assert events == []

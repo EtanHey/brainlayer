@@ -172,6 +172,7 @@ enum BrainLayerMaintenanceExit {
         #"^queue depth growing: before=\d+ after=\d+$"#,
         #"^unexpected writer holds brainlayer db: pid=\d+ command=.+ fd=\S+$"#,
         #"^quiet window leaves no time for a bounded maintenance hold$"#,
+        #"^freelist probe failed: [A-Za-z_][A-Za-z_0-9]*; VACUUM skipped$"#,
         #"^tonight's local verified snapshot unavailable; VACUUM skipped$"#,
         #"^fresh weekly backup (?:timed out|exited -?\d+|returned no receipt \(\d+ stderr bytes\)); VACUUM skipped$"#,
         #"^weekly backup failed \([A-Za-z_][A-Za-z_0-9]*\); VACUUM skipped$"#,

@@ -86,6 +86,7 @@ DELIBERATE_DEFERRALS = (
     r"^queue depth growing: before=\d+ after=\d+$",
     r"^unexpected writer holds brainlayer db: pid=\d+ command=.+ fd=\S+$",
     r"^quiet window leaves no time for a bounded maintenance hold$",
+    r"^freelist probe failed: [A-Za-z_][A-Za-z_0-9]*; VACUUM skipped$",
     r"^tonight's local verified snapshot unavailable; VACUUM skipped$",
     r"^fresh weekly backup (?:timed out|exited -?\d+|returned no receipt \(\d+ stderr bytes\)); VACUUM skipped$",
     r"^weekly backup failed \([A-Za-z_][A-Za-z_0-9]*\); VACUUM skipped$",
@@ -1321,7 +1322,7 @@ def _weekly_backup(config: MaintenanceConfig) -> dict[str, Any]:
             if remaining_window < 1:
                 raise MaintenanceAbort("no quiet-window time remains for fresh backup; VACUUM skipped")
             try:
-                backup = _run_bounded_weekly_backup(config, remaining_window)
+                _ = _run_bounded_weekly_backup(config, remaining_window)
             except BackupAlreadyRunningError:
                 held = True
             except MaintenanceAbort:
@@ -1378,7 +1379,10 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
     post_backup_gates_failed = False
     vacuum_needed = mode == "full"
     if vacuum_needed:
-        result.freelist_ratio = _freelist_ratio(config.db_path)
+        try:
+            result.freelist_ratio = _freelist_ratio(config.db_path)
+        except sqlite3.Error as exc:
+            raise MaintenanceAbort(f"freelist probe failed: {type(exc).__name__}; VACUUM skipped") from exc
         vacuum_needed = result.freelist_ratio >= _vacuum_freelist_ratio()
         if not vacuum_needed:
             result.vacuum = "not_needed"
@@ -1573,7 +1577,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 log_path,
                 {"status": "deferred" if deferred else "aborted", "mode": mode, "reason": exc.reason},
             )
-            if not deferred or mode == "full":
+            if not deferred or (mode == "full" and exc.reason.endswith("; VACUUM skipped")):
                 from .job_alerts import report
 
                 report(f"maintenance-{mode}", None if deferred else _failure_alert(mode, exc.reason, log_path))
