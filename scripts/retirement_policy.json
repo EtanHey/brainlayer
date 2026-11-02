@@ -5298,6 +5298,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "d99ab4075277f7907b099ff2cc26b403018c2d89f1b9135265da3b99c18b5091": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_facts.py reads the local SQLite database in read-only mode to collect recent unvectored chunk facts.",
+      "site": {
+        "call_sha256": "ca41c20847678100b93c03aac5cc234e1ed7c223c918a2e57de92eb984e79b0b",
+        "kind": "generic_send",
+        "owner": "<module>.recent_unvectored",
+        "path": "src/brainlayer/health_facts.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "d9b55af618c33228420b271c253ad481da96c4baeaee04d48e5a56cce546bd4a": {
       "non_cloud_purpose": "Existing local Python import/resource metadata or on-disk session-harvest application; no model SDK factory. Site: src/brainlayer/pipeline/style_embed.py <module> importlib.util.find_spec.",
       "site": {
