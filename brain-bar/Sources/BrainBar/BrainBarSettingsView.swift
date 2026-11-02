@@ -440,7 +440,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     /// B5: derive once, with one captured time, and publish; surfaces only read `publishedStatus`.
     func republishStatus() {
         let snapshot = deriveStatus(at: now())
-        if snapshot.issues != publishedStatus.issues || snapshot.isChecking != publishedStatus.isChecking {
+        if snapshot != publishedStatus {
             publishedStatus = snapshot
         }
     }
