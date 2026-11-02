@@ -2094,5 +2094,40 @@ def test_doctor_embedding_grace_rejects_invalid_env(monkeypatch, value):
     from brainlayer.doctor import DoctorConfig
 
     monkeypatch.setenv("BRAINLAYER_EMBEDDING_GRACE_HOURS", value)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="BRAINLAYER_EMBEDDING_GRACE_HOURS"):
         DoctorConfig()
+
+
+@pytest.mark.parametrize("old_age", [7, 25, None])
+def test_doctor_fresh_backlog_does_not_hide_old_or_unknown_age(tmp_path, old_age):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "mixed-backlog.db"
+    _build_db(db_path, missing_recent_vector=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE chunks SET created_at = ? WHERE id = 'doctor-recent-missing-vector'",
+            ((NOW - timedelta(minutes=10)).isoformat(),),
+        )
+        conn.execute("DELETE FROM chunk_vectors_rowids WHERE id = 'doctor-healthy-1'")
+        conn.execute(
+            "UPDATE chunks SET created_at = ? WHERE id = 'doctor-healthy-1'",
+            ((NOW - timedelta(hours=old_age)).isoformat() if old_age is not None else None,),
+        )
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path),
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+    issues = {issue.code: issue for issue in result.issues}
+    assert "vector_parity_failed" not in issues
+    assert issues["vector_parity_gap"].details["count"] == 2
+    if old_age is None:
+        assert result.exit_code == 0
+        assert issues["unvectored_age_unknown"].severity == "warning"
+        assert issues["unvectored_age_unknown"].details["count"] == 1
+    else:
+        assert result.exit_code == 1
+        assert issues["vector_parity_gap"].severity == "fatal"
+        assert issues["vector_parity_gap"].details["oldest_age_hours"] == old_age
