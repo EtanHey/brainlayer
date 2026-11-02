@@ -2,8 +2,8 @@
 
 Every red box sits on a transition TLC walked when a pre-fix switch was on. Each one is labelled
 with the PR that removed it, and its counterexample is in [COUNTEREXAMPLES.md](COUNTEREXAMPLES.md).
-Amber boxes are **current-code findings**: TLC reaches them with every fix on. They are reported,
-not fixed. Run `formal/backup-verdict/check.sh` to reproduce every box.
+The three `S1a-5` boxes are bugs this model found itself (F1–F3), fixed by S1a-5 (4e07651b, not yet
+on main). Run `formal/backup-verdict/check.sh` to reproduce every box.
 
 ## 1. Receipts and the snapshot check (`BackupVerdict.tla`)
 
@@ -97,8 +97,9 @@ stateDiagram-v2
     [*] --> Green
     Green --> Red: failure observed
     Red --> Recovering: good observation 1 of 2
-    Recovering --> Red: bad observation (count resets, #1595)
-    Recovering --> Green: good observation 2 of 2
+    Recovering --> Red: bad, unobserved or graced tick (count resets, #1595, S1a-5)
+    Recovering --> Green: observed good tick 2 of 2
+    Red --> Red: hysteresis check observes amber (stays red, S1a-5)
     Red --> Green: drive_auth: observed ok. embedding: vectors written
 
     state "#1583 R1 B1: empty queue repays a failed store canary" as b1583b1
@@ -120,9 +121,9 @@ stateDiagram-v2
     Red --> b1587b5
     b1587b5 --> Green
 
-    state "F1: one aging heartbeat steps red to amber" as f1
-    state "F2: unobserved tick keeps the count (ingest)" as f2
-    state "F3: stale heartbeat seen in wake grace keeps the count" as f3
+    state "S1a-5 F1: one aging heartbeat steps red to amber" as f1
+    state "S1a-5 F2: unobserved tick keeps the count" as f2
+    state "S1a-5 F3: stale heartbeat seen in wake grace keeps the count" as f3
     Red --> f1
     f1 --> Amber
     Recovering --> f2
@@ -130,8 +131,7 @@ stateDiagram-v2
     Recovering --> f3
     f3 --> Green
 
-    class b1583b1,b1583b2,b1583b4,b1595r,b1587b4,b1587b5 bug
-    class f1,f2,f3 finding
+    class b1583b1,b1583b2,b1583b4,b1595r,b1587b4,b1587b5,f1,f2,f3 bug
 ```
 
 ## 4. The dot (`DotTable.tla`, plan §3d)
@@ -165,7 +165,7 @@ stateDiagram-v2
 | `transcripts` | ≤ 30 h | 30–54 h | > 54 h | a new verified transcript backup | `DotTable` aging class (same `_verified_age` path as the two above, not separately modelled) |
 | `drive_auth` | ok | refresh failed | consent needed | an observed `ok` | `PipeVerdict` Focus=drive |
 | `integrity` | ok | — | corrupt | a clean result | `DotTable` two-state class |
-| `ingest` | fresh | > 10 min | > 30 min | 2 consecutive good ticks, advancing heartbeat | `PipeVerdict` Focus=ingest (findings F1–F3) |
+| `ingest` | fresh | > 10 min | > 30 min | 2 consecutive good ticks, advancing heartbeat | `PipeVerdict` Focus=ingest (S1a-5 F1–F3; conformance vs real code) |
 | `embedding` | progressing | — | not shrinking > 6 h | vectors written | `PipeVerdict` Focus=embedding |
 | `stores` | ≤ 15 min, canary ok | 15–45 min or 1 fail | > 45 min or 3 fails | canary success, then 2 good ticks | `PipeVerdict` Focus=stores |
 | `search` | ok | 1–2 fails | 3 fails | 2 consecutive good ticks | `DotTable` hysteresis class |

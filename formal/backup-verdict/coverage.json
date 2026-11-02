@@ -88,7 +88,8 @@
         "src/brainlayer/health_verdict.py:247-270 (_stall_age)"
       ],
       "Hold": [
-        "src/brainlayer/health_verdict.py:476-507"
+        "src/brainlayer/health_verdict.py:476-507 (main 67d23f14: ObservedHysteresis=FALSE)",
+        "S1a-5 4e07651b health_verdict.py:483-501 (good_ticks resets on not observed-good; hysteresis red observing amber stays red: ObservedHysteresis=TRUE)"
       ],
       "RoundTrip": [
         "src/brainlayer/maintenance.py:1544-1575 (_store_roundtrip: every attempt replaces the receipt)",
@@ -136,5 +137,10 @@
       "jobs": 3,
       "unbounded_time": true
     }
+  },
+  "s1a5": {
+    "branch": "fix/verdict-hysteresis-observed",
+    "sha": "4e07651b1f3f2ae34ff4817e4065591fdec377d8",
+    "note": "not on main; conform-ingest-fixed and bug-s1a5-* run against it with --src-ref 4e07651b"
   }
 }

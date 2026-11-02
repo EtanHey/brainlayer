@@ -9,7 +9,8 @@
 (* UNOBSERVED), and the monitor may skip hours.                             *)
 (*                                                                          *)
 (* All-fixed values: CanaryLatch, GraceNotEvidence, DriveLatch,             *)
-(* ResetRecovery, ReceiptReplaced, AnchoredBacklog all TRUE.                *)
+(* ResetRecovery, ReceiptReplaced, AnchoredBacklog, ObservedHysteresis    *)
+(* all TRUE.                                                                *)
 (***************************************************************************)
 EXTENDS Integers
 
@@ -27,6 +28,9 @@ CONSTANTS
     GraceNotEvidence,  \* #1583 B2: an age that looks fresh only because of a resume is not a good tick
     DriveLatch,        \* #1583 B4: confirmed Drive loss holds until an observed ok
     ResetRecovery,     \* #1595: any non-green raw tick resets good_ticks
+    ObservedHysteresis, \* S1a-5 (4e07651b): a tick that is not observed-good resets good_ticks
+                       \* (raw not green, no evidence, or graced), and red that observes
+                       \* amber stays red: red clears only on consecutive observed good ticks
     ReceiptReplaced,   \* #1587 B5: every round-trip attempt replaces the receipt
     AnchoredBacklog,   \* #1587 B4: rows leave the backlog only by getting a vector
     QueueStalls,       \* may the pending-store queue stall (FALSE isolates the canary)
@@ -44,12 +48,12 @@ VARIABLES
     now, alive, hb, storeOK, attempt, success, queueStalled, access,
     backlog, stallSince,                                 \* the world
     lastTick, resumed, st, uk, good, fails, owed, lost, ingClk, embClk, pend, \* the monitor
-    prevSt, streak, loose, lastCanary                     \* ghosts
+    prevSt, streak, loose, lastCanary, lastObs            \* ghosts (lastObs: what the last tick saw)
 
 world == <<now, alive, hb, storeOK, attempt, success, queueStalled, access,
            backlog, stallSince>>
 mon == <<lastTick, resumed, st, uk, good, fails, owed, lost, ingClk, embClk, pend>>
-ghost == <<prevSt, streak, loose, lastCanary>>
+ghost == <<prevSt, streak, loose, lastCanary, lastObs>>
 vars == <<world, mon, ghost>>
 
 -----------------------------------------------------------------------------
@@ -120,9 +124,11 @@ EmbObs == Only("embedding", {"unobs", IF backlog THEN "stalled" ELSE "clear"}
 Resumed1 == IF lastTick # NoTime /\ now - lastTick > Gap THEN now ELSE resumed
 ResumedNow == IF Resumed1 # NoTime /\ now - Resumed1 > Grace THEN NoTime ELSE Resumed1
 
-Hold(c, raw, ev) ==
+Hold(c, raw, ev, graced) ==
     LET prior == st[c]
-        g0 == IF ResetRecovery /\ raw # "green" THEN 0 ELSE good[c]
+        g0 == IF ObservedHysteresis
+              THEN (IF raw # "green" \/ ~ev \/ graced THEN 0 ELSE good[c])
+              ELSE IF ResetRecovery /\ raw # "green" THEN 0 ELSE good[c]
         uk1 == IF raw = "unknown" THEN uk[c] + 1 ELSE 0
     IN IF raw = "unknown"
        THEN [state |-> IF prior = "red" THEN "red"
@@ -131,6 +137,8 @@ Hold(c, raw, ev) ==
              good |-> g0, unknown |-> uk1]
        ELSE IF ~ev /\ prior \in {"amber", "red"} /\ Lower(raw, prior)
        THEN [state |-> prior, good |-> g0, unknown |-> 0]
+       ELSE IF ObservedHysteresis /\ c \in Hyst /\ prior = "red" /\ raw = "amber"
+       THEN [state |-> "red", good |-> g0, unknown |-> 0]
        ELSE IF c \in Hyst /\ raw = "green" /\ prior \in {"amber", "red"}
        THEN IF g0 + 1 < GoodTicks
             THEN [state |-> prior, good |-> g0 + 1, unknown |-> 0]
@@ -151,8 +159,8 @@ IngestRaw(o) ==
         eff == IF ResumedNow # NoTime /\ ResumedNow > clock THEN ResumedNow ELSE clock
         raw == AgeState(now - eff)
         graced == Lower(raw, AgeState(now - clock))
-    IN IF clock = NoTime THEN [raw |-> "unknown", ev |-> FALSE, clk |-> NoTime]
-       ELSE [raw |-> raw, clk |-> clock,
+    IN IF clock = NoTime THEN [raw |-> "unknown", ev |-> FALSE, clk |-> NoTime, graced |-> FALSE]
+       ELSE [raw |-> raw, clk |-> clock, graced |-> graced,
              ev |-> IF GraceNotEvidence THEN o = "seen" /\ ~graced ELSE TRUE]
 
 (* stores: oldest pending store, plus the latched round-trip canary         *)
@@ -209,7 +217,7 @@ Tick ==
                                       [] c = "stores" -> s.raw [] OTHER -> e.raw]
             ev == [c \in Checks |-> CASE c = "drive" -> d.ev [] c = "ingest" -> i.ev
                                      [] c = "stores" -> s.ev [] OTHER -> e.ev]
-            h == [c \in Checks |-> Hold(c, raw[c], ev[c])]
+            h == [c \in Checks |-> Hold(c, raw[c], ev[c], c = "ingest" /\ i.graced)]
         IN /\ st' = [c \in Checks |-> h[c].state]
            /\ good' = [c \in Checks |-> IF h[c].good > GoodTicks THEN GoodTicks ELSE h[c].good]
            /\ uk' = [c \in Checks |-> IF h[c].unknown > UnknownAmber THEN UnknownAmber
@@ -226,6 +234,7 @@ Tick ==
            /\ loose' = [c \in Checks |-> IF Demo(c, o)
                            THEN (IF loose[c] < GoodTicks THEN loose[c] + 1 ELSE GoodTicks)
                            ELSE IF Observed(c, o) THEN 0 ELSE loose[c]]
+           /\ lastObs' = o
            /\ lastCanary' = IF o.canary = "unobs" THEN lastCanary ELSE attempt
     /\ prevSt' = st
     /\ lastTick' = now
@@ -244,6 +253,8 @@ Init ==
     /\ prevSt = [c \in Checks |-> "none"] /\ streak = [c \in Checks |-> 0]
     /\ loose = [c \in Checks |-> 0]
     /\ lastCanary = "none"
+    /\ lastObs = [drive |-> "unobs", hb |-> "unobs", canary |-> "unobs", queue |-> "unobs",
+                  emb |-> "unobs"]
 
 Next == World \/ Advance \/ Tick
 Spec == Init /\ [][Next]_vars

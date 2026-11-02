@@ -92,6 +92,8 @@ CASES: list[dict[str, str]] = [
     {
         "name": "bug-1583-B2-resume-grace",
         "module": "PipeVerdict",
+        "prefix": "672c9f97",
+        "fixed_here": "yes",
         "expect": "RedClearsToGreenOnlyOnEvidence",
         "pr": "#1583 R1 B2",
         "what": "a resume makes a dead watcher look fresh",
@@ -203,25 +205,71 @@ CASES: list[dict[str, str]] = [
         "pr": "#1583 S1",
         "what": "a job alert turns the dot red with every check green",
     },
+    {
+        "name": "bug-s1a5-F1-red-to-amber",
+        "module": "PipeVerdict",
+        "prefix": "67d23f14",
+        "fixed_here": "no",
+        "expect": "RedHoldsUntilEvidence",
+        "pr": "S1a-5 F1",
+        "what": "one stale-but-advanced heartbeat steps ingest from red to amber",
+    },
+    {
+        "name": "bug-s1a5-F2-unobserved-tick-keeps-count",
+        "module": "PipeVerdict",
+        "prefix": "67d23f14",
+        "fixed_here": "no",
+        "expect": "RedToGreenNeedsConsecutive",
+        "pr": "S1a-5 F2",
+        "what": "an unobserved tick between two good ticks does not reset the count",
+    },
+    {
+        "name": "bug-s1a5-F3-graced-stale-keeps-count",
+        "module": "PipeVerdict",
+        "prefix": "67d23f14",
+        "fixed_here": "no",
+        "expect": "RedClearsToGreenOnlyOnEvidence",
+        "pr": "S1a-5 F3",
+        "what": "a stale heartbeat seen inside wake grace does not reset recovery",
+    },
+    # --- conformance: random model behaviours replayed through the real evaluate() ---------
+    {
+        "name": "conform-ingest-prefix",
+        "module": "PipeVerdict",
+        "expect": "conforms",
+        "pr": "",
+        "prefix": "67d23f14",
+        "simulate": "3000,60,7",
+        "what": "pre-S1a-5 ingest model agrees with main 67d23f14 on every tick",
+    },
+    {
+        "name": "conform-ingest-fixed",
+        "module": "PipeVerdict",
+        "expect": "diverges",
+        "pr": "S1a-5",
+        "simulate": "3000,60,7",
+        "fixed_here": "no",
+        "what": "S1a-5 ingest model vs this tree; flip to conforms once S1a-5 merges",
+    },
     # --- current-code findings (reported, not fixed here) ----------------------------------
     {
         "name": "finding-ingest-red-to-amber",
         "module": "PipeVerdict",
-        "expect": "RedHoldsUntilEvidence",
+        "expect": "pass",
         "pr": "",
         "what": "one stale-but-advanced heartbeat steps ingest from red to amber",
     },
     {
         "name": "finding-ingest-graced-stale-keeps-count",
         "module": "PipeVerdict",
-        "expect": "RedClearsToGreenOnlyOnEvidence",
+        "expect": "pass",
         "pr": "",
         "what": "a stale heartbeat seen inside wake grace does not reset recovery",
     },
     {
         "name": "finding-ingest-unobserved-tick-keeps-count",
         "module": "PipeVerdict",
-        "expect": "RedToGreenNeedsConsecutive",
+        "expect": "pass",
         "pr": "",
         "what": "an unobserved tick between two good ticks does not reset the count",
     },
@@ -361,20 +409,33 @@ def run_case(case: dict[str, str], out: Path) -> dict[str, object]:
         str(work / "states"),
         module.name,
     ]
+    if case.get("simulate"):
+        traces, depth, seed = case["simulate"].split(",")
+        command[-1:-1] = ["-simulate", f"file={work}/tr,num={traces}", "-depth", depth, "-seed", seed]
     started = time.monotonic()
     proc = subprocess.run(command, cwd=work, capture_output=True, text=True, timeout=CASE_TIMEOUT_S)
     seconds = round(time.monotonic() - started, 1)
     text = proc.stdout + proc.stderr
     (out / f"{case['name']}.log").write_text(text)
     got = outcome(text, proc.returncode)
+    conformance = {}
+    if case.get("simulate"):
+        got, conformance = simulate_conformance(case, work, text, proc.returncode, out)
     if got == "temporal" and case["expect"] in TEMPORAL:
         got = case["expect"]  # TLC names no property; each temporal config checks exactly one
     trace = parse_trace(text)
     if trace:
         (out / f"{case['name']}.trace.txt").write_text(render_trace(trace) + "\n")
     replays = {}
-    if trace and case["module"] == "BackupVerdict" and case.get("prefix"):
-        replays = {"prefix": replay(case, trace, case["prefix"], out), "src": replay(case, trace, SRC_REF, out)}
+    if trace and case.get("prefix"):
+        if case["module"] == "BackupVerdict":
+            replays = {"prefix": replay(case, trace, case["prefix"], out), "src": replay(case, trace, SRC_REF, out)}
+        else:
+            states = [values for _, values in trace]
+            replays = {
+                "prefix": replay_ingest(case, [states], case["prefix"], out),
+                "src": replay_ingest(case, [states], SRC_REF, out),
+            }
     distinct = re.findall(r"(\d+) distinct states found", text.replace(",", ""))
     version = re.search(r"TLC2 Version (\S+)", text)
     return {
@@ -382,6 +443,7 @@ def run_case(case: dict[str, str], out: Path) -> dict[str, object]:
         "got": got,
         "matched": got == case["expect"] and replay_matches(case, replays),
         "replay": replays,
+        "conformance": conformance,
         "trace_steps": len(trace),
         "distinct_states": int(distinct[-1]) if distinct else None,
         "seconds": seconds,
@@ -437,6 +499,53 @@ def replay(case: dict[str, str], states: list, ref: str | None, out: Path) -> di
         reproduces = all(last["src"][c] != "red" for c in ("snap", "off") if last["model"][c] != "red")
     conforms = all(t["src"] == t["model"] for t in ticks)
     return {"ref": ref or "working tree", "reproduces": reproduces, "conforms": conforms, "ticks": ticks}
+
+
+def replay_ingest(case: dict[str, str], traces: list, ref: str | None, out: Path) -> dict[str, object]:
+    """Feed each trace's heartbeat observations to the real evaluate() at ref; compare ingest per tick."""
+    sys.path.insert(0, str(HERE))
+    import replay as rp  # noqa: PLC0415 - sibling script
+
+    constants = {k: int(v) if v.lstrip("-").isdigit() else v for k, v in cfg_constants(case["name"]).items()}
+    payload = {"constants": constants, "traces": [rp.ingest_ops(states) for states in traces]}
+    proc = subprocess.run(
+        [sys.executable, "-S", str(HERE / "replay.py"), "--run-ingest", str(source_tree(ref, out))],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        timeout=300,
+        cwd=out,
+    )
+    if proc.returncode != 0:
+        return {"ref": ref or "working tree", "error": proc.stderr.strip().splitlines()[-1:]}
+    runs = [ticks for ticks in json.loads(proc.stdout) if ticks]
+    diverging = [ticks for ticks in runs if any(t["src"] != t["model"] for t in ticks)]
+    last = runs[0][-1] if runs else None
+    return {
+        "ref": ref or "working tree",
+        "reproduces": bool(last) and last["src"] == last["model"],
+        "conforms": not diverging,
+        "traces": len(runs),
+        "ticks": sum(len(ticks) for ticks in runs),
+        "diverging": len(diverging),
+        "first_divergence": diverging[0] if diverging else None,
+    }
+
+
+def simulate_conformance(case: dict[str, str], work: Path, text: str, code: int, out: Path) -> tuple[str, dict]:
+    """Random behaviours of the model, replayed through the real code: do they agree on every tick?"""
+    sys.path.insert(0, str(HERE))
+    import replay as rp  # noqa: PLC0415 - sibling script
+
+    if code != 0 or "Error:" in text:
+        return "error", {}
+    files = sorted(work.glob("tr_*"))
+    traces = [rp.parse_sim_file(f.read_text()) for f in files]
+    ref = case.get("prefix") or SRC_REF
+    result = replay_ingest(case, traces, ref, out)
+    if "error" in result:
+        return "error", result
+    return ("conforms" if result["conforms"] else "diverges"), result
 
 
 def replay_matches(case: dict[str, str], replays: dict) -> bool:

@@ -8,15 +8,21 @@ case re-runs with `formal/backup-verdict/check.sh --case <name>`, which writes t
 **Replay.** Every `BackupVerdict` counterexample also runs, receipt by receipt and tick by tick,
 through the real `backup_facts()` and `evaluate()` of the named pre-fix commit, then of the
 current tree (`replay.py`). "Reproduces at the pre-fix ref" means the real code reaches the same
-false state, and every tick's backup states equal the model's. The pipe and dot counterexamples are
-not replayed (see README, "What is not covered").
+false state, and every tick's backup states equal the model's. `ingest` counterexamples (#1583 B2,
+S1a-5 F1–F3) replay the same way, heartbeat by heartbeat, through the real `evaluate()`. The other
+pipe and dot counterexamples are not replayed (see README, "What is not covered").
+
+**Conformance.** Beyond the counterexamples, `conform-ingest-*` replay 3,000 random TLC behaviours
+(`-simulate`, depth 60, seed 7; 8,934 ticks) of the `ingest` model through real code. The pre-S1a-5
+model agrees with main 67d23f14 on every tick. The S1a-5 model agrees with the S1a-5 head 4e07651b
+on every tick (0 of 3,000 diverging). Against main, which still lacks the fix, it diverges.
 
 ## Tonight's bugs: each pre-fix switch gives a counterexample
 
 | Case | PR | Rule broken | Replay: pre-fix ref → current tree |
 |---|---|---|---|
 | `bug-1583-B1-canary-latch` | #1583 R1 B1 | RedHoldsUntilEvidence | (pipe model) |
-| `bug-1583-B2-resume-grace` | #1583 R1 B2 | RedClearsToGreenOnlyOnEvidence | (pipe model) |
+| `bug-1583-B2-resume-grace` | #1583 R1 B2 | RedClearsToGreenOnlyOnEvidence | 672c9f97 reproduces → fixed |
 | `bug-1583-B3-renewable-grace` | #1583 R1 B3 | NoFalseGreen | 672c9f97 reproduces → fixed |
 | `bug-1583-B4-drive-latch` | #1583 R1 B4 | RedHoldsUntilEvidence | (pipe model) |
 | `bug-1583-B5-persisted-max` | #1583 R1 B5 | NoFalseGreen | 672c9f97 reproduces → fixed |
@@ -30,6 +36,9 @@ not replayed (see README, "What is not covered").
 | `bug-1587-B4-backlog-ages-out` | #1587 B4 | RedHoldsUntilEvidence | (pipe model) |
 | `bug-1587-B5-stale-canary-success` | #1587 B5 | RedHoldsUntilEvidence | (pipe model) |
 | `bug-1583-S1-alert-lights-dot` | #1583 S1 | NoStuckAlert | (dot model) |
+| `bug-s1a5-F1-red-to-amber` | S1a-5 (4e07651b) | RedHoldsUntilEvidence | 67d23f14 reproduces → **still on main**; fixed at 4e07651b |
+| `bug-s1a5-F2-unobserved-tick-keeps-count` | S1a-5 (4e07651b) | RedToGreenNeedsConsecutive | 67d23f14 reproduces → **still on main**; fixed at 4e07651b |
+| `bug-s1a5-F3-graced-stale-keeps-count` | S1a-5 (4e07651b) | RedClearsToGreenOnlyOnEvidence | 67d23f14 reproduces → **still on main**; fixed at 4e07651b |
 
 ### #1583 R1 B1: an empty queue repays a failed store canary
 1. The store path breaks, and the nightly round trip writes a failed receipt. The tick reads it: canary failed once, `stores` amber.
@@ -133,30 +142,34 @@ Fix (#1587): every attempt replaces the receipt. If it cannot be written, the ol
 
 Fix (#1583; plan section 3d): job alerts are `job_alert_*` warning notes, and only `outcome_<check>` for a red check is critical.
 
-## Current-code findings (reported, not fixed here)
+## Found by this model, fixed by S1a-5 (branch fix/verdict-hysteresis-observed, 4e07651b)
 
-These break the section 3d table with every fix on. TLC found them, and the model was not weakened to hide them.
+TLC found these three with every earlier fix on. S1a-5 changes `evaluate()` so that `good_ticks`
+resets when `r.state != GREEN or not r.evidence or r.graced`, and a hysteresis check that is red
+and observes amber stays red. The model mirrors this behind `ObservedHysteresis`. With it on, the
+three `finding-ingest-*` cases now **pass** (21,840 states). With it off, the `bug-s1a5-*` cases
+reproduce each trace below, and the real code at main 67d23f14 reproduces each one tick for tick.
 
-### F1 `finding-ingest-red-to-amber`: one aging heartbeat steps ingest from red to amber
+### F1 `bug-s1a5-F1-red-to-amber`: one aging heartbeat steps ingest from red to amber
 1. The watcher stops: at hour 3, `ingest` is red (heartbeat 3 h old, red after 2 h).
 2. The watcher writes once, then stops again. The next tick observes that heartbeat 2 h old (amber age).
 3. Raw AMBER, observed, not graced: the hysteresis branch only guards the step to GREEN, so `ingest` goes **red → amber** on one observation. The badge goes out.
 
 Section 3d says red clears on "2 consecutive good ticks, with an advancing heartbeat". The pending-store age (15–45 min amber) has the same shape in code, but the model does not include amber store ages. Code: `health_verdict.py` (7505f8b1) `evaluate`, the `_HYSTERESIS and state == GREEN` branch.
 
-### F2 `finding-ingest-unobserved-tick-keeps-count`: an unobserved tick does not reset recovery
+### F2 `bug-s1a5-F2-unobserved-tick-keeps-count`: an unobserved tick does not reset recovery
 1. `ingest` is red. One fresh heartbeat is observed: good tick 1 of 2.
 2. The next tick observes no heartbeat. The persisted clock is fresh, so raw is GREEN with `evidence=False`, the state is held red, and `good_ticks` is **not** reset (#1595 resets only on a non-green raw).
 3. The next fresh observation makes 2 of 2: **green**, with a blind tick between the two good ones.
 
-This is allowed by the module docstring ("no bad one between"), but not by section 3d's "consecutive". It is a ruling for the lead.
+The old module docstring allowed this ("no bad one between"); section 3d's "consecutive" did not. The lead ruled for section 3d, and S1a-5 rewrote the docstring.
 
-### F3 `finding-ingest-graced-stale-keeps-count`: a stale heartbeat seen inside wake grace does not reset recovery
+### F3 `bug-s1a5-F3-graced-stale-keeps-count`: a stale heartbeat seen inside wake grace does not reset recovery
 1. `ingest` is red. One fresh heartbeat is observed: good tick 1 of 2. The watcher then dies.
 2. The Mac sleeps. The next tick **observes** the dead watcher's 3 h-old heartbeat, but wake grace makes the effective age 0, so raw is GREEN (graced), held red, and `good_ticks` stays 1.
 3. The watcher restarts. One fresh tick makes 2 of 2: **green**.
 
-This breaks the code's own rule as well: an observed bad heartbeat sat between the two good ones. Suggested fix, for the lead to route: also reset `good_ticks` when the raw state is graced (`r.graced`). That is one condition beside #1595's line.
+This broke the code's own rule as well: an observed bad heartbeat sat between the two good ones. S1a-5's `or r.graced` is the fix.
 
 ## Design limit and scratch breaks
 

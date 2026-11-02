@@ -13,6 +13,7 @@ _parse_snapshot_date bodies, extracted from that source's backup_daily.py. Nothi
 file, a database or a socket.
 
     python3 -S replay.py --run <dir with health_verdict.py and backup_daily.py> < ops.json
+    python3 -S replay.py --run-ingest <same dir> < ops.json     (PipeVerdict ingest ticks)
 """
 
 from __future__ import annotations
@@ -194,7 +195,74 @@ def run(src: Path, payload: dict) -> list[dict]:
     return out
 
 
+# --- ingest (PipeVerdict, Focus = "ingest") ---------------------------------------------
+
+
+def parse_sim_file(text: str) -> list[dict[str, str]]:
+    """States of a TLC -simulate trace module (STATE_n == /\\ var = value ...)."""
+    states: list[dict[str, str]] = []
+    name = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("STATE_") and stripped.endswith("=="):
+            states.append({})
+            name = None
+        elif states and stripped.startswith("/\\ ") and " = " in stripped:
+            name, _, value = stripped[3:].partition(" = ")
+            states[-1][name] = value.strip()
+        elif states and name is not None and stripped and not stripped.startswith("="):
+            states[-1][name] += " " + stripped
+    return states
+
+
+def ingest_ops(states: list[dict[str, str]]) -> list[dict]:
+    """One op per health tick (lastTick changes on every tick and nothing else)."""
+    ops = []
+    for before, after in zip(states, states[1:]):
+        if after.get("lastTick") == before.get("lastTick"):
+            continue
+        seen = _tla_record(after["lastObs"])["hb"] == "seen"
+        ops.append(
+            {
+                "hour": int(after["now"]),
+                "heartbeat": int(after["hb"]) if seen else None,
+                "model": _tla_record(after["st"])["ingest"],
+            }
+        )
+    return ops
+
+
+def run_ingest(src: Path, payload: dict, hv: types.ModuleType | None = None) -> list[dict]:
+    """The real evaluate() for ingest, fed the same heartbeat observations tick by tick."""
+    hv = hv or _load(src)
+    c = payload["constants"]
+    t = hv.Thresholds(
+        ingest_amber_s=c["IngestAmber"] * HOUR,
+        ingest_red_s=c["IngestRed"] * HOUR,
+        sleep_gap_s=c["Gap"] * HOUR,
+        wake_grace_s=c["Grace"] * HOUR,
+        recovery_good_ticks=c["GoodTicks"],
+        unknown_amber_ticks=c["UnknownAmber"],
+    )
+    prior = None
+    out = []
+    for op in payload["ops"]:
+        now = BASE + dt.timedelta(hours=op["hour"])
+        seen = op["heartbeat"]
+        watcher = BASE + dt.timedelta(hours=seen) if seen is not None else hv.UNOBSERVED
+        verdict = hv.evaluate(hv.Facts(now=now, watcher_updated_at=watcher), prior, t)
+        prior = verdict.state
+        out.append({"hour": op["hour"], "model": op["model"], "src": verdict.check("ingest").state})
+    return out
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] != "--run":
+    if len(sys.argv) != 3 or sys.argv[1] not in ("--run", "--run-ingest"):
         sys.exit(__doc__)
-    print(json.dumps(run(Path(sys.argv[2]), json.load(sys.stdin))))
+    payload = json.load(sys.stdin)
+    if sys.argv[1] == "--run":
+        print(json.dumps(run(Path(sys.argv[2]), payload)))
+    else:  # one payload carries every trace, so one interpreter replays them all
+        hv = _load(Path(sys.argv[2]))
+        traces = payload["traces"]
+        print(json.dumps([run_ingest(Path(sys.argv[2]), {**payload, "ops": ops}, hv) for ops in traces]))

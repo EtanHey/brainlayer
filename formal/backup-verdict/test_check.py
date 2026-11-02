@@ -47,7 +47,7 @@ def test_every_config_belongs_to_a_case():
 def test_every_bug_case_names_its_pr_and_breaks_a_named_rule():
     for case in checker.CASES:
         if case["name"].startswith("bug-"):
-            assert case["pr"].startswith("#"), case["name"]
+            assert case["pr"].startswith(("#", "S1a-")), case["name"]
             assert case["expect"] != "pass", case["name"]
         if case["name"].startswith("current-"):
             assert case["expect"] == "pass", case["name"]

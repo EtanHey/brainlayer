@@ -53,7 +53,11 @@ shortest path in plain words.
   collectors always observe): that is a modelling error. Fix the action's precondition, and cite the
   code that makes it impossible.
 - Never weaken a property until it passes. If the code breaks section 3d, add a `finding-*` case,
-  record it in `COUNTEREXAMPLES.md`, and tell the lead (F1–F3 are the current ones).
+  record it in `COUNTEREXAMPLES.md`, and tell the lead. F1–F3 went this way: found as findings,
+  fixed by S1a-5, now `bug-s1a5-*` cases.
+
+When S1a-5 merges, flip `fixed_here` to `"yes"` on the three `bug-s1a5-*` cases, and set
+`conform-ingest-fixed`'s expectation to `"conforms"`. The run fails until you do.
 
 ## 4. Intended behaviour change
 

@@ -1,7 +1,8 @@
 # Backup verdict verification (TLA+)
 
-Status: **all-fixes models pass. Every bug fixed tonight reproduces when its pre-fix switch is on.
-Three current-code findings (F1–F3, `ingest` hysteresis) are reported, not fixed.**
+Status: **all-fixes models pass. Every bug fixed tonight reproduces when its pre-fix switch is on,
+including F1–F3 (`ingest` hysteresis), which this model found and S1a-5 (4e07651b) fixes. Main
+still has F1–F3 until S1a-5 merges.**
 
 The promise: the BrainBar dot is red exactly when memory is at risk or a pipe has stopped (plan
 section 3d). The harm when it breaks: a green dot with no restorable backup, or a red dot that
@@ -68,7 +69,7 @@ not yet merged is `fixed_here: "no"`, and fails once the fix lands until someone
   Amber and green are both "not red".
 - `PipeVerdict` explores one check's world per config (`Focus`). `evaluate()` couples checks only
   through `ticked_at` / `resumed_at`, which every config keeps. Pending-store amber ages are not
-  modelled, so F1's store variant is untested.
+  modelled, so F1's store variant is checked only through S1a-5's shared rule, not by a trace.
 - `DotTable` takes each class's state freely from its section 3d columns. How each class gets
   there is checked in the two modules above. `transcripts`, `integrity`, `search` and `disk` are
   covered only at this class level.
@@ -77,8 +78,8 @@ not yet merged is `fixed_here: "no"`, and fails once the fix lands until someone
 
 - The collectors that build `Facts` from files (`health_facts.py`, #1587) are modelled only for
   #1587 B4 and B5, and are not on main. File reads, timeouts and the 4 MiB tail are out of scope.
-- Pipe and dot counterexamples are not replayed against code (the trace does not carry the
-  per-tick observation set).
+- Only `ingest` pipe traces are replayed against code: they carry the tick's observation
+  (`lastObs`). `drive_auth`, `stores`, `embedding` and dot traces are not replayed yet.
 - BrainBar's Swift rendering, the installed app, and real launchd timing.
 
 ## Keeping it in step
