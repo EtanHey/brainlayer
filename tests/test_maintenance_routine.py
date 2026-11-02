@@ -284,9 +284,10 @@ def test_weekly_backup_timeout_aborts_before_destructive_work(tmp_path, monkeypa
 
     with pytest.raises(maintenance.MaintenanceAbort, match="backup wait timed out") as exc:
         maintenance._weekly_backup(config)
-    assert exc.value.code == 76
+    assert exc.value.code == 75
 
     _create_enrichment_db(config.db_path)
+    monkeypatch.setattr(maintenance, "_freelist_ratio", lambda _path: 0.5)
     monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
     monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service, **kwargs: False)
     monkeypatch.setattr(maintenance, "_bootout_service", lambda _service: False)
@@ -296,7 +297,7 @@ def test_weekly_backup_timeout_aborts_before_destructive_work(tmp_path, monkeypa
     monkeypatch.setattr(maintenance, "_vacuum", lambda _db_path, **_kw: pytest.fail("VACUUM started"))
     with pytest.raises(maintenance.MaintenanceAbort) as full_exc:
         maintenance.run_maintenance("full", config=config)
-    assert full_exc.value.code == 76
+    assert full_exc.value.code == 75
     assert checkpoints == [1]
     assert json.loads(config.log_path.read_text().splitlines()[-1])["backup_status"] == "unavailable"
 
@@ -357,7 +358,7 @@ def test_fresh_weekly_backup_uses_supervised_process_and_kills_stuck_group(tmp_p
 
     with pytest.raises(maintenance.MaintenanceAbort, match="timed out") as exc:
         maintenance._run_bounded_weekly_backup(config, 45)
-    assert exc.value.code == 76
+    assert exc.value.code == 75
     assert observed["args"][-2:] == ["-m", "brainlayer.backup_daily"]
     assert observed["kwargs"]["env"]["BRAINLAYER_BACKUP_TIMEOUT_SECONDS"] == "45"
     assert observed["kwargs"]["env"]["BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS"] == "6"
@@ -382,7 +383,7 @@ def test_weekly_backup_read_errors_use_vacuum_skip_code(tmp_path, monkeypatch, b
 
     with pytest.raises(maintenance.MaintenanceAbort, match="VACUUM skipped") as exc:
         maintenance._weekly_backup(config)
-    assert exc.value.code == 76
+    assert exc.value.code == 75
 
 
 def test_full_rechecks_window_after_backup_wait_and_skips_vacuum(tmp_path, monkeypatch):
@@ -393,6 +394,8 @@ def test_full_rechecks_window_after_backup_wait_and_skips_vacuum(tmp_path, monke
     config.now_fn = lambda: clock[0]
     _create_enrichment_db(config.db_path)
     monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
+
+    monkeypatch.setattr(maintenance, "_freelist_ratio", lambda _path: 0.5)
 
     def finished_backup(_config):
         clock[0] = dt.datetime(2026, 9, 27, 6, 1, tzinfo=dt.UTC)

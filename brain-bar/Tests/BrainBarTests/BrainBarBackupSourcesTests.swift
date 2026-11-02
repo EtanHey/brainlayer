@@ -141,6 +141,12 @@ final class BrainBarBackupSourcesTests: XCTestCase {
         )
     }
 
+    func testNotNeededVacuumCountsAsCompletedWeeklyMaintenance() {
+        let data = Data(#"{"ts":"2026-10-11T04:30:00Z","mode":"full","dry_run":false,"status":"completed","vacuum":"not_needed","vacuum_after_bytes":null}"#.utf8)
+        XCTAssertEqual(BackupLogReader.lastRun(.weeklyMaintenance, log: data)?.at, date("2026-10-11T04:30:00Z"))
+        XCTAssertNil(BackupLogReader.lastIncompleteAttempt(.weeklyMaintenance, log: data))
+    }
+
     // MARK: #1016 review round 1
 
     private func tempDirectory() throws -> URL {
