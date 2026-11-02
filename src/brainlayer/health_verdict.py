@@ -500,7 +500,7 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
             elif state != GREEN or prior_state not in (AMBER, RED):
                 good_ticks = 0
             if name in _WAKE_GRACE:
-                same_copy = r.clock is not None and r.clock == _parse(before.get("clock"))
+                same_copy = r.clock is not None and _iso(r.clock) == before.get("clock")
                 if not same_copy or r.state in (GREEN, AMBER):
                     deadline = None  # loss/replacement of the copy ends its catch-up episode
                 if state == RED and prior_state != RED and same_copy:
@@ -646,7 +646,7 @@ def backup_facts(receipts: Iterable[Mapping[str, Any]], *, as_of: datetime | Non
         key = receipt.get("snapshot") if isinstance(receipt.get("snapshot"), str) else None
         created = _snapshot_created_time(receipt)
         if key:
-            if "snapshot_created_at" not in receipt:
+            if receipt.get("snapshot_created_at") is None:
                 created = created_by_snapshot.get(key, created)
             if created is not None:
                 created_by_snapshot[key] = created

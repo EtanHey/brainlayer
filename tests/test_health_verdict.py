@@ -462,8 +462,9 @@ BACKUPS = [
 
 @pytest.mark.parametrize(("check", "fact", "red"), BACKUPS)
 @pytest.mark.parametrize("receipts", ["unobserved", "same_copy"])
-def test_b3_repeated_gaps_never_renew_the_catch_up_deadline(check, fact, red, receipts):
-    copy = NOW - (red - 4 * H)
+@pytest.mark.parametrize("microseconds", [0, 549877])
+def test_b3_repeated_gaps_never_renew_the_catch_up_deadline(check, fact, red, receipts, microseconds):
+    copy = (NOW - (red - 4 * H)).replace(microsecond=microseconds)
     prior = run(**{fact: copy}).state
     steps = [(NOW + k * H, {} if receipts == "unobserved" else {fact: copy}) for k in range(1, 49)]
     verdicts = _ticks(prior, steps)  # hourly ticks: every one follows a >15 min monitoring gap
@@ -477,8 +478,9 @@ def test_b3_repeated_gaps_never_renew_the_catch_up_deadline(check, fact, red, re
 
 
 @pytest.mark.parametrize(("check", "fact", "red"), BACKUPS)
-def test_b3_long_sleeps_get_one_catch_up_window(check, fact, red):
-    copy = NOW - (red - 4 * H)
+@pytest.mark.parametrize("microseconds", [0, 549877])
+def test_b3_long_sleeps_get_one_catch_up_window(check, fact, red, microseconds):
+    copy = (NOW - (red - 4 * H)).replace(microsecond=microseconds)
     prior = run(**{fact: copy}).state
     woke = NOW + 30 * H  # one long sleep: the copy is now red by 26 h
     first = run(prior, now=woke, **{fact: copy})
@@ -629,7 +631,8 @@ def test_b5b_local_restoration_never_restores_offsite_for_either_monitor_schedul
         assert restored.check("backup_offsite").state == hv.GREEN
 
 
-def test_b5c_legacy_state_and_filename_only_revocation():
+@pytest.mark.parametrize("creation_time", ["missing", "null"])
+def test_b5c_legacy_state_and_filename_only_revocation(creation_time):
     receipts = [_verified_receipt(SNAP_NEW, NOW - H, NOW - 50 * M)]
     first = _reader_tick(receipts, None, NOW)
     for name in ("backup_local", "backup_offsite"):
@@ -643,7 +646,10 @@ def test_b5c_legacy_state_and_filename_only_revocation():
         assert revoked.check(name).age_s is None
     # A filename-only re-verification must retain the artifact's exact creation time, too.
     restored = _receipt(attempted_at=(NOW + 6 * M).isoformat(), local_verified=True, local_integrity="ok")
-    restored.pop("snapshot_created_at")
+    if creation_time == "missing":
+        restored.pop("snapshot_created_at")
+    else:
+        restored["snapshot_created_at"] = None
     receipts.append(restored)
     final = _reader_tick(receipts, revoked.state, NOW + 10 * M)
     assert final.check("backup_local").age_s == (H + 10 * M).total_seconds()
