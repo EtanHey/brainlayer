@@ -155,6 +155,32 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
         try renderMacroScenarioIfRequested(input, name: "macro-both-failed-960")
     }
 
+    func testGroupedLineKeepsRunnerAndUnknownFailures() throws {
+        for (field, expected) in [("runner", "maintenance runner failed at Nov 2 05:20"), ("unknown", "unknown failure at Nov 2 05:20")] {
+            var input = inputs()
+            var night = try XCTUnwrap(input.observations?[.maintenanceNightly]?.calendarNightOutcome)
+            if field == "runner" { night.runnerErrorAt = date("2026-11-02T03:20:00Z") } else { night.unknownFailureAt = date("2026-11-02T03:20:00Z") }
+            for job in [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly] {
+                input.observations?[job]?.calendarNightOutcome = night
+            }
+            let snapshot = BrainBarStatusSnapshot.derive(input)
+            let rows = BrainBarStatusPopoverController.problemRows(snapshot.verdict, health: snapshot.healthVerdict)
+            XCTAssertEqual(rows.count, 1, "\(rows)")
+            XCTAssertTrue(rows.first?.text.contains(expected) == true, rows.first?.text ?? "")
+            XCTAssertTrue(rows.first?.text.contains("snapshot failed at Nov 2 05:04") == true)
+        }
+    }
+
+    func testEveryGroupedAlertKeepsItsOwnNoticeSeverity() {
+        let snapshot = BrainBarStatusSnapshot.derive(inputs())
+        XCTAssertEqual(snapshot.issues.filter { $0.id == "nightly.backup" }.count, 1)
+        // A fresh verdict rates every job alert a notice before grouping; folding two alerts into
+        // one line must not turn the second one back into a red Backups-page alert.
+        for reason in [backup, maintenance] {
+            XCTAssertTrue(snapshot.isNoticeAlert(reason: reason), reason)
+        }
+    }
+
     func testConfigurationNoticeDoesNotInventFailedBackupRuns() throws {
         var input = T.healthy()
         input.badge?.healthVerdict = .init(dot: .green, checks: [], notes: [], evaluatedAt: input.now)

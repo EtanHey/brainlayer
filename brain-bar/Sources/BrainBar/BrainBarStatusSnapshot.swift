@@ -27,6 +27,8 @@ struct BrainBarStatusIssue: Equatable, Sendable, Identifiable {
     var alertReason: String? = nil
     var driveTone: DriveAuthPresentation.Tone? = nil
     var backupRunDetails: [BrainBarBackupRunFailure.Target: String] = [:]
+    /// Every job alert folded into this issue by grouping, with the severity it had on its own.
+    var groupedAlertSeverities: [String: Severity] = [:]
 }
 
 struct BrainBarStatusInputs: Sendable {
@@ -162,7 +164,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
     /// Whether the snapshot rates this job alert as neutral text (e.g. a deferred weekly VACUUM):
     /// then the Backups page must not carry it as a red backup alert.
     func isNoticeAlert(reason: String) -> Bool {
-        issues.first { $0.alertReason == reason }?.severity == .notice
+        issues.lazy.compactMap { $0.alertReason == reason ? $0.severity : $0.groupedAlertSeverities[reason] }.first == .notice
     }
 
     // MARK: reducer
@@ -626,6 +628,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         var result: [BrainBarStatusIssue] = []
         for var issue in issues {
             let identity = key(issue)
+            if let reason = issue.alertReason { issue.groupedAlertSeverities[reason] = issue.severity }
             switch failureAlertKey(issue) {
             case "backup-snapshot", "backup-daily":
                 issue.backupRunDetails[.database] = failedStepDetail("backup-snapshot")
@@ -658,6 +661,12 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                     issue.text = "Nightly backup failed\(count) — last: \(reason) at \(last) · \(retry)"
                     let otherSteps = night.failedSteps.filter { !["backup-snapshot", "jsonl-backup"].contains($0) }
                     if !otherSteps.isEmpty { issue.text += " · also failed: " + otherSteps.joined(separator: ", ") }
+                    formatter.dateFormat = "MMM d HH:mm"
+                    if let at = night.runnerErrorAt {
+                        issue.text += " · maintenance runner failed at " + formatter.string(from: at)
+                    } else if let at = night.unknownFailureAt {
+                        issue.text += " · unknown failure at " + formatter.string(from: at)
+                    }
                 } else {
                     issue.text = "Nightly backup failed — last failure time unavailable; check the backup log"
                 }
@@ -665,6 +674,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
             if let index = result.firstIndex(where: { $0.id == identity || $0.text == issue.text }) {
                 result[index].jobs.formUnion(issue.jobs)
                 result[index].backupRunDetails.merge(issue.backupRunDetails) { current, _ in current }
+                result[index].groupedAlertSeverities.merge(issue.groupedAlertSeverities) { current, _ in current }
                 if result[index].alertKey == nil { result[index].alertKey = issue.alertKey; result[index].alertReason = issue.alertReason }
             } else {
                 issue.id = identity
