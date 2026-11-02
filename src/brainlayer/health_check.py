@@ -149,6 +149,14 @@ class HealthCheckConfig:
         default_factory=lambda: Path("~/.local/share/brainlayer/drain-health.json").expanduser()
     )
     t3_health_path: Path | None = None
+    backup_log_path: Path | None = None  # None: backup_daily's own resolution beside the DB
+    backup_staging_dir: Path = field(
+        default_factory=lambda: Path(
+            os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", "~/.local/share/brainlayer/backups")
+        ).expanduser()
+    )
+    drive_token_path: Path | None = None  # None: drive_credentials' own resolution
+    store_roundtrip_path: Path | None = None  # None: store-roundtrip.json beside the DB
     jsonl_backup_log_path: Path = field(
         default_factory=lambda: Path(
             os.environ.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(DEFAULT_JSONL_BACKUP_LOG_PATH))
@@ -1458,15 +1466,32 @@ def _run_health_check_locked(
                 add_issue("watchdog_hold_recovery_failed", "critical", "fleet-watchdog hold recovery failed")
 
     for job, reason in active_alerts(config.job_alert_path).items():
-        add_issue(f"job_alert_{job}", "critical", reason)
+        # Job failures are history, not state: a note that can never light the dot by itself.
+        add_issue(f"job_alert_{job}", "warning", reason)
 
-    def publish_badge_state() -> None:
+    def evaluate_verdict(state_payload: dict[str, Any]) -> Any:
+        """Facts -> verdict; persist its state and the collectors' state. None if the verdict failed."""
+        from .health_facts import collect_facts
+        from .health_verdict import evaluate
+
+        try:
+            facts, collector_state = collect_facts(config, result, state.get("verdict_collectors"), now)
+            verdict = evaluate(facts, prior=state.get("verdict"))
+        except Exception as exc:  # The legacy issue-driven badge below stays visible instead.
+            add_issue("verdict_failed", "critical", f"outcome verdict could not be evaluated: {exc}")
+            return None
+        state_payload["verdict"] = verdict.state
+        state_payload["verdict_collectors"] = collector_state
+        return verdict
+
+    def publish_badge_state(verdict: Any = None) -> None:
         if config.badge_state_path is None:
             return
         from .badge_state import build_badge_state_document, write_badge_state
 
         try:
-            write_badge_state(config.badge_state_path, build_badge_state_document(result, now=now_fn()))
+            document = build_badge_state_document(result, now=now_fn(), verdict=verdict)
+            write_badge_state(config.badge_state_path, document)
         except (OSError, ValueError) as exc:
             add_issue("badge_state_write_failed", "critical", f"badge state write failed: {exc}")
             try:
@@ -1496,9 +1521,10 @@ def _run_health_check_locked(
         state_payload["slow_check"] = True
         state_payload["slow_check_stage"] = stage
         state_payload["duration_seconds"] = result.duration_seconds
+        verdict = evaluate_verdict(state_payload)
         _write_state(config.state_path, state_payload)
         result.ok = False
-        publish_badge_state()
+        publish_badge_state(verdict)
         return result
 
     def deadline_reached(stage: str) -> HealthCheckResult | None:
@@ -2035,8 +2061,9 @@ def _run_health_check_locked(
         )
     else:
         state_payload.pop("slow_check_stage", None)
+    verdict = evaluate_verdict(state_payload)
     _write_state(config.state_path, state_payload)
     result.ok = not result.issues
-    publish_badge_state()
+    publish_badge_state(verdict)
     result.ok = not result.issues
     return result
