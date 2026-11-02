@@ -1319,7 +1319,7 @@ private struct BrainBarDashboardView: View {
                     VStack(alignment: .leading, spacing: 7) {
                         ForEach(Array(attentionItems.enumerated()), id: \.offset) { _, item in
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                BrainBarStatusDot(color: statusColor, size: 5)
+                                BrainBarStatusDot(color: Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown), size: 5)
                                     .font(.system(size: 12, weight: .medium))
                                 Text(item)
                                     .font(.system(size: 12, weight: .medium))

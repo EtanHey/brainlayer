@@ -141,6 +141,38 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
         XCTAssertLessThan(host.fittingSize.height, 22, "Empty Today has one body-size line, without a hero dash")
     }
 
+    func testGroupedBackupProblemBulletRendersNeutralBesideGreenVerdict() throws {
+        let input = inputs()
+        let snapshot = BrainBarStatusSnapshot.derive(input)
+        XCTAssertEqual(snapshot.verdict.dot, .green)
+        XCTAssertEqual(snapshot.issues.count, 1)
+        let directory = brainBarTestTemporaryDirectory().appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try BrainBarRenderHarness.renderMenuCoherenceDashboard(snapshot,
+            result: BrainBarDashboardFixture.healthyObservabilityResult, now: input.now,
+            directory: directory, name: "problem-bullet", width: 960, calendar: input.calendar)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: directory.appendingPathComponent("problem-bullet.png"))))
+        let scale = CGFloat(bitmap.pixelsWide) / 960
+        let neutral = try XCTUnwrap(BrainBarDesignTokens.Colors.statusUnknown.usingColorSpace(.sRGB))
+        var neutralPixels = 0
+        var greenPixels = 0
+        // Fixed 960-point fixture: only the first problem's 5-point bullet, excluding its text
+        // and the separate 9-point outcome dot. Scale to the bitmap's actual backing density.
+        for y in Int(65 * scale)..<Int(83 * scale) {
+            for x in Int(55 * scale)..<Int(65 * scale) {
+                let color = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                if abs(color.redComponent - neutral.redComponent) < 0.05,
+                   abs(color.greenComponent - neutral.greenComponent) < 0.05,
+                   abs(color.blueComponent - neutral.blueComponent) < 0.05 { neutralPixels += 1 }
+                if color.greenComponent > color.redComponent * 1.5,
+                   color.greenComponent > color.blueComponent * 1.2 { greenPixels += 1 }
+            }
+        }
+        XCTAssertGreaterThan(neutralPixels, 0, "The grouped failure must have a neutral problem marker")
+        XCTAssertEqual(greenPixels, 0, "A failure bullet must never borrow the green outcome colour")
+    }
+
     func testStructuredFailureReasonSurvivesCalendarReadAndGrouping() throws {
         let canonical = try XCTUnwrap(realpath(brainBarTestTemporaryDirectory().path, nil))
         defer { free(canonical) }
