@@ -7,6 +7,21 @@ import Vision
 
 @MainActor
 enum BrainBarRenderHarness {
+    static func renderMenuCoherenceDashboard(_ snapshot: BrainBarStatusSnapshot,
+                                            result: ObservabilityReadResult, now: Date,
+                                            directory: URL, name: String, width: CGFloat, calendar: Calendar) throws {
+        let panel = BrainBarDashboardPanelState()
+        panel.attentionExpanded = true
+        let view = BrainBarDashboardPreview.make(collector: BrainBarDashboardFixture.makeCollector(),
+            observabilityResult: result, now: now, calendar: calendar, panelState: panel,
+            observabilityCadence: .known(300), statusVerdict: snapshot.verdict)
+        let host = NSHostingView(rootView: view)
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.frame = NSRect(x: 0, y: 0, width: width, height: 1200)
+        settle(host)
+        try writeBitmap(of: host, name: name, in: directory)
+    }
+
     static func renderMaintenanceRetryRow(_ model: BrainBarMaintenanceRetryModel,
                                           name: String, directory: URL, width: CGFloat = 860) throws {
         try renderMaintenanceRetry(
@@ -21,11 +36,8 @@ enum BrainBarRenderHarness {
                                           backupLines: [ObservabilityStatusLine], directory: URL,
                                           name: String) throws {
         let width = BrainBarStatusPopoverController.menuWidth
-        let rows = snapshot.healthVerdict.map {
-            BrainBarStatusPopoverController.verdictRows($0, details: snapshot.notices.map(\.text))
-        }
-            ?? snapshot.issues.map { BrainBarStatusPopoverController.VerdictRow(
-                text: $0.text, state: $0.severity == .attention ? .red : nil) }
+        let rows = BrainBarStatusPopoverController.cappedProblemRows(
+            BrainBarStatusPopoverController.problemRows(snapshot.verdict, health: snapshot.healthVerdict))
         let icon = BrainBarStatusPopoverController.statusIconImage(
             stats: BrainBarDashboardFixture.makeCollector().stats,
             badgeOn: snapshot.verdict.dot != .green, dot: snapshot.verdict.dot)

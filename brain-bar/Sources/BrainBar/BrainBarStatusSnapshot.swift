@@ -14,8 +14,8 @@ struct BrainBarStatusIssue: Equatable, Sendable, Identifiable {
         case notice
     }
 
-    let id: String
-    let component: Component
+    var id: String
+    var component: Component
     var severity: Severity
     var text: String
     var jobs: Set<BrainLayerLaunchdJob> = []
@@ -26,6 +26,8 @@ struct BrainBarStatusIssue: Equatable, Sendable, Identifiable {
     /// That job alert's reason exactly as the job wrote it.
     var alertReason: String? = nil
     var driveTone: DriveAuthPresentation.Tone? = nil
+    var failedBackupTargets: Set<BrainBarBackupRunFailure.Target> = []
+    var backupRunDetail: String? = nil
 }
 
 struct BrainBarStatusInputs: Sendable {
@@ -103,7 +105,9 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
 
     var verdict: BrainBarStatusVerdict {
         .init(attention: attention.map(\.text), notices: notices.map(\.text), isChecking: isChecking,
-              dotOverride: healthVerdict?.renderedDot)
+              dotOverride: healthVerdict?.renderedDot, backupRunFailures: issues.flatMap { issue in
+                  issue.failedBackupTargets.sorted { $0.rawValue < $1.rawValue }.map { .init(target: $0, text: issue.backupRunDetail ?? issue.text) }
+              })
     }
 
     var dashboardStatus: BrainBarOnePageStatus { verdict.dashboardStatus }
@@ -573,7 +577,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                         severity: verdict.dot == .red ? .attention : .notice,
                         text: "Health check: \(verdict.dot.rawValue)"), at: 0)
                 }
-                return Self(issues: rows + issues, isChecking: false, healthVerdict: verdict)
+                return Self(issues: coherentProblems(rows + issues, inputs: inputs), isChecking: false, healthVerdict: verdict)
             }
             issues.insert(.init(id: "verdict.stale", component: .health, severity: .notice,
                                 text: verdict.fallbackNotice(now: now)), at: 0)
@@ -583,6 +587,72 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                                 text: "Health check result could not be read"), at: 0)
         }
         return Self(issues: issues, isChecking: incomplete)
+    }
+
+    /// The producer's codes and launchd label identify a problem; display prose never does.
+    /// Keep the legacy fallback reducer intact while the fresh verdict owns the outcome dot.
+    private static func coherentProblems(_ issues: [BrainBarStatusIssue], inputs: BrainBarStatusInputs) -> [BrainBarStatusIssue] {
+        let jobs: [BrainLayerLaunchdJob] = [.maintenanceNightly, .maintenanceWeekly]
+        let night = jobs.compactMap { inputs.observations?[$0]?.calendarNightOutcome }.first(where: \.failed)
+        let snapshotFailed = issues.contains { $0.id == "verdict.note.job_alert_backup-snapshot" || $0.alertKey == "backup-snapshot" }
+            || night?.failedSteps.contains("backup-snapshot") == true
+        func key(_ issue: BrainBarStatusIssue) -> String {
+            let code = issue.id.replacingOccurrences(of: "verdict.note.", with: "")
+            let alert = issue.alertKey ?? (code.hasPrefix("job_alert_") ? String(code.dropFirst(10)) : nil)
+            if snapshotFailed {
+                let label = issue.text.split(separator: ":", maxSplits: 1).first.map(String.init)
+                if ["backup-snapshot", "maintenance-full"].contains(alert)
+                    || (code == "job_failure" && label == "com.brainlayer.maintenance")
+                    || issue.id == "maintenance.night" { return "nightly.backup" }
+            }
+            if code == "job_failure" { return issue.id + "." + (issue.text.split(separator: ":").first.map(String.init) ?? "unknown") }
+            return alert.map { "alert.\($0)" } ?? issue.id
+        }
+        var result: [BrainBarStatusIssue] = []
+        for var issue in issues {
+            let identity = key(issue)
+            if identity == "nightly.backup" {
+                issue.id = identity
+                issue.component = .backups
+                issue.failedBackupTargets.insert(.database)
+                if let night {
+                    let count = night.consecutiveFailures >= 2 ? " \(night.consecutiveFailures) nights in a row" : ""
+                    let problem = night.stepProblems["backup-snapshot"]
+                    let reason = problem?.reason ?? (problem?.cutOff == true ? "run cut off" : "snapshot failed")
+                    let formatter = DateFormatter()
+                    formatter.calendar = inputs.calendar
+                    formatter.timeZone = inputs.calendar.timeZone
+                    formatter.locale = Locale(identifier: "en_US_POSIX")
+                    formatter.dateFormat = "MMM d HH:mm"
+                    let last = formatter.string(from: problem?.at ?? night.at)
+                    issue.backupRunDetail = "\(reason) at \(last)"
+                    let next = jobs.compactMap { inputs.observations?[$0]?.nextRunAt }.filter { $0 > inputs.now }.min()
+                    if let next, next.timeIntervalSince(inputs.now) <= 86_400 { formatter.dateFormat = "HH:mm" }
+                    let retry = next.map { "next try " + formatter.string(from: $0) } ?? "next try time unavailable"
+                    issue.text = "Nightly backup failed\(count) — last: \(reason) at \(last) · \(retry)"
+                    if night.failedSteps.contains("jsonl-backup") { issue.failedBackupTargets.insert(.transcripts) }
+                    let otherSteps = night.failedSteps.filter { !["backup-snapshot", "jsonl-backup"].contains($0) }
+                    if !otherSteps.isEmpty { issue.text += " · also failed: " + otherSteps.joined(separator: ", ") }
+                } else {
+                    issue.text = "Nightly backup failed — last failure time unavailable; check the backup log"
+                }
+            } else {
+                if issue.jobs.contains(.backupDaily) || identity == "alert.backup-daily" { issue.failedBackupTargets.insert(.database) }
+                if issue.jobs.contains(.jsonlBackup) || identity == "alert.jsonl-backup" { issue.failedBackupTargets.insert(.transcripts) }
+                if issue.id == "maintenance.night", night?.failedSteps.contains("jsonl-backup") == true {
+                    issue.failedBackupTargets.insert(.transcripts)
+                }
+            }
+            if let index = result.firstIndex(where: { $0.id == identity || $0.text == issue.text }) {
+                result[index].jobs.formUnion(issue.jobs)
+                result[index].failedBackupTargets.formUnion(issue.failedBackupTargets)
+                if result[index].alertKey == nil { result[index].alertKey = issue.alertKey; result[index].alertReason = issue.alertReason }
+            } else {
+                issue.id = identity
+                result.append(issue)
+            }
+        }
+        return result
     }
 
     /// One failure is explicit, but only the second consecutive failure gives a dot.

@@ -11,6 +11,8 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
     let isChecking: Bool
 
     var dotOverride: BrainBarRenderedDot? = nil
+    /// Active run failures are independent of the age of the last verified copy.
+    var backupRunFailures: [BrainBarBackupRunFailure] = []
     var dot: BrainBarRenderedDot { dotOverride ?? (needsAttention ? .red : .green) }
 
     var needsAttention: Bool { !attention.isEmpty }
@@ -18,6 +20,11 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
     /// The Dashboard headline: a count only for dot issues; notices are neutral; "All good" only
     /// when everything was measured and nothing is pending.
     var dashboardStatus: BrainBarOnePageStatus {
+        if let dotOverride {
+            let headline = dotOverride == .red ? "Needs attention" : dotOverride == .amber ? "Check soon" : safeHeadline
+            return .init(headline: headline, reason: (attention + notices).isEmpty ? nil
+                : (attention + notices).joined(separator: "; "), tone: dotOverride == .green ? .green : .amber)
+        }
         if let first = attention.first {
             return .init(headline: attention.count == 1 ? "1 thing needs you" : "\(attention.count) things need you",
                          reason: ([first] + notices).joined(separator: "; "), tone: .amber)
@@ -27,10 +34,21 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
         return .init(headline: "All good", reason: nil, tone: .green)
     }
 
+    var safeHeadline: String {
+        let count = Set(attention + notices).count
+        return count == 0 ? "All good" : "Memory safe · \(count) \(count == 1 ? "thing" : "things") to look at"
+    }
+
     var tooltip: String {
         if needsAttention { return "BrainBar — needs attention: " + attention.joined(separator: "; ") }
         return dot == .amber ? "BrainBar — notice: " + notices.joined(separator: "; ") : "BrainBar"
     }
+}
+
+struct BrainBarBackupRunFailure: Equatable, Sendable {
+    enum Target: String, Sendable { case database, transcripts }
+    let target: Target
+    let text: String
 }
 
 /// The color actually drawn; green means no overlay on the sparkline.

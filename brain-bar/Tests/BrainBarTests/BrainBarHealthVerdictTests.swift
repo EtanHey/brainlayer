@@ -158,7 +158,7 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             var inputs = BrainBarStatusSnapshotTests.healthy()
             inputs.badge = try badge(state)
             XCTAssertEqual(BrainBarStatusPopoverController.statusLineTitle(for: BrainBarStatusSnapshot.derive(inputs).verdict),
-                state == "red" ? "Needs attention" : state == "amber" ? "Check soon" : "All good")
+                state == "red" ? "Needs attention" : state == "amber" ? "Check soon" : "Memory safe · 1 thing to look at")
         }
         XCTAssertEqual(BrainBarStatusPopoverController.backupReceiptColor(.red, verdictMode: true), .secondaryLabelColor)
         XCTAssertEqual(BrainBarStatusPopoverController.backupReceiptColor(.red, verdictMode: false),

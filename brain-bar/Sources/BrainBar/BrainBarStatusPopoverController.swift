@@ -137,7 +137,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
             return switch dot {
             case .red: "Needs attention"
             case .amber: "Check soon"
-            case .green: "All good"
+            case .green: verdict.safeHeadline
             }
         }
         if verdict.needsAttention {
@@ -375,6 +375,21 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     struct VerdictRow: Equatable {
         let text: String
         var state: BrainBarHealthVerdict.State? = nil
+        var opensDashboard = false
+    }
+
+    nonisolated static func problemRows(_ verdict: BrainBarStatusVerdict, health: BrainBarHealthVerdict?) -> [VerdictRow] {
+        var seen = Set<String>()
+        return (verdict.attention + verdict.notices).filter { seen.insert($0).inserted }.map { text in
+            VerdictRow(text: text, state: health?.dot == .green ? nil
+                : health?.checks.first(where: { $0.text == text })?.state
+                    ?? (verdict.attention.contains(text) ? .red : nil))
+        }
+    }
+
+    nonisolated static func cappedProblemRows(_ rows: [VerdictRow]) -> [VerdictRow] {
+        Array(rows.prefix(3)) + (rows.count > 3
+            ? [VerdictRow(text: "+\(rows.count - 3) more — Open Dashboard", opensDashboard: true)] : [])
     }
 
     nonisolated static func verdictRows(_ verdict: BrainBarHealthVerdict, details: [String] = []) -> [VerdictRow] {
@@ -393,6 +408,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         return switch tone {
         case .green: BrainBarDesignTokens.Colors.statusOK
         case .red: BrainBarDesignTokens.Colors.statusError
+        case .amber: BrainBarDesignTokens.Colors.statusAttention
         case .neutral: BrainBarDesignTokens.Colors.statusUnknown
         }
     }
@@ -565,11 +581,16 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #if BRAINBAR_UI
         if let model = runtime.jobsModel { health = model.publishedStatus.healthVerdict }
 #endif
-        let rows = health.map { Self.verdictRows($0, details: verdict.notices) }
-            ?? (verdict.attention.map { VerdictRow(text: $0, state: .red) }
-                + verdict.notices.map { VerdictRow(text: $0) })
+        let rows = Self.cappedProblemRows(Self.problemRows(verdict, health: health))
         for (index, detail) in rows.enumerated() {
             let item = NSMenuItem(title: detail.text, action: nil, keyEquivalent: "")
+            if detail.opensDashboard {
+                item.action = #selector(openDashboard(_:))
+                item.target = self
+                menu.insertItem(item, at: 1 + index)
+                verdictItems.append(item)
+                continue
+            }
             item.isEnabled = false
             item.toolTip = detail.text
             let row = NSHostingView(rootView: Self.verdictDetailRow(detail, width: Self.menuContentWidth,

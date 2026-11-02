@@ -1,0 +1,190 @@
+import AppKit
+import Darwin
+import SwiftUI
+import XCTest
+@testable import BrainBar
+
+@MainActor
+final class BrainBarMenuCoherenceTests: XCTestCase {
+    typealias T = BrainBarStatusSnapshotTests
+    private let backup = "Database backup failed; check the backup log"
+    private let maintenance = "BrainLayer full maintenance failed: tonight's local verified snapshot unavailable; VACUUM skipped. Retry after resolving the failure; inspect /Users/fixture/.local/share/brainlayer/logs/maintenance.log"
+    private let failure = "com.brainlayer.maintenance: failed 3 nights in a row; last exit 1"
+    private let diagnostic = "Database snapshot failed (step backup-snapshot) at 2026-11-02 05:04 GMT+2; nightly runs have had problems 3 nights in a row — next retry 2026-11-03 03:15 GMT+2"
+
+    private func date(_ value: String) -> Date { ISO8601DateFormatter().date(from: value)! }
+
+    private func inputs() -> BrainBarStatusInputs {
+        var input = T.healthy()
+        input.now = date("2026-11-02T22:45:00Z")
+        input.watcher = .running(heartbeatAt: input.now)
+        input.watcherHeartbeatAt = input.now
+        input.backups = .measured(T.backups(db: date("2026-11-01T17:00:00Z"), transcripts: date("2026-11-02T07:30:00Z")))
+        input.jobAlerts = .init(active: ["backup-snapshot": backup, "maintenance-full": maintenance])
+        let at = date("2026-11-02T03:04:00Z")
+        let next = date("2026-11-03T01:15:00Z")
+        var observation = T.step(code: 1, at: at, next: next, consecutiveFailures: 3)
+        observation.calendarNightOutcome = .init(scheduledDate: "2026-11-02", at: at, failed: true,
+            abandoned: false, consecutiveFailures: 3, failedSteps: ["backup-snapshot"],
+            stepProblems: ["backup-snapshot": .init(at: at)])
+        input.observations?[.maintenanceNightly] = observation
+        input.observations?[.maintenanceWeekly] = observation
+        let checks = BrainBarHealthVerdict.Check.labels.keys.sorted().map {
+            BrainBarHealthVerdict.Check(name: $0, state: .green, note: "Within safety window")
+        }
+        input.badge?.healthVerdict = .init(dot: .green, checks: checks, notes: [
+            .init(code: "job_alert_backup-snapshot", message: backup),
+            .init(code: "job_alert_maintenance-full", message: maintenance),
+            .init(code: "job_failure", message: failure),
+        ], evaluatedAt: input.now)
+        return input
+    }
+
+    func testExactReportedFourLinesBecomeOneProblem() throws {
+        let input = inputs()
+        let snapshot = BrainBarStatusSnapshot.derive(input)
+        let rows = BrainBarStatusPopoverController.problemRows(snapshot.verdict, health: snapshot.healthVerdict)
+        XCTAssertEqual(rows.count, 1, "\(rows)")
+        let text = try XCTUnwrap(rows.first?.text)
+        XCTAssertTrue(text.contains("3 nights in a row"), text)
+        XCTAssertTrue(text.contains("Nov 2 05:04"), text)
+        XCTAssertTrue(text.contains("next try 03:15"), text)
+        XCTAssertEqual(snapshot.verdict.dot, .green, "Notes never change the outcome dot")
+        XCTAssertEqual(snapshot.verdict.safeHeadline, "Memory safe · 1 thing to look at")
+        // The fixture preserves the original strings, including the independently derived diagnostic.
+        var legacy = input
+        legacy.badge?.healthVerdict = nil
+        XCTAssertTrue(BrainBarStatusSnapshot.derive(legacy).issues.contains { $0.text == diagnostic })
+        XCTAssertEqual(input.badge?.healthVerdict?.notes.map(\.message), [backup, maintenance, failure])
+    }
+
+    func testHeaderMatrixAndMenuCap() {
+        for dot in [BrainBarRenderedDot.green, .amber, .red] {
+            for notes in [[], ["A problem"]] {
+                let verdict = BrainBarStatusVerdict(attention: [], notices: notes, isChecking: false, dotOverride: dot)
+                let headline = BrainBarStatusPopoverController.statusLineTitle(for: verdict)
+                XCTAssertEqual(headline == "All good", dot == .green && notes.isEmpty)
+                XCTAssertEqual(headline, verdict.dashboardStatus.headline)
+                if dot == .amber { XCTAssertEqual(headline, "Check soon") }
+                if dot == .red { XCTAssertEqual(headline, "Needs attention") }
+            }
+        }
+        let rows = (1...5).map { BrainBarStatusPopoverController.VerdictRow(text: "Problem \($0)") }
+        let capped = BrainBarStatusPopoverController.cappedProblemRows(rows)
+        XCTAssertEqual(capped.map(\.text), ["Problem 1", "Problem 2", "Problem 3", "+2 more — Open Dashboard"])
+        XCTAssertTrue(capped.last?.opensDashboard == true)
+    }
+
+    func testReportedMenuHeaderMustAcknowledgeFailures() {
+        let snapshot = BrainBarStatusSnapshot.derive(inputs())
+        XCTAssertNotEqual(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict), "All good")
+        XCTAssertEqual(snapshot.issues.count, 1, "The reported four lines must describe one problem")
+    }
+
+    func testRealMenuOverflowOpensDashboard() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let runtime = BrainBarRuntime()
+        runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil,
+            databasePath: directory.appendingPathComponent("fixture.db").path)
+        let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
+            dashboardPanelController: panel, statusBar: TestStatusItemHost())
+        defer { controller.stop() }
+        var badge = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
+        badge.healthVerdict = .init(dot: .green, checks: [], notes: (1...5).map {
+            .init(code: "fixture_\($0)", message: "Problem \($0)")
+        }, evaluatedAt: Date())
+        controller.setBadgeForTesting(badge, alertsURL: directory.appendingPathComponent("job-alerts.json"))
+        let menu = controller.contextMenuForTesting
+        controller.menuNeedsUpdate(menu)
+        let overflow = try XCTUnwrap(menu.items.first { $0.title == "+2 more — Open Dashboard" })
+        XCTAssertTrue(overflow.isEnabled)
+        XCTAssertNotNil(overflow.action)
+        XCTAssertTrue(overflow.target === controller)
+        XCTAssertFalse(menu.items.contains { $0.title == "Problem 4" || $0.title == "Problem 5" })
+    }
+
+    func testBackupCardUsesActiveFailureAndKeepsOtherCopyGreen() throws {
+        let input = inputs()
+        let verdict = BrainBarStatusSnapshot.derive(input).verdict
+        guard case let .measured(backups) = input.backups else { return XCTFail() }
+        let lines = ObservabilityPresentation.backupReceiptLines(for: backups, now: input.now)
+        XCTAssertEqual(lines.first?.tone, .green)
+        let shown = BrainBarOnePagePresentation.backupRunLines(lines, verdict: verdict)
+        XCTAssertEqual(shown.first?.tone, .amber)
+        XCTAssertTrue(shown.first?.text.contains("last run failed") == true)
+        XCTAssertEqual(shown.last?.tone, .green, "A snapshot failure must not invent a transcript failure")
+        var recovered = verdict
+        recovered.backupRunFailures = []
+        XCTAssertEqual(BrainBarOnePagePresentation.backupRunLines(lines, verdict: recovered), lines)
+        let missing = ObservabilityPresentation.backupReceiptLines(for: T.backups(db: nil), now: input.now)
+        XCTAssertEqual(BrainBarOnePagePresentation.backupRunLines(missing, verdict: verdict).first?.tone, .red,
+            "An active run failure must not soften a missing-copy warning")
+    }
+
+    func testIndependentProblemSurvivesGrouping() {
+        var input = inputs()
+        let health = input.badge!.healthVerdict!
+        input.badge?.healthVerdict = .init(dot: health.dot, checks: health.checks,
+            notes: health.notes + [.init(code: "job_failure", message: "com.brainlayer.index: failed 3 times")],
+            evaluatedAt: input.now)
+        let snapshot = BrainBarStatusSnapshot.derive(input)
+        XCTAssertEqual(snapshot.issues.count, 2)
+        XCTAssertTrue(snapshot.issues.contains { $0.text == "com.brainlayer.index: failed 3 times" })
+    }
+
+    func testTodayPlaceholderRendersAtBodyHeight() {
+        let host = NSHostingView(rootView: BrainBarTodayEmptyState(text: "not measured yet today", isUnmeasured: true))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(host.fittingSize.height, 10)
+        XCTAssertLessThan(host.fittingSize.height, 22, "Empty Today has one body-size line, without a hero dash")
+    }
+
+    func testStructuredFailureReasonSurvivesCalendarReadAndGrouping() throws {
+        let canonical = try XCTUnwrap(realpath(brainBarTestTemporaryDirectory().path, nil))
+        defer { free(canonical) }
+        let directory = URL(fileURLWithPath: String(cString: canonical)).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let at = date("2026-11-02T03:04:00Z").timeIntervalSince1970
+        let rows: [[String: Any]] = [
+            ["event": "runner", "kind": "nightly", "scheduled_date": "2026-11-02", "steps": ["backup-snapshot"], "ts": at - 60],
+            ["event": "finished", "step": "backup-snapshot", "status": "failed", "returncode": 124, "reason": "timed out", "ts": at],
+            ["event": "summary", "kind": "nightly", "scheduled_date": "2026-11-02", "failed": 1, "ts": at + 1],
+        ]
+        var data = Data()
+        for row in rows { data.append(try JSONSerialization.data(withJSONObject: row)); data.append(10) }
+        try data.write(to: directory.appendingPathComponent("runs.jsonl"))
+        let history = BrainBarCalendarHistory.read(directory: directory)
+        XCTAssertNil(history.error)
+        let night = try XCTUnwrap(history.maintenanceNight)
+        XCTAssertEqual(night.stepProblems["backup-snapshot"]?.reason, "timed out")
+        var input = inputs()
+        input.observations?[.maintenanceNightly]?.calendarNightOutcome = night
+        input.observations?[.maintenanceWeekly]?.calendarNightOutcome = night
+        XCTAssertTrue(BrainBarStatusSnapshot.derive(input).issues.first?.text.contains("timed out at Nov 2 05:04") == true)
+    }
+
+    func testRenderEvidence() throws {
+        guard let path = ProcessInfo.processInfo.environment["BRAINBAR_S25_RENDER_DIR"] else {
+            throw XCTSkip("Set BRAINBAR_S25_RENDER_DIR for isolated render evidence")
+        }
+        let directory = URL(fileURLWithPath: path)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let input = inputs()
+        let snapshot = BrainBarStatusSnapshot.derive(input)
+        guard case let .measured(backups) = input.backups,
+              case let .readable(base) = BrainBarDashboardFixture.healthyObservabilityResult else { return XCTFail() }
+        let result = ObservabilityReadResult.readable(ObservabilityDocument(schemaVersion: 1,
+            generatedAt: input.now, dbPath: "/tmp/fixture.db", windowHours: 24, stores: .init(state: "unmeasurable", reason: "No measurement yet today", inputs: [], totalChunks: nil, inWindow: nil),
+            emitters: base.emitters, authorUnknown: base.authorUnknown, backups: backups))
+        try BrainBarRenderHarness.renderHealthVerdictPopover(snapshot,
+            backupLines: ObservabilityPresentation.backupReceiptLines(for: backups, now: input.now),
+            directory: directory, name: "menu-390")
+        for width in [390.0, 960.0] {
+            try BrainBarRenderHarness.renderMenuCoherenceDashboard(snapshot, result: result, now: input.now,
+                directory: directory, name: "dashboard-\(Int(width))", width: width, calendar: input.calendar)
+        }
+    }
+}

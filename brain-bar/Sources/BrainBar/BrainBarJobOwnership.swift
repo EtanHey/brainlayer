@@ -131,6 +131,7 @@ struct BrainBarCalendarHistory: Sendable {
     struct StepProblem: Equatable, Sendable {
         let at: Date
         var cutOff = false
+        var reason: String? = nil
     }
     struct NightOutcome: Equatable, Sendable {
         let scheduledDate: String
@@ -337,7 +338,8 @@ struct BrainBarCalendarHistory: Sendable {
                     attemptSteps[date, default: [:]][step] = outcome
                     // A retry that never ran cannot replace the original problem's time.
                     if attemptKinds[date] == "nightly", outcome.isProblem {
-                        stepProblems[date, default: [:]][step] = StepProblem(at: Date(timeIntervalSince1970: ts), cutOff: status == "stopped")
+                        stepProblems[date, default: [:]][step] = StepProblem(at: Date(timeIntervalSince1970: ts),
+                            cutOff: status == "stopped", reason: row["reason"] as? String ?? "exit \(code)")
                     }
                 }
                 // A deferral (exit 75) did not run the step: it neither extends nor resets the streak.
