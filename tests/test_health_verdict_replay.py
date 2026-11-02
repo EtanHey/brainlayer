@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from brainlayer import health_verdict as hv
+from tests.verdict_replay_oracle import ORACLE_LIMITS_H, _oracle_state
 
 FIXTURES = Path(__file__).parent / "fixtures" / "verdict_replay"
 LOCAL = ZoneInfo("Asia/Jerusalem")
@@ -28,9 +29,6 @@ END = datetime(2026, 11, 2, 0, tzinfo=LOCAL)
 # Ticks are an hour apart here; widen the monitor-gap so the replay reads as continuous monitoring.
 THRESHOLDS = hv.Thresholds(sleep_gap_s=2 * 3600)
 REPLAYED = ("backup_local", "backup_offsite", "transcripts", "drive_auth", "integrity")
-# The oracle's own copy of the plan §3 limits (amber, red), in hours. Deliberately not read from
-# hv.Thresholds, so a change to a production default cannot move expected and actual together.
-ORACLE_LIMITS_H = {"backup_local": (30, 54), "backup_offsite": (30, 78), "transcripts": (30, 54)}
 
 # The ratchet row: every red hour (UTC, inclusive start, exclusive end) the receipts support.
 # M1: Drive consent expired 2026-10-24T18:50Z; the first receipts to see it are the 10-25 02:01Z
@@ -90,34 +88,6 @@ def _job_alerts(rows: list[dict], at: datetime) -> dict[str, str]:
         elif row.get("status") is None and "checkpoint" in row:
             active.pop(key, None)
     return active
-
-
-def _oracle_state(events: list[dict], check: str, at: datetime) -> str:
-    mine = [e for e in events if e["check"] == check]
-    lo = [e for e in mine if datetime.fromisoformat(e["known_by"]) <= at]
-    hi = [e for e in mine if datetime.fromisoformat(e["known_from"]) <= at]
-
-    def state(known: list[dict]) -> str:
-        if check in ("drive_auth", "integrity"):
-            if not known:
-                return hv.UNKNOWN
-            last = max(known, key=lambda e: e["known_from"])["value"]
-            return {"ok": hv.GREEN, "consent_needed": hv.RED, "refresh_failed": hv.AMBER}.get(last, hv.RED)
-        if not known:
-            return hv.UNKNOWN  # no history for this period, not evidence that no copy existed
-        if check == "backup_local":
-            latest = max(known, key=lambda e: e["known_from"])
-            if latest["value_at"] is None:
-                return hv.RED
-            newest = datetime.fromisoformat(latest["value_at"])
-        else:
-            newest = max(datetime.fromisoformat(e["value_at"]) for e in known)
-        age = (at - newest).total_seconds()
-        amber, red = (hours * 3600 for hours in ORACLE_LIMITS_H[check])
-        return hv.RED if age > red else hv.AMBER if age > amber else hv.GREEN
-
-    low, high = state(lo), state(hi)
-    return low if low == high else hv.UNKNOWN
 
 
 def _replay(mac: str):

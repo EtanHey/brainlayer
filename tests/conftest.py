@@ -10,9 +10,11 @@ for _git_env_key in tuple(os.environ):
     if _git_env_key.startswith("GIT_"):
         os.environ.pop(_git_env_key, None)
 
+import builtins
 import functools
 import hashlib
 import importlib
+import io
 import shutil
 import sqlite3
 import subprocess
@@ -226,6 +228,7 @@ def pytest_configure(config):
     temp_root.mkdir(parents=True, exist_ok=True)
     os.environ["PYTEST_DEBUG_TEMPROOT"] = str(temp_root)
     _install_db_open_guards()
+    _install_runtime_write_guards()
     helper = Path(__file__).resolve().parent / "socket_hygiene" / "sitecustomize.py"
     if helper.is_file():
         spec = importlib.util.spec_from_file_location("_brainlayer_test_socket_hygiene", helper)
@@ -637,8 +640,8 @@ class _DbGuardState:
     suspended = False
 
 
-def _sqlite_target_path(target: object) -> Path | None:
-    """The filesystem path a sqlite3/apsw target names, or None when it names no local file.
+def _sqlite_target_text(target: object) -> str | None:
+    """The filesystem path text a sqlite3/apsw/open target names, or None when it names no local file.
 
     `file:` URIs are parsed rather than fed to `Path`. BrainLayer's read paths open the DB as
     `file:{db_path}?mode=ro` almost everywhere (`backup_daily`, `maintenance`, `kg_judge`,
@@ -658,18 +661,54 @@ def _sqlite_target_path(target: object) -> Path | None:
         text = urllib.request.url2pathname(parsed.path)
         if not text or text.startswith(":"):
             return None
+    return text
+
+
+def _sqlite_target_path(target: object) -> Path | None:
+    """The filesystem path a sqlite3/apsw target names, resolved; None when it names no local file.
+
+    `file:` URIs are parsed rather than fed to `Path` (see `_sqlite_target_text`).
+    """
+    text = _sqlite_target_text(target)
+    if text is None:
+        return None
     try:
         return Path(text).expanduser().resolve(strict=False)
     except (OSError, ValueError, RuntimeError):
         return None
 
 
+def _within(path: Path, roots: tuple[Path, ...]) -> bool:
+    return any(path == root or root in path.parents for root in roots)
+
+
+def _protected_roots() -> tuple[Path, ...]:
+    """Each protected root as written AND resolved, so a symlinked root stays protected (CodeRabbit)."""
+    roots = list(_PROTECTED_BRAINLAYER_ROOTS)
+    for root in _PROTECTED_BRAINLAYER_ROOTS:
+        try:
+            roots.append(root.resolve(strict=False))
+        except (OSError, RuntimeError):
+            pass
+    return tuple(dict.fromkeys(roots))
+
+
 def _is_protected_runtime_path(candidate: object) -> bool:
-    """Whether *candidate* names a file inside the real user's BrainLayer runtime state."""
-    resolved = _sqlite_target_path(candidate)
-    if resolved is None:
+    """Whether *candidate* names a file inside the real user's BrainLayer runtime state.
+
+    Checked both resolved (a symlink elsewhere that points INTO a root) and lexically (a path
+    inside a root whose own symlink points OUT of it), against roots as written and resolved.
+    """
+    text = _sqlite_target_text(candidate)
+    if text is None:
         return False
-    return any(resolved == root or root in resolved.parents for root in _PROTECTED_BRAINLAYER_ROOTS)
+    roots = _protected_roots()
+    try:
+        lexical = Path(os.path.abspath(Path(text).expanduser()))
+    except (OSError, ValueError, RuntimeError):
+        lexical = None
+    resolved = _sqlite_target_path(candidate)
+    return any(p is not None and _within(p, roots) for p in (lexical, resolved))
 
 
 def _refuse_protected_db(target: object, opener: str) -> None:
@@ -781,3 +820,36 @@ def test_user() -> str:
     Set BRAINLAYER_TEST_USER to your real username for local filesystem tests.
     """
     return os.environ.get("BRAINLAYER_TEST_USER", "janedev")
+
+
+def _install_runtime_write_guards() -> None:
+    """Refuse production runtime writes before collection, including captured aliases."""
+
+    def refuse(path, writing):
+        # Same exemption contract as the canonical-DB guard: only a test deliberately marked
+        # `integration`/`live` may write real runtime state (desktop notifications stay forbidden).
+        if writing and not _DbGuardState.suspended and _is_protected_runtime_path(path):
+            raise RuntimeError(f"suite hygiene: production BrainLayer runtime write refused: {path}")
+
+    def wrap_open(opener):
+        @functools.wraps(opener)
+        def guarded(file, mode="r", *args, **kwargs):
+            refuse(file, any(flag in mode for flag in "wax+"))
+            return opener(file, mode, *args, **kwargs)
+
+        guarded._brainlayer_write_guard = True
+        return guarded
+
+    for module in (builtins, io):
+        if not getattr(module.open, "_brainlayer_write_guard", False):
+            module.open = wrap_open(module.open)
+    if not getattr(os.open, "_brainlayer_write_guard", False):
+        original_os_open = os.open
+
+        @functools.wraps(original_os_open)
+        def guarded_os_open(path, flags, *args, **kwargs):
+            refuse(path, flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
+            return original_os_open(path, flags, *args, **kwargs)
+
+        guarded_os_open._brainlayer_write_guard = True
+        os.open = guarded_os_open
