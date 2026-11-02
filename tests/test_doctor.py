@@ -593,7 +593,8 @@ def test_run_doctor_fails_loudly_when_brainbar_version_check_fails(tmp_path, mon
         now_fn=lambda: NOW,
     )
 
-    issue = next(issue for issue in result.issues if issue.code == "brainbar_version_check_failed")
+    issue = next((issue for issue in result.issues if issue.code == "brainbar_version_check_failed"), None)
+    assert issue is not None
     assert result.exit_code == (0 if source_checkout else 1)
     assert result.ok is source_checkout
     assert issue.severity == ("info" if source_checkout else "fatal")
@@ -649,7 +650,8 @@ def test_run_doctor_reports_brainbar_version_check_runner_exception(tmp_path, mo
         now_fn=lambda: NOW,
     )
 
-    issue = next(issue for issue in result.issues if issue.code == "brainbar_version_check_failed")
+    issue = next((issue for issue in result.issues if issue.code == "brainbar_version_check_failed"), None)
+    assert issue is not None
     assert issue.severity == ("info" if source_checkout else "fatal")
     assert result.exit_code == (0 if source_checkout else 1)
     assert "runner unavailable" in issue.message
