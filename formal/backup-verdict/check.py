@@ -290,11 +290,11 @@ CASES: list[dict[str, str]] = [
     {
         "name": "conform-ingest-s1a5",
         "module": "PipeVerdict",
-        "expect": "diverges",
-        "pr": "S1a-5",
-        "fixed_here": "no",
+        "expect": "conforms",
+        "pr": "",
+        "against": "4e07651b",
         "simulate": "3000,60,7",
-        "what": "ingest with S1a-5 hysteresis (renewable grace) vs this tree; conforms at 4e07651b",
+        "what": "ingest: the S1a-5 model (hysteresis, renewable grace) agrees with 4e07651b on every tick (historical; the final tree is covered by conform-ingest-s1a6)",
     },
     {
         "name": "conform-ingest-s1a6",

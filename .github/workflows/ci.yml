@@ -77,8 +77,11 @@ jobs:
           persist-credentials: false
 
       # Two replay refs are #1583 PR-branch heads (672c9f97, 7f7f6245), not on main.
+      # conform-ingest-s1a5 replays against #1600's head 4e07651b, which a squash merge leaves off main.
       - name: Fetch replay refs
-        run: git fetch --no-tags origin +refs/pull/1583/head:refs/remotes/pull/1583
+        run: |
+          git fetch --no-tags origin +refs/pull/1583/head:refs/remotes/pull/1583
+          git fetch --no-tags origin +refs/pull/1600/head:refs/remotes/pull/1600
 
       - uses: actions/setup-python@v5
         with:
