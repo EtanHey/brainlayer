@@ -373,3 +373,205 @@ def test_old_reader_never_fails_visible_and_job_alerts_cannot_relight(red, live)
     assert reconciled["badge_on"] is red  # a changed or cleared job alert never moves the dot
     assert ("outcome_drive_auth" in reconciled["codes"]) is red
     assert ("job_alert_maintenance-full" in reconciled["codes"]) is bool(live)
+
+
+# --- Review R1 regressions (PR #1583) --------------------------------------------------------
+
+
+def _ticks(prior, steps, thresholds=None):
+    """Run (now, facts) steps carrying state; return each step's verdict."""
+    out = []
+    for now, facts in steps:
+        verdict = run(prior, thresholds, now=now, **facts)
+        prior = verdict.state
+        out.append(verdict)
+    return out
+
+
+def test_b1_failed_store_canary_latches_until_a_successful_round_trip():
+    failed = {"oldest_pending_store_at": None, "store_canary_ok": False}
+    quiet = {"oldest_pending_store_at": None}  # queue empty, canary not run this tick
+    ok = {"oldest_pending_store_at": None, "store_canary_ok": True}
+    steps = [failed] * 3 + [quiet, quiet, ok, quiet, quiet, ok]
+    seen = [v.check("stores").state for v in _ticks(None, [(NOW + i * 5 * M, f) for i, f in enumerate(steps)])]
+    # Reviewer's executed repro was amber, amber, red, red, GREEN: the empty queue cleared a failed canary.
+    assert seen == [hv.AMBER, hv.AMBER, hv.RED, hv.RED, hv.RED, hv.RED, hv.RED, hv.RED, hv.GREEN]
+
+
+def test_b1_canary_and_queue_evidence_are_persisted_separately():
+    verdict = run(oldest_pending_store_at=NOW - 20 * M, store_canary_ok=False)
+    stores = verdict.state["checks"]["stores"]
+    assert stores["fails"] == 1 and stores["canary_owed"] is True
+    assert stores["clock"] == hv._iso(NOW - 20 * M)
+
+
+@pytest.mark.parametrize(
+    ("check", "bad", "stale", "good", "need"),
+    [
+        ("ingest", {"watcher_updated_at": NOW - H}, {"watcher_updated_at": NOW - H}, "watcher_updated_at", 2),
+        (
+            "embedding",
+            {"embedding_stalled_since": NOW - 7 * H},
+            {"embedding_stalled_since": NOW - 7 * H},
+            None,
+            1,
+        ),
+        (
+            "stores",
+            {"oldest_pending_store_at": NOW - 50 * M},
+            {"oldest_pending_store_at": NOW - 50 * M},
+            None,
+            2,
+        ),
+    ],
+)
+@pytest.mark.parametrize("after_gap", ["unobserved", "same_stale_fact"])
+def test_b2_resume_grace_never_fabricates_recovery(check, bad, stale, good, need, after_gap):
+    fact = next(iter(bad))
+    red = run(**bad)
+    assert red.check(check).state == hv.RED
+    woke = NOW + 8 * H
+    gap_facts = {} if after_gap == "unobserved" else stale
+    held = _ticks(red.state, [(woke, gap_facts), (woke + 5 * M, gap_facts), (woke + 10 * M, gap_facts)])
+    # Reviewer's executed repro: ingest red -> red -> GREEN, embedding red -> GREEN, with no new fact.
+    assert [v.check(check).state for v in held] == [hv.RED] * 3
+    # Real recovery evidence still recovers: an advancing heartbeat, or an observed clearance.
+    recovering = [(woke + (15 + 5 * i) * M, {fact: (woke + (15 + 5 * i) * M) if good else None}) for i in range(need)]
+    assert [v.check(check).state for v in _ticks(held[-1].state, recovering)][-1] == hv.GREEN
+
+
+def test_b2_wake_grace_still_spares_a_healthy_pipe():
+    prior = run(watcher_updated_at=NOW, embedding_stalled_since=None, oldest_pending_store_at=NOW - M).state
+    woke = run(prior, now=NOW + 8 * H, watcher_updated_at=NOW, oldest_pending_store_at=NOW - M)
+    assert woke.check("ingest").state == hv.GREEN and woke.check("stores").state == hv.GREEN
+
+
+BACKUPS = [
+    ("backup_local", "backup_local_verified_at", 54 * H),
+    ("backup_offsite", "backup_offsite_verified_at", 78 * H),
+    ("transcripts", "transcripts_verified_at", 54 * H),
+]
+
+
+@pytest.mark.parametrize(("check", "fact", "red"), BACKUPS)
+@pytest.mark.parametrize("receipts", ["unobserved", "same_copy"])
+def test_b3_repeated_gaps_never_renew_the_catch_up_deadline(check, fact, red, receipts):
+    copy = NOW - (red - 4 * H)
+    prior = run(**{fact: copy}).state
+    steps = [(NOW + k * H, {} if receipts == "unobserved" else {fact: copy}) for k in range(1, 49)]
+    verdicts = _ticks(prior, steps)  # hourly ticks: every one follows a >15 min monitoring gap
+    states = [v.check(check).state for v in verdicts]
+    # Reviewer's executed repro ended 98 h old and amber, with no red tick at all.
+    assert states[-1] == hv.RED
+    # Red from the first hour past one absolute catch-up window, and never back to amber.
+    first_red_tick = 4 + 1 + 2 + 1  # crosses red at +4 h, wakes at +5 h, deadline +7 h, next tick +8 h
+    assert states[: first_red_tick - 1].count(hv.RED) == 0
+    assert set(states[first_red_tick - 1 :]) == {hv.RED}
+
+
+@pytest.mark.parametrize(("check", "fact", "red"), BACKUPS)
+def test_b3_long_sleeps_get_one_catch_up_window(check, fact, red):
+    copy = NOW - (red - 4 * H)
+    prior = run(**{fact: copy}).state
+    woke = NOW + 30 * H  # one long sleep: the copy is now red by 26 h
+    first = run(prior, now=woke, **{fact: copy})
+    assert first.check(check).state == hv.AMBER and "catch-up" in first.check(check).note
+    deadline = first.state["checks"][check]["catch_up_until"]
+    assert deadline == hv._iso(woke + 2 * H)
+    # Another gap inside the window does not move the deadline...
+    second = run(first.state, now=woke + H, **{fact: copy})
+    assert second.check(check).state == hv.AMBER
+    assert second.state["checks"][check]["catch_up_until"] == deadline
+    # ...and a second long sleep past it wakes straight to red, with no new receipt.
+    assert run(second.state, now=woke + 10 * H, **{fact: copy}).check(check).state == hv.RED
+    # A new verified copy ends the episode.
+    fresh = run(second.state, now=woke + 90 * M, **{fact: woke + 80 * M})
+    assert fresh.check(check).state == hv.GREEN and "catch_up_until" not in fresh.state["checks"][check]
+
+
+def test_b4_confirmed_drive_access_loss_latches_until_ok():
+    steps = [
+        (NOW, {"drive_auth": "consent_needed"}),
+        (NOW + 5 * M, {"drive_auth": "refresh_failed"}),
+        (NOW + 10 * M, {}),
+        (NOW + 15 * M, {"drive_auth": "refresh_failed"}),
+        (NOW + 20 * M, {"drive_auth": "ok"}),
+        (NOW + 25 * M, {"drive_auth": "refresh_failed"}),
+    ]
+    seen = [v.check("drive_auth").state for v in _ticks(None, steps)]
+    # Reviewer's executed repro: consent_needed -> refresh_failed went red -> amber.
+    assert seen == [hv.RED, hv.RED, hv.RED, hv.RED, hv.GREEN, hv.AMBER]
+
+
+SNAP_OLD, SNAP_NEW = "/b/2026-10-31.db.zst", "/b/2026-11-02.db.zst"
+
+
+def _verified_receipt(snapshot, created, attempted):
+    return _receipt(
+        snapshot=snapshot,
+        snapshot_created_at=created.isoformat(),
+        attempted_at=attempted.isoformat(),
+        local_verified=True,
+        local_integrity="ok",
+        uploaded=True,
+        verified=True,
+    )
+
+
+def _reader_tick(receipts, prior, now):
+    facts = hv.backup_facts(receipts, as_of=now)
+    return run(prior, now=now, **facts.facts_kwargs())
+
+
+def test_b5_revoking_the_only_copy_ends_the_persisted_clock():
+    receipts = [_verified_receipt(SNAP_NEW, NOW - H, NOW - 50 * M)]
+    first = _reader_tick(receipts, None, NOW)
+    assert first.check("backup_local").state == first.check("backup_offsite").state == hv.GREEN
+    receipts.append(_receipt(snapshot=SNAP_NEW, attempted_at=(NOW + M).isoformat(), drive_md5_match=False))
+    second = _reader_tick(receipts, first.state, NOW + 5 * M)
+    # Reviewer's executed repro: both stayed green on the persisted maximum.
+    assert second.check("backup_local").state == second.check("backup_offsite").state == hv.RED
+    assert "revoked" in second.check("backup_local").note
+    # An unreadable log afterwards does not bring the revoked copy back.
+    third = run(second.state, now=NOW + 10 * M, backup_local_verified_at=hv.UNOBSERVED)
+    assert third.check("backup_local").state == hv.RED
+
+
+def test_b5_revocation_falls_back_to_the_older_surviving_copy():
+    receipts = [
+        _verified_receipt(SNAP_OLD, NOW - 40 * H, NOW - 39 * H),
+        _verified_receipt(SNAP_NEW, NOW - H, NOW - 50 * M),
+    ]
+    first = _reader_tick(receipts, None, NOW)
+    assert first.state["checks"]["backup_local"]["clock_id"] == SNAP_NEW
+    receipts.append(_receipt(snapshot=SNAP_NEW, attempted_at=(NOW + M).isoformat(), verification_error="md5"))
+    second = _reader_tick(receipts, first.state, NOW + 5 * M)
+    for name in ("backup_local", "backup_offsite"):
+        check = second.check(name)
+        assert check.state == hv.AMBER and check.age_s == (40 * H + 5 * M).total_seconds()
+        assert second.state["checks"][name]["clock_id"] == SNAP_OLD
+    # Re-verifying the same snapshot reinstates it.
+    receipts.append(_verified_receipt(SNAP_NEW, NOW - H, NOW + 6 * M))
+    assert _reader_tick(receipts, second.state, NOW + 10 * M).check("backup_local").state == hv.GREEN
+
+
+def test_b5_revocation_matches_a_persisted_clock_without_identity_by_time():
+    legacy = run(backup_local_verified_at=NOW - H).state
+    legacy["checks"]["backup_local"].pop("clock_id")
+    later = run(legacy, now=NOW + 5 * M, backup_local_verified_at=None, backup_revoked=((SNAP_NEW, NOW - H),))
+    assert later.check("backup_local").state == hv.RED
+
+
+# --- DeepSource fixes ------------------------------------------------------------------------
+
+
+def test_verdict_check_names_a_missing_check():
+    with pytest.raises(KeyError):
+        run().check("nope")
+
+
+def test_thresholds_from_env_rejects_nan_and_defaults_to_os_environ(monkeypatch):
+    with pytest.raises(ValueError):
+        hv.Thresholds.from_env({"BRAINLAYER_VERDICT_INGEST_RED_S": "nan"})
+    monkeypatch.setenv("BRAINLAYER_VERDICT_INGEST_RED_S", "120")
+    assert hv.Thresholds.from_env().ingest_red_s == 120.0

@@ -22,7 +22,11 @@ dict walking, no BrainLayer imports. It shares the documented evidence rules, no
 - transcripts verified: `jsonl-backup.log` rows with `verified` and status `uploaded`/`no-op`/`created`;
 - Drive auth: `DriveCredentialError` / "Drive access expired" gives `consent_needed`; a verified upload gives `ok`.
 
-Every event carries `known_from = attempted_at` and `known_by = attempted_at + 3h`, because receipts record
-when an invocation started, not when it wrote the row. An hour where the state differs between those
-bounds is `unknown` and is not asserted. Hours the logs say nothing about (ingest, stores, search, disk,
+Every event carries `known_from = attempted_at` and `known_by = attempted_at + 8h`, because receipts record
+when an invocation started, not when it wrote the row, and carry no completion field. Eight hours is an
+upper bound, not an estimate: it is the longest default run limit of the two writers (backup-daily
+`DEFAULT_BACKUP_TIMEOUT_SECONDS`, 8 h; the jsonl-backup wrapper, 2 h), and a run killed at its limit
+writes no verified row. An hour where the state differs between those bounds is `unknown` and is not
+asserted, and so is an hour with no backup evidence at all. The oracle's age limits are its own
+constants (`ORACLE_LIMITS_H` in the test), not production's `Thresholds`. Hours the logs say nothing about (ingest, stores, search, disk,
 embedding) are not replayed at all.

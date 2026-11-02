@@ -4,7 +4,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:1 verified snapshot 2026-10-12.db.gz",
-    "known_by": "2026-10-12T03:17:07.410031Z",
+    "known_by": "2026-10-12T08:17:07.410031Z",
     "known_from": "2026-10-12T00:17:07.410031Z",
     "value": "verified",
     "value_at": "2026-10-12T00:00:00Z"
@@ -12,7 +12,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:2 verified snapshot 2026-10-13.db.gz",
-    "known_by": "2026-10-13T03:17:06.792479Z",
+    "known_by": "2026-10-13T08:17:06.792479Z",
     "known_from": "2026-10-13T00:17:06.792479Z",
     "value": "verified",
     "value_at": "2026-10-13T00:00:00Z"
@@ -20,7 +20,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:3 verified snapshot 2026-10-14.db.gz",
-    "known_by": "2026-10-14T03:17:06.923615Z",
+    "known_by": "2026-10-14T08:17:06.923615Z",
     "known_from": "2026-10-14T00:17:06.923615Z",
     "value": "verified",
     "value_at": "2026-10-14T00:00:00Z"
@@ -28,7 +28,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:4 verified snapshot 2026-10-15.db.gz",
-    "known_by": "2026-10-15T07:20:33.349677Z",
+    "known_by": "2026-10-15T12:20:33.349677Z",
     "known_from": "2026-10-15T04:20:33.349677Z",
     "value": "verified",
     "value_at": "2026-10-15T00:00:00Z"
@@ -36,7 +36,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:8 verified snapshot 2026-10-17.db.gz",
-    "known_by": "2026-10-17T23:19:06.294420Z",
+    "known_by": "2026-10-18T04:19:06.294420Z",
     "known_from": "2026-10-17T20:19:06.294420Z",
     "value": "verified",
     "value_at": "2026-10-17T00:00:00Z"
@@ -44,7 +44,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:9 verified snapshot 2026-10-18.db.gz",
-    "known_by": "2026-10-18T07:20:24.708392Z",
+    "known_by": "2026-10-18T12:20:24.708392Z",
     "known_from": "2026-10-18T04:20:24.708392Z",
     "value": "verified",
     "value_at": "2026-10-18T00:00:00Z"
@@ -52,7 +52,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:12 verified snapshot 2026-10-19.db.gz",
-    "known_by": "2026-10-19T03:45:36.055135Z",
+    "known_by": "2026-10-19T08:45:36.055135Z",
     "known_from": "2026-10-19T00:45:36.055135Z",
     "value": "verified",
     "value_at": "2026-10-19T00:45:36.576486Z"
@@ -60,7 +60,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:13 verified snapshot 2026-10-20.db.gz",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "verified",
     "value_at": "2026-10-20T01:01:00.835104Z"
@@ -68,7 +68,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:14 verified snapshot 2026-10-20.db.gz",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "verified",
     "value_at": "2026-10-20T01:01:00.835104Z"
@@ -76,7 +76,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:15 verified snapshot 2026-10-20.db.gz",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "verified",
     "value_at": "2026-10-20T01:01:00.835104Z"
@@ -84,7 +84,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:16 verified snapshot 2026-10-20.db.gz",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "verified",
     "value_at": "2026-10-20T01:01:00.835104Z"
@@ -92,7 +92,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:17 verified snapshot 2026-10-20.db.gz",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "verified",
     "value_at": "2026-10-20T01:01:00.835104Z"
@@ -100,7 +100,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:18 verified snapshot 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "verified",
     "value_at": "2026-10-21T01:01:15.157536Z"
@@ -108,7 +108,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:19 verified snapshot 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "verified",
     "value_at": "2026-10-21T01:01:15.157536Z"
@@ -116,7 +116,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:20 verified snapshot 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "verified",
     "value_at": "2026-10-21T01:01:15.157536Z"
@@ -124,7 +124,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:21 verified snapshot 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "verified",
     "value_at": "2026-10-21T01:01:15.157536Z"
@@ -132,7 +132,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:22 verified snapshot 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "verified",
     "value_at": "2026-10-21T01:01:15.157536Z"
@@ -140,7 +140,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:23 verified snapshot 2026-10-22.db.zst",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "verified",
     "value_at": "2026-10-22T01:01:07.558768Z"
@@ -148,7 +148,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:24 verified snapshot 2026-10-22.db.zst",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "verified",
     "value_at": "2026-10-22T01:01:07.558768Z"
@@ -156,7 +156,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:25 verified snapshot 2026-10-22.db.zst",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "verified",
     "value_at": "2026-10-22T01:01:07.558768Z"
@@ -164,7 +164,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:26 verified snapshot 2026-10-22.db.zst",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "verified",
     "value_at": "2026-10-22T01:01:07.558768Z"
@@ -172,7 +172,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:27 verified snapshot 2026-10-22.db.zst",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "verified",
     "value_at": "2026-10-22T01:01:07.558768Z"
@@ -180,7 +180,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:28 verified snapshot 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "verified",
     "value_at": "2026-10-23T01:01:17.680681Z"
@@ -188,7 +188,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:29 verified snapshot 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "verified",
     "value_at": "2026-10-23T01:01:17.680681Z"
@@ -196,7 +196,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:30 verified snapshot 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "verified",
     "value_at": "2026-10-23T01:01:17.680681Z"
@@ -204,7 +204,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:31 verified snapshot 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "verified",
     "value_at": "2026-10-23T01:01:17.680681Z"
@@ -212,7 +212,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:32 verified snapshot 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "verified",
     "value_at": "2026-10-23T01:01:17.680681Z"
@@ -220,7 +220,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:33 verified snapshot 2026-10-24.db.zst",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "verified",
     "value_at": "2026-10-24T01:00:57.902416Z"
@@ -228,7 +228,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:34 verified snapshot 2026-10-24.db.zst",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "verified",
     "value_at": "2026-10-24T01:00:57.902416Z"
@@ -236,7 +236,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:35 verified snapshot 2026-10-24.db.zst",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "verified",
     "value_at": "2026-10-24T01:00:57.902416Z"
@@ -244,7 +244,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:36 verified snapshot 2026-10-24.db.zst",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "verified",
     "value_at": "2026-10-24T01:00:57.902416Z"
@@ -252,7 +252,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:37 verified snapshot 2026-10-24.db.zst",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "verified",
     "value_at": "2026-10-24T01:00:57.902416Z"
@@ -260,7 +260,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:38 verified snapshot 2026-10-25.db.zst",
-    "known_by": "2026-10-25T04:45:15.949887Z",
+    "known_by": "2026-10-25T09:45:15.949887Z",
     "known_from": "2026-10-25T01:45:15.949887Z",
     "value": "verified",
     "value_at": "2026-10-25T01:45:16.563474Z"
@@ -268,7 +268,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:39 verified snapshot 2026-10-25.db.zst",
-    "known_by": "2026-10-25T04:45:15.949887Z",
+    "known_by": "2026-10-25T09:45:15.949887Z",
     "known_from": "2026-10-25T01:45:15.949887Z",
     "value": "verified",
     "value_at": "2026-10-25T01:45:16.563474Z"
@@ -276,7 +276,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:40 verified snapshot 2026-10-25.db.zst",
-    "known_by": "2026-10-25T05:01:51.685698Z",
+    "known_by": "2026-10-25T10:01:51.685698Z",
     "known_from": "2026-10-25T02:01:51.685698Z",
     "value": "verified",
     "value_at": "2026-10-25T01:45:16.563474Z"
@@ -284,7 +284,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:41 verified snapshot 2026-10-25.db.zst",
-    "known_by": "2026-10-25T05:01:51.685698Z",
+    "known_by": "2026-10-25T10:01:51.685698Z",
     "known_from": "2026-10-25T02:01:51.685698Z",
     "value": "verified",
     "value_at": "2026-10-25T01:45:16.563474Z"
@@ -292,7 +292,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:42 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T05:00:30.012345Z",
+    "known_by": "2026-10-26T10:00:30.012345Z",
     "known_from": "2026-10-26T02:00:30.012345Z",
     "value": "verified",
     "value_at": "2026-10-26T02:00:30.538833Z"
@@ -300,7 +300,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:43 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T05:00:30.012345Z",
+    "known_by": "2026-10-26T10:00:30.012345Z",
     "known_from": "2026-10-26T02:00:30.012345Z",
     "value": "verified",
     "value_at": "2026-10-26T02:00:30.538833Z"
@@ -308,7 +308,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:44 verified snapshot 2026-10-27.db.zst",
-    "known_by": "2026-10-27T05:00:31.392519Z",
+    "known_by": "2026-10-27T10:00:31.392519Z",
     "known_from": "2026-10-27T02:00:31.392519Z",
     "value": "verified",
     "value_at": "2026-10-27T02:00:32.077071Z"
@@ -316,7 +316,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:45 verified snapshot 2026-10-27.db.zst",
-    "known_by": "2026-10-27T05:00:31.392519Z",
+    "known_by": "2026-10-27T10:00:31.392519Z",
     "known_from": "2026-10-27T02:00:31.392519Z",
     "value": "verified",
     "value_at": "2026-10-27T02:00:32.077071Z"
@@ -324,7 +324,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:46 verified snapshot 2026-10-29.db.zst",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "verified",
     "value_at": "2026-10-29T02:03:48.619094Z"
@@ -332,7 +332,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:47 verified snapshot 2026-10-29.db.zst",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "verified",
     "value_at": "2026-10-29T02:03:48.619094Z"
@@ -340,7 +340,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:48 verified snapshot 2026-10-29.db.zst",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "verified",
     "value_at": "2026-10-29T02:03:48.619094Z"
@@ -348,7 +348,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:49 verified snapshot 2026-10-29.db.zst",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "verified",
     "value_at": "2026-10-29T02:03:48.619094Z"
@@ -356,7 +356,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:53 verified snapshot 2026-10-29.db.zst",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "verified",
     "value_at": "2026-10-29T02:03:48.619094Z"
@@ -364,7 +364,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:58 verified snapshot 2026-10-30.db.zst",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "verified",
     "value_at": "2026-10-30T06:58:58.960953Z"
@@ -372,7 +372,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:59 verified snapshot 2026-10-30.db.zst",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "verified",
     "value_at": "2026-10-30T06:58:58.960953Z"
@@ -380,7 +380,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:60 verified snapshot 2026-10-30.db.zst",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "verified",
     "value_at": "2026-10-30T06:58:58.960953Z"
@@ -388,7 +388,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:61 verified snapshot 2026-10-30.db.zst",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "verified",
     "value_at": "2026-10-30T06:58:58.960953Z"
@@ -396,7 +396,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:62 verified snapshot 2026-10-30.db.zst",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "verified",
     "value_at": "2026-10-30T06:58:58.960953Z"
@@ -404,7 +404,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:63 verified snapshot 2026-10-31.db.zst",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "verified",
     "value_at": "2026-10-31T02:10:00.657489Z"
@@ -412,7 +412,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:64 verified snapshot 2026-10-31.db.zst",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "verified",
     "value_at": "2026-10-31T02:10:00.657489Z"
@@ -420,7 +420,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:65 verified snapshot 2026-10-31.db.zst",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "verified",
     "value_at": "2026-10-31T02:10:00.657489Z"
@@ -428,7 +428,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:66 verified snapshot 2026-10-31.db.zst",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "verified",
     "value_at": "2026-10-31T02:10:00.657489Z"
@@ -436,7 +436,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:67 verified snapshot 2026-10-31.db.zst",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "verified",
     "value_at": "2026-10-31T02:10:00.657489Z"
@@ -444,7 +444,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:70 verified snapshot 2026-11-02.db.zst",
-    "known_by": "2026-11-02T02:56:17.189845Z",
+    "known_by": "2026-11-02T07:56:17.189845Z",
     "known_from": "2026-11-01T23:56:17.189845Z",
     "value": "verified",
     "value_at": "2026-11-01T23:56:17.288492Z"
@@ -452,7 +452,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:71 verified snapshot 2026-11-02.db.zst",
-    "known_by": "2026-11-02T02:56:17.189845Z",
+    "known_by": "2026-11-02T07:56:17.189845Z",
     "known_from": "2026-11-01T23:56:17.189845Z",
     "value": "verified",
     "value_at": "2026-11-01T23:56:17.288492Z"
@@ -460,7 +460,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:72 verified snapshot 2026-11-02.db.zst",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "verified",
     "value_at": "2026-11-01T23:56:17.288492Z"
@@ -468,7 +468,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:73 verified snapshot 2026-11-02.db.zst",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "verified",
     "value_at": "2026-11-01T23:56:17.288492Z"
@@ -476,7 +476,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:74 verified snapshot 2026-11-02.db.zst",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "verified",
     "value_at": "2026-11-01T23:56:17.288492Z"
@@ -484,7 +484,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:75 verified snapshot 2026-11-02.db.zst",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "verified",
     "value_at": "2026-11-01T23:56:17.288492Z"
@@ -492,7 +492,7 @@
    {
     "check": "backup_local",
     "evidence": "m1-backup-daily.log:76 verified snapshot 2026-11-02.db.zst",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "verified",
     "value_at": "2026-11-01T23:56:17.288492Z"
@@ -500,7 +500,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:1 uploaded+verified 2026-10-12.db.gz",
-    "known_by": "2026-10-12T03:17:07.410031Z",
+    "known_by": "2026-10-12T08:17:07.410031Z",
     "known_from": "2026-10-12T00:17:07.410031Z",
     "value": "verified",
     "value_at": "2026-10-12T00:00:00Z"
@@ -508,7 +508,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:2 uploaded+verified 2026-10-13.db.gz",
-    "known_by": "2026-10-13T03:17:06.792479Z",
+    "known_by": "2026-10-13T08:17:06.792479Z",
     "known_from": "2026-10-13T00:17:06.792479Z",
     "value": "verified",
     "value_at": "2026-10-13T00:00:00Z"
@@ -516,7 +516,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:3 uploaded+verified 2026-10-14.db.gz",
-    "known_by": "2026-10-14T03:17:06.923615Z",
+    "known_by": "2026-10-14T08:17:06.923615Z",
     "known_from": "2026-10-14T00:17:06.923615Z",
     "value": "verified",
     "value_at": "2026-10-14T00:00:00Z"
@@ -524,7 +524,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:4 uploaded+verified 2026-10-15.db.gz",
-    "known_by": "2026-10-15T07:20:33.349677Z",
+    "known_by": "2026-10-15T12:20:33.349677Z",
     "known_from": "2026-10-15T04:20:33.349677Z",
     "value": "verified",
     "value_at": "2026-10-15T00:00:00Z"
@@ -532,7 +532,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:8 uploaded+verified 2026-10-17.db.gz",
-    "known_by": "2026-10-17T23:19:06.294420Z",
+    "known_by": "2026-10-18T04:19:06.294420Z",
     "known_from": "2026-10-17T20:19:06.294420Z",
     "value": "verified",
     "value_at": "2026-10-17T00:00:00Z"
@@ -540,7 +540,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:9 uploaded+verified 2026-10-18.db.gz",
-    "known_by": "2026-10-18T07:20:24.708392Z",
+    "known_by": "2026-10-18T12:20:24.708392Z",
     "known_from": "2026-10-18T04:20:24.708392Z",
     "value": "verified",
     "value_at": "2026-10-18T00:00:00Z"
@@ -548,7 +548,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:12 uploaded+verified 2026-10-19.db.gz",
-    "known_by": "2026-10-19T03:45:36.055135Z",
+    "known_by": "2026-10-19T08:45:36.055135Z",
     "known_from": "2026-10-19T00:45:36.055135Z",
     "value": "verified",
     "value_at": "2026-10-19T00:45:36.576486Z"
@@ -556,7 +556,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:16 uploaded+verified 2026-10-20.db.gz",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "verified",
     "value_at": "2026-10-20T01:01:00.835104Z"
@@ -564,7 +564,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:17 uploaded+verified 2026-10-20.db.gz",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "verified",
     "value_at": "2026-10-20T01:01:00.835104Z"
@@ -572,7 +572,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:21 uploaded+verified 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "verified",
     "value_at": "2026-10-21T01:01:15.157536Z"
@@ -580,7 +580,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:22 uploaded+verified 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "verified",
     "value_at": "2026-10-21T01:01:15.157536Z"
@@ -588,7 +588,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:26 uploaded+verified 2026-10-22.db.zst",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "verified",
     "value_at": "2026-10-22T01:01:07.558768Z"
@@ -596,7 +596,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:27 uploaded+verified 2026-10-22.db.zst",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "verified",
     "value_at": "2026-10-22T01:01:07.558768Z"
@@ -604,7 +604,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:31 uploaded+verified 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "verified",
     "value_at": "2026-10-23T01:01:17.680681Z"
@@ -612,7 +612,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:32 uploaded+verified 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "verified",
     "value_at": "2026-10-23T01:01:17.680681Z"
@@ -620,7 +620,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:36 uploaded+verified 2026-10-24.db.zst",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "verified",
     "value_at": "2026-10-24T01:00:57.902416Z"
@@ -628,7 +628,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:37 uploaded+verified 2026-10-24.db.zst",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "verified",
     "value_at": "2026-10-24T01:00:57.902416Z"
@@ -636,7 +636,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:49 uploaded+verified 2026-10-29.db.zst",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "verified",
     "value_at": "2026-10-29T02:03:48.619094Z"
@@ -644,7 +644,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:53 uploaded+verified 2026-10-29.db.zst",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "verified",
     "value_at": "2026-10-29T02:03:48.619094Z"
@@ -652,7 +652,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:61 uploaded+verified 2026-10-30.db.zst",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "verified",
     "value_at": "2026-10-30T06:58:58.960953Z"
@@ -660,7 +660,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:62 uploaded+verified 2026-10-30.db.zst",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "verified",
     "value_at": "2026-10-30T06:58:58.960953Z"
@@ -668,7 +668,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:66 uploaded+verified 2026-10-31.db.zst",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "verified",
     "value_at": "2026-10-31T02:10:00.657489Z"
@@ -676,7 +676,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:67 uploaded+verified 2026-10-31.db.zst",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "verified",
     "value_at": "2026-10-31T02:10:00.657489Z"
@@ -684,7 +684,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:75 uploaded+verified 2026-11-02.db.zst",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "verified",
     "value_at": "2026-11-01T23:56:17.288492Z"
@@ -692,7 +692,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m1-backup-daily.log:76 uploaded+verified 2026-11-02.db.zst",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "verified",
     "value_at": "2026-11-01T23:56:17.288492Z"
@@ -700,7 +700,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:1 verified Drive upload",
-    "known_by": "2026-10-12T03:17:07.410031Z",
+    "known_by": "2026-10-12T08:17:07.410031Z",
     "known_from": "2026-10-12T00:17:07.410031Z",
     "value": "ok",
     "value_at": null
@@ -708,7 +708,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:1 verified Drive upload",
-    "known_by": "2026-10-12T05:00:06.625126Z",
+    "known_by": "2026-10-12T10:00:06.625126Z",
     "known_from": "2026-10-12T02:00:06.625126Z",
     "value": "ok",
     "value_at": null
@@ -716,7 +716,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:2 verified Drive upload",
-    "known_by": "2026-10-13T03:17:06.792479Z",
+    "known_by": "2026-10-13T08:17:06.792479Z",
     "known_from": "2026-10-13T00:17:06.792479Z",
     "value": "ok",
     "value_at": null
@@ -724,7 +724,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:2 verified Drive upload",
-    "known_by": "2026-10-13T05:00:06.675561Z",
+    "known_by": "2026-10-13T10:00:06.675561Z",
     "known_from": "2026-10-13T02:00:06.675561Z",
     "value": "ok",
     "value_at": null
@@ -732,7 +732,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:3 verified Drive upload",
-    "known_by": "2026-10-14T03:17:06.923615Z",
+    "known_by": "2026-10-14T08:17:06.923615Z",
     "known_from": "2026-10-14T00:17:06.923615Z",
     "value": "ok",
     "value_at": null
@@ -740,7 +740,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:3 verified Drive upload",
-    "known_by": "2026-10-14T05:00:05.920388Z",
+    "known_by": "2026-10-14T10:00:05.920388Z",
     "known_from": "2026-10-14T02:00:05.920388Z",
     "value": "ok",
     "value_at": null
@@ -748,7 +748,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:4 verified Drive upload",
-    "known_by": "2026-10-15T07:20:33.349677Z",
+    "known_by": "2026-10-15T12:20:33.349677Z",
     "known_from": "2026-10-15T04:20:33.349677Z",
     "value": "ok",
     "value_at": null
@@ -756,7 +756,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:5 DriveCredentialError Drive access expired: Reconnect in BrainBar",
-    "known_by": "2026-10-16T03:17:48.201810Z",
+    "known_by": "2026-10-16T08:17:48.201810Z",
     "known_from": "2026-10-16T00:17:48.201810Z",
     "value": "consent_needed",
     "value_at": null
@@ -764,7 +764,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:6 DriveCredentialError Drive access expired: Reconnect in BrainBar",
-    "known_by": "2026-10-16T04:00:17.038330Z",
+    "known_by": "2026-10-16T09:00:17.038330Z",
     "known_from": "2026-10-16T01:00:17.038330Z",
     "value": "consent_needed",
     "value_at": null
@@ -772,7 +772,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:5 Drive access expired: Reconnect in BrainBar",
-    "known_by": "2026-10-16T04:02:54.583619Z",
+    "known_by": "2026-10-16T09:02:54.583619Z",
     "known_from": "2026-10-16T01:02:54.583619Z",
     "value": "consent_needed",
     "value_at": null
@@ -780,7 +780,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:7 DriveCredentialError Drive access expired: Reconnect in BrainBar",
-    "known_by": "2026-10-17T07:20:53.094535Z",
+    "known_by": "2026-10-17T12:20:53.094535Z",
     "known_from": "2026-10-17T04:20:53.094535Z",
     "value": "consent_needed",
     "value_at": null
@@ -788,7 +788,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:6 Drive access expired: Reconnect in BrainBar",
-    "known_by": "2026-10-17T07:23:36.184044Z",
+    "known_by": "2026-10-17T12:23:36.184044Z",
     "known_from": "2026-10-17T04:23:36.184044Z",
     "value": "consent_needed",
     "value_at": null
@@ -796,7 +796,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:8 verified Drive upload",
-    "known_by": "2026-10-17T23:19:06.294420Z",
+    "known_by": "2026-10-18T04:19:06.294420Z",
     "known_from": "2026-10-17T20:19:06.294420Z",
     "value": "ok",
     "value_at": null
@@ -804,7 +804,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:7 verified Drive upload",
-    "known_by": "2026-10-17T23:21:21.588530Z",
+    "known_by": "2026-10-18T04:21:21.588530Z",
     "known_from": "2026-10-17T20:21:21.588530Z",
     "value": "ok",
     "value_at": null
@@ -812,7 +812,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:9 verified Drive upload",
-    "known_by": "2026-10-18T07:20:24.708392Z",
+    "known_by": "2026-10-18T12:20:24.708392Z",
     "known_from": "2026-10-18T04:20:24.708392Z",
     "value": "ok",
     "value_at": null
@@ -820,7 +820,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:12 verified Drive upload",
-    "known_by": "2026-10-19T03:45:36.055135Z",
+    "known_by": "2026-10-19T08:45:36.055135Z",
     "known_from": "2026-10-19T00:45:36.055135Z",
     "value": "ok",
     "value_at": null
@@ -828,7 +828,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:10 verified Drive upload",
-    "known_by": "2026-10-20T04:00:19.239757Z",
+    "known_by": "2026-10-20T09:00:19.239757Z",
     "known_from": "2026-10-20T01:00:19.239757Z",
     "value": "ok",
     "value_at": null
@@ -836,7 +836,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:16 verified Drive upload",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "ok",
     "value_at": null
@@ -844,7 +844,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:17 verified Drive upload",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "ok",
     "value_at": null
@@ -852,7 +852,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:11 verified Drive upload",
-    "known_by": "2026-10-21T04:00:22.125131Z",
+    "known_by": "2026-10-21T09:00:22.125131Z",
     "known_from": "2026-10-21T01:00:22.125131Z",
     "value": "ok",
     "value_at": null
@@ -860,7 +860,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:21 verified Drive upload",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "ok",
     "value_at": null
@@ -868,7 +868,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:22 verified Drive upload",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "ok",
     "value_at": null
@@ -876,7 +876,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:12 verified Drive upload",
-    "known_by": "2026-10-22T04:00:18.818440Z",
+    "known_by": "2026-10-22T09:00:18.818440Z",
     "known_from": "2026-10-22T01:00:18.818440Z",
     "value": "ok",
     "value_at": null
@@ -884,7 +884,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:26 verified Drive upload",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "ok",
     "value_at": null
@@ -892,7 +892,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:27 verified Drive upload",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "ok",
     "value_at": null
@@ -900,7 +900,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:13 verified Drive upload",
-    "known_by": "2026-10-23T04:00:22.395528Z",
+    "known_by": "2026-10-23T09:00:22.395528Z",
     "known_from": "2026-10-23T01:00:22.395528Z",
     "value": "ok",
     "value_at": null
@@ -908,7 +908,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:31 verified Drive upload",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "ok",
     "value_at": null
@@ -916,7 +916,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:32 verified Drive upload",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "ok",
     "value_at": null
@@ -924,7 +924,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:14 verified Drive upload",
-    "known_by": "2026-10-24T04:00:21.977846Z",
+    "known_by": "2026-10-24T09:00:21.977846Z",
     "known_from": "2026-10-24T01:00:21.977846Z",
     "value": "ok",
     "value_at": null
@@ -932,7 +932,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:36 verified Drive upload",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "ok",
     "value_at": null
@@ -940,7 +940,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:37 verified Drive upload",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "ok",
     "value_at": null
@@ -948,7 +948,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:15 Drive access expired at 2026-10-24T18:50:51.486717+00:00: Reconnect in BrainBar",
-    "known_by": "2026-10-25T05:01:21.768427Z",
+    "known_by": "2026-10-25T10:01:21.768427Z",
     "known_from": "2026-10-25T02:01:21.768427Z",
     "value": "consent_needed",
     "value_at": null
@@ -956,7 +956,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:41 DriveCredentialError Drive access expired at 2026-10-24T18:50:51.486717+00:00: R",
-    "known_by": "2026-10-25T05:01:51.685698Z",
+    "known_by": "2026-10-25T10:01:51.685698Z",
     "known_from": "2026-10-25T02:01:51.685698Z",
     "value": "consent_needed",
     "value_at": null
@@ -964,7 +964,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:16 Drive access expired at 2026-10-24T18:50:51.486717+00:00: Reconnect in BrainBar",
-    "known_by": "2026-10-26T05:00:21.564643Z",
+    "known_by": "2026-10-26T10:00:21.564643Z",
     "known_from": "2026-10-26T02:00:21.564643Z",
     "value": "consent_needed",
     "value_at": null
@@ -972,7 +972,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:43 DriveCredentialError Drive access expired at 2026-10-24T18:50:51.486717+00:00: R",
-    "known_by": "2026-10-26T05:00:30.012345Z",
+    "known_by": "2026-10-26T10:00:30.012345Z",
     "known_from": "2026-10-26T02:00:30.012345Z",
     "value": "consent_needed",
     "value_at": null
@@ -980,7 +980,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:17 Drive access expired at 2026-10-24T18:50:51.486717+00:00: Reconnect in BrainBar",
-    "known_by": "2026-10-27T05:00:25.081310Z",
+    "known_by": "2026-10-27T10:00:25.081310Z",
     "known_from": "2026-10-27T02:00:25.081310Z",
     "value": "consent_needed",
     "value_at": null
@@ -988,7 +988,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:45 DriveCredentialError Drive access expired at 2026-10-24T18:50:51.486717+00:00: R",
-    "known_by": "2026-10-27T05:00:31.392519Z",
+    "known_by": "2026-10-27T10:00:31.392519Z",
     "known_from": "2026-10-27T02:00:31.392519Z",
     "value": "consent_needed",
     "value_at": null
@@ -996,7 +996,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:18 Drive access expired at 2026-10-24T18:50:51.486717+00:00: Reconnect in BrainBar",
-    "known_by": "2026-10-28T05:00:29.082683Z",
+    "known_by": "2026-10-28T10:00:29.082683Z",
     "known_from": "2026-10-28T02:00:29.082683Z",
     "value": "consent_needed",
     "value_at": null
@@ -1004,7 +1004,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:19 verified Drive upload",
-    "known_by": "2026-10-29T05:00:36.339840Z",
+    "known_by": "2026-10-29T10:00:36.339840Z",
     "known_from": "2026-10-29T02:00:36.339840Z",
     "value": "ok",
     "value_at": null
@@ -1012,7 +1012,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:49 verified Drive upload",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "ok",
     "value_at": null
@@ -1020,7 +1020,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:53 verified Drive upload",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "ok",
     "value_at": null
@@ -1028,7 +1028,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:20 verified Drive upload",
-    "known_by": "2026-10-30T05:00:47.947244Z",
+    "known_by": "2026-10-30T10:00:47.947244Z",
     "known_from": "2026-10-30T02:00:47.947244Z",
     "value": "ok",
     "value_at": null
@@ -1036,7 +1036,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:61 verified Drive upload",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "ok",
     "value_at": null
@@ -1044,7 +1044,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:62 verified Drive upload",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "ok",
     "value_at": null
@@ -1052,7 +1052,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:21 verified Drive upload",
-    "known_by": "2026-10-31T05:00:54.598560Z",
+    "known_by": "2026-10-31T10:00:54.598560Z",
     "known_from": "2026-10-31T02:00:54.598560Z",
     "value": "ok",
     "value_at": null
@@ -1060,7 +1060,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:66 verified Drive upload",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "ok",
     "value_at": null
@@ -1068,7 +1068,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:67 verified Drive upload",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "ok",
     "value_at": null
@@ -1076,7 +1076,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-jsonl-backup.log:22 verified Drive upload",
-    "known_by": "2026-11-01T05:06:33.141171Z",
+    "known_by": "2026-11-01T10:06:33.141171Z",
     "known_from": "2026-11-01T02:06:33.141171Z",
     "value": "ok",
     "value_at": null
@@ -1084,7 +1084,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:75 verified Drive upload",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "ok",
     "value_at": null
@@ -1092,7 +1092,7 @@
    {
     "check": "drive_auth",
     "evidence": "m1-backup-daily.log:76 verified Drive upload",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "ok",
     "value_at": null
@@ -1100,7 +1100,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:13 quick_check ok",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "ok",
     "value_at": null
@@ -1108,7 +1108,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:14 quick_check ok",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "ok",
     "value_at": null
@@ -1116,7 +1116,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:15 quick_check ok",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "ok",
     "value_at": null
@@ -1124,7 +1124,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:16 quick_check ok",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "ok",
     "value_at": null
@@ -1132,7 +1132,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:17 quick_check ok",
-    "known_by": "2026-10-20T04:01:00.306542Z",
+    "known_by": "2026-10-20T09:01:00.306542Z",
     "known_from": "2026-10-20T01:01:00.306542Z",
     "value": "ok",
     "value_at": null
@@ -1140,7 +1140,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:18 quick_check ok",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "ok",
     "value_at": null
@@ -1148,7 +1148,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:19 quick_check ok",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "ok",
     "value_at": null
@@ -1156,7 +1156,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:20 quick_check ok",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "ok",
     "value_at": null
@@ -1164,7 +1164,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:21 quick_check ok",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "ok",
     "value_at": null
@@ -1172,7 +1172,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:22 quick_check ok",
-    "known_by": "2026-10-21T04:01:14.602846Z",
+    "known_by": "2026-10-21T09:01:14.602846Z",
     "known_from": "2026-10-21T01:01:14.602846Z",
     "value": "ok",
     "value_at": null
@@ -1180,7 +1180,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:23 quick_check ok",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "ok",
     "value_at": null
@@ -1188,7 +1188,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:24 quick_check ok",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "ok",
     "value_at": null
@@ -1196,7 +1196,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:25 quick_check ok",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "ok",
     "value_at": null
@@ -1204,7 +1204,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:26 quick_check ok",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "ok",
     "value_at": null
@@ -1212,7 +1212,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:27 quick_check ok",
-    "known_by": "2026-10-22T04:01:06.885090Z",
+    "known_by": "2026-10-22T09:01:06.885090Z",
     "known_from": "2026-10-22T01:01:06.885090Z",
     "value": "ok",
     "value_at": null
@@ -1220,7 +1220,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:28 quick_check ok",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "ok",
     "value_at": null
@@ -1228,7 +1228,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:29 quick_check ok",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "ok",
     "value_at": null
@@ -1236,7 +1236,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:30 quick_check ok",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "ok",
     "value_at": null
@@ -1244,7 +1244,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:31 quick_check ok",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "ok",
     "value_at": null
@@ -1252,7 +1252,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:32 quick_check ok",
-    "known_by": "2026-10-23T04:01:17.106770Z",
+    "known_by": "2026-10-23T09:01:17.106770Z",
     "known_from": "2026-10-23T01:01:17.106770Z",
     "value": "ok",
     "value_at": null
@@ -1260,7 +1260,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:33 quick_check ok",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "ok",
     "value_at": null
@@ -1268,7 +1268,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:34 quick_check ok",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "ok",
     "value_at": null
@@ -1276,7 +1276,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:35 quick_check ok",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "ok",
     "value_at": null
@@ -1284,7 +1284,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:36 quick_check ok",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "ok",
     "value_at": null
@@ -1292,7 +1292,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:37 quick_check ok",
-    "known_by": "2026-10-24T04:00:57.338377Z",
+    "known_by": "2026-10-24T09:00:57.338377Z",
     "known_from": "2026-10-24T01:00:57.338377Z",
     "value": "ok",
     "value_at": null
@@ -1300,7 +1300,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:38 integrity_check ok",
-    "known_by": "2026-10-25T04:45:15.949887Z",
+    "known_by": "2026-10-25T09:45:15.949887Z",
     "known_from": "2026-10-25T01:45:15.949887Z",
     "value": "ok",
     "value_at": null
@@ -1308,7 +1308,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:39 integrity_check ok",
-    "known_by": "2026-10-25T04:45:15.949887Z",
+    "known_by": "2026-10-25T09:45:15.949887Z",
     "known_from": "2026-10-25T01:45:15.949887Z",
     "value": "ok",
     "value_at": null
@@ -1316,7 +1316,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:40 integrity_check ok",
-    "known_by": "2026-10-25T05:01:51.685698Z",
+    "known_by": "2026-10-25T10:01:51.685698Z",
     "known_from": "2026-10-25T02:01:51.685698Z",
     "value": "ok",
     "value_at": null
@@ -1324,7 +1324,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:41 integrity_check ok",
-    "known_by": "2026-10-25T05:01:51.685698Z",
+    "known_by": "2026-10-25T10:01:51.685698Z",
     "known_from": "2026-10-25T02:01:51.685698Z",
     "value": "ok",
     "value_at": null
@@ -1332,7 +1332,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:50 integrity_check ok",
-    "known_by": "2026-10-25T05:01:51.685698Z",
+    "known_by": "2026-10-25T10:01:51.685698Z",
     "known_from": "2026-10-25T02:01:51.685698Z",
     "value": "ok",
     "value_at": null
@@ -1340,7 +1340,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:42 quick_check ok",
-    "known_by": "2026-10-26T05:00:30.012345Z",
+    "known_by": "2026-10-26T10:00:30.012345Z",
     "known_from": "2026-10-26T02:00:30.012345Z",
     "value": "ok",
     "value_at": null
@@ -1348,7 +1348,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:43 quick_check ok",
-    "known_by": "2026-10-26T05:00:30.012345Z",
+    "known_by": "2026-10-26T10:00:30.012345Z",
     "known_from": "2026-10-26T02:00:30.012345Z",
     "value": "ok",
     "value_at": null
@@ -1356,7 +1356,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:51 quick_check ok",
-    "known_by": "2026-10-26T05:00:30.012345Z",
+    "known_by": "2026-10-26T10:00:30.012345Z",
     "known_from": "2026-10-26T02:00:30.012345Z",
     "value": "ok",
     "value_at": null
@@ -1364,7 +1364,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:44 quick_check ok",
-    "known_by": "2026-10-27T05:00:31.392519Z",
+    "known_by": "2026-10-27T10:00:31.392519Z",
     "known_from": "2026-10-27T02:00:31.392519Z",
     "value": "ok",
     "value_at": null
@@ -1372,7 +1372,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:45 quick_check ok",
-    "known_by": "2026-10-27T05:00:31.392519Z",
+    "known_by": "2026-10-27T10:00:31.392519Z",
     "known_from": "2026-10-27T02:00:31.392519Z",
     "value": "ok",
     "value_at": null
@@ -1380,7 +1380,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:52 quick_check ok",
-    "known_by": "2026-10-27T05:00:31.392519Z",
+    "known_by": "2026-10-27T10:00:31.392519Z",
     "known_from": "2026-10-27T02:00:31.392519Z",
     "value": "ok",
     "value_at": null
@@ -1388,7 +1388,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:46 quick_check ok",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "ok",
     "value_at": null
@@ -1396,7 +1396,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:47 quick_check ok",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "ok",
     "value_at": null
@@ -1404,7 +1404,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:48 quick_check ok",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "ok",
     "value_at": null
@@ -1412,7 +1412,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:49 quick_check ok",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "ok",
     "value_at": null
@@ -1420,7 +1420,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:53 quick_check ok",
-    "known_by": "2026-10-29T05:03:44.836824Z",
+    "known_by": "2026-10-29T10:03:44.836824Z",
     "known_from": "2026-10-29T02:03:44.836824Z",
     "value": "ok",
     "value_at": null
@@ -1428,7 +1428,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:58 integrity_check ok",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "ok",
     "value_at": null
@@ -1436,7 +1436,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:59 integrity_check ok",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "ok",
     "value_at": null
@@ -1444,7 +1444,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:60 integrity_check ok",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "ok",
     "value_at": null
@@ -1452,7 +1452,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:61 integrity_check ok",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "ok",
     "value_at": null
@@ -1460,7 +1460,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:62 integrity_check ok",
-    "known_by": "2026-10-30T09:58:58.826676Z",
+    "known_by": "2026-10-30T14:58:58.826676Z",
     "known_from": "2026-10-30T06:58:58.826676Z",
     "value": "ok",
     "value_at": null
@@ -1468,7 +1468,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:63 integrity_check ok",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "ok",
     "value_at": null
@@ -1476,7 +1476,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:64 integrity_check ok",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "ok",
     "value_at": null
@@ -1484,7 +1484,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:65 integrity_check ok",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "ok",
     "value_at": null
@@ -1492,7 +1492,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:66 integrity_check ok",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "ok",
     "value_at": null
@@ -1500,7 +1500,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:67 integrity_check ok",
-    "known_by": "2026-10-31T05:09:57.458605Z",
+    "known_by": "2026-10-31T10:09:57.458605Z",
     "known_from": "2026-10-31T02:09:57.458605Z",
     "value": "ok",
     "value_at": null
@@ -1508,7 +1508,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:68 integrity_check ok",
-    "known_by": "2026-11-01T04:21:38.783352Z",
+    "known_by": "2026-11-01T09:21:38.783352Z",
     "known_from": "2026-11-01T01:21:38.783352Z",
     "value": "ok",
     "value_at": null
@@ -1516,7 +1516,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:70 integrity_check ok",
-    "known_by": "2026-11-02T02:56:17.189845Z",
+    "known_by": "2026-11-02T07:56:17.189845Z",
     "known_from": "2026-11-01T23:56:17.189845Z",
     "value": "ok",
     "value_at": null
@@ -1524,7 +1524,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:71 integrity_check ok",
-    "known_by": "2026-11-02T02:56:17.189845Z",
+    "known_by": "2026-11-02T07:56:17.189845Z",
     "known_from": "2026-11-01T23:56:17.189845Z",
     "value": "ok",
     "value_at": null
@@ -1532,7 +1532,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:72 integrity_check ok",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "ok",
     "value_at": null
@@ -1540,7 +1540,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:73 integrity_check ok",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "ok",
     "value_at": null
@@ -1548,7 +1548,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:74 integrity_check ok",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "ok",
     "value_at": null
@@ -1556,7 +1556,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:75 integrity_check ok",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "ok",
     "value_at": null
@@ -1564,7 +1564,7 @@
    {
     "check": "integrity",
     "evidence": "m1-backup-daily.log:76 integrity_check ok",
-    "known_by": "2026-11-02T02:56:57.842273Z",
+    "known_by": "2026-11-02T07:56:57.842273Z",
     "known_from": "2026-11-01T23:56:57.842273Z",
     "value": "ok",
     "value_at": null
@@ -1572,7 +1572,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:1 status=uploaded",
-    "known_by": "2026-10-12T05:00:06.625126Z",
+    "known_by": "2026-10-12T10:00:06.625126Z",
     "known_from": "2026-10-12T02:00:06.625126Z",
     "value": "verified",
     "value_at": "2026-10-12T02:00:06.625126Z"
@@ -1580,7 +1580,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:2 status=uploaded",
-    "known_by": "2026-10-13T05:00:06.675561Z",
+    "known_by": "2026-10-13T10:00:06.675561Z",
     "known_from": "2026-10-13T02:00:06.675561Z",
     "value": "verified",
     "value_at": "2026-10-13T02:00:06.675561Z"
@@ -1588,7 +1588,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:3 status=uploaded",
-    "known_by": "2026-10-14T05:00:05.920388Z",
+    "known_by": "2026-10-14T10:00:05.920388Z",
     "known_from": "2026-10-14T02:00:05.920388Z",
     "value": "verified",
     "value_at": "2026-10-14T02:00:05.920388Z"
@@ -1596,7 +1596,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:4 status=no-op",
-    "known_by": "2026-10-15T07:24:52.830767Z",
+    "known_by": "2026-10-15T12:24:52.830767Z",
     "known_from": "2026-10-15T04:24:52.830767Z",
     "value": "verified",
     "value_at": "2026-10-15T04:24:52.830767Z"
@@ -1604,7 +1604,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:7 status=uploaded",
-    "known_by": "2026-10-17T23:21:21.588530Z",
+    "known_by": "2026-10-18T04:21:21.588530Z",
     "known_from": "2026-10-17T20:21:21.588530Z",
     "value": "verified",
     "value_at": "2026-10-17T20:21:21.588530Z"
@@ -1612,7 +1612,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:8 status=no-op",
-    "known_by": "2026-10-18T07:26:28.714551Z",
+    "known_by": "2026-10-18T12:26:28.714551Z",
     "known_from": "2026-10-18T04:26:28.714551Z",
     "value": "verified",
     "value_at": "2026-10-18T04:26:28.714551Z"
@@ -1620,7 +1620,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:9 status=no-op",
-    "known_by": "2026-10-19T04:01:01.487378Z",
+    "known_by": "2026-10-19T09:01:01.487378Z",
     "known_from": "2026-10-19T01:01:01.487378Z",
     "value": "verified",
     "value_at": "2026-10-19T01:01:01.487378Z"
@@ -1628,7 +1628,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:10 status=uploaded",
-    "known_by": "2026-10-20T04:00:19.239757Z",
+    "known_by": "2026-10-20T09:00:19.239757Z",
     "known_from": "2026-10-20T01:00:19.239757Z",
     "value": "verified",
     "value_at": "2026-10-20T01:00:19.239757Z"
@@ -1636,7 +1636,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:11 status=uploaded",
-    "known_by": "2026-10-21T04:00:22.125131Z",
+    "known_by": "2026-10-21T09:00:22.125131Z",
     "known_from": "2026-10-21T01:00:22.125131Z",
     "value": "verified",
     "value_at": "2026-10-21T01:00:22.125131Z"
@@ -1644,7 +1644,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:12 status=uploaded",
-    "known_by": "2026-10-22T04:00:18.818440Z",
+    "known_by": "2026-10-22T09:00:18.818440Z",
     "known_from": "2026-10-22T01:00:18.818440Z",
     "value": "verified",
     "value_at": "2026-10-22T01:00:18.818440Z"
@@ -1652,7 +1652,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:13 status=uploaded",
-    "known_by": "2026-10-23T04:00:22.395528Z",
+    "known_by": "2026-10-23T09:00:22.395528Z",
     "known_from": "2026-10-23T01:00:22.395528Z",
     "value": "verified",
     "value_at": "2026-10-23T01:00:22.395528Z"
@@ -1660,7 +1660,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:14 status=uploaded",
-    "known_by": "2026-10-24T04:00:21.977846Z",
+    "known_by": "2026-10-24T09:00:21.977846Z",
     "known_from": "2026-10-24T01:00:21.977846Z",
     "value": "verified",
     "value_at": "2026-10-24T01:00:21.977846Z"
@@ -1668,7 +1668,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:19 status=uploaded",
-    "known_by": "2026-10-29T05:00:36.339840Z",
+    "known_by": "2026-10-29T10:00:36.339840Z",
     "known_from": "2026-10-29T02:00:36.339840Z",
     "value": "verified",
     "value_at": "2026-10-29T02:00:36.339840Z"
@@ -1676,7 +1676,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:20 status=uploaded",
-    "known_by": "2026-10-30T05:00:47.947244Z",
+    "known_by": "2026-10-30T10:00:47.947244Z",
     "known_from": "2026-10-30T02:00:47.947244Z",
     "value": "verified",
     "value_at": "2026-10-30T02:00:47.947244Z"
@@ -1684,7 +1684,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:21 status=uploaded",
-    "known_by": "2026-10-31T05:00:54.598560Z",
+    "known_by": "2026-10-31T10:00:54.598560Z",
     "known_from": "2026-10-31T02:00:54.598560Z",
     "value": "verified",
     "value_at": "2026-10-31T02:00:54.598560Z"
@@ -1692,7 +1692,7 @@
    {
     "check": "transcripts",
     "evidence": "m1-jsonl-backup.log:22 status=uploaded",
-    "known_by": "2026-11-01T05:06:33.141171Z",
+    "known_by": "2026-11-01T10:06:33.141171Z",
     "known_from": "2026-11-01T02:06:33.141171Z",
     "value": "verified",
     "value_at": "2026-11-01T02:06:33.141171Z"
@@ -1705,7 +1705,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:2 verified snapshot 2026-10-12.db.gz",
-    "known_by": "2026-10-12T13:29:41.153914Z",
+    "known_by": "2026-10-12T18:29:41.153914Z",
     "known_from": "2026-10-12T10:29:41.153914Z",
     "value": "verified",
     "value_at": "2026-10-12T00:00:00Z"
@@ -1713,7 +1713,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:4 verified snapshot 2026-10-13.db.gz",
-    "known_by": "2026-10-13T04:23:51.476569Z",
+    "known_by": "2026-10-13T09:23:51.476569Z",
     "known_from": "2026-10-13T01:23:51.476569Z",
     "value": "verified",
     "value_at": "2026-10-13T00:00:00Z"
@@ -1721,7 +1721,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:5 verified snapshot 2026-10-14.db.gz",
-    "known_by": "2026-10-14T03:17:06.639646Z",
+    "known_by": "2026-10-14T08:17:06.639646Z",
     "known_from": "2026-10-14T00:17:06.639646Z",
     "value": "verified",
     "value_at": "2026-10-14T00:00:00Z"
@@ -1729,7 +1729,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:6 verified snapshot 2026-10-15.db.gz",
-    "known_by": "2026-10-15T03:15:39.246798Z",
+    "known_by": "2026-10-15T08:15:39.246798Z",
     "known_from": "2026-10-15T00:15:39.246798Z",
     "value": "verified",
     "value_at": "2026-10-15T00:00:00Z"
@@ -1737,7 +1737,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:8 verified snapshot 2026-10-17.db.gz",
-    "known_by": "2026-10-17T03:23:04.907038Z",
+    "known_by": "2026-10-17T08:23:04.907038Z",
     "known_from": "2026-10-17T00:23:04.907038Z",
     "value": "verified",
     "value_at": "2026-10-17T00:00:00Z"
@@ -1745,7 +1745,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:14 verified snapshot 2026-10-21.db.zst",
-    "known_by": "2026-10-21T03:45:11.640789Z",
+    "known_by": "2026-10-21T08:45:11.640789Z",
     "known_from": "2026-10-21T00:45:11.640789Z",
     "value": "verified",
     "value_at": "2026-10-21T00:45:12.126993Z"
@@ -1753,7 +1753,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:15 verified snapshot 2026-10-21.db.zst",
-    "known_by": "2026-10-21T03:45:11.640789Z",
+    "known_by": "2026-10-21T08:45:11.640789Z",
     "known_from": "2026-10-21T00:45:11.640789Z",
     "value": "verified",
     "value_at": "2026-10-21T00:45:12.126993Z"
@@ -1761,7 +1761,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:16 verified snapshot 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "verified",
     "value_at": "2026-10-21T00:45:12.126993Z"
@@ -1769,7 +1769,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:17 verified snapshot 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "verified",
     "value_at": "2026-10-21T00:45:12.126993Z"
@@ -1777,7 +1777,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:18 verified snapshot 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "verified",
     "value_at": "2026-10-21T00:45:12.126993Z"
@@ -1785,7 +1785,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:19 verified snapshot 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "verified",
     "value_at": "2026-10-21T00:45:12.126993Z"
@@ -1793,7 +1793,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:20 verified snapshot 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "verified",
     "value_at": "2026-10-21T00:45:12.126993Z"
@@ -1801,7 +1801,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:22 verified snapshot 2026-10-22.db.zst",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "verified",
     "value_at": "2026-10-22T02:57:24.635828Z"
@@ -1809,7 +1809,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:23 verified snapshot 2026-10-22.db.zst",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "verified",
     "value_at": "2026-10-22T02:57:24.635828Z"
@@ -1817,7 +1817,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:24 verified snapshot 2026-10-22.db.zst",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "verified",
     "value_at": "2026-10-22T02:57:24.635828Z"
@@ -1825,7 +1825,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:25 verified snapshot 2026-10-22.db.zst",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "verified",
     "value_at": "2026-10-22T02:57:24.635828Z"
@@ -1833,7 +1833,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:26 verified snapshot 2026-10-22.db.zst",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "verified",
     "value_at": "2026-10-22T02:57:24.635828Z"
@@ -1841,7 +1841,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:27 verified snapshot 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "verified",
     "value_at": "2026-10-23T01:35:15.652250Z"
@@ -1849,7 +1849,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:28 verified snapshot 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "verified",
     "value_at": "2026-10-23T01:35:15.652250Z"
@@ -1857,7 +1857,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:29 verified snapshot 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "verified",
     "value_at": "2026-10-23T01:35:15.652250Z"
@@ -1865,7 +1865,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:30 verified snapshot 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "verified",
     "value_at": "2026-10-23T01:35:15.652250Z"
@@ -1873,7 +1873,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:31 verified snapshot 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "verified",
     "value_at": "2026-10-23T01:35:15.652250Z"
@@ -1881,7 +1881,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:32 verified snapshot 2026-10-24.db.zst",
-    "known_by": "2026-10-24T04:14:59.421349Z",
+    "known_by": "2026-10-24T09:14:59.421349Z",
     "known_from": "2026-10-24T01:14:59.421349Z",
     "value": "verified",
     "value_at": "2026-10-24T01:15:12.971845Z"
@@ -1889,7 +1889,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:33 verified snapshot 2026-10-24.db.zst",
-    "known_by": "2026-10-24T04:14:59.421349Z",
+    "known_by": "2026-10-24T09:14:59.421349Z",
     "known_from": "2026-10-24T01:14:59.421349Z",
     "value": "verified",
     "value_at": "2026-10-24T01:15:12.971845Z"
@@ -1897,7 +1897,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:34 verified snapshot 2026-10-24.db.zst",
-    "known_by": "2026-10-24T16:24:35.283959Z",
+    "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "verified",
     "value_at": "2026-10-24T01:15:12.971845Z"
@@ -1905,7 +1905,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:35 verified snapshot 2026-10-24.db.zst",
-    "known_by": "2026-10-24T16:24:35.283959Z",
+    "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "verified",
     "value_at": "2026-10-24T01:15:12.971845Z"
@@ -1913,7 +1913,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:36 verified snapshot 2026-10-24.db.zst",
-    "known_by": "2026-10-24T16:24:35.283959Z",
+    "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "verified",
     "value_at": "2026-10-24T01:15:12.971845Z"
@@ -1921,7 +1921,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:37 verified snapshot 2026-10-24.db.zst",
-    "known_by": "2026-10-24T16:24:35.283959Z",
+    "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "verified",
     "value_at": "2026-10-24T01:15:12.971845Z"
@@ -1929,7 +1929,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:40 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T11:30:02.645488Z",
+    "known_by": "2026-10-26T16:30:02.645488Z",
     "known_from": "2026-10-26T08:30:02.645488Z",
     "value": "verified",
     "value_at": "2026-10-26T08:30:02.764754Z"
@@ -1937,7 +1937,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:41 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T11:30:02.645488Z",
+    "known_by": "2026-10-26T16:30:02.645488Z",
     "known_from": "2026-10-26T08:30:02.645488Z",
     "value": "verified",
     "value_at": "2026-10-26T08:30:02.764754Z"
@@ -1945,7 +1945,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:42 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "verified",
     "value_at": "2026-10-26T08:30:02.764754Z"
@@ -1953,7 +1953,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:43 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "verified",
     "value_at": "2026-10-26T08:30:02.764754Z"
@@ -1961,7 +1961,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:44 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "verified",
     "value_at": "2026-10-26T08:30:02.764754Z"
@@ -1969,7 +1969,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:45 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "verified",
     "value_at": "2026-10-26T08:30:02.764754Z"
@@ -1977,7 +1977,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:46 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "verified",
     "value_at": "2026-10-26T08:30:02.764754Z"
@@ -1985,7 +1985,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:47 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T18:52:36.705498Z",
+    "known_by": "2026-10-26T23:52:36.705498Z",
     "known_from": "2026-10-26T15:52:36.705498Z",
     "value": "verified",
     "value_at": "2026-10-26T15:52:38.636628Z"
@@ -1993,7 +1993,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:48 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T18:52:36.705498Z",
+    "known_by": "2026-10-26T23:52:36.705498Z",
     "known_from": "2026-10-26T15:52:36.705498Z",
     "value": "verified",
     "value_at": "2026-10-26T15:52:38.636628Z"
@@ -2001,7 +2001,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:49 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "verified",
     "value_at": "2026-10-26T15:52:38.636628Z"
@@ -2009,7 +2009,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:50 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "verified",
     "value_at": "2026-10-26T15:52:38.636628Z"
@@ -2017,7 +2017,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:51 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "verified",
     "value_at": "2026-10-26T15:52:38.636628Z"
@@ -2025,7 +2025,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:52 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "verified",
     "value_at": "2026-10-26T15:52:38.636628Z"
@@ -2033,7 +2033,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:53 verified snapshot 2026-10-26.db.zst",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "verified",
     "value_at": "2026-10-26T15:52:38.636628Z"
@@ -2041,7 +2041,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:55 verified snapshot 2026-10-27.db.zst",
-    "known_by": "2026-10-27T07:46:58.500008Z",
+    "known_by": "2026-10-27T12:46:58.500008Z",
     "known_from": "2026-10-27T04:46:58.500008Z",
     "value": "verified",
     "value_at": "2026-10-27T04:47:13.517654Z"
@@ -2049,7 +2049,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:56 verified snapshot 2026-10-27.db.zst",
-    "known_by": "2026-10-27T07:46:58.500008Z",
+    "known_by": "2026-10-27T12:46:58.500008Z",
     "known_from": "2026-10-27T04:46:58.500008Z",
     "value": "verified",
     "value_at": "2026-10-27T04:47:13.517654Z"
@@ -2057,7 +2057,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:57 verified snapshot 2026-10-27.db.zst",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "verified",
     "value_at": "2026-10-27T04:47:13.517654Z"
@@ -2065,7 +2065,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:58 verified snapshot 2026-10-27.db.zst",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "verified",
     "value_at": "2026-10-27T04:47:13.517654Z"
@@ -2073,7 +2073,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:59 verified snapshot 2026-10-27.db.zst",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "verified",
     "value_at": "2026-10-27T04:47:13.517654Z"
@@ -2081,7 +2081,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:60 verified snapshot 2026-10-27.db.zst",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "verified",
     "value_at": "2026-10-27T04:47:13.517654Z"
@@ -2089,7 +2089,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:61 verified snapshot 2026-10-27.db.zst",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "verified",
     "value_at": "2026-10-27T04:47:13.517654Z"
@@ -2097,7 +2097,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:62 verified snapshot 2026-10-28.db.zst",
-    "known_by": "2026-10-28T04:44:46.517628Z",
+    "known_by": "2026-10-28T09:44:46.517628Z",
     "known_from": "2026-10-28T01:44:46.517628Z",
     "value": "verified",
     "value_at": "2026-10-28T01:44:47.248928Z"
@@ -2105,7 +2105,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:63 verified snapshot 2026-10-28.db.zst",
-    "known_by": "2026-10-28T04:44:46.517628Z",
+    "known_by": "2026-10-28T09:44:46.517628Z",
     "known_from": "2026-10-28T01:44:46.517628Z",
     "value": "verified",
     "value_at": "2026-10-28T01:44:47.248928Z"
@@ -2113,7 +2113,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:64 verified snapshot 2026-10-28.db.zst",
-    "known_by": "2026-10-28T06:27:22.804557Z",
+    "known_by": "2026-10-28T11:27:22.804557Z",
     "known_from": "2026-10-28T03:27:22.804557Z",
     "value": "verified",
     "value_at": "2026-10-28T01:44:47.248928Z"
@@ -2121,7 +2121,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:65 verified snapshot 2026-10-28.db.zst",
-    "known_by": "2026-10-28T06:27:22.804557Z",
+    "known_by": "2026-10-28T11:27:22.804557Z",
     "known_from": "2026-10-28T03:27:22.804557Z",
     "value": "verified",
     "value_at": "2026-10-28T01:44:47.248928Z"
@@ -2129,7 +2129,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:66 verified snapshot 2026-10-28.db.zst",
-    "known_by": "2026-10-28T06:27:22.804557Z",
+    "known_by": "2026-10-28T11:27:22.804557Z",
     "known_from": "2026-10-28T03:27:22.804557Z",
     "value": "verified",
     "value_at": "2026-10-28T01:44:47.248928Z"
@@ -2137,7 +2137,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:67 verified snapshot 2026-10-28.db.zst",
-    "known_by": "2026-10-28T06:27:22.804557Z",
+    "known_by": "2026-10-28T11:27:22.804557Z",
     "known_from": "2026-10-28T03:27:22.804557Z",
     "value": "verified",
     "value_at": "2026-10-28T01:44:47.248928Z"
@@ -2145,7 +2145,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:68 verified snapshot 2026-10-28.db.zst",
-    "known_by": "2026-10-28T11:03:52.742917Z",
+    "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "verified",
     "value_at": "2026-10-28T01:44:47.248928Z"
@@ -2153,7 +2153,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:69 verified snapshot 2026-10-28.db.zst",
-    "known_by": "2026-10-28T11:03:52.742917Z",
+    "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "verified",
     "value_at": "2026-10-28T01:44:47.248928Z"
@@ -2161,7 +2161,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:70 verified snapshot 2026-10-28.db.zst",
-    "known_by": "2026-10-28T11:03:52.742917Z",
+    "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "verified",
     "value_at": "2026-10-28T01:44:47.248928Z"
@@ -2169,7 +2169,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:71 verified snapshot 2026-10-28.db.zst",
-    "known_by": "2026-10-28T11:03:52.742917Z",
+    "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "verified",
     "value_at": "2026-10-28T01:44:47.248928Z"
@@ -2177,7 +2177,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:73 verified snapshot 2026-10-29.db.zst",
-    "known_by": "2026-10-29T04:44:49.422902Z",
+    "known_by": "2026-10-29T09:44:49.422902Z",
     "known_from": "2026-10-29T01:44:49.422902Z",
     "value": "verified",
     "value_at": "2026-10-29T01:45:26.294998Z"
@@ -2185,7 +2185,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:74 verified snapshot 2026-10-29.db.zst",
-    "known_by": "2026-10-29T04:44:49.422902Z",
+    "known_by": "2026-10-29T09:44:49.422902Z",
     "known_from": "2026-10-29T01:44:49.422902Z",
     "value": "verified",
     "value_at": "2026-10-29T01:45:26.294998Z"
@@ -2193,7 +2193,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:75 verified snapshot 2026-10-29.db.zst",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "verified",
     "value_at": "2026-10-29T01:45:26.294998Z"
@@ -2201,7 +2201,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:76 verified snapshot 2026-10-29.db.zst",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "verified",
     "value_at": "2026-10-29T01:45:26.294998Z"
@@ -2209,7 +2209,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:77 verified snapshot 2026-10-29.db.zst",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "verified",
     "value_at": "2026-10-29T01:45:26.294998Z"
@@ -2217,7 +2217,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:78 verified snapshot 2026-10-29.db.zst",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "verified",
     "value_at": "2026-10-29T01:45:26.294998Z"
@@ -2225,7 +2225,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:79 verified snapshot 2026-10-29.db.zst",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "verified",
     "value_at": "2026-10-29T01:45:26.294998Z"
@@ -2233,7 +2233,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:81 verified snapshot 2026-10-30.db.zst",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "verified",
     "value_at": "2026-10-30T03:07:15.879097Z"
@@ -2241,7 +2241,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:82 verified snapshot 2026-10-30.db.zst",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "verified",
     "value_at": "2026-10-30T03:07:15.879097Z"
@@ -2249,7 +2249,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:83 verified snapshot 2026-10-30.db.zst",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "verified",
     "value_at": "2026-10-30T03:07:15.879097Z"
@@ -2257,7 +2257,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:84 verified snapshot 2026-10-30.db.zst",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "verified",
     "value_at": "2026-10-30T03:07:15.879097Z"
@@ -2265,7 +2265,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:85 verified snapshot 2026-10-30.db.zst",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "verified",
     "value_at": "2026-10-30T03:07:15.879097Z"
@@ -2273,7 +2273,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:87 verified snapshot 2026-10-31.db.zst",
-    "known_by": "2026-10-31T13:20:35.217257Z",
+    "known_by": "2026-10-31T18:20:35.217257Z",
     "known_from": "2026-10-31T10:20:35.217257Z",
     "value": "verified",
     "value_at": "2026-10-31T10:20:35.315509Z"
@@ -2281,7 +2281,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:88 verified snapshot 2026-10-31.db.zst",
-    "known_by": "2026-10-31T13:20:35.217257Z",
+    "known_by": "2026-10-31T18:20:35.217257Z",
     "known_from": "2026-10-31T10:20:35.217257Z",
     "value": "verified",
     "value_at": "2026-10-31T10:20:35.315509Z"
@@ -2289,7 +2289,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:89 verified snapshot 2026-10-31.db.zst",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "verified",
     "value_at": "2026-10-31T10:20:35.315509Z"
@@ -2297,7 +2297,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:90 verified snapshot 2026-10-31.db.zst",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "verified",
     "value_at": "2026-10-31T10:20:35.315509Z"
@@ -2305,7 +2305,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:91 verified snapshot 2026-10-31.db.zst",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "verified",
     "value_at": "2026-10-31T10:20:35.315509Z"
@@ -2313,7 +2313,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:92 verified snapshot 2026-10-31.db.zst",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "verified",
     "value_at": "2026-10-31T10:20:35.315509Z"
@@ -2321,7 +2321,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:93 verified snapshot 2026-10-31.db.zst",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "verified",
     "value_at": "2026-10-31T10:20:35.315509Z"
@@ -2329,7 +2329,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:95 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T07:35:35.021591Z",
+    "known_by": "2026-11-01T12:35:35.021591Z",
     "known_from": "2026-11-01T04:35:35.021591Z",
     "value": "verified",
     "value_at": "2026-11-01T04:35:35.118529Z"
@@ -2337,7 +2337,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:96 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T07:35:35.021591Z",
+    "known_by": "2026-11-01T12:35:35.021591Z",
     "known_from": "2026-11-01T04:35:35.021591Z",
     "value": "verified",
     "value_at": "2026-11-01T04:35:35.118529Z"
@@ -2345,7 +2345,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:97 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "verified",
     "value_at": "2026-11-01T04:35:35.118529Z"
@@ -2353,7 +2353,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:98 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "verified",
     "value_at": "2026-11-01T04:35:35.118529Z"
@@ -2361,7 +2361,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:99 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "verified",
     "value_at": "2026-11-01T04:35:35.118529Z"
@@ -2369,7 +2369,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:100 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "verified",
     "value_at": "2026-11-01T04:35:35.118529Z"
@@ -2377,7 +2377,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:101 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "verified",
     "value_at": "2026-11-01T04:35:35.118529Z"
@@ -2385,7 +2385,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:102 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T20:00:09.510517Z",
+    "known_by": "2026-11-02T01:00:09.510517Z",
     "known_from": "2026-11-01T17:00:09.510517Z",
     "value": "verified",
     "value_at": "2026-11-01T17:00:10.896181Z"
@@ -2393,7 +2393,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:103 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T20:00:09.510517Z",
+    "known_by": "2026-11-02T01:00:09.510517Z",
     "known_from": "2026-11-01T17:00:09.510517Z",
     "value": "verified",
     "value_at": "2026-11-01T17:00:10.896181Z"
@@ -2401,7 +2401,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:104 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "verified",
     "value_at": "2026-11-01T17:00:10.896181Z"
@@ -2409,7 +2409,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:105 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "verified",
     "value_at": "2026-11-01T17:00:10.896181Z"
@@ -2417,7 +2417,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:106 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "verified",
     "value_at": "2026-11-01T17:00:10.896181Z"
@@ -2425,7 +2425,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:107 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "verified",
     "value_at": "2026-11-01T17:00:10.896181Z"
@@ -2433,7 +2433,7 @@
    {
     "check": "backup_local",
     "evidence": "m4-backup-daily.log:108 verified snapshot 2026-11-01.db.zst",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "verified",
     "value_at": "2026-11-01T17:00:10.896181Z"
@@ -2441,7 +2441,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:2 uploaded+verified 2026-10-12.db.gz",
-    "known_by": "2026-10-12T13:29:41.153914Z",
+    "known_by": "2026-10-12T18:29:41.153914Z",
     "known_from": "2026-10-12T10:29:41.153914Z",
     "value": "verified",
     "value_at": "2026-10-12T00:00:00Z"
@@ -2449,7 +2449,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:4 uploaded+verified 2026-10-13.db.gz",
-    "known_by": "2026-10-13T04:23:51.476569Z",
+    "known_by": "2026-10-13T09:23:51.476569Z",
     "known_from": "2026-10-13T01:23:51.476569Z",
     "value": "verified",
     "value_at": "2026-10-13T00:00:00Z"
@@ -2457,7 +2457,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:5 uploaded+verified 2026-10-14.db.gz",
-    "known_by": "2026-10-14T03:17:06.639646Z",
+    "known_by": "2026-10-14T08:17:06.639646Z",
     "known_from": "2026-10-14T00:17:06.639646Z",
     "value": "verified",
     "value_at": "2026-10-14T00:00:00Z"
@@ -2465,7 +2465,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:6 uploaded+verified 2026-10-15.db.gz",
-    "known_by": "2026-10-15T03:15:39.246798Z",
+    "known_by": "2026-10-15T08:15:39.246798Z",
     "known_from": "2026-10-15T00:15:39.246798Z",
     "value": "verified",
     "value_at": "2026-10-15T00:00:00Z"
@@ -2473,7 +2473,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:8 uploaded+verified 2026-10-17.db.gz",
-    "known_by": "2026-10-17T03:23:04.907038Z",
+    "known_by": "2026-10-17T08:23:04.907038Z",
     "known_from": "2026-10-17T00:23:04.907038Z",
     "value": "verified",
     "value_at": "2026-10-17T00:00:00Z"
@@ -2481,7 +2481,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:19 uploaded+verified 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "verified",
     "value_at": "2026-10-21T00:45:12.126993Z"
@@ -2489,7 +2489,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:20 uploaded+verified 2026-10-21.db.zst",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "verified",
     "value_at": "2026-10-21T00:45:12.126993Z"
@@ -2497,7 +2497,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:25 uploaded+verified 2026-10-22.db.zst",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "verified",
     "value_at": "2026-10-22T02:57:24.635828Z"
@@ -2505,7 +2505,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:26 uploaded+verified 2026-10-22.db.zst",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "verified",
     "value_at": "2026-10-22T02:57:24.635828Z"
@@ -2513,7 +2513,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:30 uploaded+verified 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "verified",
     "value_at": "2026-10-23T01:35:15.652250Z"
@@ -2521,7 +2521,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:31 uploaded+verified 2026-10-23.db.zst",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "verified",
     "value_at": "2026-10-23T01:35:15.652250Z"
@@ -2529,7 +2529,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:36 uploaded+verified 2026-10-24.db.zst",
-    "known_by": "2026-10-24T16:24:35.283959Z",
+    "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "verified",
     "value_at": "2026-10-24T01:15:12.971845Z"
@@ -2537,7 +2537,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:37 uploaded+verified 2026-10-24.db.zst",
-    "known_by": "2026-10-24T16:24:35.283959Z",
+    "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "verified",
     "value_at": "2026-10-24T01:15:12.971845Z"
@@ -2545,7 +2545,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:45 uploaded+verified 2026-10-26.db.zst",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "verified",
     "value_at": "2026-10-26T08:30:02.764754Z"
@@ -2553,7 +2553,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:46 uploaded+verified 2026-10-26.db.zst",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "verified",
     "value_at": "2026-10-26T08:30:02.764754Z"
@@ -2561,7 +2561,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:52 uploaded+verified 2026-10-26.db.zst",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "verified",
     "value_at": "2026-10-26T15:52:38.636628Z"
@@ -2569,7 +2569,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:53 uploaded+verified 2026-10-26.db.zst",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "verified",
     "value_at": "2026-10-26T15:52:38.636628Z"
@@ -2577,7 +2577,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:60 uploaded+verified 2026-10-27.db.zst",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "verified",
     "value_at": "2026-10-27T04:47:13.517654Z"
@@ -2585,7 +2585,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:61 uploaded+verified 2026-10-27.db.zst",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "verified",
     "value_at": "2026-10-27T04:47:13.517654Z"
@@ -2593,7 +2593,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:70 uploaded+verified 2026-10-28.db.zst",
-    "known_by": "2026-10-28T11:03:52.742917Z",
+    "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "verified",
     "value_at": "2026-10-28T01:44:47.248928Z"
@@ -2601,7 +2601,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:71 uploaded+verified 2026-10-28.db.zst",
-    "known_by": "2026-10-28T11:03:52.742917Z",
+    "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "verified",
     "value_at": "2026-10-28T01:44:47.248928Z"
@@ -2609,7 +2609,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:78 uploaded+verified 2026-10-29.db.zst",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "verified",
     "value_at": "2026-10-29T01:45:26.294998Z"
@@ -2617,7 +2617,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:79 uploaded+verified 2026-10-29.db.zst",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "verified",
     "value_at": "2026-10-29T01:45:26.294998Z"
@@ -2625,7 +2625,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:84 uploaded+verified 2026-10-30.db.zst",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "verified",
     "value_at": "2026-10-30T03:07:15.879097Z"
@@ -2633,7 +2633,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:85 uploaded+verified 2026-10-30.db.zst",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "verified",
     "value_at": "2026-10-30T03:07:15.879097Z"
@@ -2641,7 +2641,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:92 uploaded+verified 2026-10-31.db.zst",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "verified",
     "value_at": "2026-10-31T10:20:35.315509Z"
@@ -2649,7 +2649,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:93 uploaded+verified 2026-10-31.db.zst",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "verified",
     "value_at": "2026-10-31T10:20:35.315509Z"
@@ -2657,7 +2657,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:100 uploaded+verified 2026-11-01.db.zst",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "verified",
     "value_at": "2026-11-01T04:35:35.118529Z"
@@ -2665,7 +2665,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:101 uploaded+verified 2026-11-01.db.zst",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "verified",
     "value_at": "2026-11-01T04:35:35.118529Z"
@@ -2673,7 +2673,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:107 uploaded+verified 2026-11-01.db.zst",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "verified",
     "value_at": "2026-11-01T17:00:10.896181Z"
@@ -2681,7 +2681,7 @@
    {
     "check": "backup_offsite",
     "evidence": "m4-backup-daily.log:108 uploaded+verified 2026-11-01.db.zst",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "verified",
     "value_at": "2026-11-01T17:00:10.896181Z"
@@ -2689,7 +2689,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:2 verified Drive upload",
-    "known_by": "2026-10-12T13:29:41.153914Z",
+    "known_by": "2026-10-12T18:29:41.153914Z",
     "known_from": "2026-10-12T10:29:41.153914Z",
     "value": "ok",
     "value_at": null
@@ -2697,7 +2697,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:1 verified Drive upload",
-    "known_by": "2026-10-12T14:50:15.522369Z",
+    "known_by": "2026-10-12T19:50:15.522369Z",
     "known_from": "2026-10-12T11:50:15.522369Z",
     "value": "ok",
     "value_at": null
@@ -2705,7 +2705,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:4 verified Drive upload",
-    "known_by": "2026-10-13T04:23:51.476569Z",
+    "known_by": "2026-10-13T09:23:51.476569Z",
     "known_from": "2026-10-13T01:23:51.476569Z",
     "value": "ok",
     "value_at": null
@@ -2713,7 +2713,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:2 verified Drive upload",
-    "known_by": "2026-10-13T05:00:03.642148Z",
+    "known_by": "2026-10-13T10:00:03.642148Z",
     "known_from": "2026-10-13T02:00:03.642148Z",
     "value": "ok",
     "value_at": null
@@ -2721,7 +2721,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:5 verified Drive upload",
-    "known_by": "2026-10-14T03:17:06.639646Z",
+    "known_by": "2026-10-14T08:17:06.639646Z",
     "known_from": "2026-10-14T00:17:06.639646Z",
     "value": "ok",
     "value_at": null
@@ -2729,7 +2729,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:3 verified Drive upload",
-    "known_by": "2026-10-14T05:00:07.013518Z",
+    "known_by": "2026-10-14T10:00:07.013518Z",
     "known_from": "2026-10-14T02:00:07.013518Z",
     "value": "ok",
     "value_at": null
@@ -2737,7 +2737,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:6 verified Drive upload",
-    "known_by": "2026-10-15T03:15:39.246798Z",
+    "known_by": "2026-10-15T08:15:39.246798Z",
     "known_from": "2026-10-15T00:15:39.246798Z",
     "value": "ok",
     "value_at": null
@@ -2745,7 +2745,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:4 verified Drive upload",
-    "known_by": "2026-10-15T06:53:21.831654Z",
+    "known_by": "2026-10-15T11:53:21.831654Z",
     "known_from": "2026-10-15T03:53:21.831654Z",
     "value": "ok",
     "value_at": null
@@ -2753,7 +2753,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:8 verified Drive upload",
-    "known_by": "2026-10-17T03:23:04.907038Z",
+    "known_by": "2026-10-17T08:23:04.907038Z",
     "known_from": "2026-10-17T00:23:04.907038Z",
     "value": "ok",
     "value_at": null
@@ -2761,7 +2761,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:5 verified Drive upload",
-    "known_by": "2026-10-17T04:34:55.968793Z",
+    "known_by": "2026-10-17T09:34:55.968793Z",
     "known_from": "2026-10-17T01:34:55.968793Z",
     "value": "ok",
     "value_at": null
@@ -2769,7 +2769,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:6 verified Drive upload",
-    "known_by": "2026-10-18T08:03:39.904197Z",
+    "known_by": "2026-10-18T13:03:39.904197Z",
     "known_from": "2026-10-18T05:03:39.904197Z",
     "value": "ok",
     "value_at": null
@@ -2777,7 +2777,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:7 verified Drive upload",
-    "known_by": "2026-10-19T06:00:02.300430Z",
+    "known_by": "2026-10-19T11:00:02.300430Z",
     "known_from": "2026-10-19T03:00:02.300430Z",
     "value": "ok",
     "value_at": null
@@ -2785,7 +2785,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:8 verified Drive upload",
-    "known_by": "2026-10-20T04:30:27.070615Z",
+    "known_by": "2026-10-20T09:30:27.070615Z",
     "known_from": "2026-10-20T01:30:27.070615Z",
     "value": "ok",
     "value_at": null
@@ -2793,7 +2793,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:9 verified Drive upload",
-    "known_by": "2026-10-21T04:17:32.045121Z",
+    "known_by": "2026-10-21T09:17:32.045121Z",
     "known_from": "2026-10-21T01:17:32.045121Z",
     "value": "ok",
     "value_at": null
@@ -2801,7 +2801,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:19 verified Drive upload",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "ok",
     "value_at": null
@@ -2809,7 +2809,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:20 verified Drive upload",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "ok",
     "value_at": null
@@ -2817,7 +2817,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:25 verified Drive upload",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "ok",
     "value_at": null
@@ -2825,7 +2825,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:26 verified Drive upload",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "ok",
     "value_at": null
@@ -2833,7 +2833,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:10 verified Drive upload",
-    "known_by": "2026-10-23T04:00:14.736280Z",
+    "known_by": "2026-10-23T09:00:14.736280Z",
     "known_from": "2026-10-23T01:00:14.736280Z",
     "value": "ok",
     "value_at": null
@@ -2841,7 +2841,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:30 verified Drive upload",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "ok",
     "value_at": null
@@ -2849,7 +2849,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:31 verified Drive upload",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "ok",
     "value_at": null
@@ -2857,7 +2857,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:11 verified Drive upload",
-    "known_by": "2026-10-24T04:00:15.794503Z",
+    "known_by": "2026-10-24T09:00:15.794503Z",
     "known_from": "2026-10-24T01:00:15.794503Z",
     "value": "ok",
     "value_at": null
@@ -2865,7 +2865,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:36 verified Drive upload",
-    "known_by": "2026-10-24T16:24:35.283959Z",
+    "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "ok",
     "value_at": null
@@ -2873,7 +2873,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:37 verified Drive upload",
-    "known_by": "2026-10-24T16:24:35.283959Z",
+    "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "ok",
     "value_at": null
@@ -2881,7 +2881,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:12 verified Drive upload",
-    "known_by": "2026-10-25T05:00:18.972479Z",
+    "known_by": "2026-10-25T10:00:18.972479Z",
     "known_from": "2026-10-25T02:00:18.972479Z",
     "value": "ok",
     "value_at": null
@@ -2889,7 +2889,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:13 verified Drive upload",
-    "known_by": "2026-10-26T05:00:16.899945Z",
+    "known_by": "2026-10-26T10:00:16.899945Z",
     "known_from": "2026-10-26T02:00:16.899945Z",
     "value": "ok",
     "value_at": null
@@ -2897,7 +2897,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:45 verified Drive upload",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "ok",
     "value_at": null
@@ -2905,7 +2905,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:46 verified Drive upload",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "ok",
     "value_at": null
@@ -2913,7 +2913,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:52 verified Drive upload",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "ok",
     "value_at": null
@@ -2921,7 +2921,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:53 verified Drive upload",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "ok",
     "value_at": null
@@ -2929,7 +2929,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:14 verified Drive upload",
-    "known_by": "2026-10-27T05:48:57.348492Z",
+    "known_by": "2026-10-27T10:48:57.348492Z",
     "known_from": "2026-10-27T02:48:57.348492Z",
     "value": "ok",
     "value_at": null
@@ -2937,7 +2937,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:60 verified Drive upload",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "ok",
     "value_at": null
@@ -2945,7 +2945,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:61 verified Drive upload",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "ok",
     "value_at": null
@@ -2953,7 +2953,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:15 verified Drive upload",
-    "known_by": "2026-10-28T05:44:09.982465Z",
+    "known_by": "2026-10-28T10:44:09.982465Z",
     "known_from": "2026-10-28T02:44:09.982465Z",
     "value": "ok",
     "value_at": null
@@ -2961,7 +2961,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:70 verified Drive upload",
-    "known_by": "2026-10-28T11:03:52.742917Z",
+    "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "ok",
     "value_at": null
@@ -2969,7 +2969,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:71 verified Drive upload",
-    "known_by": "2026-10-28T11:03:52.742917Z",
+    "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "ok",
     "value_at": null
@@ -2977,7 +2977,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:78 verified Drive upload",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "ok",
     "value_at": null
@@ -2985,7 +2985,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:79 verified Drive upload",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "ok",
     "value_at": null
@@ -2993,7 +2993,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:17 verified Drive upload",
-    "known_by": "2026-10-29T10:34:24.432103Z",
+    "known_by": "2026-10-29T15:34:24.432103Z",
     "known_from": "2026-10-29T07:34:24.432103Z",
     "value": "ok",
     "value_at": null
@@ -3001,7 +3001,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:18 verified Drive upload",
-    "known_by": "2026-10-30T05:00:37.260258Z",
+    "known_by": "2026-10-30T10:00:37.260258Z",
     "known_from": "2026-10-30T02:00:37.260258Z",
     "value": "ok",
     "value_at": null
@@ -3009,7 +3009,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:84 verified Drive upload",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "ok",
     "value_at": null
@@ -3017,7 +3017,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:85 verified Drive upload",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "ok",
     "value_at": null
@@ -3025,7 +3025,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:19 verified Drive upload",
-    "known_by": "2026-10-31T05:00:48.188762Z",
+    "known_by": "2026-10-31T10:00:48.188762Z",
     "known_from": "2026-10-31T02:00:48.188762Z",
     "value": "ok",
     "value_at": null
@@ -3033,7 +3033,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:92 verified Drive upload",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "ok",
     "value_at": null
@@ -3041,7 +3041,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:93 verified Drive upload",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "ok",
     "value_at": null
@@ -3049,7 +3049,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-jsonl-backup.log:20 verified Drive upload",
-    "known_by": "2026-11-01T05:09:19.023816Z",
+    "known_by": "2026-11-01T10:09:19.023816Z",
     "known_from": "2026-11-01T02:09:19.023816Z",
     "value": "ok",
     "value_at": null
@@ -3057,7 +3057,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:100 verified Drive upload",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "ok",
     "value_at": null
@@ -3065,7 +3065,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:101 verified Drive upload",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "ok",
     "value_at": null
@@ -3073,7 +3073,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:107 verified Drive upload",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "ok",
     "value_at": null
@@ -3081,7 +3081,7 @@
    {
     "check": "drive_auth",
     "evidence": "m4-backup-daily.log:108 verified Drive upload",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "ok",
     "value_at": null
@@ -3089,7 +3089,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:14 integrity_check ok",
-    "known_by": "2026-10-21T03:45:11.640789Z",
+    "known_by": "2026-10-21T08:45:11.640789Z",
     "known_from": "2026-10-21T00:45:11.640789Z",
     "value": "ok",
     "value_at": null
@@ -3097,7 +3097,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:15 integrity_check ok",
-    "known_by": "2026-10-21T03:45:11.640789Z",
+    "known_by": "2026-10-21T08:45:11.640789Z",
     "known_from": "2026-10-21T00:45:11.640789Z",
     "value": "ok",
     "value_at": null
@@ -3105,7 +3105,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:16 integrity_check ok",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "ok",
     "value_at": null
@@ -3113,7 +3113,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:17 integrity_check ok",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "ok",
     "value_at": null
@@ -3121,7 +3121,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:18 integrity_check ok",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "ok",
     "value_at": null
@@ -3129,7 +3129,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:19 integrity_check ok",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "ok",
     "value_at": null
@@ -3137,7 +3137,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:20 integrity_check ok",
-    "known_by": "2026-10-21T04:25:35.557135Z",
+    "known_by": "2026-10-21T09:25:35.557135Z",
     "known_from": "2026-10-21T01:25:35.557135Z",
     "value": "ok",
     "value_at": null
@@ -3145,7 +3145,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:22 quick_check ok",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "ok",
     "value_at": null
@@ -3153,7 +3153,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:23 quick_check ok",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "ok",
     "value_at": null
@@ -3161,7 +3161,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:24 quick_check ok",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "ok",
     "value_at": null
@@ -3169,7 +3169,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:25 quick_check ok",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "ok",
     "value_at": null
@@ -3177,7 +3177,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:26 quick_check ok",
-    "known_by": "2026-10-22T05:57:18.300289Z",
+    "known_by": "2026-10-22T10:57:18.300289Z",
     "known_from": "2026-10-22T02:57:18.300289Z",
     "value": "ok",
     "value_at": null
@@ -3185,7 +3185,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:27 quick_check ok",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "ok",
     "value_at": null
@@ -3193,7 +3193,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:28 quick_check ok",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "ok",
     "value_at": null
@@ -3201,7 +3201,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:29 quick_check ok",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "ok",
     "value_at": null
@@ -3209,7 +3209,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:30 quick_check ok",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "ok",
     "value_at": null
@@ -3217,7 +3217,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:31 quick_check ok",
-    "known_by": "2026-10-23T04:35:15.220310Z",
+    "known_by": "2026-10-23T09:35:15.220310Z",
     "known_from": "2026-10-23T01:35:15.220310Z",
     "value": "ok",
     "value_at": null
@@ -3225,7 +3225,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:32 quick_check ok",
-    "known_by": "2026-10-24T04:14:59.421349Z",
+    "known_by": "2026-10-24T09:14:59.421349Z",
     "known_from": "2026-10-24T01:14:59.421349Z",
     "value": "ok",
     "value_at": null
@@ -3233,7 +3233,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:33 quick_check ok",
-    "known_by": "2026-10-24T04:14:59.421349Z",
+    "known_by": "2026-10-24T09:14:59.421349Z",
     "known_from": "2026-10-24T01:14:59.421349Z",
     "value": "ok",
     "value_at": null
@@ -3241,7 +3241,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:34 quick_check ok",
-    "known_by": "2026-10-24T16:24:35.283959Z",
+    "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "ok",
     "value_at": null
@@ -3249,7 +3249,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:35 quick_check ok",
-    "known_by": "2026-10-24T16:24:35.283959Z",
+    "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "ok",
     "value_at": null
@@ -3257,7 +3257,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:36 quick_check ok",
-    "known_by": "2026-10-24T16:24:35.283959Z",
+    "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "ok",
     "value_at": null
@@ -3265,7 +3265,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:37 quick_check ok",
-    "known_by": "2026-10-24T16:24:35.283959Z",
+    "known_by": "2026-10-24T21:24:35.283959Z",
     "known_from": "2026-10-24T13:24:35.283959Z",
     "value": "ok",
     "value_at": null
@@ -3273,7 +3273,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:40 integrity_check ok",
-    "known_by": "2026-10-26T11:30:02.645488Z",
+    "known_by": "2026-10-26T16:30:02.645488Z",
     "known_from": "2026-10-26T08:30:02.645488Z",
     "value": "ok",
     "value_at": null
@@ -3281,7 +3281,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:41 integrity_check ok",
-    "known_by": "2026-10-26T11:30:02.645488Z",
+    "known_by": "2026-10-26T16:30:02.645488Z",
     "known_from": "2026-10-26T08:30:02.645488Z",
     "value": "ok",
     "value_at": null
@@ -3289,7 +3289,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:42 integrity_check ok",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "ok",
     "value_at": null
@@ -3297,7 +3297,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:43 integrity_check ok",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "ok",
     "value_at": null
@@ -3305,7 +3305,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:44 integrity_check ok",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "ok",
     "value_at": null
@@ -3313,7 +3313,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:45 integrity_check ok",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "ok",
     "value_at": null
@@ -3321,7 +3321,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:46 integrity_check ok",
-    "known_by": "2026-10-26T11:39:32.263428Z",
+    "known_by": "2026-10-26T16:39:32.263428Z",
     "known_from": "2026-10-26T08:39:32.263428Z",
     "value": "ok",
     "value_at": null
@@ -3329,7 +3329,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:47 integrity_check ok",
-    "known_by": "2026-10-26T18:52:36.705498Z",
+    "known_by": "2026-10-26T23:52:36.705498Z",
     "known_from": "2026-10-26T15:52:36.705498Z",
     "value": "ok",
     "value_at": null
@@ -3337,7 +3337,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:48 integrity_check ok",
-    "known_by": "2026-10-26T18:52:36.705498Z",
+    "known_by": "2026-10-26T23:52:36.705498Z",
     "known_from": "2026-10-26T15:52:36.705498Z",
     "value": "ok",
     "value_at": null
@@ -3345,7 +3345,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:49 integrity_check ok",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "ok",
     "value_at": null
@@ -3353,7 +3353,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:50 integrity_check ok",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "ok",
     "value_at": null
@@ -3361,7 +3361,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:51 integrity_check ok",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "ok",
     "value_at": null
@@ -3369,7 +3369,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:52 integrity_check ok",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "ok",
     "value_at": null
@@ -3377,7 +3377,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:53 integrity_check ok",
-    "known_by": "2026-10-26T19:00:57.102324Z",
+    "known_by": "2026-10-27T00:00:57.102324Z",
     "known_from": "2026-10-26T16:00:57.102324Z",
     "value": "ok",
     "value_at": null
@@ -3385,7 +3385,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:55 integrity_check ok",
-    "known_by": "2026-10-27T07:46:58.500008Z",
+    "known_by": "2026-10-27T12:46:58.500008Z",
     "known_from": "2026-10-27T04:46:58.500008Z",
     "value": "ok",
     "value_at": null
@@ -3393,7 +3393,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:56 integrity_check ok",
-    "known_by": "2026-10-27T07:46:58.500008Z",
+    "known_by": "2026-10-27T12:46:58.500008Z",
     "known_from": "2026-10-27T04:46:58.500008Z",
     "value": "ok",
     "value_at": null
@@ -3401,7 +3401,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:57 integrity_check ok",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "ok",
     "value_at": null
@@ -3409,7 +3409,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:58 integrity_check ok",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "ok",
     "value_at": null
@@ -3417,7 +3417,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:59 integrity_check ok",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "ok",
     "value_at": null
@@ -3425,7 +3425,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:60 integrity_check ok",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "ok",
     "value_at": null
@@ -3433,7 +3433,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:61 integrity_check ok",
-    "known_by": "2026-10-27T07:54:56.595457Z",
+    "known_by": "2026-10-27T12:54:56.595457Z",
     "known_from": "2026-10-27T04:54:56.595457Z",
     "value": "ok",
     "value_at": null
@@ -3441,7 +3441,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:62 integrity_check ok",
-    "known_by": "2026-10-28T04:44:46.517628Z",
+    "known_by": "2026-10-28T09:44:46.517628Z",
     "known_from": "2026-10-28T01:44:46.517628Z",
     "value": "ok",
     "value_at": null
@@ -3449,7 +3449,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:63 integrity_check ok",
-    "known_by": "2026-10-28T04:44:46.517628Z",
+    "known_by": "2026-10-28T09:44:46.517628Z",
     "known_from": "2026-10-28T01:44:46.517628Z",
     "value": "ok",
     "value_at": null
@@ -3457,7 +3457,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:64 integrity_check ok",
-    "known_by": "2026-10-28T06:27:22.804557Z",
+    "known_by": "2026-10-28T11:27:22.804557Z",
     "known_from": "2026-10-28T03:27:22.804557Z",
     "value": "ok",
     "value_at": null
@@ -3465,7 +3465,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:65 integrity_check ok",
-    "known_by": "2026-10-28T06:27:22.804557Z",
+    "known_by": "2026-10-28T11:27:22.804557Z",
     "known_from": "2026-10-28T03:27:22.804557Z",
     "value": "ok",
     "value_at": null
@@ -3473,7 +3473,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:66 integrity_check ok",
-    "known_by": "2026-10-28T06:27:22.804557Z",
+    "known_by": "2026-10-28T11:27:22.804557Z",
     "known_from": "2026-10-28T03:27:22.804557Z",
     "value": "ok",
     "value_at": null
@@ -3481,7 +3481,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:67 integrity_check ok",
-    "known_by": "2026-10-28T06:27:22.804557Z",
+    "known_by": "2026-10-28T11:27:22.804557Z",
     "known_from": "2026-10-28T03:27:22.804557Z",
     "value": "ok",
     "value_at": null
@@ -3489,7 +3489,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:68 integrity_check ok",
-    "known_by": "2026-10-28T11:03:52.742917Z",
+    "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "ok",
     "value_at": null
@@ -3497,7 +3497,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:69 integrity_check ok",
-    "known_by": "2026-10-28T11:03:52.742917Z",
+    "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "ok",
     "value_at": null
@@ -3505,7 +3505,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:70 integrity_check ok",
-    "known_by": "2026-10-28T11:03:52.742917Z",
+    "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "ok",
     "value_at": null
@@ -3513,7 +3513,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:71 integrity_check ok",
-    "known_by": "2026-10-28T11:03:52.742917Z",
+    "known_by": "2026-10-28T16:03:52.742917Z",
     "known_from": "2026-10-28T08:03:52.742917Z",
     "value": "ok",
     "value_at": null
@@ -3521,7 +3521,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:73 integrity_check ok",
-    "known_by": "2026-10-29T04:44:49.422902Z",
+    "known_by": "2026-10-29T09:44:49.422902Z",
     "known_from": "2026-10-29T01:44:49.422902Z",
     "value": "ok",
     "value_at": null
@@ -3529,7 +3529,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:74 integrity_check ok",
-    "known_by": "2026-10-29T04:44:49.422902Z",
+    "known_by": "2026-10-29T09:44:49.422902Z",
     "known_from": "2026-10-29T01:44:49.422902Z",
     "value": "ok",
     "value_at": null
@@ -3537,7 +3537,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:75 integrity_check ok",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "ok",
     "value_at": null
@@ -3545,7 +3545,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:76 integrity_check ok",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "ok",
     "value_at": null
@@ -3553,7 +3553,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:77 integrity_check ok",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "ok",
     "value_at": null
@@ -3561,7 +3561,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:78 integrity_check ok",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "ok",
     "value_at": null
@@ -3569,7 +3569,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:79 integrity_check ok",
-    "known_by": "2026-10-29T06:25:41.081498Z",
+    "known_by": "2026-10-29T11:25:41.081498Z",
     "known_from": "2026-10-29T03:25:41.081498Z",
     "value": "ok",
     "value_at": null
@@ -3577,7 +3577,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:81 integrity_check ok",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "ok",
     "value_at": null
@@ -3585,7 +3585,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:82 integrity_check ok",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "ok",
     "value_at": null
@@ -3593,7 +3593,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:83 integrity_check ok",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "ok",
     "value_at": null
@@ -3601,7 +3601,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:84 integrity_check ok",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "ok",
     "value_at": null
@@ -3609,7 +3609,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:85 integrity_check ok",
-    "known_by": "2026-10-30T06:06:37.617709Z",
+    "known_by": "2026-10-30T11:06:37.617709Z",
     "known_from": "2026-10-30T03:06:37.617709Z",
     "value": "ok",
     "value_at": null
@@ -3617,7 +3617,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:86 integrity_check ok",
-    "known_by": "2026-10-31T05:31:39.191374Z",
+    "known_by": "2026-10-31T10:31:39.191374Z",
     "known_from": "2026-10-31T02:31:39.191374Z",
     "value": "ok",
     "value_at": null
@@ -3625,7 +3625,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:87 integrity_check ok",
-    "known_by": "2026-10-31T13:20:35.217257Z",
+    "known_by": "2026-10-31T18:20:35.217257Z",
     "known_from": "2026-10-31T10:20:35.217257Z",
     "value": "ok",
     "value_at": null
@@ -3633,7 +3633,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:88 integrity_check ok",
-    "known_by": "2026-10-31T13:20:35.217257Z",
+    "known_by": "2026-10-31T18:20:35.217257Z",
     "known_from": "2026-10-31T10:20:35.217257Z",
     "value": "ok",
     "value_at": null
@@ -3641,7 +3641,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:89 integrity_check ok",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "ok",
     "value_at": null
@@ -3649,7 +3649,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:90 integrity_check ok",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "ok",
     "value_at": null
@@ -3657,7 +3657,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:91 integrity_check ok",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "ok",
     "value_at": null
@@ -3665,7 +3665,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:92 integrity_check ok",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "ok",
     "value_at": null
@@ -3673,7 +3673,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:93 integrity_check ok",
-    "known_by": "2026-10-31T13:28:21.126674Z",
+    "known_by": "2026-10-31T18:28:21.126674Z",
     "known_from": "2026-10-31T10:28:21.126674Z",
     "value": "ok",
     "value_at": null
@@ -3681,7 +3681,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:94 integrity_check ok",
-    "known_by": "2026-11-01T04:44:47.308603Z",
+    "known_by": "2026-11-01T09:44:47.308603Z",
     "known_from": "2026-11-01T01:44:47.308603Z",
     "value": "ok",
     "value_at": null
@@ -3689,7 +3689,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:95 integrity_check ok",
-    "known_by": "2026-11-01T07:35:35.021591Z",
+    "known_by": "2026-11-01T12:35:35.021591Z",
     "known_from": "2026-11-01T04:35:35.021591Z",
     "value": "ok",
     "value_at": null
@@ -3697,7 +3697,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:96 integrity_check ok",
-    "known_by": "2026-11-01T07:35:35.021591Z",
+    "known_by": "2026-11-01T12:35:35.021591Z",
     "known_from": "2026-11-01T04:35:35.021591Z",
     "value": "ok",
     "value_at": null
@@ -3705,7 +3705,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:97 integrity_check ok",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "ok",
     "value_at": null
@@ -3713,7 +3713,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:98 integrity_check ok",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "ok",
     "value_at": null
@@ -3721,7 +3721,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:99 integrity_check ok",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "ok",
     "value_at": null
@@ -3729,7 +3729,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:100 integrity_check ok",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "ok",
     "value_at": null
@@ -3737,7 +3737,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:101 integrity_check ok",
-    "known_by": "2026-11-01T07:41:10.913231Z",
+    "known_by": "2026-11-01T12:41:10.913231Z",
     "known_from": "2026-11-01T04:41:10.913231Z",
     "value": "ok",
     "value_at": null
@@ -3745,7 +3745,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:102 integrity_check ok",
-    "known_by": "2026-11-01T20:00:09.510517Z",
+    "known_by": "2026-11-02T01:00:09.510517Z",
     "known_from": "2026-11-01T17:00:09.510517Z",
     "value": "ok",
     "value_at": null
@@ -3753,7 +3753,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:103 integrity_check ok",
-    "known_by": "2026-11-01T20:00:09.510517Z",
+    "known_by": "2026-11-02T01:00:09.510517Z",
     "known_from": "2026-11-01T17:00:09.510517Z",
     "value": "ok",
     "value_at": null
@@ -3761,7 +3761,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:104 integrity_check ok",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "ok",
     "value_at": null
@@ -3769,7 +3769,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:105 integrity_check ok",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "ok",
     "value_at": null
@@ -3777,7 +3777,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:106 integrity_check ok",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "ok",
     "value_at": null
@@ -3785,7 +3785,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:107 integrity_check ok",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "ok",
     "value_at": null
@@ -3793,7 +3793,7 @@
    {
     "check": "integrity",
     "evidence": "m4-backup-daily.log:108 integrity_check ok",
-    "known_by": "2026-11-01T20:11:49.782318Z",
+    "known_by": "2026-11-02T01:11:49.782318Z",
     "known_from": "2026-11-01T17:11:49.782318Z",
     "value": "ok",
     "value_at": null
@@ -3801,7 +3801,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:1 status=uploaded",
-    "known_by": "2026-10-12T14:50:15.522369Z",
+    "known_by": "2026-10-12T19:50:15.522369Z",
     "known_from": "2026-10-12T11:50:15.522369Z",
     "value": "verified",
     "value_at": "2026-10-12T11:50:15.522369Z"
@@ -3809,7 +3809,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:2 status=uploaded",
-    "known_by": "2026-10-13T05:00:03.642148Z",
+    "known_by": "2026-10-13T10:00:03.642148Z",
     "known_from": "2026-10-13T02:00:03.642148Z",
     "value": "verified",
     "value_at": "2026-10-13T02:00:03.642148Z"
@@ -3817,7 +3817,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:3 status=uploaded",
-    "known_by": "2026-10-14T05:00:07.013518Z",
+    "known_by": "2026-10-14T10:00:07.013518Z",
     "known_from": "2026-10-14T02:00:07.013518Z",
     "value": "verified",
     "value_at": "2026-10-14T02:00:07.013518Z"
@@ -3825,7 +3825,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:4 status=uploaded",
-    "known_by": "2026-10-15T06:53:21.831654Z",
+    "known_by": "2026-10-15T11:53:21.831654Z",
     "known_from": "2026-10-15T03:53:21.831654Z",
     "value": "verified",
     "value_at": "2026-10-15T03:53:21.831654Z"
@@ -3833,7 +3833,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:5 status=uploaded",
-    "known_by": "2026-10-17T04:34:55.968793Z",
+    "known_by": "2026-10-17T09:34:55.968793Z",
     "known_from": "2026-10-17T01:34:55.968793Z",
     "value": "verified",
     "value_at": "2026-10-17T01:34:55.968793Z"
@@ -3841,7 +3841,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:6 status=uploaded",
-    "known_by": "2026-10-18T08:03:39.904197Z",
+    "known_by": "2026-10-18T13:03:39.904197Z",
     "known_from": "2026-10-18T05:03:39.904197Z",
     "value": "verified",
     "value_at": "2026-10-18T05:03:39.904197Z"
@@ -3849,7 +3849,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:7 status=uploaded",
-    "known_by": "2026-10-19T06:00:02.300430Z",
+    "known_by": "2026-10-19T11:00:02.300430Z",
     "known_from": "2026-10-19T03:00:02.300430Z",
     "value": "verified",
     "value_at": "2026-10-19T03:00:02.300430Z"
@@ -3857,7 +3857,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:8 status=uploaded",
-    "known_by": "2026-10-20T04:30:27.070615Z",
+    "known_by": "2026-10-20T09:30:27.070615Z",
     "known_from": "2026-10-20T01:30:27.070615Z",
     "value": "verified",
     "value_at": "2026-10-20T01:30:27.070615Z"
@@ -3865,7 +3865,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:9 status=uploaded",
-    "known_by": "2026-10-21T04:17:32.045121Z",
+    "known_by": "2026-10-21T09:17:32.045121Z",
     "known_from": "2026-10-21T01:17:32.045121Z",
     "value": "verified",
     "value_at": "2026-10-21T01:17:32.045121Z"
@@ -3873,7 +3873,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:10 status=uploaded",
-    "known_by": "2026-10-23T04:00:14.736280Z",
+    "known_by": "2026-10-23T09:00:14.736280Z",
     "known_from": "2026-10-23T01:00:14.736280Z",
     "value": "verified",
     "value_at": "2026-10-23T01:00:14.736280Z"
@@ -3881,7 +3881,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:11 status=uploaded",
-    "known_by": "2026-10-24T04:00:15.794503Z",
+    "known_by": "2026-10-24T09:00:15.794503Z",
     "known_from": "2026-10-24T01:00:15.794503Z",
     "value": "verified",
     "value_at": "2026-10-24T01:00:15.794503Z"
@@ -3889,7 +3889,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:12 status=uploaded",
-    "known_by": "2026-10-25T05:00:18.972479Z",
+    "known_by": "2026-10-25T10:00:18.972479Z",
     "known_from": "2026-10-25T02:00:18.972479Z",
     "value": "verified",
     "value_at": "2026-10-25T02:00:18.972479Z"
@@ -3897,7 +3897,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:13 status=uploaded",
-    "known_by": "2026-10-26T05:00:16.899945Z",
+    "known_by": "2026-10-26T10:00:16.899945Z",
     "known_from": "2026-10-26T02:00:16.899945Z",
     "value": "verified",
     "value_at": "2026-10-26T02:00:16.899945Z"
@@ -3905,7 +3905,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:14 status=uploaded",
-    "known_by": "2026-10-27T05:48:57.348492Z",
+    "known_by": "2026-10-27T10:48:57.348492Z",
     "known_from": "2026-10-27T02:48:57.348492Z",
     "value": "verified",
     "value_at": "2026-10-27T02:48:57.348492Z"
@@ -3913,7 +3913,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:15 status=uploaded",
-    "known_by": "2026-10-28T05:44:09.982465Z",
+    "known_by": "2026-10-28T10:44:09.982465Z",
     "known_from": "2026-10-28T02:44:09.982465Z",
     "value": "verified",
     "value_at": "2026-10-28T02:44:09.982465Z"
@@ -3921,7 +3921,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:17 status=uploaded",
-    "known_by": "2026-10-29T10:34:24.432103Z",
+    "known_by": "2026-10-29T15:34:24.432103Z",
     "known_from": "2026-10-29T07:34:24.432103Z",
     "value": "verified",
     "value_at": "2026-10-29T07:34:24.432103Z"
@@ -3929,7 +3929,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:18 status=uploaded",
-    "known_by": "2026-10-30T05:00:37.260258Z",
+    "known_by": "2026-10-30T10:00:37.260258Z",
     "known_from": "2026-10-30T02:00:37.260258Z",
     "value": "verified",
     "value_at": "2026-10-30T02:00:37.260258Z"
@@ -3937,7 +3937,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:19 status=uploaded",
-    "known_by": "2026-10-31T05:00:48.188762Z",
+    "known_by": "2026-10-31T10:00:48.188762Z",
     "known_from": "2026-10-31T02:00:48.188762Z",
     "value": "verified",
     "value_at": "2026-10-31T02:00:48.188762Z"
@@ -3945,7 +3945,7 @@
    {
     "check": "transcripts",
     "evidence": "m4-jsonl-backup.log:20 status=uploaded",
-    "known_by": "2026-11-01T05:09:19.023816Z",
+    "known_by": "2026-11-01T10:09:19.023816Z",
     "known_from": "2026-11-01T02:09:19.023816Z",
     "value": "verified",
     "value_at": "2026-11-01T02:09:19.023816Z"
