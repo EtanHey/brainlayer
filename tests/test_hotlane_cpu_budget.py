@@ -141,6 +141,8 @@ def test_backlog_drains_without_duplicate_encoding_across_pause_and_load(hotlane
     monkeypatch.setattr(ratchet, "ps_sample", lambda _: (("start", "installed"), 30))
     probe = SimpleNamespace(hotlane_cpu_report=None, db_path=db, os_name="Darwin")
     assert ci_ratchet_table.row_hotlane_cpu(probe, {}).status == ci_ratchet_table.GREEN
+    marker.touch()
+    assert ci_ratchet_table.row_hotlane_cpu(probe, {}).status == ci_ratchet_table.NA
 
 
 def test_ratchet_collects_full_ps_window_and_fails_build_row(tmp_path, monkeypatch):

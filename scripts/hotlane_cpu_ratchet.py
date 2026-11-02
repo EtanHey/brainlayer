@@ -153,7 +153,10 @@ def read_live_report(db, os_name):
         if payload["source"] != "daemon" or payload["db"] != str(db.resolve()):
             raise ValueError("CPU evidence belongs to a different producer/database")
         ps_sample(payload["pid"])
-        return daemon_verdict(payload)
+        status, value = daemon_verdict(payload)
+        if (db.parent / "hotlane.pause").exists():
+            return "n/a", f"n/a — hotlane.pause exists; current backlog is paused: {value}"
+        return status, value
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         return "RED", f"invalid live hotlane CPU evidence: {error}"
 
