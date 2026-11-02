@@ -85,6 +85,7 @@ struct BrainBarStatusInputs: Sendable {
 struct BrainBarStatusSnapshot: Equatable, Sendable {
     let issues: [BrainBarStatusIssue]
     let isChecking: Bool
+    var healthVerdict: BrainBarHealthVerdict? = nil
 
     var attention: [BrainBarStatusIssue] { issues.filter { $0.severity == .attention } }
     var notices: [BrainBarStatusIssue] { issues.filter { $0.severity == .notice } }
@@ -101,7 +102,8 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
     static let requiredCalendarJobs: [BrainLayerLaunchdJob] = [.index, .backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly]
 
     var verdict: BrainBarStatusVerdict {
-        .init(attention: attention.map(\.text), notices: notices.map(\.text), isChecking: isChecking)
+        .init(attention: attention.map(\.text), notices: notices.map(\.text), isChecking: isChecking,
+              dotOverride: healthVerdict?.renderedDot)
     }
 
     var dashboardStatus: BrainBarOnePageStatus { verdict.dashboardStatus }
@@ -545,7 +547,38 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         let backupJobs: Set<BrainLayerLaunchdJob> = [.backupDaily, .jsonlBackup]
         let backupNotices = builder.issues.filter { $0.severity == .notice && $0.id.hasPrefix("job.") && !$0.jobs.isDisjoint(with: backupJobs) }
         let otherIssues = builder.issues.filter { !backupNotices.contains($0) }
-        return Self(issues: backupNotices + otherIssues, isChecking: incomplete)
+        var issues = backupNotices + otherIssues
+        if let verdict = inputs.badge?.healthVerdict {
+            if verdict.isFresh(now: now) {
+                issues = issues.map { issue in var detail = issue; detail.severity = .notice; return detail }
+                let checks = verdict.checks.filter { $0.state != .green }.map { check in
+                    let component: BrainBarStatusIssue.Component = switch check.name {
+                    case "backup_local", "backup_offsite", "disk": .backups
+                    case "transcripts": .transcripts
+                    case "drive_auth": .drive
+                    case "integrity": .database
+                    case "ingest": .watcher
+                    case "embedding": .ingest
+                    default: .health
+                    }
+                    return BrainBarStatusIssue(id: "verdict.\(check.name)", component: component,
+                        severity: verdict.dot == .red && check.state == .red ? .attention : .notice, text: check.text)
+                }
+                let notes = verdict.notes.map { BrainBarStatusIssue(id: "verdict.note.\($0.code)", component: .health,
+                                                                   severity: .notice, text: $0.message) }
+                var rows = checks + notes
+                if (verdict.dot == .red && !checks.contains { $0.severity == .attention })
+                    || (verdict.dot != .green && checks.isEmpty) {
+                    rows.insert(.init(id: "verdict.summary", component: .health,
+                        severity: verdict.dot == .red ? .attention : .notice,
+                        text: "Health check: \(verdict.dot.rawValue)"), at: 0)
+                }
+                return Self(issues: rows + issues, isChecking: false, healthVerdict: verdict)
+            }
+            issues.insert(.init(id: "verdict.stale", component: .health, severity: .notice,
+                                text: verdict.fallbackNotice(now: now)), at: 0)
+        }
+        return Self(issues: issues, isChecking: incomplete)
     }
 
     /// One failure is explicit, but only the second consecutive failure gives a dot.

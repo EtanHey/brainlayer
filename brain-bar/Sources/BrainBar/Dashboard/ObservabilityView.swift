@@ -6,6 +6,7 @@ struct BadgeStateDocument: Codable, Sendable {
     let schemaVersion: Int
     let generatedAt: Date
     let alerts: Alerts
+    var verdict: BrainBarHealthVerdict? = nil
 
     struct Alerts: Codable, Sendable {
         let state: String
@@ -54,6 +55,7 @@ struct BadgeStatePresentation: Equatable, Sendable {
     /// Empty only for legacy in-memory callers, whose active issues are critical.
     var activeSeverities: [String] = []
     var vectorScan: BrainBarVectorScan? = nil
+    var healthVerdict: BrainBarHealthVerdict? = nil
 
     static func failVisible(_ reason: String) -> Self {
         .init(badgeOn: true, reason: reason, activeCodes: [])
@@ -139,53 +141,58 @@ enum BadgeStateReader {
                 )
             }
             let document = try decoder.decode(BadgeStateDocument.self, from: data)
-            let age = now.timeIntervalSince(document.generatedAt)
-            guard age >= 0 else {
-                return .failVisible("Badge state timestamp is in the future.")
-            }
-            let graceUntil = history?.sleepGrace(
-                now: now, cadence: cadence, documentGeneratedAt: document.generatedAt,
-                missedPreviousRead: missedPreviousRead)
-            let sleepGraceApplies = graceUntil.map { now <= $0 } == true
-            if document.alerts.state == "pending_first_run" {
-                guard let expected = document.alerts.expectedFirstRunBy, !document.alerts.reason.isEmpty else {
-                    return .failVisible("Badge pending_first_run state is invalid.")
+            func legacyPresentation() -> BadgeStatePresentation {
+                let age = now.timeIntervalSince(document.generatedAt)
+                guard age >= 0 else {
+                    return .failVisible("Badge state timestamp is in the future.")
                 }
-                // The Python producer truncates generated_at to whole seconds but
-                // preserves fractional seconds in expected_first_run_by.
-                guard expected <= document.generatedAt.addingTimeInterval(601) else {
-                    return .failVisible("Badge pending_first_run deadline exceeds the allowed 600 seconds plus timestamp precision slack.")
+                let graceUntil = history?.sleepGrace(
+                    now: now, cadence: cadence, documentGeneratedAt: document.generatedAt,
+                    missedPreviousRead: missedPreviousRead)
+                let sleepGraceApplies = graceUntil.map { now <= $0 } == true
+                if document.alerts.state == "pending_first_run" {
+                    guard let expected = document.alerts.expectedFirstRunBy, !document.alerts.reason.isEmpty else {
+                        return .failVisible("Badge pending_first_run state is invalid.")
+                    }
+                    // The Python producer truncates generated_at to whole seconds but
+                    // preserves fractional seconds in expected_first_run_by.
+                    guard expected <= document.generatedAt.addingTimeInterval(601) else {
+                        return .failVisible("Badge pending_first_run deadline exceeds the allowed 600 seconds plus timestamp precision slack.")
+                    }
+                    if now <= expected || sleepGraceApplies {
+                        return .init(badgeOn: false, reason: document.alerts.reason, activeCodes: [])
+                    }
+                    return .failVisible("Badge producer missed expected_first_run_by.")
                 }
-                if now <= expected || sleepGraceApplies {
-                    return .init(badgeOn: false, reason: document.alerts.reason, activeCodes: [])
+                guard age <= cadence.interval * 2 || sleepGraceApplies else {
+                    return .failVisible("Badge state is stale.")
                 }
-                return .failVisible("Badge producer missed expected_first_run_by.")
+                guard document.alerts.state == "measured", document.alerts.reason.isEmpty else {
+                    let reason = document.alerts.reason.isEmpty ? "Badge alert state is unknown." : document.alerts.reason
+                    return .failVisible(reason)
+                }
+                guard let badgeOn = document.alerts.badgeOn, let active = document.alerts.active,
+                      badgeOn == active.contains(where: { $0.severity != "warning" }) else {
+                    return .failVisible("Badge alert state is internally inconsistent.")
+                }
+                // Re-evaluate on every read: an expired or unsupported suppression
+                // must become visible even when the producer has not run again.
+                let restored = (document.alerts.suppressed ?? []).filter { issue in
+                    issue.episode?.allows(issue, now: now) != true
+                }
+                let visible = active + restored
+                return .init(
+                    badgeOn: visible.contains { $0.severity != "warning" },
+                    reason: visible.map(\.message).joined(separator: "; "),
+                    activeCodes: visible.map(\.code),
+                    activeMessages: visible.map(\.message),
+                    activeSeverities: visible.map(\.severity),
+                    vectorScan: BrainBarVectorScan.read(beside: url)
+                )
             }
-            guard age <= cadence.interval * 2 || sleepGraceApplies else {
-                return .failVisible("Badge state is stale.")
-            }
-            guard document.alerts.state == "measured", document.alerts.reason.isEmpty else {
-                let reason = document.alerts.reason.isEmpty ? "Badge alert state is unknown." : document.alerts.reason
-                return .failVisible(reason)
-            }
-            guard let badgeOn = document.alerts.badgeOn, let active = document.alerts.active,
-                  badgeOn == active.contains(where: { $0.severity != "warning" }) else {
-                return .failVisible("Badge alert state is internally inconsistent.")
-            }
-            // Re-evaluate on every read: an expired or unsupported suppression
-            // must become visible even when the producer has not run again.
-            let restored = (document.alerts.suppressed ?? []).filter { issue in
-                issue.episode?.allows(issue, now: now) != true
-            }
-            let visible = active + restored
-            return .init(
-                badgeOn: visible.contains { $0.severity != "warning" },
-                reason: visible.map(\.message).joined(separator: "; "),
-                activeCodes: visible.map(\.code),
-                activeMessages: visible.map(\.message),
-                activeSeverities: visible.map(\.severity),
-                vectorScan: BrainBarVectorScan.read(beside: url)
-            )
+            var result = legacyPresentation()
+            result.healthVerdict = document.verdict
+            return result
         } catch {
             return .failVisible("Badge state unreadable: \(error.localizedDescription)")
         }

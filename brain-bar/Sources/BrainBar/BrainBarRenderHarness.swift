@@ -16,6 +16,33 @@ enum BrainBarRenderHarness {
         )
     }
 
+    /// Off-screen capture of the controller's popover rows, with its real status icon.
+    static func renderHealthVerdictPopover(_ snapshot: BrainBarStatusSnapshot, directory: URL,
+                                          name: String, width: CGFloat) throws {
+        let rows = snapshot.healthVerdict.map(BrainBarStatusPopoverController.verdictRows)
+            ?? snapshot.issues.map(\.text)
+        let icon = BrainBarStatusPopoverController.statusIconImage(
+            stats: BrainBarDashboardFixture.makeCollector().stats,
+            badgeOn: snapshot.verdict.dot != .green, dot: snapshot.verdict.dot)
+        let menu = VStack(alignment: .leading, spacing: 10) {
+            HStack { Image(nsImage: icon); Text("BrainBar").fontWeight(.semibold) }
+            Divider()
+            Text(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict)).foregroundStyle(.secondary)
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                BrainBarStatusPopoverController.verdictDetailRow(row, width: width - 32)
+            }
+            Divider()
+            Text("Open Dashboard")
+            Text("Settings…")
+        }.font(.system(size: 13)).padding(16).frame(width: width, alignment: .leading)
+            .background(Color(nsColor: .windowBackgroundColor))
+        let host = NSHostingView(rootView: menu)
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.frame = NSRect(x: 0, y: 0, width: width, height: host.fittingSize.height)
+        settle(host)
+        try writeBitmap(of: host, name: name, in: directory)
+    }
+
     /// `attentionReasons: []` is a single failed night: a notice, no dot, and no attention list.
     static func renderMaintenanceRetryDashboard(
         _ model: BrainBarMaintenanceRetryModel, directory: URL,
