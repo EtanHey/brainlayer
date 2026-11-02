@@ -1398,6 +1398,7 @@ enum SparklineRenderer {
         agent: [Int],
         watcher: [Int],
         badgeOn: Bool = false,
+        dot: BrainBarRenderedDot? = nil,
         size: NSSize = NSSize(width: 26, height: 14)
     ) -> NSImage {
         let width = max(size.width.rounded(.up), 1)
@@ -1411,9 +1412,9 @@ enum SparklineRenderer {
                 .init(values: agent, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesAgent)),
                 .init(values: watcher, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesWatcher)),
             ])
-            if badgeOn {
+            if (dot ?? (badgeOn ? .red : .green)) != .green {
                 Circle()
-                    .fill(Color.red)
+                    .fill(dot == .amber ? Color.orange : Color.red)
                     .overlay(Circle().stroke(Color.white, lineWidth: 0.75))
                     .frame(width: 6, height: 6)
             }
