@@ -75,14 +75,23 @@ checks its own `BRAINLAYER_LAUNCHD_*_ENABLED` gate before exec.
 On macOS the hotlane sets its own CPU nice value to 20, without changing disk I/O policy.
 `BRAINLAYER_HOTLANE_THREADS` caps torch and BLAS threads (default 1 on Apple M1, 2 otherwise).
 `BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD` sets the one-minute load ceiling (default performance-core count).
+`BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS` (default 300) guarantees a reserved backlog batch
+at least every five minutes under high load. This uses the existing backlog lane and never lifts hot-slice backpressure.
 A `hotlane.pause` file beside the resolved database also pauses backlog embedding; removing it resumes work.
-Hot embedding continues during these pauses. Startup records the applied settings in `hotlane-budget.json`
+The pause marker overrides minimum duty completely.
+Hot embedding continues during these pauses unless store-queue backpressure suppresses it.
+Startup records the applied settings in `hotlane-budget.json`
 beside that database and in the log.
 
-On an installed Mac, `python scripts/hotlane_cpu_ratchet.py --pid PID --db DB --out REPORT.json`
-reads the daemon's CPU time and backlog over ten minutes. Pass the report to
-`scripts/ci_ratchet_table.py --hotlane-cpu-report REPORT.json`. Nonempty backlog with CPU above
-`BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT` (default 60% of one core) fails; absent measurements report `n/a`.
+The daemon also writes `hotlane-cpu.json` beside the resolved database. It records a rolling ten-minute
+CPU-time delta, backlog vectors actually encoded, and current running/yield/pause state, with no full-DB scans.
+The ratchet table automatically reads this file on a Mac and verifies its live installed PID with `ps`.
+`BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT` defaults to 60% of one core and fails the row when exceeded
+with observed backlog encoding. Paused/yielded work, an incomplete window, or no encoding is `n/a`, never GREEN.
+The budget is unmeasured until installed; hosted CI cannot produce installed-Mac evidence.
+An optional independent `ps` audit remains available via
+`python scripts/hotlane_cpu_ratchet.py --pid PID --db DB --out REPORT.json` and the table's
+`--hotlane-cpu-report REPORT.json` override.
 
 ### Privacy
 

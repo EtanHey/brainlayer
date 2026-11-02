@@ -130,16 +130,6 @@
         "target": "import ssl"
       }
     },
-    "0a8afd138df7753244f931b48e03788ff5501cf68aa2b90ee534768c614c0a14": {
-      "non_cloud_purpose": "S22 local libc CPU-only setpriority(PRIO_PROCESS, self, nice=20) and typed errno handling; no Darwin background or disk I/O policy and no network sender.",
-      "site": {
-        "call_sha256": "fd2e5768445f456ee386121be506cc6f812ec53016700424fc3cbf65351ee7d7",
-        "kind": "dynamic_code_or_import",
-        "owner": "<module>.setup_cpu_budget",
-        "path": "scripts/hotlane_brainbar_daemon.py",
-        "target": "ctypes.CDLL"
-      }
-    },
     "0aa9c0a1ef873504b2828ebecd0b9949f33eeca1399c78bdfb5804eae68de048": {
       "non_cloud_purpose": "Resolve a stable local macOS LocalHostName via pinned /usr/sbin/scutil, with portable CI fallback; no network or model endpoint.",
       "site": {
@@ -1546,16 +1536,6 @@
         "owner": "<module>.AppSocket.__init__",
         "path": "scripts/harness_probe_native.py",
         "target": "self.sock.sendall"
-      }
-    },
-    "439497f86d085884f6af3ef168f2be900fa6f0ce9e76aab1568e8a7ddd40c405": {
-      "non_cloud_purpose": "S22 local libc CPU-only setpriority(PRIO_PROCESS, self, nice=20) and typed errno handling; no Darwin background or disk I/O policy and no network sender.",
-      "site": {
-        "call_sha256": "b037058c64dab853f827856d2585d3484b629d9cd4ba21b222a5a772db393c35",
-        "kind": "transport_call",
-        "owner": "<module>.setup_cpu_budget",
-        "path": "scripts/hotlane_brainbar_daemon.py",
-        "target": "ctypes.get_errno"
       }
     },
     "43a15a48a9eb1f821a37dc820b4f0457b53913e58da5c01e0227564a4b626fb3": {
@@ -3104,6 +3084,16 @@
         "target": "subprocess.check_output"
       }
     },
+    "826c4e569d07b33e6100eed4108c04d56c5c751b6ea3f01723a47575a4697243": {
+      "non_cloud_purpose": "S22 read-only pinned /bin/ps sampling of an explicitly named installed hotlane PID for CPU audit and live producer identity; argv only, no shell or cloud sender.",
+      "site": {
+        "call_sha256": "c38d321fc00a3a40e49e58c73f2ecfc1c838e48e453de3b5e53737860ee09c86",
+        "kind": "child_process",
+        "owner": "<module>.ps_sample",
+        "path": "scripts/hotlane_cpu_ratchet.py",
+        "target": "subprocess.check_output"
+      }
+    },
     "82a1a243a54ad83580d2c44c99867aee6f5930a253271e4ddd5d3dda6883ba13": {
       "non_cloud_purpose": "Subprocess timeout/error class reference for bounded own-process cleanup and explicit failed receipts; no transport invocation. Site: <module>.Bridge.__exit__ subprocess.TimeoutExpired.",
       "site": {
@@ -3172,16 +3162,6 @@
         "owner": "<module>._detect_git_sha",
         "path": "src/brainlayer/archive_collapse.py",
         "target": "subprocess.CalledProcessError"
-      }
-    },
-    "8639a7ba56cd85157fcfea8f9ab772c33db683ef90d09b450e96fe37a228fc5b": {
-      "non_cloud_purpose": "S22 local libc CPU-only setpriority(PRIO_PROCESS, self, nice=20) and typed errno handling; no Darwin background or disk I/O policy and no network sender.",
-      "site": {
-        "call_sha256": "d2c1bdab63bd2fb4eeac61f38341f799c24b10a34e8b42981b38e38f872ff410",
-        "kind": "callable_reference",
-        "owner": "<module>.setup_cpu_budget",
-        "path": "scripts/hotlane_brainbar_daemon.py",
-        "target": "ctypes.c_uint"
       }
     },
     "8644f4a4358b524633196e1326189fc020611328cdf49170f715cffc5a844de5": {
@@ -3790,6 +3770,16 @@
         "owner": "<module>.ps_sample",
         "path": "scripts/sprint_gate.py",
         "target": "subprocess.run"
+      }
+    },
+    "9e5a01fed464d2af61e192eb5ccc24b011c03645489f042ee3e4416a650036a8": {
+      "non_cloud_purpose": "S22 local subprocess exception type used to fail closed when pinned /bin/ps cannot verify the live hotlane producer PID; no process launch or network sender at this reference.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.read_live_report",
+        "path": "scripts/hotlane_cpu_ratchet.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "9e87eef5434c6c0016c89467c88999480208496d6a0062660b9441dde772329f": {
@@ -4508,16 +4498,6 @@
         "owner": "<module>.hooks",
         "path": "src/brainlayer/cli/__init__.py",
         "target": "subprocess.CalledProcessError"
-      }
-    },
-    "b72cc9c29a7068606f30657ddaf1fd1e7e81bd7ca0e4e362359836c2515ff08b": {
-      "non_cloud_purpose": "S22 local libc CPU-only setpriority(PRIO_PROCESS, self, nice=20) and typed errno handling; no Darwin background or disk I/O policy and no network sender.",
-      "site": {
-        "call_sha256": "669c8db7bfb9b4e64a7aa5f9239cbd229a5c460f228936e83d225f5ab2176b82",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/hotlane_brainbar_daemon.py",
-        "target": "import ctypes"
       }
     },
     "b7a7102464bccc81b95e552a2bdf3487facf2fb9217ce05dedaae7a68dd30a37": {
@@ -5318,16 +5298,6 @@
         "target": "import subprocess"
       }
     },
-    "d73c07c2f009334d5b650933772076ec576fd1d6557b69314b60322b2230168f": {
-      "non_cloud_purpose": "S22 read-only ps sampling of an explicitly named installed hotlane PID for the ten-minute CPU budget; argv only, no shell or cloud sender.",
-      "site": {
-        "call_sha256": "903bd8f38404c68fb5f4de74e04dc7299774adbd0fc00a236547efe5c9e7f9bd",
-        "kind": "child_process",
-        "owner": "<module>.ps_sample",
-        "path": "scripts/hotlane_cpu_ratchet.py",
-        "target": "subprocess.check_output"
-      }
-    },
     "d7967f8b10f25c262303281063349f16884d81c8365d987b705aa6684a8023d8": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>._optional_sqlite_pragma_check subprocess.TimeoutExpired.",
       "site": {
@@ -5694,16 +5664,6 @@
         "owner": "<module>.native_id",
         "path": "scripts/harness_probe_t3.py",
         "target": "sqlite3.connect"
-      }
-    },
-    "e9dbd78ee5b17c1339f36232d4799aa7baf9cb9e534d92f1ac465407ca3f9ee2": {
-      "non_cloud_purpose": "S22 local libc CPU-only setpriority(PRIO_PROCESS, self, nice=20) and typed errno handling; no Darwin background or disk I/O policy and no network sender.",
-      "site": {
-        "call_sha256": "d693cc601e1c8cea5d852e5a74ef971b84626342f528b60bc7484c130f5132fc",
-        "kind": "callable_reference",
-        "owner": "<module>.setup_cpu_budget",
-        "path": "scripts/hotlane_brainbar_daemon.py",
-        "target": "ctypes.c_int"
       }
     },
     "ea840c08afedc3200fe4da9589754b6775e48a559481aaf32932ce03737e36fb": {

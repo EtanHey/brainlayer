@@ -1,4 +1,4 @@
-"""Read-only installed-Mac hotlane CPU budget, using a full ten-minute ps window."""
+"""Read live daemon CPU evidence, or explicitly collect a ten-minute ps audit."""
 
 import argparse
 import json
@@ -23,7 +23,7 @@ def installed(command):
 
 def ps_sample(pid):
     output = subprocess.check_output(
-        ["ps", "-p", str(pid), "-o", "lstart=", "-o", "time=", "-o", "command="], text=True, timeout=5
+        ["/bin/ps", "-p", str(pid), "-o", "lstart=", "-o", "time=", "-o", "command="], text=True, timeout=5
     ).strip()
     fields = output.split(None, 6)
     if len(fields) != 7 or not installed(fields[6]):
@@ -74,6 +74,8 @@ def read_report(path):
         payload = json.loads(path.read_text())
         if not isinstance(payload, dict):
             raise ValueError("CPU report must be an object")
+        if payload.get("source") == "daemon":
+            return daemon_verdict(payload)
         if payload.get("status") == "unavailable" and payload.get("reason"):
             return "n/a", "n/a — " + payload["reason"]
         cpu, window, pending = payload["cpu_percent"], payload["window_seconds"], payload["backlog"]
@@ -92,11 +94,68 @@ def read_report(path):
             raise ValueError("invalid, short, or stale installed-Mac CPU evidence")
         if not any(pending):
             return "n/a", "n/a — backlog was empty throughout the measurement"
+        # Without observed progress, low CPU may just mean the backlog yielded.
+        # Arrivals can mask a real drain; that is unmeasured, never a guessed pass.
+        if not any(after < before for before, after in zip(pending, pending[1:])):
+            return "n/a", "n/a — no observed backlog drain; yielded/paused work is not a budget measurement"
         return ("RED" if cpu > budget else "GREEN"), (
             f"{cpu:.1f}% / {budget:g}% budget over {window:.1f}s; backlog {pending[0]} → {pending[-1]}"
         )
     except (OSError, ValueError, KeyError, TypeError) as error:
         return "RED", f"invalid hotlane CPU report: {error}"
+
+
+def daemon_verdict(payload):
+    cpu, window, encoded = payload["cpu_percent"], payload["window_seconds"], payload["backlog_encoded"]
+    budget = float(os.environ.get("BRAINLAYER_HOTLANE_CPU_BUDGET_PERCENT", "60"))
+    age = (datetime.now(timezone.utc) - datetime.fromisoformat(payload["measured_at"])).total_seconds()
+    state = payload["backlog_state"]
+    if (
+        payload["status"] != "measured"
+        or payload["platform"] != "darwin"
+        or type(payload["pid"]) is not int
+        or payload["pid"] <= 0
+        or not all(type(x) in (int, float) and math.isfinite(x) and x >= 0 for x in (cpu, window, budget))
+        or type(encoded) is not int
+        or encoded < 0
+        or not 0 <= age <= 60
+        or state
+        not in {
+            "starting",
+            "running",
+            "waiting",
+            "high load",
+            "pause marker",
+            "load unavailable",
+            "store queue",
+            "error",
+        }
+    ):
+        raise ValueError("invalid or stale daemon CPU evidence")
+    value = f"{cpu:.1f}% / {budget:g}% budget over {window:.1f}s; backlog encoded={encoded}; state={state}"
+    if state in {"high load", "pause marker", "load unavailable", "store queue", "error"}:
+        return "n/a", f"n/a — backlog yielded/paused or unavailable: {value}"
+    if window < 600:
+        return "n/a", f"n/a — warming the installed ten-minute window: {value}"
+    if not encoded:
+        return "n/a", f"n/a — no observed backlog encoding: {value}"
+    return ("RED" if cpu > budget else "GREEN"), value
+
+
+def read_live_report(db, os_name):
+    if os_name != "Darwin":
+        return "n/a", "n/a — live hotlane CPU evidence requires an installed Mac"
+    path = db.parent / "hotlane-cpu.json"
+    if not path.exists():
+        return "n/a", f"n/a — installed daemon has not produced {path}; unmeasured until installed"
+    try:
+        payload = json.loads(path.read_text())
+        if payload["source"] != "daemon" or payload["db"] != str(db.resolve()):
+            raise ValueError("CPU evidence belongs to a different producer/database")
+        ps_sample(payload["pid"])
+        return daemon_verdict(payload)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        return "RED", f"invalid live hotlane CPU evidence: {error}"
 
 
 def main():

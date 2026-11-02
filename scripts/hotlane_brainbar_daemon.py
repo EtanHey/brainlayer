@@ -10,7 +10,6 @@ Python enrichment arguments are accepted for compatibility but cannot invoke a m
 from __future__ import annotations
 
 import argparse
-import ctypes
 import inspect
 import json
 import logging
@@ -29,6 +28,7 @@ import sqlite_vec
 
 from brainlayer._helpers import serialize_f32
 from brainlayer.embeddings import get_embedding_model
+from brainlayer.hotlane_budget import HotlaneCpuSampler
 from brainlayer.paths import get_db_path
 from brainlayer.store import embed_hot_chunk, embed_pending_chunks
 from brainlayer.vector_store import VectorStore, skip_connection_hooks, temporary_write_busy_timeout_ms
@@ -159,6 +159,7 @@ class CycleResult(NamedTuple):
     enrich_failed: int = 0
     enrich_daily_cap_reached: bool = False
     deferred: int = 0
+    backlog_encoded: int = 0
 
 
 class EmbedCandidate(NamedTuple):
@@ -187,11 +188,7 @@ def setup_cpu_budget(db_path: Path) -> dict:
     """CPU-only priority: never request Darwin background or a disk I/O policy."""
     policy = {"policy": "not applicable", "platform": sys.platform}
     if sys.platform == "darwin":
-        library = ctypes.CDLL(None, use_errno=True)
-        library.setpriority.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_int]
-        library.setpriority.restype = ctypes.c_int
-        if library.setpriority(os.PRIO_PROCESS, 0, 20) == -1:
-            raise OSError(ctypes.get_errno(), "hotlane CPU nice policy failed")
+        os.setpriority(os.PRIO_PROCESS, 0, 20)
         policy.update(policy="nice", nice=os.getpriority(os.PRIO_PROCESS, 0))
     default_threads = 1 if sys.platform == "darwin" and "Apple M1" in _sysctl("machdep.cpu.brand_string") else 2
     threads = int(os.environ.get("BRAINLAYER_HOTLANE_THREADS", str(default_threads)))
@@ -986,9 +983,10 @@ def _run_split_cycle(
     hot_rows = [candidate for candidate in hot_rows if needs_embedding(candidate)]
     pending_rows = [candidate for candidate in pending_rows if needs_embedding(candidate)]
     vectors = metrics.run("encode", _embed_candidates, hot_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn)
-    vectors.extend(
-        metrics.run("encode", _embed_candidates, pending_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn)
+    backlog_vectors = metrics.run(
+        "encode", _embed_candidates, pending_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn
     )
+    vectors.extend(backlog_vectors)
     fresh_ids = {vector.chunk_id for vector in vectors}
     vectors = [vector for vector in carried if vector.chunk_id not in fresh_ids] + vectors
     if vectors:
@@ -1031,11 +1029,11 @@ def _run_split_cycle(
             )
             metrics.finish("deferred")
             _warn_retired_enrichment(enrich_limit, enrich_since_hours, enrich_fn)
-            return CycleResult(embedded=embedded, deferred=len(unwritten))
+            return CycleResult(embedded=embedded, deferred=len(unwritten), backlog_encoded=len(backlog_vectors))
 
     _warn_retired_enrichment(enrich_limit, enrich_since_hours, enrich_fn)
     metrics.finish()
-    return CycleResult(embedded=embedded)
+    return CycleResult(embedded=embedded, backlog_encoded=len(backlog_vectors))
 
 
 def _warn_retired_enrichment(limit: int, since_hours: int, callback: object) -> None:
@@ -1123,6 +1121,7 @@ def run(
     queue_dir: Path | None = None,
     queue_depth_fn: Callable[[Path], int] = _queue_depth,
     high_priority_queue_depth_fn: Callable[[Path], int] = _high_priority_queue_depth,
+    cpu_sampler: HotlaneCpuSampler | None = None,
 ) -> None:
     model = _create_embedding_model(model_factory, device=embedding_device)
     embed_batch_fn = getattr(model, "embed_texts", None)
@@ -1139,6 +1138,10 @@ def run(
     queue_dir_was_explicit = queue_dir is not None
     queue_dir = queue_dir or _default_queue_dir()
     last_backlog = time_fn() - backlog_interval
+    last_backlog_duty = last_backlog + backlog_interval
+    max_backlog_wait = float(os.environ.get("BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS", "300"))
+    if not math.isfinite(max_backlog_wait) or max_backlog_wait <= 0:
+        raise ValueError("BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS must be finite and positive")
     _warn_retired_enrichment(enrich_limit, enrich_since_hours, None)
     if enrich_limit > 0:
         LOGGER.warning("Ignoring retired hotlane enrichment interval=%s", enrich_interval)
@@ -1162,16 +1165,22 @@ def run(
             cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
             cycle_recent_limit = recent_limit
             reason = _backlog_yield_reason(db_path, backlog_max_load) if backlog_batch else ""
+            if reason == "high load" and now - last_backlog_duty >= max_backlog_wait:
+                # Reserve the existing backlog lane; never lift store-queue backpressure.
+                reason = ""
+                cycle_backlog_batch = backlog_batch
             if reason != backlog_yield_reason:
                 LOGGER.info("backlog embedding %s", f"yielding: {reason}" if reason else "resumed")
                 backlog_yield_reason = reason
             if reason:
                 cycle_backlog_batch = 0
-            if queue_has_high_priority_backlog and not reason:
+            if queue_has_high_priority_backlog:
                 if not queue_backpressure_active:
                     LOGGER.info("durable high-priority queue has backlog; suppressing hot embedding")
                 queue_backpressure_active = True
                 if cycle_backlog_batch <= 0:
+                    if cpu_sampler is not None:
+                        cpu_sampler.observe("store queue")
                     cycles += 1
                     # Backpressure is not idleness: hold the configured cadence so the
                     # reserved backlog slice resumes on time.
@@ -1190,6 +1199,7 @@ def run(
                 backlog_slice_logged = False
             if cycle_backlog_batch > 0:
                 last_backlog = now
+                last_backlog_duty = now
             if cycle_fn is run_cycle:
                 result = _run_split_cycle(
                     db_path=db_path,
@@ -1220,10 +1230,15 @@ def run(
             # nothing (the hot slice is deliberately suppressed to yield to the drain),
             # so it must not be treated as idle -- backing off there would slow recovery.
             did_work = bool(result.embedded) or queue_has_backlog
+            if cpu_sampler is not None:
+                state = reason or ("running" if result.backlog_encoded else "waiting")
+                cpu_sampler.observe(state, result.backlog_encoded)
             if result.embedded:
                 LOGGER.info("embedded=%d", result.embedded)
         except Exception:
             LOGGER.exception("hotlane adapter cycle failed")
+            if cpu_sampler is not None:
+                cpu_sampler.observe("error")
             cycles += 1
             # A raised cycle is a RETRY, not an idle cycle (PR #735 review, macroscope):
             # it already slept its own backoff here, and letting it fall through to the
@@ -1262,16 +1277,22 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     setup_cpu_budget(args.db)
-    run(
-        db_path=args.db,
-        interval=max(args.interval, 0.25),
-        recent_limit=max(args.recent_limit, 1),
-        backlog_interval=max(args.backlog_interval, 1.0),
-        backlog_batch=min(max(args.backlog_batch, 0), MAX_BACKLOG_BATCH),
-        enrich_interval=0.0,
-        enrich_limit=0,
-        enrich_since_hours=0,
-    )
+    sampler = HotlaneCpuSampler(args.db)
+    sampler.start()
+    try:
+        run(
+            db_path=args.db,
+            interval=max(args.interval, 0.25),
+            recent_limit=max(args.recent_limit, 1),
+            backlog_interval=max(args.backlog_interval, 1.0),
+            backlog_batch=min(max(args.backlog_batch, 0), MAX_BACKLOG_BATCH),
+            enrich_interval=0.0,
+            enrich_limit=0,
+            enrich_since_hours=0,
+            cpu_sampler=sampler,
+        )
+    finally:
+        sampler.close()
 
 
 if __name__ == "__main__":
