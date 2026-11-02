@@ -202,6 +202,7 @@ def test_write_retries_busy_begin_then_defers_only_unwritten_vectors(monkeypatch
     with pytest.raises(hotlane.HotlaneVectorWriteDeferred) as raised:
         hotlane._write_embedded_vectors(FakeStore(), vectors)
 
+    assert isinstance(raised.value, apsw.BusyError)
     assert raised.value.written == 1
     assert raised.value.attempts == hotlane.HOTLANE_WRITE_ATTEMPTS == 3
     assert [vector.chunk_id for vector in raised.value.remaining] == ["chunk-1", "chunk-2"]

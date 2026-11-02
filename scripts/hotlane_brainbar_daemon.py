@@ -180,8 +180,12 @@ class EmbeddedVector(NamedTuple):
     embedding: list[float]
 
 
-class HotlaneVectorWriteDeferred(Exception):
-    """The writer slot stayed busy through every attempt; ``remaining`` was not written."""
+class HotlaneVectorWriteDeferred(apsw.BusyError):
+    """A busy write with progress for cycle carry-over.
+
+    Remains a BusyError so callers using the writer's existing lock-error contract
+    can retry after contention; the split cycle also retains ``remaining``.
+    """
 
     def __init__(self, *, written: int, remaining: list[EmbeddedVector], attempts: int, cause: BaseException):
         super().__init__(f"{type(cause).__name__}: {cause} (after {attempts} attempts, {len(remaining)} unwritten)")
