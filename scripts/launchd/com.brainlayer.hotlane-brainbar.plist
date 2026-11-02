@@ -54,7 +54,7 @@
 	<key>ExitTimeOut</key>
 	<integer>30</integer>
 	<key>LowPriorityIO</key>
-	<true/>
+	<false/>
 	<key>SoftResourceLimits</key>
 	<dict>
 		<key>NumberOfFiles</key>
