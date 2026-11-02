@@ -15,9 +15,9 @@ skipped job while a verified backup exists is a note, never a dot. So:
   Only an unobserved receipt source falls back to the last verified timestamp; its age keeps
   running while the source is unreadable.
 - Recovery needs real evidence. Backups go green on the first verified receipt; ingest, stores
-  and search need ``recovery_good_ticks`` good observations with no bad one between. A tick with
+  and search need ``recovery_good_ticks`` consecutive observed good ticks. A tick with
   no new evidence (an unobserved fact, or an age that only looks fresh because the monitor was not
-  running) never counts as good and never improves a known amber or red.
+  running) resets recovery and never improves a known amber or red.
 - Latches: a failed store canary stays failed until a store canary succeeds; confirmed Drive
   access loss stays red until Drive access is observed ``ok``.
 - Wake grace: after a monitoring gap, a backup that just crossed red gets one catch-up window,
@@ -477,10 +477,10 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
         before = prior_checks.get(name) if isinstance(prior_checks.get(name), Mapping) else {}
         prior_state = before.get("state") if before.get("state") in _RANK else None
         unknown_ticks = int(before.get("unknown_ticks") or 0)
-        good_ticks = int(before.get("good_ticks") or 0)  # good observations since the last bad one
+        good_ticks = int(before.get("good_ticks") or 0)  # consecutive observed good ticks
         deadline = _parse(before.get("catch_up_until"))
         state, note = r.state, r.note
-        if r.state != GREEN:
+        if r.state != GREEN or not r.evidence or r.graced:
             good_ticks = 0
         if state == UNKNOWN:
             unknown_ticks += 1
@@ -497,6 +497,8 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
                 # Nothing new was observed (or the age only looks fresh because the monitor was
                 # not running): a known amber or red holds, and this is not a good tick.
                 state, note = prior_state, f"{note}; {prior_state} holds until positive evidence".lstrip("; ")
+            elif name in _HYSTERESIS and prior_state == RED and state == AMBER:
+                state, note = RED, f"{note}; red holds until consecutive observed good checks"
             elif name in _HYSTERESIS and state == GREEN and prior_state in (AMBER, RED):
                 good_ticks += 1
                 if good_ticks < t.recovery_good_ticks:
