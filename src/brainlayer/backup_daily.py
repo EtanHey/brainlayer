@@ -3039,8 +3039,13 @@ def _recent_verified_backup_for_reuse(
     except (OSError, ValueError):
         return None
     now = now.astimezone(dt.UTC)
-    # An older pass cannot restore proof revoked by a later receipt for these bytes.
-    latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
+    # An older pass cannot restore proof revoked by a later receipt for these bytes. A receipt
+    # that names no snapshot (legacy shape) keeps its own slot, as on main, instead of vanishing.
+    latest: dict[Any, dict[str, Any]] = {}
+    for index, r in enumerate(receipts):
+        snapshot = r.get("snapshot")
+        latest.pop(snapshot if isinstance(snapshot, str) else ("unnamed", index), None)
+        latest[snapshot if isinstance(snapshot, str) else ("unnamed", index)] = r
     for receipt in reversed(list(latest.values())):
         try:
             created = _snapshot_created_time(receipt)
