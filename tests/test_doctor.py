@@ -563,7 +563,9 @@ def test_run_doctor_can_skip_roundtrip_probe_for_bounded_status_gate(tmp_path, m
     assert not [issue for issue in result.issues if issue.code == "roundtrip_vector_probe_failed"]
 
 
-def test_run_doctor_fails_loudly_when_brainbar_version_check_fails(tmp_path):
+@pytest.mark.parametrize("source_checkout", [False, True])
+def test_run_doctor_fails_loudly_when_brainbar_version_check_fails(tmp_path, monkeypatch, source_checkout):
+    monkeypatch.setattr("brainlayer.doctor._running_from_source_checkout", lambda: source_checkout)
     from brainlayer.doctor import run_doctor
 
     db_path = tmp_path / "healthy.db"
@@ -591,10 +593,11 @@ def test_run_doctor_fails_loudly_when_brainbar_version_check_fails(tmp_path):
         now_fn=lambda: NOW,
     )
 
-    issue = next(issue for issue in result.issues if issue.code == "brainbar_version_check_failed")
-    assert result.exit_code == 1
-    assert result.ok is False
-    assert issue.severity == "fatal"
+    issue = next((issue for issue in result.issues if issue.code == "brainbar_version_check_failed"), None)
+    assert issue is not None
+    assert result.exit_code == (0 if source_checkout else 1)
+    assert result.ok is source_checkout
+    assert issue.severity == ("info" if source_checkout else "fatal")
     assert "cask drift" in issue.message
 
 
@@ -620,7 +623,9 @@ def test_run_doctor_warns_when_brainbar_version_check_script_is_missing(tmp_path
     assert result.ok is True
 
 
-def test_run_doctor_reports_brainbar_version_check_runner_exception(tmp_path):
+@pytest.mark.parametrize("source_checkout", [False, True])
+def test_run_doctor_reports_brainbar_version_check_runner_exception(tmp_path, monkeypatch, source_checkout):
+    monkeypatch.setattr("brainlayer.doctor._running_from_source_checkout", lambda: source_checkout)
     from brainlayer.doctor import run_doctor
 
     db_path = tmp_path / "healthy.db"
@@ -645,9 +650,10 @@ def test_run_doctor_reports_brainbar_version_check_runner_exception(tmp_path):
         now_fn=lambda: NOW,
     )
 
-    issue = next(issue for issue in result.issues if issue.code == "brainbar_version_check_failed")
-    assert issue.severity == "fatal"
-    assert result.exit_code == 1
+    issue = next((issue for issue in result.issues if issue.code == "brainbar_version_check_failed"), None)
+    assert issue is not None
+    assert issue.severity == ("info" if source_checkout else "fatal")
+    assert result.exit_code == (0 if source_checkout else 1)
     assert "runner unavailable" in issue.message
 
 
@@ -1998,3 +2004,60 @@ def test_doctor_does_not_expect_retired_enrichment_services(tmp_path, label):
     payload = json.loads(json.dumps(result.to_dict()))
     assert "enrichment_backlog" in payload
     assert payload["enrichment_backlog"] is None
+
+
+@pytest.mark.parametrize(
+    "state", ["running", "dead", "legacy", "unavailable", "disabled", "paused", "legacy_with_supervisor"]
+)
+def test_doctor_consolidated_service_invariant(tmp_path, monkeypatch, state):
+    from brainlayer import supervisor_adapters
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "healthy.db"
+    _build_db(db_path)
+    monkeypatch.setattr(supervisor_adapters, "supervisor_owns_jobs", lambda: state != "legacy")
+
+    def status(self):
+        if state == "unavailable":
+            raise OSError("control socket unavailable")
+        return {
+            name: {
+                "configured": state != "disabled",
+                "paused": state == "paused",
+                "pid": 123 if state in {"running", "disabled", "paused"} else None,
+                "starts": 1,
+                "exit_timeout": 5,
+            }
+            for name in ("hotlane", "watch", "drain")
+        }
+
+    monkeypatch.setattr(supervisor_adapters.SupervisorCommands, "request", status)
+
+    def runner(args):
+        return SimpleNamespace(
+            returncode=0 if state in {"legacy", "legacy_with_supervisor"} else 113, stdout="", stderr=""
+        )
+
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path), ps_output_fn=_hotlane_ps, command_runner=runner, now_fn=lambda: NOW
+    )
+    unloaded = {issue.code for issue in result.issues if issue.code.endswith("_unloaded")}
+    assert unloaded == (
+        set()
+        if state in {"running", "legacy", "legacy_with_supervisor"}
+        else {"hotlane_unloaded", "watch_unloaded", "drain_unloaded"}
+    )
+
+
+@pytest.mark.parametrize("checkout,keg,expected", [(True, False, True), (True, True, False), (False, False, False)])
+def test_doctor_source_checkout_detection(tmp_path, monkeypatch, checkout, keg, expected):
+    from brainlayer import doctor
+
+    root = tmp_path / "source"
+    root.mkdir()
+    if checkout:
+        (root / ".git").write_text("gitdir: /unused/worktree")
+    monkeypatch.setattr(doctor, "__file__", str(root / "src/brainlayer/doctor.py"))
+    prefix = tmp_path / ("Cellar/brainlayer/1.5.84/libexec/venv" if keg else "venv")
+    monkeypatch.setattr(doctor.sys, "prefix", str(prefix))
+    assert doctor._running_from_source_checkout() is expected
