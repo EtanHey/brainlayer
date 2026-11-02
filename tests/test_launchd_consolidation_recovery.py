@@ -19,6 +19,7 @@ from tests.test_launchd_consolidation import Launchctl, invoke
 
 FLEET = "com.etanhey.brainlayer-fleet-watchdog"
 CALENDAR = "com.brainlayer.maintenance"
+CRASH_SHARD_COUNTS = {False: 32, True: 40}
 
 
 @pytest.mark.parametrize("pinned", [False, True], ids=["opt-plist", "fallback-pinned-plist"])
@@ -630,8 +631,14 @@ def probe(root, keg, cut=0, *, context="baseline"):
 
 
 @pytest.mark.crash_sweep
-@pytest.mark.parametrize("restart", [False, True], ids=["first-install", "keg-restart"])
-@pytest.mark.parametrize("shard", range(32), ids=lambda shard: f"shard-{shard:02}")
+@pytest.mark.parametrize(
+    "restart,shard",
+    [
+        pytest.param(restart, shard, id=f"shard-{shard:02}-{'keg-restart' if restart else 'first-install'}")
+        for restart, shards in CRASH_SHARD_COUNTS.items()
+        for shard in range(shards)
+    ],
+)
 def test_sigkill_every_os_and_launchctl_boundary_then_plain_rerun(tmp_path, restart, shard):
     mode = "keg-restart" if restart else "first-install"
     baseline_root = tmp_path / "baseline"
@@ -643,7 +650,10 @@ def test_sigkill_every_os_and_launchctl_boundary_then_plain_rerun(tmp_path, rest
     assert baseline.returncode == 0, baseline.stderr
     events = json.loads(baseline.stdout)["events"]
     assert len(events) > 100 and any("os.rename" in event for event in events) == (not restart)
-    cuts = [(cut, event) for cut, event in enumerate(events, 1) if (cut - 1) % 32 == shard]
+    # Python 3.12 pre-push records more OS boundaries than the Framework 3.13
+    # interpreter. Keep every cut and the per-item bound in both environments.
+    shard_count = CRASH_SHARD_COUNTS[restart]
+    cuts = [(cut, event) for cut, event in enumerate(events, 1) if (cut - 1) % shard_count == shard]
     assert 0 < len(cuts) <= 30, "increase shard count to retain the <=30-cut per-item bound"
     failures = []
     phases = {"rolled_back": 0, "migrated": 0}
@@ -695,6 +705,7 @@ def test_sigkill_every_os_and_launchctl_boundary_then_plain_rerun(tmp_path, rest
             {
                 "mode": mode,
                 "shard": shard,
+                "shard_count": shard_count,
                 "cuts": len(cuts),
                 "all_cuts": len(events),
                 "phases": phases,

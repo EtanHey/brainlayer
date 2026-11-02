@@ -471,13 +471,32 @@ def test_prepush_cache_does_not_skip_after_failure(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "module",
-    ("launchd_consolidation", "launchd_revert", "migration_journal", "migration_runtime", "migration_custody"),
+    (
+        "launchd_consolidation",
+        "launchd_revert",
+        "migration_journal",
+        "migration_runtime",
+        "migration_custody",
+        "policy_reconcile",
+    ),
 )
-@pytest.mark.parametrize("missing", (None, "test_launchd_consolidation_recovery.py", "test_launchd_revert_crash.py"))
+@pytest.mark.parametrize(
+    "missing",
+    (
+        None,
+        "test_launchd_consolidation_recovery.py",
+        "test_launchd_revert_crash.py",
+        "test_launchd_policy_reconcile.py",
+    ),
+)
 def test_changed_only_transaction_sources_require_both_complete_sweeps(tmp_path: Path, module, missing) -> None:
     test_root = tmp_path / "tests"
     test_root.mkdir()
-    suites = ("test_launchd_consolidation_recovery.py", "test_launchd_revert_crash.py")
+    suites = (
+        "test_launchd_consolidation_recovery.py",
+        "test_launchd_revert_crash.py",
+        "test_launchd_policy_reconcile.py",
+    )
     for name in (*suites, f"test_{module}.py", "test_think_recall_integration.py"):
         if name != missing:
             (test_root / name).write_text("test placeholder\n")
@@ -502,7 +521,7 @@ def test_changed_only_transaction_sources_require_both_complete_sweeps(tmp_path:
         assert f"{test_root}/ -v" in unit
     else:
         assert all(str(test_root / name) in unit for name in suites)
-        assert str(test_root / f"test_{module}.py") in unit
+        assert module == "policy_reconcile" or str(test_root / f"test_{module}.py") in unit
         assert f"{test_root}/ -v" not in unit
 
 

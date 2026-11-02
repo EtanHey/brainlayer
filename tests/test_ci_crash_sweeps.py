@@ -30,8 +30,8 @@ def collect(marker):
 def test_marker_partition_preserves_every_exhaustive_shard_and_unit_control():
     expected = {
         f"{FILES[0]}::test_sigkill_every_os_and_launchctl_boundary_then_plain_rerun[shard-{shard:02}-{mode}]"
-        for shard in range(32)
-        for mode in ("first-install", "keg-restart")
+        for mode, shards in (("first-install", 32), ("keg-restart", 40))
+        for shard in range(shards)
     }
     if len(FILES) == 2:
         expected |= {
@@ -40,7 +40,7 @@ def test_marker_partition_preserves_every_exhaustive_shard_and_unit_control():
         }
     sweeps = collect("crash_sweep")
     controls = collect("not crash_sweep")
-    assert sweeps == expected  # An independent 32×2 + 64 inventory; no subset may pass.
+    assert sweeps == expected  # An independent 32 + 40 + 64 inventory; no subset may pass.
     assert controls and not controls.intersection(sweeps)
     assert controls | sweeps == collect("crash_sweep or not crash_sweep")
     assert any("test_probe_timeout" in node for node in controls)
