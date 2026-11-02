@@ -131,10 +131,37 @@ def test_transport_alert_reaches_the_health_badge(tmp_path, monkeypatch):
     report_transport_alert(read(path, db), env={"BRAINLAYER_DB": str(db), "BRAINLAYER_JOB_ALERT_PATH": str(alert)})
     badge = tmp_path / "badge-state.json"
     _run_minimal_health_check(tmp_path, badge, job_opt_path=tmp_path, job_alert_path=alert)
-    value = json.loads(badge.read_text())["alerts"]
-    assert value["badge_on"] is True
+    document = json.loads(badge.read_text())
+    value = document["alerts"]
+    assert value["badge_on"] is False
+    assert document["verdict"]["dot"] != "red"
     issue = next(i for i in value["active"] if i["code"] == "job_alert_mcp-transport")
+    assert issue["severity"] == "warning"
     assert "3 dropped requests" in issue["message"]
+    assert {"code": issue["code"], "message": issue["message"]} in document["verdict"]["notes"]
+
+
+def test_failing_search_canary_lights_the_health_badge_after_three_ticks(tmp_path):
+    from tests.test_badge_state import _run_minimal_health_check
+
+    badge = tmp_path / "badge-state.json"
+    for tick in range(3):
+        now = NOW + timedelta(minutes=5 * tick)
+        _run_minimal_health_check(
+            tmp_path,
+            badge,
+            canary_response={"error": {"code": -32000, "message": "BrainBar socket unavailable"}},
+            now_fn=lambda: now,
+            evidence_at=now,
+        )
+        document = json.loads(badge.read_text())
+        assert document["alerts"]["badge_on"] is (tick == 2)
+        search = next(c for c in document["verdict"]["checks"] if c["name"] == "search")
+        assert (search["state"] == "red") is (tick == 2)
+
+    assert document["verdict"]["dot"] == "red"
+    issue = next(i for i in document["alerts"]["active"] if i["code"] == "outcome_search")
+    assert issue["severity"] == "critical"
 
 
 def test_default_receipt_path_matches_native_db_symlink_parent(tmp_path):
