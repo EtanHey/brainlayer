@@ -105,14 +105,21 @@ def test_unreadable_receipts_keep_the_clock_aging_to_red():
     assert check.state == hv.RED and check.age_s == 55 * 3600
 
 
-def test_missing_or_never_verified_receipts_are_red_but_unreadable_is_unknown():
-    assert state("backup_local", backup_local_verified_at=None) == hv.RED
-    assert state("backup_local", backup_local_verified_at=hv.UNOBSERVED) == hv.UNKNOWN
+@pytest.mark.parametrize(("check", "fact"), [(check, fact) for check, fact, _, _ in AGE_EDGES[:3]])
+def test_missing_or_never_verified_receipts_are_red_but_unreadable_is_unknown(check, fact):
+    absent = run(**{fact: None})
+    assert absent.check(check).state == hv.RED
+    assert absent.check(check).note == "no verified copy on record"
+    alert = next(item for item in hv.badge_alerts(absent) if item["code"] == f"outcome_{check}")
+    assert alert["message"] == f"{hv.CHECK_LABELS[check]}: no verified copy on record"
+    unreadable = run(**{fact: hv.UNOBSERVED}).check(check)
+    assert unreadable.state == hv.UNKNOWN
+    assert unreadable.note == "receipts could not be read"
 
 
-def test_clock_never_moves_backward():
+def test_readable_receipts_can_replace_a_newer_persisted_clock():
     prior = run(backup_local_verified_at=NOW - 2 * H).state
-    assert run(prior, backup_local_verified_at=NOW - 100 * H).check("backup_local").state == hv.GREEN
+    assert run(prior, backup_local_verified_at=NOW - 100 * H).check("backup_local").state == hv.RED
 
 
 def test_unknown_keeps_last_known_then_amber_after_three_ticks():
@@ -455,8 +462,9 @@ BACKUPS = [
 
 @pytest.mark.parametrize(("check", "fact", "red"), BACKUPS)
 @pytest.mark.parametrize("receipts", ["unobserved", "same_copy"])
-def test_b3_repeated_gaps_never_renew_the_catch_up_deadline(check, fact, red, receipts):
-    copy = NOW - (red - 4 * H)
+@pytest.mark.parametrize("microseconds", [0, 549877])
+def test_b3_repeated_gaps_never_renew_the_catch_up_deadline(check, fact, red, receipts, microseconds):
+    copy = (NOW - (red - 4 * H)).replace(microsecond=microseconds)
     prior = run(**{fact: copy}).state
     steps = [(NOW + k * H, {} if receipts == "unobserved" else {fact: copy}) for k in range(1, 49)]
     verdicts = _ticks(prior, steps)  # hourly ticks: every one follows a >15 min monitoring gap
@@ -470,8 +478,9 @@ def test_b3_repeated_gaps_never_renew_the_catch_up_deadline(check, fact, red, re
 
 
 @pytest.mark.parametrize(("check", "fact", "red"), BACKUPS)
-def test_b3_long_sleeps_get_one_catch_up_window(check, fact, red):
-    copy = NOW - (red - 4 * H)
+@pytest.mark.parametrize("microseconds", [0, 549877])
+def test_b3_long_sleeps_get_one_catch_up_window(check, fact, red, microseconds):
+    copy = (NOW - (red - 4 * H)).replace(microsecond=microseconds)
     prior = run(**{fact: copy}).state
     woke = NOW + 30 * H  # one long sleep: the copy is now red by 26 h
     first = run(prior, now=woke, **{fact: copy})
@@ -531,7 +540,6 @@ def test_b5_revoking_the_only_copy_ends_the_persisted_clock():
     second = _reader_tick(receipts, first.state, NOW + 5 * M)
     # Reviewer's executed repro: both stayed green on the persisted maximum.
     assert second.check("backup_local").state == second.check("backup_offsite").state == hv.RED
-    assert "revoked" in second.check("backup_local").note
     # An unreadable log afterwards does not bring the revoked copy back.
     third = run(second.state, now=NOW + 10 * M, backup_local_verified_at=hv.UNOBSERVED)
     assert third.check("backup_local").state == hv.RED
@@ -543,22 +551,21 @@ def test_b5_revocation_falls_back_to_the_older_surviving_copy():
         _verified_receipt(SNAP_NEW, NOW - H, NOW - 50 * M),
     ]
     first = _reader_tick(receipts, None, NOW)
-    assert first.state["checks"]["backup_local"]["clock_id"] == SNAP_NEW
+    assert first.check("backup_local").age_s == H.total_seconds()
     receipts.append(_receipt(snapshot=SNAP_NEW, attempted_at=(NOW + M).isoformat(), verification_error="md5"))
     second = _reader_tick(receipts, first.state, NOW + 5 * M)
     for name in ("backup_local", "backup_offsite"):
         check = second.check(name)
         assert check.state == hv.AMBER and check.age_s == (40 * H + 5 * M).total_seconds()
-        assert second.state["checks"][name]["clock_id"] == SNAP_OLD
     # Re-verifying the same snapshot reinstates it.
     receipts.append(_verified_receipt(SNAP_NEW, NOW - H, NOW + 6 * M))
     assert _reader_tick(receipts, second.state, NOW + 10 * M).check("backup_local").state == hv.GREEN
 
 
-def test_b5_revocation_matches_a_persisted_clock_without_identity_by_time():
+def test_b5_no_verified_copy_overrides_legacy_state_without_identity():
     legacy = run(backup_local_verified_at=NOW - H).state
-    legacy["checks"]["backup_local"].pop("clock_id")
-    later = run(legacy, now=NOW + 5 * M, backup_local_verified_at=None, backup_revoked=((SNAP_NEW, NOW - H),))
+    legacy["checks"]["backup_local"].pop("clock_id", None)
+    later = run(legacy, now=NOW + 5 * M, backup_local_verified_at=None)
     assert later.check("backup_local").state == hv.RED
 
 
@@ -575,3 +582,95 @@ def test_thresholds_from_env_rejects_nan_and_defaults_to_os_environ(monkeypatch)
         hv.Thresholds.from_env({"BRAINLAYER_VERDICT_INGEST_RED_S": "nan"})
     monkeypatch.setenv("BRAINLAYER_VERDICT_INGEST_RED_S", "120")
     assert hv.Thresholds.from_env().ingest_red_s == 120.0
+
+
+# --- Review R2 regressions: the readable receipt history is authoritative --------------------
+
+
+@pytest.mark.parametrize("survivor_hours", [None, 100, 77.5])
+def test_b5a_revocation_at_wake_is_immediately_red(survivor_hours):
+    receipts = (
+        []
+        if survivor_hours is None
+        else [_verified_receipt(SNAP_OLD, NOW - survivor_hours * H, NOW - (survivor_hours - 1) * H)]
+    )
+    receipts.append(_verified_receipt(SNAP_NEW, NOW - H, NOW - 50 * M))
+    first = _reader_tick(receipts, None, NOW)
+    receipts.append(_receipt(attempted_at=(NOW + H).isoformat(), drive_md5_match=False))
+    prior = first.state
+    for at in (NOW + H, NOW + 2 * H, NOW + 3 * H + M):
+        verdict = _reader_tick(receipts, prior, at)
+        for name in ("backup_local", "backup_offsite"):
+            check = verdict.check(name)
+            assert check.state == hv.RED
+            assert check.age_s == (None if survivor_hours is None else (at - NOW + survivor_hours * H).total_seconds())
+            assert "catch_up_until" not in verdict.state["checks"][name]
+        prior = verdict.state
+
+
+@pytest.mark.parametrize("gap", [5 * M, H], ids=["ordinary-ticks", "monitoring-gap"])
+@pytest.mark.parametrize("survivor_hours", [None, 40])
+def test_b5b_local_restoration_never_restores_offsite_for_either_monitor_schedule(gap, survivor_hours):
+    receipts = []
+    if survivor_hours is not None:
+        receipts.append(_verified_receipt(SNAP_OLD, NOW - survivor_hours * H, NOW - 39 * H))
+    receipts.append(_verified_receipt(SNAP_NEW, NOW - H, NOW - 50 * M))
+    first = _reader_tick(receipts, None, NOW)
+    receipts.append(_receipt(attempted_at=(NOW + M).isoformat(), drive_md5_match=False))
+    saw_bad = _reader_tick(receipts, first.state, NOW + M)
+    receipts.append(_receipt(attempted_at=(NOW + 2 * M).isoformat(), local_verified=True, local_integrity="ok"))
+    results = [_reader_tick(receipts, prior, NOW + gap) for prior in (first.state, saw_bad.state)]
+    for verdict in results:
+        assert verdict.check("backup_local").state == hv.GREEN
+        offsite = verdict.check("backup_offsite")
+        assert offsite.state == (hv.RED if survivor_hours is None else hv.AMBER)
+        assert offsite.age_s == (None if survivor_hours is None else (survivor_hours * H + gap).total_seconds())
+    receipts.append(_verified_receipt(SNAP_NEW, NOW - H, NOW + gap + M))
+    for verdict in results:
+        restored = _reader_tick(receipts, verdict.state, NOW + gap + 5 * M)
+        assert restored.check("backup_offsite").state == hv.GREEN
+
+
+@pytest.mark.parametrize("creation_time", ["missing", "null"])
+def test_b5c_legacy_state_and_filename_only_revocation(creation_time):
+    receipts = [_verified_receipt(SNAP_NEW, NOW - H, NOW - 50 * M)]
+    first = _reader_tick(receipts, None, NOW)
+    for name in ("backup_local", "backup_offsite"):
+        first.state["checks"][name].pop("clock_id", None)
+    bad = _receipt(attempted_at=(NOW + M).isoformat(), drive_md5_match=False)
+    bad.pop("snapshot_created_at")  # filename midnight differs from the exact 02:00 creation time
+    receipts.append(bad)
+    revoked = _reader_tick(receipts, first.state, NOW + 5 * M)
+    for name in ("backup_local", "backup_offsite"):
+        assert revoked.check(name).state == hv.RED
+        assert revoked.check(name).age_s is None
+    # A filename-only re-verification must retain the artifact's exact creation time, too.
+    restored = _receipt(attempted_at=(NOW + 6 * M).isoformat(), local_verified=True, local_integrity="ok")
+    if creation_time == "missing":
+        restored.pop("snapshot_created_at")
+    else:
+        restored["snapshot_created_at"] = None
+    receipts.append(restored)
+    final = _reader_tick(receipts, revoked.state, NOW + 10 * M)
+    assert final.check("backup_local").age_s == (H + 10 * M).total_seconds()
+    assert final.check("backup_offsite").state == hv.RED
+
+
+@pytest.mark.parametrize(("check", "fact", "red"), BACKUPS)
+@pytest.mark.parametrize("observed", [None, NOW - 100 * H])
+def test_readable_backup_facts_replace_persisted_clocks(check, fact, red, observed):
+    prior = run(**{fact: NOW - H}).state
+    verdict = run(prior, now=NOW + H, **{fact: observed})
+    assert verdict.check(check).state == hv.RED
+    assert verdict.check(check).age_s == (None if observed is None else 101 * 3600)
+
+
+@pytest.mark.parametrize(("check", "fact", "red"), BACKUPS)
+def test_no_copy_cancels_an_active_backup_catch_up_window(check, fact, red):
+    copy = NOW - red + 4 * H
+    prior = run(**{fact: copy}).state
+    woke = run(prior, now=NOW + 5 * H, **{fact: copy})
+    assert woke.check(check).state == hv.AMBER
+    absent = run(woke.state, now=NOW + 5 * H + 5 * M, **{fact: None})
+    assert absent.check(check).state == hv.RED
+    assert "catch_up_until" not in absent.state["checks"][check]
