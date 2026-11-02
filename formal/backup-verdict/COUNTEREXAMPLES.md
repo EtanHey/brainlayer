@@ -24,7 +24,8 @@ check (`-simulate`, one worker, depth 60, seed 7) through real code. These are t
 | main (renewable grace, no S1a-5) | 67d23f14 | 0 diverging | 0 diverging | 0 diverging |
 | S1a-5 (renewable grace) | 4e07651b | 0 diverging | — | — |
 | S1a-5 + S1a-6 (one window per episode) | **8eecb5ee** | **0 diverging** | **0 diverging** | **0 diverging** |
-| S1a-5 + S1a-6 | main 67d23f14 / de545db2 | 218 of 3,000 | 160 of 3,000 | 212 of 3,000 |
+| S1a-5 + S1a-6 | **working tree, main 62f55b09** (both merged) | **0 diverging** | **0 diverging** | **0 diverging** |
+| S1a-5 + S1a-6 | 67d23f14 (before both) | 218 of 3,000 | 160 of 3,000 | 212 of 3,000 |
 
 Zero trace files, zero parsed ticks, or a file that parses to nothing is an error.
 
@@ -47,12 +48,12 @@ Zero trace files, zero parsed ticks, or a file that parses to nothing is an erro
 | `bug-1587-B4-backlog-ages-out` | #1587 B4 | RedHoldsUntilEvidence | (pipe model) |
 | `bug-1587-B5-stale-canary-success` | #1587 B5 | RedHoldsUntilEvidence | (pipe model) |
 | `bug-1583-S1-alert-lights-dot` | #1583 S1 | NoStuckAlert | (dot model) |
-| `bug-renewable-grace` | S1a-6 (8eecb5ee) | NoFalseGreenStall | 67d23f14 reproduces → **still on main**; fixed at 8eecb5ee |
-| `bug-renewable-grace-ingest` | S1a-6 (8eecb5ee) | NoFalseGreenStall | 67d23f14 reproduces → **still on main**; fixed at 8eecb5ee |
-| `bug-renewable-grace-stores` | S1a-6 (8eecb5ee) | NoFalseGreenStall | 67d23f14 reproduces → **still on main**; fixed at 8eecb5ee |
-| `bug-s1a5-F1-red-to-amber` | S1a-5 (4e07651b) | RedHoldsUntilEvidence | 67d23f14 reproduces → **still on main**; fixed at 4e07651b |
-| `bug-s1a5-F2-unobserved-tick-keeps-count` | S1a-5 (4e07651b) | RedToGreenNeedsConsecutive | 67d23f14 reproduces → **still on main**; fixed at 4e07651b |
-| `bug-s1a5-F3-graced-stale-keeps-count` | S1a-5 (4e07651b) | RedClearsToGreenOnlyOnEvidence | 67d23f14 reproduces → **still on main**; fixed at 4e07651b |
+| `bug-renewable-grace` | S1a-6 (8eecb5ee) | NoFalseGreenStall | 67d23f14 reproduces → fixed (main 62f55b09, #1602) |
+| `bug-renewable-grace-ingest` | S1a-6 (8eecb5ee) | NoFalseGreenStall | 67d23f14 reproduces → fixed (main 62f55b09, #1602) |
+| `bug-renewable-grace-stores` | S1a-6 (8eecb5ee) | NoFalseGreenStall | 67d23f14 reproduces → fixed (main 62f55b09, #1602) |
+| `bug-s1a5-F1-red-to-amber` | S1a-5 (4e07651b) | RedHoldsUntilEvidence | 67d23f14 reproduces → fixed (main 62f55b09, #1600) |
+| `bug-s1a5-F2-unobserved-tick-keeps-count` | S1a-5 (4e07651b) | RedToGreenNeedsConsecutive | 67d23f14 reproduces → fixed (main 62f55b09, #1600) |
+| `bug-s1a5-F3-graced-stale-keeps-count` | S1a-5 (4e07651b) | RedClearsToGreenOnlyOnEvidence | 67d23f14 reproduces → fixed (main 62f55b09, #1600) |
 
 ### #1583 R1 B1: an empty queue repays a failed store canary
 1. The store path breaks, and the nightly round trip writes a failed receipt. The tick reads it: canary failed once, `stores` amber.
@@ -160,7 +161,7 @@ Fix (#1587): every attempt replaces the receipt. If it cannot be written, the ol
 
 Fix (#1583; plan section 3d): job alerts are `job_alert_*` warning notes, and only `outcome_<check>` for a red check is critical.
 
-## Found by this model, fixed by S1a-5 (branch fix/verdict-hysteresis-observed, 4e07651b)
+## Found by this model, fixed by S1a-5 (#1600, merged as 2f983832)
 
 TLC found these three with every earlier fix on. S1a-5 changes `evaluate()` so that `good_ticks`
 resets when `r.state != GREEN or not r.evidence or r.graced`, and a hysteresis check that is red
@@ -189,7 +190,7 @@ The old module docstring allowed this ("no bad one between"); section 3d's "cons
 
 This broke the code's own rule as well: an observed bad heartbeat sat between the two good ones. S1a-5's `or r.graced` is the fix.
 
-## Found by review, fixed by S1a-6 (branch fix/wake-grace-once, 8eecb5ee): renewable wake grace
+## Found by review, fixed by S1a-6 (#1602, merged as 62f55b09): renewable wake grace
 
 REV-FTLA1-R1 B1 found that the model computed embedding (and pending stores) from the raw clock,
 while the real code routes them through `_stall_age` → `_graced_age`. That path softens the age

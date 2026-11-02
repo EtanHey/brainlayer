@@ -109,6 +109,18 @@ jobs:
           TLC_WORKERS: "2"
         run: python3 formal/backup-verdict/check.py --require-sync
 
+      # A failing case must be diagnosable: keep each case's TLC log, trace and results.json.
+      - name: Upload TLC logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-verdict-tlc-logs
+          path: |
+            .build.noindex/backup-verdict/*/*.log
+            .build.noindex/backup-verdict/*/*.trace.txt
+            .build.noindex/backup-verdict/*/results.json
+          retention-days: 14
+
   swift:
     name: swift (macos-15)
     needs: changes

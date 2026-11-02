@@ -254,7 +254,7 @@ def _world(now, last_loc, acc_rev, created="<<0, 1>>"):
         "now": str(now),
         "lastLoc": last_loc,
         "created": created,
-        "acc": f'[local |-> {{}}, off |-> {{}}, rev |-> {acc_rev}]',
+        "acc": f"[local |-> {{}}, off |-> {{}}, rev |-> {acc_rev}]",
     }
 
 
@@ -273,3 +273,50 @@ def test_second_approximate_revocation_stays_approximate():
 def test_trace_without_a_rev_sequence_fails_closed():
     with pytest.raises(ValueError, match="no rev sequence"):
         replay._acc_rev("[local |-> {}, off |-> {}]")
+
+
+@pytest.mark.parametrize("name", ["current-dot-liveness", "scratch-clean-run-keeps-alert"])
+def test_liveness_cases_run_on_one_worker(tmp_path, monkeypatch, name):
+    """F-TLA1-FLAKE: temporal checking never uses TLC_WORKERS > 1."""
+    monkeypatch.setattr(checker, "wait_for_load", lambda: {})
+    monkeypatch.setenv("TLC_WORKERS", "2")
+    case = next(c for c in checker.CASES if c["name"] == name)
+    with patch.object(
+        checker.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, PASS_LOG, "")
+    ) as launch:
+        checker.run_case(case, tmp_path)
+    command = launch.call_args.args[0]
+    assert command[command.index("-workers") + 1] == "1"
+
+
+def test_safety_cases_keep_tlc_workers(tmp_path, monkeypatch):
+    monkeypatch.setattr(checker, "wait_for_load", lambda: {})
+    monkeypatch.setenv("TLC_WORKERS", "2")
+    case = next(c for c in checker.CASES if c["name"] == "current-dot")
+    with patch.object(
+        checker.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, PASS_LOG, "")
+    ) as launch:
+        checker.run_case(case, tmp_path)
+    command = launch.call_args.args[0]
+    assert command[command.index("-workers") + 1] == "2"
+
+
+def test_error_outcome_carries_the_tlc_tail(tmp_path, monkeypatch):
+    """F-TLA1-FLAKE: an 'error' must show TLC's own last lines, not just the word."""
+    monkeypatch.setattr(checker, "wait_for_load", lambda: {})
+    case = next(c for c in checker.CASES if c["name"] == "current-dot")
+    lines = [f"line {n}" for n in range(100)] + ["java.lang.RuntimeException: boom"]
+    with patch.object(
+        checker.subprocess, "run", return_value=subprocess.CompletedProcess([], 75, "\n".join(lines), "")
+    ):
+        result = checker.run_case(case, tmp_path)
+    assert result["got"] == "error" and result["tlc_exit"] == 75
+    tail = result["tlc_tail"].splitlines()
+    assert len(tail) == checker.TAIL_LINES and tail[-1].endswith("boom")
+
+
+def test_passing_outcome_has_no_tail(tmp_path, monkeypatch):
+    monkeypatch.setattr(checker, "wait_for_load", lambda: {})
+    case = next(c for c in checker.CASES if c["name"] == "current-dot")
+    with patch.object(checker.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, PASS_LOG, "")):
+        assert checker.run_case(case, tmp_path)["tlc_tail"] is None

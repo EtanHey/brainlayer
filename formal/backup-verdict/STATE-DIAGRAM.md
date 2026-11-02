@@ -4,7 +4,7 @@ Every red box sits on a transition TLC walked when a pre-fix switch was on. Each
 with the PR that removed it, and its counterexample is in [COUNTEREXAMPLES.md](COUNTEREXAMPLES.md).
 The three `S1a-5` boxes are bugs this model found itself (F1–F3), fixed by S1a-5 (4e07651b). The
 `S1a-6` box is renewable wake grace, found by the R1 review once the model took the real
-`_graced_age` path, and fixed by S1a-6 (8eecb5ee). Neither fix is on main yet. Run `formal/backup-verdict/check.sh` to reproduce every box.
+`_graced_age` path, and fixed by S1a-6. Both are merged (#1600, #1602; main 62f55b09). Run `formal/backup-verdict/check.sh` to reproduce every box.
 
 ## 1. Receipts and the snapshot check (`BackupVerdict.tla`)
 

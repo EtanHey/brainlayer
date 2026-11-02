@@ -1,9 +1,9 @@
 # Backup verdict verification (TLA+)
 
 Status: **all-fixes models pass. Every bug fixed tonight reproduces when its pre-fix switch is on.
-That includes F1–F3 (`ingest` hysteresis, found here, fixed by S1a-5 4e07651b) and renewable wake
-grace (found by review R1, fixed by S1a-6 8eecb5ee). Main still has both until #1600 and S1a-6
-merge.**
+That includes F1–F3 (`ingest` hysteresis, found here, fixed by #1600 S1a-5) and renewable wake
+grace (found by review R1, fixed by #1602 S1a-6). Both are merged (main 62f55b09), and every
+fixed-here case is checked against the working tree.**
 
 The promise: the BrainBar dot is red exactly when memory is at risk or a pipe has stopped (plan
 section 3d). The harm when it breaks: a green dot with no restorable backup, or a red dot that
@@ -81,7 +81,7 @@ not yet merged is `fixed_here: "no"`, and fails once the fix lands until someone
 ## What is not covered
 
 - The collectors that build `Facts` from files (`health_facts.py`, #1587) are modelled only for
-  #1587 B4 and B5, and are not on main. File reads, timeouts and the 4 MiB tail are out of scope.
+  #1587 B4 and B5. File reads, timeouts and the 4 MiB tail are out of scope.
 - `ingest`, `embedding` and `stores` traces are replayed against code (they carry each tick's
   observation, `lastObs`). `drive_auth` and dot traces are not replayed.
 - `Supersede` requires a newer verified upload, as `_reclaim_superseded_local` does. The custody

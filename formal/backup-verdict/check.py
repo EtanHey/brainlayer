@@ -209,7 +209,7 @@ CASES: list[dict[str, str]] = [
         "name": "bug-s1a5-F1-red-to-amber",
         "module": "PipeVerdict",
         "prefix": "67d23f14",
-        "fixed_here": "no",
+        "fixed_here": "yes",
         "expect": "RedHoldsUntilEvidence",
         "pr": "S1a-5 F1",
         "what": "one stale-but-advanced heartbeat steps ingest from red to amber",
@@ -218,7 +218,7 @@ CASES: list[dict[str, str]] = [
         "name": "bug-s1a5-F2-unobserved-tick-keeps-count",
         "module": "PipeVerdict",
         "prefix": "67d23f14",
-        "fixed_here": "no",
+        "fixed_here": "yes",
         "expect": "RedToGreenNeedsConsecutive",
         "pr": "S1a-5 F2",
         "what": "an unobserved tick between two good ticks does not reset the count",
@@ -227,7 +227,7 @@ CASES: list[dict[str, str]] = [
         "name": "bug-s1a5-F3-graced-stale-keeps-count",
         "module": "PipeVerdict",
         "prefix": "67d23f14",
-        "fixed_here": "no",
+        "fixed_here": "yes",
         "expect": "RedClearsToGreenOnlyOnEvidence",
         "pr": "S1a-5 F3",
         "what": "a stale heartbeat seen inside wake grace does not reset recovery",
@@ -236,7 +236,7 @@ CASES: list[dict[str, str]] = [
         "name": "bug-renewable-grace",
         "module": "PipeVerdict",
         "prefix": "67d23f14",
-        "fixed_here": "no",
+        "fixed_here": "yes",
         "expect": "NoFalseGreenStall",
         "pr": "S1a-6",
         "what": "embedding: green x5 while the true stall age is past red from tick 3 (reviewer trace)",
@@ -245,7 +245,7 @@ CASES: list[dict[str, str]] = [
         "name": "bug-renewable-grace-ingest",
         "module": "PipeVerdict",
         "prefix": "67d23f14",
-        "fixed_here": "no",
+        "fixed_here": "yes",
         "expect": "NoFalseGreenStall",
         "pr": "S1a-6",
         "what": "ingest: every gap renews the grace on a dead watcher",
@@ -254,7 +254,7 @@ CASES: list[dict[str, str]] = [
         "name": "bug-renewable-grace-stores",
         "module": "PipeVerdict",
         "prefix": "67d23f14",
-        "fixed_here": "no",
+        "fixed_here": "yes",
         "expect": "NoFalseGreenStall",
         "pr": "S1a-6",
         "what": "stores: every gap renews the grace on a stuck pending store",
@@ -299,29 +299,29 @@ CASES: list[dict[str, str]] = [
     {
         "name": "conform-ingest-s1a6",
         "module": "PipeVerdict",
-        "expect": "diverges",
+        "expect": "conforms",
         "pr": "S1a-6",
-        "fixed_here": "no",
+        "fixed_here": "yes",
         "simulate": "3000,60,7",
-        "what": "ingest: all fixes (S1a-5 + S1a-6 one-window grace) vs this tree; conforms at 8eecb5ee",
+        "what": "ingest: all fixes (S1a-5 + S1a-6, merged) agree with this tree on every tick",
     },
     {
         "name": "conform-embedding-s1a6",
         "module": "PipeVerdict",
-        "expect": "diverges",
+        "expect": "conforms",
         "pr": "S1a-6",
-        "fixed_here": "no",
+        "fixed_here": "yes",
         "simulate": "3000,60,7",
-        "what": "embedding: all fixes (S1a-5 + S1a-6 one-window grace) vs this tree; conforms at 8eecb5ee",
+        "what": "embedding: all fixes (S1a-5 + S1a-6, merged) agree with this tree on every tick",
     },
     {
         "name": "conform-stores-s1a6",
         "module": "PipeVerdict",
-        "expect": "diverges",
+        "expect": "conforms",
         "pr": "S1a-6",
-        "fixed_here": "no",
+        "fixed_here": "yes",
         "simulate": "3000,60,7",
-        "what": "stores: all fixes (S1a-5 + S1a-6 one-window grace) vs this tree; conforms at 8eecb5ee",
+        "what": "stores: all fixes (S1a-5 + S1a-6, merged) agree with this tree on every tick",
     },
     # --- current-code findings (reported, not fixed here) ----------------------------------
     {
@@ -450,6 +450,14 @@ def render_trace(states: list[tuple[str, dict[str, str]]]) -> str:
     return "\n".join(lines)
 
 
+TAIL_LINES = 40
+
+
+def tail_lines(text: str, count: int = TAIL_LINES) -> str:
+    """The end of TLC's output: an error must be diagnosable from the run log alone."""
+    return "\n".join(text.rstrip().splitlines()[-count:])
+
+
 def outcome(text: str, returncode: int) -> str:
     """'pass', the violated name, 'temporal', or 'error'."""
     if match := _VIOLATION.search(text):
@@ -481,6 +489,11 @@ def run_case(case: dict[str, str], out: Path) -> dict[str, object]:
         str(work / "states"),
         module.name,
     ]
+    if "PROPERTIES" in cfg.read_text():
+        # Temporal (liveness) checking always runs on one worker. CI (2-vCPU Linux, TLC_WORKERS=2)
+        # errored intermittently after full exploration of current-dot-liveness, i.e. in TLC's
+        # multi-worker liveness phase (F-TLA1-FLAKE); one worker takes that path off the gate.
+        command[command.index("-workers") + 1] = "1"
     if case.get("simulate"):
         # -simulate num is per worker: one worker keeps the trace count and seed reproducible.
         traces, depth, seed = case["simulate"].split(",")
@@ -529,6 +542,8 @@ def run_case(case: dict[str, str], out: Path) -> dict[str, object]:
         "distinct_states": int(distinct[-1]) if distinct else None,
         "seconds": seconds,
         "tlc_version": version.group(1) if version else None,
+        "tlc_exit": proc.returncode,
+        "tlc_tail": tail_lines(text) if got == "error" else None,
         **load,
     }
 
@@ -721,6 +736,9 @@ def main(argv: list[str] | None = None) -> int:
             f" [{result['distinct_states']} states, {result['seconds']}s]{label}",
             flush=True,
         )
+        if result.get("tlc_tail"):
+            print(f"       TLC exit {result['tlc_exit']}; last {TAIL_LINES} lines of its output:")
+            print("\n".join("       | " + line for line in result["tlc_tail"].splitlines()), flush=True)
         for where, r in result["replay"].items():
             if "error" in r:
                 print(f"       replay at {r['ref']}: ERROR {r['error']}")
