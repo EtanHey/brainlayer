@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Protocol
 
-from .embeddings import DEFAULT_MODEL, build_embedding_inputs
+from .embeddings import DEFAULT_MODEL, embedding_input
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -271,7 +271,7 @@ def run_reembed_backfill(
                 if not chunks:
                     break
 
-                texts = build_embedding_inputs([chunk.content for chunk in chunks])
+                texts = [embedding_input(chunk.content) for chunk in chunks]
                 encode_start = time.monotonic()
                 embeddings = active_model.encode(
                     texts,

@@ -64,7 +64,6 @@ def _cosine_similarity():
 
 # bge-large for semantic/topic clustering (1024 dims, good multilingual)
 SEMANTIC_MODEL = "BAAI/bge-large-en-v1.5"
-MAX_CHARS = 2000
 
 # Predefined topic seeds for guided clustering (English + Hebrew)
 TOPIC_SEEDS = {
@@ -192,10 +191,12 @@ class SemanticStyleAnalyzer:
 
     def _get_topic_seed_embeddings(self) -> dict[str, np.ndarray]:
         """Get/compute embeddings for topic seed phrases."""
+        from brainlayer.embeddings import embedding_input
+
         if self._topic_seed_embeddings is None:
             self._topic_seed_embeddings = {}
             for topic, seeds in TOPIC_SEEDS.items():
-                embeddings = self.model.encode(seeds, convert_to_numpy=True)
+                embeddings = self.model.encode([embedding_input(seed) for seed in seeds], convert_to_numpy=True)
                 # Average the seed embeddings to get topic centroid
                 self._topic_seed_embeddings[topic] = np.mean(embeddings, axis=0)
         return self._topic_seed_embeddings
@@ -207,8 +208,9 @@ class SemanticStyleAnalyzer:
         show_progress: bool = True,
     ) -> np.ndarray:
         """Embed messages using bge-large for topic clustering."""
-        # Truncate long messages
-        truncated = [m[:MAX_CHARS] for m in messages]
+        from brainlayer.embeddings import embedding_input
+
+        truncated = [embedding_input(message) for message in messages]
 
         embeddings = self.model.encode(
             truncated,

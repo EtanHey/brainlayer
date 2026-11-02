@@ -22,7 +22,7 @@ from brainlayer.embeddings import (
     MAX_PASSAGE_CHARS,
     MAX_QUERY_CHARS,
     EmbeddingModel,
-    build_embedding_inputs,
+    embedding_input,
 )
 from brainlayer.pipeline.chunk import Chunk
 from brainlayer.pipeline.classify import ContentType
@@ -78,13 +78,13 @@ def test_oversized_passages_bound_encoder_input_and_preserve_originals(entrypoin
     assert model._model.encode.call_args.args[0] == [text[:MAX_PASSAGE_CHARS] for text in originals]
     assert contents == originals
     assert [chunk.content for chunk in chunks] == originals
-    assert "truncated=2 total=4 max_chars=8192" in caplog.text
+    assert sum("truncated=1" in record.message for record in caplog.records) == 2
 
 
 def test_embedding_input_builder_is_deterministic_and_keeps_ordinary_passages(caplog):
     texts = ["", "word " * 1000, "x" * MAX_PASSAGE_CHARS]
-    assert build_embedding_inputs(texts) == texts
-    assert build_embedding_inputs(build_embedding_inputs(texts)) == texts
+    assert [embedding_input(text) for text in texts] == texts
+    assert [embedding_input(embedding_input(text)) for text in texts] == texts
     assert not caplog.records
 
 

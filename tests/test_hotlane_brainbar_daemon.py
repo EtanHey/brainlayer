@@ -1126,7 +1126,7 @@ def test_oversized_backlog_drains_in_one_hotlane_pass(tmp_path, caplog, chunk_co
         )
 
     assert encoded == [content[:MAX_PASSAGE_CHARS]] * chunk_count
-    assert f"truncated={chunk_count} total={chunk_count}" in caplog.text
+    assert sum("truncated=1" in record.message for record in caplog.records) == chunk_count
     store = VectorStore(db_path, readonly=True)
     try:
         assert count_unvectored_chunks(store) == 0
