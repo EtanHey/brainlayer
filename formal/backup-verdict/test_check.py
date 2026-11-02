@@ -202,6 +202,9 @@ def test_absent_counterexample_trace_fails_a_replayed_case(tmp_path, monkeypatch
     assert result["got"] == "NoFalseGreen"
     assert result["matched"] is False
     assert "error" in result["replay"]["prefix"]
+    # The report prints r['ref'] for every replay; a missing one aborted the whole run (Macroscope).
+    assert result["replay"]["prefix"]["ref"] == case["prefix"]
+    assert result["replay"]["src"]["ref"] == "working tree"
 
 
 def _simulation_case():

@@ -503,8 +503,12 @@ def run_case(case: dict[str, str], out: Path) -> dict[str, object]:
     replays = {}
     if case.get("prefix"):
         if not trace:
-            missing = {"error": "no counterexample trace to replay"}
-            replays = {"prefix": missing, "src": missing}
+            # Name each ref so the report prints the failed replay instead of raising KeyError and
+            # hiding every other case's result (Macroscope, #1601). Still fails closed.
+            replays = {
+                "prefix": {"ref": case["prefix"], "error": "no counterexample trace to replay"},
+                "src": {"ref": "working tree", "error": "no counterexample trace to replay"},
+            }
         elif case["module"] == "BackupVerdict":
             replays = {"prefix": replay(case, trace, case["prefix"], out), "src": replay(case, trace, SRC_REF, out)}
         else:
