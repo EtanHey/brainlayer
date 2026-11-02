@@ -5,7 +5,7 @@ Fixtures under ``tests/fixtures/verdict_replay/`` are real receipts from both Ma
 URLs dropped and home directories renamed. ``oracle.json`` lists the evidence events, built by
 separate code (see the fixture README) with an explicit uncertainty window: an invocation's
 completion time is not recorded, so its receipt is known somewhere between ``known_from`` and
-``known_by`` (start + 8 h, the writers' run-limit upper bound; see ``build_oracle.py``). An hour
+``known_by`` (latest start seen in journal order + 8 h, the writers' run-limit upper bound; see ``build_oracle.py``). An hour
 where the two bounds disagree is ``unknown`` and is not asserted, and so is an hour with no backup
 evidence at all: missing history is not proof that no verified copy existed.
 """
@@ -56,6 +56,20 @@ def _load(name: str) -> list[dict]:
     return [json.loads(line) for line in (FIXTURES / name).read_text().splitlines() if line.strip()]
 
 
+def _backup_prefix(rows: list[dict], at: datetime) -> list[dict]:
+    """Only receipts written by this hour, including terminal copies with old attempt times."""
+    known = []
+    latest_start = None
+    for row in rows:
+        if row.get("attempted_at"):
+            started = datetime.fromisoformat(row["attempted_at"])
+            latest_start = max(latest_start or started, started)
+        if latest_start is not None and latest_start > at:
+            break
+        known.append(row)
+    return known
+
+
 def _hours(start: datetime, end: datetime):
     t = start
     while t < end:
@@ -91,7 +105,13 @@ def _oracle_state(events: list[dict], check: str, at: datetime) -> str:
             return {"ok": hv.GREEN, "consent_needed": hv.RED, "refresh_failed": hv.AMBER}.get(last, hv.RED)
         if not known:
             return hv.UNKNOWN  # no history for this period, not evidence that no copy existed
-        newest = max(datetime.fromisoformat(e["value_at"]) for e in known)
+        if check == "backup_local":
+            latest = max(known, key=lambda e: e["known_from"])
+            if latest["value_at"] is None:
+                return hv.RED
+            newest = datetime.fromisoformat(latest["value_at"])
+        else:
+            newest = max(datetime.fromisoformat(e["value_at"]) for e in known)
         age = (at - newest).total_seconds()
         amber, red = (hours * 3600 for hours in ORACLE_LIMITS_H[check])
         return hv.RED if age > red else hv.AMBER if age > amber else hv.GREEN
@@ -106,7 +126,7 @@ def _replay(mac: str):
     maintenance = _load(f"{mac}-maintenance.log")
     prior = None
     for at in _hours(START, END):
-        facts_b = hv.backup_facts(backups, as_of=at)
+        facts_b = hv.backup_facts(_backup_prefix(backups, at), as_of=at)
         newest_transcript, drive_t = hv.transcript_facts(transcripts, as_of=at)
         drive = max((x for x in (facts_b.drive, drive_t) if x is not None), default=None, key=lambda x: x[0])
         verdict = hv.evaluate(
@@ -180,3 +200,74 @@ def test_oracle_limits_are_pinned_independently_of_production_defaults():
     known = {**event, "known_from": "2026-10-20T00:00:00Z", "known_by": "2026-10-20T00:00:00Z"}
     assert _oracle_state([known], "backup_local", datetime(2026, 10, 22, 6, tzinfo=UTC)) == hv.AMBER  # 54 h
     assert _oracle_state([known], "backup_local", datetime(2026, 10, 22, 6, 1, tzinfo=UTC)) == hv.RED
+
+
+@pytest.mark.parametrize("uploaded", [False, True])
+def test_oracle_snapshot_removal_requires_its_own_verified_drive_copy(tmp_path, uploaded):
+    import runpy
+
+    builder = runpy.run_path(str(FIXTURES / "build_oracle.py"))
+    rows = [
+        {
+            "backup_log_provenance": "real",
+            "attempted_at": "2026-10-20T00:00:00Z",
+            "snapshot": "/b/older.db.zst",
+            "snapshot_created_at": "2026-10-19T00:00:00Z",
+            "uploaded": True,
+            "verified": True,
+            "local_removed": True,
+        },
+        {
+            "backup_log_provenance": "real",
+            "attempted_at": "2026-10-21T00:00:00Z",
+            "snapshot": "/b/newer.db.zst",
+            "snapshot_created_at": "2026-10-20T00:00:00Z",
+            "local_verified": True,
+            "local_integrity": "ok",
+            "uploaded": uploaded,
+            "verified": uploaded,
+        },
+        {
+            "backup_log_provenance": "real",
+            "attempted_at": "2026-10-21T01:00:00Z",
+            "snapshot": "/b/newer.db.zst",
+            "local_removed": True,
+        },
+    ]
+    (tmp_path / "m4-backup-daily.log").write_text("\n".join(json.dumps(row) for row in rows))
+    (tmp_path / "m4-jsonl-backup.log").write_text("")
+    events = builder["events_for"](tmp_path, "m4")
+    snapshots = [e for e in events if e["check"] == "backup_local"]
+    assert snapshots[-1]["value_at"] == ("2026-10-20T00:00:00Z" if uploaded else "2026-10-19T00:00:00Z")
+
+
+def test_copied_terminal_receipt_cannot_rewrite_earlier_hours(tmp_path):
+    import runpy
+
+    original = {
+        "backup_log_provenance": "real",
+        "attempted_at": "2026-10-26T02:00:00Z",
+        "snapshot": "/b/2026-10-26.db.zst",
+        "snapshot_created_at": "2026-10-26T02:00:00Z",
+        "local_verified": True,
+        "local_integrity": "ok",
+    }
+    later_run = {"backup_log_provenance": "real", "attempted_at": "2026-10-29T02:00:00Z"}
+    copied = {**original, "upload_state": "superseded", "local_verified": False}
+    rows = [original, later_run, copied]
+    before = datetime(2026, 10, 27, 12, tzinfo=UTC)
+    after = datetime(2026, 10, 29, 12, tzinfo=UTC)
+    assert hv.backup_facts(_backup_prefix(rows, before), as_of=before).local_verified_at == datetime.fromisoformat(
+        original["snapshot_created_at"]
+    )
+    assert hv.backup_facts(_backup_prefix(rows, after), as_of=after).local_verified_at is None
+
+    (tmp_path / "m1-backup-daily.log").write_text("\n".join(json.dumps(row) for row in rows))
+    (tmp_path / "m1-jsonl-backup.log").write_text("")
+    builder = runpy.run_path(str(FIXTURES / "build_oracle.py"))
+    events = builder["events_for"](tmp_path, "m1")
+    removal = next(e for e in events if e["check"] == "backup_local" and e["value"] == "none")
+    assert removal["known_from"] == later_run["attempted_at"]
+    assert removal["known_by"] == "2026-10-29T10:00:00Z"
+    assert _oracle_state(events, "backup_local", before) == hv.AMBER
+    assert _oracle_state(events, "backup_local", after) == hv.RED
