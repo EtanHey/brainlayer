@@ -24,8 +24,9 @@ logger = logging.getLogger(__name__)
 # Use bge-large-en-v1.5 for high-quality embeddings (1024 dims, 63.5 MTEB score)
 DEFAULT_MODEL = "BAAI/bge-large-en-v1.5"
 EMBEDDING_DIM = 1024  # bge-large dimension
-# bge-large-en-v1.5 supports 512 tokens (~2000+ characters).
-# sentence-transformers handles token-level truncation natively — no char truncation needed.
+# Bound tokenizer work before the model's native 512-token truncation. Keep
+# ordinary passages intact, including the content beyond the old 512-char cap.
+MAX_PASSAGE_CHARS = 8192
 MAX_QUERY_CHARS = 2000  # generous cap for query strings only (avoids degenerate inputs)
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
@@ -33,6 +34,19 @@ BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 # test that is not marked `embedding_model`, and it is inherited by subprocesses, so a spawned
 # script cannot quietly load a 2.5 GB model that the in-process guards would have refused.
 FORBID_MODEL_LOAD_ENV = "BRAINLAYER_FORBID_EMBEDDING_MODEL"
+
+
+def build_embedding_inputs(texts: List[str]) -> List[str]:
+    """Return deterministic passage prefixes without changing stored content."""
+    truncated = sum(len(text) > MAX_PASSAGE_CHARS for text in texts)
+    if truncated:
+        logger.info(
+            "Bounded passage embedding inputs: truncated=%d total=%d max_chars=%d",
+            truncated,
+            len(texts),
+            MAX_PASSAGE_CHARS,
+        )
+    return [text[:MAX_PASSAGE_CHARS] for text in texts]
 
 
 def guard_embedding_model_load(model_name: str) -> None:
@@ -105,10 +119,7 @@ class EmbeddingModel:
         results = []
         total = len(chunks)
 
-        # Pass full content — sentence-transformers tokenizes and truncates at the
-        # model's actual token limit (512 tokens ≈ 2000+ chars), so content beyond
-        # 512 chars is now included in the embedding instead of being discarded.
-        texts = [chunk.content for chunk in chunks]
+        texts = build_embedding_inputs([chunk.content for chunk in chunks])
 
         # Generate embeddings in batches
         for i in range(0, len(texts), batch_size):
@@ -167,7 +178,7 @@ class EmbeddingModel:
         model = self._load_model()
         try:
             embeddings = model.encode(
-                texts,
+                build_embedding_inputs(texts),
                 batch_size=batch_size,
                 convert_to_numpy=True,
                 show_progress_bar=False,
