@@ -1845,6 +1845,8 @@ def create_sqlite_backup_artifact(
             )
 
     final_archive = output_dir / f"{date_stamp}{ZSTD_SNAPSHOT_SUFFIX if compressor == 'zstd' else GZIP_SNAPSHOT_SUFFIX}"
+    if os.path.lexists(final_archive):
+        raise BackupTargetConflictError(f"Retaining existing archive without reuse proof: {final_archive}")
     final_raw = output_dir / f"{date_stamp}.db"
     sentinel_chunks = 0
     if final_raw.exists() or final_raw.is_symlink():
@@ -3024,7 +3026,13 @@ def _resume_fresh_enough(receipt: Mapping[str, Any], now: dt.datetime) -> bool:
 
 
 def _recent_verified_backup_for_reuse(
-    log_path: Path, db_path: Path, *, now: dt.datetime, max_age_hours: float
+    log_path: Path,
+    db_path: Path,
+    *,
+    now: dt.datetime,
+    max_age_hours: float,
+    context: Mapping[str, Any] | None = None,
+    snapshot_names: tuple[str, ...] | None = None,
 ) -> dict[str, Any] | None:
     try:
         receipts = _read_backup_receipts(log_path)
@@ -3042,6 +3050,13 @@ def _recent_verified_backup_for_reuse(
         drive_file = receipt.get("drive_file")
         if (
             receipt.get("db") == str(db_path)
+            and (
+                context is None
+                or all(
+                    receipt.get(k) == context.get(k) for k in ("machine_id", "drive_folder", "backup_log_provenance")
+                )
+            )
+            and (snapshot_names is None or receipt.get("snapshot") in snapshot_names)
             and receipt.get("uploaded") is True
             and receipt.get("verified") is True
             and "error_type" not in receipt
@@ -3550,6 +3565,22 @@ def run_backup(
                 "machine_id": resolved_machine_id,
             }
         )
+        # The weekly wrapper is opt-in; ordinary nightly phases also need same-date reuse.
+        remote = _recent_verified_backup_for_reuse(
+            resolved_log_path,
+            resolved_db_path,
+            now=dt.datetime.fromisoformat(result["attempted_at"]),
+            max_age_hours=local_backup_max_age_hours(),
+            context=result,
+            snapshot_names=tuple(
+                str(Path(staging_dir) / f"{resolved_date_stamp}{suffix}") for suffix in DB_SNAPSHOT_SUFFIXES
+            ),
+        )
+        if remote is not None and phase != "upload":
+            attempted_at = result["attempted_at"]
+            result.update({k: v for k, v in remote.items() if k != "backup_invocation_id"})
+            result.update(status="reused", attempted_at=attempted_at)
+            return result
         result["local_gzip_retention_deleted"] = _sweep_verified_local_archives(
             resolved_log_path, Path(staging_dir), result, remove_local=remove_local_after_upload
         )
@@ -3588,9 +3619,16 @@ def run_backup(
             created = _snapshot_created_time(local)
             now = dt.datetime.fromisoformat(result["attempted_at"])
             if created and local_backup_date(created) == local_backup_date(now) and _local_snapshot_intact(local):
-                result.update(local)
+                attempted_at = result["attempted_at"]
+                result.update({k: v for k, v in local.items() if k != "backup_invocation_id"})
+                result.update(status="reused", attempted_at=attempted_at)
                 return result
         if phase == "upload" and local is None:
+            if remote is not None:
+                attempted_at = result["attempted_at"]
+                result.update({k: v for k, v in remote.items() if k != "backup_invocation_id"})
+                result.update(status="reused", attempted_at=attempted_at, upload_state="nothing_pending")
+                return result
             nothing_pending = True
             result["upload_state"] = "nothing_pending"
             return result
@@ -3635,6 +3673,7 @@ def run_backup(
                 target = Path(staging_dir) / f"{resolved_date_stamp}{suffix}"
                 if _retained_target_collision(resolved_log_path, target):
                     raise RetainedStalledBackupConflictError(target.name)
+
             create_started = dt.datetime.now(dt.UTC).isoformat()
             try:
                 artifact = create_sqlite_backup_artifact(
@@ -4035,7 +4074,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
     return (
         0
         if (
-            result.get("local_verified")
+            (result.get("local_verified") or result.get("verified"))
             if os.environ.get("BRAINLAYER_BACKUP_PHASE") == "snapshot"
             else result.get("verified", True) or result.get("upload_state") == "nothing_pending"
         )
