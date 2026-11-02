@@ -4020,6 +4020,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
                     "error_type": "BackupStoppedError",
                     "error": _redact_upload_secrets(str(exc)),
                     "stop_signal": signal.Signals(exc.signum).name,
+                    **io_policy,
                 },
             )
         return 128 + exc.signum

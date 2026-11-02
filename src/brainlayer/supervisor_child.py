@@ -24,7 +24,6 @@ def backup_io_policy():
     for name, operation in (
         ("darwin_background", lambda: os.setpriority(4, 0, 0)),
         ("disk", lambda: set_disk_io_policy(0)),
-        ("nice", lambda: os.setpriority(os.PRIO_PROCESS, 0, 5)),
     ):
         try:
             operation()
@@ -35,8 +34,13 @@ def backup_io_policy():
         value = library.getiopolicy_np(0, 0)
         if value == -1:
             raise OSError(ctypes.get_errno(), "getiopolicy_np failed")
-        result["io_policy"] = {0: "default", 3: "throttle"}.get(value, str(value))
-        result["darwin_background"] = os.getpriority(4, 0)
+        result["iopol"] = value
+        # getpriority returns 0 (foreground) or 1 (background), not the setter's 0x1000.
+        background = os.getpriority(4, 0)
+        result["darwin_background"] = background
+        result["io_policy"] = (
+            "throttle" if value == 3 else "background" if background != 0 else "default" if value == 0 else str(value)
+        )
         result["nice"] = os.getpriority(os.PRIO_PROCESS, 0)
     except (OSError, AttributeError) as exc:
         result["io_policy_errors"].append(f"readback: {exc}")

@@ -14,12 +14,12 @@ def test_backup_resets_and_reads_policy(monkeypatch):
     monkeypatch.setattr(ctypes, "CDLL", Mock(return_value=library))
     setter = Mock()
     monkeypatch.setattr(policy.os, "setpriority", setter)
-    monkeypatch.setattr(policy.os, "getpriority", Mock(side_effect=[0, 5]))
+    monkeypatch.setattr(policy.os, "getpriority", Mock(side_effect=[0, 10]))
     result = policy.backup_io_policy()
-    assert setter.call_args_list == [call(4, 0, 0), call(policy.os.PRIO_PROCESS, 0, 5)]
+    assert setter.call_args_list == [call(4, 0, 0)]
     library.setiopolicy_np.assert_called_once_with(0, 0, 0)
     library.getiopolicy_np.assert_called_once_with(0, 0)
-    assert result == {"io_policy": "default", "io_policy_errors": [], "darwin_background": 0, "nice": 5}
+    assert result == {"io_policy": "default", "io_policy_errors": [], "iopol": 0, "darwin_background": 0, "nice": 10}
 
 
 def test_non_darwin_keeps_inherited_policy(monkeypatch):
@@ -40,7 +40,7 @@ def test_permission_failure_is_nonfatal_and_measured(monkeypatch):
     monkeypatch.setattr(ctypes, "CDLL", Mock(return_value=library))
     result = policy.backup_io_policy()
     assert result["io_policy"] == "throttle"
-    assert len(result["io_policy_errors"]) == 3
+    assert len(result["io_policy_errors"]) == 2
 
 
 def test_backup_child_passes_effective_policy_to_receipt(monkeypatch, tmp_path):
@@ -57,3 +57,38 @@ def test_backup_child_passes_effective_policy_to_receipt(monkeypatch, tmp_path):
     reset.assert_called_once_with()
     assert run.call_args.kwargs["io_policy"] == effective
     assert run.call_args.kwargs["phase"] == "snapshot"
+
+
+def test_background_reset_denied_cannot_report_default(monkeypatch):
+    monkeypatch.setattr(policy.sys, "platform", "darwin")
+
+    def setpriority(which, who, value):
+        if which == 4:
+            raise PermissionError("denied")
+        raise AssertionError("backup must not change nice")
+
+    monkeypatch.setattr(policy.os, "setpriority", setpriority)
+    monkeypatch.setattr(policy.os, "getpriority", lambda which, who: 1 if which == 4 else 10)
+    library = Mock()
+    library.setiopolicy_np.return_value = 0
+    library.getiopolicy_np.return_value = 0
+    monkeypatch.setattr(ctypes, "CDLL", Mock(return_value=library))
+    result = policy.backup_io_policy()
+    assert result["io_policy"] == "background"
+    assert result["iopol"] == 0
+    assert result["darwin_background"] == 1
+    assert len(result["io_policy_errors"]) == 1
+
+
+def test_maintenance_policy_keeps_background(monkeypatch):
+    monkeypatch.setattr(policy.sys, "platform", "darwin")
+    reset = Mock(side_effect=AssertionError("maintenance must not reset backup policy"))
+    monkeypatch.setattr(policy, "backup_io_policy", reset)
+    setter = Mock()
+    monkeypatch.setattr(policy.os, "setpriority", setter)
+    disk = Mock()
+    monkeypatch.setattr(policy, "set_disk_io_policy", disk)
+    policy.apply_policy({"Nice": 10, "ProcessType": "Background", "LowPriorityIO": True})
+    assert setter.call_args_list == [call(policy.os.PRIO_PROCESS, 0, 10), call(4, 0, 0x1000)]
+    disk.assert_called_once_with(3)
+    reset.assert_not_called()
