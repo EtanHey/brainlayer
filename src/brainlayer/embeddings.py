@@ -24,8 +24,12 @@ logger = logging.getLogger(__name__)
 # Use bge-large-en-v1.5 for high-quality embeddings (1024 dims, 63.5 MTEB score)
 DEFAULT_MODEL = "BAAI/bge-large-en-v1.5"
 EMBEDDING_DIM = 1024  # bge-large dimension
-# bge-large-en-v1.5 supports 512 tokens (~2000+ characters).
-# sentence-transformers handles token-level truncation natively — no char truncation needed.
+# BGE reads 512 WordPiece tokens (typically ~2,000 characters). This 8,192-char
+# bound covers ordinary text, but sparse-token inputs can be cut sooner: code
+# indented by 32 spaces can span ~11,474 chars in that token window. Safety comes
+# from encoding and comparing this exact prefix, not from covering every token.
+# The model still applies its native token limit after this character bound.
+MAX_PASSAGE_CHARS = 8192
 MAX_QUERY_CHARS = 2000  # generous cap for query strings only (avoids degenerate inputs)
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
@@ -33,6 +37,17 @@ BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 # test that is not marked `embedding_model`, and it is inherited by subprocesses, so a spawned
 # script cannot quietly load a 2.5 GB model that the in-process guards would have refused.
 FORBID_MODEL_LOAD_ENV = "BRAINLAYER_FORBID_EMBEDDING_MODEL"
+
+
+def embedding_input(content: str) -> str:
+    """The shared passage representation for encoding and vector invalidation."""
+    if len(content) > MAX_PASSAGE_CHARS:
+        logger.info(
+            "Bounded embedding input: truncated=1 original_chars=%d max_chars=%d",
+            len(content),
+            MAX_PASSAGE_CHARS,
+        )
+    return content[:MAX_PASSAGE_CHARS]
 
 
 def guard_embedding_model_load(model_name: str) -> None:
@@ -105,10 +120,7 @@ class EmbeddingModel:
         results = []
         total = len(chunks)
 
-        # Pass full content — sentence-transformers tokenizes and truncates at the
-        # model's actual token limit (512 tokens ≈ 2000+ chars), so content beyond
-        # 512 chars is now included in the embedding instead of being discarded.
-        texts = [chunk.content for chunk in chunks]
+        texts = [embedding_input(chunk.content) for chunk in chunks]
 
         # Generate embeddings in batches
         for i in range(0, len(texts), batch_size):
@@ -149,6 +161,7 @@ class EmbeddingModel:
         # Cap degenerate query inputs; model handles token truncation internally
         if len(query) > MAX_QUERY_CHARS:
             query = query[:MAX_QUERY_CHARS]
+        query = embedding_input(query)
 
         # BGE models need query prefix for optimal retrieval
         prefixed_query = f"{BGE_QUERY_PREFIX}{query}"
@@ -167,7 +180,7 @@ class EmbeddingModel:
         model = self._load_model()
         try:
             embeddings = model.encode(
-                texts,
+                [embedding_input(text) for text in texts],
                 batch_size=batch_size,
                 convert_to_numpy=True,
                 show_progress_bar=False,

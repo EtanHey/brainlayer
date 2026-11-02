@@ -834,7 +834,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
             }
         }
         guard let row = try? JSONSerialization.jsonObject(with: Data(last.utf8)) as? [String: Any],
-              row["status"] as? String == "aborted", let reason = row["reason"] as? String else { return nil }
+              let status = row["status"] as? String, ["aborted", "deferred"].contains(status), let reason = row["reason"] as? String else { return nil }
         return .aborted(reason: reason, writtenAt: stamp) // verdict also checks the child's start time
     }
 

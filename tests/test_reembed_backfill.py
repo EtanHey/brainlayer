@@ -131,6 +131,28 @@ def test_run_reembed_backfill_batches_and_writes_both_vector_tables(tmp_path):
         check.close()
 
 
+def test_reembed_backfill_bounds_oversized_inputs_without_changing_content(tmp_path):
+    from brainlayer.embeddings import MAX_PASSAGE_CHARS
+    from brainlayer.reembed_backfill import run_reembed_backfill
+
+    db_path = tmp_path / "oversized.db"
+    content = "passage " * 38400
+    store = VectorStore(db_path)
+    _insert_chunk(store, chunk_id="oversized", content=content)
+    store.close()
+    model = FakeBatchModel()
+
+    result = run_reembed_backfill(db_path=db_path, model=model)
+
+    assert (result.processed, result.failed, result.after_count) == (1, 0, 0)
+    assert model.calls == [[content[:MAX_PASSAGE_CHARS]]]
+    store = VectorStore(db_path, readonly=True)
+    try:
+        assert store.conn.cursor().execute("SELECT content FROM chunks WHERE id='oversized'").fetchone() == (content,)
+    finally:
+        store.close()
+
+
 def test_run_reembed_backfill_reuses_large_candidate_page_for_encode_batches(tmp_path, monkeypatch):
     from brainlayer import reembed_backfill
     from brainlayer.reembed_backfill import run_reembed_backfill

@@ -17,6 +17,7 @@ import apsw
 import sqlite_vec
 
 from .archive_lifecycle import lifecycle_active_clauses_present
+from .embeddings import embedding_input
 from .paths import get_db_path
 
 logger = logging.getLogger(__name__)
@@ -546,7 +547,7 @@ def _rollback_failed_merge(cursor: Any, savepoint: str, original: Exception) -> 
 
 
 def _invalidate_merged_vectors(cursor: Any, chunk_id: str) -> None:
-    """A changed canonical body needs a new embedding, within the merge savepoint."""
+    """Remove stale vectors within the merge savepoint."""
     for table in ("chunk_vectors", "chunk_vectors_binary"):
         if cursor.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone():
             cursor.execute(f"DELETE FROM {table} WHERE chunk_id = ?", (chunk_id,))
@@ -593,6 +594,7 @@ def merge_duplicate_chunk(
     merged_half_life = _max_optional_number(existing_half_life, incoming.get("half_life_days"))
     merged_content = _merged_content(str(existing_content), str(incoming.get("content") or ""))
     content_changed = merged_content != str(existing_content)
+    embedding_changed = content_changed and embedding_input(str(existing_content)) != embedding_input(merged_content)
     last_seen_at = _latest_timestamp(
         existing_last, existing_created, incoming.get("last_seen_at"), incoming.get("created_at")
     )
@@ -621,7 +623,7 @@ def merge_duplicate_chunk(
         cursor.execute("SAVEPOINT dedupe_merge")
         try:
             cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), canonical_id])
-            if content_changed:
+            if embedding_changed:
                 _invalidate_merged_vectors(cursor, canonical_id)
             if archive_existing_duplicate:
                 retarget_aliases(conn, old_canonical_chunk_id=duplicate_id, new_canonical_chunk_id=canonical_id)
@@ -675,6 +677,8 @@ def merge_duplicate_chunk(
             raise
         else:
             cursor.execute("RELEASE dedupe_merge")
+            if content_changed and not embedding_changed:
+                logger.info("Dedupe merge kept vector: skipped_invalidation=1 reason=unchanged_embedding_input")
             return content_changed
     return content_changed
 
@@ -789,6 +793,7 @@ def merge_existing_chunk_content(
     incoming_content = str(incoming.get("content") or "")
     merged_content = _merged_content(str(existing_content), incoming_content)
     content_changed = merged_content != str(existing_content)
+    embedding_changed = content_changed and embedding_input(str(existing_content)) != embedding_input(merged_content)
     merged_tags = sorted(_loads_tags(existing_tags) | _loads_tags(incoming.get("tags")))
     merged_importance = _max_optional_number(existing_importance, incoming.get("importance"))
     merged_half_life = _max_optional_number(existing_half_life, incoming.get("half_life_days"))
@@ -819,7 +824,7 @@ def merge_existing_chunk_content(
         cursor.execute("SAVEPOINT dedupe_same_id_content")
         try:
             cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
-            if content_changed:
+            if embedding_changed:
                 _invalidate_merged_vectors(cursor, chunk_id)
             record_dedupe_audit(
                 conn,
@@ -841,6 +846,8 @@ def merge_existing_chunk_content(
             raise
         else:
             cursor.execute("RELEASE dedupe_same_id_content")
+            if content_changed and not embedding_changed:
+                logger.info("Dedupe merge kept vector: skipped_invalidation=1 reason=unchanged_embedding_input")
             return content_changed
     return content_changed
 

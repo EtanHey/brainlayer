@@ -730,7 +730,7 @@ def test_sunday_full_waits_runs_real_vacuum_or_alerts_overrun(request, monkeypat
                         maintenance.MaintenanceAbort, match="local verified snapshot unavailable"
                     ) as exc:
                         maintenance.run_maintenance("full", config=cfg)
-                    assert exc.value.code == 76
+                    assert exc.value.code == 75
                     assert db.stat().st_size == before
                     return exc.value.code
                 result = maintenance.run_maintenance("full", config=cfg)
@@ -764,7 +764,7 @@ def test_sunday_full_waits_runs_real_vacuum_or_alerts_overrun(request, monkeypat
     assert (db.stat().st_size < before) == (finish[0] < 6 and not rejected)
     assert backups == []
     assert seen[-1] == "backup-daily"
-    assert ("maintenance-full" in job_alerts.active_alerts()) == (finish[0] >= 6 or rejected)
+    assert ("maintenance-full" in job_alerts.active_alerts()) == (finish[0] >= 6)
     events = [json.loads(l) for l in (path / "calendar" / "runs.jsonl").read_text().splitlines()]
     assert any(e["event"] == "wait-start" for e in events) == (finish[0] < 4)
     if finish[0] < 6 and not rejected:

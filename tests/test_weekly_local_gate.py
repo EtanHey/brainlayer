@@ -92,7 +92,7 @@ def test_local_gate_fails_closed(local_lane, monkeypatch, tmp_path, damage):
     monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", lambda *_: pytest.fail("calendar must fail closed"))
     with pytest.raises(maintenance.MaintenanceAbort) as exc:
         maintenance._weekly_backup(config_for(local_lane, tmp_path))
-    assert exc.value.code == 76
+    assert exc.value.code == 75
 
 
 def test_upload_phase_reuses_snapshot_and_completed_receipt(local_lane, monkeypatch):
