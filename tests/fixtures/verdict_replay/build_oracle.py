@@ -56,8 +56,10 @@ def events_for(d: Path, mac: str) -> list[dict]:
     drive_snapshots = {}
     creation_times = {}
     f = f"{mac}-backup-daily.log"
-    for n, line in enumerate((d / f).read_text().splitlines(), 1):
-        r = json.loads(line)
+    # Terminal receipts can retain an older invocation timestamp. Fold each invocation
+    # before later ones, preserving journal order within an invocation.
+    rows = [(n, json.loads(line)) for n, line in enumerate((d / f).read_text().splitlines(), 1)]
+    for n, r in sorted(rows, key=lambda row: row[1].get("attempted_at", "")):
         if r.get("backup_log_provenance") != "real" or not r.get("attempted_at"):
             continue
         err = f"{r.get('error_type') or ''} {r.get('error') or ''}"
@@ -102,7 +104,11 @@ def events_for(d: Path, mac: str) -> list[dict]:
                     snapshots[key] = stamp
                 elif r.get("local_verified") is True and r.get("local_integrity") == "ok":
                     snapshots[key] = stamp
-            if r.get("local_removed") is True:
+            if (
+                r.get("local_verified") is False
+                or r.get("upload_state") in {"abandoned", "superseded"}
+                or r.get("local_removed") is True
+            ):
                 snapshots.pop(key, None)
             newest = max([*snapshots.values(), *drive_snapshots.values()], default=None)
             if newest != before or up or (r.get("local_verified") is True and not revoked):
@@ -123,6 +129,13 @@ def events_for(d: Path, mac: str) -> list[dict]:
                 add("drive_auth", "ok", r["attempted_at"], n, f, "verified Drive upload")
         if "Drive access expired" in str(r.get("error")):
             add("drive_auth", "consent_needed", r["attempted_at"], n, f, str(r["error"])[:80])
+    # The final receipt at an invocation timestamp determines its surviving clock.
+    clocks = {(e["check"], e["known_from"]): e for e in ev if e["check"] == "backup_local"}
+    ev = [
+        e
+        for e in ev
+        if e["check"] != "backup_local" or e["value_at"] == clocks[(e["check"], e["known_from"])]["value_at"]
+    ]
     ev.sort(key=lambda e: (e["check"], e["known_from"]))
     return ev
 

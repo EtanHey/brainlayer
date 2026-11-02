@@ -41,6 +41,9 @@ ORACLE_LIMITS_H = {"backup_local": (30, 54), "backup_offsite": (30, 78), "transc
 # nightlies; the 08:30Z manual run recovered it).
 EXPECTED_RED: dict[str, dict[str, list[tuple[str, str]]]] = {
     "m1": {
+        # Superseded receipts retain the original attempt times; those local copies
+        # no longer count, leaving the 10-24 verified upload until 10-29.
+        "backup_local": [("2026-10-26T08:00Z", "2026-10-29T03:00Z")],
         "drive_auth": [("2026-10-25T11:00Z", "2026-10-29T03:00Z")],
         "transcripts": [("2026-10-26T08:00Z", "2026-10-29T03:00Z")],
         "backup_offsite": [("2026-10-27T08:00Z", "2026-10-29T03:00Z")],

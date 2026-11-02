@@ -360,7 +360,7 @@ def _raw_checks(
         ),
     }
     raw["backup_local"].note = raw["backup_local"].note.replace("verified copy", "verified snapshot")
-    if facts.backup_snapshot_local_removed:
+    if facts.backup_snapshot_local_removed and _aware(facts.backup_local_verified_at) is not None:
         raw["backup_local"].note += "; local copy removed after Drive verification"
     raw["drive_auth"] = _drive_auth(facts.drive_auth, p("drive_auth"))
     integrity = facts.integrity
@@ -635,7 +635,7 @@ def backup_facts(receipts: Iterable[Mapping[str, Any]], *, as_of: datetime | Non
     A receipt counts once its invocation has started (``attempted_at <= as_of``). A Drive-verified
     upload also proves the local snapshot it was made from. A later receipt for the same snapshot
     that reports a verification error or a Drive md5 mismatch revokes it; "superseded" does not.
-    Local removal drops the snapshot clock only without a verified Drive copy of that snapshot.
+    Local removal or invalidation drops the clock only without a verified Drive copy of that snapshot.
     Coverage is restored separately: a local-only success cannot restore a revoked Drive copy.
     Exact creation times from history survive filename-only receipts for the same artifact.
     """
@@ -668,7 +668,11 @@ def backup_facts(receipts: Iterable[Mapping[str, Any]], *, as_of: datetime | Non
                 offsite[key] = local[key] = created
             elif receipt.get("local_verified") is True and receipt.get("local_integrity") == "ok":
                 local[key] = created
-        if key and receipt.get("local_removed") is True:
+        if key and (
+            receipt.get("local_removed") is True
+            or receipt.get("local_verified") is False
+            or receipt.get("upload_state") in ("abandoned", "superseded")
+        ):
             local.pop(key, None)
         if (event := drive_event(receipt)) is not None and (drive is None or at >= drive[0]):
             drive = (at, event)
