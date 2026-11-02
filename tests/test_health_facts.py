@@ -183,8 +183,10 @@ def test_revoked_snapshot_stops_being_the_clock_end_to_end(tmp_path: Path) -> No
 
     (first, before), (after_facts, after) = _verdict_ticks(config, [(NOW, None), (NOW + timedelta(minutes=5), revoke)])
     assert before.check("backup_local").state == "green"
-    assert after_facts.backup_revoked and after_facts.backup_local_verified_at is None
-    assert after.check("backup_local").state == "red" and "revoked" in after.check("backup_local").note
+    assert after_facts.backup_local_verified_at is None
+    assert after_facts.backup_offsite_verified_at is None
+    assert after.check("backup_local").state == after.check("backup_offsite").state == "red"
+    assert after.check("backup_local").age_s is None
 
 
 def test_oldest_pending_store_spans_replay_file_and_drain_queue(tmp_path: Path) -> None:
