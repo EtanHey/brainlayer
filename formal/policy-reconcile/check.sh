@@ -13,4 +13,9 @@ if java -Xmx512m -cp "$jar" tlc2.TLC -workers 1 -config "$here/bug-rename-first.
     exit 1
 fi
 grep -F 'Invariant JournalOwnsManifest is violated' bug.log
-echo 'PASS: current transition and crash recovery; rename-first counterexample reproduced'
+if java -Xmx512m -cp "$jar" tlc2.TLC -workers 1 -config "$here/bug-recovery-skips-readiness.cfg" -metadir readiness-bug-states PolicyReconcile > readiness-bug.log 2>&1; then
+    echo 'FAIL: recovery readiness bug did not violate an invariant' >&2
+    exit 1
+fi
+grep -F 'Invariant DoneHasReadyService is violated' readiness-bug.log
+echo 'PASS: current transition and ready recovery; rename-first and skipped-readiness counterexamples reproduced'

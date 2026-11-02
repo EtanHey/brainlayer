@@ -44,9 +44,19 @@ def plan(previous, templates):
         raise ValueError("invalid manifest custody hash")
     document = json.loads(old)
     for label, record in document.items():
-        template = plistlib.loads(read_owned(templates / f"{label}.plist"))
+        try:
+            raw = read_owned(templates / f"{label}.plist")
+        except FileNotFoundError:
+            print(f"{label}: policy unchanged: no keg template", file=sys.stderr)
+            continue
+        template = plistlib.loads(raw)
         if template.get("Label") != label:
             raise ValueError(f"policy template identity changed: {label}")
+        if sys.platform != "darwin":
+            # These launchd templates carry Darwin-only resource contracts.
+            # Preserve a runnable POSIX preimage instead of importing them.
+            print(f"{label}: policy unchanged: non-Darwin platform {sys.platform}", file=sys.stderr)
+            continue
         requested = resource_policy(template)
         for key in RESOURCE_POLICY_KEYS:
             record["plist"].pop(key, None)

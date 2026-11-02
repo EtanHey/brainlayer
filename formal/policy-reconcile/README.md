@@ -12,6 +12,11 @@ durable pending intent so both manifest versions remain recoverable.
 Recovery accepts only journaled versions; unrelated bytes refuse. One crash may
 occur at any step, including unsynced directory entries. The bug config omits
 durable intent and reproduces an unowned new manifest at `Rename`.
+Recovery of matching old/new state explicitly starts that version and waits
+for readiness. Normal restart and rollback also observe readiness before
+completion. `DoneHasReadyService` requires a running, ready service for the
+selected manifest at `done`. `bug-recovery-skips-readiness.cfg` starts recovery
+but skips its readiness check, reproducing a violation of that invariant.
 
 The abstraction assumes the existing migration lock, archive, launcher, marker,
 and runtime custody checks; it does not prove those implementations. The fake-home

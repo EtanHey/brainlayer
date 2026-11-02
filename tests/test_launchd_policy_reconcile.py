@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -18,18 +19,46 @@ from tests.test_launchd_revert import revert
 from tests.test_launchd_revert import setup as setup
 
 HOT = "com.brainlayer.hotlane-brainbar"
+WAL = "com.brainlayer.wal-checkpoint-fallback"
+
+
+def plan_on_platform(platform):
+    from brainlayer.policy_reconcile import plan
+
+    def run(previous, templates):
+        with patch.object(sys, "platform", platform):
+            return plan(previous, templates)
+
+    return run
 
 
 @pytest.fixture
-def consolidated(setup, tmp_path, monkeypatch):
+def consolidated(setup, tmp_path, monkeypatch, request):
     from brainlayer import launchd_consolidation as migration
 
+    # These fixtures exercise launchd policy reconciliation on every CI host.
+    monkeypatch.setattr(migration, "policy_plan", plan_on_platform("darwin"))
     path = setup[1] / f"{HOT}.plist"
     path.write_bytes(
         plistlib.dumps(dict(Label=HOT, ProgramArguments=["/usr/bin/true"], KeepAlive=True, LowPriorityIO=True))
     )
     runner = Launchctl()
     runner.loaded.add(HOT)
+    if getattr(request, "param", None) == WAL:
+        (setup[1] / f"{WAL}.plist").write_bytes(
+            plistlib.dumps(
+                dict(
+                    Label=WAL,
+                    ProgramArguments=["/usr/bin/true"],
+                    KeepAlive=True,
+                    Nice=17,
+                    LowPriorityIO=True,
+                    ProcessType="Background",
+                    SoftResourceLimits={"NumberOfFiles": 1024},
+                )
+            )
+        )
+        runner.loaded.add(WAL)
     journal = invoke(setup, runner)
     templates = tmp_path / "templates"
     shutil.copytree(ROOT / "scripts/launchd", templates)
@@ -63,6 +92,65 @@ def test_keg_policy_upgrade_preserves_every_other_field_and_replay_is_noop(conso
     runner.calls.clear()
     assert invoke(setup, runner, "keg2") == result
     assert all(call[0] in {"print", "print-disabled"} for call in runner.calls)
+
+
+@pytest.mark.parametrize("consolidated", [WAL], indirect=True)
+def test_missing_template_keeps_pinned_policy_and_other_components_reconcile(consolidated, capsys):
+    setup, runner, before, templates = consolidated
+    (templates / f"{WAL}.plist").unlink()
+    result = invoke(setup, runner, "keg2")
+    manifest = json.loads(bytes.fromhex(result["manifest_bytes"]))
+    assert result["phase"] == "migrated" and result["keg"] == "keg2"
+    assert manifest[WAL] == before["components"][WAL]
+    assert manifest[HOT]["plist"]["LowPriorityIO"] is False
+    assert WAL not in result["policy_reconciliations"][-1]["diff"]
+    assert f"{WAL}: policy unchanged: no keg template" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_template_identity_mismatch_refuses_before_restart_or_journal_change(consolidated, monkeypatch, platform):
+    from brainlayer import launchd_consolidation as migration
+
+    monkeypatch.setattr(migration, "policy_plan", plan_on_platform(platform))
+    setup, runner, before, templates = consolidated
+    path = templates / f"{HOT}.plist"
+    document = plistlib.loads(path.read_bytes()) | {"Label": "foreign"}
+    path.write_bytes(plistlib.dumps(document))
+    with pytest.raises(ValueError, match="template identity changed"):
+        invoke(setup, runner, "keg2")
+    control = setup[0] / ".local/share/brainlayer/supervisor"
+    assert json.loads((control / "migration.json").read_bytes()) == before
+    assert (control / "jobs.json").read_bytes().hex() == before["manifest_bytes"]
+    assert all(call[0] in {"print", "print-disabled"} for call in runner.calls)
+
+
+def test_linux_restart_preserves_pinned_policy_and_private_children_accept_it(setup, monkeypatch, capsys):
+    from brainlayer import launchd_consolidation as migration
+    from brainlayer import supervisor_child
+    from brainlayer.supervisor_jobs import resource_policy
+
+    runner = Launchctl()
+    before = invoke(setup, runner)
+    monkeypatch.setattr(migration, "policy_plan", plan_on_platform("linux"))
+    result = invoke(setup, runner, "keg2")
+    manifest = json.loads(bytes.fromhex(result["manifest_bytes"]))
+    # Execute the same policy application that gates real supervisor children;
+    # isolate it because Nice and limits must not change the pytest process.
+    code = "import json,runpy,sys; apply=runpy.run_path(sys.argv[1])['apply_policy']; sys.platform='linux'; apply(json.loads(sys.argv[2]))"
+    for record in manifest.values():
+        child = subprocess.run(
+            (sys.executable, "-c", code, supervisor_child.__file__, json.dumps(resource_policy(record["plist"]))),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert child.returncode == 0, child.stderr
+    assert result["phase"] == "migrated" and result["keg"] == "keg2"
+    assert result["manifest_bytes"] == before["manifest_bytes"]
+    assert "policy_reconciliations" not in result
+    messages = capsys.readouterr().err
+    for label in manifest:
+        assert f"{label}: policy unchanged: non-Darwin platform linux" in messages
 
 
 def test_unjournaled_manifest_edit_still_refuses(consolidated):
@@ -120,12 +208,17 @@ def test_failed_policy_restart_restores_old_manifest_and_receipt(consolidated, m
     assert json.loads((control / "migration.json").read_bytes()) == before
 
 
-POLICY_PROBE = 'policy_phase = ""\n' + PROBE.replace(
+POLICY_PROBE = 'from unittest.mock import patch\npolicy_phase = ""\n' + PROBE.replace(
     'templates=Path(sys.argv[4]) / "scripts/launchd"', 'templates=root / "templates"'
 ).replace(" + name)", ' + name + (":policy:" + policy_phase if policy_phase else ""))').replace(
     "result = migrate(",
     """
 import brainlayer.launchd_consolidation as migration
+original_plan = migration.policy_plan
+def darwin_plan(previous, templates):
+    with patch.object(sys, "platform", "darwin"):
+        return original_plan(previous, templates)
+migration.policy_plan = darwin_plan
 original_update = migration.update
 def tracked_update(path, *args):
     global policy_phase

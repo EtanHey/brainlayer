@@ -19,6 +19,7 @@ from tests.test_launchd_consolidation import Launchctl, invoke
 
 FLEET = "com.etanhey.brainlayer-fleet-watchdog"
 CALENDAR = "com.brainlayer.maintenance"
+CRASH_SHARD_COUNTS = {False: 32, True: 40}
 
 
 @pytest.mark.parametrize("pinned", [False, True], ids=["opt-plist", "fallback-pinned-plist"])
@@ -634,7 +635,7 @@ def probe(root, keg, cut=0, *, context="baseline"):
     "restart,shard",
     [
         pytest.param(restart, shard, id=f"shard-{shard:02}-{'keg-restart' if restart else 'first-install'}")
-        for restart, shards in ((False, 32), (True, 40))
+        for restart, shards in CRASH_SHARD_COUNTS.items()
         for shard in range(shards)
     ],
 )
@@ -651,7 +652,7 @@ def test_sigkill_every_os_and_launchctl_boundary_then_plain_rerun(tmp_path, rest
     assert len(events) > 100 and any("os.rename" in event for event in events) == (not restart)
     # Python 3.12 pre-push records more OS boundaries than the Framework 3.13
     # interpreter. Keep every cut and the per-item bound in both environments.
-    shard_count = 40 if restart else 32
+    shard_count = CRASH_SHARD_COUNTS[restart]
     cuts = [(cut, event) for cut, event in enumerate(events, 1) if (cut - 1) % shard_count == shard]
     assert 0 < len(cuts) <= 30, "increase shard count to retain the <=30-cut per-item bound"
     failures = []
