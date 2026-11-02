@@ -23,6 +23,7 @@ import brainlayer.health_check as health_check
 # Repair (c): health SQL uses archived_at + lineage only.
 from brainlayer.health_check import HealthCheckConfig, run_health_check
 from brainlayer.vector_store import VectorStore
+from tests.verdict_evidence import write_evidence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ENRICHMENT_EVENT = '{"kind":"enrichment_update"}\n'
@@ -175,7 +176,8 @@ def _make_db(path: Path, *, total: int, vector_rows: int) -> None:
                 status TEXT DEFAULT 'active',
                 enriched_at TEXT,
                 enrich_status TEXT,
-                char_count INTEGER
+                char_count INTEGER,
+                created_at TEXT
             );
             CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY, chunk_id INTEGER);
             """
@@ -215,7 +217,10 @@ def test_48_hour_idle_machine_uses_liveness_and_preserves_real_failures(tmp_path
     backup = tmp_path / "jsonl-backup.log"
     alerts = tmp_path / "job-alerts.json"
     alerts.write_text(json.dumps({"maintenance-full": "quiet window missed"} if failure == "job" else {}))
+    evidence = write_evidence(tmp_path, now)
+    evidence.pop("jsonl_backup_log_path"), evidence.pop("watcher_health_path")
     config = HealthCheckConfig(
+        **evidence,
         db_path=db,
         state_path=tmp_path / "health-state.json",
         job_opt_path=None,
@@ -257,8 +262,18 @@ def test_48_hour_idle_machine_uses_liveness_and_preserves_real_failures(tmp_path
         assert result.ok is (failure is None)
         assert result.canary_status == "empty"
         badge = json.loads(config.badge_state_path.read_text())["alerts"]
-        assert badge["badge_on"] is (failure is not None)
-        assert [issue["code"] for issue in badge["active"]] == ([expected] if expected else [])
+        # A failed transcript archive with no verified copy on record is an outcome (red); a job
+        # alert beside a fresh verified backup is history: a warning note, never the dot.
+        assert badge["badge_on"] is (failure == "backup")
+        active = {issue["code"]: issue["severity"] for issue in badge["active"]}
+        assert (
+            active
+            == {
+                None: {},
+                "backup": {"outcome_transcripts": "critical"},
+                "job": {"job_alert_maintenance-full": "warning"},
+            }[failure]
+        )
 
 
 def _write_writer_pidfile(pidfile_dir: Path, db_path: Path, *, pid: int, start_time: str | None = None) -> Path:

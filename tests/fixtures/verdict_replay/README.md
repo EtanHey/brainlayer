@@ -16,13 +16,18 @@ Drive file ids, md5s and sizes are kept. Rows are re-serialized with sorted keys
 tests/fixtures/verdict_replay`). It is deliberately separate code from `brainlayer.health_verdict`: plain
 dict walking, no BrainLayer imports. It shares the documented evidence rules, not the parser:
 
-- local copy verified: `local_verified` with `local_integrity == "ok"`, or a Drive-verified upload (which
-  proves the snapshot it came from); value time = `snapshot_created_at`, else the artifact date at 00:00Z;
+- database snapshot verified (key `backup_local`): `local_verified` with `local_integrity == "ok"`, or a Drive-verified upload (which
+  proves the snapshot it came from). Removal preserves this clock only while a verified Drive copy
+  of that same snapshot exists; otherwise it falls back to the newest surviving verified snapshot.
+  Snapshot events carry the resulting clock, including `none` when no copy survives; value time = `snapshot_created_at`, else the artifact date at 00:00Z;
 - Drive copy verified: `uploaded` and `verified`, no md5 mismatch or verification error;
 - transcripts verified: `jsonl-backup.log` rows with `verified` and status `uploaded`/`no-op`/`created`;
 - Drive auth: `DriveCredentialError` / "Drive access expired" gives `consent_needed`; a verified upload gives `ok`.
 
-Every event carries `known_from = attempted_at` and `known_by = attempted_at + 8h`, because receipts record
+Backup events follow file order with `known_from = max(attempted_at seen so far)`; copied terminal
+receipts retain old attempt times and cannot affect earlier hours. The replay passes only the journal
+prefix known at each hour. Other events use their own `attempted_at`. Every event carries
+`known_by = known_from + 8h`, because receipts record
 when an invocation started, not when it wrote the row, and carry no completion field. Eight hours is an
 upper bound, not an estimate: it is the longest default run limit of the two writers (backup-daily
 `DEFAULT_BACKUP_TIMEOUT_SECONDS`, 8 h; the jsonl-backup wrapper, 2 h), and a run killed at its limit
