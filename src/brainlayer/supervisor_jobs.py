@@ -22,6 +22,7 @@ from .supervisor_adapters import ALIASES
 
 TRANSCRIPT_RECOVERY_RUN_TIMEOUT = 7500
 TRANSCRIPT_RECOVERY_EXIT_TIMEOUT = 60
+RESOURCE_POLICY_KEYS = ("SoftResourceLimits", "Nice", "LowPriorityIO", "ProcessType")
 
 PLIST_KEYS = set(
     "Label ProgramArguments EnvironmentVariables StandardOutPath StandardErrorPath "
@@ -31,7 +32,7 @@ PLIST_KEYS = set(
 
 
 def resource_policy(plist):
-    policy = {k: plist[k] for k in ("SoftResourceLimits", "Nice", "LowPriorityIO", "ProcessType") if k in plist}
+    policy = {k: plist[k] for k in RESOURCE_POLICY_KEYS if k in plist}
     limits = policy.get("SoftResourceLimits", {})
     if not isinstance(limits, dict) or set(limits) - {"NumberOfFiles"}:
         raise ValueError(f"unsupported SoftResourceLimits: {limits}")

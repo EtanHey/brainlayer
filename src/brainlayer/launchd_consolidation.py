@@ -27,6 +27,9 @@ from .migration_journal import archive_replace as update
 from .migration_journal import recover_staging
 from .migration_journal import sync_directory as sync
 from .migration_runtime import LaunchdRuntime, deadline_after, pid_alive, wait_supervisor
+from .policy_reconcile import log_diff
+from .policy_reconcile import plan as policy_plan
+from .policy_reconcile import versions as policy_versions
 from .supervisor_adapters import SupervisorCommands
 from .supervisor_guard import Custody, boot_time, group_exists, start_time
 from .supervisor_jobs import load_components
@@ -348,7 +351,9 @@ def _migrate(
                 raise RuntimeError("legacy/archive custody changed; restart recovery refused")
         if any(runtime.observe(label)["loaded"] for label in previous["states"] if label not in NEW):
             raise RuntimeError("unowned legacy service prevents restart recovery")
-        if hashlib.sha256(read_owned(manifest)).hexdigest() != previous["manifest_sha256"]:
+        old_manifest, new_manifest = policy_versions(restarting)
+        allowed_manifests = {old_manifest, new_manifest}
+        if read_owned(manifest) not in allowed_manifests:
             raise RuntimeError("foreign manifest prevents restart recovery")
         daemon_path = agents / f"{NEW[0]}.plist"
         old_daemon = bytes.fromhex(previous["published_files"][daemon_path.name])
@@ -387,8 +392,16 @@ def _migrate(
         receipt_versions = {expected_receipt}
         missing_previous = ""
 
-        def completed(keg_value, daemon_bytes, fallback=False):
+        def completed(keg_value, daemon_bytes, fallback=False, reconciled=False):
             result = previous | dict(phase="migrated", keg=keg_value, daemon_pinned=pinned_daemon(daemon_bytes).hex())
+            if reconciled and (policy := restarting.get("policy_reconcile")):
+                result.update(
+                    manifest_bytes=policy["new_bytes"],
+                    manifest_sha256=policy["new_sha256"],
+                    components=json.loads(new_manifest),
+                    policy_reconciliations=previous.get("policy_reconciliations", [])
+                    + [{key: policy[key] for key in ("old_sha256", "new_sha256", "diff")}],
+                )
             files = dict(previous["published_files"])
             files[daemon_path.name] = daemon_bytes.hex()
             for marker in marker_paths:
@@ -405,6 +418,8 @@ def _migrate(
                 raise RuntimeError("foreign journal prevents restart rollback")
             receipt_versions.add(json.dumps(result).encode())
             journal_update(result, current_receipt)
+            if reconciled and restarting.get("policy_reconcile"):
+                log_diff(restarting["policy_reconcile"]["diff"])
             return result
 
         try:
@@ -414,14 +429,22 @@ def _migrate(
             stop(NEW[0], initial_state)
             stopped_daemon = True
             wait_custody(control / "calendar", clock=clock)
+            replace_known(manifest, allowed_manifests, new_manifest, write_file)
             replace_known(daemon_path, allowed_daemons, requested_daemon, write_launch_agent)
             bootstrap(NEW[0], daemon_path)
             verify_daemon()
             for marker in marker_paths:
                 replace_known(marker, {old_marker, new_marker}, new_marker, write_launch_agent)
-            return completed(restarting["requested_keg"], requested_daemon)
+            return completed(restarting["requested_keg"], requested_daemon, reconciled=True)
         except BaseException as failure:
             try:
+                # Completion may have renamed the new receipt before its directory
+                # fsync failed. Re-arm durable intent before restoring either policy.
+                current_receipt = read_owned(receipt)
+                if current_receipt not in receipt_versions:
+                    raise RuntimeError("foreign journal prevents restart rollback")
+                if current_receipt != expected_receipt:
+                    journal_update(restarting, current_receipt)
                 kept = False
                 current = runtime.observe(NEW[0])
                 fallback_python = Path(plistlib.loads(fallback_daemon)["ProgramArguments"][1])
@@ -458,6 +481,7 @@ def _migrate(
                 if not kept and any(alive(pid) for pid in runtime.observed_pids.get(NEW[0], set())):
                     raise RuntimeError("original supervisor still lives; refusing restart bootstrap")
                 replace_known(daemon_path, allowed_daemons, fallback_daemon, write_launch_agent)
+                replace_known(manifest, allowed_manifests, old_manifest, write_file)
                 for marker in marker_paths:
                     replace_known(marker, {old_marker, new_marker}, old_marker, write_launch_agent)
                 if not kept:
@@ -566,6 +590,8 @@ def _migrate(
             restart_state=runtime.observe(NEW[0]),
             requested_daemon=prepared[NEW[0]].hex(),
         )
+        if policy := policy_plan(previous, templates):
+            restarting["policy_reconcile"] = policy
         restarting_bytes = json.dumps(restarting).encode()
         try:
             journal_update(restarting, previous_bytes)

@@ -3,6 +3,12 @@
 Install the release containing migration, revert and wiring before activation.
 Run installed `brainlayer/launchd/install.sh consolidate` for BrainLayer Daemon and Maintenance. Signatures, Spotlight layout, interpreter, rendered plists and helper syntax are checked first.
 Same-keg replay leaves writers running; a changed keg restarts the supervisor. Differing shared helpers require explicit operator reconciliation.
+A changed keg also reconciles existing components' `Nice`, `LowPriorityIO`, `ProcessType` and
+`SoftResourceLimits` from its templates. Commands, environment, paths, schedules and enabled states
+retain their journaled values. The restart journal records old/new manifest hashes and the policy
+diff; successful changes print to stderr and remain in `policy_reconciliations` in `migration.json`.
+Interrupted restarts accept only the two journaled manifest versions; failed restarts restore the
+old policy before verifying the fallback supervisor. Unrelated manifest edits still refuse.
 Use `install.sh consolidation-rollback` to restore journaled legacy definitions, markers and runtime states; the journal remains. Interrupts print recovery guidance and return nonzero.
 Legacy targets (`all`, individual jobs, `load`, `unload`, `remove`, watchdog commands) refuse supervisor-owned or unknown phases and share installer/migration custody. They reopen after `reverted` or `rolled_back`.
 Activation requires review, merged prerequisites and real serving/sleep-wake proof on both Macs. Scratch tests do not establish installed or native acceptance.
