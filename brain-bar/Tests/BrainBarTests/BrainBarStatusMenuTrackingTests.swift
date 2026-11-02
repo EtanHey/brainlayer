@@ -243,7 +243,7 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
                 MainActor.assumeIsolated {
                     XCTAssertEqual(delegate.opens, cycle, "AppKit must invoke the real menuWillOpen callback")
                     XCTAssertEqual(fixture.controller.contextMenuForTesting.items.first?.title,
-                        cycle == 2 ? "Needs attention" : "All good")
+                        cycle == 2 ? "Needs attention: Changed failure" : "Nothing needs attention")
                     let writes = fixture.host.button.imageWrites
                     fixture.provider.value = 40 + cycle
                     fixture.collector.refresh(force: true)

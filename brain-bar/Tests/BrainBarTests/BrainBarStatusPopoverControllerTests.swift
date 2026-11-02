@@ -56,8 +56,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         controller.setBadgeForTesting(.failVisible(reason), alertsURL: alertsURL)
         controller.menuNeedsUpdate(menu)
         XCTAssertLessThanOrEqual(statusRow.title.count, 60)
-        XCTAssertEqual(statusRow.title, "Needs attention")
-        XCTAssertTrue(menu.items.contains { $0.title == reason }, "The full reason wraps below the outcome")
+        XCTAssertTrue(statusRow.title.hasSuffix("…"))
         XCTAssertEqual(statusRow.toolTip, reason)
 
         let unboundedMenu = NSMenu(title: "Neutral width reference")
@@ -67,12 +66,12 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
 
         controller.setBadgeForTesting(.failVisible("Watcher stopped"), alertsURL: alertsURL)
         controller.menuNeedsUpdate(menu)
-        XCTAssertEqual(statusRow.title, "Needs attention")
+        XCTAssertEqual(statusRow.title, "Needs attention: Watcher stopped")
         XCTAssertEqual(statusRow.toolTip, "Watcher stopped")
 
         controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []), alertsURL: alertsURL)
         controller.menuNeedsUpdate(menu)
-        XCTAssertEqual(statusRow.title, "All good")
+        XCTAssertEqual(statusRow.title, "Nothing needs attention")
         XCTAssertNil(statusRow.toolTip)
     }
 
