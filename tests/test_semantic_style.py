@@ -19,6 +19,17 @@ from brainlayer.pipeline.semantic_style import (
 )
 
 
+def test_semantic_messages_use_shared_embedding_input():
+    from brainlayer.embeddings import MAX_PASSAGE_CHARS
+
+    messages = ["short", "passage " * 38400]
+    with patch.object(SemanticStyleAnalyzer, "model") as model:
+        analyzer = SemanticStyleAnalyzer()
+        analyzer.embed_messages(messages)
+        assert model.encode.call_args.args[0] == [messages[0], messages[1][:MAX_PASSAGE_CHARS]]
+    assert len(messages[1]) == 307200
+
+
 class TestTopicSeeds:
     """Test topic seed definitions."""
 

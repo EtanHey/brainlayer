@@ -241,7 +241,6 @@ def test_maintenance_deliberate_deferrals_match_swift_allowlist():
     swift = (
         Path(__file__).resolve().parents[1] / "brain-bar/Sources/BrainBar/BrainLayerLaunchdActivity.swift"
     ).read_text()
-    block = swift.split("static let deliberateDeferrals = [", 1)[1].split("]", 1)[0]
+    block = swift.split("static let deliberateDeferrals = [", 1)[1].split("\n    ]", 1)[0]
     patterns = re.findall(r'#"(.*?)"#', block)
-    assert len(patterns) == 5
     assert tuple(patterns) == maintenance.DELIBERATE_DEFERRALS
