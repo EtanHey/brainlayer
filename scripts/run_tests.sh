@@ -200,7 +200,7 @@ map_changed_files_to_pytests() {
           done
         fi
         ;;
-      src/brainlayer/launchd_consolidation.py|src/brainlayer/launchd_revert.py|src/brainlayer/migration_journal.py|src/brainlayer/migration_runtime.py|src/brainlayer/migration_custody.py|src/brainlayer/policy_reconcile.py)
+      src/brainlayer/launchd_consolidation.py|src/brainlayer/launchd_revert.py|src/brainlayer/migration_journal.py|src/brainlayer/migration_runtime.py|src/brainlayer/migration_custody.py|src/brainlayer/policy_reconcile.py|src/brainlayer/launcher_policy_reconcile.py)
         # Either direction can break durable recovery. Require both sweeps and policy recovery;
         # a renamed/missing sibling must fall back to the full suite, never narrow.
         migration_sweeps=(

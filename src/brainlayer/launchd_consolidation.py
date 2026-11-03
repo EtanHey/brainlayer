@@ -1,11 +1,13 @@
 """Explicit launchd migration with durable archive custody and checked rollback."""
 
+import fcntl
 import hashlib
 import json
 import os
 import plistlib
 import re
 import stat
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -21,6 +23,8 @@ from .consolidation_plan import (
     rendered_launchers,
     snapshot_legacy,
 )
+from .launcher_policy_reconcile import transition as launcher_policy_transition
+from .launcher_policy_reconcile import validate as validate_launcher_policy
 from .migration_custody import migration_lock, write_launch_agent
 from .migration_custody import write_new_file as write_file
 from .migration_journal import archive_replace as update
@@ -78,6 +82,41 @@ def wait_custody(directory, *, clock=time, grace=30):
         if clock.monotonic() >= deadline:
             raise RuntimeError("supervisor custody did not exit")
         clock.sleep(0.1)
+
+
+def _acquire_maintenance_idle(home):
+    """Hold nonblocking maintenance leases through a policy-only launcher restart."""
+    paths = (
+        home / ".local/share/brainlayer/supervisor/maintenance.lock",
+        home / ".local/share/brainlayer/.maintenance.lock",
+        home / ".local/share/brainlayer/backups/.backup.lock",
+    )
+    held = []
+    try:
+        for path in paths:
+            if not os.path.lexists(path):
+                continue
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            held.append(fd)
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+                raise RuntimeError("maintenance lock identity refused; retry later")
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise RuntimeError("maintenance is busy; retry later") from None
+        return held
+    except BaseException:
+        _release_maintenance_locks(held)
+        raise
+
+
+def _release_maintenance_locks(held):
+    for fd in held:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 def migrate(*, home, **options):
@@ -197,6 +236,65 @@ def _migrate(
                 raise RuntimeError(f"replacement did not load: {label}")
             if label in NEW:
                 remember_started(label, current)
+
+    def reconcile_launchers(journal, expected_receipt, pending, *, recovering, held_locks=None):
+        validate_launcher_policy(pending)
+        changed = set(pending["diff"])
+        own_locks = held_locks is None and "com.brainlayer.maintenance" in changed
+        locks = _acquire_maintenance_idle(home) if own_locks else (held_locks or [])
+        try:
+            if "com.brainlayer.maintenance" in changed:
+                _, calendar_pid = observe(NEW[1])
+                if calendar_pid is not None and alive(calendar_pid):
+                    raise RuntimeError("calendar is active; maintenance busy, retry later")
+            if not recovering:
+                journal_update(journal, expected_receipt)
+                expected_receipt = json.dumps(journal).encode()
+        except BaseException:
+            if own_locks:
+                _release_maintenance_locks(locks)
+            raise
+        publications = {}
+        try:
+            for name, item in pending["files"].items():
+                path = agents / name
+                old, new = bytes.fromhex(item["old_bytes"]), bytes.fromhex(item["new_bytes"])
+                current = read_owned(path)
+                if current not in {old, new}:
+                    raise RuntimeError(f"launcher policy recovery found foreign plist: {name}")
+                label = name.removesuffix(".plist")
+                state = runtime.observe(label)
+                if current == old and state["loaded"]:
+                    stop(label, state)
+                if current == old:
+                    update(path, old, new, Path(journal["archive"]), write_launch_agent)
+                if not runtime.observe(label)["loaded"]:
+                    bootstrap(label, path)
+                publications[name] = new.hex()
+
+            result = journal.get("restart_preimage", journal).copy()
+            result.pop("launcher_policy_reconcile", None)
+            files = dict(result["published_files"])
+            files.update(publications)
+            result.update(
+                phase="migrated",
+                published_files=files,
+                published_sha256={name: hashlib.sha256(bytes.fromhex(raw)).hexdigest() for name, raw in files.items()},
+                configuration_sha256={
+                    **result["configuration_sha256"],
+                    **{name.removesuffix(".plist"): item["new_sha256"] for name, item in pending["files"].items()},
+                },
+                launcher_policy_reconciliations=result.get("launcher_policy_reconciliations", [])
+                + [{"diff": pending["diff"], "files": pending["files"]}],
+            )
+            journal_update(result, expected_receipt)
+            for label, changes in pending["diff"].items():
+                for key, values in changes.items():
+                    print(f"{label}: {key} {values['old']} → {values['new']}", file=sys.stderr)
+            return result
+        finally:
+            if own_locks:
+                _release_maintenance_locks(locks)
 
     def verify_daemon():
         if NEW[0] not in disabled:
@@ -542,17 +640,38 @@ def _migrate(
             )
         if pending:
             try:
+                if "launcher_policy_reconcile" in previous:
+                    return reconcile_launchers(
+                        previous, previous_bytes, previous["launcher_policy_reconcile"], recovering=True
+                    )
                 if "requested_keg" in previous:
                     return restart_daemon(previous, previous_bytes, recovering=True)
                 return restore_first(previous, previous_bytes, recovering=True)
             except BaseException as failure:
                 if not isinstance(failure, Exception):
                     raise
+                if "busy, retry later" in str(failure) or "busy; retry later" in str(failure):
+                    raise
                 raise RuntimeError(
                     f"interrupted migration; rollback incomplete; operator reconciliation: {failure}"
                 ) from failure
         if previous.get("phase") != "migrated":
             raise RuntimeError("unknown migration phase; operator reconciliation required")
+        try:
+            launcher_policy = launcher_policy_transition(previous, prepared)
+        except ValueError as failure:
+            raise RuntimeError(str(failure)) from failure
+        if launcher_policy:
+            restarting = previous | dict(phase="migrating", launcher_policy_reconcile=launcher_policy)
+            changes_maintenance = "com.brainlayer.maintenance" in launcher_policy["diff"]
+            locks = _acquire_maintenance_idle(home) if changes_maintenance else []
+            try:
+                previous = reconcile_launchers(
+                    restarting, previous_bytes, launcher_policy, recovering=False, held_locks=locks
+                )
+                previous_bytes = json.dumps(previous).encode()
+            finally:
+                _release_maintenance_locks(locks)
         if any(os.path.lexists(agents / name) for name in previous["files"]):
             raise RuntimeError("legacy files reappeared after consolidation")
         for name, original in previous["files"].items():
