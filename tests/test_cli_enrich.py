@@ -295,6 +295,43 @@ def test_cli_wal_checkpoint_reports_guard_timeout_as_json_error(monkeypatch):
     assert json.loads(result.stdout) == {"error": "checkpoint guard acquisition timed out after 10.0s"}
 
 
+def test_cli_wal_checkpoint_reports_busy_truncate_as_deferred_success(monkeypatch):
+    def fake_run(_mode, *, retry_busy=False):
+        assert retry_busy is True
+        return {
+            "db": "/tmp/test.db",
+            "mode": "TRUNCATE",
+            "wal_before": "2.4GB",
+            "wal_after": "2.4GB",
+            "busy": 1,
+            "log_pages": 32,
+            "checkpointed_pages": 32,
+            "attempts": 8,
+            "deferred": True,
+            "passive_log_pages": 32,
+            "passive_checkpointed_pages": 32,
+        }
+
+    monkeypatch.setattr("brainlayer.wal_checkpoint.run_wal_checkpoint", fake_run)
+
+    result = runner.invoke(app, ["wal-checkpoint", "--mode", "TRUNCATE", "--retry-busy"])
+
+    assert result.exit_code == 0
+    assert "TRUNCATE deferred after bounded retries" in result.stdout
+
+
+def test_cli_wal_checkpoint_keeps_real_errors_nonzero(monkeypatch):
+    def fake_run(_mode, *, retry_busy=False):
+        raise OSError("disk I/O error")
+
+    monkeypatch.setattr("brainlayer.wal_checkpoint.run_wal_checkpoint", fake_run)
+
+    result = runner.invoke(app, ["wal-checkpoint", "--retry-busy"])
+
+    assert result.exit_code == 1
+    assert "disk I/O error" in result.stdout
+
+
 def test_retired_enrich_is_hidden_and_does_not_resolve_database(monkeypatch):
     from typer.main import get_command
 

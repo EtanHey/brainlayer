@@ -20,6 +20,7 @@ from .paths import get_db_path, supervisor_socket_path
 _VALID_CHECKPOINT_MODES = {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}
 _DEFAULT_GUARD_TIMEOUT_SECONDS = 10.0
 _GUARD_POLL_SECONDS = 0.1
+_WAL_CHECKPOINT_HARD_CEILING_BYTES = 4 * 1024**3
 
 
 class CheckpointGuardTimeout(TimeoutError):
@@ -155,6 +156,11 @@ def run_wal_checkpoint(
 
     mode = mode.upper()
     wal_before = get_wal_size(db_path)
+    if retry_busy and wal_before > _WAL_CHECKPOINT_HARD_CEILING_BYTES:
+        raise RuntimeError(
+            f"WAL is above the checkpoint safety ceiling ({format_size(wal_before)} > "
+            f"{format_size(_WAL_CHECKPOINT_HARD_CEILING_BYTES)})"
+        )
     attempts = 0
     max_attempts = max(1, int(max_attempts))
     delay = max(0.0, retry_base_seconds)
@@ -165,9 +171,16 @@ def run_wal_checkpoint(
             break
         sleep_fn(delay)
         delay = min(max(delay * 2, retry_base_seconds), max(retry_max_seconds, retry_base_seconds))
+    deferred = bool(busy and mode == "TRUNCATE" and retry_busy)
+    passive_result = None
+    if deferred:
+        # A held reader can prevent TRUNCATE from resetting the WAL. Make any safe
+        # progress without waiting for exclusive access, then leave truncation to
+        # the periodic fallback after that reader closes.
+        passive_result = checkpoint(db_path, "PASSIVE")
     wal_after = get_wal_size(db_path)
 
-    return {
+    result = {
         "db": db_path,
         "mode": mode,
         "wal_before_bytes": wal_before,
@@ -178,7 +191,12 @@ def run_wal_checkpoint(
         "log_pages": log_pages,
         "checkpointed_pages": checkpointed_pages,
         "attempts": attempts,
+        "deferred": deferred,
     }
+    if passive_result is not None:
+        result["passive_log_pages"] = passive_result[1]
+        result["passive_checkpointed_pages"] = passive_result[2]
+    return result
 
 
 def _fallback_defer_reason(directory):
