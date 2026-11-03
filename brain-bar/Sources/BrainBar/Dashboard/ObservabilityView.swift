@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Darwin
 import SwiftUI
 
 struct BadgeStateDocument: Codable, Sendable {
@@ -320,6 +321,8 @@ struct ObservabilityDocument: Codable, Sendable {
         let localVerified, uploaded: Bool
         let uploadState: String
         let uploadError: String?
+        var uploadProcessLive: Bool? = nil
+        var uploadProcessStartedAt: Date? = nil
         let localIntegrity, localIntegrityPragma: String?
     }
     struct Launchd: Codable, Sendable {
@@ -327,6 +330,13 @@ struct ObservabilityDocument: Codable, Sendable {
         let bootstrapped, disabledDirPresent: Bool
     }
     struct Input: Codable, Sendable { let path: String, status: String }
+}
+
+private extension ObservabilityDocument {
+    func replacingBackups(_ backups: Backups) -> Self {
+        Self(schemaVersion: schemaVersion, generatedAt: generatedAt, dbPath: dbPath, windowHours: windowHours,
+             stores: stores, emitters: emitters, authorUnknown: authorUnknown, backups: backups)
+    }
 }
 
 enum ObservabilityReadResult: Sendable {
@@ -357,7 +367,10 @@ enum ObservabilityReader {
             .appendingPathComponent("observability.json")
     }
 
-    static func read(url: URL) -> ObservabilityReadResult {
+    static func read(
+        url: URL,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> ObservabilityReadResult {
         do {
             let data = try Data(contentsOf: url)
             let envelope = try JSONDecoder().decode(SchemaEnvelope.self, from: data)
@@ -373,14 +386,59 @@ enum ObservabilityReader {
                 if let date = fractional.date(from: raw) ?? ISO8601DateFormatter().date(from: raw) { return date }
                 throw DecodingError.dataCorruptedError(in: try value.singleValueContainer(), debugDescription: "Invalid date-time")
             }
-            let document = try decoder.decode(ObservabilityDocument.self, from: data)
+            var document = try decoder.decode(ObservabilityDocument.self, from: data)
             guard document.windowHours == 24, !document.dbPath.isEmpty else {
                 return .unreadable("Observability root fields are invalid.")
+            }
+            if var local = document.backups.localSnapshot, local.uploadState == "in_progress" {
+                local.uploadProcessStartedAt = backupProcessStartedAt(dbPath: document.dbPath, environment: environment)
+                local.uploadProcessLive = local.uploadProcessStartedAt != nil
+                var backups = document.backups
+                backups.localSnapshot = local
+                document = document.replacingBackups(backups)
             }
             return .readable(document)
         } catch {
             return .unreadable("Observability data unreadable: \(error.localizedDescription)")
         }
+    }
+
+    private static func backupProcessStartedAt(dbPath: String, environment: [String: String]) -> Date? {
+        let directory: URL
+        if let override = environment["BRAINLAYER_BACKUP_STAGING_DIR"], !override.isEmpty {
+            directory = URL(fileURLWithPath: BadgeStateReader.expandedTildePath(override))
+        } else if environment["BRAINBAR_TEST_TMP_ROOT"] != nil {
+            directory = URL(fileURLWithPath: dbPath).deletingLastPathComponent().appendingPathComponent("backups")
+        } else {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let label = "com.brainlayer.backup-daily"
+            let plistURL = home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
+            let jobEnvironment = BrainLayerJobEnvironment.effective(
+                plist: FileManager.default.contents(atPath: plistURL.path),
+                brainBarEnvironment: environment, home: home,
+                readFile: { FileManager.default.contents(atPath: $0.path) }
+            )
+            if let configured = jobEnvironment["BRAINLAYER_BACKUP_STAGING_DIR"], !configured.isEmpty {
+                directory = URL(fileURLWithPath: BadgeStateReader.expandedTildePath(configured))
+            } else {
+                directory = URL(fileURLWithPath: dbPath).deletingLastPathComponent().appendingPathComponent("backups")
+            }
+        }
+        let lock = directory.appendingPathComponent(".backup.lock")
+        let descriptor = open(lock.path, O_RDWR | O_NOFOLLOW)
+        guard descriptor >= 0 else { return nil }
+        defer { close(descriptor) }
+        if flock(descriptor, LOCK_EX | LOCK_NB) == 0 {
+            flock(descriptor, LOCK_UN)
+            return nil
+        }
+        guard errno == EWOULDBLOCK || errno == EAGAIN else { return nil }
+        var bytes = [UInt8](repeating: 0, count: 64)
+        let count = Darwin.read(descriptor, &bytes, bytes.count)
+        guard count > 0,
+              let raw = String(bytes: bytes[..<count], encoding: .ascii)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        else { return nil }
+        return ISO8601DateFormatter().date(from: raw)
     }
 
     static func healthCheckCadence(
@@ -645,7 +703,15 @@ enum ObservabilityPresentation {
             } else if pendingState && staleOffsite {
                 snapshotUpload = .init(text: staleText, tone: .red)
             } else if backups.localUploadPending(now: now) {
-                snapshotUpload = .init(text: value.uploadState == "pending" ? "Upload queued" : "Upload checkpoint saved; current activity unknown", tone: .neutral)
+                let uploadText: String
+                if value.uploadState == "pending" {
+                    uploadText = "Upload queued"
+                } else if value.uploadProcessLive == true, let since = value.uploadProcessStartedAt {
+                    uploadText = "Uploading to Drive since " + localTime(since, calendar: calendar)
+                } else {
+                    uploadText = "Upload checkpoint saved; current activity unknown"
+                }
+                snapshotUpload = .init(text: uploadText, tone: .neutral)
             } else if !value.localVerified || value.lastAt.map({ !backups.isRecent($0, now: now) }) != false ||
                         !value.uploaded || value.uploadState != "verified" {
                 snapshotUpload = .init(text: "Local DB snapshot missing verification or stale", tone: .red)
@@ -813,6 +879,15 @@ enum ObservabilityPresentation {
 
     private static func localDate(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private static func localTime(_ date: Date, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = .current
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
     }
 
     private static func hours(_ value: Double) -> String {

@@ -7,6 +7,8 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
     let attention: [String]
     /// Visible neutral notices; never a dot.
     let notices: [String]
+    /// Historical rows remain on the Dashboard/menu but do not count as current work.
+    var oldNotices: [String] = []
     /// Nothing has been measured yet.
     let isChecking: Bool
 
@@ -22,14 +24,17 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
     var dashboardStatus: BrainBarOnePageStatus {
         if let dotOverride {
             let headline = dotOverride == .red ? "Needs attention" : dotOverride == .amber ? "Check soon" : safeHeadline
-            return .init(headline: headline, reason: (attention + notices).isEmpty ? nil
-                : (attention + notices).joined(separator: "; "), tone: dotOverride == .green ? .green : .amber)
+            let details = attention + notices + oldNotices
+            return .init(headline: headline, reason: details.isEmpty ? nil
+                : details.joined(separator: "; "), tone: dotOverride == .green ? .green : .amber)
         }
         if let first = attention.first {
             return .init(headline: attention.count == 1 ? "1 thing needs you" : "\(attention.count) things need you",
                          reason: ([first] + notices).joined(separator: "; "), tone: .amber)
         }
-        if !notices.isEmpty { return .init(headline: "Status notice", reason: notices.joined(separator: "; "), tone: .neutral) }
+        if !notices.isEmpty || !oldNotices.isEmpty {
+            return .init(headline: "Status notice", reason: (notices + oldNotices).joined(separator: "; "), tone: .neutral)
+        }
         if isChecking { return .init(headline: "Checking…", reason: nil, tone: .neutral) }
         return .init(headline: "All good", reason: nil, tone: .green)
     }

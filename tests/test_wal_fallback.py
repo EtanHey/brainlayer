@@ -48,6 +48,16 @@ def tick(**kwargs):
     return wal.periodic_checkpoint(high_water_bytes=4096, busy_timeout_seconds=0.02, **kwargs)
 
 
+def test_successful_periodic_checkpoint_clears_scheduled_busy_alert(database):
+    db, _, _, _ = database
+    alerts = job_alerts.alert_path(db_path=db)
+    job_alerts.report("wal-checkpoint", "BrainLayer WAL checkpoint was busy", path=alerts, notify=lambda _message: None)
+    assert "wal-checkpoint" in job_alerts.active_alerts(alerts)
+    result = tick()
+    assert result["outcome"] in {"below-high-water", "reclaimed"}
+    assert "wal-checkpoint" not in job_alerts.active_alerts(alerts)
+
+
 @pytest.mark.parametrize("phase", ["index", "maintenance-weekly"])
 def test_calendar_dies_before_checkpoint_independent_tick_reclaims(database, request, monkeypatch, phase):
     runner = request.getfixturevalue("calendar_runner")

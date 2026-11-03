@@ -8,6 +8,7 @@ import logging
 import os
 import subprocess
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -20,6 +21,10 @@ ALERT_PATH_ENV = "BRAINLAYER_JOB_ALERT_PATH"
 def alert_path(*, env: Mapping[str, str] | None = None, db_path: Path | None = None) -> Path:
     env = os.environ if env is None else env
     return Path(env.get(ALERT_PATH_ENV) or (db_path or get_db_path()).with_name("job-alerts.json")).expanduser()
+
+
+def _times_path(path: Path) -> Path:
+    return path.with_name(f"{path.stem}.times.json")
 
 
 def _notify(message: str) -> None:
@@ -50,12 +55,48 @@ def _locked(path: Path):
         os.close(fd)
 
 
-def active_alerts(path: Path | None = None) -> dict[str, str]:
+def _alert_records(path: Path | None = None) -> dict[str, dict[str, str | None]]:
     try:
         value = json.loads((path or alert_path()).read_text(encoding="utf-8"))
-        return {str(k): str(v) for k, v in value.items()} if isinstance(value, dict) else {}
+        if not isinstance(value, dict):
+            return {}
+        records = {}
+        for key, item in value.items():
+            if isinstance(item, str):  # Read pre-S32 files without losing their live alerts.
+                records[str(key)] = {"reason": item, "reported_at": None}
+            elif isinstance(item, dict) and isinstance(item.get("reason"), str):
+                records[str(key)] = {
+                    "reason": item["reason"],
+                    "reported_at": None,
+                }
+        times = _alert_times(_times_path(path or alert_path()))
+        for key, reported_at in times.items():
+            if key in records:
+                records[key]["reported_at"] = reported_at
+        return records
     except (FileNotFoundError, OSError, ValueError):
         return {}
+
+
+def _alert_times(path: Path) -> dict[str, str]:
+    """Read optional timestamps; absent or malformed metadata never hides an alert."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict) or not all(isinstance(item, str) for item in value.values()):
+            return {}
+        return {str(key): item for key, item in value.items()}
+    except (FileNotFoundError, OSError, ValueError):
+        return {}
+
+
+def active_alerts(path: Path | None = None) -> dict[str, str]:
+    """Return current reasons, accepting both legacy strings and timestamped records."""
+    return {key: record["reason"] for key, record in _alert_records(path).items()}
+
+
+def alert_reported_at(path: Path | None = None) -> dict[str, str]:
+    """Return alert occurrence times where available; legacy records have no timestamp."""
+    return {key: at for key, record in _alert_records(path).items() if (at := record["reported_at"]) is not None}
 
 
 def report(
@@ -73,23 +114,25 @@ def report(
     """
     destination = path or alert_path()
     with _locked(destination):
-        current = active_alerts(destination)
-        before = current.get(key)
+        records = _alert_records(destination)
+        before = records.get(key, {}).get("reason")
         if reason is None:
             if before is None:
                 return False
-            current.pop(key)
+            records.pop(key)
             message = f"BrainLayer {key} recovered"
             post = False
         else:
-            if before is not None and (before == reason or key != "drive-consent"):
+            if before is not None and before == reason:
+                records[key]["reported_at"] = datetime.now(UTC).isoformat(timespec="microseconds")
+                _write_records(destination, records)
                 return False
-            post = reason not in (value for other, value in current.items() if other != key)
-            current[key] = reason
+            if before is not None and key != "drive-consent":
+                return False
+            post = reason not in (record["reason"] for other, record in records.items() if other != key)
+            records[key] = {"reason": reason, "reported_at": datetime.now(UTC).isoformat(timespec="microseconds")}
             message = reason
-        from brainlayer.drive_credentials import _atomic_write
-
-        _atomic_write(destination, current)
+        _write_records(destination, records)
     LOG.warning("health event job=%s state=%s reason=%s", key, "recovered" if reason is None else "failed", message)
     if not post:
         return True
@@ -98,3 +141,16 @@ def report(
     except (OSError, subprocess.SubprocessError) as exc:
         LOG.warning("macOS notification failed for %s: %s", key, type(exc).__name__)
     return True
+
+
+def _write_records(path: Path, records: dict[str, dict[str, str | None]]) -> None:
+    """Atomically replace both files under the caller's shared alert lock.
+
+    The public alerts file intentionally stays a map of strings for older BrainBar readers.
+    """
+    from brainlayer.drive_credentials import _atomic_write
+
+    alerts = {key: record["reason"] for key, record in records.items()}
+    times = {key: record["reported_at"] for key, record in records.items() if record["reported_at"]}
+    _atomic_write(_times_path(path), times)
+    _atomic_write(path, alerts)

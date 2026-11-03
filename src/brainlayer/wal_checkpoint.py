@@ -331,6 +331,10 @@ def periodic_checkpoint(*, high_water_bytes=256_000_000, busy_timeout_seconds=0.
             f"{detail}. See wal-fallback.json for progress and diagnostics."
         )
     job_alerts.report("wal-checkpoint-fallback", reason, path=job_alerts.alert_path(db_path=Path(db)))
+    if reason is None:
+        # The 15-minute fallback is an equivalent successful checkpoint: retire a busy
+        # scheduled-checkpoint alert durably before BrainBar reads its next status snapshot.
+        job_alerts.report("wal-checkpoint", None, path=job_alerts.alert_path(db_path=Path(db)))
     return result
 
 

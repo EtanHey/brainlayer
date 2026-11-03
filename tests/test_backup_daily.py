@@ -1379,6 +1379,7 @@ def test_backup_run_lock_rejects_overlapping_run(tmp_path):
     worker.start()
     try:
         assert entered.wait(2)
+        assert datetime.fromisoformat((tmp_path / ".backup.lock").read_text().strip()).tzinfo is not None
         with pytest.raises(RuntimeError, match="backup already running"):
             held_run(tmp_path, log_path)
     finally:
