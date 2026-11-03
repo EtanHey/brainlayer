@@ -448,6 +448,19 @@ map_changed_files_to_pytests() {
           if [ -f "$TEST_ROOT/$rel" ]; then append_unique "$TEST_ROOT/$rel"; else mapped=0; fi
         done
         ;;
+      src/brainlayer/wal_checkpoint.py)
+        # Its tests are named *_module / *_fallback, so the generic test_<module>.py rule misses
+        # them and every push paid for the full suite (S30, 2026-11-03).
+        mapped=1
+        for rel in test_wal_checkpoint_module.py test_wal_fallback.py test_wal_fallback_consolidation.py test_maintenance_wal_reclaim.py test_cli_enrich.py; do
+          [ -f "$TEST_ROOT/$rel" ] || mapped=0
+        done
+        if [ "$mapped" -eq 1 ]; then
+          for rel in test_wal_checkpoint_module.py test_wal_fallback.py test_wal_fallback_consolidation.py test_maintenance_wal_reclaim.py test_cli_enrich.py; do
+            append_unique "$TEST_ROOT/$rel"
+          done
+        fi
+        ;;
       src/brainlayer/*.py)
         module_name="$(basename "$changed" .py)"
         test_path="$TEST_ROOT/test_${module_name}.py"
