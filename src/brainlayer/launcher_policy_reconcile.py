@@ -39,8 +39,24 @@ def _transition(previous, prepared):
 
 
 def transition(previous, prepared):
-    result = _transition(previous, prepared)
-    return result if result and result["diff"] else None
+    """Collect policy-only changes per launcher.
+
+    A launcher whose non-policy keys differ from its published bytes is left out, not refused:
+    the existing journal checks own that case (a restart fallback pins a different daemon than
+    the requested configuration, and a real configuration change must still refuse there).
+    """
+    files, diff = {}, {}
+    for label, new in prepared.items():
+        try:
+            one = _transition(previous, {label: new})
+        except ValueError as failure:
+            if "explicit replan required" in str(failure):
+                continue
+            raise
+        if one:
+            files.update(one["files"])
+            diff.update(one["diff"])
+    return {"files": files, "diff": diff} if diff else None
 
 
 def validate(pending):
