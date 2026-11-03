@@ -78,6 +78,9 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
     func testOldJobAlertStaysVisibleButDoesNotCountInHeader() {
         var input = T.healthy()
         input.now = date("2026-11-03T00:00:00Z")
+        input.watcher = .running(heartbeatAt: input.now)
+        input.watcherHeartbeatAt = input.now
+        input.backups = .measured(T.backups(db: input.now, transcripts: input.now))
         let reportedAt = input.now.addingTimeInterval(-3 * 60 * 60)
         let priorRun = input.now.addingTimeInterval(-4 * 60 * 60)
         input.jobAlerts = .init(active: ["wal-checkpoint": "BrainLayer WAL checkpoint was busy"],
@@ -89,7 +92,8 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
         }
         input.badge?.healthVerdict = .init(dot: .green, checks: checks, notes: [], evaluatedAt: input.now)
         let snapshot = BrainBarStatusSnapshot.derive(input)
-        let row = try! XCTUnwrap(BrainBarStatusPopoverController.problemRows(snapshot.verdict, health: snapshot.healthVerdict).first)
+        let row = try! XCTUnwrap(BrainBarStatusPopoverController.problemRows(snapshot.verdict, health: snapshot.healthVerdict)
+            .first(where: { $0.text.contains("WAL checkpoint") }))
         XCTAssertTrue(row.isOld)
         XCTAssertTrue(row.text.hasPrefix("Earlier: "), row.text)
         XCTAssertEqual(snapshot.verdict.safeHeadline, "All good")
@@ -219,6 +223,24 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
         let snapshot = BrainBarStatusSnapshot.derive(input)
         XCTAssertTrue(snapshot.issues.contains { $0.text.contains("failed 1 night in a row") }, "\(snapshot.issues)")
         XCTAssertFalse(snapshot.issues.contains { $0.text.contains("failed 3 nights in a row") }, "\(snapshot.issues)")
+    }
+
+    func testOldJobFailureNoteWithUnresolvedNightNeverBecomesOld() {
+        var input = inputs()
+        input.now = date("2026-11-03T22:45:00Z")
+        input.watcher = .running(heartbeatAt: input.now)
+        input.watcherHeartbeatAt = input.now
+        input.backups = .measured(T.backups(db: input.now, transcripts: input.now))
+        let verdict = input.badge!.healthVerdict!
+        input.badge?.healthVerdict = .init(dot: verdict.dot, checks: verdict.checks,
+            notes: verdict.notes, evaluatedAt: input.now)
+        input.jobAlerts = .init(active: [:])
+        let snapshot = BrainBarStatusSnapshot.derive(input)
+
+        XCTAssertTrue(snapshot.issues.contains { $0.text.contains("failed 3 nights in a row") }, "\(snapshot.issues)")
+        XCTAssertTrue(snapshot.verdict.oldNotices.isEmpty, "Calendar failures cannot age out: \(snapshot.verdict.oldNotices)")
+        XCTAssertEqual(snapshot.verdict.dot, .green, "The note does not take dot authority from the health verdict")
+        XCTAssertNotEqual(snapshot.verdict.safeHeadline, "All good", "The unresolved failure remains counted")
     }
 
     func testNightlyBackupFailuresKeepEachTargetsReasonAndTime() throws {

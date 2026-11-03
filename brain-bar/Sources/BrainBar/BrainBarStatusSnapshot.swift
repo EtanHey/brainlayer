@@ -709,25 +709,24 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         }
         return result.map { original in
             var issue = original
+            // Age applies only to durable job-alert records with a known reportedAt value.
+            // Calendar-derived job issues and job_failure notes may describe unresolved failures;
+            // their age alone is never evidence that the failure is stale.
+            let noteCode = issue.id.replacingOccurrences(of: "verdict.note.", with: "")
+            let alertKey = issue.alertKey ?? (noteCode.hasPrefix("job_alert_") ? String(noteCode.dropFirst(10)) : nil)
+            guard let alertKey else { return issue }
             let alertJob: BrainLayerLaunchdJob?
-            if let key = issue.alertKey, case let .maintenance(job) = alertClass(key: key) { alertJob = job }
-            else if let key = issue.alertKey, case let .backup(job) = alertClass(key: key) { alertJob = job }
-            else if issue.alertKey == "wal-checkpoint" || issue.alertKey == "wal-checkpoint-fallback" { alertJob = .walCheckpoint }
-            else if issue.alertKey == "index" { alertJob = .index }
+            if case let .maintenance(job) = alertClass(key: alertKey) { alertJob = job }
+            else if case let .backup(job) = alertClass(key: alertKey) { alertJob = job }
+            else if alertKey == "wal-checkpoint" || alertKey == "wal-checkpoint-fallback" { alertJob = .walCheckpoint }
+            else if alertKey == "index" { alertJob = .index }
             else { alertJob = nil }
-            guard let job = alertJob ?? issue.jobs.sorted(by: { $0.rawValue < $1.rawValue }).first else { return issue }
+            guard let job = alertJob else { return issue }
             let observed = inputs.observations?[job]
-            let reportedAt: Date?
-            if let alertKey = issue.alertKey {
-                // A missing optional times sibling means the age is unknown. Do not substitute a
-                // diagnostic or launchd time: doing so could hide a still-active alert.
-                guard let knownTime = inputs.jobAlerts?.reportedAt[alertKey] else { return issue }
-                reportedAt = knownTime
-            } else {
-                reportedAt = issue.occurredAt ?? observed?.lastRunAt
-            }
-            guard let reportedAt else { return issue }
-            let period = alertInterval(key: issue.alertKey, job: job)
+            // A missing optional times sibling means age is unknown. Do not substitute a
+            // diagnostic or launchd time: doing so could hide a still-active alert.
+            guard let reportedAt = inputs.jobAlerts?.reportedAt[alertKey] else { return issue }
+            let period = alertInterval(key: alertKey, job: job)
             let nextRun = observed?.nextRunAt
             let due: Date
             if let nextRun {
