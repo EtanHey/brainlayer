@@ -127,30 +127,14 @@ final class BrainBarNightRecoveryTests: XCTestCase {
 
     func testRecoveryNeedsSameDateAndLaterCompletedRun() throws {
         let failure = [runner(date), finished("jsonl-backup"), summary(date)]
-        let laterDateSuccess = try history(failure + [runner("2026-10-30", kind: "recovery"),
-            finished("jsonl-backup", "ok", 0), summary("2026-10-30", failed: 0, kind: "recovery")])
-        XCTAssertEqual(laterDateSuccess.maintenanceNight?.failed, false)
-        XCTAssertEqual(laterDateSuccess.maintenanceNight?.failedSteps, [])
-
         for rows in [
+            failure + [runner("2026-10-30", kind: "recovery"), finished("jsonl-backup", "ok", 0), summary("2026-10-30", failed: 0, kind: "recovery")],
             failure + [runner(date, kind: "recovery"), finished("jsonl-backup", "ok", 0)],
             [runner(date, kind: "recovery"), finished("jsonl-backup", "ok", 0), summary(date, failed: 0, kind: "recovery")] + failure,
             failure + [summary(date, failed: 0, kind: "recovery")],
         ] {
             XCTAssertEqual(try history(rows).maintenanceNight?.failed, true)
         }
-    }
-
-    func testLaterStepSuccessReducesTheUnresolvedMaintenanceNightStreak() throws {
-        let rows = [
-            runner("2026-10-27"), finished("backup-snapshot"), summary("2026-10-27"),
-            runner("2026-10-28"), finished("backup-snapshot"), summary("2026-10-28"),
-            runner(date), finished("backup-snapshot", "ok", 0), finished("wal-checkpoint"), summary(date),
-        ]
-        let value = try history(rows)
-        XCTAssertEqual(value.maintenanceNight?.failed, true)
-        XCTAssertEqual(value.maintenanceNight?.failedSteps, ["wal-checkpoint"])
-        XCTAssertEqual(value.maintenanceNight?.consecutiveFailures, 1)
     }
 
     func testTranscriptFailureNamesBackupAndPreservesStreakDot() throws {

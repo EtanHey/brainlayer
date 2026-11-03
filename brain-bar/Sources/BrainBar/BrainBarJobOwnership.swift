@@ -367,7 +367,9 @@ struct BrainBarCalendarHistory: Sendable {
                 night.runnerErrorAt = runnerErrors[date]
                 night.unknownFailureAt = unknownFailures[date]
                 night.abandonmentFailureAt = abandonmentFailures[date]
-                night.failed = !(unresolvedSteps[date] ?? []).isEmpty || night.runnerErrorAt != nil || night.unknownFailureAt != nil
+                // The streak counts nights that had a problem when they ran; it already resets on the
+                // first clean night. A later success clears that step's detail, not the night (S32).
+                night.failed = night.failed || night.runnerErrorAt != nil || night.unknownFailureAt != nil
                     || night.abandonmentFailureAt != nil
                 streak = night.failed ? streak + 1 : 0
                 night.consecutiveFailures = streak
