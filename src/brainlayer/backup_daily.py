@@ -3405,7 +3405,8 @@ def _record_backup_lock_time(staging_dir: Path) -> None:
         os.ftruncate(descriptor, 0)
         os.write(descriptor, value)
     except OSError:
-        pass  # The flock itself is authoritative; its display timestamp is best effort.
+        # No reader may treat this lock-file content as a lock signal; only the held flock is authoritative.
+        pass  # The display timestamp is best effort.
     finally:
         if descriptor >= 0:
             os.close(descriptor)

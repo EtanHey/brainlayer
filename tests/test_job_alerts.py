@@ -51,6 +51,35 @@ def test_active_alerts_keep_a_readable_occurrence_time_and_read_legacy_values(tm
     assert report("wal-checkpoint", "SQLite busy", path=path, notify=lambda _message: None)
     assert active_alerts(path)["wal-checkpoint"] == "SQLite busy"
     assert dt.datetime.fromisoformat(alert_reported_at(path)["wal-checkpoint"]).tzinfo is not None
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert all(isinstance(value, str) for value in written.values())
+    times_path = path.with_name(f"{path.stem}.times.json")
+    assert (
+        json.loads(times_path.read_text(encoding="utf-8"))["wal-checkpoint"]
+        == alert_reported_at(path)["wal-checkpoint"]
+    )
+
+
+def test_alerts_round_trip_and_remain_active_without_optional_times_file(tmp_path):
+    path = tmp_path / "job-alerts.json"
+    reason = "BrainLayer WAL checkpoint was busy"
+    assert report("wal-checkpoint", reason, path=path, notify=lambda _message: None)
+    assert json.loads(path.read_text(encoding="utf-8")) == {"wal-checkpoint": reason}
+    legacy_reader_fixture = (
+        Path(__file__).parent.parent / "brain-bar/Tests/BrainBarTests/Fixtures/job-alerts-python-writer-v1.json"
+    )
+    assert json.loads(path.read_text(encoding="utf-8")) == json.loads(legacy_reader_fixture.read_text(encoding="utf-8"))
+    assert active_alerts(path) == {"wal-checkpoint": reason}
+    assert "wal-checkpoint" in alert_reported_at(path)
+
+    path.with_name("job-alerts.times.json").unlink()
+    assert active_alerts(path) == {"wal-checkpoint": reason}
+    assert alert_reported_at(path) == {}
+
+    assert report("wal-checkpoint", None, path=path, notify=lambda _message: None)
+    assert active_alerts(path) == {}
+    assert json.loads(path.read_text(encoding="utf-8")) == {}
+    assert json.loads(path.with_name("job-alerts.times.json").read_text(encoding="utf-8")) == {}
 
 
 def test_repeated_failure_refreshes_age_without_repeating_notification(tmp_path):

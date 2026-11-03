@@ -52,17 +52,29 @@ final class BrainBarJobAlertTests: XCTestCase {
         XCTAssertNil(BrainBarJobAlerts.read(url: url), "an unreadable file is unknown, never 'no alerts'")
     }
 
-    func test_timestamped_python_alert_record_preserves_legacy_and_occurrence_time() throws {
+    func test_new_python_writer_fixture_still_passes_the_legacy_string_reader() throws {
+        let fixture = try XCTUnwrap(Bundle.module.url(forResource: "job-alerts-python-writer-v1",
+            withExtension: "json", subdirectory: "Fixtures"))
+        let data = try Data(contentsOf: fixture)
+        let legacyReader = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
+        XCTAssertEqual(legacyReader, ["wal-checkpoint": "BrainLayer WAL checkpoint was busy"])
+        XCTAssertEqual(BrainBarJobAlerts.read(url: fixture)?.active, legacyReader)
+    }
+
+    func test_alert_times_round_trip_from_optional_sibling_and_bad_sibling_keeps_alert_active() throws {
         let url = root.appendingPathComponent("job-alerts.json")
-        let data = try JSONSerialization.data(withJSONObject: [
-            "maintenance-light": ["reason": alert, "reported_at": "2026-11-03T07:35:12.123456+00:00"],
-            "legacy": "old failure",
-        ])
-        try data.write(to: url)
+        try Data(#"{"maintenance-light":"\#(alert)","legacy":"old failure"}"#.utf8).write(to: url)
+        let timesURL = root.appendingPathComponent("job-alerts.times.json")
+        try Data(#"{"maintenance-light":"2026-11-03T07:35:12.123456+00:00"}"#.utf8).write(to: timesURL)
         let alerts = try XCTUnwrap(BrainBarJobAlerts.read(url: url))
         XCTAssertEqual(alerts.active, ["maintenance-light": alert, "legacy": "old failure"])
         XCTAssertEqual(alerts.reportedAt["maintenance-light"], ISO8601DateFormatter().date(from: "2026-11-03T07:35:12.123456+00:00"))
         XCTAssertNil(alerts.reportedAt["legacy"])
+
+        try Data("not json".utf8).write(to: timesURL)
+        let withoutKnownTimes = try XCTUnwrap(BrainBarJobAlerts.read(url: url))
+        XCTAssertEqual(withoutKnownTimes.active["maintenance-light"], alert)
+        XCTAssertTrue(withoutKnownTimes.reportedAt.isEmpty)
     }
 
     func test_the_alert_file_sits_beside_the_producers_database_unless_overridden() {

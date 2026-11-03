@@ -99,6 +99,15 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
         let fresh = BrainBarStatusSnapshot.derive(input)
         XCTAssertFalse(BrainBarStatusPopoverController.problemRows(fresh.verdict, health: fresh.healthVerdict).first?.isOld ?? true)
         XCTAssertNotEqual(fresh.verdict.safeHeadline, "All good")
+
+        input.jobAlerts = .init(active: ["wal-checkpoint": "BrainLayer WAL checkpoint was busy"])
+        let unknownAge = BrainBarStatusSnapshot.derive(input)
+        XCTAssertTrue(unknownAge.verdict.notices.contains { $0.contains("WAL checkpoint") },
+                      "Missing optional timestamps keep the alert active and counted")
+        XCTAssertFalse(unknownAge.verdict.oldNotices.contains { $0.contains("WAL checkpoint") })
+        XCTAssertFalse(BrainBarStatusPopoverController.problemRows(unknownAge.verdict, health: unknownAge.healthVerdict)
+            .first(where: { $0.text.contains("WAL checkpoint") })?.isOld ?? true)
+        XCTAssertNotEqual(unknownAge.verdict.safeHeadline, "All good")
     }
 
     func testRenderOldAlertEvidence() throws {

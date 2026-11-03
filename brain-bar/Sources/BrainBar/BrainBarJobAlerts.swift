@@ -28,7 +28,7 @@ struct BrainBarJobAlerts: Equatable, Sendable {
 
     /// Job key → reason, e.g. `maintenance-light` → "BrainLayer light maintenance failed; …".
     let active: [String: String]
-    /// When each current alert began. Older string-only files remain readable with no timestamp.
+    /// When each current alert began. Missing or malformed optional metadata means no known time.
     let reportedAt: [String: Date]
 
     init(active: [String: String], reportedAt: [String: Date] = [:]) {
@@ -47,26 +47,35 @@ struct BrainBarJobAlerts: Equatable, Sendable {
     }
 
     /// Nil when the file is missing, unreadable or not a map of job key → reason string: unknown,
-    /// never "no alerts", so a malformed file can never clear a live alert.
+    /// never "no alerts", so a malformed file can never clear a live alert. Timestamps live in
+    /// a sibling file so older installed readers keep accepting this file during staged upgrades.
     static func read(url: URL) -> Self? {
         guard let data = FileManager.default.contents(atPath: url.path),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         var active: [String: String] = [:]
-        var reportedAt: [String: Date] = [:]
-        let formatter = ISO8601DateFormatter()
         for (key, value) in object {
             if let reason = value as? String {
                 active[key] = reason
-            } else if let record = value as? [String: Any], let reason = record["reason"] as? String {
-                active[key] = reason
-                if let raw = record["reported_at"] as? String, let date = formatter.date(from: raw) {
-                    reportedAt[key] = date
-                }
             } else {
                 return nil
             }
         }
-        return Self(active: active, reportedAt: reportedAt)
+        let timesURL = url.deletingLastPathComponent().appendingPathComponent("\(url.deletingPathExtension().lastPathComponent).times.json")
+        return Self(active: active, reportedAt: readTimes(url: timesURL))
+    }
+
+    /// Optional time metadata is deliberately fail-soft: an old/malformed sibling never makes
+    /// valid active alerts disappear or become unavailable.
+    private static func readTimes(url: URL) -> [String: Date] {
+        guard let data = FileManager.default.contents(atPath: url.path),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        let formatter = ISO8601DateFormatter()
+        var dates: [String: Date] = [:]
+        for (key, value) in object {
+            guard let raw = value as? String, let date = formatter.date(from: raw) else { return [:] }
+            dates[key] = date
+        }
+        return dates
     }
 
     /// R2-3: a read with its outcome explicit. `absent` (no file: no job has ever reported) is a

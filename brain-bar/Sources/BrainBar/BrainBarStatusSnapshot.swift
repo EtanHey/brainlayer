@@ -717,7 +717,15 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
             else { alertJob = nil }
             guard let job = alertJob ?? issue.jobs.sorted(by: { $0.rawValue < $1.rawValue }).first else { return issue }
             let observed = inputs.observations?[job]
-            let reportedAt = issue.alertKey.flatMap { inputs.jobAlerts?.reportedAt[$0] } ?? issue.occurredAt ?? observed?.lastRunAt
+            let reportedAt: Date?
+            if let alertKey = issue.alertKey {
+                // A missing optional times sibling means the age is unknown. Do not substitute a
+                // diagnostic or launchd time: doing so could hide a still-active alert.
+                guard let knownTime = inputs.jobAlerts?.reportedAt[alertKey] else { return issue }
+                reportedAt = knownTime
+            } else {
+                reportedAt = issue.occurredAt ?? observed?.lastRunAt
+            }
             guard let reportedAt else { return issue }
             let period = alertInterval(key: issue.alertKey, job: job)
             let nextRun = observed?.nextRunAt

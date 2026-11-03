@@ -23,6 +23,10 @@ def alert_path(*, env: Mapping[str, str] | None = None, db_path: Path | None = N
     return Path(env.get(ALERT_PATH_ENV) or (db_path or get_db_path()).with_name("job-alerts.json")).expanduser()
 
 
+def _times_path(path: Path) -> Path:
+    return path.with_name(f"{path.stem}.times.json")
+
+
 def _notify(message: str) -> None:
     if os.environ.get("BRAINLAYER_TEST_PATH_PROVENANCE") == "pytest":
         return
@@ -61,12 +65,26 @@ def _alert_records(path: Path | None = None) -> dict[str, dict[str, str | None]]
             if isinstance(item, str):  # Read pre-S32 files without losing their live alerts.
                 records[str(key)] = {"reason": item, "reported_at": None}
             elif isinstance(item, dict) and isinstance(item.get("reason"), str):
-                reported_at = item.get("reported_at")
                 records[str(key)] = {
                     "reason": item["reason"],
-                    "reported_at": reported_at if isinstance(reported_at, str) else None,
+                    "reported_at": None,
                 }
+        times = _alert_times(_times_path(path or alert_path()))
+        for key, reported_at in times.items():
+            if key in records:
+                records[key]["reported_at"] = reported_at
         return records
+    except (FileNotFoundError, OSError, ValueError):
+        return {}
+
+
+def _alert_times(path: Path) -> dict[str, str]:
+    """Read optional timestamps; absent or malformed metadata never hides an alert."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict) or not all(isinstance(item, str) for item in value.values()):
+            return {}
+        return {str(key): item for key, item in value.items()}
     except (FileNotFoundError, OSError, ValueError):
         return {}
 
@@ -107,18 +125,14 @@ def report(
         else:
             if before is not None and before == reason:
                 records[key]["reported_at"] = datetime.now(UTC).isoformat(timespec="microseconds")
-                from brainlayer.drive_credentials import _atomic_write
-
-                _atomic_write(destination, records)
+                _write_records(destination, records)
                 return False
             if before is not None and key != "drive-consent":
                 return False
             post = reason not in (record["reason"] for other, record in records.items() if other != key)
             records[key] = {"reason": reason, "reported_at": datetime.now(UTC).isoformat(timespec="microseconds")}
             message = reason
-        from brainlayer.drive_credentials import _atomic_write
-
-        _atomic_write(destination, records)
+        _write_records(destination, records)
     LOG.warning("health event job=%s state=%s reason=%s", key, "recovered" if reason is None else "failed", message)
     if not post:
         return True
@@ -127,3 +141,16 @@ def report(
     except (OSError, subprocess.SubprocessError) as exc:
         LOG.warning("macOS notification failed for %s: %s", key, type(exc).__name__)
     return True
+
+
+def _write_records(path: Path, records: dict[str, dict[str, str | None]]) -> None:
+    """Atomically replace both files under the caller's shared alert lock.
+
+    The public alerts file intentionally stays a map of strings for older BrainBar readers.
+    """
+    from brainlayer.drive_credentials import _atomic_write
+
+    alerts = {key: record["reason"] for key, record in records.items()}
+    times = {key: record["reported_at"] for key, record in records.items() if record["reported_at"]}
+    _atomic_write(_times_path(path), times)
+    _atomic_write(path, alerts)
