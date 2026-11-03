@@ -32,6 +32,25 @@ def plan_on_platform(platform):
     return run
 
 
+def test_maintenance_template_reconciles_process_type_to_standard(tmp_path):
+    label = "com.brainlayer.maintenance"
+    template = ROOT / "scripts/launchd" / f"{label}.plist"
+    requested = plistlib.loads(template.read_bytes())
+    assert requested["ProcessType"] == "Standard"
+    assert requested["Nice"] == 10 and requested["LowPriorityIO"] is True
+
+    previous_plist = requested | {"ProcessType": "Background"}
+    old = json.dumps({label: {"enabled": True, "plist": previous_plist}}).encode()
+    previous = {"manifest_bytes": old.hex(), "manifest_sha256": hashlib.sha256(old).hexdigest()}
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / f"{label}.plist").write_bytes(template.read_bytes())
+
+    result = plan_on_platform("darwin")(previous, templates)
+
+    assert result["diff"] == {label: {"ProcessType": {"old": "Background", "new": "Standard"}}}
+
+
 @pytest.fixture
 def consolidated(setup, tmp_path, monkeypatch, request):
     from brainlayer import launchd_consolidation as migration

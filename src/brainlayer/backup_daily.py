@@ -96,8 +96,10 @@ BACKUP_LOCAL_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS"
 BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
 BACKUP_INVOCATION_ENV = "BRAINLAYER_BACKUP_INVOCATION_ID"
-# Fields supervisor_child.backup_io_policy() measures for the current process (S3).
-_IO_POLICY_KEYS = frozenset({"io_policy", "io_policy_errors", "iopol", "darwin_background", "nice"})
+# Policy fields are measured for the current process (S3) and upload thread.
+_POLICY_RECEIPT_KEYS = frozenset(
+    {"io_policy", "io_policy_errors", "iopol", "darwin_background", "nice", "upload_thread_policy"}
+)
 BACKUP_SQLITE_CHECK_TIMEOUT_ENV = "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS"
 BACKUP_DRIVE_RETENTION_ENV = "BRAINLAYER_BACKUP_DRIVE_RETENTION"
 DRIVE_UPLOAD_DEADLINE_FLOOR_ENV = "BRAINLAYER_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS"
@@ -615,11 +617,26 @@ def _execute_drive_read(request: Any, *, what: str) -> Any:
     return _retry_transient_drive_call(request.execute, what=what)
 
 
-def _drive_put_with_deadline(session: Any, url: str, *, headers: dict[str, str], data: bytes, deadline: float):
+def _drive_put_with_deadline(
+    session: Any,
+    url: str,
+    *,
+    headers: dict[str, str],
+    data: bytes,
+    deadline: float,
+    policy_callback: Callable[[dict[str, Any]], None] | None = None,
+):
     outcome: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
 
     def perform() -> None:
         try:
+            # Record the scheduling state of the socket-owning thread; process-level
+            # I/O readbacks do not expose launchd's effective thread priority.
+            from brainlayer.supervisor_child import backup_upload_thread_policy
+
+            upload_policy = backup_upload_thread_policy()
+            if policy_callback is not None:
+                policy_callback(upload_policy)
             outcome.put((True, session.put(url, headers=headers, data=data, timeout=deadline + 5)))
         except Exception as exc:
             outcome.put((False, exc))
@@ -2424,6 +2441,7 @@ def upload_file_to_drive_raw(
     max_attempts: int = 30,
     resume_session_url: str | None = None,
     progress_callback: Callable[[str, int], None] | None = None,
+    policy_callback: Callable[[dict[str, Any]], None] | None = None,
     run_deadline: float | None = None,
 ) -> dict[str, Any]:
     """Upload unchanged bytes; probe ambiguous writes before retransmitting them."""
@@ -2533,6 +2551,7 @@ def upload_file_to_drive_raw(
                         },
                         data=chunk,
                         deadline=request_deadline(max(deadline_floor, len(chunk) / minimum_rate)),
+                        policy_callback=policy_callback,
                     )
                     if response.status_code in {200, 201}:
                         return response.json()
@@ -3577,7 +3596,7 @@ def run_backup(
             get_drive_credentials()
         attempted_at = result["attempted_at"]
         # The receipt records THIS run's process policy (S3); an earlier run's must not leak in.
-        dropped = {"backup_invocation_id", "drive_auth_probe", *_IO_POLICY_KEYS}
+        dropped = {"backup_invocation_id", "drive_auth_probe", *_POLICY_RECEIPT_KEYS}
         result.update({k: v for k, v in receipt.items() if k not in dropped})
         result.update(io_policy or {"io_policy": "unknown"})
         result.update(status="reused", attempted_at=attempted_at)
@@ -3831,6 +3850,9 @@ def run_backup(
                         },
                     )
 
+            def record_upload_thread_policy(policy: dict[str, Any]) -> None:
+                result["upload_thread_policy"] = policy
+
             try:
                 uploaded = upload_file_to_drive_raw(
                     snapshot,
@@ -3838,6 +3860,7 @@ def run_backup(
                     credentials,
                     machine_id=resolved_machine_id,
                     progress_callback=record_upload_progress,
+                    policy_callback=record_upload_thread_policy,
                     run_deadline=run_deadline,
                     **({"resume_session_url": saved_session["url"]} if saved_session else {}),
                 )
@@ -3850,6 +3873,7 @@ def run_backup(
                         credentials,
                         machine_id=resolved_machine_id,
                         progress_callback=record_upload_progress,
+                        policy_callback=record_upload_thread_policy,
                         run_deadline=run_deadline,
                     )
                     break

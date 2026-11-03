@@ -670,6 +670,16 @@
         "target": "pool.put"
       }
     },
+    "2098ae794b1d64232208e9c950f6d96c11984a3787a38948cfa59d0aac791144": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "85954f83f5d655c16e8bacf13cd1ad03c69b350839d85f3afc97516bbec2e029",
+        "kind": "transport_call",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.POINTER"
+      }
+    },
     "2102820c0e122d0b9e9eef2a0749e428d825068dde48a11ee01515d59fe8a53f": {
       "non_cloud_purpose": "Stdlib local process custody and Unix peer credentials; imports do not activate commands or connect to cloud endpoints.",
       "site": {
@@ -768,6 +778,16 @@
         "owner": "<module>.get_launchd_dir",
         "path": "src/brainlayer/setup.py",
         "target": "importlib.resources.files"
+      }
+    },
+    "235f99336121f5e6c87e47deeedf38456edbffbcdc864e9d03e13cb17c40b6b2": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "3713cd3d597b2f8fb45954dba5a38a6ef94e3e4cbe40cf25b6bb7dff3cbeb0d0",
+        "kind": "transport_call",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.sizeof"
       }
     },
     "23a09bf35310b4d8bad8f0e8b3be1dcab15cdc19d2de67c5c61e2aab718f9223": {
@@ -940,6 +960,16 @@
         "target": "import socket"
       }
     },
+    "2d26e06c75c5e981f61af9ad135117b92cc83726ab816f7c33a02f7c9ef92369": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "50d7d2958a3535fbe1babfdfc5c002c8d907a01f0c9b2147c3b7dc8d31f98aba",
+        "kind": "transport_call",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.c_uint32"
+      }
+    },
     "2d30f3ef7f0bbf9e1a83a2bea490eb8bc2c1c546b40b6bea97d0cbda0ad84889": {
       "non_cloud_purpose": "Owner-only local Unix supervisor status and token-owned pause/resume for an inherited maintenance writer lease; subprocess only reads operator launchctl disabled state. No model sender.",
       "site": {
@@ -1008,6 +1038,16 @@
         "owner": "<module>.run_with_timeout.target",
         "path": "hooks/brainlayer-prompt-search.py",
         "target": "results.put"
+      }
+    },
+    "2f36fa3b50d9b11677dbdc1a3943d0829f8c8d49f9aa4c606721dc58e384d8b6": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "1b03458336227cf0b3f33d565f4b2159083ee3806ecfe2c08ede3b75e09f76cd",
+        "kind": "callable_reference",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.c_uint32"
       }
     },
     "2f44f13ed652b1ac628d9246ef833606efa30dafbf1acf45fe5e1461925614fe": {
@@ -1280,6 +1320,26 @@
         "target": "subprocess.TimeoutExpired"
       }
     },
+    "383956cc463f5643d51f694dec6231720e1d759e4d9c405df02771a3157300ca": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "114a59af516cc133b8fc0ef4c887809d6db6b31af2d93d99122096b021df86d0",
+        "kind": "callable_reference",
+        "owner": "<module>._ProcThreadInfo",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.c_uint64"
+      }
+    },
+    "386cf5edadb4d0cb90ef70fe442aa01355e4059915ea9e744c04260c72e7cadd": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "fd2e5768445f456ee386121be506cc6f812ec53016700424fc3cbf65351ee7d7",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.CDLL"
+      }
+    },
     "38d8ae158442e2eca39999edc9d320a3dc009c345be55fdcf7133e15db828ec2": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/kg_judge.py <module>._read_repo_evidence subprocess.SubprocessError.",
       "site": {
@@ -1348,6 +1408,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/git_overlay.py",
         "target": "import subprocess"
+      }
+    },
+    "3b6c4afed219ece5f36a3cd98ccab3c33a5dc4581851b391a3ee2869a0c820ed": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "b23099dd30e368afeeff5d572aa4974e8a5585ce068e8735c31ed19ab42e57de",
+        "kind": "transport_call",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.byref"
       }
     },
     "3bdd6fd701295aa4346da8a45ee40bc10968684ebb99e16a17540434f38f3afc": {
@@ -2368,6 +2438,16 @@
         "target": "subprocess.run"
       }
     },
+    "658369ef9ae8a0b177b910c9c583e50e8158f333cfb91c5bc397f109fca68d54": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "d693cc601e1c8cea5d852e5a74ef971b84626342f528b60bc7484c130f5132fc",
+        "kind": "callable_reference",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.c_int"
+      }
+    },
     "65b50f41df46124c85d1ba93a33e64e845927e9d62b571eaae05f5f8f937f2f4": {
       "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module>.upload_file_to_drive_raw requests.Session.",
       "site": {
@@ -2446,6 +2526,16 @@
         "owner": "<module>.set_disk_io_policy",
         "path": "src/brainlayer/supervisor_child.py",
         "target": "ctypes.get_errno"
+      }
+    },
+    "67cdaf3df4026734903c740ab62afc94c61d9b8d2716abb74543961d17557172": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "114a59af516cc133b8fc0ef4c887809d6db6b31af2d93d99122096b021df86d0",
+        "kind": "callable_reference",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.c_uint64"
       }
     },
     "67d441d26675f16651da35262ac1e6709af9bb49e88c521dd0ff577a7cf4f262": {
@@ -2626,6 +2716,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "6dbeb856bad399bf22104fc1bf5dd97857cd5e1ff15bc086b802eac9ca3ab5a9": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "207fb7a0385908de81f64a49c9a5d9692e9c371e85371e2263d99e2b1dbd0180",
+        "kind": "transport_call",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.POINTER"
+      }
+    },
     "6dcda7b3618524cd94f99273d26091b632623db8eae8df6b911843a64eeeaf75": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jobs.py <module> subprocess.CompletedProcess.",
       "site": {
@@ -2654,6 +2754,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/backup_daily.py",
         "target": "import subprocess"
+      }
+    },
+    "6de5d89cb76a67f43cde398349fac5dd9da3f311c4abe2fe9c70e0d15c7dfb04": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "b037058c64dab853f827856d2585d3484b629d9cd4ba21b222a5a772db393c35",
+        "kind": "transport_call",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.get_errno"
       }
     },
     "6e1e9661c2ad8182b84450bb9a1cb1c0421d79c00c6404d282638e9602e7c24f": {
@@ -2994,6 +3104,16 @@
         "target": "ctypes.get_errno"
       }
     },
+    "7c3ff0adfec5698545c844ad23041186b0ad63c6ce2e9968a36f3a99ee162c68": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "99a7461135c3f1c1fb4f671c6c6f92e840fc57b41a8e101264a322d15abb0316",
+        "kind": "transport_call",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.byref"
+      }
+    },
     "7d586f3e7e97e739f34db5656a6f775f925856c1ab0beaafe16d63b9aa618ab6": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/launchd_primitive.py <module>",
       "site": {
@@ -3132,6 +3252,16 @@
         "owner": "<module>.send_brainbar_search_canary",
         "path": "src/brainlayer/health_check.py",
         "target": "client.connect"
+      }
+    },
+    "837ee23c48881860478e8eba3c32f0d355e453611a742f9b559903f3d3eefa58": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "5af4f2725172a5115d54a63c0ca44ba4e98a08da44412ae1a999e140cf6af4d4",
+        "kind": "callable_reference",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.c_void_p"
       }
     },
     "83bfa4b4a14d021d4904c4597c6766dc7995560212474404a8c0201c6b4f7a68": {
@@ -3390,6 +3520,16 @@
         "body_sha256": "3f0f023889865000cfd6009c5b84f2eaeb7c36c8c8eb9f8dbcc401a57e0e0d91",
         "kind": "non_python_source",
         "path": "brain-bar/Sources/BrainBar/HybridSearchHelperClient.swift"
+      }
+    },
+    "8bfedeb0b056cd4ab70abfd26790af72f6629f11ebc5662a31205a7b9b55e994": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "78a9497fb30ee209ee9f8700208c41fab1fbd69471342dd6b14ab1870e624b35",
+        "kind": "transport_call",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.c_uint64"
       }
     },
     "8c493123d5f29663faf8affb818262b594a647580837c2a0a8f27b49646d2910": {
@@ -3810,6 +3950,16 @@
         "owner": "<module>.control_client",
         "path": "src/brainlayer/maintenance_control.py",
         "target": "subprocess.run"
+      }
+    },
+    "9ec66c6483975a5d55243ef673bb058efdcafac97dcb9907606eeaaca8c79451": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "341d32e8cab5fa1d81ddfe0b435b4709109ea23efbfcd3b5ae7fda70fca04a7e",
+        "kind": "callable_reference",
+        "owner": "<module>._ProcThreadInfo",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.c_int32"
       }
     },
     "9efe6e400a352a5c11b536f14719b6917b9eb343d3fc70e5991682753e77cf90": {
@@ -4460,6 +4610,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "b40d48c795cd2ac0c7ead25406ad783cfb2f58d20bd79dd2f42099d3fd8ce516": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "265568b9a78e686aeada58fc1bd3bc5f393ca181a96d8b2fe23481b45af4a4b8",
+        "kind": "transport_call",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.byref"
+      }
+    },
     "b41dc6e9c02ef42ad5f9b7ce99005349ff8683e26807d7e383bb3554f970d6f9": {
       "non_cloud_purpose": "Existing SSL context or error metadata for YouTube transcript ingest or Drive backup; no model send. Site: scripts/index_youtube.py <module>._get_ssl_context ssl.create_default_context.",
       "site": {
@@ -4876,6 +5036,16 @@
         "owner": "<module>._ollama_generate",
         "path": "src/brainlayer/pipeline/longitudinal_analyzer.py",
         "target": "import requests"
+      }
+    },
+    "bfec0a38a48228c64a336660377c598a7620f010d630c0183014da9ff51402e8": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "77b90f5e94791a6dafe75cb4be5756f4184d677fc3d90010c0df03606405369f",
+        "kind": "transport_call",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.byref"
       }
     },
     "c1e66ea9e601f63e9f7322179155ab8df3e2a2f267451dc0463ae8cb7fe42e9b": {
@@ -5486,6 +5656,16 @@
         "target": "socket.socket"
       }
     },
+    "ded7504a20c2cf86e88ede57cceae6741de750a361cae44b0ef1415948873608": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "35bc8c41e84d23d7d6c01eaafaef6a29951bbfe951377c4fa421e4aac0d120d5",
+        "kind": "transport_call",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.POINTER"
+      }
+    },
     "e027a7091fb7fc6753f1abc3d5049a1b64ee1802a690235a4b142819a8b8dff3": {
       "non_cloud_purpose": "Existing SSL context or error metadata for YouTube transcript ingest or Drive backup; no model send. Site: src/brainlayer/backup_daily.py <module> ssl.SSLEOFError.",
       "site": {
@@ -5504,6 +5684,16 @@
         "owner": "<module>.upload_file_to_drive_raw",
         "path": "src/brainlayer/backup_daily.py",
         "target": "requests.Session()"
+      }
+    },
+    "e166442f20795ea6079885cdcdb3fa3072d5853d6bf100f0ee6fcc3a152285ed": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "866b51bb9ff266d3ca4363763f33c250c1ac1e3fd844e290a99464acfa61c3e4",
+        "kind": "callable_reference",
+        "owner": "<module>._ProcThreadInfo",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.c_char"
       }
     },
     "e1a5953f4ca43fa74957222efe17a3073d20fc28d9ddbcb25978c2cb19ccba04": {
@@ -5556,6 +5746,16 @@
         "target": "import socket"
       }
     },
+    "e2a7bbd586f16c7d99adea5508a3faef436e9c7c769e91fd81aeabfead58ada2": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "7b4269664b0158d828627e79dcab158abdfb41a3ce43714343ac2d26cf80c764",
+        "kind": "callable_reference",
+        "owner": "<module>._ProcThreadInfo",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.Structure"
+      }
+    },
     "e331b5e35c4296106518aa501e6f80c489286d98f706a0c7a91f9f64c1a8fde7": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls socket.socket.",
       "site": {
@@ -5574,6 +5774,16 @@
         "owner": "<module>.run_bridge.start_connect",
         "path": "src/brainlayer/mcp_stdio_bridge.py",
         "target": "socket.socket().setblocking"
+      }
+    },
+    "e408258b6be34298ce703eefdebf67358b2ed103e20cc2fc75a726d235053440": {
+      "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "22648dc4f24e0ff050fc1901be95cc0a8efd64893e9a612888044c0e3cb2fdc7",
+        "kind": "transport_call",
+        "owner": "<module>.backup_upload_thread_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.c_int"
       }
     },
     "e431de0f17da405b4cbd1f007db7eb8ac810d79c3d7afeefeb08118c11845bed": {
