@@ -39,6 +39,12 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.87] - 2026-11-03
+
+### Maintenance
+- The nightly Drive upload is no longer throttled (#1612). The maintenance LaunchAgent ran as `ProcessType=Background`, which clamps every thread to the lowest scheduling band and background-class networking; a 10.7 GB upload ran at about 0.1-0.3 MB/s. The template now uses `ProcessType=Standard`, keeping `Nice 10` and per-step low-priority disk I/O. On an already-consolidated Mac, the next `install.sh consolidate` applies it through the journaled policy reconcile (#1607).
+- The backup receipt records the upload thread's real scheduler priority and QoS (`upload_thread_policy`), so a throttled upload is visible in the receipt instead of reading as "default".
+
 ## [1.5.86] - 2026-11-03
 
 ### BrainBar
