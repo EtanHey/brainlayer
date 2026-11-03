@@ -240,6 +240,46 @@ def test_same_keg_reconciles_launcher_policy_only_and_is_idempotent(setup, capsy
     assert before["keg"] == result["keg"]
 
 
+def test_keg_upgrade_applies_launcher_policy_then_restarts_daemon(setup, capsys):
+    runner = Launchctl()
+    _install_old_maintenance_policy(setup, runner)
+
+    result = invoke(setup, runner, "keg2")
+
+    home, agents, _ = setup
+    label = "com.brainlayer.maintenance"
+    launcher = agents / f"{label}.plist"
+    assert plistlib.loads(launcher.read_bytes())["ProcessType"] == "Standard"
+    assert result["phase"] == "migrated" and result["keg"] == "keg2"
+    assert result["configuration_sha256"][label] == hashlib.sha256(launcher.read_bytes()).hexdigest()
+    assert result["published_sha256"][launcher.name] == result["configuration_sha256"][label]
+    assert result["launcher_policy_reconciliations"][-1]["diff"] == {
+        label: {"ProcessType": {"old": "Background", "new": "Standard"}}
+    }
+    assert f"{label}: ProcessType Background → Standard" in capsys.readouterr().err
+    assert (agents / "com.brainlayer.daemon.plist.loaded-keg").read_bytes() == b"keg2\n"
+
+
+def test_live_calendar_refuses_launcher_policy_without_changes(setup):
+    runner = Launchctl()
+    _install_old_maintenance_policy(setup, runner)
+    home, agents, _ = setup
+    control = home / ".local/share/brainlayer/supervisor"
+    receipt = control / "migration.json"
+    before = receipt.read_bytes()
+    launcher = agents / "com.brainlayer.maintenance.plist"
+    launcher_bytes = launcher.read_bytes()
+    runner.calls.clear()
+
+    with pytest.raises(RuntimeError, match="busy, retry later"):
+        invoke(setup, runner, alive=lambda _pid: True)
+
+    assert receipt.read_bytes() == before
+    assert launcher.read_bytes() == launcher_bytes
+    assert runner.loaded == {"com.brainlayer.daemon", "com.brainlayer.maintenance"}
+    assert all(call[0] in {"print", "print-disabled"} for call in runner.calls)
+
+
 def test_non_policy_launcher_change_still_requires_explicit_replan(setup, monkeypatch):
     from brainlayer import launchd_consolidation as migration
 
@@ -266,7 +306,8 @@ def test_non_policy_launcher_change_still_requires_explicit_replan(setup, monkey
 @pytest.mark.parametrize(
     "lock_relative",
     [
-        ".local/share/brainlayer/supervisor/calendar/maintenance.lock",
+        ".local/share/brainlayer/supervisor/maintenance.lock",
+        ".local/share/brainlayer/.maintenance.lock",
         ".local/share/brainlayer/backups/.backup.lock",
     ],
 )

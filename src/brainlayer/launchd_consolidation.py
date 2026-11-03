@@ -87,7 +87,7 @@ def wait_custody(directory, *, clock=time, grace=30):
 def _acquire_maintenance_idle(home):
     """Hold nonblocking maintenance leases through a policy-only launcher restart."""
     paths = (
-        home / ".local/share/brainlayer/supervisor/calendar/maintenance.lock",
+        home / ".local/share/brainlayer/supervisor/maintenance.lock",
         home / ".local/share/brainlayer/.maintenance.lock",
         home / ".local/share/brainlayer/backups/.backup.lock",
     )
@@ -243,6 +243,10 @@ def _migrate(
         own_locks = held_locks is None and "com.brainlayer.maintenance" in changed
         locks = _acquire_maintenance_idle(home) if own_locks else (held_locks or [])
         try:
+            if "com.brainlayer.maintenance" in changed:
+                _, calendar_pid = observe(NEW[1])
+                if calendar_pid is not None and alive(calendar_pid):
+                    raise RuntimeError("calendar is active; maintenance busy, retry later")
             if not recovering:
                 journal_update(journal, expected_receipt)
                 expected_receipt = json.dumps(journal).encode()
@@ -646,29 +650,28 @@ def _migrate(
             except BaseException as failure:
                 if not isinstance(failure, Exception):
                     raise
-                if "maintenance is busy; retry later" in str(failure):
+                if "busy, retry later" in str(failure) or "busy; retry later" in str(failure):
                     raise
                 raise RuntimeError(
                     f"interrupted migration; rollback incomplete; operator reconciliation: {failure}"
                 ) from failure
         if previous.get("phase") != "migrated":
             raise RuntimeError("unknown migration phase; operator reconciliation required")
-        if previous["keg"] == keg:
+        try:
+            launcher_policy = launcher_policy_transition(previous, prepared)
+        except ValueError as failure:
+            raise RuntimeError(str(failure)) from failure
+        if launcher_policy:
+            restarting = previous | dict(phase="migrating", launcher_policy_reconcile=launcher_policy)
+            changes_maintenance = "com.brainlayer.maintenance" in launcher_policy["diff"]
+            locks = _acquire_maintenance_idle(home) if changes_maintenance else []
             try:
-                launcher_policy = launcher_policy_transition(previous, prepared)
-            except ValueError as failure:
-                raise RuntimeError(str(failure)) from failure
-            if launcher_policy:
-                restarting = previous | dict(phase="migrating", launcher_policy_reconcile=launcher_policy)
-                locks = (
-                    _acquire_maintenance_idle(home) if "com.brainlayer.maintenance" in launcher_policy["diff"] else []
+                previous = reconcile_launchers(
+                    restarting, previous_bytes, launcher_policy, recovering=False, held_locks=locks
                 )
-                try:
-                    return reconcile_launchers(
-                        restarting, previous_bytes, launcher_policy, recovering=False, held_locks=locks
-                    )
-                finally:
-                    _release_maintenance_locks(locks)
+                previous_bytes = json.dumps(previous).encode()
+            finally:
+                _release_maintenance_locks(locks)
         if any(os.path.lexists(agents / name) for name in previous["files"]):
             raise RuntimeError("legacy files reappeared after consolidation")
         for name, original in previous["files"].items():
