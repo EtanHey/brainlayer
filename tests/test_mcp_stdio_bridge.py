@@ -11,7 +11,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from brainlayer.mcp_stdio_bridge import BridgeConfig, _connect_timed_out, _consume_complete_backend_response_ids
+from brainlayer.mcp_stdio_bridge import (
+    BridgeConfig,
+    InFlightFrame,
+    _connect_timed_out,
+    _consume_complete_backend_response_ids,
+    _jsonrpc_error_for_frame,
+)
 
 
 class RestartableLineServer:
@@ -222,6 +228,18 @@ def test_connect_timeout_uses_configured_milliseconds() -> None:
     assert _connect_timed_out(10.0, 10.101, config)
 
 
+def test_backend_disconnect_error_preserves_request_id_and_unknown_outcome() -> None:
+    request = b'{"jsonrpc":"2.0","id":"upgrade-request","method":"tools/call"}\n'
+
+    error = json.loads(_jsonrpc_error_for_frame(InFlightFrame(data=request, request_id="upgrade-request")))
+
+    assert error["id"] == "upgrade-request"
+    assert error["error"]["code"] == -32000
+    assert error["error"]["message"] == (
+        "BrainLayer backend disconnected before responding; request outcome is unknown"
+    )
+
+
 def test_write_all_preserves_complete_frame_after_partial_stdout_write(monkeypatch) -> None:
     import brainlayer.mcp_stdio_bridge as bridge
 
@@ -315,6 +333,74 @@ def test_stdio_bridge_exits_cleanly_when_stdout_pipe_closes(tmp_path: Path) -> N
         assert "Traceback" not in stderr
     finally:
         server.stop()
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
+
+
+def test_stdio_bridge_survives_opt_install_swap_and_reconnects(tmp_path: Path) -> None:
+    socket_path = Path("/tmp") / f"bl-upgrade-{os.getpid()}-{time.monotonic_ns()}.sock"
+    old_keg = tmp_path / "Cellar" / "brainlayer" / "1.0-old"
+    new_keg = tmp_path / "Cellar" / "brainlayer" / "1.0-new"
+    old_binary = old_keg / "bin" / "brainlayer-mcp-stdio-bridge"
+    new_binary = new_keg / "bin" / "brainlayer-mcp-stdio-bridge"
+    opt_path = tmp_path / "opt" / "brainlayer"
+    old_binary.parent.mkdir(parents=True)
+    new_binary.parent.mkdir(parents=True)
+    opt_path.parent.mkdir(parents=True)
+    old_binary.write_text(
+        f"#!{sys.executable}\nfrom brainlayer.mcp_stdio_bridge import main\nmain()\n",
+        encoding="utf-8",
+    )
+    new_binary.write_text(f"#!{sys.executable}\nraise SystemExit(99)\n", encoding="utf-8")
+    old_binary.chmod(0o755)
+    new_binary.chmod(0o755)
+    opt_path.symlink_to(old_keg, target_is_directory=True)
+
+    server = RestartableLineServer(socket_path)
+    server.start()
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+        "BRAINLAYER_MCP_SOCKET": str(socket_path),
+        "BRAINLAYER_MCP_RECONNECT_MS": "25",
+        "BRAINLAYER_MCP_MAX_RECONNECT_MS": "50",
+        "BRAINLAYER_MCP_CONNECT_TIMEOUT_MS": "100",
+    }
+    process = subprocess.Popen(
+        [str(opt_path / "bin" / "brainlayer-mcp-stdio-bridge")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    try:
+        deadline = time.monotonic() + 2
+        while server.client_count() == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.client_count() > 0
+
+        opt_path.unlink()
+        opt_path.symlink_to(new_keg, target_is_directory=True)
+        server.stop()
+        time.sleep(0.1)
+        server.start()
+
+        _write_json_line(process, {"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        assert _read_json_line(process)["result"] == {"generation": 2}
+        assert process.poll() is None
+
+        assert process.stdin is not None
+        process.stdin.close()
+        assert process.wait(timeout=5) == 0
+        assert process.stderr is not None
+        stderr = process.stderr.read().decode("utf-8", errors="replace")
+        assert stderr.count("reconnected to socket") >= 1  # a slow runner may reconnect more than once
+        assert "Traceback" not in stderr
+    finally:
+        server.stop()
+        if process.stdin is not None and not process.stdin.closed:
+            process.stdin.close()
         if process.poll() is None:
             process.terminate()
             process.wait(timeout=5)
