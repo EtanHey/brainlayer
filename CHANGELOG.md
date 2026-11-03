@@ -39,6 +39,17 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.86] - 2026-11-03
+
+### BrainBar
+- The menu and the dashboard tell one story (#1610).
+  - The header says "All good" only when every check is green and there are no notes; otherwise "Memory safe · N things to look at".
+  - One problem is one line: the nightly backup chain (snapshot alert, full-maintenance alert, the maintenance job failure and the snapshot diagnostic) becomes "Nightly backup failed N nights in a row — last: … · next try …".
+  - At most 3 problem lines, then "+N more — Open Dashboard".
+  - The Backups card shows an amber dot and "last run failed …" for a backup whose last nightly run failed, even while its verified copy is still inside the window, so the card and the menu agree.
+  - The Today card shows a small "not measured yet today" instead of a large dash.
+- The Drive "reconnect" warning clears as soon as Drive is re-approved (#1609). BrainBar re-reads Drive status when the token file changes and when the menu or dashboard opens; before, only every 30 minutes.
+
 ## [1.5.85] - 2026-11-02
 
 ### Supervisor
