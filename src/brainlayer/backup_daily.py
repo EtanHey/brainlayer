@@ -615,11 +615,26 @@ def _execute_drive_read(request: Any, *, what: str) -> Any:
     return _retry_transient_drive_call(request.execute, what=what)
 
 
-def _drive_put_with_deadline(session: Any, url: str, *, headers: dict[str, str], data: bytes, deadline: float):
+def _drive_put_with_deadline(
+    session: Any,
+    url: str,
+    *,
+    headers: dict[str, str],
+    data: bytes,
+    deadline: float,
+    policy_callback: Callable[[dict[str, Any]], None] | None = None,
+):
     outcome: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
 
     def perform() -> None:
         try:
+            # Darwin background state is per-thread and throttles sockets opened by that
+            # thread. The main backup thread's S3 reset does not cover this worker.
+            from brainlayer.supervisor_child import backup_io_policy
+
+            upload_policy = backup_io_policy()
+            if policy_callback is not None:
+                policy_callback(upload_policy)
             outcome.put((True, session.put(url, headers=headers, data=data, timeout=deadline + 5)))
         except Exception as exc:
             outcome.put((False, exc))
@@ -2424,6 +2439,7 @@ def upload_file_to_drive_raw(
     max_attempts: int = 30,
     resume_session_url: str | None = None,
     progress_callback: Callable[[str, int], None] | None = None,
+    policy_callback: Callable[[dict[str, Any]], None] | None = None,
     run_deadline: float | None = None,
 ) -> dict[str, Any]:
     """Upload unchanged bytes; probe ambiguous writes before retransmitting them."""
@@ -2533,6 +2549,7 @@ def upload_file_to_drive_raw(
                         },
                         data=chunk,
                         deadline=request_deadline(max(deadline_floor, len(chunk) / minimum_rate)),
+                        policy_callback=policy_callback,
                     )
                     if response.status_code in {200, 201}:
                         return response.json()
@@ -3831,6 +3848,9 @@ def run_backup(
                         },
                     )
 
+            def record_upload_thread_policy(policy: dict[str, Any]) -> None:
+                result["upload_thread_policy"] = policy
+
             try:
                 uploaded = upload_file_to_drive_raw(
                     snapshot,
@@ -3838,6 +3858,7 @@ def run_backup(
                     credentials,
                     machine_id=resolved_machine_id,
                     progress_callback=record_upload_progress,
+                    policy_callback=record_upload_thread_policy,
                     run_deadline=run_deadline,
                     **({"resume_session_url": saved_session["url"]} if saved_session else {}),
                 )
@@ -3850,6 +3871,7 @@ def run_backup(
                         credentials,
                         machine_id=resolved_machine_id,
                         progress_callback=record_upload_progress,
+                        policy_callback=record_upload_thread_policy,
                         run_deadline=run_deadline,
                     )
                     break

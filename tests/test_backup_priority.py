@@ -1,6 +1,7 @@
 """Backup children lift inherited throttling without affecting maintenance."""
 
 import ctypes
+import threading
 from unittest.mock import Mock, call
 
 from brainlayer import backup_daily as backup
@@ -80,6 +81,58 @@ def test_background_reset_denied_cannot_report_default(monkeypatch):
     assert result["iopol"] == 0
     assert result["darwin_background"] == 1
     assert len(result["io_policy_errors"]) == 1
+
+
+def test_drive_put_resets_and_receipts_network_thread_policy(monkeypatch):
+    """The socket-owning worker must clear and report its own Darwin thread state."""
+    monkeypatch.setattr(policy.sys, "platform", "darwin")
+    monkeypatch.setattr(policy, "set_disk_io_policy", lambda value: None)
+    library = Mock()
+    library.getiopolicy_np.return_value = 0
+    monkeypatch.setattr(ctypes, "CDLL", Mock(return_value=library))
+    state = threading.local()
+
+    def setpriority(which, who, value):
+        assert threading.current_thread().name == "brainlayer-drive-put"
+        assert (which, who, value) == (4, 0, 0)
+        state.background = False
+
+    def getpriority(which, who):
+        assert who == 0
+        return int(getattr(state, "background", True)) if which == 4 else 10
+
+    monkeypatch.setattr(policy.os, "setpriority", setpriority)
+    monkeypatch.setattr(policy.os, "getpriority", getpriority)
+    called = []
+
+    class Session:
+        def put(self, url, **kwargs):
+            assert threading.current_thread().name == "brainlayer-drive-put"
+            assert state.background is False
+            return "uploaded"
+
+        def close(self):
+            pass
+
+    result = backup._drive_put_with_deadline(
+        Session(),
+        "https://drive.example/upload",
+        headers={},
+        data=b"chunk",
+        deadline=2,
+        policy_callback=called.append,
+    )
+
+    assert result == "uploaded"
+    assert called == [
+        {
+            "io_policy": "default",
+            "io_policy_errors": [],
+            "iopol": 0,
+            "darwin_background": 0,
+            "nice": 10,
+        }
+    ]
 
 
 def test_maintenance_policy_keeps_background(monkeypatch):
