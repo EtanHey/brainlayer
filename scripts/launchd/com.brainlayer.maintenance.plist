@@ -53,7 +53,7 @@
 	<key>Nice</key>
 	<integer>10</integer>
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Standard</string>
 	<key>LowPriorityIO</key>
 	<true/>
 	<key>SoftResourceLimits</key>

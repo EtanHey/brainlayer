@@ -96,8 +96,10 @@ BACKUP_LOCAL_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS"
 BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
 BACKUP_INVOCATION_ENV = "BRAINLAYER_BACKUP_INVOCATION_ID"
-# Fields supervisor_child.backup_io_policy() measures for the current process (S3).
-_IO_POLICY_KEYS = frozenset({"io_policy", "io_policy_errors", "iopol", "darwin_background", "nice"})
+# Policy fields are measured for the current process (S3) and upload thread.
+_POLICY_RECEIPT_KEYS = frozenset(
+    {"io_policy", "io_policy_errors", "iopol", "darwin_background", "nice", "upload_thread_policy"}
+)
 BACKUP_SQLITE_CHECK_TIMEOUT_ENV = "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS"
 BACKUP_DRIVE_RETENTION_ENV = "BRAINLAYER_BACKUP_DRIVE_RETENTION"
 DRIVE_UPLOAD_DEADLINE_FLOOR_ENV = "BRAINLAYER_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS"
@@ -628,11 +630,11 @@ def _drive_put_with_deadline(
 
     def perform() -> None:
         try:
-            # Darwin background state is per-thread and throttles sockets opened by that
-            # thread. The main backup thread's S3 reset does not cover this worker.
-            from brainlayer.supervisor_child import backup_io_policy
+            # Record the scheduling state of the socket-owning thread; process-level
+            # I/O readbacks do not expose launchd's effective thread priority.
+            from brainlayer.supervisor_child import backup_upload_thread_policy
 
-            upload_policy = backup_io_policy()
+            upload_policy = backup_upload_thread_policy()
             if policy_callback is not None:
                 policy_callback(upload_policy)
             outcome.put((True, session.put(url, headers=headers, data=data, timeout=deadline + 5)))
@@ -3594,7 +3596,7 @@ def run_backup(
             get_drive_credentials()
         attempted_at = result["attempted_at"]
         # The receipt records THIS run's process policy (S3); an earlier run's must not leak in.
-        dropped = {"backup_invocation_id", "drive_auth_probe", *_IO_POLICY_KEYS}
+        dropped = {"backup_invocation_id", "drive_auth_probe", *_POLICY_RECEIPT_KEYS}
         result.update({k: v for k, v in receipt.items() if k not in dropped})
         result.update(io_policy or {"io_policy": "unknown"})
         result.update(status="reused", attempted_at=attempted_at)
