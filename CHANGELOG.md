@@ -39,6 +39,17 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.89] - 2026-11-03
+
+### Maintenance
+- A busy nightly WAL checkpoint no longer fails the night (#1619). After bounded TRUNCATE retries stay busy (readers open), the step runs a PASSIVE checkpoint, reports "deferred" and exits 0; the 15-minute fallback truncates later. Real errors and a WAL above 4 GiB still fail.
+
+### BrainBar
+- The menu starts clean (#1615). A job alert superseded by a later success clears (a successful fallback checkpoint clears the busy alert); older timed alerts show dimmed as "Earlier: …" and do not count in the header. Alert times live in a sibling `job-alerts.times.json`; `job-alerts.json` stays a plain string map so older BrainBar builds read it unchanged. While a Drive upload is running, the database row says "Uploading to Drive since HH:mm".
+
+### Bridge
+- The MCP stdio bridge logs each reconnect to BrainBar, and a disconnect error says the request outcome is unknown (#1616, shipped in 1.5.88's tree).
+
 ## [1.5.88] - 2026-11-03
 
 ### Supervisor
