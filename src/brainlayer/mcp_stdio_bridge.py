@@ -268,9 +268,7 @@ def run_bridge(
     def log_reconnect() -> None:
         nonlocal has_connected_once
         if has_connected_once:
-            stderr.write(
-                f"brainlayer-mcp-stdio-bridge: reconnected to socket {config.socket_path!r}\n".encode("utf-8")
-            )
+            stderr.write(f"brainlayer-mcp-stdio-bridge: reconnected to socket {config.socket_path!r}\n".encode("utf-8"))
             stderr.flush()
         has_connected_once = True
 

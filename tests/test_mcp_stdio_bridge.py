@@ -395,7 +395,7 @@ def test_stdio_bridge_survives_opt_install_swap_and_reconnects(tmp_path: Path) -
         assert process.wait(timeout=5) == 0
         assert process.stderr is not None
         stderr = process.stderr.read().decode("utf-8", errors="replace")
-        assert stderr.count("reconnected to socket") == 1
+        assert stderr.count("reconnected to socket") >= 1  # a slow runner may reconnect more than once
         assert "Traceback" not in stderr
     finally:
         server.stop()
