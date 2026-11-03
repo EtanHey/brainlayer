@@ -481,8 +481,8 @@ struct BrainBarOnePageStatus: Sendable, Equatable {
 
 struct BrainBarOnePagePresentation: Sendable, Equatable {
     let status: BrainBarOnePageStatus
-    let attentionItems: [String]
-    let backupLines: [ObservabilityStatusLine]
+    var attentionItems: [String]
+    var backupLines: [ObservabilityStatusLine]
     let totalIndexedChunks: Int?
     let indexedToday: Int?
     let indexedTodayUnavailableText: String?
@@ -621,9 +621,24 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
     ) -> Self {
         // B5: the shared headline is never rewritten here; dashboard-data freshness and agent
         // measurement stay in their own sections of the page.
-        return assemble(status: statusVerdict.dashboardStatus, attentionItems: statusVerdict.attention, observability: observability, stats: stats,
+        var presentation = assemble(status: statusVerdict.dashboardStatus, attentionItems: statusVerdict.attention, observability: observability, stats: stats,
                         agentActivity: agentActivity, now: now, calendar: calendar, locale: locale,
                         observabilityCadence: observabilityCadence, backupNow: backupNow)
+        if statusVerdict.dotOverride != nil {
+            presentation.attentionItems = statusVerdict.attention + statusVerdict.notices
+        }
+        presentation.backupLines = backupRunLines(presentation.backupLines, verdict: statusVerdict)
+        return presentation
+    }
+
+    static func backupRunLines(_ lines: [ObservabilityStatusLine], verdict: BrainBarStatusVerdict) -> [ObservabilityStatusLine] {
+        // Receipt order is database, optional database-upload detail, then transcripts.
+        lines.enumerated().map { index, line in
+            let target: BrainBarBackupRunFailure.Target = index == lines.count - 1 ? .transcripts : .database
+            guard let failure = verdict.backupRunFailures.first(where: { $0.target == target }) else { return line }
+            return .init(text: line.text + " · last run failed — " + failure.text,
+                tone: line.tone == .red ? .red : .amber)
+        }
     }
 
     private static func assemble(
@@ -1304,7 +1319,7 @@ private struct BrainBarDashboardView: View {
                     VStack(alignment: .leading, spacing: 7) {
                         ForEach(Array(attentionItems.enumerated()), id: \.offset) { _, item in
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                BrainBarStatusDot(color: statusColor, size: 5)
+                                BrainBarStatusDot(color: Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown), size: 5)
                                     .font(.system(size: 12, weight: .medium))
                                 Text(item)
                                     .font(.system(size: 12, weight: .medium))
@@ -1402,15 +1417,8 @@ private struct BrainBarDashboardView: View {
                             }
                         }
                     } else {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("—")
-                                .font(.system(size: 28, weight: .semibold, design: .rounded))
-                            Text(todayUnavailableSummary(counts.indexedTodayUnavailableText))
-                                .font(.system(size: 11))
-                                .foregroundStyle(counts.indexedTodayUnavailableText == "not measured yet today"
-                                    ? Color.brainBarTextSecondary : Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
-                                .lineLimit(1)
-                        }
+                        BrainBarTodayEmptyState(text: todayUnavailableSummary(counts.indexedTodayUnavailableText),
+                            isUnmeasured: counts.indexedTodayUnavailableText == "not measured yet today")
                     }
                 }
                 .frame(height: 52, alignment: .topLeading)
@@ -1777,6 +1785,18 @@ private struct BrainBarDashboardView: View {
 
     private var daemonLastSeenSummary: String {
         DaemonRuntimeRows.lastSeenText(lastAnswerAt: collector.lastDaemonAnswerAt, now: currentNow)
+    }
+}
+
+struct BrainBarTodayEmptyState: View {
+    let text: String
+    let isUnmeasured: Bool
+
+    var body: some View {
+        Text(text).font(.system(size: 13))
+            .foregroundStyle(isUnmeasured ? Color.brainBarTextSecondary
+                : Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
+            .lineLimit(1)
     }
 }
 

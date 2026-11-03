@@ -423,7 +423,7 @@ enum ObservabilityReader {
 }
 
 enum ObservabilityCardTone: String, Equatable, Sendable { case standard, neutral, amber }
-enum ObservabilityStatusTone: String, Equatable, Hashable, Sendable { case green, red, neutral }
+enum ObservabilityStatusTone: String, Equatable, Hashable, Sendable { case green, amber, red, neutral }
 
 struct ObservabilityStatusLine: Equatable, Sendable {
     let text: String
@@ -447,6 +447,7 @@ struct ObservabilityStatusRows: View {
         switch tone {
         case .green: Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
         case .red: Color(nsColor: BrainBarDesignTokens.Colors.statusError)
+        case .amber: Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
         case .neutral: .secondary
         }
     }

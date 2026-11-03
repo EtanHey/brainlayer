@@ -200,6 +200,7 @@ struct BrainBarBackupChecksCard: View {
         switch tone {
         case .green: Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
         case .red: Color(nsColor: BrainBarDesignTokens.Colors.statusError)
+        case .amber: Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
         case .neutral: Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown)
         }
     }
@@ -208,6 +209,7 @@ struct BrainBarBackupChecksCard: View {
         switch tone {
         case .green: "checkmark.circle.fill"
         case .red: "exclamationmark.triangle.fill"
+        case .amber: "exclamationmark.circle.fill"
         case .neutral: "info.circle.fill"
         }
     }
