@@ -92,6 +92,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
     let issues: [BrainBarStatusIssue]
     let isChecking: Bool
     var healthVerdict: BrainBarHealthVerdict? = nil
+    var preservesLegacyAttention: Bool = false
 
     var attention: [BrainBarStatusIssue] { issues.filter { $0.severity == .attention } }
     var notices: [BrainBarStatusIssue] { issues.filter { $0.severity == .notice } }
@@ -108,9 +109,10 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
     static let requiredCalendarJobs: [BrainLayerLaunchdJob] = [.index, .backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly]
 
     var verdict: BrainBarStatusVerdict {
-        .init(attention: attention.filter { !$0.isOld }.map(\.text),
+        return .init(attention: attention.filter { !$0.isOld }.map(\.text),
               notices: notices.filter { !$0.isOld }.map(\.text), oldNotices: issues.filter(\.isOld).map(\.text), isChecking: isChecking,
-              dotOverride: healthVerdict?.renderedDot, backupRunFailures: issues.flatMap { issue in
+              dotOverride: healthVerdict?.renderedDot == .green && preservesLegacyAttention ? nil : healthVerdict?.renderedDot,
+              backupRunFailures: issues.flatMap { issue in
                   issue.backupRunDetails.sorted { $0.key.rawValue < $1.key.rawValue }.map { .init(target: $0.key, text: $0.value) }
               })
     }
@@ -561,7 +563,15 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         var issues = backupNotices + otherIssues
         if let verdict = inputs.badge?.healthVerdict {
             if verdict.isFresh(now: now) {
-                issues = issues.map { issue in var detail = issue; detail.severity = .notice; return detail }
+                issues = issues.map { issue in
+                    // A fresh health verdict owns ordinary presentation, but cannot erase a
+                    // dot-worthy calendar failure already established by the legacy reducer.
+                    guard issue.severity == .attention,
+                          !Self.hasUnresolvedCalendarFailure(for: issue, inputs: inputs) else { return issue }
+                    var detail = issue
+                    detail.severity = .notice
+                    return detail
+                }
                 let checks = verdict.checks.filter { $0.state != .green }.map { check in
                     let component: BrainBarStatusIssue.Component = switch check.name {
                     case "backup_local", "backup_offsite", "disk": .backups
@@ -589,7 +599,16 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                         severity: verdict.dot == .red ? .attention : .notice,
                         text: "Health check: \(verdict.dot.rawValue)"), at: 0)
                 }
-                return Self(issues: coherentProblems(rows + issues, inputs: inputs), isChecking: false, healthVerdict: verdict)
+                let coherent = coherentProblems(rows + issues, inputs: inputs)
+                let preservesLegacyAttention = coherent.contains { issue in
+                    issue.id == "maintenance.night" && issue.severity == .attention
+                        && hasUnresolvedCalendarFailure(for: issue, inputs: inputs)
+                        && [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly].contains { job in
+                            (inputs.observations?[job]?.calendarNightOutcome?.consecutiveFailures ?? 0) >= 2
+                        }
+                }
+                return Self(issues: coherent, isChecking: false, healthVerdict: verdict,
+                            preservesLegacyAttention: preservesLegacyAttention)
             }
             issues.insert(.init(id: "verdict.stale", component: .health, severity: .notice,
                                 text: verdict.fallbackNotice(now: now)), at: 0)
@@ -709,6 +728,12 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         }
         return result.map { original in
             var issue = original
+            let unresolvedCalendarFailure = hasUnresolvedCalendarFailure(for: issue, inputs: inputs)
+            // Age is presentation-only for a resolved notice. A failed calendar run remains
+            // current until its job or failed step has a later successful run, and the legacy
+            // reducer's attention severity must never be hidden by elapsed time.
+            guard issue.severity == .notice,
+                  !unresolvedCalendarFailure else { return issue }
             let alertJob: BrainLayerLaunchdJob?
             if let key = issue.alertKey, case let .maintenance(job) = alertClass(key: key) { alertJob = job }
             else if let key = issue.alertKey, case let .backup(job) = alertClass(key: key) { alertJob = job }
@@ -751,6 +776,51 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
             issue.isOld = true
             return issue
         }
+    }
+
+    private static func hasUnresolvedCalendarFailure(for issue: BrainBarStatusIssue,
+                                                       inputs: BrainBarStatusInputs) -> Bool {
+        var jobs: Set<BrainLayerLaunchdJob>
+        if let key = issue.alertKey {
+            switch alertClass(key: key) {
+            case let .maintenance(job), let .backup(job):
+                jobs = Set(job.map { [$0] } ?? [])
+            case .drive, .informational, .unknown:
+                jobs = key == "wal-checkpoint" || key == "wal-checkpoint-fallback" ? [.walCheckpoint]
+                    : key == "index" ? [.index] : []
+            }
+        } else {
+            jobs = issue.jobs
+        }
+        let code = issue.id.replacingOccurrences(of: "verdict.note.", with: "")
+        if code.hasPrefix("job_alert_"), issue.alertKey == nil {
+            switch alertClass(key: String(code.dropFirst("job_alert_".count))) {
+            case let .maintenance(job), let .backup(job):
+                jobs = Set(job.map { [$0] } ?? [])
+            case .drive, .informational, .unknown:
+                jobs = []
+            }
+        }
+        for job in jobs {
+            if inputs.observations?[job]?.isFailedRun == true { return true }
+        }
+
+        let calendarJobs: Set<BrainLayerLaunchdJob> = [.backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly]
+        guard !jobs.isDisjoint(with: calendarJobs) else { return false }
+
+        let failedStepsByJob: [BrainLayerLaunchdJob: Set<String>] = [
+            .backupDaily: ["backup-daily", "backup-snapshot"],
+            .jsonlBackup: ["jsonl-backup"]
+        ]
+        for maintenanceJob in [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly] {
+            guard let night = inputs.observations?[maintenanceJob]?.calendarNightOutcome, night.failed else { continue }
+            if jobs.contains(maintenanceJob) { return true }
+            if jobs.contains(where: { job in
+                guard let failedSteps = failedStepsByJob[job] else { return false }
+                return !failedSteps.isDisjoint(with: night.failedSteps)
+            }) { return true }
+        }
+        return false
     }
 
     private static func alertInterval(key: String?, job: BrainLayerLaunchdJob) -> TimeInterval {
