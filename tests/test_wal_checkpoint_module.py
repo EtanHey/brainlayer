@@ -82,6 +82,36 @@ def test_checkpoint_short_busy_timeout_with_real_reader(tmp_path, monkeypatch):
         writer.close()
 
 
+def test_retrying_truncate_defers_with_held_reader_and_attempts_passive(tmp_path, monkeypatch):
+    from brainlayer import wal_checkpoint
+
+    db = tmp_path / "db"
+    monkeypatch.setattr(wal_checkpoint, "resolve_db_path", lambda: str(db))
+    monkeypatch.setattr(wal_checkpoint, "checkpoint_lock_path", lambda _db: tmp_path / "checkpoint.lock")
+    writer = sqlite3.connect(db, isolation_level=None)
+    reader = sqlite3.connect(db, isolation_level=None)
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("CREATE TABLE t(x)")
+        reader.execute("BEGIN")
+        reader.execute("SELECT * FROM t").fetchall()
+        writer.execute("INSERT INTO t VALUES (1)")
+
+        result = wal_checkpoint.run_wal_checkpoint(
+            "TRUNCATE", retry_busy=True, max_attempts=1, retry_base_seconds=0, sleep_fn=lambda _delay: None
+        )
+
+        assert result["busy"] == 1
+        assert result["deferred"] is True
+        assert result["attempts"] == 1
+        assert "passive_checkpointed_pages" in result
+        reader.execute("ROLLBACK")
+        assert wal_checkpoint.checkpoint(str(db)) == (0, 0, 0)
+    finally:
+        reader.close()
+        writer.close()
+
+
 def test_retrying_truncate_backs_off_until_checkpoint_is_not_busy(tmp_path, monkeypatch):
     import brainlayer.wal_checkpoint as wal_checkpoint
 
@@ -152,9 +182,27 @@ def test_retrying_truncate_returns_busy_after_bounded_attempts(tmp_path, monkeyp
     )
 
     assert result["busy"] == 1
+    assert result["deferred"] is True
     assert result["attempts"] == 3
-    assert calls == ["TRUNCATE", "TRUNCATE", "TRUNCATE"]
+    assert calls == ["TRUNCATE", "TRUNCATE", "TRUNCATE", "PASSIVE"]
     assert delays == [1.0, 2.0]
+
+
+def test_retrying_checkpoint_fails_closed_above_wal_safety_ceiling(tmp_path, monkeypatch):
+    from brainlayer import wal_checkpoint
+
+    db_path = tmp_path / "brainlayer.db"
+    db_path.write_bytes(b"")
+    monkeypatch.setattr(wal_checkpoint, "resolve_db_path", lambda: str(db_path))
+    monkeypatch.setattr(wal_checkpoint, "get_wal_size", lambda _path: wal_checkpoint._WAL_CHECKPOINT_HARD_CEILING_BYTES + 1)
+    monkeypatch.setattr(
+        wal_checkpoint,
+        "checkpoint",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not checkpoint an oversized WAL")),
+    )
+
+    with pytest.raises(RuntimeError, match="above the checkpoint safety ceiling"):
+        wal_checkpoint.run_wal_checkpoint("TRUNCATE", retry_busy=True)
 
 
 def test_launchagent_runs_retrying_truncate_every_night():

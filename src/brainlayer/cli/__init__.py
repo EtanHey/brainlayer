@@ -3142,7 +3142,15 @@ def wal_checkpoint(
         console.print(
             f"Checkpoint ({result['mode']}): {result['checkpointed_pages']}/{result['log_pages']} pages{suffix}"
         )
+        if result.get("deferred"):
+            console.print(
+                "TRUNCATE deferred after bounded retries; PASSIVE checkpoint attempted; "
+                "the WAL remains available for the next checkpoint."
+            )
 
+    if result.get("deferred"):
+        report_job_alert("wal-checkpoint", None)
+        return
     if result["busy"]:
         report_job_alert("wal-checkpoint", "BrainLayer WAL checkpoint was busy; check the job log")
         raise typer.Exit(1)
