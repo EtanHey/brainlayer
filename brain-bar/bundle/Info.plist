@@ -9,11 +9,11 @@
     <key>CFBundleIdentifier</key>
     <string>com.brainlayer.brainbar</string>
     <key>CFBundleVersion</key>
-    <string>1.5.87</string>
+    <string>1.5.88</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.5.87</string>
+    <string>1.5.88</string>
     <key>BrainLayerReleaseVersion</key>
-    <string>1.5.87</string>
+    <string>1.5.88</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>

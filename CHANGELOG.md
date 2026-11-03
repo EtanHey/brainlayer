@@ -39,6 +39,15 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.88] - 2026-11-03
+
+### Supervisor
+- Policy-only launcher changes now reach already-consolidated Macs (#1617). `install.sh consolidate` journals a launcher plist transition when the only differences are `ProcessType`, `Nice`, `LowPriorityIO` or `SoftResourceLimits`, publishes it, restarts only the changed launcher, and records the new configuration hash. It runs before a keg upgrade continues in the same invocation. Any other launcher difference still refuses with "explicit replan required". It refuses without changes while the nightly calendar or a maintenance/backup lock is active.
+- This delivers 1.5.87's maintenance change (#1612): on the next consolidate the maintenance launcher moves from `ProcessType=Background` to `Standard`, so the nightly Drive upload is no longer throttled.
+
+### Tests
+- Pre-push maps `wal_checkpoint.py` to its real tests instead of falling back to the full suite (#1614).
+
 ## [1.5.87] - 2026-11-03
 
 ### Maintenance
