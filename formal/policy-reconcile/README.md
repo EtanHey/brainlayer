@@ -21,3 +21,11 @@ but skips its readiness check, reproducing a violation of that invariant.
 The abstraction assumes the existing migration lock, archive, launcher, marker,
 and runtime custody checks; it does not prove those implementations. The fake-home
 SIGKILL test exercises real journal/manifest fsync and rename boundaries.
+
+Launcher plist policy reconciliation is outside this model's state space: the
+modeled durable value is the supervisor component manifest, while launchers and
+their loaded runtime are explicit custody assumptions. Modeling one or more
+plist publications plus per-label bootout/bootstrap requires separate launcher
+state and invariants (including maintenance-lock admission), so the S24 model is
+not extended to claim coverage it does not provide. The launcher transition's
+old/new hashes and crash recovery are exercised by fake-home tests instead.

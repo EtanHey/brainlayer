@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -181,6 +182,166 @@ def test_unjournaled_manifest_edit_still_refuses(consolidated):
     with pytest.raises(RuntimeError, match="component manifest changed"):
         invoke(setup, runner, "keg2")
     assert all(call[0] in {"print", "print-disabled"} for call in runner.calls)
+
+
+def _install_old_maintenance_policy(setup, runner):
+
+    result = invoke(setup, runner)
+    home, agents, _ = setup
+    control = home / ".local/share/brainlayer/supervisor"
+    journal_path = control / "migration.json"
+    journal = json.loads(journal_path.read_bytes())
+    label = "com.brainlayer.maintenance"
+    name = f"{label}.plist"
+    old = plistlib.loads(bytes.fromhex(journal["published_files"][name]))
+    old["ProcessType"] = "Background"
+    raw = plistlib.dumps(old, sort_keys=False)
+    (agents / name).write_bytes(raw)
+    journal["published_files"][name] = raw.hex()
+    journal["published_sha256"][name] = hashlib.sha256(raw).hexdigest()
+    journal["configuration_sha256"][label] = hashlib.sha256(raw).hexdigest()
+    journal_path.write_text(json.dumps(journal))
+    runner.calls.clear()
+    assert result["phase"] == "migrated"
+    return journal
+
+
+def test_same_keg_reconciles_launcher_policy_only_and_is_idempotent(setup, capsys):
+    from brainlayer.launchd_consolidation import NEW
+
+    runner = Launchctl()
+    before = _install_old_maintenance_policy(setup, runner)
+    result = invoke(setup, runner)
+    home, agents, _ = setup
+    label = "com.brainlayer.maintenance"
+    name = f"{label}.plist"
+    updated = plistlib.loads((agents / name).read_bytes())
+    assert updated["ProcessType"] == "Standard"
+    changed_actions = [
+        (
+            call[0],
+            call[1].rsplit("/", 1)[-1] if call[0] == "bootout" else plistlib.loads(Path(call[2]).read_bytes())["Label"],
+        )
+        for call in runner.calls
+        if call[0] in {"bootout", "bootstrap"}
+    ]
+    assert changed_actions == [("bootout", label), ("bootstrap", label)]
+    assert runner.loaded == {*NEW, label}
+    assert result["phase"] == "migrated" and result["keg"] == "keg1"
+    assert result["configuration_sha256"][label] == hashlib.sha256((agents / name).read_bytes()).hexdigest()
+    assert result["published_sha256"][name] == result["configuration_sha256"][label]
+    assert result["launcher_policy_reconciliations"][-1]["diff"] == {
+        label: {"ProcessType": {"old": "Background", "new": "Standard"}}
+    }
+    assert f"{label}: ProcessType Background → Standard" in capsys.readouterr().err
+    runner.calls.clear()
+    assert invoke(setup, runner) == result
+    assert all(call[0] in {"print", "print-disabled"} for call in runner.calls)
+    assert before["keg"] == result["keg"]
+
+
+def test_non_policy_launcher_change_still_requires_explicit_replan(setup, monkeypatch):
+    from brainlayer import launchd_consolidation as migration
+
+    runner = Launchctl()
+    _install_old_maintenance_policy(setup, runner)
+    receipt = setup[0] / ".local/share/brainlayer/supervisor/migration.json"
+    original = receipt.read_bytes()
+    render = migration.rendered_launchers
+
+    def changed(*args, **kwargs):
+        prepared = render(*args, **kwargs)
+        label = "com.brainlayer.maintenance"
+        document = plistlib.loads(prepared[label])
+        document["ProgramArguments"] = ["/foreign/command"]
+        return prepared | {label: plistlib.dumps(document, sort_keys=False)}
+
+    monkeypatch.setattr(migration, "rendered_launchers", changed)
+    with pytest.raises(RuntimeError, match="explicit replan required"):
+        invoke(setup, runner)
+    assert receipt.read_bytes() == original
+    assert all(call[0] in {"print", "print-disabled"} for call in runner.calls)
+
+
+@pytest.mark.parametrize(
+    "lock_relative",
+    [
+        ".local/share/brainlayer/supervisor/calendar/maintenance.lock",
+        ".local/share/brainlayer/backups/.backup.lock",
+    ],
+)
+def test_busy_maintenance_refuses_launcher_restart_without_changes(setup, lock_relative):
+    import fcntl
+
+    runner = Launchctl()
+    _install_old_maintenance_policy(setup, runner)
+    home, agents, _ = setup
+    control = home / ".local/share/brainlayer/supervisor"
+    lock_path = home / lock_relative
+    lock_path.parent.mkdir(mode=0o700, exist_ok=True)
+    lock_path.touch(mode=0o600)
+    receipt = control / "migration.json"
+    before = receipt.read_bytes()
+    launcher = agents / "com.brainlayer.maintenance.plist"
+    launcher_bytes = launcher.read_bytes()
+    runner.calls.clear()
+    with lock_path.open("rb") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        with pytest.raises(RuntimeError, match="busy; retry later"):
+            invoke(setup, runner)
+    assert receipt.read_bytes() == before
+    assert launcher.read_bytes() == launcher_bytes
+    assert runner.loaded == {"com.brainlayer.daemon", "com.brainlayer.maintenance"}
+    assert all(call[0] in {"print", "print-disabled"} for call in runner.calls)
+
+
+@pytest.mark.parametrize("cut", ["bootout", "publish", "bootstrap"])
+def test_launcher_policy_interruption_recovers_forward(setup, monkeypatch, cut):
+    from brainlayer import launchd_consolidation as migration
+
+    class Interrupted(Launchctl):
+        fired = False
+        armed = False
+
+        def __call__(self, argv):
+            result = super().__call__(argv)
+            action = argv[1]
+            if (
+                self.armed
+                and not self.fired
+                and action == cut
+                and (action != "bootstrap" or plistlib.loads(Path(argv[3]).read_bytes())["Label"])
+            ):
+                self.fired = True
+                raise KeyboardInterrupt("injected launcher policy crash")
+            return result
+
+    runner = Interrupted()
+    _install_old_maintenance_policy(setup, runner)
+    runner.armed = True
+    if cut == "publish":
+        publish = migration.update
+        fired = False
+
+        def interrupt_publish(path, *args):
+            nonlocal fired
+            result = publish(path, *args)
+            if not fired and path.name == "com.brainlayer.maintenance.plist":
+                fired = True
+                raise KeyboardInterrupt("injected launcher policy crash")
+            return result
+
+        monkeypatch.setattr(migration, "update", interrupt_publish)
+    with pytest.raises(KeyboardInterrupt, match="injected launcher policy crash"):
+        invoke(setup, runner)
+    monkeypatch.undo()
+    result = invoke(setup, runner)
+    home, agents, _ = setup
+    launcher = agents / "com.brainlayer.maintenance.plist"
+    assert plistlib.loads(launcher.read_bytes())["ProcessType"] == "Standard"
+    assert result["phase"] == "migrated"
+    assert result["published_sha256"][launcher.name] == hashlib.sha256(launcher.read_bytes()).hexdigest()
+    assert runner.loaded == {"com.brainlayer.daemon", "com.brainlayer.maintenance"}
 
 
 def test_revert_after_policy_reconcile_restores_legacy_bytes(consolidated):
