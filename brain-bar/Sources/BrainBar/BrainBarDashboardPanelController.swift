@@ -209,6 +209,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     private let frameStore: BrainBarWindowFrameStore
     private let screenFrames: () -> [NSRect]
     private let activationPolicy: BrainBarWindowActivationPolicy?
+    private let driveAuth: BrainBarDriveAuthModel
     private var hasPlacedWindow = false
     private var isClosingWindow = false
     /// Only used to place the very first window below the menu-bar icon.
@@ -231,6 +232,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         hostingController.view.autoresizingMask = [.width, .height]
 
         contentViewControllerForTesting = hostingController
+        self.driveAuth = runtime.driveAuth
         self.frameStore = frameStore
         self.screenFrames = screenFrames
         self.activationPolicy = activationPolicy
@@ -258,6 +260,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     }
 
     func show(anchoredTo anchorView: NSView? = nil) {
+        Task { [driveAuth] in await driveAuth.refreshIfStale() }
         if panelState.selectedTab == .settings { panelState.settingsActivationRevision += 1 }
         if !hasPlacedWindow || isClosingWindow {
             placeWindow(near: anchorView ?? statusItemButton)
