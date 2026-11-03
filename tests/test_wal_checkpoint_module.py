@@ -194,7 +194,9 @@ def test_retrying_checkpoint_fails_closed_above_wal_safety_ceiling(tmp_path, mon
     db_path = tmp_path / "brainlayer.db"
     db_path.write_bytes(b"")
     monkeypatch.setattr(wal_checkpoint, "resolve_db_path", lambda: str(db_path))
-    monkeypatch.setattr(wal_checkpoint, "get_wal_size", lambda _path: wal_checkpoint._WAL_CHECKPOINT_HARD_CEILING_BYTES + 1)
+    monkeypatch.setattr(
+        wal_checkpoint, "get_wal_size", lambda _path: wal_checkpoint._WAL_CHECKPOINT_HARD_CEILING_BYTES + 1
+    )
     monkeypatch.setattr(
         wal_checkpoint,
         "checkpoint",
