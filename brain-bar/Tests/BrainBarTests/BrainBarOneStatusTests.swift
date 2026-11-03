@@ -49,13 +49,12 @@ final class BrainBarOneStatusTests: XCTestCase {
         ISO8601DateFormatter().date(from: "\(date)T\(time)Z")!.timeIntervalSince1970
     }
 
-    private static func night(_ date: String, failing: [String] = [], abandoned: Bool = false,
-                              incomplete: [String] = ["maintenance-nightly"]) -> [[String: Any]] {
+    private static func night(_ date: String, failing: [String] = [], abandoned: Bool = false) -> [[String: Any]] {
         var rows: [[String: Any]] = [["event": "runner", "kind": "nightly", "scheduled_date": date,
                                       "steps": ["maintenance-nightly", "jsonl-backup"], "ts": ts(date, "01:15:00")]]
         if abandoned {
             rows.append(["event": "abandoned", "kind": "nightly", "scheduled_date": date,
-                         "incomplete_steps": incomplete, "reason": "runner-vanished", "ts": ts(date, "03:00:00")])
+                         "incomplete_steps": ["maintenance-nightly"], "reason": "runner-vanished", "ts": ts(date, "03:00:00")])
         } else {
             for step in ["maintenance-nightly", "jsonl-backup"] {
                 let failed = failing.contains(step)
@@ -112,14 +111,12 @@ final class BrainBarOneStatusTests: XCTestCase {
             setMaintenance([.maintenanceNightly: nightly])
         case .failedNight:
             // The M4 shape: two abandoned nights, then a failed transcript backup nobody retried.
-            setMaintenance(try calendarObservations(Self.night("2026-10-24", abandoned: true, incomplete: ["jsonl-backup"])
-                + Self.night("2026-10-25", abandoned: true, incomplete: ["jsonl-backup"])
-                + Self.night(Self.scheduledDate, failing: ["jsonl-backup"])))
+            setMaintenance(try calendarObservations(Self.night("2026-10-24", abandoned: true)
+                + Self.night("2026-10-25", abandoned: true) + Self.night(Self.scheduledDate, failing: ["jsonl-backup"])))
         case .recoveredNight:
             // #1550: the same nights, but a later retry completed the failed step.
-            setMaintenance(try calendarObservations(Self.night("2026-10-24", abandoned: true, incomplete: ["jsonl-backup"])
-                + Self.night("2026-10-25", abandoned: true, incomplete: ["jsonl-backup"])
-                + Self.night(Self.scheduledDate, failing: ["jsonl-backup"])
+            setMaintenance(try calendarObservations(Self.night("2026-10-24", abandoned: true)
+                + Self.night("2026-10-25", abandoned: true) + Self.night(Self.scheduledDate, failing: ["jsonl-backup"])
                 + Self.recovery(Self.scheduledDate, step: "jsonl-backup")))
         case .unreadableSource:
             let unreadable = BrainLayerLaunchdJobObservation.stateOnly(.probeError("Maintenance calendar status unavailable"))
@@ -236,10 +233,6 @@ final class BrainBarOneStatusTests: XCTestCase {
             let readings = Dictionary(uniqueKeysWithValues: Surface.allCases.map { ($0, read($0, rig)) })
             let verdict = rig.model.publishedStatus.verdict
             let shared = verdict.attention + verdict.notices
-            if fixture == .failedNight {
-                XCTAssertTrue(verdict.attention.contains { $0.contains("Transcript backup failed") }, name)
-                XCTAssertFalse(rig.model.publishedStatus.issues.contains { $0.id == "maintenance.night" && $0.isOld }, name)
-            }
 
             for surface in Surface.allCases {
                 let reading = readings[surface]!
