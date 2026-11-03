@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from brainlayer.job_alerts import active_alerts, report
+from brainlayer.job_alerts import active_alerts, alert_reported_at, report
 
 
 def test_macos_notification_has_bounded_subprocess_timeout(monkeypatch):
@@ -41,6 +41,27 @@ def test_failure_episode_and_recovery(tmp_path):
     assert notifications == ["Database backup failed"]
     assert active_alerts(path) == {}
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_active_alerts_keep_a_readable_occurrence_time_and_read_legacy_values(tmp_path):
+    path = tmp_path / "alerts.json"
+    path.write_text(json.dumps({"legacy": "old failure"}), encoding="utf-8")
+    assert active_alerts(path) == {"legacy": "old failure"}
+    assert alert_reported_at(path) == {}
+    assert report("wal-checkpoint", "SQLite busy", path=path, notify=lambda _message: None)
+    assert active_alerts(path)["wal-checkpoint"] == "SQLite busy"
+    assert dt.datetime.fromisoformat(alert_reported_at(path)["wal-checkpoint"]).tzinfo is not None
+
+
+def test_repeated_failure_refreshes_age_without_repeating_notification(tmp_path):
+    path = tmp_path / "alerts.json"
+    notifications = []
+    reason = "BrainLayer WAL checkpoint was busy"
+    assert report("wal-checkpoint", reason, path=path, notify=notifications.append)
+    first = alert_reported_at(path)["wal-checkpoint"]
+    assert not report("wal-checkpoint", reason, path=path, notify=notifications.append)
+    assert alert_reported_at(path)["wal-checkpoint"] > first
+    assert notifications == [reason]
 
 
 def test_consent_warns_once_then_escalates_and_reauthorization_clears(tmp_path):

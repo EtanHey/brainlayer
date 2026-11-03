@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import SwiftUI
 import XCTest
@@ -283,6 +284,32 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
             // Job-alert reconciliation must retain the new optional evidence.
             XCTAssertNotNil(doc.replacingBackupsErrorType(nil).backups.transcriptAttempt)
         }
+    }
+
+    func testInProgressUploadNamesDriveWhenTheBackupLockIsLive() throws {
+        let doc = try document(attempt: true, pending: "in_progress")
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        encoder.dateEncodingStrategy = .iso8601
+        let staging = URL(fileURLWithPath: brainBarTestTemporaryPath()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: staging) }
+        let lockPath = staging.appendingPathComponent(".backup.lock")
+        XCTAssertTrue(FileManager.default.createFile(atPath: lockPath.path, contents: Data()))
+        let lock = open(lockPath.path, O_RDWR | O_NOFOLLOW)
+        XCTAssertGreaterThanOrEqual(lock, 0)
+        defer { flock(lock, LOCK_UN); close(lock) }
+        XCTAssertEqual(flock(lock, LOCK_EX | LOCK_NB), 0)
+        let startedAt = Array("2026-11-02T12:34:00Z\n".utf8)
+        startedAt.withUnsafeBytes { bytes in _ = Darwin.write(lock, bytes.baseAddress, bytes.count) }
+        let url = staging.appendingPathComponent("observability.json")
+        try encoder.encode(doc).write(to: url)
+        guard case let .readable(live) = ObservabilityReader.read(url: url,
+            environment: ["BRAINLAYER_BACKUP_STAGING_DIR": staging.path]) else { return XCTFail("fixture must decode") }
+        let status = ObservabilityPresentation.backupStatus(for: live.backups, now: now)
+        XCTAssertTrue(status.snapshotUpload?.text.hasPrefix("Uploading to Drive since ") == true,
+                      status.snapshotUpload?.text ?? "missing upload status")
+        XCTAssertEqual(status.snapshotUpload?.tone, .neutral)
     }
 
     func testNeutralChecksRenderInIsolatedNativeView() throws {

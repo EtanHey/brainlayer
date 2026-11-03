@@ -336,6 +336,14 @@ struct BrainBarCalendarHistory: Sendable {
                     let outcome: AttemptStep = status == "deferred" || code == 75 ? .deferred :
                         status == "ok" && code == 0 ? .succeeded : status == "failed" ? .failed : .incomplete
                     attemptSteps[date, default: [:]][step] = outcome
+                    if outcome == .succeeded {
+                        // A later calendar date completing this step supersedes earlier
+                        // unresolved failures for the same step; older-date replays do not.
+                        for failedDate in unresolvedSteps.keys.filter({ $0 < date }) {
+                            unresolvedSteps[failedDate]?.remove(step)
+                            stepProblems[failedDate]?.removeValue(forKey: step)
+                        }
+                    }
                     // A retry that never ran cannot replace the original problem's time.
                     if attemptKinds[date] == "nightly", outcome.isProblem {
                         stepProblems[date, default: [:]][step] = StepProblem(at: Date(timeIntervalSince1970: ts),
@@ -359,7 +367,7 @@ struct BrainBarCalendarHistory: Sendable {
                 night.runnerErrorAt = runnerErrors[date]
                 night.unknownFailureAt = unknownFailures[date]
                 night.abandonmentFailureAt = abandonmentFailures[date]
-                night.failed = night.failed || night.runnerErrorAt != nil || night.unknownFailureAt != nil
+                night.failed = !(unresolvedSteps[date] ?? []).isEmpty || night.runnerErrorAt != nil || night.unknownFailureAt != nil
                     || night.abandonmentFailureAt != nil
                 streak = night.failed ? streak + 1 : 0
                 night.consecutiveFailures = streak

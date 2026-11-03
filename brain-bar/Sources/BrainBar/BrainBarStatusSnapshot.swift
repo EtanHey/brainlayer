@@ -27,6 +27,9 @@ struct BrainBarStatusIssue: Equatable, Sendable, Identifiable {
     var alertReason: String? = nil
     var driveTone: DriveAuthPresentation.Tone? = nil
     var backupRunDetails: [BrainBarBackupRunFailure.Target: String] = [:]
+    /// The underlying event time used when an alert survives beyond its next scheduled run.
+    var occurredAt: Date? = nil
+    var isOld = false
     /// Every job alert folded into this issue by grouping, with the severity it had on its own.
     var groupedAlertSeverities: [String: Severity] = [:]
 }
@@ -105,7 +108,8 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
     static let requiredCalendarJobs: [BrainLayerLaunchdJob] = [.index, .backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly]
 
     var verdict: BrainBarStatusVerdict {
-        .init(attention: attention.map(\.text), notices: notices.map(\.text), isChecking: isChecking,
+        .init(attention: attention.filter { !$0.isOld }.map(\.text),
+              notices: notices.filter { !$0.isOld }.map(\.text), oldNotices: issues.filter(\.isOld).map(\.text), isChecking: isChecking,
               dotOverride: healthVerdict?.renderedDot, backupRunFailures: issues.flatMap { issue in
                   issue.backupRunDetails.sorted { $0.key.rawValue < $1.key.rawValue }.map { .init(target: $0.key, text: $0.value) }
               })
@@ -381,10 +385,12 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                 outcome += (outcome.isEmpty ? "" : "; ") + "Scheduled maintenance reported an unknown failure at \(absoluteDate(at, calendar: inputs.calendar))"
             }
             let count = night.consecutiveFailures >= 2 ? "; nightly runs have had problems \(night.consecutiveFailures) nights in a row" : ""
+            let eventTimes = night.stepProblems.values.map(\.at)
+                + [night.runnerErrorAt, night.unknownFailureAt, night.abandonmentFailureAt].compactMap { $0 }
             builder.add(.init(id: "maintenance.night", component: .maintenance,
                 severity: night.consecutiveFailures >= 2 ? .attention : .notice,
                 text: "\(outcome)\(count) — \(retry)",
-                jobs: Set(maintenanceJobs)))
+                jobs: Set(maintenanceJobs), occurredAt: eventTimes.max() ?? night.at))
         } else {
             // Legacy per-step failures stay visible, but can never earn a nightly-run dot.
             for job in maintenanceJobs where desired(job) {
@@ -569,8 +575,13 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                     return BrainBarStatusIssue(id: "verdict.\(check.name)", component: component,
                         severity: verdict.dot == .red && check.state == .red ? .attention : .notice, text: check.text)
                 }
-                let notes = verdict.notes.map { BrainBarStatusIssue(id: "verdict.note.\($0.code)", component: .health,
-                                                                   severity: .notice, text: $0.message) }
+                let notes = verdict.notes.map { note -> BrainBarStatusIssue in
+                    let label = note.message.split(separator: ":", maxSplits: 1).first.map(String.init)
+                    let job = note.code == "job_failure" ? Self.job(forLaunchdLabel: label) : nil
+                    return BrainBarStatusIssue(id: "verdict.note.\(note.code)", component: .health,
+                        severity: .notice, text: note.message, jobs: job.map { [$0] } ?? [],
+                        occurredAt: job.flatMap { inputs.observations?[$0]?.lastRunAt })
+                }
                 var rows = checks + notes
                 if (verdict.dot == .red && !checks.contains { $0.severity == .attention })
                     || (verdict.dot != .green && checks.isEmpty) {
@@ -627,6 +638,21 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         }
         var result: [BrainBarStatusIssue] = []
         for var issue in issues {
+            let code = issue.id.replacingOccurrences(of: "verdict.note.", with: "")
+            if code == "job_failure", let job = issue.jobs.first,
+               [.maintenanceNightly, .maintenanceWeekly].contains(job) {
+                if let observedNight = jobs.compactMap({ inputs.observations?[$0]?.calendarNightOutcome }).first {
+                    // launchd's last-exit streak is replaced by the calendar's unresolved-night count.
+                    if !observedNight.failed { continue }
+                    let count = max(1, observedNight.consecutiveFailures)
+                    let noun = count == 1 ? "night" : "nights"
+                    issue.text = issue.text.replacingOccurrences(
+                        of: #"failed \d+ nights? in a row"#,
+                        with: "failed \(count) \(noun) in a row",
+                        options: .regularExpression
+                    )
+                }
+            }
             let identity = key(issue)
             if let reason = issue.alertReason { issue.groupedAlertSeverities[reason] = issue.severity }
             switch failureAlertKey(issue) {
@@ -681,7 +707,61 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                 result.append(issue)
             }
         }
-        return result
+        return result.map { original in
+            var issue = original
+            let alertJob: BrainLayerLaunchdJob?
+            if let key = issue.alertKey, case let .maintenance(job) = alertClass(key: key) { alertJob = job }
+            else if let key = issue.alertKey, case let .backup(job) = alertClass(key: key) { alertJob = job }
+            else if issue.alertKey == "wal-checkpoint" || issue.alertKey == "wal-checkpoint-fallback" { alertJob = .walCheckpoint }
+            else if issue.alertKey == "index" { alertJob = .index }
+            else { alertJob = nil }
+            guard let job = alertJob ?? issue.jobs.sorted(by: { $0.rawValue < $1.rawValue }).first else { return issue }
+            let observed = inputs.observations?[job]
+            let reportedAt = issue.alertKey.flatMap { inputs.jobAlerts?.reportedAt[$0] } ?? issue.occurredAt ?? observed?.lastRunAt
+            guard let reportedAt else { return issue }
+            let period = alertInterval(key: issue.alertKey, job: job)
+            let nextRun = observed?.nextRunAt
+            let due: Date
+            if let nextRun {
+                if reportedAt < nextRun {
+                    let cycles = ceil(nextRun.timeIntervalSince(reportedAt) / period)
+                    due = nextRun.addingTimeInterval(-max(0, cycles - 1) * period)
+                } else {
+                    let elapsed = reportedAt.timeIntervalSince(nextRun)
+                    due = nextRun.addingTimeInterval((floor(elapsed / period) + 1) * period)
+                }
+            } else {
+                due = reportedAt.addingTimeInterval(period)
+            }
+            guard inputs.now > due.addingTimeInterval(2 * 60 * 60) else { return issue }
+            let formatter = DateFormatter()
+            formatter.calendar = inputs.calendar
+            formatter.timeZone = inputs.calendar.timeZone
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "HH:mm"
+            issue.text = "Earlier: \(issue.text) (\(formatter.string(from: reportedAt)))"
+            issue.isOld = true
+            return issue
+        }
+    }
+
+    private static func alertInterval(key: String?, job: BrainLayerLaunchdJob) -> TimeInterval {
+        switch key {
+        case "maintenance-full", "backup-snapshot": return 7 * 24 * 60 * 60
+        case "wal-checkpoint", "wal-checkpoint-fallback", "index", "p0-counter": return 15 * 60
+        default:
+            switch job {
+            case .maintenanceWeekly: return 7 * 24 * 60 * 60
+            case .index, .walCheckpoint: return 15 * 60
+            default: return 24 * 60 * 60
+            }
+        }
+    }
+
+    private static func job(forLaunchdLabel label: String?) -> BrainLayerLaunchdJob? {
+        guard let label else { return nil }
+        if label == "com.brainlayer.maintenance" { return .maintenanceNightly }
+        return BrainLayerLaunchdJob.allCases.first { $0.launchdLabel == label }
     }
 
     /// One failure is explicit, but only the second consecutive failure gives a dot.
@@ -694,7 +774,8 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         let retry = observation.nextRunAt.flatMap { $0 > now ? $0 : nil }
             .map { "next retry " + absoluteDate($0, calendar: calendar) } ?? "next retry time unavailable"
         return .init(id: abandoned ? "maintenance.abandoned-run" : "job.\(job.rawValue)", component: .maintenance,
-                     severity: .notice, text: "\(label) maintenance \(outcome) at \(when) — \(retry)", jobs: [job])
+                     severity: .notice, text: "\(label) maintenance \(outcome) at \(when) — \(retry)", jobs: [job],
+                     occurredAt: observation.lastRunAt)
     }
 
     static func absoluteDate(_ date: Date, calendar: Calendar) -> String {

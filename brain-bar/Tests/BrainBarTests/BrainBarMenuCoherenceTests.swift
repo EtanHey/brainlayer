@@ -75,6 +75,66 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
         XCTAssertTrue(capped.last?.opensDashboard == true)
     }
 
+    func testOldJobAlertStaysVisibleButDoesNotCountInHeader() {
+        var input = T.healthy()
+        input.now = date("2026-11-03T00:00:00Z")
+        let reportedAt = input.now.addingTimeInterval(-3 * 60 * 60)
+        let priorRun = input.now.addingTimeInterval(-4 * 60 * 60)
+        input.jobAlerts = .init(active: ["wal-checkpoint": "BrainLayer WAL checkpoint was busy"],
+                                reportedAt: ["wal-checkpoint": reportedAt])
+        input.observations?[.walCheckpoint] = T.step(at: priorRun,
+            next: input.now.addingTimeInterval(-4 * 60 * 60))
+        let checks = BrainBarHealthVerdict.Check.labels.keys.sorted().map {
+            BrainBarHealthVerdict.Check(name: $0, state: .green, note: "Within safety window")
+        }
+        input.badge?.healthVerdict = .init(dot: .green, checks: checks, notes: [], evaluatedAt: input.now)
+        let snapshot = BrainBarStatusSnapshot.derive(input)
+        let row = try! XCTUnwrap(BrainBarStatusPopoverController.problemRows(snapshot.verdict, health: snapshot.healthVerdict).first)
+        XCTAssertTrue(row.isOld)
+        XCTAssertTrue(row.text.hasPrefix("Earlier: "), row.text)
+        XCTAssertEqual(snapshot.verdict.safeHeadline, "All good")
+
+        input.jobAlerts = .init(active: ["wal-checkpoint": "BrainLayer WAL checkpoint was busy"],
+                                reportedAt: ["wal-checkpoint": input.now])
+        let fresh = BrainBarStatusSnapshot.derive(input)
+        XCTAssertFalse(BrainBarStatusPopoverController.problemRows(fresh.verdict, health: fresh.healthVerdict).first?.isOld ?? true)
+        XCTAssertNotEqual(fresh.verdict.safeHeadline, "All good")
+    }
+
+    func testRenderOldAlertEvidence() throws {
+        guard let path = ProcessInfo.processInfo.environment["BRAINBAR_S32_RENDER_DIR"] else {
+            throw XCTSkip("Set BRAINBAR_S32_RENDER_DIR for isolated render evidence")
+        }
+        let directory = URL(fileURLWithPath: path)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var input = inputs()
+        input.now = date("2026-11-03T12:00:00Z")
+        input.watcher = .running(heartbeatAt: input.now)
+        input.watcherHeartbeatAt = input.now
+        input.backups = .measured(T.backups(db: date("2026-11-03T10:00:00Z"), transcripts: date("2026-11-03T11:00:00Z")))
+        let reportedAt = date("2026-11-02T03:11:00Z")
+        input.observations?[.index] = T.step(at: input.now.addingTimeInterval(-3600), next: input.now.addingTimeInterval(900))
+        for job in [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly] {
+            input.observations?[job] = T.step(at: input.now.addingTimeInterval(-3600), next: input.now.addingTimeInterval(900))
+        }
+        input.jobAlerts = .init(active: ["wal-checkpoint": "BrainLayer WAL checkpoint was busy"],
+                                reportedAt: ["wal-checkpoint": reportedAt])
+        input.observations?[.walCheckpoint] = T.step(at: reportedAt, next: date("2026-11-02T03:15:00Z"))
+        let checks = BrainBarHealthVerdict.Check.labels.keys.sorted().map {
+            BrainBarHealthVerdict.Check(name: $0, state: .green, note: "Within safety window")
+        }
+        input.badge?.healthVerdict = .init(dot: .green, checks: checks, notes: [], evaluatedAt: input.now)
+        let snapshot = BrainBarStatusSnapshot.derive(input)
+        XCTAssertEqual(snapshot.verdict.oldNotices.count, 1, "\(snapshot.issues)")
+        guard case let .measured(backups) = input.backups else { return XCTFail() }
+        try BrainBarRenderHarness.renderHealthVerdictPopover(snapshot,
+            backupLines: ObservabilityPresentation.backupReceiptLines(for: backups, now: input.now),
+            directory: directory, name: "menu-390")
+        try BrainBarRenderHarness.renderMenuCoherenceDashboard(snapshot,
+            result: BrainBarDashboardFixture.healthyObservabilityResult, now: BrainBarDashboardFixture.fetchedAt,
+            directory: directory, name: "dashboard-960", width: 960, calendar: input.calendar)
+    }
+
     func testReportedMenuHeaderMustAcknowledgeFailures() {
         let snapshot = BrainBarStatusSnapshot.derive(inputs())
         XCTAssertNotEqual(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict), "All good")
@@ -131,7 +191,25 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
             evaluatedAt: input.now)
         let snapshot = BrainBarStatusSnapshot.derive(input)
         XCTAssertEqual(snapshot.issues.count, 2)
-        XCTAssertTrue(snapshot.issues.contains { $0.text == "com.brainlayer.index: failed 3 times" })
+        XCTAssertTrue(snapshot.issues.contains { $0.text.contains("com.brainlayer.index: failed 3 times") })
+    }
+
+    func testMaintenanceJobFailureCountUsesUnresolvedCalendarNights() throws {
+        var input = inputs()
+        input.jobAlerts = .init(active: [:])
+        let health = try XCTUnwrap(input.badge?.healthVerdict)
+        input.badge?.healthVerdict = .init(dot: health.dot, checks: health.checks,
+            notes: [.init(code: "job_failure", message: failure)], evaluatedAt: input.now)
+        var night = try XCTUnwrap(input.observations?[.maintenanceNightly]?.calendarNightOutcome)
+        night.failedSteps = ["wal-checkpoint"]
+        night.stepProblems = ["wal-checkpoint": .init(at: date("2026-11-02T03:11:00Z"), reason: "checkpoint busy")]
+        night.consecutiveFailures = 1
+        for job in [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly] {
+            input.observations?[job]?.calendarNightOutcome = night
+        }
+        let snapshot = BrainBarStatusSnapshot.derive(input)
+        XCTAssertTrue(snapshot.issues.contains { $0.text.contains("failed 1 night in a row") }, "\(snapshot.issues)")
+        XCTAssertFalse(snapshot.issues.contains { $0.text.contains("failed 3 nights in a row") }, "\(snapshot.issues)")
     }
 
     func testNightlyBackupFailuresKeepEachTargetsReasonAndTime() throws {

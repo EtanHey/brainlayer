@@ -376,14 +376,15 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         let text: String
         var state: BrainBarHealthVerdict.State? = nil
         var opensDashboard = false
+        var isOld = false
     }
 
     nonisolated static func problemRows(_ verdict: BrainBarStatusVerdict, health: BrainBarHealthVerdict?) -> [VerdictRow] {
         var seen = Set<String>()
-        return (verdict.attention + verdict.notices).filter { seen.insert($0).inserted }.map { text in
+        return (verdict.attention + verdict.notices + verdict.oldNotices).filter { seen.insert($0).inserted }.map { text in
             VerdictRow(text: text, state: health?.dot == .green ? nil
                 : health?.checks.first(where: { $0.text == text })?.state
-                    ?? (verdict.attention.contains(text) ? .red : nil))
+                    ?? (verdict.attention.contains(text) ? .red : nil), isOld: verdict.oldNotices.contains(text))
         }
     }
 
@@ -420,8 +421,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
                 if let state = row.state {
                     Circle().fill(state == .red ? Color.red : Color.orange).frame(width: 6, height: 6)
                 }
-                Text(row.text).foregroundStyle(row.state == nil ? .secondary : .primary)
+                Text(row.text).foregroundStyle(row.isOld || row.state == nil ? .secondary : .primary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .opacity(row.isOld ? 0.58 : 1)
             }
         }.font(.system(size: 13)).frame(width: width, alignment: .leading)
     }

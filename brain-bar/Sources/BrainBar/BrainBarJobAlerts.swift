@@ -28,6 +28,13 @@ struct BrainBarJobAlerts: Equatable, Sendable {
 
     /// Job key → reason, e.g. `maintenance-light` → "BrainLayer light maintenance failed; …".
     let active: [String: String]
+    /// When each current alert began. Older string-only files remain readable with no timestamp.
+    let reportedAt: [String: Date]
+
+    init(active: [String: String], reportedAt: [String: Date] = [:]) {
+        self.active = active
+        self.reportedAt = reportedAt
+    }
 
     /// The same path `job_alerts.alert_path` resolves: the override, else beside the database.
     static func url(dbPath: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
@@ -45,11 +52,21 @@ struct BrainBarJobAlerts: Equatable, Sendable {
         guard let data = FileManager.default.contents(atPath: url.path),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         var active: [String: String] = [:]
+        var reportedAt: [String: Date] = [:]
+        let formatter = ISO8601DateFormatter()
         for (key, value) in object {
-            guard let reason = value as? String else { return nil }
-            active[key] = reason
+            if let reason = value as? String {
+                active[key] = reason
+            } else if let record = value as? [String: Any], let reason = record["reason"] as? String {
+                active[key] = reason
+                if let raw = record["reported_at"] as? String, let date = formatter.date(from: raw) {
+                    reportedAt[key] = date
+                }
+            } else {
+                return nil
+            }
         }
-        return Self(active: active)
+        return Self(active: active, reportedAt: reportedAt)
     }
 
     /// R2-3: a read with its outcome explicit. `absent` (no file: no job has ever reported) is a

@@ -52,6 +52,19 @@ final class BrainBarJobAlertTests: XCTestCase {
         XCTAssertNil(BrainBarJobAlerts.read(url: url), "an unreadable file is unknown, never 'no alerts'")
     }
 
+    func test_timestamped_python_alert_record_preserves_legacy_and_occurrence_time() throws {
+        let url = root.appendingPathComponent("job-alerts.json")
+        let data = try JSONSerialization.data(withJSONObject: [
+            "maintenance-light": ["reason": alert, "reported_at": "2026-11-03T07:35:12.123456+00:00"],
+            "legacy": "old failure",
+        ])
+        try data.write(to: url)
+        let alerts = try XCTUnwrap(BrainBarJobAlerts.read(url: url))
+        XCTAssertEqual(alerts.active, ["maintenance-light": alert, "legacy": "old failure"])
+        XCTAssertEqual(alerts.reportedAt["maintenance-light"], ISO8601DateFormatter().date(from: "2026-11-03T07:35:12.123456+00:00"))
+        XCTAssertNil(alerts.reportedAt["legacy"])
+    }
+
     func test_the_alert_file_sits_beside_the_producers_database_unless_overridden() {
         let db = root.appendingPathComponent("brainlayer.db").path
         XCTAssertEqual(BrainBarJobAlerts.url(dbPath: db, environment: [:]), root.appendingPathComponent("job-alerts.json"))

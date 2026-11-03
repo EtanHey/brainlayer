@@ -3373,6 +3373,7 @@ def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[...,
                     },
                 )
                 raise BackupAlreadyRunningError(error) from exc
+            _record_backup_lock_time(staging_dir)
             try:
                 # Weekly maintenance's first receipt check precedes this lock. A daily
                 # backup can finish in that gap, so recheck before copying the DB.
@@ -3393,6 +3394,21 @@ def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[...,
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
     return wrapped
+
+
+def _record_backup_lock_time(staging_dir: Path) -> None:
+    """Write the current local/upload phase start beside the held backup flock."""
+    descriptor = -1
+    try:
+        descriptor = os.open(staging_dir / ".backup.lock", os.O_WRONLY | os.O_NOFOLLOW)
+        value = dt.datetime.now(dt.UTC).isoformat(timespec="seconds").encode("ascii") + b"\n"
+        os.ftruncate(descriptor, 0)
+        os.write(descriptor, value)
+    except OSError:
+        pass  # The flock itself is authoritative; its display timestamp is best effort.
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _upload_identity(path: Path) -> dict[str, Any]:
@@ -3809,6 +3825,7 @@ def run_backup(
                 folder_id = ensure_drive_folder_chain(service, resolved_folder_parts)
                 break  # Completed session: retry verification, never POST another upload.
             result["upload_state"] = "in_progress"
+            _record_backup_lock_time(snapshot.parent)
             credentials = get_drive_credentials()
             service = build_drive_service()
             folder_id = ensure_drive_folder_chain(service, resolved_folder_parts)
