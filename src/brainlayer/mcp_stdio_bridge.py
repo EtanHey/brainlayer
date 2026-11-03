@@ -159,7 +159,7 @@ def _jsonrpc_error_for_frame(frame: InFlightFrame) -> bytes:
             "id": frame.request_id,
             "error": {
                 "code": -32000,
-                "message": "BrainLayer backend disconnected before responding; request was not acknowledged",
+                "message": "BrainLayer backend disconnected before responding; request outcome is unknown",
             },
         },
         separators=(",", ":"),
@@ -263,6 +263,16 @@ def run_bridge(
     eof_response_deadline: float | None = None
     pending_responses = 0
     stdout_failed = False
+    has_connected_once = False
+
+    def log_reconnect() -> None:
+        nonlocal has_connected_once
+        if has_connected_once:
+            stderr.write(
+                f"brainlayer-mcp-stdio-bridge: reconnected to socket {config.socket_path!r}\n".encode("utf-8")
+            )
+            stderr.flush()
+        has_connected_once = True
 
     def fail_in_flight_requests() -> None:
         nonlocal pending_responses, stdout_failed
@@ -316,6 +326,7 @@ def run_bridge(
         connecting = False
         connect_started_at = None
         reconnect_delay = config.reconnect_ms / 1000
+        log_reconnect()
 
     def mark_connected() -> None:
         nonlocal connected, connecting, connect_started_at, reconnect_delay
@@ -323,6 +334,7 @@ def run_bridge(
         connecting = False
         connect_started_at = None
         reconnect_delay = config.reconnect_ms / 1000
+        log_reconnect()
 
     try:
         while True:
