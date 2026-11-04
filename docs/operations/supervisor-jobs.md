@@ -21,8 +21,10 @@ argv, environment gates, output/error paths, working directory and exit grace fr
 that snapshot. It adds the control socket path to child environments, enabling the
 existing dual-mode heal adapters. Calendar and retired labels are refused here.
 
-Resident children retain monotonic crash backoff. `StartInterval` children use wall-clock
-deadlines from their last start, including time asleep on macOS. An overdue job runs once
+Resident children retain monotonic crash backoff. `StartInterval` children pair their
+monotonic deadlines with wall-clock deadlines from their last start, including time asleep
+on macOS. Either clock reaching its deadline makes the run due, so a backwards wall-clock
+adjustment cannot postpone it. An overdue job runs once
 on resume without replaying missed ticks, and never overlaps its previous group. An exit
 first observed after wake does not postpone the overdue run by another interval.
 Process and cleanup bounds remain monotonic. A run deadline terminates and reaps its owned group, leaving sibling children

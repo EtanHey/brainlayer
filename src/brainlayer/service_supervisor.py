@@ -46,6 +46,7 @@ class Component:
     starts: int = field(default=0, init=False)
     failures: int = field(default=0, init=False)
     retry_at: float = field(default=0, init=False)
+    retry_wall_at: float | None = field(default=None, init=False)
     error: str = field(default="", init=False)
     started_at: float = field(default=0, init=False)
     cleanup: asyncio.Task | None = field(default=None, init=False)
@@ -56,10 +57,17 @@ class Component:
     delay_reason: str = field(default="", init=False)
     delay_reported_at: float = field(default=0, init=False)
 
-    def schedule_clock(self):
-        # Darwin uptime excludes sleep. Periodic work is due after elapsed wall time;
-        # resident restart backoff and process/cleanup deadlines still use uptime.
-        return time.time() if self.interval else time.monotonic()
+    def schedule_after(self, delay):
+        self.retry_at = time.monotonic() + delay
+        self.retry_wall_at = time.time() + delay if self.interval else None
+
+    def retry_delay(self):
+        # Keep retry_at in uptime units for existing callers. The paired wall deadline
+        # also makes periodic work due after sleep, when Darwin uptime barely advances.
+        delay = self.retry_at - time.monotonic()
+        if self.interval and self.retry_wall_at is not None:
+            delay = min(delay, self.retry_wall_at - time.time())
+        return delay
 
     def status(self):
         return dict(
@@ -76,7 +84,7 @@ class Component:
             interval=self.interval,
             last_exit_code=self.last_exit_code,
             last_run_at=self.last_run_at,
-            next_run_at=time.time() + max(0, self.retry_at - self.schedule_clock())
+            next_run_at=time.time() + max(0, self.retry_delay())
             if self.interval and self.enabled and not self.paused
             else None,
         )
@@ -223,9 +231,7 @@ class Supervisor:
         child.failures += 1
         child.error = error
         self._report_interval_delay(child, "startup-failed")
-        child.retry_at = child.schedule_clock() + min(
-            300, (child.backoff or self.backoff) * 2 ** min(child.failures - 1, 30)
-        )
+        child.schedule_after(min(300, (child.backoff or self.backoff) * 2 ** min(child.failures - 1, 30)))
 
     def _report_interval_delay(self, child, reason):
         if not child.interval:
@@ -235,7 +241,7 @@ class Supervisor:
             return
         child.delay_reason, child.delay_reported_at = reason, now
         name = next(name for name, component in self.components.items() if component is child)
-        delay = max(0, child.schedule_clock() - child.retry_at) if child.retry_at else 0
+        delay = max(0, -child.retry_delay()) if child.retry_at else 0
         emit(
             self.diagnostics,
             event="interval-delayed",
@@ -272,11 +278,11 @@ class Supervisor:
             child.last_run_at = time.time()
             child.delay_reason = ""
             if child.interval:
-                child.retry_at = child.last_run_at + child.interval
+                child.schedule_after(child.interval)
         except BlockingIOError:
             self._report_interval_delay(child, "maintenance-lease-held")
             child.error = "maintenance lease held"
-            child.retry_at = child.schedule_clock() + 0.5
+            child.schedule_after(0.5)
         except OSError as exc:
             self._failed(child, str(exc))
         finally:
@@ -303,7 +309,7 @@ class Supervisor:
             self.recovery = asyncio.create_task(self._blocking(self._recover_hold))
             self.recovery_at = time.monotonic() + 1
         for child in self.components.values():
-            if child.interval and child.retry_at and child.schedule_clock() >= child.retry_at:
+            if child.interval and child.retry_at and child.retry_delay() <= 0:
                 if not child.enabled:
                     reason = "configured-off"
                 elif child.paused:
@@ -318,7 +324,7 @@ class Supervisor:
                     reason = "previous-run-active"
                 else:
                     reason = "scheduler-gap"
-                if reason != "scheduler-gap" or child.schedule_clock() - child.retry_at >= 1:
+                if reason != "scheduler-gap" or child.retry_delay() <= -1:
                     self._report_interval_delay(child, reason)
             if child.startup is not None:
                 if not child.startup.done():
@@ -367,7 +373,7 @@ class Supervisor:
             ):
                 child.last_exit_code, child.error = 124, "interval worker timed out"
                 child.failures += 1
-                child.retry_at = child.schedule_clock() + child.interval
+                child.schedule_after(child.interval)
                 child.cleanup = asyncio.create_task(self._reap(child))
             if (
                 not child.interval
@@ -376,12 +382,7 @@ class Supervisor:
                 and time.monotonic() - child.started_at >= self.stable_uptime
             ):
                 child.failures = 0
-            if (
-                child.enabled
-                and not child.paused
-                and child.process is None
-                and child.schedule_clock() >= child.retry_at
-            ):
+            if child.enabled and not child.paused and child.process is None and child.retry_delay() <= 0:
                 self._schedule_start(child)
 
     def _recover_hold(self):
