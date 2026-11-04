@@ -250,6 +250,18 @@ as a stream and SHA-256-compared with the checked raw before publication. Subseq
 Drive verification use the same SHA-256 proof; full Drive verification also compares compressed
 MD5. Drive reads use 8 MiB requests and the upload path's bounded transient-network retry policy.
 
+Drive uploads use 64 MiB chunks on a reused HTTP session. Each PUT has a total deadline of
+`max(120 seconds, chunk bytes / 32 KiB per second)`, capped by the remaining backup run budget
+with five seconds reserved for the receipt. Override the floor or rate with
+`BRAINLAYER_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS` or
+`BRAINLAYER_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND`. Ambiguous network writes are probed before
+retransmission. Private resumable receipts are fsynced at session creation, every confirmed
+advance/retry, and every 30 seconds while waiting for a PUT. They include `bytes_confirmed`,
+`upload_rate_bps` (newly confirmed bytes per elapsed upload second, excluding an existing resumed
+prefix), `retries`, `upload_probes`, `upload_requests`, `upload_deadline_exceeded`,
+`upload_bytes_attempted` (scheduled bytes, including retries; not measured wire traffic), and
+`upload_updated_at`. A long unconfirmed chunk can show zero confirmed rate while bytes are in flight.
+
 This path reserves raw size + one 64 MiB chunk + at most 64 KiB expansion per frame, plus the
 2 GiB floor and 1 MiB margin. For a 22 GB database this is about 24.24 GB. If the staging probe
 cannot reclaim blocks, the log names the reason and selects the legacy pipeline and its larger
