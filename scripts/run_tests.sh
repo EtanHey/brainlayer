@@ -461,6 +461,19 @@ map_changed_files_to_pytests() {
           done
         fi
         ;;
+      src/brainlayer/t3_provenance.py)
+        # #1628's module has no test_t3_provenance.py; unmapped, the v1.5.90 tag push fell back to
+        # the full suite and timed out heavy-suite twice (2026-11-04).
+        mapped=1
+        for rel in test_t3_app_provenance.py test_t3_linkage_alarm.py test_t3_runtime_alarm_dedup.py; do
+          [ -f "$TEST_ROOT/$rel" ] || mapped=0
+        done
+        if [ "$mapped" -eq 1 ]; then
+          for rel in test_t3_app_provenance.py test_t3_linkage_alarm.py test_t3_runtime_alarm_dedup.py; do
+            append_unique "$TEST_ROOT/$rel"
+          done
+        fi
+        ;;
       src/brainlayer/*.py)
         module_name="$(basename "$changed" .py)"
         test_path="$TEST_ROOT/test_${module_name}.py"
