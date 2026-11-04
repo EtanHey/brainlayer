@@ -470,3 +470,98 @@ def test_consent_warning_names_exact_expiry_without_changing_gate(tmp_path, hour
     assert status["expires_at"] == expires.isoformat()
     assert expires.isoformat() in status["reason"]
     assert token.read_bytes() == before
+
+
+def _consented_token(tmp_path: Path, consented: datetime) -> tuple[Path, Path]:
+    token, client = tmp_path / "token.json", tmp_path / "client.json"
+    _token(token)
+    _client(client)
+    data = json.loads(token.read_text())
+    data["consented_at"] = consented.isoformat()
+    token.write_text(json.dumps(data))
+    return token, client
+
+
+def test_invalid_grant_names_known_local_deadline_without_claiming_revocation_time(tmp_path):
+    """#1343: a server revocation inside the local seven-day window keeps the local deadline."""
+    from brainlayer import drive_credentials
+
+    consented = datetime(2026, 10, 17, 18, 50, tzinfo=UTC)
+    expires = consented + timedelta(days=7)
+    token, client = _consented_token(tmp_path, consented)
+    before = token.read_bytes()
+    alerts = []
+
+    class Revoked(FakeCredentials):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.expired = True
+            self.fail = True
+
+    kwargs = dict(
+        token_path=token,
+        client_path=client,
+        credentials_class=Revoked,
+        request_factory=object,
+        now=consented + timedelta(days=3),
+        alert_reporter=lambda *args: alerts.append(args),
+    )
+    with pytest.raises(drive_credentials.DriveCredentialError) as caught:
+        drive_credentials.load_credentials(**kwargs)
+    status = drive_credentials.credential_status(**kwargs)
+
+    for text in (str(caught.value), alerts[-1][1], status["reason"]):
+        assert text.startswith("Drive access expired: Reconnect in BrainBar")
+        assert f"local consent deadline {expires.isoformat()}" in text
+        assert "not Google's revocation time" in text
+        assert "secret-payload" not in text
+    assert status["state"] == "invalid"
+    assert token.read_bytes() == before
+
+
+def test_invalid_grant_without_consent_metadata_keeps_legacy_text(tmp_path):
+    from brainlayer import drive_credentials
+
+    token, client = tmp_path / "token.json", tmp_path / "client.json"
+    _token(token)
+    _client(client)
+
+    class Revoked(FakeCredentials):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.expired = True
+            self.fail = True
+
+    with pytest.raises(drive_credentials.DriveCredentialError) as caught:
+        drive_credentials.load_credentials(
+            token_path=token, client_path=client, credentials_class=Revoked, alert_reporter=lambda *_: None
+        )
+    assert str(caught.value) == "Drive access expired: Reconnect in BrainBar"
+
+
+def test_cli_text_status_shows_local_deadline_on_real_google_refresh_error(tmp_path, monkeypatch):
+    """CLI boundary: real google-auth Credentials and RefreshError; only the HTTP refresh is stubbed."""
+    from google.auth.exceptions import RefreshError
+    from google.oauth2.credentials import Credentials
+    from typer.testing import CliRunner
+
+    from brainlayer.cli import app
+
+    consented = datetime.now(UTC) - timedelta(days=2)
+    expires = consented + timedelta(days=7)
+    token, client = _consented_token(tmp_path, consented)
+    data = json.loads(token.read_text())
+    data["expiry"] = (datetime.now(UTC) - timedelta(hours=1)).isoformat()  # forces a real refresh attempt
+    token.write_text(json.dumps(data))
+
+    def revoked(self, request):
+        raise RefreshError("invalid_grant: Token has been expired or revoked.", {"error": "invalid_grant"})
+
+    monkeypatch.setattr(Credentials, "refresh", revoked)
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "alerts.json"))
+    monkeypatch.setenv("BRAINLAYER_DRIVE_TOKEN_PATH", str(token))
+    monkeypatch.setenv("BRAINLAYER_DRIVE_CLIENT_PATH", str(client))
+    result = CliRunner().invoke(app, ["backup", "auth", "--status"])
+    assert f"local consent deadline {expires.isoformat()}" in result.output
+    assert "not Google's revocation time" in result.output
+    assert "Token has been expired or revoked" not in result.output
