@@ -2212,3 +2212,39 @@ def test_changed_only_scope_maps_hotlane_budget_to_its_owners(tmp_path: Path) ->
     assert "unmapped: src/brainlayer/hotlane_budget.py" not in result.stdout + result.stderr
     assert "falling back to full pytest unit suite" not in result.stdout
     assert f"{test_root}/ -v" not in logged
+
+
+def test_changed_only_scope_maps_t3_provenance_to_its_owners(tmp_path: Path) -> None:
+    """Unmapped, t3_provenance.py (#1628) escalated the v1.5.90 tag push to the full suite and
+    timed out the 1,800 s heavy-suite slot twice (2026-11-04)."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    owners = (
+        "test_t3_app_provenance.py",
+        "test_t3_linkage_alarm.py",
+        "test_t3_runtime_alarm_dedup.py",
+    )
+    for name in owners:
+        (test_root / name).write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "src/brainlayer/t3_provenance.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    logged = pytest_log.read_text()
+    for name in owners:
+        assert str(test_root / name) in logged
+    assert "unmapped: src/brainlayer/t3_provenance.py" not in result.stdout + result.stderr
+    assert "falling back to full pytest unit suite" not in result.stdout
+    assert f"{test_root}/ -v" not in logged
