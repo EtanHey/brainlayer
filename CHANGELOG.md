@@ -39,6 +39,31 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.90] - 2026-11-04
+
+### Backup
+- The nightly Drive upload survives slow or contended uplinks (#1622). 8 MiB chunks with a fixed 120 s per-request deadline were aborted and resent from zero whenever a chunk needed longer (an 8 MiB PUT at ~45 KB/s needs ~180 s), so a slow night never confirmed a byte. Chunks are now 64 MiB, deadlines scale to a 32 KiB/s floor rate (bounded by the run deadline), and the receipt records progress every 30 s (confirmed bytes, rate, retries, probes, deadline hits). Probe-before-retransmit and resumability are unchanged.
+- `python -m brainlayer.backup_daily --help` (or any unknown argument) prints usage and exits instead of starting a production backup (#1626, Fixes #1438). A bare invocation and the explicit `run` verb still run a backup; every production caller passes no arguments.
+
+### Supervisor
+- Periodic jobs keep running across Mac sleep (#1624). Deadlines now count time asleep, missed ticks coalesce into one run, and a delayed or blocked periodic run logs its reason. Process and cleanup deadlines stay monotonic.
+
+### BrainBar
+- A stale health verdict shows amber "Health check stale since HH:mm" instead of falling back to a red dot from old calendar history (#1624). A last-known red stays red; plan §3d (the dot is the outcome verdict) holds.
+
+### MCP
+- Same-length core tool labels steer deep, multi-source recall to the brain-worker sub-agent while `brain_store` stays direct (#1621; skill-creator w24 eval: 0/15 → 15/15 deep-recall delegation on Opus).
+
+### Drive
+- Offline `brainlayer backup auth --status` names the local reconnect deadline when consent expires within two days (#1623, Fixes #1364).
+- A Google-rejected refresh (`invalid_grant`) names the known local consent deadline and says it is not Google's revocation time (#1627, Fixes #1343).
+
+### T3 provenance
+- `unavailable`, `schema_drift` and `linkage_invalid` runtime alarms log on change plus hourly reminders instead of CRITICAL every poll (~2.9k lines/day); every observation still raises (#1628, Fixes #1402).
+
+### Tests
+- Supervisor shutdown assertions carry the child's stderr tail (#1625, Fixes #1362).
+
 ## [1.5.89] - 2026-11-03
 
 ### Maintenance
