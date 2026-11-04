@@ -243,6 +243,23 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertLessThanOrEqual(data.count, 1_600)
     }
 
+    func testCoreDescriptionsMatchDeepRecallRoutingHandoff() throws {
+        let expected = [
+            "brain_search": "Lookup facts.",
+            "brain_store": "Store directly. status: STORED|DUPLICATE|MERGED|DEFERRED all = success, "
+                + "do NOT re-store; REJECTED|ERROR = nothing stored, no chunk_id.",
+            "brain_recall": "Session context.",
+            "brain_expand": "Open chunk.",
+            "expand_palette": "Expose all tools.",
+        ]
+        let tools = listedTools(MCPRouter(profile: "core"))
+        XCTAssertEqual(tools.count, expected.count)
+        for tool in tools {
+            let name = try XCTUnwrap(tool["name"] as? String)
+            XCTAssertEqual(tool["description"] as? String, expected[name], name)
+        }
+    }
+
     func testCoreCompactionFallsBackToTheCanonicalDescription() throws {
         let brainTags = try XCTUnwrap(
             MCPRouter.toolDefinitions.first { ($0["name"] as? String) == "brain_tags" }

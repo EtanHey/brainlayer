@@ -32,7 +32,7 @@ final class MCPRouter: @unchecked Sendable {
         "brain_backup_vacuum_into",
     ]
     private static let coreToolDescriptions: [String: String] = [
-        "brain_search": "Search memory.",
+        "brain_search": "Lookup facts.",
         // The core palette is token-terse, but it is also the ONLY description a
         // default agent sees (the full text needs expand_palette), so it has to
         // carry the outcome contract Etan asked for on 2026-08-19 -- compressed to
@@ -43,10 +43,10 @@ final class MCPRouter: @unchecked Sendable {
         // 2026-08-19: the bytes buy outcome disambiguation, because agents were
         // re-storing on ambiguous responses. The guard is now 1600 EXACTLY and is
         // not headroom to spend -- see testCoreToolsListStaysWithinBootBudget.
-        "brain_store": "Store memory. status: STORED|DUPLICATE|MERGED|DEFERRED all = success, "
+        "brain_store": "Store directly. status: STORED|DUPLICATE|MERGED|DEFERRED all = success, "
             + "do NOT re-store; REJECTED|ERROR = nothing stored, no chunk_id.",
-        "brain_recall": "Recall context.",
-        "brain_expand": "Expand chunk.",
+        "brain_recall": "Session context.",
+        "brain_expand": "Open chunk.",
     ]
     nonisolated(unsafe) private static let expandPaletteToolDefinition: [String: Any] = [
         "name": "expand_palette",

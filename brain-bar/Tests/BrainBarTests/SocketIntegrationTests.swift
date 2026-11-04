@@ -600,6 +600,38 @@ final class SocketIntegrationTests: XCTestCase {
         }
     }
 
+    func testCoreDescriptionsAreUntruncatedOverSocket() throws {
+        restartServer(profile: "core")
+        let fd = try connectClient()
+        defer { close(fd) }
+        try initializeClient(fd: fd, name: "deep-recall-description-proof")
+        try sendMCPRequest(on: fd, request: [
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list",
+        ])
+        let response = try readMCPMessage(fd: fd, timeout: 2)
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let tools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        let expected = [
+            "brain_search": "Lookup facts.",
+            "brain_store": "Store directly. status: STORED|DUPLICATE|MERGED|DEFERRED all = success, "
+                + "do NOT re-store; REJECTED|ERROR = nothing stored, no chunk_id.",
+            "brain_recall": "Session context.",
+            "brain_expand": "Open chunk.",
+            "expand_palette": "Expose all tools.",
+        ]
+        XCTAssertEqual(tools.count, expected.count)
+        for tool in tools {
+            let name = try XCTUnwrap(tool["name"] as? String)
+            XCTAssertEqual(tool["description"] as? String, expected[name], name)
+        }
+        let metadata = result["_meta"] as? [String: Any]
+        XCTAssertNil(metadata?["brainlayer/descriptionsTruncated"])
+        let payload = try JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys])
+        XCTAssertLessThanOrEqual(payload.count, 1_600)
+        print("W24 tools/list bytes=\(payload.count) socket=\(testSocketPath) "
+              + String(decoding: payload, as: UTF8.self))
+    }
+
     func testCorePaletteExpansionIsIsolatedPerSocketClient() throws {
         restartServer(profile: "core")
         let firstFD = try connectClient()
