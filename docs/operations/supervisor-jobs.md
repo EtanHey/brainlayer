@@ -21,11 +21,18 @@ argv, environment gates, output/error paths, working directory and exit grace fr
 that snapshot. It adds the control socket path to child environments, enabling the
 existing dual-mode heal adapters. Calendar and retired labels are refused here.
 
-Resident children retain crash backoff. `StartInterval` children use monotonic deadlines,
-never overlap, and wait a full interval after completion; missed ticks run once without
-catch-up. A run deadline terminates and reaps its owned group, leaving sibling children
+Resident children retain monotonic crash backoff. `StartInterval` children use wall-clock
+deadlines from their last start, including time asleep on macOS. An overdue job runs once
+on resume without replaying missed ticks, and never overlaps its previous group. An exit
+first observed after wake does not postpone the overdue run by another interval.
+Process and cleanup bounds remain monotonic. A run deadline terminates and reaps its owned group, leaving sibling children
 running. Exit 75 is deferred rather than counted as failed. Status retains the last exit
 code and start time, and supplies the next deadline as an epoch timestamp.
+
+Overdue or blocked periodic runs emit `interval-delayed` to `operation-events.jsonl` and
+a warning to the daemon log, naming the component, delay and reason (scheduler gap,
+pause/OFF state, startup, prior run, cleanup/backoff, or maintenance lease). Identical
+blockers repeat at most once per minute; successful starts reset that suppression.
 
 Child policy is established after custody registration and before exec: file limits,
 nice priority, Darwin background state and disk I/O policy. Standard children clear

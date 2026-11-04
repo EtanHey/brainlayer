@@ -126,7 +126,7 @@ def load_components(path: Path, socket_path: Path) -> dict[str, Component]:
             backoff=throttle,
         )
         if interval and not run_at_load:
-            child.retry_at = time.monotonic() + interval
+            child.retry_at = child.schedule_clock() + interval
         components[ALIASES[label]] = child
     # Supervisor-only registration: legacy installs ship no second checkpoint schedule.
     source = components.get("observability", next(iter(components.values())))
@@ -154,7 +154,7 @@ def load_components(path: Path, socket_path: Path) -> dict[str, Component]:
             stderr=socket_path.with_name("wal-fallback.err.log"),
         ),
     )
-    components["wal-checkpoint-fallback"].retry_at = time.monotonic() + 900
+    components["wal-checkpoint-fallback"].retry_at = time.time() + 900
     return with_brainbar_monitor(components, socket_path)
 
 

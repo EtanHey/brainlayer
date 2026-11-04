@@ -160,11 +160,11 @@ def test_successful_interval_waits_without_failure_backoff_or_catchup(short_path
             await asyncio.sleep(0.2)
             assert child.starts == 1 and child.process is None
             # A missed interval starts once; its next deadline is in the future.
-            child.retry_at = time.monotonic() - 100
+            child.retry_at = child.schedule_clock() - 100
             s._tick()
             await s._wait_start(child)
             assert child.starts == 2
-            assert child.retry_at > time.monotonic()
+            assert child.retry_at > child.schedule_clock()
         finally:
             s.stop.set()
             await task
@@ -361,3 +361,133 @@ def test_hotlane_job_resets_inherited_io_throttle():
     policy = resource_policy(plist)
     assert policy["LowPriorityIO"] is False
     assert policy["ProcessType"] == "Standard"
+
+
+@pytest.mark.parametrize("exit_observed", [False, True])
+def test_periodic_job_runs_once_after_sleep_without_waiting_another_interval(short_path, monkeypatch, exit_observed):
+    """S36: 05:08 health tick, clamshell sleep, full wake at 06:34; uptime barely advanced."""
+    from types import SimpleNamespace
+
+    from brainlayer import service_supervisor as module
+
+    wall = [1793768893.0]
+    monkeypatch.setattr(module, "time", SimpleNamespace(time=lambda: wall[0], monotonic=time.monotonic))
+
+    async def scenario():
+        child = Component((sys.executable, "-c", "pass"), interval=300, exit_timeout=0.02)
+        s = Supervisor({"health-check": child}, short_path / "s", shutdown_timeout=0.5)
+        rows = []
+        tick = s._tick
+        allow_ticks = [True]
+        s._tick = lambda: tick() if allow_ticks[0] else None
+        task = asyncio.create_task(s.run())
+        try:
+            deadline = time.monotonic() + 5
+            while child.starts == 0:
+                assert time.monotonic() < deadline
+                await asyncio.sleep(0.01)
+            if exit_observed:
+                while child.process is not None or child.cleanup is not None:
+                    assert time.monotonic() < deadline
+                    await asyncio.sleep(0.01)
+            else:
+                allow_ticks[0] = False
+                while child.process.poll() is None:
+                    assert time.monotonic() < deadline
+                    await asyncio.sleep(0.01)
+            s.diagnostics.close()
+            s.diagnostics = SimpleNamespace(emit=lambda **row: rows.append(row), close=lambda: None)
+            wall[0] += 86 * 60 + 13  # Sleep advances wall time, not the process uptime clock.
+            tick()
+            if child.cleanup:
+                await child.cleanup
+                tick()
+            await s._wait_start(child)
+            assert child.starts == 2, "An overdue health check must run immediately after wake"
+            assert child.status()["next_run_at"] > wall[0]
+            tick()
+            assert child.starts == 2, "Missed intervals coalesce; never replay 17 health checks"
+            assert any(
+                r["event"] == "interval-delayed"
+                and r["component"] == "health-check"
+                and r["reason"] == "scheduler-gap"
+                and r["delay_s"] >= 4800
+                for r in rows
+            )
+        finally:
+            s.stop.set()
+            await task
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "blocked", ["paused", "configured-off", "startup-pending", "cleanup-pending", "cleanup-backoff"]
+)
+def test_overdue_periodic_job_reports_blocker_without_log_storm(tmp_path, monkeypatch, blocked, caplog):
+    from types import SimpleNamespace
+
+    from brainlayer import service_supervisor as module
+
+    clock = [1000.0]
+    monkeypatch.setattr(module, "time", SimpleNamespace(time=lambda: clock[0], monotonic=lambda: clock[0]))
+
+    async def scenario():
+        child = Component((sys.executable, "-c", "pass"), interval=300)
+        child.retry_at = 900
+        child.paused = blocked == "paused"
+        child.enabled = blocked != "configured-off"
+        if blocked == "startup-pending":
+            child.startup = asyncio.create_task(asyncio.Event().wait())
+        if blocked == "cleanup-pending":
+            child.cleanup = asyncio.create_task(asyncio.Event().wait())
+            child.cleanup_retry_at = 1
+        if blocked == "cleanup-backoff":
+            child.cleanup_retry_at = 2000
+        s = Supervisor({"health-check": child}, tmp_path / "s")
+        s.recovery_at = 3000
+        rows = []
+        s.diagnostics = SimpleNamespace(emit=lambda **row: rows.append(row))
+        try:
+            for _ in range(10):
+                s._tick()
+            assert [(r["component"], r["reason"], r["delay_s"]) for r in rows] == [("health-check", blocked, 100)]
+            assert f"periodic component health-check delayed 100.0s: {blocked}" in caplog.text
+            clock[0] += 60
+            s._tick()
+            assert len(rows) == 2
+        finally:
+            for task in [child.startup, child.cleanup]:
+                if task:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_periodic_launch_logs_maintenance_lease_delay(short_path):
+    from types import SimpleNamespace
+
+    from brainlayer.supervisor_guard import component_gate
+
+    child = Component((sys.executable, "-c", "pass"), interval=300)
+    s = Supervisor({"health-check": child}, short_path / "s")
+    rows = []
+    s.diagnostics = SimpleNamespace(emit=lambda **row: rows.append(row))
+    with component_gate(short_path, exclusive=True):
+        s._start(child)
+        s._start(child)
+    assert child.process is None and child.starts == 0
+    assert [(r["component"], r["reason"]) for r in rows] == [("health-check", "maintenance-lease-held")]
+
+
+def test_periodic_launch_failure_reports_retry_reason(short_path):
+    from types import SimpleNamespace
+
+    child = Component(("unused",), interval=300, stdout=short_path / "absent" / "out")
+    s = Supervisor({"health-check": child}, short_path / "s")
+    rows = []
+    s.diagnostics = SimpleNamespace(emit=lambda **row: rows.append(row))
+    s._start(child)
+    assert child.process is None and child.failures == 1
+    assert rows[0]["reason"] == "startup-failed" and rows[0]["error"] == child.error
