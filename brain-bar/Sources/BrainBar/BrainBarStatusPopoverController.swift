@@ -270,11 +270,14 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         if let model = runtime.jobsModel { return model.publishedStatus.verdict }
 #endif
         let badge = badgePresentation
-        if let health = badge.healthVerdict, health.isFresh(now: Date()) {
+        if let health = badge.healthVerdict {
+            let fresh = health.isFresh(now: Date())
             return .init(attention: health.checks.filter { $0.state == .red && health.dot == .red }.map(\.text),
-                         notices: Self.verdictRows(health).map(\.text), isChecking: false, dotOverride: health.renderedDot)
+                         notices: (fresh ? [] : [health.fallbackNotice(now: Date())]) + Self.verdictRows(health).map(\.text),
+                         isChecking: false, dotOverride: fresh ? health.renderedDot : health.staleRenderedDot,
+                         healthVerdictIsStale: !fresh)
         }
-        var notices = badge.healthVerdict.map { [$0.fallbackNotice(now: Date())] } ?? []
+        var notices: [String] = []
         if badge.healthVerdictUnreadable { notices.append("Health check result could not be read") }
         return badge.badgeOn ? .init(attention: [badge.reason], notices: notices, isChecking: false)
             : .init(attention: [], notices: notices + badge.activeMessages, isChecking: false)
@@ -437,9 +440,13 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         let verdict = currentVerdict
         var reasons = verdict.dotOverride == nil ? verdict.attention
             : health?.checks.filter { $0.state != .green }.map(\.text) ?? []
+        if verdict.healthVerdictIsStale, let health {
+            reasons = [health.fallbackNotice(now: Date())]
+                + (health.dot == .red ? health.checks.filter { $0.state == .red }.map(\.text) : [])
+        }
         if verdict.dot != .green && reasons.isEmpty { reasons = ["Health check: \(verdict.dot.rawValue)"] }
         let receipt = BrainBarUIStatusReceipt(renderedAt: Date(), dot: verdict.dot,
-            source: verdict.dotOverride == nil ? "fallback" : "verdict", verdictEvaluatedAt: health?.evaluatedAt,
+            source: verdict.dotOverride == nil || verdict.healthVerdictIsStale ? "fallback" : "verdict", verdictEvaluatedAt: health?.evaluatedAt,
             reasons: verdict.dot == .green ? [] : reasons,
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
             gitCommit: Bundle.main.object(forInfoDictionaryKey: "GitCommit") as? String ?? "unknown")

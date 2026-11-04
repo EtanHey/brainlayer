@@ -13,6 +13,7 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
     let isChecking: Bool
 
     var dotOverride: BrainBarRenderedDot? = nil
+    var healthVerdictIsStale = false
     /// Active run failures are independent of the age of the last verified copy.
     var backupRunFailures: [BrainBarBackupRunFailure] = []
     var dot: BrainBarRenderedDot { dotOverride ?? (needsAttention ? .red : .green) }
@@ -85,9 +86,16 @@ struct BrainBarHealthVerdict: Codable, Equatable, Sendable {
         switch dot { case .green: .green; case .amber, .unknown: .amber; case .red: .red }
     }
     func isFresh(now: Date) -> Bool { (0...900).contains(now.timeIntervalSince(evaluatedAt)) }
-    func fallbackNotice(now: Date) -> String {
+    var staleRenderedDot: BrainBarRenderedDot { dot == .red ? .red : .amber }
+    func fallbackNotice(now: Date, calendar: Calendar = .current) -> String {
         let age = now.timeIntervalSince(evaluatedAt)
-        return age < 0 ? "Health check result is dated in the future" : "Health check result is \(Int(age / 60)) min old"
+        if age < 0 { return "Health check result is dated in the future" }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm"
+        return "Health check stale since \(formatter.string(from: evaluatedAt))"
     }
 }
 

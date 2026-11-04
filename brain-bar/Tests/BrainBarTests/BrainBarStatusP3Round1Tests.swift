@@ -57,9 +57,12 @@ final class BrainBarStatusP3Round1Tests: XCTestCase {
     func testNightlyThenWeeklyFailuresCountAcrossPlansAndRecoveryCannotReset() throws {
         let rows = [finished("maintenance-nightly", date: "2026-10-24"), summary("2026-10-24", failed: 1),
                     finished("maintenance-weekly", date: "2026-10-25"), summary("2026-10-25", failed: 1)]
-        T.assertAgree(inputs(try history(rows)), dot: true, "nightly then weekly")
-        T.assertAgree(inputs(try history(rows + [summary("2026-10-25", failed: 0, kind: "recovery")])),
-                      dot: true, "hourly recovery cannot reset nightly failures")
+        let failed = try history(rows)
+        XCTAssertEqual(failed.maintenanceNight?.consecutiveFailures, 2)
+        T.assertAgree(inputs(failed), dot: false, "nightly then weekly are history")
+        let recovery = try history(rows + [summary("2026-10-25", failed: 0, kind: "recovery")])
+        XCTAssertEqual(recovery.maintenanceNight?.consecutiveFailures, 2)
+        T.assertAgree(inputs(recovery), dot: false, "hourly recovery cannot reset nightly failure history")
         T.assertAgree(inputs(try history(rows + [summary("2026-10-26", failed: 0)])), dot: false, "successful night resets")
     }
 
@@ -84,7 +87,7 @@ final class BrainBarStatusP3Round1Tests: XCTestCase {
         T.assertAgree(inputs(oneNight), dot: false, "abandonment and caused summary share one night")
         let secondNight = try history([event, terminal, summary("2026-10-26", failed: 1)])
         XCTAssertEqual(secondNight.maintenanceNight?.consecutiveFailures, 2)
-        T.assertAgree(inputs(secondNight), dot: true, "a distinct failed scheduled night earns the dot")
+        T.assertAgree(inputs(secondNight), dot: false, "a distinct failed scheduled night remains a notice")
     }
 
     func testLegacyOwnershipSkipsMissingSupervisorDaemon() {

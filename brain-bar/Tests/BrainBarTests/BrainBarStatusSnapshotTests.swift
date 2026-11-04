@@ -269,7 +269,7 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         }
     }
 
-    func testDeferredMaintenanceReturnsToADotOnEachLeadCondition() {
+    func testDeferredMaintenanceHistoryNeverSetsTheDot() {
         let failureAt = ISO8601DateFormatter().date(from: "2026-10-26T02:00:16Z")!
         let newerCopy = Self.backups(db: ISO8601DateFormatter().date(from: "2026-10-26T08:30:02Z")!)
         var base = Self.healthy()
@@ -277,14 +277,14 @@ final class BrainBarStatusSnapshotTests: XCTestCase {
         base.observations?[.maintenanceWeekly] = Self.failed(.maintenanceWeekly, code: 76, at: failureAt)
         Self.assertAgree(base, dot: false, "single exit 76")
 
-        // Etan, 2026-10-27: the second consecutive maintenance failure is the dot.
+        // Plan 3d / S36: even repeated job failures are notes, not outcome checks.
         var second = base
         second.observations?[.maintenanceWeekly] = Self.failed(.maintenanceWeekly, code: 76, at: failureAt, consecutive: 2)
-        Self.assertAgree(second, dot: true, "second consecutive exit 76")
+        Self.assertAgree(second, dot: false, "second consecutive exit 76 is history")
 
         var third = base
         third.observations?[.maintenanceWeekly] = Self.failed(.maintenanceWeekly, code: 76, at: failureAt, consecutive: 3)
-        Self.assertAgree(third, dot: true, "third consecutive exit 76")
+        Self.assertAgree(third, dot: false, "third consecutive exit 76 is history")
 
         var nineDays = base
         nineDays.maintenance = .init(weeklyCompletion: .completed(Self.now.addingTimeInterval(-9 * 86_400)), runRecords: [:])

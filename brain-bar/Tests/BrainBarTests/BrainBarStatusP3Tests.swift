@@ -31,10 +31,10 @@ final class BrainBarStatusP3Tests: XCTestCase {
         XCTAssertTrue(withDot.dashboard.reason?.contains("maintenance failed at") == true)
     }
 
-    func testTwoMaintenanceFailuresGiveDotAndOldCompletionAloneDoesNot() {
+    func testTwoMaintenanceFailuresAndOldCompletionRemainNotices() {
         var inputs = T.healthy()
         inputs.observations?[.maintenanceWeekly] = T.failed(.maintenanceWeekly, code: 76, consecutive: 2)
-        T.assertAgree(inputs, dot: true, "two failures")
+        T.assertAgree(inputs, dot: false, "two failures are history")
         inputs = T.healthy()
         inputs.maintenance = .init(weeklyCompletion: .completed(T.hoursAgo(24 * 15)), runRecords: [:])
         T.assertAgree(inputs, dot: false, "old completion is not a failed run")
@@ -77,9 +77,9 @@ final class BrainBarStatusP3Tests: XCTestCase {
         let sampled = provider.sampleActivity()
         inputs.observations?[.maintenanceWeekly] = sampled[.maintenanceWeekly]
         inputs.observations?[.maintenanceNightly] = sampled[.maintenanceNightly]
-        let (snapshot, _) = T.assertAgree(inputs, dot: true, "two abandoned runners")
-        XCTAssertEqual(snapshot.attention.filter { $0.component == .maintenance }.count, 1)
-        XCTAssertTrue(snapshot.attention.contains { $0.text.contains("Weekly maintenance (step maintenance-weekly) found cut off") })
+        let (snapshot, _) = T.assertAgree(inputs, dot: false, "two abandoned runners are history")
+        XCTAssertEqual(snapshot.notices.filter { $0.component == .maintenance }.count, 1)
+        XCTAssertTrue(snapshot.notices.contains { $0.text.contains("Weekly maintenance (step maintenance-weekly) found cut off") })
         try Data((abandoned + "{\"event\":\"finished\",\"step\":\"maintenance-weekly\",\"ts\":1793052900,\"status\":\"ok\",\"returncode\":0}\n").utf8).write(to: file)
         XCTAssertEqual(BrainBarCalendarHistory.read(directory: directory).runs["maintenance-weekly"]?.consecutiveFailures, 0)
     }
