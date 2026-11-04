@@ -137,10 +137,10 @@ final class BrainBarNightRecoveryTests: XCTestCase {
         }
     }
 
-    func testTranscriptFailureNamesBackupAndPreservesStreakDot() throws {
+    func testTranscriptFailureNamesBackupAndPreservesStreakNotice() throws {
         let value = try history([runner("2026-10-28"), finished("jsonl-backup"), summary("2026-10-28"),
             runner(date), finished("jsonl-backup"), summary(date)])
-        let text = try XCTUnwrap(snapshot(value, dot: true).attention.first { $0.id == "maintenance.night" }?.text)
+        let text = try XCTUnwrap(snapshot(value, dot: false).notices.first { $0.id == "maintenance.night" }?.text)
         XCTAssertTrue(text.contains("Transcript backup failed"), text)
         XCTAssertTrue(text.contains("step jsonl-backup"), text)
         XCTAssertTrue(text.contains("nightly runs have had problems 2 nights in a row"), text)
@@ -149,7 +149,7 @@ final class BrainBarNightRecoveryTests: XCTestCase {
     func testAbandonedMessageNamesIncompleteStepAndKeepsNightCount() throws {
         let value = try history([runner("2026-10-28"), abandoned("2026-10-28"), summary("2026-10-28"),
             runner(date), abandoned(date), summary(date)])
-        let text = try XCTUnwrap(snapshot(value, dot: true).attention.first { $0.id == "maintenance.night" }?.text)
+        let text = try XCTUnwrap(snapshot(value, dot: false).notices.first { $0.id == "maintenance.night" }?.text)
         XCTAssertTrue(text.contains("Nightly maintenance (step maintenance-nightly) found cut off"), text)
         XCTAssertTrue(text.contains("nightly runs have had problems 2 nights in a row"), text)
     }

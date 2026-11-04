@@ -28,7 +28,7 @@ final class BrainBarOneStatusTests: XCTestCase {
             switch self {
             case .healthy, .recoveredNight, .vectorScan: (.healthy, .healthy)
             case .skippedWithReason: (.notice, .skipped)
-            case .failedNight: (.attention, .unhealthy)
+            case .failedNight: (.notice, .notice)
             case .unreadableSource: (.notice, .unknown)
             case .noticeOnly: (.notice, .healthy)
             }

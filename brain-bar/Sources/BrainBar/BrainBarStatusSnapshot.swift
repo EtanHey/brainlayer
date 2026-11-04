@@ -83,15 +83,13 @@ struct BrainBarStatusInputs: Sendable {
 /// the menu text, the Dashboard headline and attention list, Jobs group badges and the Backups
 /// badge. A pure reducer: the same inputs give the same verdict everywhere.
 ///
-/// Etan's dot rule (2026-10-27): no verified Drive copy within 36 h, an unclean daemon/
-/// watcher exit until six healthy hours, or two consecutive failed/abandoned maintenance runs.
-/// Lead r1: an unprovable backup age for >60 min is at risk; a supposedly running watcher
-/// without a heartbeat for >15 min is not capturing. Future receipts cannot prove backup safety.
-/// Other faults remain visible notices on the same snapshot.
+/// Plan 3d: outcome checks own the dot. Stale verdicts are amber, preserving a known red;
+/// calendar failures stay visible as notes even without a usable producer verdict.
 struct BrainBarStatusSnapshot: Equatable, Sendable {
     let issues: [BrainBarStatusIssue]
     let isChecking: Bool
     var healthVerdict: BrainBarHealthVerdict? = nil
+    var staleHealthVerdict: BrainBarHealthVerdict? = nil
 
     var attention: [BrainBarStatusIssue] { issues.filter { $0.severity == .attention } }
     var notices: [BrainBarStatusIssue] { issues.filter { $0.severity == .notice } }
@@ -110,7 +108,8 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
     var verdict: BrainBarStatusVerdict {
         .init(attention: attention.filter { !$0.isOld }.map(\.text),
               notices: notices.filter { !$0.isOld }.map(\.text), oldNotices: issues.filter(\.isOld).map(\.text), isChecking: isChecking,
-              dotOverride: healthVerdict?.renderedDot, backupRunFailures: issues.flatMap { issue in
+              dotOverride: healthVerdict?.renderedDot ?? staleHealthVerdict?.staleRenderedDot,
+              healthVerdictIsStale: staleHealthVerdict != nil, backupRunFailures: issues.flatMap { issue in
                   issue.backupRunDetails.sorted { $0.key.rawValue < $1.key.rawValue }.map { .init(target: $0.key, text: $0.value) }
               })
     }
@@ -312,7 +311,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
             builder.add(.init(id: "job.\(job.rawValue)", component: .backups, severity: .notice,
                               text: text, jobs: [job]))
         }
-        // Index failures stay visible; maintenance owns the failure-streak dot.
+        // Job failures stay visible as history; only outcome checks own the dot.
         if desired(.index), let observation = observations?[.index] {
             if observation.isFailedRun {
                 let streak = observation.calendarConsecutiveFailures ?? 1
@@ -388,7 +387,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
             let eventTimes = night.stepProblems.values.map(\.at)
                 + [night.runnerErrorAt, night.unknownFailureAt, night.abandonmentFailureAt].compactMap { $0 }
             builder.add(.init(id: "maintenance.night", component: .maintenance,
-                severity: night.consecutiveFailures >= 2 ? .attention : .notice,
+                severity: .notice,
                 text: "\(outcome)\(count) — \(retry)",
                 jobs: Set(maintenanceJobs), occurredAt: eventTimes.max() ?? night.at))
         } else {
@@ -560,39 +559,41 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         let otherIssues = builder.issues.filter { !backupNotices.contains($0) }
         var issues = backupNotices + otherIssues
         if let verdict = inputs.badge?.healthVerdict {
-            if verdict.isFresh(now: now) {
-                issues = issues.map { issue in var detail = issue; detail.severity = .notice; return detail }
-                let checks = verdict.checks.filter { $0.state != .green }.map { check in
-                    let component: BrainBarStatusIssue.Component = switch check.name {
-                    case "backup_local", "backup_offsite", "disk": .backups
-                    case "transcripts": .transcripts
-                    case "drive_auth": .drive
-                    case "integrity": .database
-                    case "ingest": .watcher
-                    case "embedding": .ingest
-                    default: .health
-                    }
-                    return BrainBarStatusIssue(id: "verdict.\(check.name)", component: component,
-                        severity: verdict.dot == .red && check.state == .red ? .attention : .notice, text: check.text)
+            let fresh = verdict.isFresh(now: now)
+            issues = issues.map { issue in var detail = issue; detail.severity = .notice; return detail }
+            let checks = verdict.checks.filter { $0.state != .green && (fresh || verdict.dot == .red) }.map { check in
+                let component: BrainBarStatusIssue.Component = switch check.name {
+                case "backup_local", "backup_offsite", "disk": .backups
+                case "transcripts": .transcripts
+                case "drive_auth": .drive
+                case "integrity": .database
+                case "ingest": .watcher
+                case "embedding": .ingest
+                default: .health
                 }
-                let notes = verdict.notes.map { note -> BrainBarStatusIssue in
-                    let label = note.message.split(separator: ":", maxSplits: 1).first.map(String.init)
-                    let job = note.code == "job_failure" ? Self.job(forLaunchdLabel: label) : nil
-                    return BrainBarStatusIssue(id: "verdict.note.\(note.code)", component: .health,
-                        severity: .notice, text: note.message, jobs: job.map { [$0] } ?? [],
-                        occurredAt: job.flatMap { inputs.observations?[$0]?.lastRunAt })
-                }
-                var rows = checks + notes
-                if (verdict.dot == .red && !checks.contains { $0.severity == .attention })
-                    || (verdict.dot != .green && checks.isEmpty) {
-                    rows.insert(.init(id: "verdict.summary", component: .health,
-                        severity: verdict.dot == .red ? .attention : .notice,
-                        text: "Health check: \(verdict.dot.rawValue)"), at: 0)
-                }
-                return Self(issues: coherentProblems(rows + issues, inputs: inputs), isChecking: false, healthVerdict: verdict)
+                return BrainBarStatusIssue(id: "verdict.\(check.name)", component: component,
+                    severity: verdict.dot == .red && check.state == .red ? .attention : .notice, text: check.text)
             }
-            issues.insert(.init(id: "verdict.stale", component: .health, severity: .notice,
-                                text: verdict.fallbackNotice(now: now)), at: 0)
+            let notes = verdict.notes.map { note -> BrainBarStatusIssue in
+                let label = note.message.split(separator: ":", maxSplits: 1).first.map(String.init)
+                let job = note.code == "job_failure" ? Self.job(forLaunchdLabel: label) : nil
+                return BrainBarStatusIssue(id: "verdict.note.\(note.code)", component: .health,
+                    severity: .notice, text: note.message, jobs: job.map { [$0] } ?? [],
+                    occurredAt: job.flatMap { inputs.observations?[$0]?.lastRunAt })
+            }
+            var rows = checks + notes
+            if (verdict.dot == .red && !checks.contains { $0.severity == .attention })
+                || (fresh && verdict.dot != .green && checks.isEmpty) {
+                rows.insert(.init(id: "verdict.summary", component: .health,
+                    severity: verdict.dot == .red ? .attention : .notice,
+                    text: "Health check: \(verdict.dot.rawValue)"), at: 0)
+            }
+            if !fresh {
+                rows.insert(.init(id: "verdict.stale", component: .health, severity: .notice,
+                                  text: verdict.fallbackNotice(now: now, calendar: inputs.calendar)), at: 0)
+            }
+            return Self(issues: coherentProblems(rows + issues, inputs: inputs), isChecking: false,
+                        healthVerdict: fresh ? verdict : nil, staleHealthVerdict: fresh ? nil : verdict)
         }
         if inputs.badge?.healthVerdictUnreadable == true {
             issues.insert(.init(id: "verdict.unreadable", component: .health, severity: .notice,
@@ -602,7 +603,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
     }
 
     /// The producer's codes and launchd label identify a problem; display prose never does.
-    /// Keep the legacy fallback reducer intact while the fresh verdict owns the outcome dot.
+    /// Legacy diagnostic rows remain secondary while the outcome verdict owns the dot.
     private static func coherentProblems(_ issues: [BrainBarStatusIssue], inputs: BrainBarStatusInputs) -> [BrainBarStatusIssue] {
         let jobs: [BrainLayerLaunchdJob] = [.maintenanceNightly, .maintenanceWeekly]
         let night = jobs.compactMap { inputs.observations?[$0]?.calendarNightOutcome }.first(where: \.failed)

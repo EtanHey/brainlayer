@@ -18,28 +18,28 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
 
     // MARK: maintenance failure streaks
 
-    func testTodaysTwoConsecutiveExit76FailuresGiveADot() {
+    func testTodaysTwoConsecutiveExit76FailuresRemainNotices() {
         var inputs = T.healthy()
         // Oct 25 + Oct 26 exit 76, last successful weekly Oct 21 (5 days).
         inputs.observations?[.maintenanceWeekly] = Self.weekly(76, consecutive: 2)
         inputs.maintenance = Self.completed(daysAgo: 5)
         inputs.jobAlerts = BrainBarJobAlerts(active: ["maintenance-full":
             "BrainLayer full maintenance failed: tonight's local verified snapshot unavailable; VACUUM skipped."])
-        let (snapshot, surfaces) = T.assertAgree(inputs, dot: true, "today")
-        let notice = snapshot.attention.filter { $0.jobs.contains(.maintenanceWeekly) }
+        let (snapshot, surfaces) = T.assertAgree(inputs, dot: false, "today")
+        let notice = snapshot.notices.filter { $0.jobs.contains(.maintenanceWeekly) }
         XCTAssertEqual(notice.count, 1, "\(snapshot.notices)")
         XCTAssertEqual(notice.first?.text.hasPrefix("Scheduled maintenance failed at 2026-10-26 04:00"), true, notice.first?.text ?? "")
-        XCTAssertEqual(surfaces.jobs[.maintenance]?.health, .unhealthy)
+        XCTAssertEqual(surfaces.jobs[.maintenance]?.health, .notice)
     }
 
-    func testMaintenanceDotsOnTheSecondConsecutiveFailure() {
+    func testMaintenanceNeverDotsOnConsecutiveFailures() {
         for (job, code) in [(BrainLayerLaunchdJob.maintenanceWeekly, Int32(76)), (.maintenanceWeekly, 1), (.maintenanceNightly, 1)] {
             var inputs = T.healthy()
             inputs.maintenance = Self.completed(daysAgo: 3)
             inputs.observations?[job] = T.failed(job, code: code, consecutive: 2)
-            T.assertAgree(inputs, dot: true, "\(job) exit \(code) ×2")
+            T.assertAgree(inputs, dot: false, "\(job) exit \(code) ×2")
             inputs.observations?[job] = T.failed(job, code: code, consecutive: 3)
-            T.assertAgree(inputs, dot: true, "\(job) exit \(code) ×3")
+            T.assertAgree(inputs, dot: false, "\(job) exit \(code) ×3")
         }
     }
 

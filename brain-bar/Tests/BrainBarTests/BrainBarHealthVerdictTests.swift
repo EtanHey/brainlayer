@@ -26,12 +26,58 @@ final class BrainBarHealthVerdictTests: XCTestCase {
         return BadgeStateReader.read(url: url, now: now, cadence: .known(300))
     }
 
+    func testStaleVerdictCannotReviveYesterdayCalendarFailure() throws {
+        let iso = ISO8601DateFormatter()
+        let evaluated = iso.date(from: "2026-11-04T05:08:17Z")!
+        let rendered = iso.date(from: "2026-11-04T06:30:30Z")!
+        let failure = iso.date(from: "2026-11-03T03:11:00Z")!
+        for state in ["green", "amber", "red", "unknown"] {
+            var inputs = BrainBarStatusSnapshotTests.healthy()
+            inputs.now = rendered
+            inputs.watcher = .running(heartbeatAt: rendered)
+            inputs.watcherHeartbeatAt = rendered
+            inputs.backups = .measured(BrainBarStatusSnapshotTests.backups(db: rendered, transcripts: rendered))
+            var observation = BrainBarStatusSnapshotTests.step(at: rendered)
+            observation.calendarNightOutcome = .init(scheduledDate: "2026-11-03", at: failure,
+                failed: true, abandoned: false, consecutiveFailures: 4, failedSteps: ["wal-checkpoint"],
+                stepProblems: ["wal-checkpoint": .init(at: failure)])
+            inputs.observations?[.maintenanceNightly] = observation
+            var raw = try badge(state)
+            let health = try XCTUnwrap(raw.healthVerdict)
+            raw.healthVerdict = .init(dot: health.dot, checks: health.checks, notes: health.notes, evaluatedAt: evaluated)
+            inputs.badge = raw
+            let snapshot = BrainBarStatusSnapshot.derive(inputs)
+            XCTAssertEqual(snapshot.verdict.dot, state == "red" ? .red : .amber, state)
+            XCTAssertNil(snapshot.healthVerdict, "Stale data is not a fresh verdict")
+            XCTAssertTrue(snapshot.notices.contains { $0.text == "Health check stale since 07:08" })
+            XCTAssertTrue(snapshot.notices.contains { $0.id == "maintenance.night" && $0.text.contains("4 nights") })
+            XCTAssertFalse(snapshot.attention.contains { $0.id == "maintenance.night" })
+            if state == "red" {
+                XCTAssertTrue(snapshot.attention.contains { $0.id == "verdict.backup_local" })
+            } else {
+                XCTAssertTrue(snapshot.attention.isEmpty)
+            }
+            inputs.observations?[.maintenanceNightly] = BrainBarStatusSnapshotTests.step(at: rendered)
+            XCTAssertEqual(BrainBarStatusSnapshot.derive(inputs).verdict.dot, state == "red" ? .red : .amber,
+                           "Last-known red must hold even without any legacy failure")
+        }
+    }
+
+    func testLegacyCalendarHistoryNeverTurnsDotRed() {
+        var inputs = BrainBarStatusSnapshotTests.healthy()
+        inputs.observations?[.maintenanceNightly] = BrainBarStatusSnapshotTests.failed(
+            .maintenanceNightly, code: 1, consecutive: 4)
+        let snapshot = BrainBarStatusSnapshot.derive(inputs)
+        XCTAssertEqual(snapshot.verdict.dot, .green)
+        XCTAssertTrue(snapshot.notices.contains { $0.id == "maintenance.night" })
+    }
+
     func testVerdictFixtureMatrixAndLegacyFallback() throws {
         for (state, age, expected, source) in [
             ("green", 0.0, BrainBarRenderedDot.green, "verdict"), ("amber", 0, .amber, "verdict"),
             ("red", 0, .red, "verdict"), ("unknown", 0, .amber, "verdict"),
-            ("green", 900, .green, "verdict"), ("green", 901, .red, "fallback"),
-            ("green", -1, .red, "fallback"),
+            ("green", 900, .green, "verdict"), ("green", 901, .amber, "fallback"),
+            ("green", -1, .amber, "fallback"),
         ] {
             var inputs = BrainBarStatusSnapshotTests.healthy()
             inputs.backups = .measured(BrainBarStatusSnapshotTests.backups(db: nil))
@@ -40,11 +86,11 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             XCTAssertEqual(snapshot.verdict.dot, expected, "\(state), age \(age)")
             XCTAssertEqual(snapshot.healthVerdict == nil ? "fallback" : "verdict", source)
             if source == "fallback" {
-                XCTAssertTrue(snapshot.verdict.needsAttention, "An expired or future verdict cannot hide a missing copy")
+                XCTAssertFalse(snapshot.verdict.needsAttention, "Staleness is uncertainty, not a new red outcome")
                 XCTAssertTrue(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict)
-                    .hasPrefix("Needs attention: "), "Fallback keeps the Swift failure headline")
+                    == "Check soon", "Stale fallback has an amber headline")
             }
-            if age == 901 { XCTAssertTrue(snapshot.notices.contains { $0.text == "Health check result is 15 min old" }) }
+            if age == 901 { XCTAssertTrue(snapshot.notices.contains { $0.text.hasPrefix("Health check stale since ") }) }
             if state == "green", source == "verdict" {
                 XCTAssertTrue(snapshot.notices.contains { $0.id == "database.copy" })
                 XCTAssertTrue(snapshot.attention.isEmpty)
@@ -220,6 +266,27 @@ final class BrainBarHealthVerdictTests: XCTestCase {
                 XCTAssertEqual(BrainBarStatusPopoverController.verdictRows(health).map(\.text),
                     ["Database snapshot (verified): Fixture backup age", "Weekly maintenance deferred"])
             }
+        }
+        for state in ["green", "red"] {
+            var raw = try badge(state)
+            let health = try XCTUnwrap(raw.healthVerdict)
+            raw.healthVerdict = .init(dot: health.dot, checks: health.checks, notes: health.notes,
+                                     evaluatedAt: Date().addingTimeInterval(-4933))
+            raw = .init(badgeOn: true, reason: "Yesterday's database checkpoint failed", activeCodes: [],
+                        healthVerdict: raw.healthVerdict)
+            controller.setBadgeForTesting(raw, alertsURL: root.appendingPathComponent("job-alerts.json"))
+            controller.renderStatusIconForTesting(stats: BrainBarDashboardFixture.makeCollector().stats, state: .idle)
+            controller.menuNeedsUpdate(controller.contextMenuForTesting)
+            controller.flushStatusReceiptForTesting()
+            let url = BrainBarUIStatusReceipt.url(dbPath: root.appendingPathComponent("fixture.db").path, environment: [:])
+            let receipt = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+            XCTAssertEqual(receipt["dot"] as? String, state == "red" ? "red" : "amber")
+            XCTAssertEqual(receipt["source"] as? String, "fallback")
+            XCTAssertNotNil(receipt["verdict_evaluated_at"] as? String)
+            let reasons = try XCTUnwrap(receipt["reasons"] as? [String])
+            XCTAssertTrue(reasons.first?.hasPrefix("Health check stale since ") == true)
+            XCTAssertFalse(reasons.contains(raw.reason))
+            XCTAssertTrue(controller.contextMenuForTesting.items.contains { $0.title.hasPrefix("Health check stale since ") })
         }
         controller.setBadgeForTesting(.failVisible("Legacy failure"), alertsURL: root.appendingPathComponent("job-alerts.json"))
         controller.renderStatusIconForTesting(stats: BrainBarDashboardFixture.makeCollector().stats, state: .idle)

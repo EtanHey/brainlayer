@@ -700,18 +700,18 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         return #"{"event":"finished","step":"\#(step)","ts":\#(1784466000 - 1000 + offset),"status":"\#(status)","returncode":\#(code)\#(extra)}"#
     }
 
-    func testEarnedMaintenanceAlarmSurvivesADeferralUntilANightlySummarySuccess() throws {
+    func testMaintenanceHistorySurvivesADeferralWithoutSettingTheDot() throws {
         let directory = try journal("migrated").deletingLastPathComponent()
         for step in ["maintenance-weekly", "maintenance-nightly"] {
             var lines = [finished(step, 1, "failed", 76),
                 #"{"event":"summary","kind":"nightly","scheduled_date":"2026-10-24","failed":1,"ts":1784465001}"#,
                 finished(step, 2, "failed", 76),
                 #"{"event":"summary","kind":"nightly","scheduled_date":"2026-10-25","failed":1,"ts":1784465002}"#]
-            XCTAssertTrue(try snapshot(lines, in: directory).needsAttention)
+            XCTAssertFalse(try snapshot(lines, in: directory).needsAttention)
             lines.append(finished(step, 4, "deferred", 75))
             let deferred = try snapshot(lines, in: directory)
-            XCTAssertTrue(deferred.needsAttention, "a step deferral cannot reset the nightly streak")
-            let text = try XCTUnwrap(deferred.attention.first { $0.component == .maintenance }?.text)
+            XCTAssertFalse(deferred.needsAttention, "a nightly streak is history, not an outcome")
+            let text = try XCTUnwrap(deferred.notices.first { $0.component == .maintenance }?.text)
             XCTAssertTrue(text.contains("nightly runs have had problems 2 nights in a row"), text)
             lines.append(finished(step, 5, "ok", 0))
             lines.append(#"{"event":"summary","kind":"nightly","scheduled_date":"2026-10-26","failed":0,"ts":1784465005}"#)
