@@ -266,8 +266,19 @@ def test_status_json_stays_safe_on_refresh_transport_failure(tmp_path):
     assert status["state"] == "valid" and "private-payload" not in json.dumps(status)
 
 
+OFFLINE_REASON = "status checked offline; last known state"
+
+
 @pytest.mark.parametrize(
-    "elapsed_days, expected", [(2, "valid"), (5, "expiring"), (5.5, "expiring"), (6.5, "expiring")]
+    "elapsed_days, expected",
+    [
+        (2, "valid"),
+        (5 - 1 / 86400, "valid"),  # one second outside the two-day window
+        (5, "expiring"),  # days_left == 2 exactly
+        (5.5, "expiring"),
+        (6.5, "expiring"),
+        (7 - 1 / 86400, "expiring"),  # last second before the local deadline
+    ],
 )
 def test_offline_status_keeps_local_consent_clock(tmp_path, elapsed_days, expected):
     from google.auth.exceptions import TransportError
@@ -296,11 +307,56 @@ def test_offline_status_keeps_local_consent_clock(tmp_path, elapsed_days, expect
         credentials_class=Offline,
         now=consented + timedelta(days=elapsed_days),
     )
+    deadline = (consented + timedelta(days=7)).isoformat()
     assert status["state"] == expected
-    assert status["expires_at"] == (consented + timedelta(days=7)).isoformat()
+    assert status["expires_at"] == deadline
     assert status["days_left"] == pytest.approx(7 - elapsed_days)
     assert "offline" in status["reason"]
     assert "private-payload" not in json.dumps(status)
+    if expected == "expiring":
+        # #1364: text --status prints only the reason, so the local deadline must be in it.
+        assert status["reason"] == f"{OFFLINE_REASON}: Drive access expires at {deadline}: Reconnect in BrainBar"
+    else:
+        assert status["reason"] == OFFLINE_REASON
+
+
+def test_cli_text_status_offline_expiring_prints_local_deadline(tmp_path, monkeypatch):
+    """Real CLI text formatter + real credential_status; only the token endpoint is offline."""
+    from google.auth.exceptions import TransportError
+    from google.oauth2.credentials import Credentials
+    from typer.testing import CliRunner
+
+    from brainlayer.cli import app
+
+    token, client = tmp_path / "token.json", tmp_path / "client.json"
+    _token(token)
+    _client(client)
+    consented = datetime.now(UTC) - timedelta(days=5, hours=12)
+    data = json.loads(token.read_text())
+    data["consented_at"] = consented.isoformat()
+    data["expiry"] = "2000-01-01T00:00:00"  # stale access token forces the refresh attempt
+    token.write_text(json.dumps(data))
+    before = token.read_bytes()
+    monkeypatch.setenv("BRAINLAYER_DRIVE_TOKEN_PATH", str(token))
+    monkeypatch.setenv("BRAINLAYER_DRIVE_CLIENT_PATH", str(client))
+
+    def offline_refresh(self, request):
+        raise TransportError("private-payload")
+
+    monkeypatch.setattr(Credentials, "refresh", offline_refresh)
+    runner = CliRunner()
+    text = runner.invoke(app, ["backup", "auth", "--status"])
+    as_json = runner.invoke(app, ["backup", "auth", "--status", "--json"])
+
+    deadline = (consented + timedelta(days=7)).isoformat()
+    assert text.exit_code == 0 and as_json.exit_code == 0
+    assert text.output == f"{OFFLINE_REASON}: Drive access expires at {deadline}: Reconnect in BrainBar\n"
+    payload = json.loads(as_json.output)
+    assert payload["state"] == "expiring" and payload["expires_at"] == deadline
+    assert 1 < payload["days_left"] < 2
+    assert payload["reason"] == text.output.rstrip("\n")
+    assert "private-payload" not in text.output + as_json.output
+    assert token.read_bytes() == before
 
 
 def test_authorize_writes_only_owned_token_with_drive_scope(tmp_path):

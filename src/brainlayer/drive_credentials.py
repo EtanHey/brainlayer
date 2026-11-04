@@ -248,11 +248,12 @@ def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[
             return {"state": "invalid", "reason": reason, **timing}
         load_credentials(**kwargs, migrate=False, persist_refresh=False, now=now)
     except TransportError:
-        return {
-            "state": "expiring" if days_left is not None and days_left <= 2 else "valid",
-            "reason": "status checked offline; last known state",
-            **timing,
-        }
+        reason = "status checked offline; last known state"
+        if days_left is not None and days_left <= 2:
+            # Text --status prints only the reason, so name the local consent deadline (never a server time).
+            reason = f"{reason}: Drive access expires at {expires.isoformat()}: Reconnect in BrainBar"
+            return {"state": "expiring", "reason": reason, **timing}
+        return {"state": "valid", "reason": reason, **timing}
     except DriveCredentialError as exc:
         return {"state": "invalid", "reason": str(exc), "expires_at": None, "days_left": None}
     if days_left is not None and days_left <= 2:
