@@ -117,11 +117,12 @@ DEFAULT_BACKUP_TIMEOUT_SECONDS = 8 * 60 * 60
 DEFAULT_BACKUP_ATTEMPT_MAX_AGE_SECONDS = 24 * 60 * 60
 DEFAULT_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS = 0
 # Two minutes tolerates ordinary request latency; the throughput term stretches
-# the deadline for chunks larger than the default 8 MiB without allowing a
+# the deadline for chunks at a conservative floor rate without allowing a
 # zero-window connection to occupy the eight-hour backup budget.
 DEFAULT_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS = 120.0
-DEFAULT_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND = 256 * 1024
+DEFAULT_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND = 32 * 1024
 DEFAULT_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS = 3
+DRIVE_UPLOAD_PROGRESS_INTERVAL_SECONDS = 30.0
 # DB snapshot compression. zstd -T0 -3 measured 2.5-3.7 GB/s at a 0.473 mean ratio on
 # 2 GiB windows of the real 20.7 GB raw snapshot, against 24-99 MB/s and 0.491 for
 # Python gzip -6 (bl-lead backup-rc124-measure.md section 4). gzip stays selectable
@@ -567,7 +568,11 @@ def _drive_upload_stall_max_attempts() -> int:
     return int(value)
 
 
-class _DriveRequestDeadlineExceeded(TimeoutError):
+class _DriveUploadNeedsProbe(TimeoutError):
+    pass
+
+
+class _DriveRequestDeadlineExceeded(_DriveUploadNeedsProbe):
     pass
 
 
@@ -625,8 +630,10 @@ def _drive_put_with_deadline(
     data: bytes,
     deadline: float,
     policy_callback: Callable[[dict[str, Any]], None] | None = None,
+    heartbeat_callback: Callable[[], None] | None = None,
 ):
     outcome: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+    expires = time.monotonic() + deadline
 
     def perform() -> None:
         try:
@@ -642,11 +649,17 @@ def _drive_put_with_deadline(
             outcome.put((False, exc))
 
     threading.Thread(target=perform, daemon=True, name="brainlayer-drive-put").start()
-    try:
-        succeeded, value = outcome.get(timeout=deadline)
-    except queue.Empty as exc:
-        session.close()
-        raise _DriveRequestDeadlineExceeded(f"Drive PUT exceeded {deadline:.3f}s total deadline") from exc
+    while True:
+        remaining = max(0, expires - time.monotonic())
+        try:
+            succeeded, value = outcome.get(timeout=min(remaining, DRIVE_UPLOAD_PROGRESS_INTERVAL_SECONDS))
+            break
+        except queue.Empty as exc:
+            if time.monotonic() >= expires:
+                session.close()
+                raise _DriveRequestDeadlineExceeded(f"Drive PUT exceeded {deadline:.3f}s total deadline") from exc
+            if heartbeat_callback is not None:
+                heartbeat_callback()
     if succeeded:
         return value
     if isinstance(value, requests.Timeout):
@@ -2437,11 +2450,12 @@ def upload_file_to_drive_raw(
     credentials: Any,
     *,
     machine_id: str,
-    chunk_size: int = 8 * 1024 * 1024,
+    chunk_size: int = 64 * 1024 * 1024,
     max_attempts: int = 30,
     resume_session_url: str | None = None,
     progress_callback: Callable[[str, int], None] | None = None,
     policy_callback: Callable[[dict[str, Any]], None] | None = None,
+    telemetry_callback: Callable[[dict[str, Any]], None] | None = None,
     run_deadline: float | None = None,
 ) -> dict[str, Any]:
     """Upload unchanged bytes; probe ambiguous writes before retransmitting them."""
@@ -2476,6 +2490,26 @@ def upload_file_to_drive_raw(
     probe = resume_session_url is not None
     recovering = False
     session = requests.Session()
+    started = time.monotonic()
+    rate_base = retries = probes = deadlines = requests_started = bytes_attempted = 0
+
+    def report_progress() -> None:
+        elapsed = time.monotonic() - started
+        if telemetry_callback is not None:
+            telemetry_callback(
+                {
+                    "upload_updated_at": dt.datetime.now(dt.UTC).isoformat(),
+                    "upload_elapsed_seconds": round(elapsed, 3),
+                    "upload_rate_bps": max(0, sent - rate_base) / elapsed if elapsed > 0 else 0.0,
+                    "retries": retries,
+                    "upload_probes": probes,
+                    "upload_deadline_exceeded": deadlines,
+                    "upload_requests": requests_started,
+                    "upload_bytes_attempted": bytes_attempted,
+                }
+            )
+        if progress_callback is not None:
+            progress_callback(upload_url, sent)
 
     def backoff() -> None:
         nonlocal slept
@@ -2523,10 +2557,10 @@ def upload_file_to_drive_raw(
             except (*_DRIVE_TRANSIENT_NETWORK_ERRORS, requests.Timeout):
                 stall_started = time.monotonic() if stall_started is None else stall_started
                 stalled_attempts += 1
+                retries += 1
                 backoff()
         stalled_attempts, slept, stall_started = 0, 0.0, None
-        if progress_callback is not None:
-            progress_callback(upload_url, sent)
+        report_progress()
         with file_path.open("rb") as handle:
             while sent < total or probe:
                 is_probe = probe
@@ -2541,6 +2575,9 @@ def upload_file_to_drive_raw(
                         raise RuntimeError("Backup file changed during upload")
                     content_range = f"bytes {sent}-{sent + len(chunk) - 1}/{total}"
                 try:
+                    requests_started += 1
+                    probes += int(is_probe)
+                    bytes_attempted += len(chunk)
                     response = _drive_put_with_deadline(
                         session,
                         upload_url,
@@ -2552,9 +2589,15 @@ def upload_file_to_drive_raw(
                         data=chunk,
                         deadline=request_deadline(max(deadline_floor, len(chunk) / minimum_rate)),
                         policy_callback=policy_callback,
+                        heartbeat_callback=report_progress,
                     )
                     if response.status_code in {200, 201}:
-                        return response.json()
+                        completed = response.json()
+                        sent = total
+                        if not bytes_attempted:
+                            rate_base = total  # A completed resume probe transferred no new file bytes.
+                        report_progress()
+                        return completed
                     if is_probe and response.status_code in {404, 410}:
                         raise DriveSessionExpiredError("Drive upload session expired")
                     if response.status_code in {429, 500, 502, 503, 504}:
@@ -2564,9 +2607,7 @@ def upload_file_to_drive_raw(
                         raise RuntimeError(f"Unexpected Drive status {response.status_code}")
                     uploaded_range = response.headers.get("Range")
                     if not uploaded_range and sent > 0:
-                        raise _DriveRequestDeadlineExceeded(
-                            "Drive omitted Range after a confirmed prefix; query session"
-                        )
+                        raise _DriveUploadNeedsProbe("Drive omitted Range after a confirmed prefix; query session")
                     confirmed = int(uploaded_range.rsplit("-", 1)[1]) + 1 if uploaded_range else 0
                     if confirmed < sent or confirmed > total:
                         raise RuntimeError(
@@ -2574,21 +2615,25 @@ def upload_file_to_drive_raw(
                         )
                     http_attempts = 0
                     if confirmed > sent:
+                        if resume_session_url is not None and not bytes_attempted:
+                            rate_base = confirmed  # Existing remote bytes are not this invocation's rate.
                         sent = confirmed
-                        if progress_callback is not None:
-                            progress_callback(upload_url, sent)
+                        report_progress()
                         stalled_attempts, slept, stall_started = 0, 0.0, None
                         print(f"drive upload progress: {sent}/{total} bytes", flush=True)
                     elif not is_probe or confirmed == total:
-                        raise _DriveRequestDeadlineExceeded("Drive upload returned no newly confirmed bytes")
+                        raise _DriveUploadNeedsProbe("Drive upload returned no newly confirmed bytes")
                     elif recovering:
                         backoff()
                     probe, recovering = confirmed == total, False
                 except BackupTimeoutError:
                     raise
-                except (_DriveRequestDeadlineExceeded, *_DRIVE_TRANSIENT_NETWORK_ERRORS):
+                except (_DriveUploadNeedsProbe, *_DRIVE_TRANSIENT_NETWORK_ERRORS) as exc:
                     stall_started = time.monotonic() if stall_started is None else stall_started
                     stalled_attempts += 1
+                    retries += 1
+                    deadlines += int(isinstance(exc, _DriveRequestDeadlineExceeded))
+                    report_progress()
                     recovering = True
                     session.close()
                     session = requests.Session()
@@ -2597,6 +2642,8 @@ def upload_file_to_drive_raw(
                     probe = True
                 except _DriveRetryableHTTPError:
                     http_attempts += 1
+                    retries += 1
+                    report_progress()
                     if http_attempts >= max_attempts:
                         raise
                     _sleep(min(60, 2 ** min(http_attempts, 6), request_deadline(60)))
@@ -3853,20 +3900,18 @@ def run_backup(
             def record_upload_progress(url: str, confirmed: int) -> None:
                 nonlocal resume_state
                 next_state = {"url": url, "folder_id": folder_id, **upload_identity}
-                first = resume_state != next_state
                 resume_state = next_state
                 result["bytes_confirmed"] = confirmed
-                if first:
-                    _append_json_log(
-                        resolved_log_path,
-                        {
-                            **result,
-                            "resumable_upload": resume_state,
-                            "error_code": "drive_upload_interrupted",
-                            "upload_in_progress": True,
-                            "upload_state": "in_progress",
-                        },
-                    )
+                _append_json_log(
+                    resolved_log_path,
+                    {
+                        **result,
+                        "resumable_upload": resume_state,
+                        "error_code": "drive_upload_interrupted",
+                        "upload_in_progress": True,
+                        "upload_state": "in_progress",
+                    },
+                )
 
             def record_upload_thread_policy(policy: dict[str, Any]) -> None:
                 result["upload_thread_policy"] = policy
@@ -3879,6 +3924,7 @@ def run_backup(
                     machine_id=resolved_machine_id,
                     progress_callback=record_upload_progress,
                     policy_callback=record_upload_thread_policy,
+                    telemetry_callback=result.update,
                     run_deadline=run_deadline,
                     **({"resume_session_url": saved_session["url"]} if saved_session else {}),
                 )
@@ -3892,6 +3938,7 @@ def run_backup(
                         machine_id=resolved_machine_id,
                         progress_callback=record_upload_progress,
                         policy_callback=record_upload_thread_policy,
+                        telemetry_callback=result.update,
                         run_deadline=run_deadline,
                     )
                     break

@@ -14,6 +14,7 @@ URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upl
 
 @pytest.fixture
 def lane(tmp_path, monkeypatch):
+    real_put = backup._drive_put_with_deadline
     monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
     monkeypatch.setenv("BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS", "2")
     snapshot = tmp_path / "2026-10-17.db.gz"
@@ -65,6 +66,7 @@ def lane(tmp_path, monkeypatch):
         snapshot=snapshot,
         log=log,
         root=tmp_path,
+        real_put=real_put,
     )
 
 
@@ -814,3 +816,67 @@ def test_r2_raw_floor_failure_names_retained_stalled_backup(lane, monkeypatch, f
     assert "raw free space floor breached" in receipt["error"]
     assert lane.snapshot.read_bytes() == b"abcdef"
     assert not receipt.get("superseded_stalled_deleted")
+
+
+def test_progress_receipts_persist_confirmations_retries_and_completion(lane):
+    lane.outcomes.extend(
+        [
+            _DriveResponse(308, headers={"Range": "bytes=0-2"}),
+            ConnectionError("response lost"),
+            _DriveResponse(308, headers={"Range": "bytes=0-4"}),
+            _DriveResponse(200, payload={"id": "done"}),
+        ]
+    )
+    result = lane.run()
+    active = [
+        json.loads(line) for line in lane.log.read_text().splitlines() if json.loads(line).get("upload_in_progress")
+    ]
+    assert [row["bytes_confirmed"] for row in active] == [0, 3, 3, 5, 6]
+    assert active[2]["retries"] == 1
+    assert active[3]["upload_probes"] == 1
+    assert active[-1]["upload_requests"] == 4
+    assert result["bytes_confirmed"] == 6
+    assert result["upload_rate_bps"] > 0
+    assert result["upload_deadline_exceeded"] == 0
+
+
+def test_heartbeat_receipt_is_durable_while_socket_thread_is_waiting(lane, monkeypatch):
+    import threading
+
+    finished = threading.Event()
+    original_append = backup._append_json_log
+    waiting_receipts = []
+
+    def append(path, row):
+        original_append(path, row)
+        if row.get("upload_requests") == 1 and row.get("upload_in_progress") and row.get("bytes_confirmed") == 0:
+            waiting_receipts.append(_last_run_receipt(path))
+            finished.set()
+
+    class Session:
+        def put(self, *args, **kwargs):
+            assert finished.wait(2), "no receipt arrived before the PUT finished"
+            return _DriveResponse(200, payload={"id": "done"})
+
+        def close(self):
+            finished.set()
+
+    monkeypatch.setattr(backup, "_drive_put_with_deadline", lane.real_put)
+    monkeypatch.setattr(backup.requests, "Session", Session)
+    monkeypatch.setattr(backup, "DRIVE_UPLOAD_PROGRESS_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(backup, "_append_json_log", append)
+    assert lane.run()["verified"]
+    assert waiting_receipts
+    assert waiting_receipts[0]["bytes_confirmed"] == 0
+    assert waiting_receipts[0]["upload_rate_bps"] == 0
+    assert waiting_receipts[0]["resumable_upload"]["url"] == URL
+    assert waiting_receipts[0]["upload_thread_policy"] is not None
+
+
+def test_completed_resume_probe_does_not_count_old_bytes_as_upload_rate(lane):
+    stalled(lane)
+    lane.outcomes.append(_DriveResponse(200, payload={"id": "done"}))
+    result = lane.run("2026-10-18")
+    assert result["bytes_confirmed"] == 6
+    assert result["upload_rate_bps"] == result["upload_bytes_attempted"] == 0
+    assert result["upload_probes"] == result["upload_requests"] == 1
