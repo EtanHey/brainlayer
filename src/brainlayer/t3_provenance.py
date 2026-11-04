@@ -139,11 +139,11 @@ def t3_app_codex_session_ids(state_db: str | Path | None = None, *, projection_v
     """Union linkage from the same default sources used by thread ingestion."""
     version = _projection_version(projection_version)
     sources = resolve_t3_sources(state_db or os.environ.get("BRAINLAYER_T3_STATE_DB"), version)
-    return set().union(*(_source_codex_session_ids(path, selected) for path, selected in sources))
+    return set().union(*(_resolved_source_codex_session_ids(path, selected) for path, selected in sources))
 
 
-def _source_codex_session_ids(path: Path, version: int) -> set[str]:
-    session_ids = _read_source_codex_session_ids(path, version)
+def _resolved_source_codex_session_ids(path: Path, version: int) -> set[str]:
+    session_ids = _source_codex_session_ids(path, version)
     t3_linkage_alarm.runtime_resolved(path, version)
     return session_ids
 
@@ -153,7 +153,7 @@ def _runtime_alarm(path: Path, version: int, code: str, message: str, context: d
     t3_linkage_alarm.raise_runtime_alarm(path, version, code, message, context)
 
 
-def _read_source_codex_session_ids(path: Path, version: int) -> set[str]:
+def _source_codex_session_ids(path: Path, version: int) -> set[str]:
 
     try:
         connection = sqlite3.connect(f"{path.absolute().as_uri()}?mode=ro&immutable=0", uri=True, timeout=1.0)
