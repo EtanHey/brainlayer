@@ -182,10 +182,16 @@ def test_only_maintenance_and_fts_hold_writers_and_wait_stays_online(runner):
         Step(n, (sys.executable, "-c", held if n.startswith("maintenance-") or n == "repair-fts" else online), 5)
         for n in names
     ]
-    assert (
-        asyncio.run(run_calendar(steps, path / "calendar", path / "logs", now_fn=lambda: clock[0], sleep_fn=advance))
-        == 0
+    result = asyncio.run(
+        run_calendar(steps, path / "calendar", path / "logs", now_fn=lambda: clock[0], sleep_fn=advance)
     )
+    if result:
+        diagnostics = []
+        for directory in (path / "calendar", path / "logs"):
+            for artifact in sorted(directory.rglob("*")):
+                if artifact.is_file():
+                    diagnostics.append(f"--- {artifact.relative_to(path)} ---\n{artifact.read_text(errors='replace')}")
+        assert result == 0, "Calendar failed; receipts and child output:\n" + "\n".join(diagnostics)
 
 
 def test_slow_ack_keeps_guard_pulsing_without_starting_writer_early(runner):
