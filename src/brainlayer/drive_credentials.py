@@ -162,6 +162,7 @@ def load_credentials(
             _migrate_if_missing(token, legacy)
         token_data = _read_object(token, private=True)
         consented = token_data.get("consented_at")
+        expires = None
         if consented:
             try:
                 consent_time = dt.datetime.fromisoformat(str(consented).replace("Z", "+00:00")).astimezone(dt.UTC)
@@ -201,8 +202,15 @@ def load_credentials(
                 if isinstance(exc, TransportError):
                     raise TransportError("Drive token refresh network failure") from None
                 if "invalid_grant" in str(exc).lower():
-                    _report_consent(alert_reporter, "Drive access expired: Reconnect in BrainBar")
-                    raise DriveCredentialError("Drive access expired: Reconnect in BrainBar") from None
+                    reason = "Drive access expired: Reconnect in BrainBar"
+                    if expires is not None:
+                        # Google revoked before our local clock ran out; name our deadline, not theirs.
+                        reason += (
+                            f" (Google rejected refresh; local consent deadline {expires.isoformat()}"
+                            " is not Google's revocation time)"
+                        )
+                    _report_consent(alert_reporter, reason)
+                    raise DriveCredentialError(reason) from None
                 raise DriveCredentialError("Drive token refresh failed; run brainlayer backup auth") from None
             if persist_refresh:
                 token_data["access_token"] = creds.token
