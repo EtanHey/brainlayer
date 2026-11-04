@@ -1888,6 +1888,16 @@
         "target": "import subprocess"
       }
     },
+    "4d1de79fd9491f30a54d31fe85187dd58a9e23769ce6ea4511a6c873a1570e7b": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/jobs.py <module>._run",
+      "site": {
+        "call_sha256": "92ea588f361a98ae851c9d4468db3485eeea0b6087b067e77d850435078cc623",
+        "kind": "child_process",
+        "owner": "<module>._run",
+        "path": "src/brainlayer/jobs.py",
+        "target": "subprocess.run"
+      }
+    },
     "4d280e84087655cf076cedd02d707eb48d1c25bf90783bbbf870a34329987e34": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
       "site": {
@@ -2286,16 +2296,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/dedupe_merge.py",
         "target": "import subprocess"
-      }
-    },
-    "5fdb89dca15e912202ad05d98829d12f449f6548d6a7884a843602ea11f91b7b": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/jobs.py <module>._run",
-      "site": {
-        "call_sha256": "e6e4319857b7d0a6a63a65ddd2edf215e9ce654183cdf80b54908f490e2d35d0",
-        "kind": "child_process",
-        "owner": "<module>._run",
-        "path": "src/brainlayer/jobs.py",
-        "target": "subprocess.run"
       }
     },
     "60300f756e30ea5cb7b4db67806afb6ffb534797de3a4bff89e23635d13bef3b": {
