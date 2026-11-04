@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,31 @@ def eventually(probe, timeout=3):
             return
         time.sleep(0.02)
     assert probe()
+
+
+STDERR_TAIL = 4000
+
+
+@contextmanager
+def child_stderr(path, limit=STDERR_TAIL):
+    """Attach the bounded tail of fixture-owned child stderr to a failing shutdown check.
+
+    The original exception and traceback are re-raised unchanged; only a PEP 678 note is added.
+    """
+    try:
+        yield
+    except (AssertionError, subprocess.TimeoutExpired) as error:
+        try:
+            data = (path / "errors").read_bytes()
+        except OSError as read_error:
+            text = f"<unreadable: {read_error!r}>"
+        else:
+            omitted = max(0, len(data) - limit)
+            text = (f"...[{omitted} earlier bytes omitted]\n" if omitted else "") + (
+                data[omitted:].decode(errors="replace") or "<empty>"
+            )
+        error.add_note(f"fixture-owned child stderr (last {limit} bytes):\n{text}")
+        raise
 
 
 @pytest.fixture
@@ -113,6 +139,39 @@ def test_startup_reports_early_supervisor_death(native, monkeypatch):
         native[1]()
 
 
+def test_nonzero_shutdown_failure_carries_child_stderr(native, monkeypatch):
+    # Negative control: a known child error must reach the shutdown failure output (#1362).
+    boot = BOOT.replace(
+        "asyncio.run(main())", "try: asyncio.run(main())\nfinally: raise RuntimeError('known child shutdown error')"
+    )
+    monkeypatch.setattr(sys.modules[__name__], "BOOT", boot)
+    path, start, _ = native
+    process, _, _ = start()
+    process.terminate()
+    with pytest.raises(AssertionError) as failure:
+        with child_stderr(path):
+            assert process.wait(timeout=2) == 0
+    assert "assert 1 == 0" in str(failure.value)  # The original assertion survives unchanged.
+    assert failure.traceback[-1].path == Path(__file__)
+    assert "RuntimeError: known child shutdown error" in "\n".join(getattr(failure.value, "__notes__", ()))
+
+
+def test_shutdown_wait_timeout_carries_bounded_child_stderr(tmp_path):
+    with (tmp_path / "errors").open("ab") as output:
+        script = "import sys,time; sys.stderr.write('x'*9000+'known wedge'); sys.stderr.flush(); time.sleep(60)"
+        process = subprocess.Popen((sys.executable, "-c", script), stderr=output)
+    try:
+        eventually(lambda: (tmp_path / "errors").read_bytes().endswith(b"known wedge"))
+        with pytest.raises(subprocess.TimeoutExpired) as failure:
+            with child_stderr(tmp_path):
+                process.wait(timeout=0.2)
+    finally:
+        process.kill()
+        process.wait(timeout=3)
+    notes = "\n".join(getattr(failure.value, "__notes__", ()))
+    assert notes.endswith("known wedge") and "x" * STDERR_TAIL not in notes and "omitted" in notes
+
+
 def test_healthy_supervisor_survives_slow_custody_write(native, monkeypatch):
     slow_journal = """
 import time
@@ -128,11 +187,12 @@ def slow_save(custody):
 Custody._save=slow_save
 """
     monkeypatch.setattr(sys.modules[__name__], "BOOT", BOOT.replace("s=Supervisor(", slow_journal + "\ns=Supervisor("))
-    _, start, request = native
+    path, start, request = native
     process, initial, _ = start()
     assert request()["components"]["watch"]["pid"] == initial["watch"]["pid"]
     process.terminate()
-    assert process.wait(timeout=2) == 0
+    with child_stderr(path):
+        assert process.wait(timeout=2) == 0
 
 
 @pytest.mark.parametrize("death", [signal.SIGSTOP, signal.SIGKILL])
@@ -147,7 +207,8 @@ def test_guard_recovers_permanent_freeze_or_parent_death(native, death, monkeypa
     replacement, after, _ = start()
     assert all(after[n]["starts"] == 1 and after[n]["pid"] != before[n]["pid"] for n in ("watch", "drain"))
     replacement.terminate()
-    assert replacement.wait(timeout=2) == 0
+    with child_stderr(path):
+        assert replacement.wait(timeout=2) == 0
 
 
 def test_journal_recovers_if_guard_and_parent_both_die(native):
@@ -161,7 +222,8 @@ def test_journal_recovers_if_guard_and_parent_both_die(native):
     assert not any(exists(c["pid"]) for c in before.values() if c["pid"])
     assert after["off"]["pid"] is None
     replacement.terminate()
-    assert replacement.wait(timeout=2) == 0
+    with child_stderr(path):
+        assert replacement.wait(timeout=2) == 0
 
 
 @pytest.mark.parametrize("stop_signal", [signal.SIGTERM, signal.SIGINT, signal.SIGHUP, 0])
@@ -173,8 +235,9 @@ def test_total_shutdown_disarms_guard_and_stale_socket_restarts(native, stop_sig
     process, before, _ = start()
     began = time.monotonic()
     os.kill(process.pid, stop_signal or signal.SIGTERM)
-    assert process.wait(timeout=2) == 0
-    assert time.monotonic() - began < 1.5
+    with child_stderr(path):
+        assert process.wait(timeout=2) == 0
+        assert time.monotonic() - began < 1.5
     assert not any(exists(c["pid"]) for c in before.values() if c["pid"])
     (path / "control.sock").touch()  # Stale endpoint must not cause a launchd crash loop.
     replacement, _, _ = start()
@@ -182,7 +245,8 @@ def test_total_shutdown_disarms_guard_and_stale_socket_restarts(native, stop_sig
     assert duplicate.returncode != 0 and b"lock" in duplicate.stderr.lower()
     assert request()["components"]["drain"]["starts"] == 1
     replacement.terminate()
-    assert replacement.wait(timeout=2) == 0
+    with child_stderr(path):
+        assert replacement.wait(timeout=2) == 0
 
 
 def test_crashed_group_cleanup_does_not_block_controls_and_off_is_skipped(native):
@@ -203,7 +267,8 @@ def test_crashed_group_cleanup_does_not_block_controls_and_off_is_skipped(native
     assert request()["components"]["watch"]["starts"] == paused["starts"]
     assert "error" in request("resume", "off")
     process.terminate()
-    assert process.wait(timeout=2) == 0
+    with child_stderr(path):
+        assert process.wait(timeout=2) == 0
 
 
 def test_retirement_and_constructor_remain_inactive(tmp_path):
@@ -262,7 +327,8 @@ else: setattr(Custody, {stage!r}, slow)
     assert after["drain"]["starts"] == before["drain"]["starts"] + 1
     assert request()["components"]["drain"]["pid"] == after["drain"]["pid"]
     process.terminate()
-    assert process.wait(timeout=2) == 0
+    with child_stderr(path):
+        assert process.wait(timeout=2) == 0
 
 
 def test_disconnected_control_runs_mutation_once(native):
@@ -275,7 +341,8 @@ def test_disconnected_control_runs_mutation_once(native):
     eventually(lambda: request()["components"]["drain"]["starts"] == before["drain"]["starts"] + 1)
     assert request()["components"]["watch"]["pid"] == before["watch"]["pid"]
     process.terminate()
-    assert process.wait(timeout=2) == 0
+    with child_stderr(path):
+        assert process.wait(timeout=2) == 0
     assert "Unhandled exception" not in (path / "errors").read_text()
 
 
