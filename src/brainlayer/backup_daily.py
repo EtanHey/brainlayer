@@ -4264,7 +4264,23 @@ def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None
             signal.signal(shutdown_signal, previous_handler)
 
 
-def main() -> int:
+def _parse_cli_args(argv: list[str]) -> None:
+    """Refuse anything but a bare invocation or ``run`` before any backup work (#1438)."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m brainlayer.backup_daily",
+        description="Run one BrainLayer database backup: snapshot, verify, upload, prune.",
+        epilog="No arguments also runs a backup; that is how the env-run launchd wrapper, the backup "
+        "supervisor and weekly maintenance invoke it. Configuration comes from BRAINLAYER_* env vars.",
+    )
+    parser.add_argument("verb", nargs="?", choices=("run",), help="run a backup now (explicit form)")
+    parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Library callers pass nothing; only the ``python -m`` entry forwards sys.argv.
+    _parse_cli_args([] if argv is None else argv)
     timeout_seconds = _configured_backup_timeout_seconds()
     snapshot_phase = os.environ.get("BRAINLAYER_BACKUP_PHASE") == "snapshot"
     if snapshot_phase:
@@ -4295,4 +4311,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))
