@@ -7,7 +7,9 @@ import os
 import re
 import sqlite3
 from pathlib import Path
+from typing import NoReturn
 
+from . import t3_linkage_alarm
 from .alarm import raise_alarm
 from .t3_sources import DEFAULT_T3_STATE_DB as DEFAULT_T3_STATE_DB
 from .t3_sources import resolve_t3_sources
@@ -129,9 +131,7 @@ def is_t3_app_initiated_codex_session(
         linked_session_ids = t3_app_codex_session_ids(selected_path, projection_version=version)
     linked = session_id in linked_session_ids
     if t3_origin:
-        from .t3_linkage_alarm import observe
-
-        observe(source_file, session_id, sources, pending=not linked)
+        t3_linkage_alarm.observe(source_file, session_id, sources, pending=not linked)
     return linked
 
 
@@ -139,7 +139,18 @@ def t3_app_codex_session_ids(state_db: str | Path | None = None, *, projection_v
     """Union linkage from the same default sources used by thread ingestion."""
     version = _projection_version(projection_version)
     sources = resolve_t3_sources(state_db or os.environ.get("BRAINLAYER_T3_STATE_DB"), version)
-    return set().union(*(_source_codex_session_ids(path, selected) for path, selected in sources))
+    return set().union(*(_resolved_source_codex_session_ids(path, selected) for path, selected in sources))
+
+
+def _resolved_source_codex_session_ids(path: Path, version: int) -> set[str]:
+    session_ids = _source_codex_session_ids(path, version)
+    t3_linkage_alarm.runtime_resolved(path, version)
+    return session_ids
+
+
+def _runtime_alarm(path: Path, version: int, code: str, message: str, context: dict) -> NoReturn:
+    # Fatal on every flush; CRITICAL emission is deduplicated per source (#1402).
+    t3_linkage_alarm.raise_runtime_alarm(path, version, code, message, context)
 
 
 def _source_codex_session_ids(path: Path, version: int) -> set[str]:
@@ -147,7 +158,9 @@ def _source_codex_session_ids(path: Path, version: int) -> set[str]:
     try:
         connection = sqlite3.connect(f"{path.absolute().as_uri()}?mode=ro&immutable=0", uri=True, timeout=1.0)
     except sqlite3.Error as exc:
-        raise_alarm(
+        _runtime_alarm(
+            path,
+            version,
             "t3_runtime_unavailable",
             "could not open T3 runtime state read-only",
             {"path": str(path), "error": str(exc)},
@@ -157,7 +170,9 @@ def _source_codex_session_ids(path: Path, version: int) -> set[str]:
         if version == 2:
             columns = {row[1] for row in connection.execute(f"PRAGMA table_info({_V2_TABLE})")}
             if not {"provider", "payload_json", "provider_thread_id"} <= columns:
-                raise_alarm(
+                _runtime_alarm(
+                    path,
+                    version,
                     "t3_runtime_schema_drift",
                     "selected V2 provider projection lacks linkage columns",
                     {"path": str(path)},
@@ -190,7 +205,9 @@ def _source_codex_session_ids(path: Path, version: int) -> set[str]:
                             raise ValueError("Codex native reference must contain a UUID")
                         session_ids.add(identity.lower())
                 except (TypeError, ValueError) as exc:
-                    raise_alarm(
+                    _runtime_alarm(
+                        path,
+                        version,
                         "t3_runtime_linkage_invalid",
                         "selected V2 provider linkage is malformed",
                         {"path": str(path), "error": str(exc)},
@@ -199,7 +216,9 @@ def _source_codex_session_ids(path: Path, version: int) -> set[str]:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(provider_session_runtime)")}
         missing = sorted(_REQUIRED_RUNTIME_COLUMNS - columns)
         if missing:
-            raise_alarm(
+            _runtime_alarm(
+                path,
+                version,
                 "t3_runtime_schema_drift",
                 "provider_session_runtime no longer exposes the required T3 linkage columns",
                 {"path": str(path), "missing_columns": missing},
@@ -212,7 +231,9 @@ def _source_codex_session_ids(path: Path, version: int) -> set[str]:
             try:
                 resume_cursor = json.loads(resume_cursor_json)
             except (TypeError, json.JSONDecodeError) as exc:
-                raise_alarm(
+                _runtime_alarm(
+                    path,
+                    version,
                     "t3_runtime_linkage_invalid",
                     "provider_session_runtime.resume_cursor_json is not valid JSON",
                     {"path": str(path), "provider_name": provider_name, "error": str(exc)},
@@ -222,7 +243,9 @@ def _source_codex_session_ids(path: Path, version: int) -> set[str]:
                 session_ids.add(thread_id.lower())
         return session_ids
     except sqlite3.Error as exc:
-        raise_alarm(
+        _runtime_alarm(
+            path,
+            version,
             "t3_runtime_schema_drift",
             "could not query provider_session_runtime for T3 provenance",
             {"path": str(path), "error": str(exc)},

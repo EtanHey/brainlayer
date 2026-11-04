@@ -84,8 +84,8 @@ def test_linkage_resolution_and_recurrence_realert(pending):
     assert check(linked=True)
     from brainlayer import t3_linkage_alarm
 
-    record = next(t3_linkage_alarm.status_directory().glob("*.json"))
-    assert json.loads(record.read_text())["state"] == "resolved"
+    # Resolution garbage-collects the status receipt and its lock (#1402).
+    assert list(t3_linkage_alarm.status_directory().iterdir()) == []
     with pytest.raises(BrainLayerAlarm):
         check()
     assert len(events) == 2

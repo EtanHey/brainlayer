@@ -1,7 +1,9 @@
-"""Durable, per-source pending-linkage status and hourly alarm reminders.
+"""Durable, per-source T3 alarm status with alert-on-change and hourly reminders.
 
-Only emission backs off: every pending observation still raises BrainLayerAlarm.
-Status lives beside the resolved BrainLayer DB, never inside the transcript or DB.
+Only emission backs off: every observation of a T3 alarm still raises BrainLayerAlarm.
+Status lives beside the resolved BrainLayer DB, never inside the transcript or DB, and
+records only code/path/fingerprint/timestamps -- never alarm context or runtime rows.
+Resolved status files (and their locks) are removed, so recurrence re-alerts.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
+from typing import Any, NoReturn
 
 from . import alarm
 from .paths import resolve_db_path
@@ -27,53 +30,94 @@ def status_directory() -> Path:
     return resolve_db_path().parent / "t3-linkage-status"
 
 
+def _status_path(key_material: str) -> Path:
+    return status_directory() / f"{hashlib.sha256(key_material.encode()).hexdigest()}.json"
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
+
+
 def observe(source_file: str | Path, session_id: str, sources: list, *, pending: bool) -> None:
-    """Record transitions; suppress repeats only after status was persisted."""
+    """Record pending-linkage transitions for one transcript."""
     source = str(Path(source_file).resolve())
-    directory = status_directory()
-    key = hashlib.sha256(source.encode()).hexdigest()
-    path = directory / f"{key}.json"
-    fingerprint = hashlib.sha256(
-        json.dumps([session_id, [(str(p.resolve()), v) for p, v in sources]]).encode()
-    ).hexdigest()
+    path = _status_path(source)
+    if not pending:
+        _resolve(path)
+        return
+    fingerprint = _digest([session_id, [(str(p.resolve()), v) for p, v in sources]])
+    event = alarm.build_alarm(
+        "t3_runtime_linkage_pending", "T3-origin session has no selected projection linkage", {"path": str(source_file)}
+    )
+    _raise_deduplicated(path, source, fingerprint, event)
+
+
+def raise_runtime_alarm(
+    runtime_path: str | Path, version: int, code: str, message: str, context: dict[str, Any]
+) -> NoReturn:
+    """Raise a T3 runtime alarm (unavailable/schema_drift/linkage_invalid) with deduplicated emission."""
+    source = str(Path(runtime_path).resolve())
+    event = alarm.build_alarm(code, message, context)
+    _raise_deduplicated(
+        _status_path(f"t3-runtime:{version}:{source}"), source, _digest([code, message, context]), event
+    )
+
+
+def runtime_resolved(runtime_path: str | Path, version: int) -> None:
+    _resolve(_status_path(f"t3-runtime:{version}:{Path(runtime_path).resolve()}"))
+
+
+def _resolve(path: Path) -> None:
+    _CACHE.pop(path, None)
+    if not path.exists():
+        return
+    lock_path = path.with_suffix(".lock")
+    try:
+        with lock_path.open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Removing the lock inode can at worst let a racing writer skip suppression once;
+            # suppression always needs a persisted same-state receipt, so no alarm is silenced.
+            path.unlink(missing_ok=True)
+            lock_path.unlink(missing_ok=True)
+    except BlockingIOError:
+        logger.info("T3 alarm status %s is busy; resolution cleanup deferred", path)
+    except OSError as exc:
+        logger.warning("Could not clear resolved T3 alarm status %s: %s", path, exc)
+
+
+def _raise_deduplicated(path: Path, source: str, fingerprint: str, event: alarm.BrainLayerAlarm) -> NoReturn:
+    """Always raise; emit only on change, hourly, or when no durable receipt exists."""
     now = time.time()
-    state = "pending" if pending else "resolved"
     entry = _CACHE.get(path)
     try:
         cached = entry[1] if entry and path.stat().st_mtime_ns == entry[0] else None
     except OSError:
         cached = None
-    if cached and cached["fingerprint"] == fingerprint and cached["state"] == state:
-        if not pending or 0 <= now - cached["last_alert_at"] < REMINDER_SECONDS:
-            if pending:
-                raise alarm.build_alarm(
-                    "t3_runtime_linkage_pending",
-                    "T3-origin session has no selected projection linkage",
-                    {"path": str(source_file)},
-                )
-            return
-    event = alarm.build_alarm(
-        "t3_runtime_linkage_pending", "T3-origin session has no selected projection linkage", {"path": str(source_file)}
-    )
-    emit = pending
+    if (
+        cached
+        and cached["fingerprint"] == fingerprint
+        and cached["state"] == "pending"
+        and 0 <= now - cached["last_alert_at"] < REMINDER_SECONDS
+    ):
+        raise event
+    emit = True
+    directory = path.parent
     try:
-        if not pending and not path.exists():
-            return
         directory.mkdir(parents=True, exist_ok=True)
-        with (directory / f"{key}.lock").open("a") as lock:
+        with path.with_suffix(".lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             try:
                 previous = json.loads(path.read_text())
                 if not isinstance(previous, dict):
                     raise ValueError("status must be an object")
-                same = previous.get("fingerprint") == fingerprint and previous.get("state") == state
+                same = previous.get("fingerprint") == fingerprint and previous.get("state") == "pending"
                 last_alert = float(previous.get("last_alert_at", 0))
             except FileNotFoundError:
                 previous, same, last_alert = {}, False, 0
             except (ValueError, TypeError) as exc:
                 logger.warning("Unreadable T3 linkage alarm status %s: %s", path, exc)
                 previous, same, last_alert = {}, False, 0
-            emit = pending and (not same or not 0 <= now - last_alert < REMINDER_SECONDS)
+            emit = not same or not 0 <= now - last_alert < REMINDER_SECONDS
             record = (
                 dict(previous)
                 if same
@@ -81,13 +125,12 @@ def observe(source_file: str | Path, session_id: str, sources: list, *, pending:
                     "code": event.code,
                     "path": source,
                     "fingerprint": fingerprint,
-                    "state": state,
+                    "state": "pending",
                     "first_seen_at": now,
                 }
             )
             if emit:
                 record["last_alert_at"] = now
-            if not same or emit:
                 temporary = None
                 try:
                     with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as handle:
@@ -100,11 +143,14 @@ def observe(source_file: str | Path, session_id: str, sources: list, *, pending:
                     if temporary is not None:
                         temporary.unlink(missing_ok=True)
             _CACHE[path] = (path.stat().st_mtime_ns, record)
+    except BlockingIOError:
+        # Another process holds this source's status; without our own receipt, stay loud.
+        logger.info("T3 alarm status %s is busy; emitting %s without suppression", path, event.code)
+        emit = True
     except OSError:
         # No durable receipt means no suppression; never pretend a failed status write worked.
         logger.error("Could not persist T3 linkage alarm status %s", path, exc_info=True)
-        emit = pending
-    if pending:
-        if emit:
-            alarm.emit_alarm(event)
-        raise event
+        emit = True
+    if emit:
+        alarm.emit_alarm(event)
+    raise event
