@@ -1,28 +1,28 @@
 {
-  "sync_note": "All sources pinned at main 62f55b09 (#1600 S1a-5 and #1602 S1a-6 merged), confirmed 2026-11-02 by re-reading every mapped line. health_verdict.py equals S1a-6's 8eecb5ee except #1599's drive_event hunk (a reused receipt reports Drive ok only on a live auth probe), which PipeVerdict's abstract drive observation already respects. backup_daily.py's #1599 same-date reuse re-asserts a still-valid verification (the latest receipt per snapshot, never revoked, removed, abandoned or superseded): an idempotent receipt to both the truth and the reader fold, and its tightened _recent_local_verified_backup is the latest-receipt gate the model uses. Re-pinned backup_daily.py at main ad50657e after #1597 (S3): its hunks are in run_backup's reuse() closure (I/O-policy keys), _run_backup_process and a new constant; every mapped range is byte-identical, shifted +2 (functions) / +7 (run_backup receipt lines). No model change. Re-confirmed S28 at 32703d8e (with the preceding #1612 upload-thread reset): backup_daily.py now records only upload-thread scheduling metadata through a callback before the Drive PUT and excludes that metadata from reused receipts. Neither that observation nor callback changes verified/uploaded/local_removed receipt facts or the modelled receipt reader; the mapped verdict actions retain their same state transitions. Updated line references to the current source; no model change.",
+  "sync_note": "All sources pinned at main 62f55b09 (#1600 S1a-5 and #1602 S1a-6 merged), confirmed 2026-11-02 by re-reading every mapped line. health_verdict.py equals S1a-6's 8eecb5ee except #1599's drive_event hunk (a reused receipt reports Drive ok only on a live auth probe), which PipeVerdict's abstract drive observation already respects. backup_daily.py's #1599 same-date reuse re-asserts a still-valid verification (the latest receipt per snapshot, never revoked, removed, abandoned or superseded): an idempotent receipt to both the truth and the reader fold, and its tightened _recent_local_verified_backup is the latest-receipt gate the model uses. Re-pinned backup_daily.py at main ad50657e after #1597 (S3): its hunks are in run_backup's reuse() closure (I/O-policy keys), _run_backup_process and a new constant; every mapped range is byte-identical, shifted +2 (functions) / +7 (run_backup receipt lines). No model change. Re-confirmed S28 at 32703d8e (with the preceding #1612 upload-thread reset): backup_daily.py now records only upload-thread scheduling metadata through a callback before the Drive PUT and excludes that metadata from reused receipts. Neither that observation nor callback changes verified/uploaded/local_removed receipt facts or the modelled receipt reader; the mapped verdict actions retain their same state transitions. Updated line references to the current source; no model change. Re-pinned all sources at main 5a24d4b9 (2026-11-05, lead) after #1622 (S35: upload progress receipts are written during the upload, before any verified receipt, so the latest-receipt gate is unchanged), #1626 (argv parsing only), #1647 (snapshot elapsed deadline: an expired window is an existing deferred outcome) and the job_alerts timestamp sidecar (set/clear semantics unchanged); health_verdict/health_facts/maintenance unchanged. Mapped line references were not re-audited and remain at 62f55b09 as line_refs_at states. No model change.",
   "sources": {
     "src/brainlayer/health_verdict.py": {
-      "sha": "62f55b09",
+      "sha": "5a24d4b9",
       "sha256": "d8c237ea4b5b3868eeab4c2abffde53aa2ea52d2a2765a9b8df7983756b355cb"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "32703d8e",
-      "sha256": "0bfe8bb075d5554281d2c61e2365e7358e31f23961942e78e71fcc2cf97177a4"
+      "sha": "5a24d4b9",
+      "sha256": "ff57d95889d08b2f0dc52abb83a3797c861e6330ecaf90f2e7771118fed9b722"
     },
     "src/brainlayer/maintenance.py": {
-      "sha": "62f55b09",
+      "sha": "5a24d4b9",
       "sha256": "cdc7748d68108d686e8945b1890e1914f96957aeefb4e3035c5e8f501e9b8c05"
     },
     "src/brainlayer/maintenance_calendar.py": {
-      "sha": "62f55b09",
-      "sha256": "3cb4692f4c572c77d7272acc1156ef6fe89a4a7ee16e0c9c410499ea834de899"
+      "sha": "5a24d4b9",
+      "sha256": "5a307852afec90364eb48bbfca534d0e85e07c35c09503b24d57e3b72bbe91ac"
     },
     "src/brainlayer/job_alerts.py": {
-      "sha": "62f55b09",
-      "sha256": "c5cc184acddbb820b0bb29af4b466b01ab64b322851e1f0f6aea4627772aedfe"
+      "sha": "5a24d4b9",
+      "sha256": "3f0fe1827f62a493d1041cea34610233da7d08d60fe762b51c7c73bba712132e"
     },
     "src/brainlayer/health_facts.py": {
-      "sha": "62f55b09",
+      "sha": "5a24d4b9",
       "sha256": "76562ee6364296c023536fb868f670e7dcb7818f8653d9c8228117b970b40e96"
     }
   },
