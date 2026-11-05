@@ -334,8 +334,9 @@ class TestFlushCallback:
         assert inserted == 1
         assert queued["content"] == scrubbed_text
         assert secret not in queued["content"]
-        assert queued["chunk_id"] == f"rt-session-{expected_hash}"
-        assert queued["chunk_id"] != f"rt-session-{raw_hash}"
+        assert queued["chunk_id"].startswith("rt2-")
+        assert queued["chunk_id"].endswith(f"-{expected_hash}")
+        assert not queued["chunk_id"].endswith(f"-{raw_hash}")
 
     def test_arbitrated_flush_enqueues_watcher_chunks_without_db_write(self, tmp_path, monkeypatch):
         db_path = tmp_path / "test.db"
