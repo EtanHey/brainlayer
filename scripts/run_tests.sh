@@ -440,6 +440,18 @@ map_changed_files_to_pytests() {
           fi
         fi
         ;;
+      src/brainlayer/schema_ddl_ledger.py)
+        # No test_schema_ddl_ledger.py; unmapped, a push escalated to the full suite (2026-11-05).
+        mapped=1
+        for rel in test_runtime_ddl_ledger.py test_1642_atomic_probe.py; do
+          [ -f "$TEST_ROOT/$rel" ] || mapped=0
+        done
+        if [ "$mapped" -eq 1 ]; then
+          for rel in test_runtime_ddl_ledger.py test_1642_atomic_probe.py; do
+            append_unique "$TEST_ROOT/$rel"
+          done
+        fi
+        ;;
       src/brainlayer/hotlane_budget.py)
         # S22: the hotlane CPU budget/sampler is covered by these, not a test_hotlane_budget.py.
         # Unmapped, it escalated a changed-only push to the full suite and timed out heavy-suite.
