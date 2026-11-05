@@ -133,6 +133,9 @@ def test_runtime_fts_repair_writes_one_ledger_event_and_repeat_open_writes_none(
     # Repeat open is a no-op ensure pass: same schema, no new event.
     with VectorStore(db):
         pass
+    # The repaired schema satisfies the runtime contract (definition hashes included).
+    with WriterRuntimeStore(db):
+        pass
     assert _schema(db) == result
     assert len(_events(db)) == 1
 
