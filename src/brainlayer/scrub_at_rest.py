@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+import traceback
 from collections import Counter
 from pathlib import Path
 
@@ -53,6 +54,8 @@ LIVE_SERVICES = (
 
 BRAINBAR_EXIT_TIMEOUT_SECONDS = 30.0
 BACKUP_WAIT_SAFE_MARGIN_SECONDS = 20 * 60.0
+# Every guarded apply, waited or not, must leave this much quiet window before it stops writers.
+RUN_BUDGET_RESERVE_SECONDS = BACKUP_WAIT_SAFE_MARGIN_SECONDS
 _QUIESCE_DETAILS = frozenset(
     {"quiesce-services", "brainbar-process-probe", "lsof-writers", "process:BrainBar", "process:BrainBarDaemon"}
     | {
@@ -71,6 +74,48 @@ class ScrubAtRestError(RuntimeError):
         self.reason = reason
         # Only fixed service labels and gate names can reach refusal JSON.
         self.detail = detail if isinstance(detail, str) and detail in _QUIESCE_DETAILS else None
+        # Fixed labels from _CAUSE_CATEGORIES / _MAINTENANCE_GATES only; set by _failure (#1129).
+        self.cause = "scrub-refusal"
+        self.gate = None
+
+
+# Refusal JSON names a wrapped failure only by these fixed labels: never the exception's
+# text (MaintenanceAbort messages embed lsof commands and paths) or an unlisted class name.
+# First isinstance match wins, so subclasses precede their bases.
+_CAUSE_CATEGORIES = (
+    (ScrubAtRestError, "scrub-refusal"),
+    (maintenance.MaintenanceAbort, "maintenance-abort"),
+    (apsw.BusyError, "sqlite-busy"),
+    (apsw.Error, "sqlite-error"),
+    (TimeoutError, "timeout"),
+    (PermissionError, "permission-denied"),
+    (OSError, "os-error"),
+    (ValueError, "invalid-input"),
+    ((KeyboardInterrupt, SystemExit), "interrupted"),
+)
+# Maintenance functions whose raise identifies the gate; matched by code-object name.
+_MAINTENANCE_GATES = {
+    "_check_quiet_window": "quiet-window",
+    "_check_idle": "queue-idle",
+    "_check_lsof_clean": "lsof-writers",
+    "_maintenance_lock": "maintenance-lock",
+}
+
+
+def _cause_category(exc):
+    for kind, label in _CAUSE_CATEGORIES:
+        if isinstance(exc, kind):
+            return label
+    return "unknown"
+
+
+def _maintenance_gate(exc):
+    # Innermost listed maintenance frame; frame names are code, never exception data.
+    gate = None
+    for frame, _ in traceback.walk_tb(exc.__traceback__):
+        if frame.f_globals.get("__name__") == maintenance.__name__:
+            gate = _MAINTENANCE_GATES.get(frame.f_code.co_name, gate)
+    return gate
 
 
 def _safe_cause(exc):
@@ -84,10 +129,14 @@ def _safe_cause(exc):
 def _failure(exc, cleanup=None):
     error = ScrubAtRestError(f"at-rest scrub failed ({type(exc).__name__}); no matched values logged")
     error.__cause__ = _safe_cause(exc)
+    error.cause = _cause_category(exc)
+    error.gate = _maintenance_gate(exc)
     if isinstance(exc, ScrubAtRestError):
         error.reason = exc.reason
         error.detail = exc.detail
         error.__cause__ = exc.__cause__
+        error.cause = exc.cause
+        error.gate = exc.gate
         for note in getattr(exc, "__notes__", []):
             error.add_note(note)
     if cleanup is not None:
@@ -314,6 +363,13 @@ def _wait_for_verified_backup(path, timeout_seconds):
             raise ScrubAtRestError("verified backup wait timed out", reason="verified-backup-timeout")
 
 
+def _check_run_budget(config):
+    """Refuse service-down work unless the quiet window still covers the run reserve."""
+    # Same boundary as the backup wait: exactly the reserve left is not enough to start.
+    if _remaining_quiet_window_seconds(config) <= RUN_BUDGET_RESERVE_SECONDS:
+        raise ScrubAtRestError("quiet-window run budget exhausted", reason="quiet-window-budget")
+
+
 def _check_no_brainbar_processes():
     # An unregistered UI can open the daemon bundle even after its job is booted out.
     try:
@@ -378,6 +434,8 @@ def _guarded_apply(path, batch_size, expect_rows, selected=PROVIDERS):
     config = maintenance.MaintenanceConfig(db_path=path, backup_reuse_max_age_hours=24)
     _live_requirements(config)
     maintenance._run_gates(config)
+    # Last check before quiescing: gates and the lock wait both spend window time.
+    _check_run_budget(config)
     booted_out, failure = {}, None
     try:
         try:
