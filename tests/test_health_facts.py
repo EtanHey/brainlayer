@@ -566,3 +566,17 @@ def test_an_unrecordable_attempt_leaves_no_stale_success_standing(tmp_path, monk
     attempt = maintenance._store_roundtrip(config)
     assert attempt["ok"] is None and "not recorded" in attempt["reason"]
     assert hf.store_canary_fact(receipt_path, datetime.now(UTC), None)[0] is UNOBSERVED
+
+
+def test_disk_timeout_reuses_measurement_only_within_thirty_minutes(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    monkeypatch.setattr(hf, "disk_fact", lambda *_: (100_000_000_000, 10, 5, 2))
+    result = HealthCheckResult(checked_at="", ok=True)
+    _, state = hf.collect_facts(config, result, None, NOW)
+    monkeypatch.setattr(hf, "disk_fact", lambda *_: UNOBSERVED)
+    for minute in (5, 10, 15):
+        facts, state = hf.collect_facts(config, result, state, NOW + timedelta(minutes=minute))
+        assert evaluate(facts).check("disk").state == "green"
+        assert "earlier measurement" in facts.check_notes["disk"]
+    facts, _ = hf.collect_facts(config, result, state, NOW + timedelta(minutes=31))
+    assert facts.disk_free_bytes is UNOBSERVED
