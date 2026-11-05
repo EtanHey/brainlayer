@@ -331,6 +331,82 @@ def _mapping_value(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+@dataclass(frozen=True)
+class CodexTurnContext:
+    """Which model authors the next Codex turn, as of one byte offset of one file (#655).
+
+    Codex records the model once per turn in a ``turn_context`` line, not on each
+    message, so a reader resuming mid-file has already passed it. The context is only
+    trusted at exactly ``offset`` of the file whose inode is ``inode``; any other read
+    start (restart, replay, rewind, replaced file, quarantined bytes) rebuilds it from
+    the file itself instead of carrying a stale model forward.
+    """
+
+    inode: int
+    offset: int
+    model: str | None = None
+    model_provider: str | None = None
+
+
+_CODEX_CONTEXT_LINE_TYPES = frozenset({"turn_context", "session_meta"})
+
+
+def fold_codex_turn_context(context: CodexTurnContext, line: Any) -> CodexTurnContext:
+    """Apply one raw Codex JSONL record to the running author context.
+
+    Mirrors the batch parser: every ``turn_context`` replaces the model (an absent or
+    malformed model becomes unknown, never the previous one) and ``session_meta`` names
+    the provider. Nothing else changes the context.
+    """
+    from .pipeline.classify import transcript_author_model
+
+    if not isinstance(line, dict) or line.get("type") not in _CODEX_CONTEXT_LINE_TYPES:
+        return context
+    payload = _mapping_value(line.get("payload"))
+    if line["type"] == "turn_context":
+        return CodexTurnContext(
+            context.inode, context.offset, transcript_author_model(payload.get("model")), context.model_provider
+        )
+    return CodexTurnContext(
+        context.inode, context.offset, context.model, transcript_author_model(payload.get("model_provider"))
+    )
+
+
+def scan_codex_turn_context(filepath: str, end_offset: int, inode: int) -> CodexTurnContext:
+    """Rebuild the author context from the file's own bytes before ``end_offset``.
+
+    Only lines naming a context record are parsed. A context record that cannot be
+    parsed makes the model unknown rather than leaving an earlier one in force, and a
+    file whose inode is not the one being read yields an unknown context.
+    """
+    context = CodexTurnContext(inode, end_offset)
+    if end_offset <= 0:
+        return context
+    try:
+        with open(filepath, "rb") as handle:
+            if inode and os.fstat(handle.fileno()).st_ino != inode:
+                return context
+            position = 0
+            while position < end_offset:
+                raw = handle.readline()
+                if not raw or position + len(raw) > end_offset:
+                    break
+                position += len(raw)
+                if b"turn_context" not in raw and b"session_meta" not in raw:
+                    continue
+                try:
+                    record = json.loads(raw)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    if b"turn_context" in raw:
+                        context = CodexTurnContext(inode, end_offset, None, context.model_provider)
+                    continue
+                context = fold_codex_turn_context(context, record)
+    except OSError as error:
+        logger.debug("Codex author context unavailable for %s: %s", filepath, error)
+        return CodexTurnContext(inode, end_offset)
+    return context
+
+
 def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, Any] | None:
     if not isinstance(entry, dict):
         return None
@@ -871,6 +947,7 @@ class JSONLTailer:
         self.last_error: OSError | json.JSONDecodeError | UnicodeDecodeError | OversizedJSONLRecordError | None = None
         self.failed_record: bytes | None = None
         self.observed_inode = self.get_inode()
+        self.codex_turn_context: CodexTurnContext | None = None
 
     def restore_snapshot(self, snapshot: tuple[int, bytes]) -> None:
         """Put the tailer back to a (offset, buffer) pair captured before a failed read.
@@ -1489,8 +1566,46 @@ class JSONLWatcher:
             entry["_ingest_observed_at"] = line.get("_ingest_observed_at", time.time())
             if isinstance(line.get("_line_end_offset"), int):
                 entry["_line_end_offset"] = line["_line_end_offset"]
+            model_provider = line.get("_author_model_provider")
+            if model_provider:
+                entry["_author_model_provider"] = model_provider
+            model = line.get("_author_model")
+            if model and entry.get("type") == "assistant" and isinstance(entry.get("message"), dict):
+                entry["message"] = {**entry["message"], "model": model}
+                entry["_author_model_source"] = line.get("_author_model_source")
             normalized.append(entry)
         return normalized
+
+    def _annotate_codex_author_context(
+        self,
+        filepath: str,
+        tailer: "JSONLTailer",
+        new_lines: list[dict],
+        read_start_offset: int,
+        source_inode: int,
+    ) -> None:
+        """Stamp each raw Codex record with the model context in force when it was written.
+
+        The context lives on the tailer, keyed to the exact (inode, offset) it describes,
+        so a read that does not continue precisely where the last one ended rebuilds it
+        from the file instead of inheriting it. The stamp travels on the entry itself, so
+        deferred and retried entries keep the author they were read with.
+        """
+        if self.provider_for_file(filepath) != "codex":
+            return
+        context = tailer.codex_turn_context
+        if context is None or context.inode != source_inode or context.offset != read_start_offset:
+            context = scan_codex_turn_context(filepath, read_start_offset, source_inode)
+        for line in new_lines:
+            context = fold_codex_turn_context(context, line)
+            if context.model:
+                line["_author_model"] = context.model
+                line["_author_model_source"] = "codex_turn_context"
+            if context.model_provider:
+                line["_author_model_provider"] = context.model_provider
+        tailer.codex_turn_context = CodexTurnContext(
+            source_inode, tailer.offset, context.model, context.model_provider
+        )
 
     def _checkpoint_discarded_progress(
         self,
@@ -2043,6 +2158,10 @@ class JSONLWatcher:
                         source_inode = tailer.observed_inode
                         source_generation = self.registry.generation(filepath)
 
+                    if new_lines:
+                        self._annotate_codex_author_context(
+                            filepath, tailer, new_lines, read_start_offset, source_inode
+                        )
                     normalized_lines = self._normalize_lines(filepath, new_lines) if new_lines else []
                     if normalized_lines:
                         for line in normalized_lines:
