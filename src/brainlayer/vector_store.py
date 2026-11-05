@@ -843,18 +843,11 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         conn.setbusytimeout(_default_write_busy_timeout_ms())
 
     def _record_runtime_ddl_success(self) -> None:
-        audit, self._ddl_audit = getattr(self, "_ddl_audit", None), None
-        if audit is None:
-            return
-        try:
+        audit = getattr(self, "_ddl_audit", None)
+        if audit is not None:
             audit.finish_success()
-        except Exception as exc:
-            # The DDL already committed; failing the open now would not undo it.
-            logger.error(
-                "runtime schema DDL committed but its migration_events record failed: %s: %s",
-                type(exc).__name__,
-                exc,
-            )
+            self.conn.execute("COMMIT")
+        self._ddl_audit = None
 
     def _record_runtime_ddl_failure(self, exc: BaseException, *, retryable: bool) -> None:
         audit, self._ddl_audit = getattr(self, "_ddl_audit", None), None
@@ -893,6 +886,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         # WAL mode is persistent on the DB file — set it every time
         cursor.execute("PRAGMA journal_mode = WAL")
         _configure_writer_pragmas(self.conn)
+
+        self.conn.execute("BEGIN IMMEDIATE")
 
         # Create tables
         cursor.execute("""

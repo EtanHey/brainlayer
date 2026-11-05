@@ -21,21 +21,13 @@ again after it. Only when the two differ is one ``migration_events`` row written
 A validation-only open, or an ensure pass that leaves the schema identical,
 writes nothing.
 
-Transaction boundaries (explicit, because they are not all one transaction)
---------------------------------------------------------------------------
-* ``_init_db`` historically runs DDL in implicit per-statement autocommit, so a
-  failure part-way can leave earlier statements committed. A failure event says
-  exactly that: ``details.ddl_committed`` and ``affected_objects`` list only the
-  objects whose committed definition actually differs from the prior snapshot,
-  and ``result_fingerprint`` stays NULL -- a failed pass never claims a result.
-* Destructive repairs run inside :func:`atomic_ddl_step` (a SAVEPOINT). If one
-  fails, its DDL is rolled back and the step is listed under
-  ``details.rolled_back_steps``; nothing in it is reported as committed.
-* A success event is written in its own transaction immediately after the DDL;
-  the ledger column upgrade, the result snapshot and the insert are atomic with
-  each other (taken under the write lock). A failure event is necessarily written
-  after the failed work rolled back -- it cannot live inside the transaction it
-  reports on.
+Transaction boundaries
+----------------------
+The runtime ensure pass and its success event share one write transaction,
+including dependent FTS triggers, backfill and row-ID mappings. A failure rolls
+back that transaction before writing a separate failure event with no result
+fingerprint. Destructive repair savepoints also record their rollback details.
+
 """
 
 from __future__ import annotations
@@ -222,7 +214,6 @@ class RuntimeDDLAudit:
         """Write a success event iff the schema changed. Returns the event id or None."""
         if self.finished:
             return None
-        self.finished = True
         if schema_objects(self.conn) == self.prior:
             return None
         nested = _in_transaction(self.conn)
@@ -240,7 +231,7 @@ class RuntimeDDLAudit:
                     "changes": changes,
                     "completed_steps": self.completed_steps,
                     "rolled_back_steps": self.rolled_back_steps,
-                    "transaction": "implicit_per_statement; event in its own transaction after DDL",
+                    "transaction": "DDL and success event in one transaction",
                 },
             )
         except BaseException:
@@ -268,6 +259,9 @@ class RuntimeDDLAudit:
         self.finished = True
         try:
             if _in_transaction(self.conn):
+                self.rolled_back_steps.append(
+                    {"step": "runtime_schema_ensure", "changes": diff_schema(self.prior, schema_objects(self.conn))}
+                )
                 self.conn.execute("ROLLBACK")
             changes = diff_schema(self.prior, schema_objects(self.conn))
             committed = _affected(changes)

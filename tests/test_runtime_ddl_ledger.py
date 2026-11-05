@@ -187,7 +187,7 @@ def test_failed_fts_repair_rolls_back_and_records_failure_without_result(tmp_pat
     details = json.loads(event["details"])
     assert details["ddl_committed"] is False
     assert details["committed_changes"] == {"altered": [], "created": [], "dropped": []}
-    assert [step["step"] for step in details["rolled_back_steps"]] == ["fts_schema_rebuild"]
+    assert [step["step"] for step in details["rolled_back_steps"]] == ["fts_schema_rebuild", "runtime_schema_ensure"]
     assert details["completed_steps"] == []
     _assert_no_content(event)
 
@@ -247,13 +247,12 @@ def test_ledger_write_failure_after_committed_ddl_is_loud_not_silent(tmp_path, c
     )
     conn.close()
 
-    with caplog.at_level("ERROR", logger="brainlayer.vector_store"):
-        with VectorStore(db) as store:
-            fts_cols = {row[1] for row in store.conn.execute("PRAGMA table_info(chunks_fts)")}
-
-    assert "summary" in fts_cols  # the committed repair is not undone by a ledger failure
-    assert "migration_events record failed" in caplog.text
-    assert "ledger unavailable" in caplog.text
+    with pytest.raises(apsw.ConstraintError, match="ledger unavailable"):
+        VectorStore(db)
+    conn = _connect(db)
+    assert "summary" not in {r[1] for r in conn.execute("PRAGMA table_info(chunks_fts)")}
+    assert conn.execute("SELECT content FROM chunks_fts WHERE chunk_id='c1'").fetchall() == [(SENTINEL,)]
+    conn.close()
     assert _events(db) == []
 
 
@@ -275,7 +274,7 @@ def test_failure_after_autocommitted_ddl_reports_exactly_what_committed(tmp_path
         VectorStore(db)
 
     observed = _schema(db)
-    assert "chunks_fts_insert" in observed and "chunks_fts_insert" not in prior
+    assert "chunks_fts_insert" not in observed and "chunks_fts_insert" not in prior
     events = _events(db)
     assert len(events) == 1
     event = events[0]
@@ -283,12 +282,12 @@ def test_failure_after_autocommitted_ddl_reports_exactly_what_committed(tmp_path
     assert event["result_fingerprint"] is None
     assert event["prior_fingerprint"] == schema_fingerprint(prior)
     details = json.loads(event["details"])
-    assert details["ddl_committed"] is True
+    assert details["ddl_committed"] is False
     committed = {name for names in details["committed_changes"].values() for name in names}
     assert committed == set(json.loads(event["affected_objects"]))
     # Exactly the objects whose committed definition changed -- minus our own ledger upgrade.
     assert committed == {n for n in prior.keys() | observed.keys() if prior.get(n) != observed.get(n)} - {
         "migration_events"
     }
-    assert "chunks_fts_insert" in committed
+    assert not committed
     _assert_no_content(event)
