@@ -239,6 +239,7 @@ final class MCPRouter: @unchecked Sendable {
     private static let stringMaxLengths: [String: Int] = [
         "action": 64,
         "agent_id": 128,
+        "caller_model": BrainDatabase.callerModelMaxLength,
         "chunk_id": chunkIdentifierMaxLength,
         "content": 200_000,
         "detail": 16,
@@ -355,11 +356,24 @@ final class MCPRouter: @unchecked Sendable {
             "name": name,
             "description": description,
         ]
-        if let inputSchema = definition["inputSchema"] as? [String: Any] {
+        if var inputSchema = definition["inputSchema"] as? [String: Any] {
+            if let hidden = fullPaletteOnlyProperties[name],
+               var properties = inputSchema["properties"] as? [String: Any] {
+                for property in hidden { properties.removeValue(forKey: property) }
+                inputSchema["properties"] = properties
+            }
             compact["inputSchema"] = removingDescriptions(from: inputSchema)
         }
         return compact
     }
+
+    /// Optional properties advertised only once the palette is expanded. They are still
+    /// accepted and validated against the full schema from a core session. The core boot
+    /// payload has a ratified 1600-byte budget that main already fills (#655 Part B:
+    /// advertising caller_model in core costs 49 bytes and is an owner decision).
+    private static let fullPaletteOnlyProperties: [String: Set<String>] = [
+        "brain_store": ["caller_model"],
+    ]
 
     private static func removingDescriptions(from value: Any) -> Any {
         if let dictionary = value as? [String: Any] {
@@ -1047,6 +1061,9 @@ final class MCPRouter: @unchecked Sendable {
         let tags = args["tags"] as? [String] ?? []
         let importance = args["importance"] as? Int ?? 5
         let project = args["project"] as? String
+        // Self-reported by the caller (MCP cannot see who is calling). Never inferred
+        // from agent_id or the session; an invalid value is dropped, not stored.
+        let callerModel = args["caller_model"] as? String
         if deferForBackup {
             return try queueBrainStore(
                 content: content,
@@ -1055,6 +1072,7 @@ final class MCPRouter: @unchecked Sendable {
                 source: "mcp",
                 project: project,
                 conversationID: session.conversationID,
+                callerModel: callerModel,
                 reason: "BACKUP_SNAPSHOT"
             )
         }
@@ -1066,6 +1084,7 @@ final class MCPRouter: @unchecked Sendable {
                 source: "mcp",
                 project: project,
                 conversationID: session.conversationID,
+                callerModel: callerModel,
                 reason: "DB_NOT_OPEN"
             )
         }
@@ -1078,6 +1097,7 @@ final class MCPRouter: @unchecked Sendable {
                 source: "mcp",
                 project: project,
                 conversationID: session.conversationID,
+                callerModel: callerModel,
                 busyTimeoutMillis: Self.mcpStoreBusyTimeoutMillis,
                 retries: Self.mcpStoreRetries
             ) {
@@ -1137,6 +1157,7 @@ final class MCPRouter: @unchecked Sendable {
                 source: "mcp",
                 project: project,
                 conversationID: session.conversationID,
+                callerModel: callerModel,
                 reason: "DB_NOT_OPEN"
             )
         }
@@ -1284,6 +1305,7 @@ final class MCPRouter: @unchecked Sendable {
         source: String,
         project: String?,
         conversationID: String,
+        callerModel: String? = nil,
         reason: String
     ) throws -> ToolOutput {
         guard let dbPath else {
@@ -1297,6 +1319,7 @@ final class MCPRouter: @unchecked Sendable {
             source: source,
             project: project,
             conversationID: conversationID,
+            callerModel: callerModel,
             reason: reason
         )
         return queuedBrainStoreOutput(
@@ -1929,6 +1952,7 @@ final class MCPRouter: @unchecked Sendable {
                     "tags": ["type": "array", "items": ["type": "string"], "description": "Tags for categorization"],
                     "importance": ["type": "integer", "description": "Importance score (1-10)"],
                     "project": ["type": "string", "description": "Project context for the stored memory"],
+                    "caller_model": ["type": "string", "description": "Optional: your own model ID, self-reported. Stored as metadata.model; never inferred."],
                 ] as [String: Any],
                 "required": ["content"]
             ] as [String: Any])

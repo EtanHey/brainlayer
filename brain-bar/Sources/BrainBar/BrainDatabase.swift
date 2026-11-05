@@ -780,6 +780,9 @@ final class BrainDatabase: @unchecked Sendable {
         // already scrubbed, so replay would otherwise find nothing to record.
         let secretScrubRedactions: [String]?
         let secretScrubQuarantineCount: Int?
+        // #655 Part B: the caller's self-reported model. Absent on records queued
+        // before this field existed, which replay exactly as they did before.
+        let callerModel: String?
 
         enum CodingKeys: String, CodingKey {
             case content
@@ -795,6 +798,7 @@ final class BrainDatabase: @unchecked Sendable {
             case conversationID = "conversation_id"
             case secretScrubRedactions = "secret_scrub_redactions"
             case secretScrubQuarantineCount = "secret_scrub_quarantine_count"
+            case callerModel = "caller_model"
         }
 
         init(
@@ -810,7 +814,8 @@ final class BrainDatabase: @unchecked Sendable {
             chunkID: String? = nil,
             conversationID: String? = nil,
             secretScrubRedactions: [String]? = nil,
-            secretScrubQuarantineCount: Int? = nil
+            secretScrubQuarantineCount: Int? = nil,
+            callerModel: String? = nil
         ) {
             self.content = content
             self.tags = tags
@@ -825,6 +830,7 @@ final class BrainDatabase: @unchecked Sendable {
             self.conversationID = conversationID
             self.secretScrubRedactions = secretScrubRedactions
             self.secretScrubQuarantineCount = secretScrubQuarantineCount
+            self.callerModel = BrainDatabase.normalizedCallerModel(callerModel)
         }
 
         init(from decoder: Decoder) throws {
@@ -842,6 +848,11 @@ final class BrainDatabase: @unchecked Sendable {
             conversationID = try container.decodeIfPresent(String.self, forKey: .conversationID)
             secretScrubRedactions = try container.decodeIfPresent([String].self, forKey: .secretScrubRedactions)
             secretScrubQuarantineCount = try container.decodeIfPresent(Int.self, forKey: .secretScrubQuarantineCount)
+            // Lenient on purpose: a malformed model on a queued line drops the model,
+            // never the memory. A strict decode would strand the whole line.
+            callerModel = BrainDatabase.normalizedCallerModel(
+                try? container.decodeIfPresent(String.self, forKey: .callerModel)
+            )
         }
 
         /// This item with content and tags scrubbed and the findings folded in.
@@ -864,7 +875,8 @@ final class BrainDatabase: @unchecked Sendable {
                 chunkID: chunkID,
                 conversationID: conversationID,
                 secretScrubRedactions: result.metadata["secret_scrub_redactions"] as? [String],
-                secretScrubQuarantineCount: result.metadata["secret_scrub_quarantine_count"] as? Int
+                secretScrubQuarantineCount: result.metadata["secret_scrub_quarantine_count"] as? Int,
+                callerModel: callerModel
             )
         }
 
@@ -875,6 +887,48 @@ final class BrainDatabase: @unchecked Sendable {
             if let secretScrubQuarantineCount { metadata["secret_scrub_quarantine_count"] = secretScrubQuarantineCount }
             return metadata
         }
+
+        /// Everything a replayed row records: scrub findings plus caller model provenance,
+        /// so a replayed row carries the same metadata a direct store would have.
+        var replayMetadata: [String: Any] {
+            scrubMetadata.merging(BrainDatabase.callerModelMetadata(callerModel)) { current, _ in current }
+        }
+    }
+
+    /// Longest caller-reported model accepted, in Unicode scalars. Mirrors the
+    /// `caller_model` maxLength advertised on the brain_store inputSchema.
+    static let callerModelMaxLength = 128
+
+    /// The caller's self-reported model, trimmed, or nil when it cannot be trusted as one.
+    /// Nothing is inferred: absent, blank, over-long, control/format characters, the
+    /// `<synthetic>` placeholder, or anything the secret scrubber would touch → unknown.
+    static func normalizedCallerModel(_ raw: String?) -> String? {
+        guard let model = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !model.isEmpty else {
+            return nil
+        }
+        guard model.unicodeScalars.count <= callerModelMaxLength, model != "<synthetic>" else {
+            return nil
+        }
+        for scalar in model.unicodeScalars {
+            switch scalar.properties.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator, .surrogate, .privateUse, .unassigned:
+                return nil
+            default:
+                continue
+            }
+        }
+        let scrubbed = SecretScrubber.scrub(model)
+        guard scrubbed.text == model, scrubbed.quarantineCount == 0 else {
+            return nil
+        }
+        return model
+    }
+
+    /// Authoring-model provenance for a brain_store row. Written only when the caller
+    /// supplied a valid model; never the enrichment_model / enrichment_backend columns.
+    static func callerModelMetadata(_ raw: String?) -> [String: Any] {
+        guard let model = normalizedCallerModel(raw) else { return [:] }
+        return ["model": model, "model_source": "caller_self_reported"]
     }
 
     private var db: OpaquePointer?
@@ -1732,6 +1786,7 @@ final class BrainDatabase: @unchecked Sendable {
         source: String,
         project: String? = nil,
         conversationID: String? = nil,
+        callerModel: String? = nil,
         busyTimeoutMillis: Int32 = 30_000,
         retries: Int = 3
     ) throws -> StoreWriteOutcome {
@@ -1756,7 +1811,8 @@ final class BrainDatabase: @unchecked Sendable {
                 conversationID: conversationID,
                 refreshStatistics: true,
                 retries: retries,
-                busyTimeoutMillis: busyTimeoutMillis
+                busyTimeoutMillis: busyTimeoutMillis,
+                metadata: Self.callerModelMetadata(callerModel)
             )
             return .stored(stored)
         } catch {
@@ -1771,7 +1827,8 @@ final class BrainDatabase: @unchecked Sendable {
                 project: project,
                 createdAt: createdAt,
                 chunkID: chunkID,
-                conversationID: conversationID
+                conversationID: conversationID,
+                callerModel: callerModel
             )
             return .queued(queueID: queued.queueID, queuedAt: queued.queuedAt, chunkID: queued.chunkID)
         }
@@ -1828,6 +1885,7 @@ final class BrainDatabase: @unchecked Sendable {
         createdAt: String? = nil,
         chunkID: String? = nil,
         conversationID: String? = nil,
+        callerModel: String? = nil,
         reason: String = "DB_BUSY"
     ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
         try Self.queuePendingStore(
@@ -1840,6 +1898,7 @@ final class BrainDatabase: @unchecked Sendable {
             createdAt: createdAt,
             chunkID: chunkID,
             conversationID: conversationID,
+            callerModel: callerModel,
             reason: reason,
             sync: pendingStoreSyncForTesting,
             directorySync: pendingStoreDirectorySyncForTesting
@@ -1865,6 +1924,7 @@ final class BrainDatabase: @unchecked Sendable {
         createdAt: String? = nil,
         chunkID: String? = nil,
         conversationID: String? = nil,
+        callerModel: String? = nil,
         reason: String = "DB_BUSY",
         sync: ((Int32) throws -> Void)? = nil,
         directorySync: ((URL) throws -> Void)? = nil
@@ -1890,7 +1950,8 @@ final class BrainDatabase: @unchecked Sendable {
             telemetry: DeferredStoreTelemetry.Origin(epoch: Date().timeIntervalSince1970, reason: reason),
             createdAt: createdAt,
             chunkID: chunkID,
-            conversationID: conversationID
+            conversationID: conversationID,
+            callerModel: callerModel
         ).scrubbed()
         var line = try JSONEncoder().encode(item)
         line.append(0x0A)
@@ -1976,7 +2037,7 @@ final class BrainDatabase: @unchecked Sendable {
                             refreshStatistics: false,
                             retries: retries,
                             busyTimeoutMillis: busyTimeoutMillis,
-                            metadata: item.scrubMetadata
+                            metadata: item.replayMetadata
                         )
                         if stored.outcome.storedNew {
                             DeferredStoreTelemetry.record("committed", dbPath: self.path, queueID: queueID,
@@ -4968,7 +5029,8 @@ final class BrainDatabase: @unchecked Sendable {
             chunkID: chunkID,
             conversationID: item.conversationID,
             secretScrubRedactions: item.secretScrubRedactions,
-            secretScrubQuarantineCount: item.secretScrubQuarantineCount
+            secretScrubQuarantineCount: item.secretScrubQuarantineCount,
+            callerModel: item.callerModel
         )
         return try? JSONEncoder().encode(replayItem)
     }
