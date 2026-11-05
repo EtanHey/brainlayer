@@ -356,11 +356,24 @@ final class MCPRouter: @unchecked Sendable {
             "name": name,
             "description": description,
         ]
-        if let inputSchema = definition["inputSchema"] as? [String: Any] {
+        if var inputSchema = definition["inputSchema"] as? [String: Any] {
+            if let hidden = fullPaletteOnlyProperties[name],
+               var properties = inputSchema["properties"] as? [String: Any] {
+                for property in hidden { properties.removeValue(forKey: property) }
+                inputSchema["properties"] = properties
+            }
             compact["inputSchema"] = removingDescriptions(from: inputSchema)
         }
         return compact
     }
+
+    /// Optional properties advertised only once the palette is expanded. They are still
+    /// accepted and validated against the full schema from a core session. The core boot
+    /// payload has a ratified 1600-byte budget that main already fills (#655 Part B:
+    /// advertising caller_model in core costs 49 bytes and is an owner decision).
+    private static let fullPaletteOnlyProperties: [String: Set<String>] = [
+        "brain_store": ["caller_model"],
+    ]
 
     private static func removingDescriptions(from value: Any) -> Any {
         if let dictionary = value as? [String: Any] {
@@ -1939,8 +1952,7 @@ final class MCPRouter: @unchecked Sendable {
                     "tags": ["type": "array", "items": ["type": "string"], "description": "Tags for categorization"],
                     "importance": ["type": "integer", "description": "Importance score (1-10)"],
                     "project": ["type": "string", "description": "Project context for the stored memory"],
-                    // Core boot budget (1600 bytes, ratified): keep this description this short.
-                    "caller_model": ["type": "string", "description": "Your model ID"],
+                    "caller_model": ["type": "string", "description": "Optional: your own model ID, self-reported. Stored as metadata.model; never inferred."],
                 ] as [String: Any],
                 "required": ["content"]
             ] as [String: Any])

@@ -135,6 +135,31 @@ final class StoreCallerModelTests: XCTestCase {
         XCTAssertEqual(schema["required"] as? [String], ["content"], "caller_model must stay optional")
     }
 
+    /// The core boot payload has no room for another property (ratified 1600-byte budget),
+    /// so core does not advertise caller_model, but a core session can still use it.
+    func testCorePaletteHidesCallerModelButStillAcceptsIt() throws {
+        let core = MCPRouter(profile: "core", dbPath: dbPath)
+        let listed = core.handle(["jsonrpc": "2.0", "id": 1, "method": "tools/list"])
+        let tools = try XCTUnwrap((listed["result"] as? [String: Any])?["tools"] as? [[String: Any]])
+        let storeTool = try XCTUnwrap(tools.first { ($0["name"] as? String) == "brain_store" })
+        let properties = try XCTUnwrap((storeTool["inputSchema"] as? [String: Any])?["properties"] as? [String: Any])
+        XCTAssertNil(properties["caller_model"], "core must not spend boot bytes on caller_model")
+        XCTAssertNotNil(properties["content"])
+
+        let drain = heldDrainQueue()
+        defer { drain.resume() }
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        let router = MCPRouter(profile: "core", dbPath: dbPath, pendingStoreDrainQueue: drain)
+        router.setDatabase(db)
+        let result = try store(router, ["content": "core session with a model", "caller_model": modelA])
+        XCTAssertEqual(result["status"] as? String, "STORED")
+        assertProvenance(try metadata(ofChunk: try XCTUnwrap(result["chunk_id"] as? String)), model: modelA)
+
+        let oversized = try store(router, ["content": "core oversized", "caller_model": String(repeating: "m", count: 129)])
+        XCTAssertEqual(oversized["isError"] as? Bool, true, "core still validates against the full schema")
+    }
+
     // MARK: direct path
 
     func testDirectStoreRecordsSelfReportedModel() throws {
