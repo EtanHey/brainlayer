@@ -1939,7 +1939,8 @@ final class MCPRouter: @unchecked Sendable {
                     "tags": ["type": "array", "items": ["type": "string"], "description": "Tags for categorization"],
                     "importance": ["type": "integer", "description": "Importance score (1-10)"],
                     "project": ["type": "string", "description": "Project context for the stored memory"],
-                    "caller_model": ["type": "string", "description": "Optional: your own model ID, self-reported; stored as metadata.model"],
+                    // Core boot budget (1600 bytes, ratified): keep this description this short.
+                    "caller_model": ["type": "string", "description": "Your model ID"],
                 ] as [String: Any],
                 "required": ["content"]
             ] as [String: Any])
