@@ -77,7 +77,8 @@ MALFORMED = {
         {"canonical": "Zorbleth", "aliases": [f"qw{i}" for i in range(ld.USER_ALIASES_MAX_SURFACES_PER_ENTRY + 1)]}
     ),
     "too_many_entries": _entries(*({"canonical": f"Zorb{i}"} for i in range(ld.USER_ALIASES_MAX_ENTRIES + 1))),
-    "oversized": _entries({"canonical": "Zorbleth", "aliases": ["qwvx"]}) | {"pad": "x" * ld.USER_ALIASES_MAX_BYTES},
+    # Schema-valid JSON padded with whitespace: only the byte bound can reject it.
+    "oversized": json.dumps(_entries({"canonical": "Zorbleth", "aliases": ["qwvx"]})) + " " * ld.USER_ALIASES_MAX_BYTES,
 }
 
 
