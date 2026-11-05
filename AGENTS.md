@@ -431,7 +431,15 @@ brainlayer search "how did I implement authentication"
 - Prompts cache: `~/.local/share/brainlayer/prompts/`
 - Watcher logs: `~/Library/Logs/brainlayer/watch.{out,err}.log`
   (moved from `~/.local/share/brainlayer/logs/watch.{log,err}` by `3dca26a2`, 2026-05-18;
-  the old files are frozen at that date and are NOT a health signal)
+  the old files are frozen at that date and are NOT a health signal — #732: an agent read them
+  as a live lock storm). Those paths are only what the shipped plist sets. **The running watcher
+  is the authority on where it writes:** its `JSONL watcher started:` line and
+  `watcher-health.json` → `log_destinations` name the stdout/stderr targets read from the kernel.
+  Read that before tailing anything. Agents never delete or archive the old files; Etan decides.
+- A vanished JSONL is not a parse failure: `vanished_source_count_total` in
+  `watcher-health.json` counts confirmed deletions (lstat ENOENT), which never raise
+  `watcher_file_ingestion_failed`. A path that reappears under the same inode is resumed only
+  if the 64 bytes before its offset still match; otherwise it is re-ingested from 0 (#732).
 - Socket: `/tmp/brainlayer.sock`
 - Historical enrichment lock: `/tmp/brainlayer-enrichment.lock` (legacy cleanup/safety only)
 - Session dedup: `/tmp/brainlayer_session_*.json`

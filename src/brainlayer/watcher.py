@@ -55,11 +55,9 @@ _DEFAULT_WATCH_MAX_RECORD_BYTES = 128 * 1024 * 1024
 _WATCH_READ_CHUNK_BYTES = 64 * 1024
 _MAX_HEALTH_FAILURE_DETAILS = 100
 _MAX_HEALTH_QUARANTINE_DETAILS = 100
-# Bytes of already-consumed content a tailer remembers, ending at its offset. When a source
-# vanishes and a file reappears at the same path with the same inode -- a rename away and
-# back, or a new file that was handed the deleted file's inode number (ext4 reuses them
-# immediately) -- these bytes are the only evidence of whether resuming at the old offset is
-# safe. Re-ingesting is idempotent (content-hash chunk ids + dedupe); skipping is not (#732).
+# Consumed bytes a tailer remembers, ending at its offset: the only evidence that a path under
+# the same inode (renamed back, or a new file handed a freed inode) is still the same file.
+# Re-ingesting is idempotent (content-hash chunk ids + dedupe); skipping is not (#732).
 _SOURCE_ANCHOR_BYTES = 64
 
 
@@ -67,6 +65,40 @@ _OFFSET_PRUNE_RETRY_ENV = "BRAINLAYER_WATCHER_OFFSET_PRUNE_RETRY_S"
 _DEFAULT_OFFSET_PRUNE_RETRY_S = 900.0
 
 MIN_WATCH_POLL_INTERVAL_S = 30.0
+
+
+def describe_stream_destination(fd: int) -> str:
+    """Name where a file descriptor really writes, read from the kernel, not from docs (#732).
+
+    An operator tailed the documented-but-abandoned `~/.local/share/brainlayer/logs/watch.*` and
+    reported a three-month-old lock storm as live. Only the process knows where its logs go, so
+    the watcher states it on startup and in watcher-health.json. Never raises.
+    """
+    try:
+        mode = os.fstat(fd).st_mode
+    except OSError:
+        return "closed"
+    if stat.S_ISREG(mode):
+        try:
+            import fcntl
+
+            get_path = getattr(fcntl, "F_GETPATH", None)  # macOS
+            if get_path is not None:
+                raw = fcntl.fcntl(fd, get_path, bytes(1024))
+                return os.fsdecode(raw.split(b"\0", 1)[0])
+        except (ImportError, OSError):
+            pass
+        try:
+            return os.readlink(f"/proc/self/fd/{fd}")  # Linux
+        except OSError:
+            return "file (path unavailable)"
+    if stat.S_ISFIFO(mode):
+        return "pipe"
+    if stat.S_ISSOCK(mode):
+        return "socket"
+    if stat.S_ISCHR(mode):
+        return "tty" if os.isatty(fd) else "character device"
+    return "unknown"
 
 
 def enforce_min_poll_interval(poll_interval_s: float) -> float:
@@ -1350,6 +1382,7 @@ class JSONLWatcher:
         # a path leaves the set when discovery sees it again (#732).
         self._vanished_sources: set[str] = set()
         self._vanished_source_count_total = 0
+        self.log_destinations = {"stdout": describe_stream_destination(1), "stderr": describe_stream_destination(2)}
         self._stop = threading.Event()
         self._last_registry_flush = time.monotonic()
         self.health_path = Path(health_path).expanduser() if health_path else None
@@ -1638,11 +1671,10 @@ class JSONLWatcher:
     def _retire_vanished_source(self, filepath: str, tailer: JSONLTailer | None) -> None:
         """Record a confirmed-deleted source once, without alarming as a parse failure (#732).
 
-        A deleted JSONL is not unparseable bytes and retrying it cannot succeed, so it must not
-        reach watcher_file_ingestion_failed, which keeps the health surface alerting. The tailer
-        and registry checkpoint are deliberately kept: startup pruning retires the checkpoint
-        with mount evidence, and if the path comes back the tailer's anchor check decides
-        whether its old offset still applies (a rename back) or not (a reused inode).
+        A deleted JSONL is not unparseable bytes, so it must not reach the parse alarm or keep
+        health alerting. The tailer and registry checkpoint are kept: startup pruning retires the
+        checkpoint with mount evidence, and if the path comes back the tailer's anchor check
+        decides whether the old offset still applies (renamed back) or not (reused inode).
         """
         self._clear_file_ingestion_failure(filepath)
         if tailer is not None:
@@ -1868,6 +1900,7 @@ class JSONLWatcher:
             "quarantined_record_count_total": self._quarantined_record_count_total,
             "quarantined_records": list(self._quarantined_records),
             "vanished_source_count_total": self._vanished_source_count_total,
+            "log_destinations": self.log_destinations,
             **watchdog,
         }
         try:
@@ -2221,6 +2254,11 @@ class JSONLWatcher:
     def start(self):
         """Start the watcher loop (blocking). Call stop() from another thread."""
         logger.info("JSONL watcher started: %s", self.watch_dir)
+        logger.info(
+            "Watcher logs: stdout -> %s, stderr -> %s",
+            self.log_destinations["stdout"],
+            self.log_destinations["stderr"],
+        )
         start_time = time.monotonic()
 
         # Emit startup telemetry

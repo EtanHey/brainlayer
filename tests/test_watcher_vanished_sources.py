@@ -217,3 +217,36 @@ def test_file_missing_from_discovery_but_still_on_disk_is_not_declared_vanished(
     _poll(watcher)
 
     assert _health(tmp_path)["vanished_source_count_total"] == 0
+
+
+def test_watcher_names_its_real_log_destinations_from_a_child_process(tmp_path):
+    """A real subprocess with redirected stdout/stderr, as launchd's StandardOutPath does."""
+    import subprocess
+    import sys
+
+    out_log, err_log, report = tmp_path / "watch.out.log", tmp_path / "watch.err.log", tmp_path / "report.json"
+    script = (
+        "import json, sys\n"
+        "from brainlayer.watcher import describe_stream_destination\n"
+        "json.dump({'stdout': describe_stream_destination(1), 'stderr': describe_stream_destination(2)},"
+        " open(sys.argv[1], 'w'))\n"
+    )
+    with out_log.open("w") as out_handle, err_log.open("w") as err_handle:
+        subprocess.run([sys.executable, "-c", script, str(report)], stdout=out_handle, stderr=err_handle, check=True)
+    destinations = json.loads(report.read_text())
+    assert {key: os.path.realpath(value) for key, value in destinations.items()} == {
+        "stdout": os.path.realpath(out_log),
+        "stderr": os.path.realpath(err_log),
+    }
+
+    piped = subprocess.run(
+        [sys.executable, "-c", script, str(report)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+    )
+    assert piped.returncode == 0
+    assert json.loads(report.read_text()) == {"stdout": "pipe", "stderr": "pipe"}
+
+
+def test_health_snapshot_carries_log_destinations(tmp_path, monkeypatch):
+    watcher, _sessions, _flushed, _alarms = _make_watcher(tmp_path, monkeypatch)
+    watcher.poll_once()
+    assert set(_health(tmp_path)["log_destinations"]) == {"stdout", "stderr"}
