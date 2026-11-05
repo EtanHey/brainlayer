@@ -550,7 +550,8 @@ class _CalendarIndexCheckpoint:
             elif best is None or best["uncounted_files"] or not best["files_remaining"]:
                 growing, best = 0, backlog
             elif (backlog["chunks_remaining"], backlog["files_remaining"]) < (
-                best["chunks_remaining"], best["files_remaining"]
+                best["chunks_remaining"],
+                best["files_remaining"],
             ):
                 growing, best = 0, backlog
             else:
