@@ -334,7 +334,36 @@ def _extract_entry_metadata(entry: dict) -> dict[str, Any]:
     entry_type = entry.get("type")
     if entry_type in ("user", "assistant"):
         meta["sender"] = entry_type
+    if entry_type == "assistant":
+        message = entry.get("message")
+        model = transcript_author_model(message.get("model") if isinstance(message, dict) else None)
+        if model:
+            meta["model"] = model
     return meta
+
+
+# Claude Code writes this placeholder on assistant turns no model produced
+# (API errors, interrupted turns). It is not an author.
+_NON_AUTHOR_MODELS = frozenset({"<synthetic>"})
+_MAX_MODEL_ID_LEN = 128
+
+
+def transcript_author_model(raw: Any) -> str | None:
+    """Return the model id a transcript recorded for a turn, or None when unknown.
+
+    This is AUTHORING provenance, read verbatim from the transcript entry. It is
+    unrelated to ``chunks.enrichment_model`` (which model enriched the chunk later).
+    Nothing is inferred: a missing, non-string, placeholder or malformed value is
+    unknown rather than guessed.
+    """
+    if not isinstance(raw, str):
+        return None
+    model = raw.strip()
+    if not model or model in _NON_AUTHOR_MODELS or len(model) > _MAX_MODEL_ID_LEN:
+        return None
+    if not model.isprintable():
+        return None
+    return model
 
 
 def classify_content(entry: dict) -> ClassifiedContent | None:
