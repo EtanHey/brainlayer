@@ -2000,7 +2000,14 @@ final class BrainDatabase: @unchecked Sendable {
                     }
                 }
 
-                rewritePendingStoreFile(path: path, snapshot: snapshot, remainingLines: remaining)
+                // The queue line is the durable copy of a DEFERRED receipt, synced with
+                // F_FULLFSYNC before it was acknowledged. Replay commits run under
+                // synchronous=NORMAL, so dropping the line before those WAL frames reach
+                // stable storage would trade a durable copy for one a power loss can
+                // roll back. No barrier, no drop: the rows stay and replay is idempotent.
+                if remaining.count == lines.count || replayedCommitsAreDurable() {
+                    rewritePendingStoreFile(path: path, snapshot: snapshot, remainingLines: remaining)
+                }
                 if !flushed.isEmpty {
                     refreshSearchStatisticsBestEffort()
                 }
