@@ -40,6 +40,14 @@ class DriveCredentialError(RuntimeError):
     """A payload-free credential failure safe for logs and notifications."""
 
 
+class DriveRefreshUnavailableError(DriveCredentialError):
+    """Google's token endpoint failed retryably (5xx/429) after google-auth's own retries.
+
+    Not lost access: the grant was never rejected. ``credential_status`` keeps the local
+    consent clock; backup receipts still read as a refresh failure, not a consent loss.
+    """
+
+
 def resolve_paths(*, environ: dict[str, str] | None = None, home: Path | None = None) -> tuple[Path, Path, Path]:
     environ = os.environ if environ is None else environ
     home = Path.home() if home is None else Path(home)
@@ -211,6 +219,11 @@ def load_credentials(
                         )
                     _report_consent(alert_reporter, reason)
                     raise DriveCredentialError(reason) from None
+                if getattr(exc, "retryable", False) is True:
+                    # A permanent rejection (checked above) always wins over a retryable flag.
+                    raise DriveRefreshUnavailableError(
+                        "Drive token refresh temporarily unavailable: Google's token endpoint failed retryably"
+                    ) from None
                 raise DriveCredentialError("Drive token refresh failed; run brainlayer backup auth") from None
             if persist_refresh:
                 token_data["access_token"] = creds.token
@@ -255,8 +268,10 @@ def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[
             _report_consent(kwargs.get("alert_reporter", job_alerts.report), reason)
             return {"state": "invalid", "reason": reason, **timing}
         load_credentials(**kwargs, migrate=False, persist_refresh=False, now=now)
-    except TransportError:
+    except (TransportError, DriveRefreshUnavailableError) as exc:
         reason = "status checked offline; last known state"
+        if isinstance(exc, DriveRefreshUnavailableError):
+            reason = "status checked while Google's token endpoint was temporarily unavailable; last known state"
         if days_left is not None and days_left <= 2:
             # Text --status prints only the reason, so name the local consent deadline (never a server time).
             reason = f"{reason}: Drive access expires at {expires.isoformat()}: Reconnect in BrainBar"
