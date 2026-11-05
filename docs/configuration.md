@@ -468,7 +468,10 @@ hotlane, watcher, drain, index, tier-3 ingest, decay and enrichment using mainte
 that jobs remain unloaded, BrainBar processes are gone and no writable database
 descriptors remain before applying. Any failed gate aborts before writing.
 Service restoration runs in `finally`; services previously down or deliberately
-paused remain down, and resume failures are reported by count. Proof and rehearsal
+paused remain down, and resume failures are reported by count. Refusal JSON adds
+`cause` (a fixed category such as `maintenance-abort`, `sqlite-busy`, `os-error`,
+`scrub-refusal`, or `unknown`) and `gate` (`quiet-window`, `queue-idle`, `lsof-writers`,
+`maintenance-lock`, or null); neither ever carries exception text. Proof and rehearsal
 must use copies and synthetic service stubs; canonical execution belongs to the
 deployment lead's maintenance window.
 
