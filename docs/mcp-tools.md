@@ -79,6 +79,7 @@ Persist a memory (idea, decision, learning, mistake, etc.) for future retrieval.
 | `tags` | array[string] | No | Tags for categorization |
 | `importance` | integer | No | Importance score 1-10 (auto-detected if omitted) |
 | `entity_id` | string | No | Link memory to a KG entity |
+| `caller_model` | string | No | Your own model ID, self-reported (max 128). Stored as `metadata.model` with `metadata.model_source = "caller_self_reported"` on direct, queued and replayed writes. Blank, control/format characters, `<synthetic>` or secret-shaped values are dropped and the memory is still stored. A non-string or over-long value is `REJECTED`. Never inferred, and unrelated to the enrichment columns. |
 
 Issue type supports lifecycle tracking: status (open→in_progress→done→archived), severity (critical/high/medium/low), and code references (file_path, function_name, line_number).
 
