@@ -1,6 +1,6 @@
 --------------------------- MODULE CalendarGuard ---------------------------
 EXTENDS Naturals, TLC
-CONSTANTS OffLoop, Budgeted, Fault, Mode, Kill, OperationBudget, HeartbeatBudget, Horizon
+CONSTANTS OffLoop, Budgeted, Fault, Mode, Kill, OperationBudget, HeartbeatBudget, Horizon, MaxExtensions, GraceCap
 VARIABLE s
 vars == <<s>>
 Operations == {"pre", "runner", "custody", "finish", "summary"}
@@ -8,7 +8,8 @@ Init == s = [pc |-> "pre", work |-> FALSE, left |-> 0, age |-> 0,
              tick |-> 0, heartbeat |-> 0, childAge |-> 0, guard |-> "off",
              parent |-> TRUE, lock |-> TRUE, child |-> "none", durable |-> FALSE,
              sent |-> FALSE, registered |-> FALSE, ran |-> 0, killed |-> FALSE,
-             summary |-> FALSE, envKilled |-> FALSE]
+             summary |-> FALSE, envKilled |-> FALSE, extensions |-> 0,
+             deadline |-> HeartbeatBudget, stalled |-> FALSE, graceUsed |-> 0]
 
 BeginOperation == /\ s.parent /\ s.pc \in Operations /\ ~s.work
                   /\ \E delay \in {0, 1, 3}:
@@ -67,30 +68,50 @@ SendH == s.guard = "H" /\ s.parent /\ LoopAvailable
 NeedsTime == (s.parent /\ s.work /\ (s.left > 0 \/ Wedged))
              \/ (s.parent /\ s.pc = "wait" /\ s.childAge < 2)
              \/ (s.guard = "Q" /\ (s.heartbeat < 1 \/ Mode = "q-stall"))
+(* One tick is a guard scheduling quantum. A missed scheduling quantum is
+   nondeterministic; its elapsed time is charged to the absolute grace cap.
+   GraceCap=5 abstracts 300 seconds relative to the heartbeat window of 2. *)
+ExtensionAvailable == s.guard = "H" /\ s.stalled
+                      /\ s.heartbeat >= s.deadline
+                      /\ s.extensions < MaxExtensions
+                      /\ s.heartbeat < HeartbeatBudget + GraceCap
+GrantExtension == /\ ExtensionAvailable
+                  /\ LET end == IF s.heartbeat + HeartbeatBudget < HeartbeatBudget + GraceCap
+                                 THEN s.heartbeat + HeartbeatBudget ELSE HeartbeatBudget + GraceCap
+                      IN s' = [s EXCEPT !.extensions = @ + 1, !.deadline = end,
+                                        !.graceUsed = end - HeartbeatBudget, !.stalled = FALSE]
 Tick == /\ NeedsTime /\ s.tick < Horizon
-        /\ ~(s.guard = "H" /\ s.heartbeat >= HeartbeatBudget)
+        /\ ~(s.guard = "H" /\ s.heartbeat >= s.deadline)
         /\ ~(s.guard = "Q" /\ s.heartbeat >= HeartbeatBudget + 1)
-        /\ s' = [s EXCEPT !.tick = @ + 1,
+        /\ \E stalledNext \in BOOLEAN:
+           s' = [s EXCEPT !.stalled = stalledNext,
+                  !.extensions = IF SendH THEN 0 ELSE @,
+                  !.deadline = IF SendH THEN HeartbeatBudget ELSE @,
+                  !.graceUsed = IF SendH THEN 0 ELSE @,
+                  !.tick = @ + 1,
                   !.age = IF s.work THEN @ + 1 ELSE @,
                   !.left = IF s.work /\ s.left > 0 /\ ~Wedged THEN @ - 1 ELSE @,
                   !.heartbeat = IF SendH THEN 0 ELSE @ + 1,
                   !.childAge = IF s.child = "running" THEN @ + 1 ELSE @]
-GuardTimeout == /\ ((s.guard = "H" /\ s.heartbeat >= HeartbeatBudget)
+GuardTimeout == /\ ~ExtensionAvailable
+                /\ ((s.guard = "H" /\ s.heartbeat >= s.deadline)
                    \/ (s.guard = "Q" /\ s.heartbeat >= HeartbeatBudget + 1))
                 /\ s' = [s EXCEPT !.parent = FALSE, !.killed = TRUE, !.guard = "reap",
                           !.child = IF s.child = "gated" THEN "gone" ELSE @]
 Progress == BeginOperation \/ CompleteOperation \/ LaunchGuard \/ Spawn
             \/ WriteRegistration \/ ReleaseGate \/ FinishChild \/ Quiesce \/ Close
 Next == Progress \/ ReadRegistration \/ GuardEOF \/ GuardReap \/ Tick
-        \/ GuardTimeout \/ EnvironmentKill
+        \/ GuardTimeout \/ GrantExtension \/ EnvironmentKill
 Spec == Init /\ [][Next]_vars /\ WF_vars(Progress) /\ WF_vars(Tick)
         /\ WF_vars(GuardTimeout) /\ WF_vars(GuardEOF) /\ WF_vars(GuardReap)
-        /\ WF_vars(ReadRegistration)
+        /\ WF_vars(ReadRegistration) /\ WF_vars(GrantExtension)
 TypeOK == /\ s.pc \in Operations \cup {"launch", "spawn", "register", "release",
                                        "wait", "shutdown", "guard-exit", "close", "done"}
           /\ s.guard \in {"off", "H", "Q", "reap", "gone"}
           /\ s.child \in {"none", "gated", "running", "gone"}
           /\ s.ran \in 0..1 /\ s.tick \in 0..Horizon
+NoPrematureTimeout == ExtensionAvailable => ~ENABLED GuardTimeout
+GraceWithinCap == s.graceUsed <= GraceCap /\ s.extensions <= MaxExtensions
 ExactlyOneChild == s.ran <= 1 /\ (s.ran = 1 => s.durable /\ s.sent)
 (* Deliberately false reachability assertion: the parent can die after sending
    registration but before receipt. This is not a product safety promise. *)
