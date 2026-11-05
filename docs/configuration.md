@@ -316,6 +316,19 @@ full-maintenance restore failures remain failures with exit **76** and an alert.
 Quiet-window, queue-idle and writer checks run again after backup;
 post-backup gate failure skips service bootout and all DB maintenance with exit **76**.
 
+`python -m brainlayer.maintenance` exit codes (#1040): **0** ok; **75** (`EX_TEMPFAIL`) only for a
+deliberate, retryable deferral (a quiet-window, queue-idle or writer gate, a refused window-bound
+hold, or an optional VACUUM step skipped for backup custody); **70** (`EX_SOFTWARE`) for a genuine
+failure — services that could not be resumed (light/burn), a burn drain that failed, pathological
+search latency, a quiesce or watchdog-hold failure, or any abort that does not declare itself a
+deferral; **76** for a weekly full-pass failure; **77** when the maintenance lock timed out. A
+deferral that then cannot restore its services exits **70** (**76** in a full pass), never 75. Every
+terminal record the run prints, and its row in the maintenance log, carries `status`, `outcome`
+(`ok`/`deferred`/`failed`), `exit_code`, a UTC `ts` and `run_id`. Under the calendar, `run_id` is the
+`maintenance_run_id` on that step's `spawn` and `finished` records (passed in
+`BRAINLAYER_MAINTENANCE_RUN_ID`), so readers correlate on the record, not on a log's mtime; a manual
+run gets a fresh id. Readers fall back to the reason allowlist only for older records without `outcome`.
+
 Every writer pause (a supervisor `MaintenanceHold`) is bounded. It lasts at most
 `BRAINLAYER_MAINTENANCE_HOLD_MAX_S` (default **3600**). A calendar or scheduled maintenance hold is
 also window-bound: it starts only inside the quiet window and ends 10 minutes before the window closes

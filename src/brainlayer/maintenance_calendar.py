@@ -32,7 +32,7 @@ from .config import configured_brainlayer_env_value, get_user_env_path
 from .drive_credentials import _atomic_write
 from .index_budget import CALENDAR_INDEX_UNWIND_S, calendar_index_budget_s
 from .job_alerts import active_alerts, report
-from .maintenance_control import MaintenanceHold
+from .maintenance_control import MAINTENANCE_RUN_ID_ENV, MaintenanceHold
 from .supervisor_guard import (
     MAX_STALL_GRACE_S,
     Custody,
@@ -709,6 +709,8 @@ async def _execute_step(
             identity = (
                 {"backup_invocation_id": env[BACKUP_INVOCATION_ENV]}
                 if step.name == "backup-daily" and env.get(BACKUP_INVOCATION_ENV)
+                else {"maintenance_run_id": env[MAINTENANCE_RUN_ID_ENV]}
+                if step.name in MAINTENANCE_STEPS and env.get(MAINTENANCE_RUN_ID_ENV)
                 else {}
             )
             record(directory, event="spawn", step=step.name, pid=child.pid, start_time=birth, **identity)
@@ -768,12 +770,18 @@ def finish(
     reason=None,
     replaces=None,
     backup_invocation_id=None,
+    maintenance_run_id=None,
     preserve_abandonment_alerts=False,
 ):
     status = "stopped" if stopped else "deferred" if code == 75 else "ok" if code == 0 else "failed"
     detail = {
         key: value
-        for key, value in dict(reason=reason, replaces=replaces, backup_invocation_id=backup_invocation_id).items()
+        for key, value in dict(
+            reason=reason,
+            replaces=replaces,
+            backup_invocation_id=backup_invocation_id,
+            maintenance_run_id=maintenance_run_id,
+        ).items()
         if value is not None
     }
     record(directory, event="finished", step=step.name, status=status, returncode=code, **detail)
@@ -834,6 +842,7 @@ async def _finish_step(*args, **kwargs):
 
 
 HELD_STEPS = frozenset({"maintenance-nightly", "maintenance-weekly", "repair-fts"})
+MAINTENANCE_STEPS = frozenset({"maintenance-nightly", "maintenance-weekly"})
 
 
 @asynccontextmanager
@@ -1067,6 +1076,7 @@ async def run_calendar(
         )
         env.pop("BRAINLAYER_BACKUP_SUPERVISED_CHILD", None)
         env.pop(BACKUP_INVOCATION_ENV, None)
+        env.pop(MAINTENANCE_RUN_ID_ENV, None)  # Never let an inherited id stand for this run.
         for step in steps:
             active_step = step.name
             if stop.is_set():
@@ -1074,6 +1084,7 @@ async def run_calendar(
                 continue
             code, missed, reason, step_failed = 1, False, None, False
             invocation = uuid.uuid4().hex if step.name == "backup-daily" else None
+            run_id = uuid.uuid4().hex if step.name in MAINTENANCE_STEPS else None
             try:
                 if failed_recovery:
                     blocked, window, window_reason = await _blocking(
@@ -1110,6 +1121,7 @@ async def run_calendar(
                                 XPC_SERVICE_NAME=f"com.brainlayer.{_service_name(step)}",
                             )
                             | ({BACKUP_INVOCATION_ENV: invocation} if invocation else {})
+                            | ({MAINTENANCE_RUN_ID_ENV: run_id} if run_id else {})
                         )
                         try:
                             async with step_hold(client, guard, child_env, step, now_fn) as held_env:
@@ -1171,6 +1183,7 @@ async def run_calendar(
                 reason=reason,
                 replaces="maintenance-nightly" if weekly_substitution and step.name == "maintenance-weekly" else None,
                 backup_invocation_id=invocation,
+                maintenance_run_id=run_id,
                 preserve_abandonment_alerts=transcript_recovery or failed_recovery,
             )
         active_step = None
