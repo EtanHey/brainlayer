@@ -172,6 +172,33 @@ def _user_surface(value: object, where: str) -> str:
     return surface
 
 
+def _user_alias_entry(item: object, where: str) -> LexicalDefenseEntry:
+    if (
+        not isinstance(item, dict)
+        or "canonical" not in item
+        or not set(item) <= {"canonical", "aliases", "split_forms"}
+    ):
+        raise UserAliasConfigError(f"{where}: keys must be canonical plus optional aliases/split_forms")
+    lists = {}
+    for key in ("aliases", "split_forms"):
+        values = item.get(key, [])
+        if not isinstance(values, list):
+            raise UserAliasConfigError(f"{where}.{key}: must be a list")
+        lists[key] = tuple(_user_surface(value, f"{where}.{key}") for value in values)
+    if len(lists["aliases"]) + len(lists["split_forms"]) > USER_ALIASES_MAX_SURFACES_PER_ENTRY:
+        raise UserAliasConfigError(f"{where}: more than {USER_ALIASES_MAX_SURFACES_PER_ENTRY} surfaces")
+    return LexicalDefenseEntry(
+        canonical=_user_surface(item["canonical"], f"{where}.canonical"),
+        category="user_alias",
+        script="user",
+        protect_from_split=False,
+        swift_override_priority=0,
+        aliases=lists["aliases"],
+        split_forms=lists["split_forms"],
+        sources=("user_config",),
+    )
+
+
 def parse_user_alias_entries(raw: bytes) -> list[LexicalDefenseEntry]:
     """Validate the user file strictly. Any violation rejects the WHOLE file."""
     if len(raw) > USER_ALIASES_MAX_BYTES:
@@ -187,36 +214,7 @@ def parse_user_alias_entries(raw: bytes) -> list[LexicalDefenseEntry]:
     items = payload["entries"]
     if not isinstance(items, list) or len(items) > USER_ALIASES_MAX_ENTRIES:
         raise UserAliasConfigError(f"entries must be a list of at most {USER_ALIASES_MAX_ENTRIES}")
-    entries: list[LexicalDefenseEntry] = []
-    for index, item in enumerate(items):
-        where = f"entries[{index}]"
-        if (
-            not isinstance(item, dict)
-            or "canonical" not in item
-            or not set(item) <= {"canonical", "aliases", "split_forms"}
-        ):
-            raise UserAliasConfigError(f"{where}: keys must be canonical plus optional aliases/split_forms")
-        lists = {}
-        for key in ("aliases", "split_forms"):
-            values = item.get(key, [])
-            if not isinstance(values, list):
-                raise UserAliasConfigError(f"{where}.{key}: must be a list")
-            lists[key] = tuple(_user_surface(value, f"{where}.{key}") for value in values)
-        if len(lists["aliases"]) + len(lists["split_forms"]) > USER_ALIASES_MAX_SURFACES_PER_ENTRY:
-            raise UserAliasConfigError(f"{where}: more than {USER_ALIASES_MAX_SURFACES_PER_ENTRY} surfaces")
-        entries.append(
-            LexicalDefenseEntry(
-                canonical=_user_surface(item["canonical"], f"{where}.canonical"),
-                category="user_alias",
-                script="user",
-                protect_from_split=False,
-                swift_override_priority=0,
-                aliases=lists["aliases"],
-                split_forms=lists["split_forms"],
-                sources=("user_config",),
-            )
-        )
-    return entries
+    return [_user_alias_entry(item, f"entries[{index}]") for index, item in enumerate(items)]
 
 
 def merge_user_alias_entries(
@@ -244,7 +242,8 @@ def merge_user_alias_entries(
 
 
 _effective_lock = threading.Lock()
-_effective_cache: tuple[tuple[str, int, int] | None, LexicalDefenseDictionary] | None = None
+# (user-file stamp, effective dictionary); read and replaced only under _effective_lock.
+_effective_cache: list[tuple[tuple[str, int, int] | None, LexicalDefenseDictionary]] = []
 
 
 def _user_file_stamp(path: Path) -> tuple[str, int, int] | None:
@@ -265,13 +264,12 @@ def load_effective_lexical_defense_dictionary(user_path: Path | None = None) -> 
     restart. A missing file yields exactly the packaged dictionary. A malformed,
     oversized or unreadable file is ignored whole with one warning per file version.
     """
-    global _effective_cache
     base = load_lexical_defense_dictionary()
     path = user_path or default_user_aliases_path()
     stamp = _user_file_stamp(path)
     with _effective_lock:
-        if _effective_cache is not None and _effective_cache[0] == stamp:
-            return _effective_cache[1]
+        if _effective_cache and _effective_cache[0][0] == stamp:
+            return _effective_cache[0][1]
         effective = base
         if stamp is not None:
             try:
@@ -282,5 +280,5 @@ def load_effective_lexical_defense_dictionary(user_path: Path | None = None) -> 
                     logger.warning("lexical defense: %d user alias entries skipped on conflict: %s", len(skipped), path)
             except (OSError, UserAliasConfigError) as exc:
                 logger.warning("lexical defense: ignoring user alias file %s: %s", path, exc)
-        _effective_cache = (stamp, effective)
+        _effective_cache[:] = [(stamp, effective)]
         return effective

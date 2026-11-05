@@ -17,7 +17,7 @@ from tests.test_search_alias_expansion import _insert_chunk, mock_model  # noqa:
 
 @pytest.fixture(autouse=True)
 def _fresh_cache(monkeypatch):
-    monkeypatch.setattr(ld, "_effective_cache", None)
+    monkeypatch.setattr(ld, "_effective_cache", [])
 
 
 def _write(path, payload):
