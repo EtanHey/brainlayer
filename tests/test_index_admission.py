@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 import brainlayer.cli as cli
 import brainlayer.index_new as index_new
 import brainlayer.vector_store as storage
-from brainlayer.index_admission import AdmissionBackoff, IndexAdmissionExhausted
+from brainlayer.index_admission import ADMISSION_CAP_S, AdmissionBackoff, IndexAdmissionExhausted
 from tests.test_cli_index_calendar import prepare
 
 
@@ -213,8 +213,10 @@ def test_no_admission_within_budget_defers_with_receipt(tmp_path, monkeypatch):
     assert "backlog_delta_chunks=-64" in deferred
     assert len(committed) == 64 and len(sleeps) > 5
     # The wait consumed the budget instead of quitting at the first rollback burst,
-    # and the last sleep still left one attempt's reserve before the deadline.
-    assert 100.0 + 600 - 60 <= clock[0] < 100.0 + 600
+    # and the last sleep still left one attempt's reserve before the deadline. The
+    # backoff stops once the next jittered delay (at most ADMISSION_CAP_S) no longer
+    # fits, so the final sleep can end up to one cap earlier than a full budget.
+    assert 100.0 + 600 - 60 - ADMISSION_CAP_S <= clock[0] < 100.0 + 600
     checkpoint = json.loads(next(tmp_path.glob("index-checkpoint-*.json")).read_text())
     assert next(iter(checkpoint["files"].values()))["next_chunk"] == 64
     backlog = json.loads(next(tmp_path.glob("index-backlog-*.json")).read_text())
