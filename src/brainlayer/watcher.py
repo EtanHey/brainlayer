@@ -1603,9 +1603,7 @@ class JSONLWatcher:
                 line["_author_model_source"] = "codex_turn_context"
             if context.model_provider:
                 line["_author_model_provider"] = context.model_provider
-        tailer.codex_turn_context = CodexTurnContext(
-            source_inode, tailer.offset, context.model, context.model_provider
-        )
+        tailer.codex_turn_context = CodexTurnContext(source_inode, tailer.offset, context.model, context.model_provider)
 
     def _checkpoint_discarded_progress(
         self,

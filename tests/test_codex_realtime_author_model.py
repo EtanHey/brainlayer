@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from brainlayer.watcher import JSONLWatcher, WatchRoot, scan_codex_turn_context
+from brainlayer.watcher import JSONLWatcher, WatchRoot
 from brainlayer.watcher_bridge import create_flush_callback
 
 MODEL_A = "codex-fixture-model-a"
@@ -253,7 +253,9 @@ def test_context_is_per_file(env):
 def test_turn_context_without_a_usable_model_makes_the_next_turn_unknown(env):
     tmp_path, sessions = env
     source = _source(sessions)
-    source.write_bytes(_encode([_meta(), _turn(MODEL_A), _assistant(_say(0)), _turn("<synthetic>"), _assistant(_say(1))]))
+    source.write_bytes(
+        _encode([_meta(), _turn(MODEL_A), _assistant(_say(0)), _turn("<synthetic>"), _assistant(_say(1))])
+    )
 
     _drain(_watcher(tmp_path, sessions))
 
@@ -261,6 +263,8 @@ def test_turn_context_without_a_usable_model_makes_the_next_turn_unknown(env):
 
 
 def test_prefix_scan_treats_an_unparseable_turn_context_as_unknown(tmp_path):
+    from brainlayer.watcher import scan_codex_turn_context
+
     source = tmp_path / "rollout.jsonl"
     source.write_bytes(_encode([_meta(), _turn(MODEL_A)]) + b'{"type": "turn_context", "payload": {"mod\n')
 
@@ -271,6 +275,8 @@ def test_prefix_scan_treats_an_unparseable_turn_context_as_unknown(tmp_path):
 
 
 def test_prefix_scan_refuses_a_file_that_is_not_the_inode_being_read(tmp_path):
+    from brainlayer.watcher import scan_codex_turn_context
+
     source = tmp_path / "rollout.jsonl"
     source.write_bytes(_encode([_meta(), _turn(MODEL_A)]))
 
