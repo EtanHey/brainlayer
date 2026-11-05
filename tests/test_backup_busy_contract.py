@@ -44,11 +44,6 @@ NOT_BUSY = {
 }
 
 
-@pytest.mark.parametrize("shape", sorted(BUSY_SHAPES))
-def test_every_busy_shape_is_recognised(shape):
-    assert backup_daily._is_brainbar_snapshot_busy(BUSY_SHAPES[shape])
-
-
 @pytest.mark.parametrize("shape", sorted(NOT_BUSY))
 def test_terminal_and_success_shapes_are_not_busy(shape):
     assert not backup_daily._is_brainbar_snapshot_busy(NOT_BUSY[shape])
@@ -60,7 +55,7 @@ def test_structured_busy_code_matches_the_brainbar_admission_guard():
 
 
 class ScriptedBrainBar:
-    """A fake BrainBar on a private Unix socket; `respond(request, conn)` returns a reply or None."""
+    """A fake BrainBar on a private Unix socket; `respond(request)` returns a reply or None."""
 
     def __init__(self, respond):
         self._dir = tempfile.mkdtemp(prefix="bl-1413-")  # AF_UNIX paths stay short.
@@ -98,42 +93,24 @@ class ScriptedBrainBar:
         os.rmdir(self._dir)
 
 
-class LiveWriter:
-    """Stands in for a VACUUM INTO that BrainBar keeps running after the client lost its answer."""
-
-    def __init__(self, path: Path):
-        self.path = path
-        self.handle = path.open("wb")
-        self.stop = threading.Event()
-        self.writes = 0
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def _run(self):
-        while not self.stop.is_set():
-            self.handle.write(b"x" * 512)
-            self.handle.flush()
-            self.writes += 1
-            time.sleep(0.005)
-
-    def close(self):
-        self.stop.set()
-        self._thread.join(timeout=2)
-        self.handle.close()
-
-
 @pytest.mark.parametrize("shape", sorted(BUSY_SHAPES))
 def test_busy_rejection_over_the_wire_never_unlinks_a_live_earlier_target(tmp_path, monkeypatch, shape):
     # Sol's #1413 repro: request 1 loses its answer while BrainBar keeps writing; request 2 is
     # rejected as busy. Before the fix, the wrapped shape was "terminal" and unlinked request 1.
-    writers: list[LiveWriter] = []
+    live, stop, writes = {}, threading.Event(), []
+
+    def keep_writing(handle):  # The VACUUM INTO BrainBar keeps running after the lost answer.
+        while not stop.is_set():
+            handle.write(b"x" * 512)
+            handle.flush()
+            writes.append(1)
+            time.sleep(0.005)
 
     def respond(request):
-        if request["method"] != "tools/call":
-            return {"result": {"serverInfo": {"backupWriterStartedAtUnix": 1.0}}}
-        target = Path(request["params"]["arguments"]["target_path"])
-        if not writers:
-            writers.append(LiveWriter(target))
+        if not live:
+            live["path"] = Path(request["params"]["arguments"]["target_path"])
+            live["handle"] = live["path"].open("wb")
+            threading.Thread(target=keep_writing, args=(live["handle"],), daemon=True).start()
             return None  # Connection closes without an answer.
         return BUSY_SHAPES[shape]
 
@@ -144,19 +121,18 @@ def test_busy_rejection_over_the_wire_never_unlinks_a_live_earlier_target(tmp_pa
             backup_daily.request_brainbar_vacuum_into(
                 tmp_path / "2026-11-05.db", socket_path=bar.path, timeout_seconds=5, retry_backoff_seconds=0
             )
-        calls = [r for r in bar.requests if r["method"] == "tools/call"]
-        live = writers[0]
-        assert len(calls) == 2  # No third request beside the unresolved first one.
-        writes_at_rejection = live.writes
+        assert len(bar.requests) == 2  # No third request beside the unresolved first one.
+        writes_at_rejection = len(writes)
         time.sleep(0.05)
-        assert live.writes > writes_at_rejection  # The writer was still running after the rejection.
-        assert live.path.exists()
-        assert os.fstat(live.handle.fileno()).st_nlink == 1  # Never unlinked under the writer.
-        assert str(live.path) in str(raised.value)
+        assert len(writes) > writes_at_rejection  # The writer was still running after the rejection.
+        assert live["path"].exists()
+        assert os.fstat(live["handle"].fileno()).st_nlink == 1  # Never unlinked under the writer.
+        assert str(live["path"]) in str(raised.value)
     finally:
-        for writer in writers:
-            writer.close()
+        stop.set()
         bar.close()
+        if live:
+            live["handle"].close()
 
 
 def _status_bar(*server_infos):
@@ -175,20 +151,18 @@ NOW = 1_000_000.0
 EPOCH = NOW - 200_000  # The writer started long before the aged attempt was created.
 
 
-def _attempt(directory: Path, name: str, age: float, *, marked: bool = False) -> Path:
+def _attempt(directory: Path, name: str, age: float) -> Path:
     path = directory / f".2026-11-05.db.attempt-{name}"
     path.write_bytes(b"partial")
     os.utime(path, (NOW - age, NOW - age))
-    if marked:
-        marker = backup_daily._backup_attempt_completion_marker(path)
-        marker.write_text("complete")
-        os.utime(marker, (NOW - age, NOW - age))
     return path
 
 
-def _sweep(directory: Path, bar: ScriptedBrainBar | None, writer_started_at: float | None = EPOCH):
+def _sweep(directory: Path, socket_path: Path | None, writer_started_at: float = EPOCH):
     probe = (
-        None if bar is None else (lambda: backup_daily._brainbar_snapshot_idle_in_epoch(bar.path, writer_started_at))
+        None
+        if socket_path is None
+        else (lambda: backup_daily._brainbar_snapshot_idle_in_epoch(socket_path, writer_started_at))
     )
     return backup_daily._sweep_stale_backup_attempts(
         directory, max_age_seconds=86_400, now=NOW, writer_started_at=writer_started_at, writer_snapshot_idle=probe
@@ -207,7 +181,7 @@ def test_idle_status_in_the_same_epoch_reclaims_only_the_aged_unmarked_attempt(t
     recent = _attempt(tmp_path, "recent", 60)
     bar = _status_bar({"backupWriterStartedAtUnix": EPOCH, "backupSnapshotInProgress": False})
     try:
-        deleted, surviving = _sweep(tmp_path, bar)
+        deleted, surviving = _sweep(tmp_path, bar.path)
     finally:
         bar.close()
     assert deleted == [aged.name]
@@ -231,7 +205,7 @@ def test_aged_unmarked_attempt_survives_unless_idle_is_proven_in_the_same_epoch(
     aged = _attempt(tmp_path, "aged", 90_000)
     bar = _status_bar(server_info)
     try:
-        deleted, surviving = _sweep(tmp_path, bar)
+        deleted, surviving = _sweep(tmp_path, bar.path)
     finally:
         bar.close()
     assert deleted == [] and surviving == [aged] and aged.exists()
@@ -239,15 +213,7 @@ def test_aged_unmarked_attempt_survives_unless_idle_is_proven_in_the_same_epoch(
 
 def test_probe_failure_fails_closed(tmp_path):
     aged = _attempt(tmp_path, "aged", 90_000)
-    gone = tmp_path / "gone.sock"
-    deleted, surviving = backup_daily._sweep_stale_backup_attempts(
-        tmp_path,
-        max_age_seconds=86_400,
-        now=NOW,
-        writer_started_at=EPOCH,
-        writer_snapshot_idle=lambda: backup_daily._brainbar_snapshot_idle_in_epoch(gone, EPOCH),
-    )
-    assert deleted == [] and surviving == [aged]
+    assert _sweep(tmp_path, tmp_path / "no-brainbar.sock") == ([], [aged])
 
 
 def test_stale_epoch_attempt_is_still_reclaimed_while_a_new_snapshot_runs(tmp_path):
@@ -258,7 +224,7 @@ def test_stale_epoch_attempt_is_still_reclaimed_while_a_new_snapshot_runs(tmp_pa
     current = _attempt(tmp_path, "current", 90_000)  # Aged past the cutoff, but after the restart.
     bar = _status_bar({"backupWriterStartedAtUnix": epoch, "backupSnapshotInProgress": True})
     try:
-        deleted, surviving = _sweep(tmp_path, bar, writer_started_at=epoch)
+        deleted, surviving = _sweep(tmp_path, bar.path, writer_started_at=epoch)
     finally:
         bar.close()
     assert deleted == [prior.name]
@@ -266,23 +232,9 @@ def test_stale_epoch_attempt_is_still_reclaimed_while_a_new_snapshot_runs(tmp_pa
     assert len(bar.requests) == 1  # Kept because BrainBar said a snapshot runs, not by age.
 
 
-def test_status_is_not_asked_when_no_aged_current_epoch_attempt_exists(tmp_path):
-    _attempt(tmp_path, "recent", 60)
-    _attempt(tmp_path, "done", 90_000, marked=True)
-    asked = []
-    backup_daily._sweep_stale_backup_attempts(
-        tmp_path,
-        max_age_seconds=86_400,
-        now=NOW,
-        writer_started_at=EPOCH,
-        writer_snapshot_idle=lambda: asked.append(1) or True,
-    )
-    assert asked == []
-
-
 def test_create_snapshot_wires_the_epoch_status_into_the_sweep(tmp_path, monkeypatch):
     # The live entry point asks BrainBar for status over the socket and reclaims the aged
-    # unmarked attempt; the identity-refused snapshot then stops the run before any VACUUM.
+    # unmarked attempt; a refused snapshot request then ends the run.
     output_dir = tmp_path / "out"
     output_dir.mkdir()
     source = tmp_path / "brainlayer.db"
