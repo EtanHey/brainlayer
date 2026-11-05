@@ -851,7 +851,7 @@ final class BrainDatabase: @unchecked Sendable {
             // Lenient on purpose: a malformed model on a queued line drops the model,
             // never the memory. A strict decode would strand the whole line.
             callerModel = BrainDatabase.normalizedCallerModel(
-                (try? container.decodeIfPresent(String.self, forKey: .callerModel)) ?? nil
+                try? container.decodeIfPresent(String.self, forKey: .callerModel)
             )
         }
 
@@ -929,7 +929,6 @@ final class BrainDatabase: @unchecked Sendable {
     static func callerModelMetadata(_ raw: String?) -> [String: Any] {
         guard let model = normalizedCallerModel(raw) else { return [:] }
         return ["model": model, "model_source": "caller_self_reported"]
-    }
     }
 
     private var db: OpaquePointer?
