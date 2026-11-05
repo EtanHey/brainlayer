@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import plistlib
 import re
 import subprocess
@@ -14,16 +15,25 @@ from typing import Any
 
 from .retired_services import RETIRED_ENRICHMENT_LABELS
 
-CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
+CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 PID_RE = re.compile(r"(?m)^\s*pid\s*=\s*(\d+)\s*$")
 BACKUP_LABELS = {"com.brainlayer.backup-daily", "com.brainlayer.jsonl-backup"}
 SUPERVISOR_LABELS = {"com.brainlayer.daemon", "com.brainlayer.maintenance"}
 SUPERVISOR_SKIP = "supervisor-owned: keg changes go through install.sh consolidate"
+COMMAND_TIMEOUT_S = 10.0
+# launchd's own defaults when a plist omits ExitTimeOut / ThrottleInterval (launchd.plist(5)).
+LAUNCHD_DEFAULT_EXIT_TIMEOUT_S = 20.0
+LAUNCHD_DEFAULT_THROTTLE_S = 10.0
+# `kickstart -k` returns once launchd has reaped the old pid (SIGKILL at ExitTimeOut) and respawned.
+KICKSTART_MARGIN_S = 5.0
+# Bounded window for a respawned daemon to reach a pid mapping the new keg under load (#1072).
+STARTUP_SETTLE_S = 20.0
+VERIFY_POLL_S = 0.5
 
 
-def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
+def _run(args: list[str], timeout: float = COMMAND_TIMEOUT_S) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(args, capture_output=True, text=True, check=False, timeout=10)
+        return subprocess.run(args, capture_output=True, text=True, check=False, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return subprocess.CompletedProcess(args, 127, "", str(exc))
 
@@ -95,6 +105,13 @@ def _runs_keg(plist: dict[str, Any], opt_path: Path, current_keg: Path) -> bool:
     return any(isinstance(argument, str) and argument.startswith(prefixes) for argument in arguments)
 
 
+def _plist_seconds(plist: dict[str, Any], key: str, default: float) -> float:
+    value = plist.get(key)
+    if type(value) in {int, float} and math.isfinite(value) and value >= 0:
+        return float(value)
+    return default
+
+
 def _supervisor_owned(plist_dir: Path) -> bool:
     """Read phase under the LaunchAgents HOME; unknown ownership refuses restart."""
     # Local import avoids consolidation_plan -> component_jobs -> jobs import cycle.
@@ -123,6 +140,7 @@ def restart_loaded_jobs(
     command_runner: CommandRunner = _run,
     uid: int,
     sleep_fn: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     """Restart and verify legacy jobs; consolidate owns supervisor keg changes."""
     current_keg = opt_path.resolve(strict=True)
@@ -187,8 +205,13 @@ def restart_loaded_jobs(
         stale_inflight = False
         if interval and pid is not None:
             stale_inflight = not _maps_current_keg(pid, opt_path, current_keg, command_runner)[0]
+        # One deadline per job covers its documented shutdown, respawn throttle and startup settle.
+        exit_timeout = _plist_seconds(plist, "ExitTimeOut", LAUNCHD_DEFAULT_EXIT_TIMEOUT_S)
+        throttle = _plist_seconds(plist, "ThrottleInterval", LAUNCHD_DEFAULT_THROTTLE_S)
+        kickstart_timeout = exit_timeout + KICKSTART_MARGIN_S
+        deadline = clock() + kickstart_timeout + throttle + STARTUP_SETTLE_S
         if daemon or stale_inflight:
-            kicked = command_runner(["launchctl", "kickstart", "-k", target])
+            kicked = command_runner(["launchctl", "kickstart", "-k", target], timeout=kickstart_timeout)
             if kicked.returncode != 0:
                 report["errors"][label] = f"kickstart failed: {kicked.stderr.strip() or kicked.returncode}"
             else:
@@ -197,29 +220,31 @@ def restart_loaded_jobs(
             report["skipped"][label] = "interval job waits for next run"
         else:
             report["skipped"][label] = "not a resident daemon"
-        for attempt in range(17):
+        while True:
             observed = command_runner(["launchctl", "print", target])
             if observed.returncode != 0:
                 report["errors"][label] = (
                     f"verification launchctl print failed: {observed.stderr.strip() or observed.returncode}"
                 )
                 break
+            final = clock() + VERIFY_POLL_S > deadline
             if observed.returncode == 0 and (running_pid := _pid(observed.stdout)) is not None:
                 current, reason = _maps_current_keg(running_pid, opt_path, current_keg, command_runner)
                 if current:
                     break
-                if attempt == 16:
+                if final:
                     report["stale"][label] = reason
+                    break
             else:
                 if interval and stale_inflight and label in report["restarted"]:
                     report["skipped"][label] = "completed_after_restart"
                     break
                 if not daemon and not stale_inflight:
                     break  # an idle interval job will execute the new keg next time
-                if attempt == 16:
+                if final:
                     report["errors"][label] = "job did not reach a running pid before verification deadline"
-            if attempt < 16:
-                sleep_fn(0.5)
+                    break
+            sleep_fn(VERIFY_POLL_S)
     if measured_jobs == 0 and delegated_jobs == 0:
         report["errors"]["selection"] = "no loaded BrainLayer keg jobs were measured"
     report["ok"] = not report["errors"] and not report["stale"]
