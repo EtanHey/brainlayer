@@ -1,7 +1,7 @@
 import Foundation
 
 enum TextFormatter {
-    static let compactSearchLegend = "ID|score|project|date|source; S=summary P=preview"
+    static let compactSearchLegend = "ID|score|project|date|source; S=summary P=preview; blank project=your project filter"
     private enum Alignment {
         case left
         case right

@@ -24,7 +24,7 @@ final class BrainBarOperationReceiptTests: XCTestCase {
     }
 
     func testCompactSearchCountRecognizesOnlyItsLabeledHeader() {
-        XCTAssertEqual(BrainBarOperationReceipt.searchCount(in: "## \"x\" 3/8\nID|score|project|date|source; S=summary P=preview\n"), 3)
+        XCTAssertEqual(BrainBarOperationReceipt.searchCount(in: "## \"x\" 3/8\nID|score|project|date|source; S=summary P=preview; blank project=your project filter\n"), 3)
         XCTAssertNil(BrainBarOperationReceipt.searchCount(in: "## \"x\" 3/8\nother text"))
         XCTAssertNil(BrainBarOperationReceipt.searchCount(in: "P: ## \"x\" 3/8\n"))
     }

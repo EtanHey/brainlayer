@@ -59,6 +59,7 @@ PACKAGE = SRC / "brainlayer"
 sys.path.insert(0, str(SRC))
 from brainlayer import __version__
 from brainlayer.paths import get_db_path
+from brainlayer.search_response import search_result_rows as served_search_result_rows
 from brainlayer.socket_hygiene import refuse_production_brainbar_socket
 
 sys.path.insert(0, str(ROOT))
@@ -159,11 +160,8 @@ def tool_text(result: dict) -> str:
 
 
 def search_result_rows(text: str) -> list[str]:
-    header = re.search(r"^## Search results for .+ - (\d+) of \d+ shown$", text, re.MULTILINE)
-    if not header or int(header.group(1)) < 1:
-        return []
-    body = text[header.end() :]
-    return re.findall(r"^### \d+\..*?(?=^### \d+\.|\Z)", body, re.MULTILINE | re.DOTALL)
+    """Rows of BrainBar's served brain_search text: compact/full ``- ID:`` rows, or the helper's ``### N.``."""
+    return served_search_result_rows(text) or []
 
 
 def search_visible(client: MCPClient, marker: str, timeout: float) -> bool:
