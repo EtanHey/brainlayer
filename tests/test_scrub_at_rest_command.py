@@ -292,6 +292,7 @@ def live_guard(db, tmp_path, monkeypatch):
     monkeypatch.setattr(chunk_origin_wipe, "_live_db_candidates", lambda: [db.db_path])
     monkeypatch.setattr(maintenance, "run_command", lambda args, **kwargs: subprocess.CompletedProcess(args, 0, "", ""))
     loaded_probe = maintenance._service_is_loaded
+    real_run_gates, real_lsof_clean = maintenance._run_gates, maintenance._check_lsof_clean
     events, loaded = [], {}
     monkeypatch.setattr(maintenance, "_run_gates", lambda config: events.append("gates"))
     monkeypatch.setattr(maintenance, "_check_lsof_clean", lambda config: events.append("no-writers"))
@@ -320,6 +321,8 @@ def live_guard(db, tmp_path, monkeypatch):
         events=events,
         loaded=loaded,
         loaded_probe=loaded_probe,
+        real_run_gates=real_run_gates,
+        real_lsof_clean=real_lsof_clean,
         pause=pause,
         backup=backup,
         receipt=receipt,
@@ -1300,3 +1303,121 @@ def test_sigterm_during_live_scrub_restores_watchdog(db, live_guard, monkeypatch
     assert signal.getsignal(signal.SIGTERM) == previous
     assert live_guard.events[-1] == ("resume", "fleet-watchdog")
     assert not maintenance._watchdog_hold_path().exists()
+
+
+# #1129: a wrapped failure names a fixed cause category and maintenance gate, never its text.
+_EVIL = "/Users/victim/private " + TOKENS["google_oauth_refresh"] + " ctx7sk-" + "1" * 24
+
+
+class _EvilNamedError(Exception):
+    """An unlisted class: its name and message must not reach the refusal JSON."""
+
+
+_EvilNamedError.__name__ = _EvilNamedError.__qualname__ = "Leak" + TOKENS["google_client_secret"]
+
+
+def _restore_real_gates(monkeypatch, live_guard, keep):
+    from brainlayer import maintenance
+
+    monkeypatch.setattr(maintenance, "_run_gates", live_guard.real_run_gates)
+    for name in ("_check_quiet_window", "_check_idle", "_check_lsof_clean"):
+        if name != keep:
+            monkeypatch.setattr(maintenance, name, lambda config: None)
+    if keep == "_check_lsof_clean":
+        monkeypatch.setattr(maintenance, "_check_lsof_clean", live_guard.real_lsof_clean)
+
+
+@pytest.mark.parametrize(
+    "case, cause, gate",
+    [
+        ("quiet-window", "maintenance-abort", "quiet-window"),
+        ("queue-idle", "maintenance-abort", "queue-idle"),
+        ("lsof-writers", "maintenance-abort", "lsof-writers"),
+        ("maintenance-lock", "maintenance-abort", "maintenance-lock"),
+        ("sqlite-busy", "sqlite-busy", None),
+        ("permission", "permission-denied", None),
+        ("unknown", "unknown", None),
+        ("foreign-gate-frame", "maintenance-abort", None),
+    ],
+)
+def test_cli_refusal_names_value_free_cause_and_gate(db, live_guard, monkeypatch, tmp_path, case, cause, gate):
+    import fcntl
+    import os
+
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    config_type = maintenance.MaintenanceConfig  # live_guard's clock and backup receipt
+    overrides, reached, lock = {}, [], None
+    if case == "quiet-window":
+        _restore_real_gates(monkeypatch, live_guard, "_check_quiet_window")
+        overrides["quiet_window_start_hour"] = 12  # 04:30 fixture clock is outside 12:00-14:00
+    elif case == "queue-idle":
+        _restore_real_gates(monkeypatch, live_guard, "_check_idle")
+        queue = tmp_path / "queue"
+        queue.mkdir()
+        fresh = queue / "fresh.jsonl"
+        fresh.write_text(json.dumps({"content": _EVIL}) + "\n")
+        mtime = live_guard.now.timestamp()
+        os.utime(fresh, (mtime, mtime))
+        overrides.update(queue_dir=queue, idle_sample_seconds=0)
+    elif case == "lsof-writers":
+        _restore_real_gates(monkeypatch, live_guard, "_check_lsof_clean")
+        monkeypatch.setattr(
+            maintenance,
+            "collect_lsof_entries",
+            lambda paths: [maintenance.LsofEntry(pid=4242, command=_EVIL, fd="3u", path=str(paths[0]))],
+        )
+    elif case == "maintenance-lock":
+        monkeypatch.setattr(maintenance, "MAINTENANCE_LOCK_TIMEOUT_SECONDS", 0)
+        lock = (db.db_path.parent / ".maintenance.lock").open("a+b")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    elif case == "foreign-gate-frame":
+        # A non-maintenance frame that merely shares a gate's name is not a gate.
+        def _check_quiet_window(*args):
+            reached.append(case)
+            raise maintenance.MaintenanceAbort(_EVIL)
+
+        monkeypatch.setattr(module, "_apply", _check_quiet_window)
+    else:
+        kind = {"sqlite-busy": apsw.BusyError, "permission": PermissionError, "unknown": _EvilNamedError}[case]
+
+        def fail_apply(*args):
+            reached.append(case)
+            raise kind(_EVIL)
+
+        monkeypatch.setattr(module, "_apply", fail_apply)
+    monkeypatch.setattr(maintenance, "MaintenanceConfig", lambda **kwargs: config_type(**kwargs, **overrides))
+    try:
+        result = CliRunner().invoke(
+            app,
+            ["scrub-at-rest", "--db", str(db.db_path), "--allow-live-db", "--expect-rows", str(live_guard.total)],
+        )
+    finally:
+        if lock is not None:
+            lock.close()
+    assert result.exit_code == 1, result.output
+    assert reached == ([case] if gate is None else [])
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "error": "at-rest scrub refused or failed",
+        "error_type": "ScrubAtRestError",
+        "reason": "scrub-failed",
+        "detail": None,
+        "cause": cause,
+        "gate": gate,
+    }
+    for secret in (_EVIL, "victim", "ctx7sk-", "pid=4242", "Leak", *TOKENS.values()):
+        assert secret not in result.output
+    assert db.conn.execute("SELECT content FROM chunks").fetchone()[0] == TOKENS["google_oauth_access"]
+
+
+def test_cli_refusal_keeps_native_reason_and_category(db, live_guard):
+    result = CliRunner().invoke(app, ["scrub-at-rest", "--db", str(db.db_path), "--allow-live-db"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert (payload["reason"], payload["cause"], payload["gate"]) == (
+        "expected-row-count-required",
+        "scrub-refusal",
+        None,
+    )
