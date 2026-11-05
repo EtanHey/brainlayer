@@ -34,7 +34,7 @@ def test_checkpointed_backlog_is_persisted_and_shrinks(calendar_fixture, monkeyp
         assert state["stalled_passes"] == 0
 
 
-def test_arriving_work_with_commits_does_not_alarm(calendar_fixture, monkeypatch):
+def test_growing_input_warns_without_alarm(calendar_fixture, monkeypatch):
     source, db, chunks, clock = calendar_fixture
     monkeypatch.setenv("BRAINLAYER_INDEX_STALL_PASSES", "3")
     monkeypatch.setattr(adapter, "embed_chunks", synthetic_vectors)
@@ -48,9 +48,11 @@ def test_arriving_work_with_commits_does_not_alarm(calendar_fixture, monkeypatch
         clock[0] = 100.0
         result = invoke(source)
         assert result.exit_code == 0, result.output
+    assert "INDEX_BACKLOG_GROWING" in result.output
     assert "INDEX_BACKLOG_STALLED" not in result.output
     state = json.loads(next(db.parent.glob("index-backlog-*.json")).read_text())
     assert state["stalled_passes"] == 0
+    assert state["growing_passes"] == 3
 
 
 @pytest.mark.parametrize("mutation", ["append", "rewrite", "truncate", "replace_inode"])
@@ -611,7 +613,7 @@ def test_r2_checkpoint_publication_fault_still_fails_pass(calendar_fixture, monk
     assert checkpoint(db) == {}
 
 
-def test_m1_arriving_work_does_not_stall_draining_passes(tmp_path):
+def test_m1_arriving_work_does_not_stall_draining_passes(tmp_path, capsys):
     outcomes = []
     for before, after in ((1194, 975), (3069, 1393), (1990, 1577), (2475, 2138)):
         db = tmp_path / "probe.db"
@@ -622,6 +624,10 @@ def test_m1_arriving_work_does_not_stall_draining_passes(tmp_path):
         alarm = cp.finish()
         outcomes.append((alarm, json.loads(cp.backlog_path.read_text())["stalled_passes"]))
     assert outcomes == [(False, 0)] * 4
+    assert json.loads(cp.backlog_path.read_text())["growing_passes"] == 3
+    output = capsys.readouterr().out
+    assert "INDEX_BACKLOG_GROWING passes=3 leftover_chunks=2138 best_chunks=975" in output
+    assert "INDEX_BACKLOG_STALLED" not in output
 
 
 def test_measured_non_draining_passes_alarm(tmp_path):
