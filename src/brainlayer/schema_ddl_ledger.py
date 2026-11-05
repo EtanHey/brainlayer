@@ -258,9 +258,10 @@ class RuntimeDDLAudit:
 
         Any transaction the failure left open is rolled back first, so the observed
         schema is what is actually committed. ``affected_objects`` names only objects
-        whose committed definition differs from the prior snapshot. A retryable error
-        that committed nothing and attempted no atomic step writes no event -- the
-        retry will produce the outcome.
+        whose committed definition differs from the prior snapshot. A failure that
+        committed nothing and rolled back no atomic repair step left the schema
+        untouched -- like a no-op pass, it writes no event (the error still reaches
+        the caller; a retryable one is retried).
         """
         if self.finished:
             return None
@@ -270,7 +271,7 @@ class RuntimeDDLAudit:
                 self.conn.execute("ROLLBACK")
             changes = diff_schema(self.prior, schema_objects(self.conn))
             committed = _affected(changes)
-            if retryable and not committed and not self.rolled_back_steps:
+            if not committed and not self.rolled_back_steps:
                 return None
             self.conn.execute("BEGIN IMMEDIATE")
             try:

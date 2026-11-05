@@ -255,3 +255,40 @@ def test_ledger_write_failure_after_committed_ddl_is_loud_not_silent(tmp_path, c
     assert "migration_events record failed" in caplog.text
     assert "ledger unavailable" in caplog.text
     assert _events(db) == []
+
+
+def test_failure_after_autocommitted_ddl_reports_exactly_what_committed(tmp_path):
+    db = tmp_path / "scratch.db"
+    _current_db(db)
+    conn = _connect(db)
+    # chunks_fts_insert is recreated (autocommit) before the chunk_tags section, where a
+    # view squatting on the chunk_tags name makes the ensure pass fail.
+    conn.execute("DROP TRIGGER chunks_fts_insert")
+    for trigger in ("chunk_tags_insert", "chunk_tags_update", "chunk_tags_update_clear", "chunk_tags_delete"):
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    conn.execute("DROP TABLE chunk_tags")
+    conn.execute("CREATE VIEW chunk_tags AS SELECT id AS chunk_id, tags AS tag FROM chunks")
+    conn.close()
+    prior = _schema(db)
+
+    with pytest.raises(apsw.SQLError):
+        VectorStore(db)
+
+    observed = _schema(db)
+    assert "chunks_fts_insert" in observed and "chunks_fts_insert" not in prior
+    events = _events(db)
+    assert len(events) == 1
+    event = events[0]
+    assert event["status"] == "failure"
+    assert event["result_fingerprint"] is None
+    assert event["prior_fingerprint"] == schema_fingerprint(prior)
+    details = json.loads(event["details"])
+    assert details["ddl_committed"] is True
+    committed = {name for names in details["committed_changes"].values() for name in names}
+    assert committed == set(json.loads(event["affected_objects"]))
+    # Exactly the objects whose committed definition changed -- minus our own ledger upgrade.
+    assert committed == {n for n in prior.keys() | observed.keys() if prior.get(n) != observed.get(n)} - {
+        "migration_events"
+    }
+    assert "chunks_fts_insert" in committed
+    _assert_no_content(event)
