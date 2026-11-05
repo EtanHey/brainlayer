@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+import traceback
 from collections import Counter
 from pathlib import Path
 
@@ -73,6 +74,48 @@ class ScrubAtRestError(RuntimeError):
         self.reason = reason
         # Only fixed service labels and gate names can reach refusal JSON.
         self.detail = detail if isinstance(detail, str) and detail in _QUIESCE_DETAILS else None
+        # Fixed labels from _CAUSE_CATEGORIES / _MAINTENANCE_GATES only; set by _failure (#1129).
+        self.cause = "scrub-refusal"
+        self.gate = None
+
+
+# Refusal JSON names a wrapped failure only by these fixed labels: never the exception's
+# text (MaintenanceAbort messages embed lsof commands and paths) or an unlisted class name.
+# First isinstance match wins, so subclasses precede their bases.
+_CAUSE_CATEGORIES = (
+    (ScrubAtRestError, "scrub-refusal"),
+    (maintenance.MaintenanceAbort, "maintenance-abort"),
+    (apsw.BusyError, "sqlite-busy"),
+    (apsw.Error, "sqlite-error"),
+    (TimeoutError, "timeout"),
+    (PermissionError, "permission-denied"),
+    (OSError, "os-error"),
+    (ValueError, "invalid-input"),
+    ((KeyboardInterrupt, SystemExit), "interrupted"),
+)
+# Maintenance functions whose raise identifies the gate; matched by code-object name.
+_MAINTENANCE_GATES = {
+    "_check_quiet_window": "quiet-window",
+    "_check_idle": "queue-idle",
+    "_check_lsof_clean": "lsof-writers",
+    "_maintenance_lock": "maintenance-lock",
+}
+
+
+def _cause_category(exc):
+    for kind, label in _CAUSE_CATEGORIES:
+        if isinstance(exc, kind):
+            return label
+    return "unknown"
+
+
+def _maintenance_gate(exc):
+    # Innermost listed maintenance frame; frame names are code, never exception data.
+    gate = None
+    for frame, _ in traceback.walk_tb(exc.__traceback__):
+        if frame.f_globals.get("__name__") == maintenance.__name__:
+            gate = _MAINTENANCE_GATES.get(frame.f_code.co_name, gate)
+    return gate
 
 
 def _safe_cause(exc):
@@ -86,10 +129,14 @@ def _safe_cause(exc):
 def _failure(exc, cleanup=None):
     error = ScrubAtRestError(f"at-rest scrub failed ({type(exc).__name__}); no matched values logged")
     error.__cause__ = _safe_cause(exc)
+    error.cause = _cause_category(exc)
+    error.gate = _maintenance_gate(exc)
     if isinstance(exc, ScrubAtRestError):
         error.reason = exc.reason
         error.detail = exc.detail
         error.__cause__ = exc.__cause__
+        error.cause = exc.cause
+        error.gate = exc.gate
         for note in getattr(exc, "__notes__", []):
             error.add_note(note)
     if cleanup is not None:

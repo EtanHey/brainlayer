@@ -3201,6 +3201,9 @@ def scrub_at_rest_command(
                     "error_type": type(exc).__name__,
                     "reason": getattr(exc, "reason", "scrub-failed"),
                     "detail": getattr(exc, "detail", None),
+                    # Fixed allowlisted labels only (#1129); never exception text.
+                    "cause": getattr(exc, "cause", "unknown"),
+                    "gate": getattr(exc, "gate", None),
                 }
             )
         )
