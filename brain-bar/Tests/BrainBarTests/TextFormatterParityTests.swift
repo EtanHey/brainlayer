@@ -28,7 +28,7 @@ final class TextFormatterParityTests: XCTestCase {
             output,
             """
             ## "brainbar native swift renderer parity should trun…" 1/1
-            ID|score|project|date|source; S=summary P=preview; blank project=your project filter
+            ID|score|project|date|source; S=summary P=preview
             - ID: rt-abc123def4567890|0.8700|brainlayer|2026-03-29|MCPRouter.swift
             P: BrainBar is a native macOS daemon for BrainLayer MCP routing.
             """

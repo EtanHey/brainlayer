@@ -21,7 +21,7 @@ from tests.test_stability_health_check import _make_db
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts import sprint_gate  # noqa: E402
 
-LEGEND = "ID|score|project|date|source; S=summary P=preview; blank project=your project filter"
+LEGEND = "ID|score|project(blank=your filter)|date|source; S=summary P=preview"
 
 # Two hits under `project: "brainlayer"`: the first row's project column is blank because it is the
 # caller's filter. The second row's preview QUOTES both old header shapes and a fake `- ID:` / `|`
