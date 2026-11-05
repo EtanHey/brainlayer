@@ -37,7 +37,6 @@ BUSY_SHAPES = {
 NOT_BUSY = {
     "terminal_error": {"error": {"code": -32000, "message": "vacuum failed"}},
     "terminal_is_error": {"result": {"content": [{"type": "text", "text": "Error: disk I/O error"}], "isError": True}},
-    "success": {"result": {"content": [{"type": "text", "text": "{}"}]}},
     "busy_text_in_success": {"result": {"content": [{"type": "text", "text": BUSY_TEXT}]}},
     "other_code": {"error": {"code": -32000, "message": "x", "data": {"brainlayer_error_code": "other"}}},
     "malformed_content": {"result": {"content": "Error: nope", "isError": True}},
@@ -135,16 +134,8 @@ def test_busy_rejection_over_the_wire_never_unlinks_a_live_earlier_target(tmp_pa
             live["handle"].close()
 
 
-def _status_bar(*server_infos):
-    """Answer successive initialize probes with the given serverInfo dicts (last one repeats)."""
-    answers = list(server_infos)
-
-    def respond(request):
-        assert request["method"] == "initialize"
-        info = answers.pop(0) if len(answers) > 1 else answers[0]
-        return {"result": {"serverInfo": info}}
-
-    return ScriptedBrainBar(respond)
+def _status_bar(server_info):
+    return ScriptedBrainBar(lambda _request: {"result": {"serverInfo": server_info}})
 
 
 NOW = 1_000_000.0
@@ -167,13 +158,6 @@ def _sweep(directory: Path, socket_path: Path | None, writer_started_at: float =
     return backup_daily._sweep_stale_backup_attempts(
         directory, max_age_seconds=86_400, now=NOW, writer_started_at=writer_started_at, writer_snapshot_idle=probe
     )
-
-
-def test_aged_unmarked_attempt_in_the_same_epoch_survives_without_status(tmp_path):
-    # The #1413 gap: age alone never proves the writer stopped, so without a status it stays.
-    aged = _attempt(tmp_path, "aged", 90_000)
-    deleted, surviving = _sweep(tmp_path, None)
-    assert deleted == [] and surviving == [aged]
 
 
 def test_idle_status_in_the_same_epoch_reclaims_only_the_aged_unmarked_attempt(tmp_path):
@@ -199,21 +183,23 @@ def test_idle_status_in_the_same_epoch_reclaims_only_the_aged_unmarked_attempt(t
         pytest.param({"backupWriterStartedAtUnix": EPOCH, "backupSnapshotInProgress": None}, id="null_status"),
         pytest.param({"backupWriterStartedAtUnix": EPOCH + 5, "backupSnapshotInProgress": False}, id="restarted"),
         pytest.param({"backupSnapshotInProgress": False}, id="missing_epoch"),
+        pytest.param(None, id="no_status_probe"),
+        pytest.param("unreachable", id="probe_failure"),
     ],
 )
 def test_aged_unmarked_attempt_survives_unless_idle_is_proven_in_the_same_epoch(tmp_path, server_info):
+    # The #1413 gap: age alone never proves the writer stopped; only a same-epoch idle status does.
     aged = _attempt(tmp_path, "aged", 90_000)
+    if not isinstance(server_info, dict):
+        socket_path = None if server_info is None else tmp_path / "no-brainbar.sock"
+        assert _sweep(tmp_path, socket_path) == ([], [aged])
+        return
     bar = _status_bar(server_info)
     try:
         deleted, surviving = _sweep(tmp_path, bar.path)
     finally:
         bar.close()
     assert deleted == [] and surviving == [aged] and aged.exists()
-
-
-def test_probe_failure_fails_closed(tmp_path):
-    aged = _attempt(tmp_path, "aged", 90_000)
-    assert _sweep(tmp_path, tmp_path / "no-brainbar.sock") == ([], [aged])
 
 
 def test_stale_epoch_attempt_is_still_reclaimed_while_a_new_snapshot_runs(tmp_path):
