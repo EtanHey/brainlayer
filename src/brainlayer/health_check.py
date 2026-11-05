@@ -44,6 +44,7 @@ from .pause import (
     queue_contains_only_enrichment,
 )
 from .retired_services import LEGACY_ENRICHMENT_HOLD_LABEL, RETIRED_ENRICHMENT_LABELS
+from .search_response import search_result_count
 from .socket_hygiene import refuse_production_brainbar_socket
 from .watcher import default_watch_roots
 
@@ -799,10 +800,12 @@ def _canary_text(response: Any) -> tuple[bool, str]:
     return True, text
 
 
-def _canary_count(text: str) -> int | None:
-    match = re.search(r"-\s*(\d+)\s+of\s+(\d+)\s+shown", text)
-    if match:
-        return int(match.group(1))
+def _canary_count(text: str, result: Any = None) -> int | None:
+    # structuredContent or counted ``- ID:`` rows (#1069); the old unanchored ``N of M shown``
+    # match missed every compact answer and could read a header quoted inside a preview.
+    count = search_result_count(text, result)
+    if count is not None:
+        return count
     match = re.search(r"Found\s+(\d+)\s+results?", text)
     if match:
         return int(match.group(1))
@@ -1685,7 +1688,7 @@ def _run_health_check_locked(
         response = socket_request_fn(config.socket_path, config.canary_query, config.socket_timeout_seconds)
         canary_success, text = _canary_text(response)
         if canary_success:
-            result.canary_result_count = _canary_count(text)
+            result.canary_result_count = _canary_count(text, response.get("result"))
             result.canary_ok = True
             # This is request liveness, not recall quality: a well-formed empty search
             # proves the request path worked without claiming the corpus should match.

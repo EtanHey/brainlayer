@@ -134,6 +134,24 @@ final class MCPFramingTests: XCTestCase {
         )
     }
 
+    func testEncodesSlashesUnescapedAndTheValueRoundTrips() throws {
+        let path = "/fixtures/session0.jsonl"
+        let response: [String: Any] = [
+            "jsonrpc": "2.0", "id": 3,
+            "result": ["content": [["type": "text", "text": "## \"q\" 5/5"]], "structuredContent": ["source_file": path]] as [String: Any]
+        ]
+        let body = try MCPFraming.encodeJSONResponse(response)
+        let text = try XCTUnwrap(String(data: body, encoding: .utf8))
+        XCTAssertFalse(text.contains("\\/"), "a `\\/` escape is wire overhead with no meaning: \(text)")
+        XCTAssertTrue(text.contains(path), text)
+        let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let result = try XCTUnwrap(decoded["result"] as? [String: Any])
+        XCTAssertEqual((result["structuredContent"] as? [String: Any])?["source_file"] as? String, path)
+        // Envelopes outside the ordered path use the same encoding.
+        let bare = try MCPFraming.encodeJSONResponse(["path": path])
+        XCTAssertEqual(String(data: bare, encoding: .utf8), #"{"path":"/fixtures/session0.jsonl"}"#)
+    }
+
     // MARK: - Empty body
 
     func testRejectsZeroContentLength() {
