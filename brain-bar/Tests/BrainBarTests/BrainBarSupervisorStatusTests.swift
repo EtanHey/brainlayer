@@ -370,6 +370,37 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         XCTAssertEqual(Self.supervised(history: noSpawn, logs: logs).sampleActivity()[.jsonlBackup]?.backupScheduleLine?.tone, .neutral)
     }
 
+    /// #1040: a record that names its run is correlated on the calendar's receipt id, not the log's
+    /// mtime, and its structured outcome decides Skipped without any reason-text allowlist.
+    func testCalendarAbortRecordCorrelatesOnRunIDAndStructuredOutcome() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        let logs = directory.appendingPathComponent("logs")
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let runID = String(repeating: "a", count: 32)
+        try Data("""
+        {"event":"spawn","step":"maintenance-nightly","ts":1784466000,"pid":4242,"maintenance_run_id":"\(runID)"}
+        {"event":"finished","step":"maintenance-nightly","ts":1784466060,"status":"deferred","returncode":75,"maintenance_run_id":"\(runID)"}
+
+        """.utf8).write(to: directory.appendingPathComponent("runs.jsonl"))
+        let history = BrainBarCalendarHistory.read(directory: directory)
+        XCTAssertEqual(history.runs["maintenance-nightly"]?.runID, runID)
+        let log = logs.appendingPathComponent("maintenance-nightly.out.log")
+        func health(recordRunID: String, outcome: String, mtime: Date) throws -> BrainLayerLaunchdGroupHealth {
+            try JSONSerialization.data(withJSONObject: ["status": "deferred", "outcome": outcome, "exit_code": 75,
+                "run_id": recordRunID, "reason": "a deferral wording no allowlist knows"]).write(to: log)
+            try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: log.path)
+            return BrainLayerLaunchdJobGroup.maintenance.status(settings: BrainLayerConfig.defaultConfig.launchdJobs,
+                observations: Self.supervised(history: history, logs: logs).sampleActivity(), formatDate: { $0.description }).health
+        }
+        // Touched long after the run (e.g. a copy or rotation): the run id still proves it is this run's.
+        let lateTouch = Date(timeIntervalSince1970: 1784466000 + 6 * 3_600)
+        XCTAssertEqual(try health(recordRunID: runID, outcome: "deferred", mtime: lateTouch), .skipped)
+        // In the mtime window but naming another run: not this run's evidence.
+        let inWindow = Date(timeIntervalSince1970: 1784466060)
+        XCTAssertNotEqual(try health(recordRunID: String(repeating: "b", count: 32), outcome: "deferred", mtime: inWindow), .skipped)
+        XCTAssertNotEqual(try health(recordRunID: runID, outcome: "failed", mtime: inWindow), .skipped)
+    }
+
     func testMalformedLinkedOrPublicJournalCannotClaimAnOwner() throws {
         let malformed = try journal("migrated")
         try Data("not JSON".utf8).write(to: malformed)

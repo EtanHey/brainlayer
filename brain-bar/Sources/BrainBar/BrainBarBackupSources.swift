@@ -199,7 +199,8 @@ struct BrainBarBackupSources: Sendable {
         guard let reason = row["reason"] as? String, !reason.isEmpty else {
             return .unavailable("the newest record in \(log.lastPathComponent) is incomplete")
         }
-        return .aborted(reason: reason, writtenAt: writtenAt)
+        return .aborted(reason: reason, writtenAt: writtenAt,
+                        deliberate: BrainLayerMaintenanceExit.deliberate(outcome: row["outcome"]))
     }
 
     private func row(

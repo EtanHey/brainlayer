@@ -824,9 +824,10 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         let path = calendarLogsDirectory().appendingPathComponent("\(name).out.log")
         guard BrainBarBackupSources.isRegularFile(path),
               case let .read(data, stamp) = BrainBarStableFileReader.readTail(path, maxBytes: 64 * 1024),
-              stamp <= run.at.addingTimeInterval(BrainLayerMaintenanceExit.recordClockSlack),
               let last = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).last else { return nil }
+        let writtenBeforeFinish = stamp <= run.at.addingTimeInterval(BrainLayerMaintenanceExit.recordClockSlack)
         if job == .index, last.hasPrefix("INDEX_DEFERRED ") {
+            guard writtenBeforeFinish else { return nil }
             let token = last.split(separator: " ").dropFirst().first.map(String.init)
             if let reason = ["resident_writer_busy": "resident-writer-busy",
                              "maintenance_window=04:00-06:00": "maintenance-window"][token ?? ""] {
@@ -835,7 +836,13 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         }
         guard let row = try? JSONSerialization.jsonObject(with: Data(last.utf8)) as? [String: Any],
               let status = row["status"] as? String, ["aborted", "deferred"].contains(status), let reason = row["reason"] as? String else { return nil }
-        return .aborted(reason: reason, writtenAt: stamp) // verdict also checks the child's start time
+        let deliberate = BrainLayerMaintenanceExit.deliberate(outcome: row["outcome"])
+        if let recordRunID = row["run_id"] as? String, let runID = run.runID {
+            // #1040: the record names its run; correlate on the calendar's receipt id, never on mtime.
+            return recordRunID == runID ? .aborted(reason: reason, writtenAt: stamp, deliberate: deliberate, sameRun: true) : nil
+        }
+        guard writtenBeforeFinish else { return nil }
+        return .aborted(reason: reason, writtenAt: stamp, deliberate: deliberate) // verdict also checks the child's start time
     }
 
     private static func readCalendarLogsDirectory() -> URL {
