@@ -40,6 +40,35 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
         return input
     }
 
+    func testIndexReportsFromSameNightCollapseWithDiskProblem() {
+        var input = inputs()
+        let at = date("2026-11-02T03:04:00Z")
+        input.jobAlerts = .init(active: ["index": "BrainLayer index exited 1"])
+        input.observations?[.index] = T.failed(.index, code: 1, at: at)
+        for job in [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly] {
+            input.observations?[job]?.calendarNightOutcome = .init(scheduledDate: "2026-11-02", at: at,
+                failed: true, abandoned: false, consecutiveFailures: 1, failedSteps: ["index"],
+                stepProblems: ["index": .init(at: at)])
+        }
+        input.badge?.healthVerdict = .init(dot: .amber, checks: [
+            .init(name: "disk", state: .amber, note: "free space versus the next backup's need not measured (3 checks in a row)")
+        ], notes: [.init(code: "job_alert_index", message: "BrainLayer index exited 1")], evaluatedAt: input.now)
+        let snapshot = BrainBarStatusSnapshot.derive(input)
+        XCTAssertEqual(snapshot.issues.count, 2, "\(snapshot.issues)")
+        XCTAssertTrue(snapshot.issues.allSatisfy { $0.text.contains("Nothing to do.") })
+        XCTAssertTrue(snapshot.issues.contains { $0.text.contains("Retries") })
+        XCTAssertEqual(snapshot.verdict.dot, .amber)
+    }
+
+    func testDifferentFailedJobsRemainSeparate() {
+        var input = T.healthy()
+        input.jobAlerts = .init(active: ["index": "BrainLayer index exited 1", "wal-checkpoint": "Database checkpoint failed"])
+        let snapshot = BrainBarStatusSnapshot.derive(input)
+        XCTAssertTrue(snapshot.issues.contains { $0.alertKey == "index" })
+        XCTAssertTrue(snapshot.issues.contains { $0.alertKey == "wal-checkpoint" })
+        XCTAssertEqual(snapshot.issues.filter { $0.alertKey != nil }.count, 2)
+    }
+
     func testExactReportedFourLinesBecomeOneProblem() throws {
         let input = inputs()
         let snapshot = BrainBarStatusSnapshot.derive(input)
