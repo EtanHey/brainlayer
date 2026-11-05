@@ -1980,6 +1980,66 @@ final class DatabaseTests: XCTestCase {
         XCTAssertNil(entity)
     }
 
+    // #663: a differently-cased query must resolve the existing entity, not fall
+    // through to the substring tier and return an unrelated card that merely
+    // contains the query. Names are synthetic.
+    private func setEntityImportance(_ id: String, _ importance: Double) throws {
+        let handle = try XCTUnwrap(db.dbHandle)
+        let sql = "UPDATE kg_entities SET importance = \(importance) WHERE id = '\(id)'"
+        XCTAssertEqual(sqlite3_exec(handle, sql, nil, nil, nil), SQLITE_OK)
+    }
+
+    func testEntityLookupResolvesDifferentCaseToCanonicalEntity() throws {
+        // Inserted first so a full-scan substring match reaches it before "Nimbus".
+        try db.insertEntity(id: "ent-notes", type: "topic", name: "Old Nimbus Notes")
+        try db.insertEntity(id: "ent-nimbus", type: "company", name: "Nimbus")
+        try db.insertEntity(id: "ent-avery", type: "person", name: "Avery Quill")
+        try db.insertRelation(sourceId: "ent-avery", targetId: "ent-nimbus", relationType: "works_at")
+
+        for query in ["Nimbus", "nimbus", "NIMBUS", "nImBuS"] {
+            let entity = try XCTUnwrap(try db.lookupEntity(query: query), "query \(query)")
+            XCTAssertEqual(entity["entity_id"] as? String, "ent-nimbus", "query \(query)")
+            XCTAssertEqual(entity["name"] as? String, "Nimbus", "canonical name kept for \(query)")
+            let relations = entity["relations"] as? [[String: Any]] ?? []
+            XCTAssertEqual(relations.first?["target_name"] as? String, "Avery Quill", "query \(query)")
+        }
+        // Substring fallback is untouched.
+        XCTAssertEqual(try db.lookupEntity(query: "old nimbus")?["entity_id"] as? String, "ent-notes")
+    }
+
+    func testEntityLookupExactCasePrecedesAndCaseVariantsAreDeterministic() throws {
+        try db.insertEntity(id: "ent-lower", type: "company", name: "Nimbus")
+        try db.insertEntity(id: "ent-upper", type: "company", name: "NIMBUS")
+        try setEntityImportance("ent-lower", 0.2)
+        try setEntityImportance("ent-upper", 0.9)
+
+        // Exact spelling wins regardless of importance.
+        XCTAssertEqual(try db.lookupEntity(query: "Nimbus")?["entity_id"] as? String, "ent-lower")
+        XCTAssertEqual(try db.lookupEntity(query: "NIMBUS")?["entity_id"] as? String, "ent-upper")
+        // No exact spelling: higher importance wins.
+        XCTAssertEqual(try db.lookupEntity(query: "nimbus")?["entity_id"] as? String, "ent-upper")
+        // Importance tie: binary name order ("NIMBUS" < "Nimbus"), stable across calls.
+        try setEntityImportance("ent-upper", 0.2)
+        for _ in 0..<3 {
+            XCTAssertEqual(try db.lookupEntity(query: "nimbus")?["entity_id"] as? String, "ent-upper")
+        }
+        // Entity-type filter still applies to the case-insensitive tier.
+        XCTAssertNil(try db.lookupEntity(query: "nimbus", entityType: "person"))
+    }
+
+    func testEntityLookupMissingDifferentCaseDoesNotCreateEntity() throws {
+        try db.insertEntity(id: "ent-nimbus", type: "company", name: "Nimbus")
+        XCTAssertNil(try db.lookupEntity(query: "nimbuz"))
+        XCTAssertNil(try db.lookupEntity(query: "NIMBUZ"))
+
+        let handle = try XCTUnwrap(db.dbHandle)
+        var stmt: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(handle, "SELECT COUNT(*) FROM kg_entities", -1, &stmt, nil), SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+        XCTAssertEqual(sqlite3_step(stmt), SQLITE_ROW)
+        XCTAssertEqual(sqlite3_column_int(stmt, 0), 1, "lookup must never create entities")
+    }
+
     // MARK: - brain_recall (session context)
 
     func testRecallStatsMode() throws {

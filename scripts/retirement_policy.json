@@ -1888,6 +1888,16 @@
         "target": "import subprocess"
       }
     },
+    "4d1de79fd9491f30a54d31fe85187dd58a9e23769ce6ea4511a6c873a1570e7b": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/jobs.py <module>._run",
+      "site": {
+        "call_sha256": "92ea588f361a98ae851c9d4468db3485eeea0b6087b067e77d850435078cc623",
+        "kind": "child_process",
+        "owner": "<module>._run",
+        "path": "src/brainlayer/jobs.py",
+        "target": "subprocess.run"
+      }
+    },
     "4d280e84087655cf076cedd02d707eb48d1c25bf90783bbbf870a34329987e34": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
       "site": {
@@ -2288,16 +2298,6 @@
         "target": "import subprocess"
       }
     },
-    "5fdb89dca15e912202ad05d98829d12f449f6548d6a7884a843602ea11f91b7b": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/jobs.py <module>._run",
-      "site": {
-        "call_sha256": "e6e4319857b7d0a6a63a65ddd2edf215e9ce654183cdf80b54908f490e2d35d0",
-        "kind": "child_process",
-        "owner": "<module>._run",
-        "path": "src/brainlayer/jobs.py",
-        "target": "subprocess.run"
-      }
-    },
     "60300f756e30ea5cb7b4db67806afb6ffb534797de3a4bff89e23635d13bef3b": {
       "non_cloud_purpose": "Local AF_UNIX peer UID query via libc getpeereid or SO_PEERCRED; no network/cloud endpoint.",
       "site": {
@@ -2456,16 +2456,6 @@
         "owner": "<module>.upload_file_to_drive_raw",
         "path": "src/brainlayer/backup_daily.py",
         "target": "requests.Session"
-      }
-    },
-    "661b8066c3acc9ace5274c46e2c5a20f35bd71639373ac3136cb52643d88ee48": {
-      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/ci/run_with_deadline.py <module>.main subprocess.TimeoutExpired.",
-      "site": {
-        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
-        "kind": "callable_reference",
-        "owner": "<module>.main",
-        "path": "scripts/ci/run_with_deadline.py",
-        "target": "subprocess.TimeoutExpired"
       }
     },
     "663f8e3260afd2782569d1dca82aa43a95e1a92ebadafb16538db00596a63f42": {
@@ -4390,16 +4380,6 @@
         "target": "subprocess.TimeoutExpired"
       }
     },
-    "af590c54442cf25c4ed1157f5d66ff254a54096665634c7226085f979d90dabd": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ci/run_with_deadline.py <module>.main",
-      "site": {
-        "call_sha256": "54673820a88319d8d6c261ba8467b7faa5d642ef1936b173f3c4ca4da269ee8c",
-        "kind": "child_process",
-        "owner": "<module>.main",
-        "path": "scripts/ci/run_with_deadline.py",
-        "target": "subprocess.Popen"
-      }
-    },
     "af643a38e080a55652075b8ecc63c50660aafa4e1321ca4b9e6d6ff96606daf9": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/reembed_bgem3.py <module>._open_apsw",
       "site": {
@@ -4658,6 +4638,16 @@
         "owner": "<module>._read_repo_evidence",
         "path": "src/brainlayer/kg_judge.py",
         "target": "subprocess.run"
+      }
+    },
+    "b651e3b276660a581a152ad71874178f724e5405ec060b2c7dd0e70e31b3733b": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ci/run_with_deadline.py <module>._run",
+      "site": {
+        "call_sha256": "54673820a88319d8d6c261ba8467b7faa5d642ef1936b173f3c4ca4da269ee8c",
+        "kind": "child_process",
+        "owner": "<module>._run",
+        "path": "scripts/ci/run_with_deadline.py",
+        "target": "subprocess.Popen"
       }
     },
     "b684440ab14ebfa5e14721c84779c561498f5f7e62e1659a3e383dbbbb12a86a": {

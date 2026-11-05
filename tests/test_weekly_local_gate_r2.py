@@ -210,10 +210,12 @@ def test_snapshot_has_own_bounded_deadline_and_existing_service_identity(tmp_pat
     plan = calendar.calendar_steps("python", "cli", tmp_path, dt.date.today())
     step = next(s for s in plan.select() if s.name == "backup-snapshot")
     assert calendar.backup_deadline(step) < 28800
-    bounded = calendar._bounded_snapshot_step(step, dt.datetime(2026, 10, 18, 5, 59), 2)
-    assert bounded.timeout <= 58
+    bounded = calendar._bounded_snapshot_step(step, dt.datetime(2026, 10, 18, 5, 58), 2)
+    assert bounded.timeout <= 118
     # The backup's own deadline fires before the calendar kill so its timeout receipt is written.
     assert 1 <= int(bounded.env["BRAINLAYER_BACKUP_TIMEOUT_SECONDS"]) < bounded.timeout
+    # 05:59 leaves no work budget beside the full receipt reserve (#1422): defer, never spawn.
+    assert calendar._bounded_snapshot_step(step, dt.datetime(2026, 10, 18, 5, 59), 2) is None
     assert calendar._service_name(step) == "backup-daily"
 
 
@@ -441,5 +443,5 @@ def test_default_snapshot_cap_has_measured_headroom_and_shutdown_reserve(tmp_pat
     plan = calendar.calendar_steps("python", "cli", tmp_path, dt.date.today())
     step = next(s for s in plan.select() if s.name == "backup-snapshot")
     assert step.timeout == backup.SNAPSHOT_TIMEOUT_CEILING_SECONDS  # size-derived; see test_snapshot_budget.py
-    bounded = calendar._bounded_snapshot_step(step, dt.datetime(2026, 10, 18, 5, 59), 2)
-    assert bounded.timeout <= 57  # include scheduling headroom beyond group shutdown
+    bounded = calendar._bounded_snapshot_step(step, dt.datetime(2026, 10, 18, 5, 58), 2)
+    assert bounded.timeout <= 117  # include scheduling headroom beyond group shutdown

@@ -621,3 +621,155 @@ def test_cli_text_status_shows_local_deadline_on_real_google_refresh_error(tmp_p
     assert f"local consent deadline {expires.isoformat()}" in result.output
     assert "not Google's revocation time" in result.output
     assert "Token has been expired or revoked" not in result.output
+
+
+# --- #1032: a retryable token-endpoint failure is temporary, not lost access -----------------
+
+TEMPORARY_REASON = "status checked while Google's token endpoint was temporarily unavailable; last known state"
+
+
+class _TokenEndpoint:
+    """The only stub: the HTTP transport that real google-auth refresh (and its retries) calls."""
+
+    def __init__(self, status: int, body: dict):
+        self.status, self.body, self.calls = status, body, 0
+
+    def __call__(self, **kwargs):
+        self.calls += 1
+        return SimpleNamespace(status=self.status, data=json.dumps(self.body).encode())
+
+
+def _stale_consented_token(tmp_path: Path, consented: datetime) -> tuple[Path, Path]:
+    token, client = _consented_token(tmp_path, consented)
+    data = json.loads(token.read_text())
+    data["expiry"] = "2000-01-01T00:00:00"  # stale access token forces a real refresh attempt
+    token.write_text(json.dumps(data))
+    return token, client
+
+
+@pytest.fixture
+def no_backoff_sleep(monkeypatch):
+    import google.auth._exponential_backoff as backoff
+
+    sleeps = []
+    monkeypatch.setattr(backoff, "time", SimpleNamespace(sleep=sleeps.append))
+    return sleeps
+
+
+@pytest.mark.parametrize(
+    "status, body, elapsed_days, expected",
+    [
+        (503, {"error": "backend_error", "error_description": "private-payload"}, 2, "valid"),
+        (429, {"error": "rate_limited", "error_description": "private-payload"}, 5.5, "expiring"),
+        (500, {"error": "internal_failure", "error_description": "private-payload"}, 6.5, "expiring"),
+        (503, {"error": "backend_error", "error_description": "private-payload"}, 7.5, "invalid"),
+    ],
+)
+def test_status_retryable_refresh_error_keeps_local_consent_clock(
+    tmp_path, no_backoff_sleep, status, body, elapsed_days, expected
+):
+    from brainlayer import drive_credentials
+
+    consented = datetime.now(UTC) - timedelta(days=elapsed_days)
+    deadline = (consented + timedelta(days=7)).isoformat()
+    token, client = _stale_consented_token(tmp_path, consented)
+    before = token.read_bytes()
+    endpoint, alerts = _TokenEndpoint(status, body), []
+    result = drive_credentials.credential_status(
+        token_path=token,
+        client_path=client,
+        request_factory=lambda: endpoint,
+        now=consented + timedelta(days=elapsed_days),
+        alert_reporter=lambda *args: alerts.append(args),
+    )
+
+    assert result["state"] == expected and result["expires_at"] == deadline
+    assert "private-payload" not in json.dumps(result)
+    assert token.read_bytes() == before
+    if expected == "invalid":  # the local clock already ran out; no refresh is attempted
+        assert endpoint.calls == 0
+        assert result["reason"] == f"Drive access expired at {deadline}: Reconnect in BrainBar"
+        return
+    assert endpoint.calls == 3 and len(no_backoff_sleep) == 2  # google-auth's own retries ran first
+    assert alerts == []  # a temporary failure neither raises nor clears a consent alert
+    assert result["days_left"] == pytest.approx(7 - elapsed_days, abs=1e-3)
+    if expected == "expiring":
+        assert result["reason"] == f"{TEMPORARY_REASON}: Drive access expires at {deadline}: Reconnect in BrainBar"
+    else:
+        assert result["reason"] == TEMPORARY_REASON
+
+
+@pytest.mark.parametrize(
+    "status, error, expected_reason_start",
+    [
+        (400, "invalid_grant", "Drive access expired: Reconnect in BrainBar (Google rejected refresh;"),
+        (401, "unauthorized_client", "Drive token refresh failed; run brainlayer backup auth"),
+    ],
+)
+def test_status_permanent_refresh_rejection_stays_invalid(
+    tmp_path, no_backoff_sleep, status, error, expected_reason_start
+):
+    from brainlayer import drive_credentials
+
+    consented = datetime.now(UTC) - timedelta(days=2)
+    token, client = _stale_consented_token(tmp_path, consented)
+    endpoint = _TokenEndpoint(status, {"error": error, "error_description": "private-payload"})
+    result = drive_credentials.credential_status(
+        token_path=token, client_path=client, request_factory=lambda: endpoint, alert_reporter=lambda *_: None
+    )
+
+    assert endpoint.calls == 1  # not retryable: google-auth gives up at once
+    assert result["state"] == "invalid" and result["reason"].startswith(expected_reason_start)
+    assert "private-payload" not in json.dumps(result)
+
+
+def test_backup_job_retryable_refresh_error_is_refresh_failed_not_consent(tmp_path, no_backoff_sleep):
+    from brainlayer import drive_credentials, health_verdict
+
+    token, client = _stale_consented_token(tmp_path, datetime.now(UTC) - timedelta(days=2))
+    alerts = []
+    with pytest.raises(drive_credentials.DriveCredentialError) as caught:
+        drive_credentials.load_credentials(
+            token_path=token,
+            client_path=client,
+            request_factory=lambda: _TokenEndpoint(503, {"error": "backend_error", "error_description": "private"}),
+            alert_reporter=lambda *args: alerts.append(args),
+        )
+
+    assert isinstance(caught.value, drive_credentials.DriveRefreshUnavailableError)
+    assert "run brainlayer backup auth" not in str(caught.value) and "private" not in str(caught.value)
+    assert alerts == []
+    receipt = {"error_type": type(caught.value).__name__, "error": str(caught.value)}
+    assert health_verdict.drive_event(receipt) == "refresh_failed"  # amber retrying, never Reconnect
+
+
+def test_cli_text_status_temporary_token_endpoint_failure_prints_local_deadline(
+    tmp_path, monkeypatch, no_backoff_sleep
+):
+    """Real CLI + real google-auth Credentials and retry loop; only the token endpoint answers 503."""
+    import google.auth.transport.requests as transport
+    from typer.testing import CliRunner
+
+    from brainlayer.cli import app
+
+    consented = datetime.now(UTC) - timedelta(days=5, hours=12)
+    deadline = (consented + timedelta(days=7)).isoformat()
+    token, client = _stale_consented_token(tmp_path, consented)
+    before = token.read_bytes()
+    endpoint = _TokenEndpoint(503, {"error": "backend_error", "error_description": "private-payload"})
+    monkeypatch.setattr(transport, "Request", lambda: endpoint)
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "alerts.json"))
+    monkeypatch.setenv("BRAINLAYER_DRIVE_TOKEN_PATH", str(token))
+    monkeypatch.setenv("BRAINLAYER_DRIVE_CLIENT_PATH", str(client))
+    runner = CliRunner()
+    text = runner.invoke(app, ["backup", "auth", "--status"])
+    as_json = runner.invoke(app, ["backup", "auth", "--status", "--json"])
+
+    assert text.exit_code == 0 and as_json.exit_code == 0
+    assert text.output == f"{TEMPORARY_REASON}: Drive access expires at {deadline}: Reconnect in BrainBar\n"
+    payload = json.loads(as_json.output)
+    assert payload["state"] == "expiring" and payload["expires_at"] == deadline
+    assert payload["reason"] == text.output.rstrip("\n")
+    assert "private-payload" not in text.output + as_json.output
+    assert endpoint.calls == 6 and token.read_bytes() == before
+    assert not (tmp_path / "alerts.json").exists()

@@ -113,6 +113,19 @@ The database path is resolved in this order:
 1. `BRAINLAYER_DB` environment variable (highest priority)
 2. Canonical path `~/.local/share/brainlayer/brainlayer.db` (default)
 
+### First run: an absent database
+
+The scheduled (calendar) `brainlayer index` pass never creates a database. When the resolved path
+does not exist it prints `INDEX_BOOTSTRAP_REQUIRED db=<path> run="brainlayer bootstrap-db"` and
+exits 78, writing nothing. A dangling symlink at the path prints `INDEX_DB_UNAVAILABLE` and exits 1.
+An existing database is never bootstrapped: a partial, foreign or unwritable file still fails the
+runtime schema check. Interactive `brainlayer index` keeps the writer's own refusal.
+
+`brainlayer bootstrap-db` is the explicit first-run creator. It builds the canonical schema in a
+sibling temp file, verifies the runtime schema fingerprint, and publishes it only if nothing is at
+the path. Any existing path, including one created by a concurrent run, is refused unchanged
+(`BOOTSTRAP_REFUSED`, exit 1).
+
 ## Data Sources
 
 BrainLayer reads from these locations by default:
@@ -316,6 +329,19 @@ full-maintenance restore failures remain failures with exit **76** and an alert.
 Quiet-window, queue-idle and writer checks run again after backup;
 post-backup gate failure skips service bootout and all DB maintenance with exit **76**.
 
+`python -m brainlayer.maintenance` exit codes (#1040): **0** ok; **75** (`EX_TEMPFAIL`) only for a
+deliberate, retryable deferral (a quiet-window, queue-idle or writer gate, a refused window-bound
+hold, or an optional VACUUM step skipped for backup custody); **70** (`EX_SOFTWARE`) for a genuine
+failure — services that could not be resumed (light/burn), a burn drain that failed, pathological
+search latency, a quiesce or watchdog-hold failure, or any abort that does not declare itself a
+deferral; **76** for a weekly full-pass failure; **77** when the maintenance lock timed out. A
+deferral that then cannot restore its services exits **70** (**76** in a full pass), never 75. Every
+terminal record the run prints, and its row in the maintenance log, carries `status`, `outcome`
+(`ok`/`deferred`/`failed`), `exit_code`, a UTC `ts` and `run_id`. Under the calendar, `run_id` is the
+`maintenance_run_id` on that step's `spawn` and `finished` records (passed in
+`BRAINLAYER_MAINTENANCE_RUN_ID`), so readers correlate on the record, not on a log's mtime; a manual
+run gets a fresh id. Readers fall back to the reason allowlist only for older records without `outcome`.
+
 Every writer pause (a supervisor `MaintenanceHold`) is bounded. It lasts at most
 `BRAINLAYER_MAINTENANCE_HOLD_MAX_S` (default **3600**). A calendar or scheduled maintenance hold is
 also window-bound: it starts only inside the quiet window and ends 10 minutes before the window closes
@@ -442,7 +468,10 @@ hotlane, watcher, drain, index, tier-3 ingest, decay and enrichment using mainte
 that jobs remain unloaded, BrainBar processes are gone and no writable database
 descriptors remain before applying. Any failed gate aborts before writing.
 Service restoration runs in `finally`; services previously down or deliberately
-paused remain down, and resume failures are reported by count. Proof and rehearsal
+paused remain down, and resume failures are reported by count. Refusal JSON adds
+`cause` (a fixed category such as `maintenance-abort`, `sqlite-busy`, `os-error`,
+`scrub-refusal`, or `unknown`) and `gate` (`quiet-window`, `queue-idle`, `lsof-writers`,
+`maintenance-lock`, or null); neither ever carries exception text. Proof and rehearsal
 must use copies and synthetic service stubs; canonical execution belongs to the
 deployment lead's maintenance window.
 
