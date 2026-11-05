@@ -5516,77 +5516,51 @@ final class BrainDatabase: @unchecked Sendable {
     func lookupEntity(query: String, entityType: String? = nil) throws -> [String: Any]? {
         guard let db else { throw DBError.notOpen }
 
-        // First try exact name match
-        let exactSQL = """
-            SELECT id, entity_type, name, metadata, description, importance
-            FROM kg_entities
-            WHERE name = ?
-              AND (? IS NULL OR entity_type = ?)
-            LIMIT 1
-        """
-        var exactStmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, exactSQL, -1, &exactStmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        bindText(query, to: exactStmt, index: 1)
-        if let entityType {
-            bindText(entityType, to: exactStmt, index: 2)
-            bindText(entityType, to: exactStmt, index: 3)
-        } else {
-            sqlite3_bind_null(exactStmt, 2)
-            sqlite3_bind_null(exactStmt, 3)
-        }
+        // Resolution tiers, first hit wins (#663):
+        //   1. exact name (case-sensitive) — an exact spelling always takes precedence;
+        //   2. exact name, ASCII case-insensitive — so "nimbus" resolves "Nimbus" instead
+        //      of falling through to the substring tier and landing on whichever entity
+        //      merely *contains* the query. Ambiguous case variants are ordered
+        //      deterministically (importance, then binary name, then id);
+        //   3. substring LIKE fallback (unchanged).
+        // The returned `name` is always the stored canonical spelling, never the query.
+        let selectColumns = "SELECT id, entity_type, name, metadata, description, importance FROM kg_entities"
+        let typeFilter = "AND (? IS NULL OR entity_type = ?)"
+        let tiers: [(sql: String, pattern: String)] = [
+            ("\(selectColumns) WHERE name = ? \(typeFilter) LIMIT 1", query),
+            ("\(selectColumns) WHERE name = ? COLLATE NOCASE \(typeFilter) "
+                + "ORDER BY importance DESC, name COLLATE BINARY ASC, id ASC LIMIT 1", query),
+            ("\(selectColumns) WHERE name LIKE ? \(typeFilter) LIMIT 1", "%\(query)%"),
+        ]
 
         var entityId: String?
         var result: [String: Any]?
 
-        if sqlite3_step(exactStmt) == SQLITE_ROW {
-            entityId = columnText(exactStmt, 0)
-            result = [
-                "entity_id": entityId as Any,
-                "entity_type": columnText(exactStmt, 1) as Any,
-                "name": columnText(exactStmt, 2) as Any,
-                "metadata": columnText(exactStmt, 3) as Any,
-                "description": columnText(exactStmt, 4) as Any,
-                "importance": sqlite3_column_double(exactStmt, 5)
-            ]
-        }
-        sqlite3_finalize(exactStmt)
-
-        // If no exact match, try LIKE
-        if result == nil {
-            let likeSQL = """
-                SELECT id, entity_type, name, metadata, description, importance
-                FROM kg_entities
-                WHERE name LIKE ?
-                  AND (? IS NULL OR entity_type = ?)
-                LIMIT 1
-            """
-            var likeStmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, likeSQL, -1, &likeStmt, nil) == SQLITE_OK else {
+        for tier in tiers where result == nil {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, tier.sql, -1, &stmt, nil) == SQLITE_OK else {
                 throw DBError.prepare(sqlite3_errcode(db))
             }
-            bindText("%\(query)%", to: likeStmt, index: 1)
+            defer { sqlite3_finalize(stmt) }
+            bindText(tier.pattern, to: stmt, index: 1)
             if let entityType {
-                bindText(entityType, to: likeStmt, index: 2)
-                bindText(entityType, to: likeStmt, index: 3)
+                bindText(entityType, to: stmt, index: 2)
+                bindText(entityType, to: stmt, index: 3)
             } else {
-                sqlite3_bind_null(likeStmt, 2)
-                sqlite3_bind_null(likeStmt, 3)
+                sqlite3_bind_null(stmt, 2)
+                sqlite3_bind_null(stmt, 3)
             }
-
-            if sqlite3_step(likeStmt) == SQLITE_ROW {
-                entityId = columnText(likeStmt, 0)
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                entityId = columnText(stmt, 0)
                 result = [
                     "entity_id": entityId as Any,
-                    "entity_type": columnText(likeStmt, 1) as Any,
-                    "name": columnText(likeStmt, 2) as Any,
-                    "metadata": columnText(likeStmt, 3) as Any,
-                    "description": columnText(likeStmt, 4) as Any,
-                    "importance": sqlite3_column_double(likeStmt, 5)
+                    "entity_type": columnText(stmt, 1) as Any,
+                    "name": columnText(stmt, 2) as Any,
+                    "metadata": columnText(stmt, 3) as Any,
+                    "description": columnText(stmt, 4) as Any,
+                    "importance": sqlite3_column_double(stmt, 5)
                 ]
             }
-            sqlite3_finalize(likeStmt)
         }
 
         // Get typed relations for found entity (excludes co_occurs_with noise)
