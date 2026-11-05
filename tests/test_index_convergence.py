@@ -34,7 +34,7 @@ def test_checkpointed_backlog_is_persisted_and_shrinks(calendar_fixture, monkeyp
         assert state["stalled_passes"] == 0
 
 
-def test_stagnation_is_loud_after_configured_consecutive_passes(calendar_fixture, monkeypatch):
+def test_arriving_work_with_commits_does_not_alarm(calendar_fixture, monkeypatch):
     source, db, chunks, clock = calendar_fixture
     monkeypatch.setenv("BRAINLAYER_INDEX_STALL_PASSES", "3")
     monkeypatch.setattr(adapter, "embed_chunks", synthetic_vectors)
@@ -47,10 +47,10 @@ def test_stagnation_is_loud_after_configured_consecutive_passes(calendar_fixture
             chunks.extend(replace(chunks[0], content=f"Growing input {len(chunks) + i}") for i in range(64))
         clock[0] = 100.0
         result = invoke(source)
-        assert result.exit_code == (1 if number == 3 else 0), result.output
-    assert "INDEX_BACKLOG_STALLED" in result.output
+        assert result.exit_code == 0, result.output
+    assert "INDEX_BACKLOG_STALLED" not in result.output
     state = json.loads(next(db.parent.glob("index-backlog-*.json")).read_text())
-    assert state["stalled_passes"] == 3
+    assert state["stalled_passes"] == 0
 
 
 @pytest.mark.parametrize("mutation", ["append", "rewrite", "truncate", "replace_inode"])
@@ -609,3 +609,27 @@ def test_r2_checkpoint_publication_fault_still_fails_pass(calendar_fixture, monk
     assert result.exit_code == 1, result.output
     assert "INDEX_RESOURCE_SKIPPED" not in result.output
     assert checkpoint(db) == {}
+
+
+def test_m1_arriving_work_does_not_stall_draining_passes(tmp_path):
+    outcomes = []
+    for before, after in ((1194, 975), (3069, 1393), (1990, 1577), (2475, 2138)):
+        db = tmp_path / "probe.db"
+        db.touch()
+        cp = cli._CalendarIndexCheckpoint(db, tmp_path, None, False)
+        cp.backlog = lambda: dict(files_remaining=2, chunks_remaining=after, uncounted_files=0)
+        cp.backlog_before = dict(files_remaining=2, chunks_remaining=before, uncounted_files=0)
+        alarm = cp.finish()
+        outcomes.append((alarm, json.loads(cp.backlog_path.read_text())["stalled_passes"]))
+    assert outcomes == [(False, 0)] * 4
+
+
+def test_measured_non_draining_passes_alarm(tmp_path):
+    for number in range(1, 4):
+        db = tmp_path / "probe.db"
+        db.touch()
+        cp = cli._CalendarIndexCheckpoint(db, tmp_path, None, False)
+        cp.backlog = lambda: dict(files_remaining=1, chunks_remaining=100, uncounted_files=0)
+        cp.mark_backlog_before()
+        alarm = cp.finish()
+        assert alarm == (number == 3)

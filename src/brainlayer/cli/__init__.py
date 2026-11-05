@@ -511,8 +511,9 @@ class _CalendarIndexCheckpoint:
         backlog = self.backlog()
         stalled = self.previous.get("stalled_passes", 0)
         best = self.previous.get("best_backlog")
-        # Only complete non-deferred measurements can establish or advance the
-        # held minimum. Unknown lower bounds carry both count and baseline.
+        # Compare measured passes with their own inventory. Retain the legacy
+        # baseline for older callers without a before measurement. Unknown
+        # lower bounds carry both count and baseline.
         if (
             best is None
             and self.previous
@@ -524,6 +525,15 @@ class _CalendarIndexCheckpoint:
         if not deferred and measured:
             if not backlog["files_remaining"]:
                 stalled, best = 0, backlog
+            elif self.backlog_before is not None:
+                before = self.backlog_before
+                if before["uncounted_files"] == 0:
+                    smaller = (backlog["chunks_remaining"], backlog["files_remaining"]) < (
+                        before["chunks_remaining"],
+                        before["files_remaining"],
+                    )
+                    stalled = 0 if smaller else stalled + 1
+                    best = backlog
             elif best is None or best["uncounted_files"] or not best["files_remaining"]:
                 best = backlog
             else:
