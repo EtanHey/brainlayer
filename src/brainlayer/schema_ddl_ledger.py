@@ -282,7 +282,7 @@ class RuntimeDDLAudit:
                         "completed_steps": self.completed_steps,
                         "rolled_back_steps": self.rolled_back_steps,
                         "retryable": retryable,
-                        "transaction": "implicit_per_statement; failure event written after rollback",
+                        "transaction": "init transaction rolled back; failure event written after rollback",
                     },
                 )
             except BaseException:

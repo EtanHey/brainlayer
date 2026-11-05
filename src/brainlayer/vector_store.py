@@ -847,7 +847,11 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         if audit is not None:
             audit.finish_success()
             self.conn.execute("COMMIT")
-            self._checkpoint_wal_full(self.conn.cursor())
+            if getattr(self, "_init_needs_checkpoint", False):
+                # Only after the one-time chunk-origin backfill, as before #618; a FULL
+                # checkpoint on every writer open would stall startup behind readers.
+                self._checkpoint_wal_full(self.conn.cursor())
+        self._init_needs_checkpoint = False
         self._ddl_audit = None
 
     def _record_runtime_ddl_failure(self, exc: BaseException, *, retryable: bool) -> None:
@@ -858,6 +862,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     def _init_db(self) -> None:
         """Initialize database with vector extension."""
         self._ddl_audit = None
+        self._init_needs_checkpoint = False
         self.conn = apsw.Connection(str(self.db_path))
 
         # Set busy timeout IMMEDIATELY via APSW native method — before any DDL.
@@ -875,7 +880,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             lane="maintenance",
             operation="init",
             span_kind="writer_operation",
-            transaction_mode="immediate",
+            transaction_mode="explicit",
         )
 
         cursor = self.conn.cursor()
@@ -1028,6 +1033,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             (migration_name,),
         ).fetchone()
         if migration_done is None:
+            self._init_needs_checkpoint = True
             cursor.execute(
                 """
                 UPDATE chunks

@@ -308,3 +308,14 @@ def test_writer_init_checkpoints_after_commit(tmp_path, monkeypatch, caplog):
         pass
     assert checkpoints
     assert "SQLITE_LOCKED" not in caplog.text
+
+
+def test_writer_reopen_without_migration_skips_full_checkpoint(tmp_path, monkeypatch):
+    db = tmp_path / "reopen.db"
+    with VectorStore(db):
+        pass
+    calls = []
+    monkeypatch.setattr(VectorStore, "_checkpoint_wal_full", lambda self, cursor: calls.append(1))
+    with VectorStore(db):
+        pass
+    assert calls == [], "a no-migration writer open must not run a FULL checkpoint"
