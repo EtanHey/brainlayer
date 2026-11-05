@@ -21,6 +21,7 @@ from xml.parsers.expat import ExpatError
 
 from . import maintenance_control
 from .backup_daily import (
+    BACKUP_CALENDAR_DEADLINE_ENV,
     BACKUP_INVOCATION_ENV,
     DEFAULT_SNAPSHOT_TIMEOUT_SECONDS,
     SNAPSHOT_RECEIPT_RESERVE_SECONDS,
@@ -568,9 +569,13 @@ def _bounded_snapshot_step(step, now, shutdown_timeout):
     end = now.replace(hour=6, minute=0, second=0, microsecond=0)
     seconds = int(min(requested, (end - now).total_seconds() - shutdown_timeout - 1))
     # The backup's own deadline fires first, so its timeout receipt is written before this kill.
-    internal = seconds - min(SNAPSHOT_RECEIPT_RESERVE_SECONDS, max(1, seconds // 4))
+    # The full reserve always applies (#1422): a shrunken one cannot hold the 10 s grace plus the
+    # receipt, so a window without a positive work budget beside it defers instead of spawning.
+    internal = seconds - SNAPSHOT_RECEIPT_RESERVE_SECONDS
     if internal < 1:
         return None
+    # Taken before the spawn, so it is never later than the kill `_execute_step` arms after it.
+    deadline = time.monotonic() + seconds
     return replace(
         step,
         timeout=seconds,
@@ -578,6 +583,7 @@ def _bounded_snapshot_step(step, now, shutdown_timeout):
         | {
             "BRAINLAYER_BACKUP_TIMEOUT_SECONDS": str(internal),
             "BRAINLAYER_BACKUP_CALENDAR_SNAPSHOT_BUDGET_SECONDS": str(internal),
+            BACKUP_CALENDAR_DEADLINE_ENV: repr(deadline),
         },
     )
 
