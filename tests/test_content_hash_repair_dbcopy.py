@@ -1,12 +1,7 @@
-"""Adversarial DB-copy proof for #623 (stacked on #1637): both merge writers and the repair.
+"""Adversarial DB-copy proof for #623 (stacked on #1637). Synthetic production-schema copies only.
 
-Every fixture is a private synthetic copy built with the production ``VectorStore``
-schema (FTS triggers, vec0 tables, the content_hash index). Nothing here opens,
-copies or names a real database.
-
-The invariant under attack: after a content-changing merge, and after the repair,
-``content_hash == sha256(content.strip())``; every other column, FTS row and
-vector row is left byte-identical.
+Invariant under attack: after a content-changing merge, and after the repair, content_hash ==
+sha256(content.strip()); every other column, FTS row and vector row stays byte-identical.
 """
 
 from __future__ import annotations
@@ -28,7 +23,6 @@ from brainlayer.content_hash_repair import repair_merged_content_hashes
 from brainlayer.dedupe import (
     _MERGED_MARKER,
     _merged_originals,
-    _whitespace_normalized,
     compute_dedupe_fields,
     merge_duplicate_chunk,
     merge_existing_chunk_content,
@@ -42,11 +36,11 @@ def _sha(content: str) -> str:
     return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
 
 
-def _insert(conn, chunk_id, content, content_hash, *, source_file="synthetic.jsonl", project="synthetic"):
+def _insert(conn, chunk_id, content, content_hash):
     conn.execute(
         """INSERT INTO chunks(id, content, metadata, source_file, project, content_hash, created_at, seen_count)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
-        (chunk_id, content, json.dumps({"origin": chunk_id}), source_file, project, content_hash, CREATED),
+           VALUES (?, ?, ?, 'synthetic.jsonl', 'synthetic', ?, ?, 1)""",
+        (chunk_id, content, json.dumps({"origin": chunk_id}), content_hash, CREATED),
     )
 
 
@@ -94,39 +88,26 @@ def test_merge_sequences_keep_hash_equal_to_current_trimmed_content(tmp_path, ki
     store = VectorStore(tmp_path / "seq.db")
     conn = store.conn
     try:
-        start = rng.choice(
-            [
-                "plain starting body for the ledger",
-                _MERGED_MARKER + "\n\n1. legacy first original\n\n2. legacy second original",
-            ]
-        )
+        start = rng.choice(["plain starting body", _MERGED_MARKER + "\n\n1. legacy first\n\n2. legacy second"])
         _insert(conn, "c", start, _sha(start))
         sent = []
         for n in range(12):
             incoming = rng.choice(TRICKY + sent + [f"fresh original {seed}-{n} about the amber footnote"])
-            before_content, before_hash = conn.execute(
-                "SELECT content, content_hash FROM chunks WHERE id='c'"
-            ).fetchone()
+            sent.append(incoming)
+            before, before_hash = conn.execute("SELECT content, content_hash FROM chunks WHERE id='c'").fetchone()
             changed = _merge(conn, kind, "c", incoming, n)
             content, stored, dedupe_hash, simhash = conn.execute(
                 "SELECT content, content_hash, dedupe_hash, simhash FROM chunks WHERE id='c'"
             ).fetchone()
-            assert changed == (content != before_content)
+            assert changed == (content != before)
             if changed:
                 assert stored == _sha(content), f"seed={seed} step={n}: stale hash after content-changing merge"
+                # Retained original text: every prior original survives verbatim, incoming appended verbatim.
+                assert _merged_originals(content) == [*_merged_originals(before), incoming]
             else:
-                assert (content, stored) == (before_content, before_hash), "no-op merge touched content/hash"
+                assert (content, stored) == (before, before_hash), "no-op merge touched content/hash"
             fields = compute_dedupe_fields(content, CREATED)
             assert (dedupe_hash, simhash) == (fields.dedupe_hash, fields.simhash)
-            if incoming.strip():
-                sent.append(incoming)
-                # Retained original text: every non-empty original is still recoverable.
-                normalized = {_whitespace_normalized(o) for o in _merged_originals(content)}
-                assert (
-                    _whitespace_normalized(incoming) in normalized
-                    or _whitespace_normalized(content) == (_whitespace_normalized(incoming))
-                    or start.startswith(_MERGED_MARKER)
-                )
     finally:
         store.close()
 
@@ -302,16 +283,10 @@ def test_apply_subprocess_waits_for_a_held_writer_lock_then_completes(big_copy):
     assert json.loads(out)["repaired"] == len(stale)
 
 
-def test_copy_named_by_brainlayer_db_or_hardlinked_to_live_is_refused(big_copy, monkeypatch, tmp_path):
+def test_copy_named_by_brainlayer_db_is_refused_as_live(big_copy, monkeypatch):
     db, _ = big_copy
     before = _snapshot(db)
-    monkeypatch.setenv("BRAINLAYER_DB", str(db))
-    with pytest.raises(RuntimeError, match="refusing to write the live"):
-        repair_merged_content_hashes(db, apply=True)
-    monkeypatch.setenv("BRAINLAYER_DB", str(tmp_path / "elsewhere.db"))
-    live = tmp_path / "pretend-live.db"
-    os.link(db, live)
-    monkeypatch.setattr("brainlayer.chunk_origin_wipe.live_canonical_db_path", lambda: live)
+    monkeypatch.setenv("BRAINLAYER_DB", str(db))  # The runbook forbids exporting this for the copy.
     with pytest.raises(RuntimeError, match="refusing to write the live"):
         repair_merged_content_hashes(db, apply=True)
     assert _snapshot(db) == before

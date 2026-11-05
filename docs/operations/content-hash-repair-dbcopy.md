@@ -1,28 +1,21 @@
 # content_hash repair: DB-copy acceptance runbook (#623)
 
-**Status: LOCAL / UNRUN.** Nobody has run this against a copy of the real database yet.
-The synthetic proof is `tests/test_content_hash_repair_dbcopy.py`.
-
-This runbook checks `python -m brainlayer.content_hash_repair` against a **copy**. That tool
-ships with #1637. Passing it does **not** authorise touching the live DB:
-
-- The tool refuses the live DB by inode.
-- It also refuses whatever `BRAINLAYER_DB` names.
-- It has no `--allow-live` flag.
+**Status: LOCAL / UNRUN** against any copy of the real database. Synthetic proof:
+`tests/test_content_hash_repair_dbcopy.py`. This checks `python -m brainlayer.content_hash_repair`
+(#1637) against a **copy**. A pass does **not** authorise touching the live DB: the tool refuses
+it by inode, refuses whatever `BRAINLAYER_DB` names, and has no `--allow-live` flag.
 
 ## 0. Preconditions
 
-- **Interpreter.** Use a worktree venv that contains #1637, or the keg python once a release
-  contains it (`scripts/release_tag_contains.py`). Never use bare `python3`: on the M4 it
-  imports the repo root's live working tree through `_brainlayer.pth`.
-- **Copy method.** Take a consistent snapshot of the live DB:
-  - preferably with BrainBar's `brain_backup_vacuum_into`;
-  - or with `sqlite3 "file:$LIVE?mode=ro" ".backup '$COPY'"`.
-
-  Never `cp` only the main file: uncheckpointed WAL frames would be missing from the copy.
-- **Copy location.** Keep `$COPY` outside `~/.local/share/brainlayer`, and do **not** export
-  `BRAINLAYER_DB=$COPY`. The tool treats that path as live and refuses it, by design.
-- **Do not upload the copy anywhere.** It is personal data.
+- **Interpreter:** a worktree venv containing #1637, or the keg python once a release contains it
+  (`scripts/release_tag_contains.py`). Never bare `python3` (on the M4 it imports the repo root's
+  working tree through `_brainlayer.pth`).
+- **Copy:** a consistent snapshot, preferably BrainBar's `brain_backup_vacuum_into`, else
+  `sqlite3 "file:$LIVE?mode=ro" ".backup '$COPY'"`. Never `cp` only the main file: uncheckpointed
+  WAL frames would be missing.
+- **Location:** keep `$COPY` outside `~/.local/share/brainlayer` and do **not** export
+  `BRAINLAYER_DB=$COPY`; the tool treats that path as live and refuses it, by design. Never upload
+  the copy anywhere; it is personal data.
 
 ```bash
 COPY=/path/outside/brainlayer/brainlayer-623-copy.db
@@ -34,8 +27,7 @@ PY=/path/to/worktree/.venv/bin/python   # or the keg python, once the release co
 ```bash
 sqlite3 -readonly "$COPY" "PRAGMA quick_check;"                       # expect: ok
 sqlite3 -readonly "$COPY" "SELECT COUNT(*) FROM pragma_table_info('chunks') WHERE name='content_hash';"  # expect: 1
-# Any trigger that could fire on a content_hash UPDATE. Expect no rows. Only the header (before
-# BEGIN) is read: INSERT triggers' bodies contain "ON CONFLICT ... DO UPDATE" and are not UPDATE triggers.
+# Triggers that could fire on a content_hash UPDATE (header only: INSERT bodies say DO UPDATE). Expect none.
 sqlite3 -readonly "$COPY" "SELECT name FROM (SELECT name, substr(sql, 1, instr(upper(sql), 'BEGIN')) AS h
   FROM sqlite_master WHERE type='trigger' AND tbl_name='chunks')
   WHERE h LIKE '%UPDATE%' AND (h NOT LIKE '%UPDATE OF%' OR h LIKE '%content_hash%');"
@@ -43,8 +35,7 @@ sqlite3 -readonly "$COPY" "SELECT COUNT(*), SUM(content_hash IS NULL) FROM chunk
   WHERE substr(content,1,28)='[Merged duplicate originals]';"      # merged rows, merged NULL-hash rows
 ```
 
-Fingerprint everything the repair must **not** change. That is every `chunks` column except
-`content_hash`, the FTS row count, and the vector row count:
+Fingerprint what the repair must **not** change (every other `chunks` column, FTS and vector counts):
 
 ```bash
 cat > /tmp/fp623.py <<'EOF'
@@ -92,8 +83,7 @@ means something else is writing to the copy: stop.
 sqlite3 -readonly "$COPY" "PRAGMA integrity_check;"                               # expect: ok
 ```
 
-Spot-check the `sample_ids` from step 2. For each one, `content_hash` must equal
-`sha256(content.strip())`:
+Spot-check step 2's `sample_ids`: each must print `True` (hash == sha256 of trimmed content):
 
 ```bash
 "$PY" -I -c 'import hashlib,sqlite3,sys,json
@@ -105,21 +95,14 @@ for i in json.load(open(sys.argv[2]))["sample_ids"]:
 
 ## 5. Receipt and stop conditions
 
-- **Receipt.** Put the JSON outputs, the two fingerprints and the counts in a small text
-  receipt under `docs.local/`. Never include the copy or any row content.
-- **Stop and report**, without retrying around the check, on any of these:
-  - a precheck trigger row;
-  - `stale` above 2,256;
-  - `skipped_identity_changed` above 0;
-  - a fingerprint diff;
-  - an integrity result other than `ok`;
-  - any refusal.
+Put the JSON outputs, both fingerprints and the counts in a small text receipt under `docs.local/`,
+never the copy or any row content. **Stop and report** (do not retry around the check) on: a
+precheck trigger row, `stale` above 2,256, `skipped_identity_changed` above 0, a fingerprint diff,
+an integrity result other than `ok`, or any refusal.
 
 ## What a pass does NOT cover
 
-- **Production.** Applying this to the live DB is a separate lead decision. The tool cannot
-  do it as written, because it has no live mode.
-- **Order of operations.** The fixed merge writer must be **deployed** before any production
-  application. Until then, the old writer keeps leaving new stale rows behind.
-- **The other content changes.** Stale hashes left by non-merge content changes (the rest of
-  the repair (e) census) are out of scope. This tool leaves them alone.
+- **Production.** Applying this to the live DB is a separate lead decision; the tool has no live mode.
+- **Order.** The fixed merge writer must be **deployed** first, or the old writer keeps leaving new
+  stale rows behind.
+- **Non-merge content changes** (the rest of the repair (e) census) are out of scope and left alone.
