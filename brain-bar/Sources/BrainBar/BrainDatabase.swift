@@ -891,6 +891,8 @@ final class BrainDatabase: @unchecked Sendable {
     var failNextStoreWithBusyForTesting = false
     var pendingStoreSyncForTesting: ((Int32) throws -> Void)?
     var pendingStoreDirectorySyncForTesting: ((URL) throws -> Void)?
+    /// Replaces the barrier that makes replayed commits durable before the queue drops their rows.
+    var pendingStoreReplayDurabilityBarrierForTesting: (() throws -> Void)?
 #if DEBUG
     var observeStorePolicyForTesting: ((Int32, Int) -> Void)?
     var onStoreTransactionForTesting: (() -> Void)?
@@ -5120,6 +5122,41 @@ final class BrainDatabase: @unchecked Sendable {
         default:
             throw DBError.step(stepRC)
         }
+    }
+
+    private func replayedCommitsAreDurable() -> Bool {
+        do {
+            if let barrier = pendingStoreReplayDurabilityBarrierForTesting {
+                try barrier()
+            } else {
+                try syncCommittedWritesToStableStorage()
+            }
+            return true
+        } catch {
+            NSLog("[BrainBar] Keeping pending store queue rows: replayed commits not yet durable: %@",
+                  String(describing: error))
+            return false
+        }
+    }
+
+    /// Forces every frame this database has committed onto stable storage, through SQLite's
+    /// own open handle: the WAL in WAL mode, the main file otherwise. SQLITE_SYNC_FULL makes
+    /// the unix VFS issue F_FULLFSYNC on Darwin, the same device-cache barrier the queue
+    /// append uses. Syncing the WAL covers every earlier frame, including rows a previous
+    /// replay committed whose queue line is only now being dropped as already stored.
+    func syncCommittedWritesToStableStorage() throws {
+        guard let db else { throw DBError.notOpen }
+        let isWAL = queryPragma(db, name: "journal_mode")?.lowercased() == "wal"
+        var file: UnsafeMutablePointer<sqlite3_file>?
+        let rc = sqlite3_file_control(
+            db, "main", isWAL ? SQLITE_FCNTL_JOURNAL_POINTER : SQLITE_FCNTL_FILE_POINTER, &file
+        )
+        guard rc == SQLITE_OK else { throw DBError.exec(rc, "durability barrier: no database file handle") }
+        guard let file, let methods = file.pointee.pMethods, let xSync = methods.pointee.xSync else {
+            throw DBError.exec(SQLITE_IOERR, "durability barrier: \(isWAL ? "WAL" : "database") file is not open")
+        }
+        let syncRC = xSync(file, SQLITE_SYNC_FULL)
+        guard syncRC == SQLITE_OK else { throw DBError.exec(syncRC, "durability barrier: sync failed") }
     }
 
     private func rewritePendingStoreFile(path: URL, snapshot: Data, remainingLines: [Data]) {
