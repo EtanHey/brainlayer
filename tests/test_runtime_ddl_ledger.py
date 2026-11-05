@@ -291,3 +291,20 @@ def test_failure_after_autocommitted_ddl_reports_exactly_what_committed(tmp_path
     }
     assert not committed
     _assert_no_content(event)
+
+
+def test_writer_init_checkpoints_after_commit(tmp_path, monkeypatch, caplog):
+    checkpoints = []
+
+    def checkpoint(self, cursor):
+        assert self.conn.getautocommit(), "checkpoint must run after COMMIT"
+        result = cursor.execute("PRAGMA wal_checkpoint(FULL)").fetchone()
+        checkpoints.append(result)
+        assert result[0] == 0
+        assert result[1] == result[2]
+
+    monkeypatch.setattr(VectorStore, "_checkpoint_wal_full", checkpoint)
+    with VectorStore(tmp_path / "checkpoint.db"):
+        pass
+    assert checkpoints
+    assert "SQLITE_LOCKED" not in caplog.text

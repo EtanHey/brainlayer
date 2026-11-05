@@ -847,6 +847,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         if audit is not None:
             audit.finish_success()
             self.conn.execute("COMMIT")
+            self._checkpoint_wal_full(self.conn.cursor())
         self._ddl_audit = None
 
     def _record_runtime_ddl_failure(self, exc: BaseException, *, retryable: bool) -> None:
@@ -874,7 +875,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             lane="maintenance",
             operation="init",
             span_kind="writer_operation",
-            transaction_mode="implicit_per_statement",
+            transaction_mode="immediate",
         )
 
         cursor = self.conn.cursor()
@@ -1027,7 +1028,6 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             (migration_name,),
         ).fetchone()
         if migration_done is None:
-            self._checkpoint_wal_full(cursor)
             cursor.execute(
                 """
                 UPDATE chunks
@@ -1067,7 +1067,6 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     json.dumps({"backfilled_precompact_checkpoints": backfilled}),
                 ),
             )
-            self._checkpoint_wal_full(cursor)
             self._invalidate_filtered_count_caches()
 
         enrich_status_migration_name = "2026_05_26_enrich_status_v1"
