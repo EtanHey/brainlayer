@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, List, Optional
 
+from ..pipeline.classify import transcript_author_model
+
 logger = logging.getLogger(__name__)
 
 # System injection patterns — skip these user-role messages
@@ -128,6 +130,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
     session_timestamp: Optional[str] = None
     project: Optional[str] = None
     model: Optional[str] = None
+    model_provider: Optional[str] = None
 
     with open(file_path, "rb") as fh:
         for raw in fh:
@@ -150,15 +153,15 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                 session_id = payload.get("id")
                 session_timestamp = payload.get("timestamp") or line_ts
                 project = _infer_project_from_cwd(payload.get("cwd"))
-                model = payload.get("model_provider", "openai")
+                model_provider = payload.get("model_provider", "openai")
                 continue
 
             # ------------------------------------------------------------------
-            # turn_context — pick up model details if present
+            # turn_context — the model that authors the following turn (#655).
+            # A session can switch models mid-way, so every turn_context wins.
             # ------------------------------------------------------------------
             if line_type == "turn_context":
-                if not model:
-                    model = payload.get("model")
+                model = transcript_author_model(payload.get("model"))
                 continue
 
             # ------------------------------------------------------------------
@@ -211,7 +214,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                     "metadata": {
                         "session_id": session_id,
                         "sender": "user",
-                        "model": model,
+                        "model_provider": model_provider,
                         "source_file": str(file_path),
                     },
                 }
@@ -241,6 +244,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "session_id": session_id,
                         "sender": "assistant",
                         "model": model,
+                        "model_provider": model_provider,
                         "source_file": str(file_path),
                     },
                 }
@@ -271,7 +275,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "session_id": session_id,
                         "sender": "tool",
                         "call_id": payload.get("call_id"),
-                        "model": model,
+                        "model_provider": model_provider,
                         "source_file": str(file_path),
                     },
                 }

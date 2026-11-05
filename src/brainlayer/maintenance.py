@@ -16,7 +16,9 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from time import monotonic, sleep
@@ -39,6 +41,7 @@ from .backup_daily import (
 from .drain import BurnDrainResult, burn_drain_once
 from .drive_credentials import _atomic_write
 from .launchd_primitive import is_launchd_label_disabled, is_launchd_label_loaded
+from .maintenance_control import MAINTENANCE_RUN_ID_ENV
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .pipeline.code_intelligence import _pid_is_alive, _pid_start_time
@@ -78,8 +81,14 @@ SEARCH_LATENCY_TARGET_MS = 50.0
 # Ten times the target distinguishes sustained pathological delay from scheduler jitter.
 SEARCH_LATENCY_FAILURE_MS = 500.0
 SEARCH_LATENCY_SAMPLES = 5
-# Keep in parity with BrainLayerMaintenanceExit.deliberateDeferrals in BrainBar.
-# Exit 75 is also used for real failures; only these whole reasons are deliberate skips.
+# Exit codes (#1040). Only a deliberate, retryable deferral exits 75; anything else is a failure.
+EXIT_DEFERRED = 75  # EX_TEMPFAIL: a safety gate or optional VACUUM step deferred; retry next window.
+EXIT_FAILED = 70  # EX_SOFTWARE: a genuine failure (resume, burn drain, latency, quiesce); needs attention.
+EXIT_VACUUM_FAILED = 76  # A genuine weekly full-pass failure (VACUUM, or restore after it).
+EXIT_LOCK_TIMEOUT = 77  # Another maintenance job held the lock past MAINTENANCE_LOCK_TIMEOUT_SECONDS.
+# Legacy reason allowlist, kept in parity with BrainLayerMaintenanceExit.deliberateDeferrals in
+# BrainBar. Releases before #1040 also exited 75 for real failures, so readers of a record without an
+# `outcome` field still classify by these whole reasons. Every EXIT_DEFERRED reason must match one.
 DELIBERATE_DEFERRALS = (
     r"^outside quiet window: now=\S+ start_hour=\d+ duration_minutes=\d+$",
     r"^recent queue write activity: \d+ file\(s\) modified recently$",
@@ -107,7 +116,9 @@ def _is_deliberate_deferral(reason: str) -> bool:
 
 
 class MaintenanceAbort(RuntimeError):
-    def __init__(self, reason: str, *, code: int = 75, detail: str | None = None) -> None:
+    """A refused or failed run. Fail closed: only a site that declares EXIT_DEFERRED is a deferral."""
+
+    def __init__(self, reason: str, *, code: int = EXIT_FAILED, detail: str | None = None) -> None:
         super().__init__(reason)
         self.reason = reason
         self.code = code
@@ -228,7 +239,8 @@ def _check_quiet_window(config: MaintenanceConfig) -> None:
     if not in_window:
         raise MaintenanceAbort(
             f"outside quiet window: now={now.isoformat()} start_hour={config.quiet_window_start_hour} "
-            f"duration_minutes={config.quiet_window_duration_minutes}"
+            f"duration_minutes={config.quiet_window_duration_minutes}",
+            code=EXIT_DEFERRED,
         )
 
 
@@ -248,14 +260,16 @@ def _check_idle(config: MaintenanceConfig) -> None:
             if path.exists() and now_ts - path.stat().st_mtime < config.recent_write_grace_seconds
         ]
         if recent:
-            raise MaintenanceAbort(f"recent queue write activity: {len(recent)} file(s) modified recently")
+            raise MaintenanceAbort(
+                f"recent queue write activity: {len(recent)} file(s) modified recently", code=EXIT_DEFERRED
+            )
 
     if config.idle_sample_seconds > 0:
         before = len(files_before)
         time.sleep(config.idle_sample_seconds)
         after = len(_queue_files(config.queue_dir))
         if after > before:
-            raise MaintenanceAbort(f"queue depth growing: before={before} after={after}")
+            raise MaintenanceAbort(f"queue depth growing: before={before} after={after}", code=EXIT_DEFERRED)
 
 
 def _process_command_line(pid: int) -> str | None:
@@ -335,7 +349,7 @@ def _check_lsof_clean(config: MaintenanceConfig) -> None:
     ]
     if unexpected:
         details = ", ".join(f"pid={entry.pid} command={entry.command!r} fd={entry.fd}" for entry in unexpected)
-        raise MaintenanceAbort(f"unexpected writer holds BrainLayer DB: {details}")
+        raise MaintenanceAbort(f"unexpected writer holds BrainLayer DB: {details}", code=EXIT_DEFERRED)
 
 
 def _read_queue_events(path: Path) -> list[dict[str, Any]]:
@@ -636,7 +650,7 @@ def _quiesce_services(services: Sequence[str], booted_out: dict[str, Any], now_f
         try:
             hold.__enter__()
         except HoldWindowClosed as exc:
-            raise MaintenanceAbort(str(exc)) from None
+            raise MaintenanceAbort(str(exc), code=EXIT_DEFERRED) from None
         return
     path = _watchdog_hold_path()
     with _watchdog_hold_lock(path):
@@ -1020,7 +1034,7 @@ def _verify_search_latency(db_path: Path, *, threshold_ms: float = SEARCH_LATENC
     if latency_ms > threshold_ms:
         raise MaintenanceAbort(
             f"post-maintenance search latency pathological: {latency_ms:.1f}ms > {threshold_ms:.1f}ms",
-            code=1,
+            code=EXIT_FAILED,
         )
     return latency_ms
 
@@ -1063,12 +1077,15 @@ def _vacuum(db_path: Path, *, deadline: float | None = None) -> tuple[int, int]:
     if deadline is not None:
         cutoff, now = deadline - HOLD_UNWIND_S, maintenance_control.hold_clock()
         if now >= cutoff:
-            raise MaintenanceAbort("maintenance hold expires before VACUUM could unwind; VACUUM skipped")
+            raise MaintenanceAbort(
+                "maintenance hold expires before VACUUM could unwind; VACUUM skipped", code=EXIT_DEFERRED
+            )
         estimate = db_path.stat().st_size / 1e9 * _vacuum_seconds_per_gb()
         if now + estimate > cutoff:
             raise MaintenanceAbort(
                 f"maintenance hold leaves too little time for VACUUM (estimate {estimate:.0f}s, "
                 f"{cutoff - now:.0f}s left); VACUUM skipped",
+                code=EXIT_DEFERRED,
             )
     before = db_path.stat().st_size
     conn = sqlite3.connect(db_path)
@@ -1263,11 +1280,11 @@ def _run_bounded_weekly_backup(config: MaintenanceConfig, timeout_seconds: int) 
         except ProcessLookupError:
             pass
         process.communicate()
-        raise MaintenanceAbort("fresh weekly backup timed out; VACUUM skipped") from exc
+        raise MaintenanceAbort("fresh weekly backup timed out; VACUUM skipped", code=EXIT_DEFERRED) from exc
     if process.returncode != 0:
         if _backup_lock_is_held(config.backup_staging_dir):
             raise BackupAlreadyRunningError("backup lock acquired during fresh weekly backup")
-        raise MaintenanceAbort(f"fresh weekly backup exited {process.returncode}; VACUUM skipped")
+        raise MaintenanceAbort(f"fresh weekly backup exited {process.returncode}; VACUUM skipped", code=EXIT_DEFERRED)
     for line in reversed(stdout.splitlines()):
         try:
             result = json.loads(line)
@@ -1275,7 +1292,9 @@ def _run_bounded_weekly_backup(config: MaintenanceConfig, timeout_seconds: int) 
             continue
         if isinstance(result, dict) and "verified" in result:
             return result
-    raise MaintenanceAbort(f"fresh weekly backup returned no receipt ({len(stderr)} stderr bytes); VACUUM skipped")
+    raise MaintenanceAbort(
+        f"fresh weekly backup returned no receipt ({len(stderr)} stderr bytes); VACUUM skipped", code=EXIT_DEFERRED
+    )
 
 
 @contextmanager
@@ -1290,10 +1309,10 @@ def _pin_weekly_backup(config: MaintenanceConfig, backup: dict[str, Any] | None)
         try:
             fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise MaintenanceAbort("backup custody unavailable; VACUUM skipped") from exc
+            raise MaintenanceAbort("backup custody unavailable; VACUUM skipped", code=EXIT_DEFERRED) from exc
         latest = _recent_weekly_verified_backup(config)
         if latest is None or latest.get("snapshot") != backup.get("snapshot"):
-            raise MaintenanceAbort("local snapshot changed before quiesce; VACUUM skipped")
+            raise MaintenanceAbort("local snapshot changed before quiesce; VACUUM skipped", code=EXIT_DEFERRED)
         _atomic_write(
             config.backup_staging_dir / ".weekly-backup-pin.json",
             {
@@ -1315,20 +1334,28 @@ def _weekly_backup(config: MaintenanceConfig) -> dict[str, Any]:
         try:
             held = _backup_lock_is_held(config.backup_staging_dir)
         except OSError as exc:
-            raise MaintenanceAbort(f"backup lock unreadable ({type(exc).__name__}); VACUUM skipped") from exc
+            raise MaintenanceAbort(
+                f"backup lock unreadable ({type(exc).__name__}); VACUUM skipped", code=EXIT_DEFERRED
+            ) from exc
         if not held:
             try:
                 receipt = _recent_weekly_verified_backup(config)
             except OSError as exc:
-                raise MaintenanceAbort(f"backup receipt unreadable ({type(exc).__name__}); VACUUM skipped") from exc
+                raise MaintenanceAbort(
+                    f"backup receipt unreadable ({type(exc).__name__}); VACUUM skipped", code=EXIT_DEFERRED
+                ) from exc
             if receipt is not None and WEEKLY_RETENTION == DAILY_RETENTION:
                 _write_log(config.log_path, {"mode": "full", "backup_status": "local_verified", "waited": waited})
                 return receipt
             if os.environ.get("BRAINLAYER_CALENDAR_STEP"):
-                raise MaintenanceAbort("tonight's local verified snapshot unavailable; VACUUM skipped")
+                raise MaintenanceAbort(
+                    "tonight's local verified snapshot unavailable; VACUUM skipped", code=EXIT_DEFERRED
+                )
             remaining_window = _remaining_quiet_window_seconds(config)
             if remaining_window < 1:
-                raise MaintenanceAbort("no quiet-window time remains for fresh backup; VACUUM skipped")
+                raise MaintenanceAbort(
+                    "no quiet-window time remains for fresh backup; VACUUM skipped", code=EXIT_DEFERRED
+                )
             try:
                 _ = _run_bounded_weekly_backup(config, remaining_window)
             except BackupAlreadyRunningError:
@@ -1336,20 +1363,22 @@ def _weekly_backup(config: MaintenanceConfig) -> dict[str, Any]:
             except MaintenanceAbort:
                 raise
             except Exception as exc:
-                raise MaintenanceAbort(f"weekly backup failed ({type(exc).__name__}); VACUUM skipped") from exc
+                raise MaintenanceAbort(
+                    f"weekly backup failed ({type(exc).__name__}); VACUUM skipped", code=EXIT_DEFERRED
+                ) from exc
             else:
                 receipt = _recent_weekly_verified_backup(config)
                 if receipt is None:
-                    raise MaintenanceAbort("weekly local snapshot was not verified; VACUUM skipped")
+                    raise MaintenanceAbort("weekly local snapshot was not verified; VACUUM skipped", code=EXIT_DEFERRED)
                 return receipt
         if os.environ.get("BRAINLAYER_CALENDAR_STEP"):
             # The calendar already holds writers paused for this step; never wait on a backup inside it.
-            raise MaintenanceAbort("backup running during held calendar step; VACUUM skipped")
+            raise MaintenanceAbort("backup running during held calendar step; VACUUM skipped", code=EXIT_DEFERRED)
         waited = True
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             _write_log(config.log_path, {"mode": "full", "backup_status": "wait_timeout"})
-            raise MaintenanceAbort("backup wait timed out; VACUUM skipped")
+            raise MaintenanceAbort("backup wait timed out; VACUUM skipped", code=EXIT_DEFERRED)
         _write_log(config.log_path, {"mode": "full", "backup_status": "waiting", "remaining_seconds": round(remaining)})
         time.sleep(min(config.backup_wait_poll_seconds, remaining))
 
@@ -1390,7 +1419,9 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
         try:
             result.freelist_ratio = _freelist_ratio(config.db_path)
         except sqlite3.Error as exc:
-            raise MaintenanceAbort(f"freelist probe failed: {type(exc).__name__}; VACUUM skipped") from exc
+            raise MaintenanceAbort(
+                f"freelist probe failed: {type(exc).__name__}; VACUUM skipped", code=EXIT_DEFERRED
+            ) from exc
         vacuum_needed = result.freelist_ratio >= _vacuum_freelist_ratio()
         if not vacuum_needed:
             result.vacuum = "not_needed"
@@ -1400,7 +1431,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
             backup = _weekly_backup(config)
             result.backup_status = "local_verified"
         except MaintenanceAbort as exc:
-            if exc.code != 75 or not _is_deliberate_deferral(exc.reason):
+            if exc.code != EXIT_DEFERRED:
                 raise
             backup_abort = exc
             result.backup_status = "unavailable"
@@ -1440,7 +1471,9 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
                 and (_recent_weekly_verified_backup(config) or {}).get("snapshot") != backup.get("snapshot")
             ):
                 backup = None
-                backup_abort = MaintenanceAbort("local snapshot changed before VACUUM; VACUUM skipped")
+                backup_abort = MaintenanceAbort(
+                    "local snapshot changed before VACUUM; VACUUM skipped", code=EXIT_DEFERRED
+                )
                 result.backup_status = "unavailable"
                 result.vacuum = "deferred"
             if mode == "full" and backup is not None:
@@ -1454,7 +1487,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
                 try:
                     result.vacuum_before_bytes, result.vacuum_after_bytes = _vacuum(config.db_path, deadline=deadline)
                 except MaintenanceAbort as exc:
-                    if exc.code == 75 and _is_deliberate_deferral(exc.reason):
+                    if exc.code == EXIT_DEFERRED:
                         backup_abort = exc
                         result.vacuum = "deferred"
                     else:
@@ -1491,11 +1524,16 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
                 if isinstance(body_error, MaintenanceAbort):
                     body_error.reason = f"{body_error.reason}; {resume_failure_reason}"
                     body_error.args = (body_error.reason,)
+                    # A run that could not restore its services is never a deferral.
                     if mode == "full":
-                        body_error.code = 76
+                        body_error.code = EXIT_VACUUM_FAILED
+                    elif body_error.code == EXIT_DEFERRED:
+                        body_error.code = EXIT_FAILED
 
     if resume_failures:
-        raise MaintenanceAbort(_format_resume_failures(resume_failures), code=76 if mode == "full" else 75)
+        raise MaintenanceAbort(
+            _format_resume_failures(resume_failures), code=EXIT_VACUUM_FAILED if mode == "full" else EXIT_FAILED
+        )
 
     result.db_after_bytes = _file_size(config.db_path)
     result.queue_after_files = len(_queue_files(config.queue_dir))
@@ -1509,9 +1547,10 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
     store_roundtrip = (
         _store_roundtrip(config) if mode in ("light", "full") and config.store_roundtrip_fn is not None else None
     )
-    status = "completed" if backup_abort is None else "deferred" if backup_abort.code == 75 else "aborted"
+    status = "completed" if backup_abort is None else "deferred" if backup_abort.code == EXIT_DEFERRED else "aborted"
     event = {
         "status": status,
+        "run_id": _RUN_ID.get(),
         "mode": mode,
         "dry_run": False,
         "store_roundtrip": store_roundtrip,
@@ -1533,6 +1572,8 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
         "freelist_ratio": result.freelist_ratio,
         "actions": result.actions,
     }
+    if event["run_id"] is None:
+        del event["run_id"]
     _write_log(config.log_path, event)
     _emit_telemetry(event)
     if backup_abort is not None:
@@ -1608,8 +1649,33 @@ def _failure_alert(mode: str, reason: str, log_path: Path) -> str:
     return f"BrainLayer {mode} maintenance failed: {reason}. Retry after resolving the failure; inspect {log_path}"
 
 
+# This invocation's run id: the calendar's run-start receipt id, or a fresh one for a manual run.
+_RUN_ID: ContextVar[str | None] = ContextVar("maintenance_run_id", default=None)
+
+
+def _run_record(status: str, exit_code: int, **fields: Any) -> dict[str, Any]:
+    """Every terminal record names its own run, time and outcome, so readers never infer them."""
+    outcome = "ok" if exit_code == 0 else "deferred" if exit_code == EXIT_DEFERRED else "failed"
+    return {
+        "status": status,
+        "outcome": outcome,
+        "exit_code": exit_code,
+        "ts": dt.datetime.now(dt.UTC).isoformat(),
+        "run_id": _RUN_ID.get(),
+        **fields,
+    }
+
+
 @sigterm_cleanup()
 def main(argv: Sequence[str] | None = None) -> int:
+    token = _RUN_ID.set(os.environ.get(MAINTENANCE_RUN_ID_ENV) or uuid.uuid4().hex)
+    try:
+        return _main(argv)
+    finally:
+        _RUN_ID.reset(token)
+
+
+def _main(argv: Sequence[str] | None) -> int:
     parser = argparse.ArgumentParser(description="Run safety-gated BrainLayer maintenance.")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--light", action="store_true", help="Run the nightly light pass")
@@ -1622,25 +1688,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = run_maintenance(mode, dry_run=args.dry_run)
     except MaintenanceAbort as exc:
-        deferred = exc.code == 75 and _is_deliberate_deferral(exc.reason)
+        deferred = exc.code == EXIT_DEFERRED
+        status = "deferred" if deferred else "aborted"
         if not args.dry_run:
-            _write_log(
-                log_path,
-                {"status": "deferred" if deferred else "aborted", "mode": mode, "reason": exc.reason},
-            )
+            _write_log(log_path, _run_record(status, exc.code, mode=mode, reason=exc.reason))
             if not deferred or (mode == "full" and exc.reason.endswith("; VACUUM skipped")):
                 from .job_alerts import report
 
                 report(f"maintenance-{mode}", None if deferred else _failure_alert(mode, exc.reason, log_path))
-        print(
-            json.dumps({"status": "deferred" if deferred else "aborted", "reason": exc.reason}, sort_keys=True),
-            flush=True,
-        )
+        print(json.dumps(_run_record(status, exc.code, reason=exc.reason), sort_keys=True), flush=True)
         return exc.code
     except Exception as exc:
         if not args.dry_run:
             reason = type(exc).__name__
-            _write_log(log_path, {"status": "failed", "mode": mode, "reason": reason})
+            _write_log(log_path, _run_record("failed", 1, mode=mode, reason=reason))
             from .job_alerts import report
 
             report(
@@ -1652,7 +1713,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .job_alerts import report
 
         report(f"maintenance-{mode}", None)
-    print(json.dumps({"status": "ok", **_result_to_dict(result)}, sort_keys=True), flush=True)
+    print(json.dumps(_run_record("ok", 0, **_result_to_dict(result)), sort_keys=True), flush=True)
     return 0
 
 

@@ -17,6 +17,9 @@ from .drive_credentials import _atomic_write
 from .supervisor_guard import component_gate, start_time
 
 HOLD_MAX_ENV = "BRAINLAYER_MAINTENANCE_HOLD_MAX_S"
+# The calendar's run-start receipt id for one maintenance child: written on its `spawn` and
+# `finished` records and echoed in every record the child prints, so readers correlate on the id.
+MAINTENANCE_RUN_ID_ENV = "BRAINLAYER_MAINTENANCE_RUN_ID"
 HOLD_GRACE_ENV = "BRAINLAYER_MAINTENANCE_HOLD_GRACE_S"
 HOLD_KILL_AFTER_ENV = "BRAINLAYER_MAINTENANCE_HOLD_KILL_AFTER_S"
 DEFAULT_HOLD_MAX_S = 3600.0

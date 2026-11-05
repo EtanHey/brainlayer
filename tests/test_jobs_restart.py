@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import plistlib
 import subprocess
 from pathlib import Path
@@ -22,7 +23,7 @@ class FakeCommands:
         self.no_keg_map_for: set[str] = set()
         self.ps_command = f"{current_keg.parents[2]}/opt/brainlayer/libexec/venv/bin/python -m brainlayer\n"
 
-    def __call__(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+    def __call__(self, args: list[str], timeout: float | None = None) -> subprocess.CompletedProcess[str]:
         self.commands.append(args)
         if args[:2] == ["launchctl", "print"]:
             name = args[-1].split("com.brainlayer.")[-1]
@@ -42,6 +43,19 @@ class FakeCommands:
         if args[:2] == ["ps", "-p"]:
             return subprocess.CompletedProcess(args, 0, self.ps_command, "")
         raise AssertionError(args)
+
+
+class FakeClock:
+    """Monotonic clock that only moves when the code under test sleeps or a fake command runs."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
 
 
 def _plist(directory: Path, name: str, **options: object) -> None:
@@ -101,12 +115,15 @@ def test_stale_mapping_fails_with_named_job(tmp_path: Path) -> None:
     _plist(tmp_path, "watch", KeepAlive=True, ProgramArguments=[f"{opt}/bin/brainlayer", "watch"])
     fake = FakeCommands(old_keg, current_keg)
 
-    def failed_restart(args: list[str]) -> subprocess.CompletedProcess[str]:
+    def failed_restart(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
         if args[:3] == ["launchctl", "kickstart", "-k"]:
             return subprocess.CompletedProcess(args, 1, "", "failed")
         return fake(args)
 
-    result = restart_loaded_jobs(tmp_path, opt, command_runner=failed_restart, uid=501, sleep_fn=lambda _: None)
+    clock = FakeClock()
+    result = restart_loaded_jobs(
+        tmp_path, opt, command_runner=failed_restart, uid=501, sleep_fn=clock.sleep, clock=clock
+    )
 
     assert result["ok"] is False
     assert "com.brainlayer.watch" in result["stale"]
@@ -149,12 +166,12 @@ def test_cold_start_retries_before_declaring_missing_pid(tmp_path: Path) -> None
     class ColdStart(FakeCommands):
         cold_prints = 0
 
-        def __call__(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+        def __call__(self, args: list[str], **kwargs: float) -> subprocess.CompletedProcess[str]:
             if args[:2] == ["launchctl", "print"] and self.kegs["watch"] == current_keg:
                 self.cold_prints += 1
                 if self.cold_prints <= 2:
                     return subprocess.CompletedProcess(args, 0, "state = waiting\n", "")
-            return super().__call__(args)
+            return super().__call__(args, **kwargs)
 
     fake = ColdStart(old_keg, current_keg)
     result = restart_loaded_jobs(tmp_path, opt, command_runner=fake, uid=501, sleep_fn=lambda _: None)
@@ -167,10 +184,10 @@ def test_restarted_interval_may_complete_before_verification(tmp_path: Path) -> 
     _plist(tmp_path, "health-check", StartInterval=300, ProgramArguments=[f"{opt}/bin/brainlayer", "health-check"])
 
     class CompletedInterval(FakeCommands):
-        def __call__(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+        def __call__(self, args: list[str], **kwargs: float) -> subprocess.CompletedProcess[str]:
             if args[:2] == ["launchctl", "print"] and self.kegs["health-check"] == current_keg:
                 return subprocess.CompletedProcess(args, 0, "state = waiting\nlast exit code = 0\n", "")
-            return super().__call__(args)
+            return super().__call__(args, **kwargs)
 
     result = restart_loaded_jobs(
         tmp_path, opt, command_runner=CompletedInterval(old_keg, current_keg), uid=501, sleep_fn=lambda _: None
@@ -284,12 +301,15 @@ def test_consolidated_skip_does_not_hide_other_job_failure(tmp_path: Path) -> No
     agents, _, opt, fake = _supervisor_home(tmp_path, "migrated")
     _plist(agents, "watch", KeepAlive=True, ProgramArguments=[f"{opt}/bin/brainlayer", "watch"])
 
-    def denied_kickstart(args):
+    def denied_kickstart(args, **_):
         if args[:3] == ["launchctl", "kickstart", "-k"]:
             return subprocess.CompletedProcess(args, 1, "", "denied")
         return fake(args)
 
-    result = restart_loaded_jobs(agents, opt, command_runner=denied_kickstart, uid=501, sleep_fn=lambda _: None)
+    clock = FakeClock()
+    result = restart_loaded_jobs(
+        agents, opt, command_runner=denied_kickstart, uid=501, sleep_fn=clock.sleep, clock=clock
+    )
     assert result["ok"] is False
     assert result["skipped"]["com.brainlayer.daemon"] == SUPERVISOR_SKIP
     assert "com.brainlayer.watch" in result["errors"]
@@ -334,3 +354,119 @@ def test_journal_permission_error_is_not_absence(tmp_path: Path, monkeypatch) ->
     result = restart_loaded_jobs(agents, opt, command_runner=fake, uid=501, sleep_fn=lambda _: None)
     assert result["ok"] is False and "ownership" in result["errors"]
     assert fake.commands == []
+
+
+class LaunchdAtSubprocessBoundary:
+    """Fake ``subprocess.run`` for launchctl/lsof on a fake clock, so ``jobs._run`` itself is exercised.
+
+    ``kickstart -k`` blocks for ``shutdown_s`` (the old pid draining within its ExitTimeOut) and
+    honours the caller's subprocess timeout exactly as ``subprocess.run`` does; the respawned job
+    then has no pid for ``startup_s`` and finally maps ``end_keg``.
+    """
+
+    def __init__(self, clock: FakeClock, old_keg: Path, end_keg: Path, *, shutdown_s: float, startup_s: float):
+        self.clock, self.end_keg = clock, end_keg
+        self.shutdown_s, self.startup_s = shutdown_s, startup_s
+        self.pid, self.keg = 700, old_keg
+        self.respawn_at: float | None = None
+        self.kick_timeouts: list[float] = []
+
+    def __call__(self, args, *, capture_output, text, check, timeout):
+        if args[:3] == ["launchctl", "kickstart", "-k"]:
+            self.kick_timeouts.append(timeout)
+            if self.shutdown_s > timeout:
+                self.clock.now += timeout
+                raise subprocess.TimeoutExpired(args, timeout)
+            self.clock.now += self.shutdown_s
+            self.respawn_at = self.clock.now + self.startup_s
+            self.pid, self.keg = 701, self.end_keg
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args[:2] == ["launchctl", "print"]:
+            if self.respawn_at is not None and self.clock.now < self.respawn_at:
+                return subprocess.CompletedProcess(args, 0, "state = spawn scheduled\n", "")
+            return subprocess.CompletedProcess(args, 0, f"pid = {self.pid}\n", "")
+        if args[:2] == ["lsof", "-p"]:
+            return subprocess.CompletedProcess(args, 0, f"p{self.pid}\nn{self.keg}/libexec/venv/bin/python\n", "")
+        raise AssertionError(args)
+
+
+def _restart_hotlane(tmp_path: Path, monkeypatch, *, stale: bool = False, **timing: float):
+    from brainlayer import jobs
+
+    old_keg, current_keg, opt = _kegs(tmp_path)
+    _plist(
+        tmp_path,
+        "hotlane-brainbar",
+        KeepAlive=True,
+        RunAtLoad=True,
+        ThrottleInterval=5,
+        ExitTimeOut=30,
+        ProgramArguments=[f"{opt}/bin/brainlayer", "hotlane-brainbar"],
+    )
+    clock = FakeClock()
+    sim = LaunchdAtSubprocessBoundary(clock, old_keg, old_keg if stale else current_keg, **timing)
+    monkeypatch.setattr(jobs.subprocess, "run", sim)
+    result = restart_loaded_jobs(tmp_path, opt, uid=501, sleep_fn=clock.sleep, clock=clock)
+    return result, sim, clock
+
+
+# One deadline: ExitTimeOut 30 + kickstart margin 5 + ThrottleInterval 5 + startup settle 20.
+HOTLANE_DEADLINE_S = 60.0
+
+
+@pytest.mark.parametrize(
+    ("shutdown_s", "startup_s"),
+    [(25.0, 0.0), (2.0, 12.0), (29.0, 12.0)],
+    ids=["slow-clean-shutdown", "slow-startup-under-load", "both"],
+)
+def test_hotlane_restart_within_documented_bounds_is_green(tmp_path: Path, monkeypatch, shutdown_s, startup_s) -> None:
+    """#1072: a shutdown inside ExitTimeOut=30 or a startup past 8s was a false exit 1."""
+    result, sim, clock = _restart_hotlane(tmp_path, monkeypatch, shutdown_s=shutdown_s, startup_s=startup_s)
+
+    assert result["ok"] is True, result
+    assert result["restarted"] == ["com.brainlayer.hotlane-brainbar"]
+    assert sim.kick_timeouts == [35.0]
+    assert clock.now <= HOTLANE_DEADLINE_S
+
+
+def test_hung_hotlane_shutdown_still_fails_at_bounded_kickstart_timeout(tmp_path: Path, monkeypatch) -> None:
+    result, sim, clock = _restart_hotlane(tmp_path, monkeypatch, shutdown_s=math.inf, startup_s=0.0)
+
+    assert result["ok"] is False
+    assert "timed out after 35" in result["errors"]["com.brainlayer.hotlane-brainbar"]
+    assert result["stale"]["com.brainlayer.hotlane-brainbar"]  # old pid still running
+    assert sim.kick_timeouts == [35.0]
+    assert clock.now <= HOTLANE_DEADLINE_S
+
+
+def test_hotlane_that_never_starts_fails_at_the_single_deadline(tmp_path: Path, monkeypatch) -> None:
+    result, _, clock = _restart_hotlane(tmp_path, monkeypatch, shutdown_s=1.0, startup_s=math.inf)
+
+    assert result["ok"] is False
+    assert result["errors"]["com.brainlayer.hotlane-brainbar"] == (
+        "job did not reach a running pid before verification deadline"
+    )
+    assert HOTLANE_DEADLINE_S - 1.0 <= clock.now <= HOTLANE_DEADLINE_S
+
+
+def test_hotlane_respawned_on_old_keg_is_stale_at_the_single_deadline(tmp_path: Path, monkeypatch) -> None:
+    result, _, clock = _restart_hotlane(tmp_path, monkeypatch, stale=True, shutdown_s=1.0, startup_s=0.0)
+
+    assert result["ok"] is False
+    assert "1.5.35" in result["stale"]["com.brainlayer.hotlane-brainbar"]
+    assert HOTLANE_DEADLINE_S - 1.0 <= clock.now <= HOTLANE_DEADLINE_S
+
+
+def test_kickstart_timeout_uses_launchd_default_exit_timeout_when_plist_omits_it(tmp_path: Path) -> None:
+    old_keg, current_keg, opt = _kegs(tmp_path)
+    _plist(tmp_path, "watch", KeepAlive=True, ProgramArguments=[f"{opt}/bin/brainlayer", "watch"])
+    seen: list[float | None] = []
+    fake = FakeCommands(old_keg, current_keg)
+
+    def record(args: list[str], timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+        if args[:3] == ["launchctl", "kickstart", "-k"]:
+            seen.append(timeout)
+        return fake(args, timeout=timeout)
+
+    assert restart_loaded_jobs(tmp_path, opt, command_runner=record, uid=501)["ok"] is True
+    assert seen == [25.0]

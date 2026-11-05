@@ -115,7 +115,7 @@ def test_entrypoint_size_default_never_exceeds_the_calendar_internal_budget(db_o
         monkeypatch.setenv(key, bounded.env[key])
     monkeypatch.setenv("BRAINLAYER_BACKUP_PHASE", "snapshot")
     observed = []
-    monkeypatch.setattr(backup, "_supervise_backup_process", lambda timeout: observed.append(timeout) or 0)
+    monkeypatch.setattr(backup, "_supervise_backup_process", lambda timeout, **kw: observed.append(timeout) or 0)
     monkeypatch.setattr("brainlayer.job_alerts.report", lambda *a, **kw: None)
     assert backup.main() == 0
     assert observed == [int(bounded.env["BRAINLAYER_BACKUP_TIMEOUT_SECONDS"])]
@@ -128,7 +128,7 @@ def test_entrypoint_without_calendar_uses_the_size_default(db_of_size, monkeypat
     monkeypatch.delenv("BRAINLAYER_BACKUP_CALENDAR_SNAPSHOT_BUDGET_SECONDS", raising=False)
     monkeypatch.setenv("BRAINLAYER_BACKUP_PHASE", "snapshot")
     observed = []
-    monkeypatch.setattr(backup, "_supervise_backup_process", lambda timeout: observed.append(timeout) or 0)
+    monkeypatch.setattr(backup, "_supervise_backup_process", lambda timeout, **kw: observed.append(timeout) or 0)
     monkeypatch.setattr("brainlayer.job_alerts.report", lambda *a, **kw: None)
     assert backup.main() == 0
     assert observed == [4200]
@@ -151,16 +151,18 @@ def test_explicit_snapshot_timeout_override_still_wins(db_of_size, tmp_path, mon
         monkeypatch.delenv("BRAINLAYER_BACKUP_CALENDAR_SNAPSHOT_BUDGET_SECONDS", raising=False)
         monkeypatch.setenv("BRAINLAYER_BACKUP_PHASE", "snapshot")
         observed = []
-        monkeypatch.setattr(backup, "_supervise_backup_process", lambda timeout: observed.append(timeout) or 0)
+        monkeypatch.setattr(backup, "_supervise_backup_process", lambda timeout, **kw: observed.append(timeout) or 0)
         monkeypatch.setattr("brainlayer.job_alerts.report", lambda *a, **kw: None)
         assert backup.main() == 0
         assert observed == [1234]
 
 
-def test_tiny_window_reserves_proportionally_and_defers_when_nothing_fits(db_of_size, tmp_path):
+def test_tiny_window_keeps_the_full_reserve_and_defers_when_work_cannot_fit(db_of_size, tmp_path):
+    # #1422: a proportional reserve (57 // 4 = 14 s) cannot hold the 10 s grace plus the receipt
+    # behind any startup, so a window without positive work beside the full reserve defers.
     db_of_size(21 * GB)
     step = snapshot_step(tmp_path)
-    bounded = calendar._bounded_snapshot_step(step, dt.datetime(2026, 10, 18, 5, 59), 2)
-    assert bounded.timeout == 57
-    assert 1 <= int(bounded.env["BRAINLAYER_BACKUP_TIMEOUT_SECONDS"]) < 57
+    assert calendar._bounded_snapshot_step(step, dt.datetime(2026, 10, 18, 5, 59), 2) is None
     assert calendar._bounded_snapshot_step(step, dt.datetime(2026, 10, 18, 5, 59, 56), 2) is None
+    bounded = calendar._bounded_snapshot_step(step, dt.datetime(2026, 10, 18, 5, 58, 56), 2)
+    assert bounded.timeout == 61 and int(bounded.env["BRAINLAYER_BACKUP_TIMEOUT_SECONDS"]) == 1

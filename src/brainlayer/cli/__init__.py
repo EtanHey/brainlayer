@@ -1153,6 +1153,24 @@ def index(
     index_fast(source, project, force)
 
 
+@app.command("bootstrap-db")
+def bootstrap_db() -> None:
+    """Create the configured BrainLayer database with the canonical schema -- only if it is absent.
+
+    Refuses any existing path (file, partial file, foreign DB, symlink). `brainlayer index` never
+    creates a database; run this once on a fresh install when index reports INDEX_BOOTSTRAP_REQUIRED.
+    """
+    from ..runtime_store import RuntimeBootstrapRefused, bootstrap_runtime_database
+
+    db_path = get_db_path()
+    try:
+        fingerprint = bootstrap_runtime_database(db_path)
+    except RuntimeBootstrapRefused as exc:
+        rprint(f"BOOTSTRAP_REFUSED db={db_path} reason={exc}")
+        raise typer.Exit(1) from exc
+    rprint(f"BOOTSTRAP_CREATED db={db_path} schema_fingerprint={fingerprint}")
+
+
 @app.command()
 def dashboard() -> None:
     """Launch interactive dashboard for memory search and management."""
@@ -3201,6 +3219,9 @@ def scrub_at_rest_command(
                     "error_type": type(exc).__name__,
                     "reason": getattr(exc, "reason", "scrub-failed"),
                     "detail": getattr(exc, "detail", None),
+                    # Fixed allowlisted labels only (#1129); never exception text.
+                    "cause": getattr(exc, "cause", "unknown"),
+                    "gate": getattr(exc, "gate", None),
                 }
             )
         )
@@ -4177,6 +4198,20 @@ def index_fast(
         if not source.exists():
             rprint(f"[bold red]Error:[/] Source directory not found: {source}")
             raise typer.Exit(1)
+
+        # #1349 first-calendar policy: the scheduled pass never creates a database. Decide BEFORE
+        # the checkpoint sidecar (which stats the DB) or the writer (which refuses an absent DB)
+        # are built, so an absent DB is one actionable rc78 instead of two unrelated tracebacks.
+        # `brainlayer bootstrap-db` is the explicit creator. Interactive runs keep the writer's
+        # own fail-closed refusal.
+        if calendar:
+            db_path = get_db_path()
+            if os.path.lexists(db_path) and not db_path.exists():
+                rprint(f"INDEX_DB_UNAVAILABLE db={db_path} reason=dangling_symlink")
+                raise typer.Exit(1)
+            if not os.path.lexists(db_path):
+                rprint(f'INDEX_BOOTSTRAP_REQUIRED db={db_path} run="brainlayer bootstrap-db"')
+                raise typer.Exit(78)
 
         start_time = time.time()
         start_monotonic = time.monotonic()
