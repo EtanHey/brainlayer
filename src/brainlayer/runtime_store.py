@@ -531,6 +531,51 @@ class OfflineMigrator(VectorStore):
         super().__init__(path)
 
 
+class RuntimeBootstrapRefused(FileExistsError):
+    """Raised when bootstrap finds anything already at the target path; nothing was written there."""
+
+
+def bootstrap_runtime_database(db_path: Path) -> str:
+    """Create the canonical runtime schema at an ABSENT path, or refuse. Returns its fingerprint.
+
+    The one supported first-run creator. It never opens, migrates or replaces an existing file:
+    the schema is built in a private sibling temp file by the canonical ``VectorStore`` init,
+    proven against the runtime fingerprint by ``ReadonlyStore``, and only then published with
+    ``os.link`` -- which fails atomically if anything (a regular file, a symlink, a concurrent
+    bootstrap, a watcher that created the DB first) appeared at the target meanwhile. A losing
+    racer leaves the winner's database untouched and removes only its own temp files.
+    """
+    from .vector_store import VectorStore
+
+    target = Path(db_path).expanduser().absolute()
+    if os.path.lexists(target):
+        raise RuntimeBootstrapRefused(f"refusing to bootstrap over an existing path: {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(f".{target.name}.bootstrap-{os.getpid()}-{os.urandom(4).hex()}")
+    try:
+        with VectorStore(temp):
+            pass
+        conn = apsw.Connection(str(temp), flags=apsw.SQLITE_OPEN_READWRITE)
+        try:
+            # Fold any WAL into the main file: only the main file is linked into place.
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            conn.close()
+        with ReadonlyStore(temp) as proof:
+            fingerprint = proof.schema_fingerprint
+        try:
+            os.link(temp, target)
+        except FileExistsError as exc:
+            raise RuntimeBootstrapRefused(f"refusing to bootstrap: {target} appeared during bootstrap") from exc
+        return fingerprint
+    finally:
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            try:
+                os.unlink(f"{temp}{suffix}")
+            except FileNotFoundError:
+                pass
+
+
 def open_writer_store(
     db_path: Path,
     *,

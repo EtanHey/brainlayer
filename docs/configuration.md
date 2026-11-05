@@ -113,6 +113,19 @@ The database path is resolved in this order:
 1. `BRAINLAYER_DB` environment variable (highest priority)
 2. Canonical path `~/.local/share/brainlayer/brainlayer.db` (default)
 
+### First run: an absent database
+
+The scheduled (calendar) `brainlayer index` pass never creates a database. When the resolved path
+does not exist it prints `INDEX_BOOTSTRAP_REQUIRED db=<path> run="brainlayer bootstrap-db"` and
+exits 78, writing nothing. A dangling symlink at the path prints `INDEX_DB_UNAVAILABLE` and exits 1.
+An existing database is never bootstrapped: a partial, foreign or unwritable file still fails the
+runtime schema check. Interactive `brainlayer index` keeps the writer's own refusal.
+
+`brainlayer bootstrap-db` is the explicit first-run creator. It builds the canonical schema in a
+sibling temp file, verifies the runtime schema fingerprint, and publishes it only if nothing is at
+the path. Any existing path, including one created by a concurrent run, is refused unchanged
+(`BOOTSTRAP_REFUSED`, exit 1).
+
 ## Data Sources
 
 BrainLayer reads from these locations by default:
