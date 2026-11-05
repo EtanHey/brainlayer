@@ -117,10 +117,10 @@ final class LexicalDefenseUserAliases: @unchecked Sendable {
         var entries: [[String]] = []
         for (index, item) in items.enumerated() {
             let place = "entries[\(index)]"
-            guard let entry = item as? [String: Any], entry["canonical"] != nil,
+            guard let entry = item as? [String: Any], let canonical = entry["canonical"],
                   Set(entry.keys).isSubset(of: ["canonical", "aliases", "split_forms"])
             else { throw ConfigError(description: "\(place): keys must be canonical plus optional aliases/split_forms") }
-            var surfaces = try [surface(entry["canonical"]!, "\(place).canonical")]
+            var surfaces = try [surface(canonical, "\(place).canonical")]
             var extra = 0
             for key in ["aliases", "split_forms"] {
                 guard let values = (entry[key] ?? [Any]()) as? [Any] else {

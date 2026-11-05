@@ -4,21 +4,15 @@ import XCTest
 @testable import BrainBar
 
 final class LexicalDefenseUserAliasesTests: XCTestCase {
-    private var directory: URL!
-    private var db: BrainDatabase!
-    private var dbPath: String!
+    private let directory = URL(fileURLWithPath: brainBarTestTemporaryPath())
+        .appendingPathComponent("brainbar-user-aliases-\(UUID().uuidString)", isDirectory: true)
 
     override func setUp() {
         super.setUp()
-        directory = URL(fileURLWithPath: brainBarTestTemporaryPath())
-            .appendingPathComponent("brainbar-user-aliases-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        dbPath = directory.appendingPathComponent("brainbar.db").path
-        db = BrainDatabase(path: dbPath)
     }
 
     override func tearDown() {
-        db.close()
         try? FileManager.default.removeItem(at: directory)
         super.tearDown()
     }
@@ -44,6 +38,8 @@ final class LexicalDefenseUserAliasesTests: XCTestCase {
     }
 
     func testNativeSearchExpandsUserAliasOnlyWhenTheFileIsPresent() throws {
+        let db = BrainDatabase(path: directory.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
         try db.insertChunk(
             id: "user-alias-hit",
             content: "Zorbleth signed off on the synthetic rollout.",
