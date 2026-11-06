@@ -511,8 +511,10 @@ class _CalendarIndexCheckpoint:
         backlog = self.backlog()
         stalled = self.previous.get("stalled_passes", 0)
         best = self.previous.get("best_backlog")
-        # Only complete non-deferred measurements can establish or advance the
-        # held minimum. Unknown lower bounds carry both count and baseline.
+        growing = self.previous.get("growing_passes", 0)
+        # Compare measured passes with their own inventory. Retain the legacy
+        # baseline for older callers without a before measurement. Unknown
+        # lower bounds carry both count and baseline.
         if (
             best is None
             and self.previous
@@ -520,10 +522,19 @@ class _CalendarIndexCheckpoint:
             and self.previous["uncounted_files"] == 0
         ):
             best = {key: self.previous[key] for key in self.backlog_keys()}
+        growth_best = best
         measured = backlog["uncounted_files"] == 0
         if not deferred and measured:
             if not backlog["files_remaining"]:
                 stalled, best = 0, backlog
+            elif self.backlog_before is not None:
+                before = self.backlog_before
+                if before["uncounted_files"] == 0:
+                    smaller = (backlog["chunks_remaining"], backlog["files_remaining"]) < (
+                        before["chunks_remaining"],
+                        before["files_remaining"],
+                    )
+                    stalled = 0 if smaller else stalled + 1
             elif best is None or best["uncounted_files"] or not best["files_remaining"]:
                 best = backlog
             else:
@@ -532,8 +543,19 @@ class _CalendarIndexCheckpoint:
                     best["files_remaining"],
                 )
                 stalled = 0 if smaller else stalled + 1
-                if smaller:
-                    best = backlog
+        best = growth_best
+        if not deferred and measured:
+            if not backlog["files_remaining"]:
+                growing, best = 0, backlog
+            elif best is None or best["uncounted_files"] or not best["files_remaining"]:
+                growing, best = 0, backlog
+            elif (backlog["chunks_remaining"], backlog["files_remaining"]) < (
+                best["chunks_remaining"],
+                best["files_remaining"],
+            ):
+                growing, best = 0, backlog
+            else:
+                growing += 1
         quarantined = [key for key in self.catalog if self.quarantined(Path(key))]
         state = dict(
             database=self.database,
@@ -541,6 +563,7 @@ class _CalendarIndexCheckpoint:
             **backlog,
             backlog_before=self.backlog_before,
             stalled_passes=stalled,
+            growing_passes=growing,
             best_backlog=best,
             deferred=deferred,
             quarantined=quarantined,
@@ -555,6 +578,11 @@ class _CalendarIndexCheckpoint:
             f"quarantined_files={len(quarantined)} resource_files={len(self.resource_faults)} "
             f"{self.delta_summary()}"
         )
+        if not deferred and measured and growing >= self.limit("BRAINLAYER_INDEX_STALL_PASSES"):
+            rprint(
+                f"INDEX_BACKLOG_GROWING passes={growing} "
+                f"leftover_chunks={backlog['chunks_remaining']} best_chunks={best['chunks_remaining']}"
+            )
         for path, cause in self.resource_faults.items():
             rprint(f"INDEX_RESOURCE_SKIPPED file={path} cause={cause}")
         for path in quarantined:
