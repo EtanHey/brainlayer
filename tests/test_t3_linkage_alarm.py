@@ -190,3 +190,35 @@ def test_hourly_counters_count_unchanged_suppression(pending):
     assert len(events) == 1
     assert events[0].context["emission_reason"] == "changed"
     assert len(events[0].context["source_fingerprint"]) == 64
+
+
+def test_thousand_observations_use_one_hourly_file(pending, monkeypatch):
+    from brainlayer import t3_linkage_alarm
+
+    _, events, _, check = pending
+    syncs = []
+    monkeypatch.setattr(t3_linkage_alarm.os, "fsync", lambda fd: syncs.append(fd))
+    for _ in range(1000):
+        with pytest.raises(BrainLayerAlarm):
+            check()
+    assert len(list(t3_linkage_alarm._counter_directory().glob("*.json"))) == 1
+    assert t3_linkage_alarm.alarm_counts() == [
+        {
+            "hour": 2,
+            "observed": 1000,
+            "emitted": 1,
+            "suppressed_unchanged": 999,
+            "emitted_because_lock_or_persist_failed": 0,
+        }
+    ]
+    assert len(events) == 1
+    assert len(syncs) == 2  # status receipt and first counter bucket only
+
+
+def test_counter_prunes_hours_older_than_seven_days(tmp_path, monkeypatch):
+    from brainlayer import t3_linkage_alarm
+
+    monkeypatch.setattr(t3_linkage_alarm, "_counter_directory", lambda: tmp_path)
+    for hour in (0, 1, 167, 168):
+        t3_linkage_alarm._count(hour * 3600, "changed")
+    assert {p.name for p in tmp_path.glob("*.json")} == {"1.json", "167.json", "168.json"}

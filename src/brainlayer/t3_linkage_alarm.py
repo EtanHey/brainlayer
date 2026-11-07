@@ -15,7 +15,6 @@ import logging
 import os
 import tempfile
 import time
-import uuid
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -169,9 +168,14 @@ def _counter_directory() -> Path:
 
 
 def _count(now: float, reason: str) -> None:
-    """One immutable receipt per observation avoids shared counter write races."""
-    row = {
-        "hour": int(now // REMINDER_SECONDS),
+    """Update bounded hourly diagnostics under a shared lock.
+
+    Only a new bucket is fsynced; crash loss of subsequent increments is acceptable.
+    Retain at most seven days, including the current hour. Counter failures never
+    change alarm emission or suppression.
+    """
+    hour = int(now // REMINDER_SECONDS)
+    increments = {
         "observed": 1,
         "emitted": int(reason != "suppressed_unchanged"),
         "suppressed_unchanged": int(reason == "suppressed_unchanged"),
@@ -180,17 +184,27 @@ def _count(now: float, reason: str) -> None:
     try:
         directory = _counter_directory()
         directory.mkdir(parents=True, exist_ok=True)
-        target = directory / f"{uuid.uuid4().hex}.json"
-        with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as handle:
-            temporary = Path(handle.name)
-            try:
-                json.dump(row, handle)
-                handle.flush()
-                os.fsync(handle.fileno())
-                temporary.replace(target)
-            finally:
-                temporary.unlink(missing_ok=True)
-    except OSError:
+        with (directory / "counts.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            target = directory / f"{hour}.json"
+            new_bucket = not target.exists()
+            row = {"hour": hour, **dict.fromkeys(increments, 0)} if new_bucket else json.loads(target.read_text())
+            for key, value in increments.items():
+                row[key] += value
+            with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as handle:
+                temporary = Path(handle.name)
+                try:
+                    json.dump(row, handle)
+                    handle.flush()
+                    if new_bucket:
+                        os.fsync(handle.fileno())
+                    temporary.replace(target)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            for path in directory.glob("*.json"):
+                if path.stem.isdecimal() and int(path.stem) <= hour - 7 * 24:
+                    path.unlink(missing_ok=True)
+    except (OSError, ValueError, TypeError, KeyError):
         logger.error("Could not persist T3 alarm counters", exc_info=True)
 
 
