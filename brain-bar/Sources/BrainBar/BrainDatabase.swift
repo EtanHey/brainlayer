@@ -37,6 +37,8 @@ final class BrainDatabase: @unchecked Sendable {
     private static let brainLayerQueueDirEnv = "BRAINLAYER_QUEUE_DIR"
     private static let agentWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('mcp', 'manual', 'digest', 'precompact-hook', 'brain_store', 'pending', 'fallback', 'fallback-replay')"
     private static let lexicalDefenseReplacements: [String: [String]] = [:]
+    /// Optional per-user aliases from outside the app (#995); the packaged table above stays empty.
+    var userLexicalAliases = LexicalDefenseUserAliases(claimedSurfaces: Set(BrainDatabase.lexicalDefenseReplacements.keys))
 
     enum TrigramStartupRepairDecision: Equatable {
         case noRepairNeeded
@@ -3281,7 +3283,7 @@ final class BrainDatabase: @unchecked Sendable {
         let normalized = token
             .trimmingCharacters(in: .punctuationCharacters.union(.whitespacesAndNewlines))
             .lowercased()
-        return Self.lexicalDefenseReplacements[normalized] ?? []
+        return (Self.lexicalDefenseReplacements[normalized] ?? []) + userLexicalAliases.replacements(for: token)
     }
 
     private func kgAliasReplacements(for token: String) -> [String] {

@@ -521,6 +521,8 @@ def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request, real_node_b
     data_dir = isolated_home / ".local" / "share" / "brainlayer"
 
     monkeypatch.setenv("HOME", str(isolated_home))
+    # An absolute override walks past the HOME remap; the user alias file is personal (#995).
+    monkeypatch.delenv("BRAINLAYER_LEXICAL_DEFENSE_LOCAL", raising=False)
     if real_node_bin_dir is not None:
         monkeypatch.setenv("PATH", f"{real_node_bin_dir}{os.pathsep}{os.environ.get('PATH', os.defpath)}")
     monkeypatch.setenv("BRAINLAYER_DB", str(data_dir / "brainlayer.db"))
