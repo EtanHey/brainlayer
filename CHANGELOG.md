@@ -65,6 +65,16 @@
 ### Tests, CI and formal
 - CalendarGuard models the supervisor's stall-grace extensions and the TLA+ source pins are current (#1665); CI forwards INT/TERM/HUP to the suite group (#1646); pre-push maps `t3_provenance.py` (#1630); flaky admission-wait bound fixed (#1664); test-only hardening #1631, #1634, #1635.
 
+### Also in this release
+- fix(scrub-at-rest): refuse quiesce without quiet-window run budget (Refs #1073) (#1644).
+- fix(backup): structured BrainBar busy contract + same-epoch snapshot status (Refs #1413) (#1650).
+- fix(backup): hash retained stalls only where used; surface the disk-full deadlock in BrainBar (Refs #1385) (#1654).
+- feat(search): optional user-config lexical alias source on both brain_search paths (Refs #995) (#1655).
+- test(#1377): proof fixtures for weekly VACUUM deadline and hold release (report-only) (#1659).
+- fix(watcher): isolate non-UUID realtime chunk ids by full stem + project (future ingest only) (#1661).
+- fix(ci): run_with_deadline kills past-deadline suites again on macOS without waitid (#1669).
+- fix(hooks): exclude retired chunks from ambient session-start and prompt context (#1670).
+
 ## [1.5.90] - 2026-11-04
 
 ### Backup
