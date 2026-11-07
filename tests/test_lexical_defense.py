@@ -76,6 +76,7 @@ def test_brainbar_bundle_has_no_personal_lexical_defaults():
 def test_shared_casefold_parity_fixture():
     import json
     from pathlib import Path
+
     from brainlayer.lexical_defense import _normalize_surface
 
     rows = json.loads((Path(__file__).parent / "fixtures/lexical_casefold.json").read_text())
