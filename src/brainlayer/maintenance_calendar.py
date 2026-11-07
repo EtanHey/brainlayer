@@ -83,6 +83,7 @@ def _recovery_failure_reason(row):
         "maintenance-window": "Not enough time remained in the 04:00–06:00 maintenance window",
         "index-overran-window": "Indexing ran past the end of the maintenance window",
         "resident-writer-busy": "Another database writer was busy",
+        "maintenance-hold-busy": "Another maintenance job held the database lease",
         "disabled": "This step was disabled or paused",
         "runner-vanished": "The scheduled runner stopped before finishing",
     }
@@ -845,6 +846,10 @@ HELD_STEPS = frozenset({"maintenance-nightly", "maintenance-weekly", "repair-fts
 MAINTENANCE_STEPS = frozenset({"maintenance-nightly", "maintenance-weekly"})
 
 
+class HoldBusy(RuntimeError):
+    """The maintenance hold is held by another process right now."""
+
+
 @asynccontextmanager
 async def step_hold(client, guard, env, step, now_fn=None):
     if step.name not in HELD_STEPS:
@@ -852,7 +857,12 @@ async def step_hold(client, guard, env, step, now_fn=None):
         return
     hold = MaintenanceHold(client, now_fn=now_fn)  # Calendar holds are always window-bound.
     try:
-        await _blocking(hold.__enter__)
+        try:
+            await _blocking(hold.__enter__)
+        except BlockingIOError as exc:
+            # Another holder owns the maintenance lease: this step defers, the plan (and its
+            # backup) continues. Only custody/protocol failures abort the run (M4, 2026-11-07).
+            raise HoldBusy(str(exc)) from exc
         await _blocking(guard_lease, guard, hold.fd)
         yield env | dict(
             BRAINLAYER_MAINTENANCE_FD=str(hold.fd),
@@ -1162,6 +1172,9 @@ async def run_calendar(
                         except maintenance_control.HoldWindowClosed:
                             # The window closed between the check and the grant: defer, keep the plan going.
                             code, reason = 75, "maintenance-window"
+                        except HoldBusy:
+                            # Another holder has the lease: defer this step, keep the plan (and backup) going.
+                            code, reason = 75, "maintenance-hold-busy"
             except (OSError, RuntimeError, ValueError) as exc:
                 await _blocking(record, directory, event="step-error", step=step.name, error=type(exc).__name__)
                 code = 1
