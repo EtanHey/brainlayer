@@ -55,12 +55,50 @@ _DEFAULT_WATCH_MAX_RECORD_BYTES = 128 * 1024 * 1024
 _WATCH_READ_CHUNK_BYTES = 64 * 1024
 _MAX_HEALTH_FAILURE_DETAILS = 100
 _MAX_HEALTH_QUARANTINE_DETAILS = 100
+# Consumed bytes a tailer remembers, ending at its offset: the only evidence that a path under
+# the same inode (renamed back, or a new file handed a freed inode) is still the same file.
+# Re-ingesting is idempotent (content-hash chunk ids + dedupe); skipping is not (#732).
+_SOURCE_ANCHOR_BYTES = 64
 
 
 _OFFSET_PRUNE_RETRY_ENV = "BRAINLAYER_WATCHER_OFFSET_PRUNE_RETRY_S"
 _DEFAULT_OFFSET_PRUNE_RETRY_S = 900.0
 
 MIN_WATCH_POLL_INTERVAL_S = 30.0
+
+
+def describe_stream_destination(fd: int) -> str:
+    """Name where a file descriptor really writes, read from the kernel, not from docs (#732).
+
+    An operator tailed the documented-but-abandoned `~/.local/share/brainlayer/logs/watch.*` and
+    reported a three-month-old lock storm as live. Only the process knows where its logs go, so
+    the watcher states it on startup and in watcher-health.json. Never raises.
+    """
+    try:
+        mode = os.fstat(fd).st_mode
+    except OSError:
+        return "closed"
+    if stat.S_ISREG(mode):
+        try:
+            import fcntl
+
+            get_path = getattr(fcntl, "F_GETPATH", None)  # macOS
+            if get_path is not None:
+                raw = fcntl.fcntl(fd, get_path, bytes(1024))
+                return os.fsdecode(raw.split(b"\0", 1)[0])
+        except (ImportError, OSError):
+            pass
+        try:
+            return os.readlink(f"/proc/self/fd/{fd}")  # Linux
+        except OSError:
+            return "file (path unavailable)"
+    if stat.S_ISFIFO(mode):
+        return "pipe"
+    if stat.S_ISSOCK(mode):
+        return "socket"
+    if stat.S_ISCHR(mode):
+        return "tty" if os.isatty(fd) else "character device"
+    return "unknown"
 
 
 def enforce_min_poll_interval(poll_interval_s: float) -> float:
@@ -866,10 +904,13 @@ class JSONLTailer:
         self.max_record_bytes = max_record_bytes
         self._buffer = b""
         self.rewound = False  # Set to True when rewind detected
+        self.replaced = False  # Set when bytes before the offset changed under the same inode
         self.rewind_old_offset = 0
         self.rewind_new_offset = 0
         self.last_error: OSError | json.JSONDecodeError | UnicodeDecodeError | OversizedJSONLRecordError | None = None
         self.failed_record: bytes | None = None
+        # Last consumed bytes ending at `offset`; None until read from the file (#732).
+        self.anchor: bytes | None = b"" if offset == 0 else None
         self.observed_inode = self.get_inode()
 
     def restore_snapshot(self, snapshot: tuple[int, bytes]) -> None:
@@ -880,6 +921,11 @@ class JSONLTailer:
         parameter instead of a `tuple | None` it cannot narrow (DeepSource on #781).
         """
         self.offset, self._buffer = snapshot
+        self.anchor = b"" if self.offset == 0 else None
+
+    def _consume_anchor(self, consumed: bytes) -> None:
+        if self.anchor is not None or len(consumed) >= _SOURCE_ANCHOR_BYTES:
+            self.anchor = ((self.anchor or b"") + consumed)[-_SOURCE_ANCHOR_BYTES:]
 
     def check_rewind(self) -> bool:
         """Check if file has shrunk (checkpoint restore). Returns True if rewound."""
@@ -894,6 +940,7 @@ class JSONLTailer:
             self.rewind_new_offset = file_size
             self.offset = 0  # Reset to start of file
             self._buffer = b""
+            self.anchor = b""
             self.rewound = True
             logger.warning(
                 "Rewind detected: %s shrank from %d to %d",
@@ -920,6 +967,13 @@ class JSONLTailer:
 
         try:
             with open(self.filepath, "rb") as f:
+                if self.anchor is None:
+                    anchor_start = max(0, self.offset - _SOURCE_ANCHOR_BYTES)
+                    f.seek(anchor_start)
+                    anchor = f.read(self.offset - anchor_start)
+                    self.anchor = anchor if len(anchor) == self.offset - anchor_start else None
+                elif self.anchor:
+                    self._verify_anchor(f)
                 f.seek(self.offset + len(self._buffer))
                 remaining_bytes = max_bytes if max_bytes is not None and max_bytes > 0 else None
                 complete_lines = self._buffer.count(b"\n")
@@ -961,6 +1015,30 @@ class JSONLTailer:
         if b"\n" not in self._buffer and not self._buffer:
             return []
         return self.read_buffered_lines(max_lines=max_lines)
+
+    def _verify_anchor(self, f) -> None:
+        """Restart from 0 when the bytes we already consumed are no longer at our offset (#732).
+
+        An appended-to JSONL never rewrites bytes before the offset, so a mismatch means the
+        path now holds a different file under the same inode number -- deleted and recreated
+        (ext4 reuses a freed inode at once), or replaced in place -- and resuming at the old
+        offset would silently skip that much of it. check_rewind has already handled a file
+        shorter than the offset. Costs one small read per poll, only for files that changed.
+        """
+        anchor = self.anchor or b""
+        expected = anchor + self._buffer[:_SOURCE_ANCHOR_BYTES]
+        f.seek(self.offset - len(anchor))
+        if f.read(len(expected)) == expected:
+            return
+        logger.warning(
+            "Source replaced under the same inode: %s (bytes before offset %d changed); re-reading from 0",
+            self.filepath,
+            self.offset,
+        )
+        self.offset = 0
+        self._buffer = b""
+        self.anchor = b""
+        self.replaced = True
 
     def has_complete_buffered_line(self) -> bool:
         """Return whether an already-read complete record is waiting to be emitted."""
@@ -1004,6 +1082,7 @@ class JSONLTailer:
                 lines.append(parsed)
 
         if consumed_bytes:
+            self._consume_anchor(self._buffer[:consumed_bytes])
             self._buffer = self._buffer[consumed_bytes:]
             self.offset = starting_offset + consumed_bytes
 
@@ -1021,6 +1100,7 @@ class JSONLTailer:
             return None
         start_offset = self.offset
         record = self.failed_record
+        self._consume_anchor(record)
         self._buffer = self._buffer[len(record) :]
         self.offset += len(record)
         self.failed_record = None
@@ -1298,6 +1378,11 @@ class JSONLWatcher:
         self._quarantined_record_count_total = 0
         self._quarantined_records: list[dict[str, Any]] = []
         self._pending_quarantined_offsets: dict[str, list[tuple[int, int, int, int]]] = {}
+        # Sources confirmed gone (lstat ENOENT). Their tailer and registry checkpoint are kept;
+        # a path leaves the set when discovery sees it again (#732).
+        self._vanished_sources: set[str] = set()
+        self._vanished_source_count_total = 0
+        self.log_destinations = {"stdout": describe_stream_destination(1), "stderr": describe_stream_destination(2)}
         self._stop = threading.Event()
         self._last_registry_flush = time.monotonic()
         self.health_path = Path(health_path).expanduser() if health_path else None
@@ -1572,6 +1657,39 @@ class JSONLWatcher:
     def _clear_file_ingestion_failure(self, filepath: str) -> None:
         self._file_ingestion_failures.pop(filepath, None)
 
+    @staticmethod
+    def _source_is_gone(filepath: str) -> bool:
+        """Confirm a deletion: only lstat ENOENT counts, never a permission or I/O error."""
+        try:
+            os.lstat(filepath)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return False
+
+    def _retire_vanished_source(self, filepath: str, tailer: JSONLTailer | None) -> None:
+        """Record a confirmed-deleted source once, without alarming as a parse failure (#732).
+
+        A deleted JSONL is not unparseable bytes, so it must not reach the parse alarm or keep
+        health alerting. The tailer and registry checkpoint are kept: startup pruning retires the
+        checkpoint with mount evidence, and if the path comes back the tailer's anchor check
+        decides whether the old offset still applies (renamed back) or not (reused inode).
+        """
+        self._clear_file_ingestion_failure(filepath)
+        if tailer is not None:
+            tailer.last_error = None
+            tailer.failed_record = None
+        if filepath in self._vanished_sources:
+            return
+        self._vanished_sources.add(filepath)
+        self._vanished_source_count_total += 1
+        logger.info(
+            "Watcher source vanished (deleted or renamed away): %s at offset %d",
+            filepath,
+            tailer.offset if tailer is not None else self.registry.get(filepath)[0],
+        )
+
     def _quarantine_failed_record(
         self,
         filepath: str,
@@ -1781,6 +1899,8 @@ class JSONLWatcher:
             "file_ingestion_failures_overflow_count": failure_overflow_count,
             "quarantined_record_count_total": self._quarantined_record_count_total,
             "quarantined_records": list(self._quarantined_records),
+            "vanished_source_count_total": self._vanished_source_count_total,
+            "log_destinations": self.log_destinations,
             **watchdog,
         }
         try:
@@ -1971,8 +2091,18 @@ class JSONLWatcher:
             }
             self._maybe_prune_offsets(files)
 
+            for filepath, known_tailer in list(self._tailers.items()):
+                if (
+                    filepath not in live_files
+                    and filepath not in self._vanished_sources
+                    and not self._denylisted(filepath)
+                    and self._source_is_gone(filepath)
+                ):
+                    self._retire_vanished_source(filepath, known_tailer)
+
             for filepath in list(self._tailers):
                 if self._denylisted(filepath):
+                    self._vanished_sources.discard(filepath)
                     self._tailers.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
                     self._pending_quarantined_offsets.pop(filepath, None)
@@ -1980,11 +2110,13 @@ class JSONLWatcher:
 
             for filepath in files:
                 if self._denylisted(filepath):
+                    self._vanished_sources.discard(filepath)
                     self._tailers.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
                     self._pending_quarantined_offsets.pop(filepath, None)
                     self.registry.remove(filepath)
                     continue
+                self._vanished_sources.discard(filepath)
                 if self._can_skip_unchanged(filepath):
                     continue
                 tailer: JSONLTailer | None = None
@@ -2042,6 +2174,16 @@ class JSONLWatcher:
                         tailer.rewound = False  # Reset flag
                         source_inode = tailer.observed_inode
                         source_generation = self.registry.generation(filepath)
+                    elif tailer.replaced:
+                        # Same inode, different bytes before the offset: a new file, not a
+                        # checkpoint restore. Restart the generation like an inode change does.
+                        read_start_offset = 0
+                        tailer.replaced = False
+                        tailer_snapshot = (0, b"")  # a later failure must not restore the old offset
+                        self._pending_quarantined_offsets.pop(filepath, None)
+                        self.registry.mark_rewind(filepath, tailer.observed_inode)
+                        source_inode = tailer.observed_inode
+                        source_generation = self.registry.generation(filepath)
 
                     normalized_lines = self._normalize_lines(filepath, new_lines) if new_lines else []
                     if normalized_lines:
@@ -2060,7 +2202,9 @@ class JSONLWatcher:
                         source_inode,
                         source_generation,
                     )
-                    if tailer.last_error is not None:
+                    if isinstance(tailer.last_error, FileNotFoundError) and self._source_is_gone(filepath):
+                        self._retire_vanished_source(filepath, tailer)
+                    elif tailer.last_error is not None:
                         if not self._quarantine_failed_record(
                             filepath,
                             tailer,
@@ -2080,6 +2224,9 @@ class JSONLWatcher:
                         tailer.restore_snapshot(tailer_snapshot)
                         tailer.last_error = error
                         tailer.failed_record = None
+                    if isinstance(error, FileNotFoundError) and self._source_is_gone(filepath):
+                        self._retire_vanished_source(filepath, tailer)
+                        continue
                     logger.exception("Poll file error: %s", filepath)
                     self._record_file_ingestion_failure(filepath, error)
 
@@ -2107,6 +2254,11 @@ class JSONLWatcher:
     def start(self):
         """Start the watcher loop (blocking). Call stop() from another thread."""
         logger.info("JSONL watcher started: %s", self.watch_dir)
+        logger.info(
+            "Watcher logs: stdout -> %s, stderr -> %s",
+            self.log_destinations["stdout"],
+            self.log_destinations["stderr"],
+        )
         start_time = time.monotonic()
 
         # Emit startup telemetry
