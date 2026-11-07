@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="identity-checked cleanup reads /proc")
+pytestmark = pytest.mark.skipif(sys.platform not in ("linux", "darwin"), reason="requires POSIX process inspection")
 
 RUNNER = Path(__file__).resolve().parent.parent / "scripts" / "ci" / "run_with_deadline.py"
 BOUND = 30.0
@@ -33,7 +33,7 @@ gc_mode, own_mode = mode.split("+") if "+" in mode else ("plain", mode)
 if own_mode == "stubborn":
     for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(s, signal.SIG_IGN)
-start = open(f"/proc/{os.getpid()}/stat").read().rsplit(")", 1)[1].split()[19]
+start = subprocess.check_output(["/bin/ps", "-o", "lstart=", "-p", str(os.getpid())], text=True).strip()
 with open(os.path.join(piddir, role), "w") as f:
     f.write(f"{os.getpid()} {start}")
 keep = os.open(fifo, os.O_WRONLY)
@@ -57,6 +57,8 @@ import os, runpy, signal, subprocess, sys
 force, path = os.environ["FORCE"], sys.argv[1]
 real_popen, real_killpg, real_waitpid = subprocess.Popen, os.killpg, os.waitpid
 real_waitid = getattr(os, "waitid", None)
+if force == "no-waitid" and real_waitid is not None:
+    del os.waitid
 leaders, fired = [], []
 def log(*a): print("EVENT", *a, file=sys.stderr, flush=True)
 def popen(*a, **k):
@@ -78,7 +80,7 @@ def waitpid(pid, options):
         log("reap", pid)
     return res
 subprocess.Popen, os.killpg, os.waitpid = popen, killpg, waitpid
-if real_waitid is not None:
+if real_waitid is not None and force != "no-waitid":
     os.waitid = waitid
 sys.argv = [path] + sys.argv[2:]
 runpy.run_path(path, run_name="__main__")
@@ -144,11 +146,11 @@ class Suite:
             self.wrapper.wait()
         for record in self.piddir.iterdir():
             try:
-                pid, start = record.read_text().split()
-                stat = Path(f"/proc/{pid}/stat").read_text()
-            except (OSError, ValueError):
+                pid, start = record.read_text().split(" ", 1)
+                stat = subprocess.check_output(["/bin/ps", "-o", "lstart=", "-p", pid], text=True).strip()
+            except (OSError, ValueError, subprocess.CalledProcessError):
                 continue
-            if stat.rsplit(")", 1)[1].split()[19] == start:  # same process, not a reused PID
+            if stat == start:  # same process, not a reused PID
                 os.kill(int(pid), signal.SIGKILL)
         os.close(self.rfd)
 
@@ -209,8 +211,11 @@ def _events(err: str) -> list[tuple[str, ...]]:
 
 def _assert_group_signalled_only_before_reap(err: str) -> None:
     events = _events(err)
-    reaps = [i for i, e in enumerate(events) if e[0] == "reap"]
     kills = [i for i, e in enumerate(events) if e[0] == "killpg"]
+    assert kills, events
+    leader = events[kills[0]][1]
+    # The no-waitid observer spawns ps, whose reap does not unpin the suite pgid.
+    reaps = [i for i, e in enumerate(events) if e[0] == "reap" and e[1] == leader]
     assert reaps and kills, events
     assert max(kills) < reaps[0], f"killpg after the leader was reaped (PID-reuse hazard): {events}"
     assert events[kills[-1]][2] == str(int(signal.SIGKILL)), events
@@ -223,6 +228,7 @@ def test_forced_signal_during_spawn_is_forwarded_after_the_child_exists(suite: S
     _assert_group_signalled_only_before_reap(err)
 
 
+@pytest.mark.skipif(not hasattr(os, "waitid"), reason="race injection requires waitid")
 def test_forced_signal_after_leader_exit_still_kills_the_pinned_group(suite: Suite) -> None:
     suite.start("stubborn+exit", force="exited")  # leader exits; grandchild ignores TERM
     rc, err = suite.finish()
@@ -237,3 +243,11 @@ def test_forced_repeated_signal_escalates_without_waiting_out_the_grace(suite: S
     rc, err = suite.finish()  # bounded by BOUND, far below the grace: escalation must happen
     _assert_exited_with_group_gone(suite, rc, err, 128 + signal.SIGTERM)
     _assert_group_signalled_only_before_reap(err)
+
+
+def test_deadline_without_waitid_finishes_before_default_grace(suite: Suite) -> None:
+    suite.start("plain", seconds=1, force="no-waitid")
+    suite.wait_ready()
+    suite.wrapper.communicate(timeout=4)
+    assert suite.wrapper.returncode == 124
+    assert suite.no_fixture_alive()

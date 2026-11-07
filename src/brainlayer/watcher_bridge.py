@@ -10,6 +10,7 @@ Filtering layers:
   4. Post-chunk: strip system-reminder injections from content, skip file deletion diffs
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -73,6 +74,26 @@ MIN_RAW_CONTENT_LENGTH = 20
 _SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 
 # Regex for pure file deletion diffs (- lines only, no + lines)
+_NATIVE_SESSION_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def _realtime_chunk_id(file_stem: str, project: str | None, content_hash: str) -> str:
+    """Return the watcher chunk id for one chunk of one source file.
+
+    Native Claude Code session files are named by UUID, so the legacy
+    ``rt-{stem[:8]}-{hash}`` key stays unchanged for them and every stored row
+    keeps its primary key. Any other stem (``cse-…``, ``rollout-…``, cloud
+    exports) shares a fixed prefix, so the legacy key forced identical text
+    from unrelated sessions and projects onto one row. Those get a versioned
+    key over the full stem and the normalized project. Same-project content
+    dedupe is left to ``find_duplicate``, which is already project-scoped.
+    """
+    if _NATIVE_SESSION_UUID_RE.match(file_stem):
+        return f"rt-{file_stem[:8]}-{content_hash}"
+    source_key = hashlib.sha256(f"rt2\0{(project or '').strip().lower()}\0{file_stem}".encode()).hexdigest()[:12]
+    return f"rt2-{source_key}-{content_hash}"
+
+
 _PURE_DELETION_DIFF_RE = re.compile(r"^```(?:diff)?\n(?:-[^\n]*\n)+```$", re.MULTILINE)
 
 
@@ -512,7 +533,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 clean_content = secret_scrub_result.text
                 content_hash = normalized_exact_hash(clean_content)[:16]
                 file_stem = Path(source_file).stem
-                chunk_id = f"rt-{file_stem[:8]}-{content_hash}"
+                chunk_id = _realtime_chunk_id(file_stem, project, content_hash)
 
                 # Layer 4: Post-chunk content filter
                 skip_reason = should_skip_chunk_content(clean_content, chunk_id=chunk_id, source_file=source_file)

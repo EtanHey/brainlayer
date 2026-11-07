@@ -19,6 +19,7 @@
 - Groq rate limiter for enrichment backend (#68)
 
 ### Fixed
+- BrainBar's backup busy rejection now carries a structured `error.data.brainlayer_error_code = "backup_snapshot_busy"` (`admitted: false`). The backup client treats that code, the legacy message, or an `isError` tool result that wraps either as busy, so a wrapped rejection no longer unlinks a still-running earlier VACUUM INTO target. `initialize` reports `serverInfo.backupSnapshotInProgress`. An aged, unmarked attempt from the current writer epoch is reclaimed only when BrainBar positively reports no snapshot in progress in that same epoch. A missing, unknown or restarted status keeps the attempt (Refs #1413).
 - `brain_graph.py`: replaced correlated subquery with literal `'claude_code'` — eliminates N+1 subquery on large DBs (PR #62)
 - Removed `tree-sitter>=0.21.0` from core dependencies
 - `brainlayer serve` docs: removed non-existent `--http` flag

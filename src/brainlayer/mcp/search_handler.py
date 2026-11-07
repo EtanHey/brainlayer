@@ -22,7 +22,7 @@ from .. import search_profile, telemetry
 from .._helpers import _escape_fts5_query, _is_sqlite_busy_error
 from ..chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from ..content_class import content_class_is_default_hidden, normalize_content_class
-from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
+from ..lexical_defense import _normalize_surface, load_effective_lexical_defense_dictionary
 from ..search_fanout import run_fan_out
 from ..search_repo import _is_audit_recursion_metadata, _metadata_matches_project_scope
 from ..socket_hygiene import refuse_production_brainbar_socket
@@ -397,7 +397,7 @@ def _quote_fts_phrase(value: str) -> str:
 
 
 def _lexical_defense_variants(query: str) -> list[str]:
-    dictionary = load_lexical_defense_dictionary()
+    dictionary = load_effective_lexical_defense_dictionary()
     variants: list[str] = [query]
     seen = {query.casefold().strip()}
 

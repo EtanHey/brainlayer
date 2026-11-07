@@ -334,8 +334,9 @@ class TestFlushCallback:
         assert inserted == 1
         assert queued["content"] == scrubbed_text
         assert secret not in queued["content"]
-        assert queued["chunk_id"] == f"rt-session-{expected_hash}"
-        assert queued["chunk_id"] != f"rt-session-{raw_hash}"
+        assert queued["chunk_id"].startswith("rt2-")
+        assert queued["chunk_id"].endswith(f"-{expected_hash}")
+        assert not queued["chunk_id"].endswith(f"-{raw_hash}")
 
     def test_arbitrated_flush_enqueues_watcher_chunks_without_db_write(self, tmp_path, monkeypatch):
         db_path = tmp_path / "test.db"
@@ -1002,3 +1003,49 @@ def test_watcher_stage_timings_use_fake_clock(tmp_path, monkeypatch):
     assert result["scrub_ms"] == pytest.approx(50)
     assert result["encode_ms"] == 0
     assert result.get("committed_at") is None  # publishing work is not a DB commit
+
+
+class TestRealtimeChunkIdSourceIsolation:
+    """cse-style stems share an 8-char prefix; the key must not merge projects."""
+
+    @staticmethod
+    def _flush_rows(tmp_path, monkeypatch, sources, *, repeat=1):
+        db_path = tmp_path / "test.db"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+        flush = create_flush_callback(db_path, arbitrated=False)
+        for _ in range(repeat):
+            for source in sources:
+                entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant")
+                entry["_source_file"] = str(tmp_path / "projects" / source)
+                flush([entry])
+        conn = sqlite3.connect(str(db_path))
+        rows = conn.execute(
+            "SELECT id, project FROM chunks WHERE source = 'realtime_watcher' ORDER BY project, id"
+        ).fetchall()
+        conn.close()
+        return rows
+
+    def test_identical_text_in_cse_files_of_two_projects_stays_two_rows(self, tmp_path, monkeypatch):
+        rows = self._flush_rows(
+            tmp_path,
+            monkeypatch,
+            ["alpha/cse-20261105-aaaa.jsonl", "beta/cse-20261105-bbbb.jsonl"],
+            repeat=2,
+        )
+        assert [project for _, project in rows] == ["alpha", "beta"]
+        assert all(chunk_id.startswith("rt2-") for chunk_id, _ in rows)
+
+    def test_same_project_identical_text_still_dedupes(self, tmp_path, monkeypatch):
+        rows = self._flush_rows(
+            tmp_path,
+            monkeypatch,
+            ["alpha/cse-20261105-aaaa.jsonl", "alpha/cse-20261105-cccc.jsonl"],
+            repeat=2,
+        )
+        assert [project for _, project in rows] == ["alpha"]
+
+    def test_native_uuid_session_keeps_legacy_chunk_id(self, tmp_path, monkeypatch):
+        rows = self._flush_rows(tmp_path, monkeypatch, ["alpha/0a1b2c3d-1111-2222-3333-444455556666.jsonl"], repeat=2)
+        expected = f"rt-0a1b2c3d-{normalized_exact_hash(_LONG_TEXT)[:16]}"
+        assert rows == [(expected, "alpha")]
