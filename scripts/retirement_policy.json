@@ -4360,6 +4360,16 @@
         "target": "subprocess.Popen"
       }
     },
+    "aed8b06c4cec332a279b35f5b0e6a61e4e9dcf86a6bd74c86beb0c0cad5ce5bd": {
+      "non_cloud_purpose": "Read-only SQLite inspection of an explicitly supplied local rehearsal database copy; no network or model invocation.",
+      "site": {
+        "call_sha256": "4c82531793abf62b7e560aa880fb266f165fe431f77b4903d73233e08b2d4dac",
+        "kind": "generic_send",
+        "owner": "<module>.snapshot",
+        "path": "scripts/rehearse_1661.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "aed9b5dea2412a92d4cd4b5defb4ace626bbe2554309872f7bd632c1e5678598": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
