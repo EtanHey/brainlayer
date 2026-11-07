@@ -628,6 +628,15 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         func key(_ issue: BrainBarStatusIssue) -> String {
             let code = issue.id.replacingOccurrences(of: "verdict.note.", with: "")
             let alert = failureAlertKey(issue)
+            if let night, night.failedSteps == ["index"],
+               night.runnerErrorAt == nil, night.unknownFailureAt == nil,
+               (alert == "index" || issue.jobs == [.index] || issue.id == "maintenance.night") {
+                let event = night.stepProblems["index"]?.at ?? night.at
+                let reportedAt = issue.occurredAt ?? inputs.jobAlerts?.reportedAt["index"] ?? inputs.observations?[.index]?.lastRunAt
+                if issue.id == "maintenance.night" || reportedAt.map({ inputs.calendar.isDate($0, inSameDayAs: event) }) == true {
+                    return "nightly.index"
+                }
+            }
             if snapshotFailed {
                 let label = issue.text.split(separator: ":", maxSplits: 1).first.map(String.init)
                 if ["backup-snapshot", "maintenance-full"].contains(alert)
@@ -668,6 +677,16 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                 for (step, target) in [("backup-daily", BrainBarBackupRunFailure.Target.database), ("backup-snapshot", .database), ("jsonl-backup", .transcripts)] {
                     if let detail = failedStepDetail(step) { issue.backupRunDetails[target] = detail }
                 }
+            }
+            if identity == "nightly.index", let night {
+                let at = night.stepProblems["index"]?.at ?? night.at
+                let next = jobs.compactMap { inputs.observations?[$0]?.nextRunAt }.filter { $0 > inputs.now }.min()
+                let retry = next.map { "Retries " + retryPhrase($0, now: inputs.now, calendar: inputs.calendar) }
+                    ?? "Next retry time unavailable; check the job schedule"
+                issue.text = "Transcript indexing stopped early at \(absoluteDate(at, calendar: inputs.calendar)). \(retry). Nothing to do."
+            }
+            if issue.id == "verdict.disk", issue.text.contains("not measured") {
+                issue.text = "Couldn't check backup disk space. Rechecks every 5 min. Nothing to do."
             }
             if identity == "nightly.backup" {
                 issue.id = identity

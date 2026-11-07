@@ -65,6 +65,43 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
         }
     }
 
+    // MARK: #1040 the record's own outcome and run id decide; reason text and mtime only for older records
+
+    func testStructuredOutcomeDecidesBeforeTheLegacyReasonAllowlist() {
+        let unlisted = "a deferral wording no allowlist knows"
+        let deferred = BrainLayerMaintenanceEvidence.RunRecord.aborted(
+            reason: unlisted, writtenAt: lastRun.addingTimeInterval(1), deliberate: true)
+        XCTAssertEqual(BrainLayerMaintenanceExit.verdict(deferred, lastRunAt: lastRun), .deferred(unlisted))
+        let failed = BrainLayerMaintenanceEvidence.RunRecord.aborted(
+            reason: quietWindow, writtenAt: lastRun.addingTimeInterval(1), deliberate: false)
+        XCTAssertEqual(BrainLayerMaintenanceExit.verdict(failed, lastRunAt: lastRun), .failed(quietWindow))
+        // An older record carries no outcome: the legacy allowlist still classifies it.
+        XCTAssertEqual(BrainLayerMaintenanceExit.verdict(aborted(quietWindow), lastRunAt: lastRun),
+                       .deferred("outside the 04:00–06:00 quiet window"))
+        XCTAssertEqual(BrainLayerMaintenanceExit.verdict(aborted(unlisted), lastRunAt: lastRun), .failed(unlisted))
+    }
+
+    func testRunIDCorrelationReplacesTheMtimeWindow() {
+        let late = lastRun.addingTimeInterval(BrainLayerMaintenanceExit.recordLatestAfterStart + 60)
+        let matched = BrainLayerMaintenanceEvidence.RunRecord.aborted(
+            reason: quietWindow, writtenAt: late, deliberate: true, sameRun: true)
+        XCTAssertEqual(BrainLayerMaintenanceExit.thisRunsReason(matched, lastRunAt: lastRun), quietWindow)
+        let other = BrainLayerMaintenanceEvidence.RunRecord.aborted(
+            reason: quietWindow, writtenAt: lastRun.addingTimeInterval(1), deliberate: true, sameRun: false)
+        XCTAssertNil(BrainLayerMaintenanceExit.thisRunsReason(other, lastRunAt: lastRun))
+        XCTAssertNil(BrainLayerMaintenanceExit.thisRunsReason(.aborted(reason: quietWindow, writtenAt: late), lastRunAt: lastRun))
+    }
+
+    func testFailureExitIsDistinctAndOutcomeParsingIsExact() {
+        XCTAssertEqual(BrainLayerMaintenanceExit.failed, 70)
+        XCTAssertNotEqual(BrainLayerMaintenanceExit.failed, BrainLayerMaintenanceExit.deferred)
+        XCTAssertEqual(BrainLayerMaintenanceExit.deliberate(outcome: "deferred"), true)
+        XCTAssertEqual(BrainLayerMaintenanceExit.deliberate(outcome: "failed"), false)
+        XCTAssertNil(BrainLayerMaintenanceExit.deliberate(outcome: nil))
+        XCTAssertNil(BrainLayerMaintenanceExit.deliberate(outcome: "ok"))
+        XCTAssertNil(BrainLayerMaintenanceExit.deliberate(outcome: true))
+    }
+
     func testOptionalVacuumDeferralIsNeutralButRollbackAndRestoreStayFailures() {
         let reason = "tonight's local verified snapshot unavailable; VACUUM skipped"
         XCTAssertEqual(maintenance(weekly: 75, completion: .completed(daysAgo(2)),

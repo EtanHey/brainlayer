@@ -84,7 +84,7 @@ def test_vector_store_init_emits_implicit_operation_span(tmp_path, monkeypatch):
     assert event["producer"] == "vector_store"
     assert event["lane"] == "maintenance"
     assert event["span_kind"] == "writer_operation"
-    assert event["transaction_mode"] == "implicit_per_statement"
+    assert event["transaction_mode"] == "explicit"
     assert event["outcome"] == "completed"
     assert any("chunks_fts" in sql for sql in observed_sql)
     assert len(event["statements"]) == 64

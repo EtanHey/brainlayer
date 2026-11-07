@@ -3,16 +3,16 @@
   "base_sha": "f01469cfdac1368d54a9f9d47bf743f5fc49ca8d",
   "sources": {
     "src/brainlayer/maintenance_calendar.py": {
-      "sha": "a9c3f184821006dd29b40f2758bee1ba2df4afc5",
-      "sha256": "dbdca628b3991a7f1ddd437619fb0e57d4bb0ff63362c9c00f600296f8fc7cef"
+      "sha": "5a24d4b9",
+      "sha256": "5a307852afec90364eb48bbfca534d0e85e07c35c09503b24d57e3b72bbe91ac"
     },
     "src/brainlayer/supervisor_guard.py": {
-      "sha": "f01469cfdac1368d54a9f9d47bf743f5fc49ca8d",
-      "sha256": "bbfed017c31e07a7d7141be0d4e1dcdcd6704cf9298da59b9b7df83112ba7269"
+      "sha": "5a24d4b9",
+      "sha256": "51aedbfed3f8772b4af63875293c4d1c673f2ba43dec5e5de8f7f86c7ae9bc11"
     },
     "src/brainlayer/supervisor_child.py": {
-      "sha": "f01469cfdac1368d54a9f9d47bf743f5fc49ca8d",
-      "sha256": "811d174f883de3ea337afbdfe0a82097fb9717828090f97c9202eb2913940fa0"
+      "sha": "5a24d4b9",
+      "sha256": "c3011fd62b10155ecdc22ee1eddc6079a0b3d7748af5893a71144a75241e4751"
     }
   },
   "actions": {
@@ -181,5 +181,6 @@
     "path": "formal/calendar-guard/scratch/maintenance_calendar.py",
     "sha256": "9ad28230d86cb3f8e279c773c56e1afc68a18323ea42b1acba0a5b64661b7e8d",
     "note": "Full real module copy, only pulse overdue condition removed; runtime paths unchanged."
-  }
+  },
+  "sync_note": "Re-pinned at main 5a24d4b9 (2026-11-05, lead): CalendarGuard now models the supervisor_guard stall-grace extensions (ab3e525e..07e98435; MaxExtensions 3, cap, heartbeat reset; NoPrematureTimeout/GraceWithinCap) in b8f47957. maintenance_calendar.py now skips the summary only when recovery failed before the runner started (runner_started_at None): outside CalendarJournal.Summary's started-run scope, not a violation. supervisor_child.py gained only Darwin thread-priority/QoS and I/O-policy measurement helpers (#1597 S3, #1612 S28): telemetry, no guard transition; its mapped range shifted and was not re-audited."
 }

@@ -40,7 +40,7 @@ def assert_surfaces(reason, monkeypatch, capsys):
     monkeypatch.setattr(maintenance, "run_maintenance", abort)
     monkeypatch.setattr(maintenance, "_write_log", lambda path, record: logs.append(record))
     monkeypatch.setattr(job_alerts, "report", lambda key, message: alerts.append((key, message)))
-    assert maintenance.main(["--light"]) == 75
+    assert maintenance.main(["--light"]) == maintenance.EXIT_FAILED
     assert json.loads(capsys.readouterr().out)["reason"] == reason
     assert logs[0]["reason"] == reason
     assert alerts[0][0] == "maintenance-light" and reason in alerts[0][1]

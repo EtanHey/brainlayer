@@ -2,6 +2,11 @@ import Foundation
 
 enum TextFormatter {
     static let compactSearchLegend = "ID|score|project|date|source; S=summary P=preview"
+    /// Used only when at least one row's project column was blanked because it equals the
+    /// caller's project filter (#1069). The note sits on the column it explains, so the
+    /// served row shape (`- ID: id|score|project|date|source`) is unchanged.
+    static let scopedCompactSearchLegend = "ID|score|project(blank=your filter)|date|source; S=summary P=preview"
+    static let compactSearchLegends: Set<String> = [compactSearchLegend, scopedCompactSearchLegend]
     private enum Alignment {
         case left
         case right
@@ -20,16 +25,19 @@ enum TextFormatter {
         }
 
         let compact = detail != "full"
+        func impliedByScope(_ result: SearchResult) -> Bool {
+            compact && scopedProject == result.project && !result.project.isEmpty
+        }
+        let legend = results.contains(where: impliedByScope) ? scopedCompactSearchLegend : compactSearchLegend
         var lines = compact
-            ? ["## \"\(truncatedQuery)\" \(results.count)/\(total)", compactSearchLegend]
+            ? ["## \"\(truncatedQuery)\" \(results.count)/\(total)", legend]
             : ["## Search results for \"\(truncatedQuery)\" - \(results.count) of \(total) shown"]
         for result in results {
             let source = sourceBasename(result.sourceFile.isEmpty ? result.project : result.sourceFile)
             let date = formattedDate(result.date)
             // A substring of an opaque ID is not evidence of matching provenance.
             let separateSource = !source.isEmpty && result.chunkID != source && result.chunkID != result.sourceFile
-            let project = compact && scopedProject == result.project && !result.project.isEmpty
-                ? "" : (result.project.isEmpty ? "unknown" : result.project)
+            let project = impliedByScope(result) ? "" : (result.project.isEmpty ? "unknown" : result.project)
             if compact {
                 // Label the columns once; keep canonical IDs, score precision and dates intact.
                 // An empty project column is implied by the caller's project filter.

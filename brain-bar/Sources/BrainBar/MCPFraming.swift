@@ -128,7 +128,7 @@ struct MCPFraming: Sendable {
         guard let jsonrpc = response["jsonrpc"],
               let id = response["id"],
               response["result"] != nil || response["error"] != nil else {
-            return try JSONSerialization.data(withJSONObject: response)
+            return try JSONSerialization.data(withJSONObject: response, options: [.withoutEscapingSlashes])
         }
 
         var data = Data("{\"jsonrpc\":".utf8)
@@ -148,8 +148,11 @@ struct MCPFraming: Sendable {
 
     // MARK: - Private
 
+    /// Foundation escapes `/` as `\/` by default. Both spellings decode to the same JSON
+    /// string, so the escape is pure wire overhead on every path and `N/M` header
+    /// BrainBar sends (#1060 diet gate).
     private static func encodeJSONValue(_ value: Any) throws -> Data {
-        try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])
+        try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .withoutEscapingSlashes])
     }
 
     private func parseContentLength(_ header: String) -> Int? {

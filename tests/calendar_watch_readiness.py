@@ -2,6 +2,8 @@
 
 import time
 
+_TEXT_LIMIT = 16384  # Characters after decoding, not bytes.
+
 
 def _fixture_diagnostics(path):
     """Read only known private fixture artifacts, never sockets or symlink targets."""
@@ -23,12 +25,18 @@ def _fixture_diagnostics(path):
                 artifacts[name] = "symlink (not read)"
             elif candidate.is_file():
                 with candidate.open(encoding="utf-8", errors="replace") as stream:
-                    artifacts[name] = stream.read(16384)
+                    text = stream.read(_TEXT_LIMIT + 1)
+                if len(text) > _TEXT_LIMIT:
+                    text = text[:_TEXT_LIMIT] + f"…[truncated after {_TEXT_LIMIT} characters]"
+                artifacts[name] = text
             else:
                 artifacts[name] = "missing or not a regular file"
         except OSError as error:
             artifacts[name] = f"unreadable: {error!r}"
-    artifacts["control.sock exists"] = (path / "control.sock").exists()
+    try:  # A stat failure must not replace the readiness assertion or its timeout cause.
+        artifacts["control.sock exists"] = (path / "control.sock").exists()
+    except OSError as error:
+        artifacts["control.sock exists"] = f"unknown: {error!r}"
     return artifacts
 
 

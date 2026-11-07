@@ -92,6 +92,13 @@ DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = SNAPSHOT_TIMEOUT_CEILING_SECONDS
 # The calendar kills at its budget; the backup's own deadline must fire this much earlier so its
 # supervisor (SIGALRM, 10 s grace, SIGKILL) can still write the BackupTimeoutError receipt.
 SNAPSHOT_RECEIPT_RESERVE_SECONDS = 60
+# The supervisor's SIGALRM -> SIGKILL grace, and the slice of the reserve kept for the receipt itself.
+SUPERVISOR_ALARM_GRACE_SECONDS = 10
+SUPERVISOR_RECEIPT_WRITE_SECONDS = 5
+# One elapsed deadline (#1422): the calendar's kill instant on the system-wide monotonic clock,
+# taken before the spawn, so wrapper/Python startup and child creation are charged against it.
+BACKUP_CALENDAR_DEADLINE_ENV = "BRAINLAYER_BACKUP_CALENDAR_DEADLINE_MONOTONIC"
+BACKUP_DEFERRED_EXIT_CODE = 75
 BACKUP_LOCAL_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS"
 BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
@@ -4196,7 +4203,10 @@ def _run_backup_process(timeout_seconds: int) -> int:
     )
 
 
-def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None = None) -> int:
+def _supervise_backup_process(
+    timeout_seconds: int, *, command: list[str] | None = None, deadline: float | None = None
+) -> int:
+    """Run the backup child; with ``deadline`` (monotonic), the receipt is written strictly before it."""
     guard_fd = os.environ.get("BRAINLAYER_CALENDAR_GUARD_FD")
     managed = guard_fd is not None
     if managed:
@@ -4226,12 +4236,22 @@ def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None
         signal.signal(shutdown_signal, forward_shutdown_signal)
     try:
         try:
-            return child.wait(timeout=timeout_seconds)
+            wait = timeout_seconds
+            if deadline is not None:
+                # Child creation already spent part of the budget; the alarm keeps the full reserve.
+                alarm_at = deadline - SNAPSHOT_RECEIPT_RESERVE_SECONDS
+                wait = max(0.0, min(timeout_seconds, alarm_at - time.monotonic()))
+            return child.wait(timeout=wait)
         except subprocess.TimeoutExpired:
             if child.poll() is None:
                 signal_child(signal.SIGALRM)
+                grace = SUPERVISOR_ALARM_GRACE_SECONDS
+                if deadline is not None:
+                    # Never let the grace eat the receipt's own slice of the remaining window.
+                    remaining = deadline - time.monotonic() - SUPERVISOR_RECEIPT_WRITE_SECONDS
+                    grace = max(0.0, min(grace, remaining))
                 try:
-                    child.wait(timeout=10)
+                    child.wait(timeout=grace)
                 except subprocess.TimeoutExpired:
                     signal_child(signal.SIGKILL)
                     child.wait()
@@ -4283,6 +4303,7 @@ def main(argv: list[str] | None = None) -> int:
     _parse_cli_args([] if argv is None else argv)
     timeout_seconds = _configured_backup_timeout_seconds()
     snapshot_phase = os.environ.get("BRAINLAYER_BACKUP_PHASE") == "snapshot"
+    deadline = None
     if snapshot_phase:
         timeout_seconds = min(
             timeout_seconds,
@@ -4296,17 +4317,32 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds = min(timeout_seconds, int(budget))
         if timeout_seconds < 1:
             raise ValueError("snapshot timeout must be positive")
+        if (raw_deadline := os.environ.get(BACKUP_CALENDAR_DEADLINE_ENV)) is not None:
+            deadline = float(raw_deadline)
+            if not math.isfinite(deadline):
+                raise ValueError(f"{BACKUP_CALENDAR_DEADLINE_ENV} must be finite")
+            # Startup so far is charged against the calendar's clock, not added on top of it.
+            work = math.floor(deadline - time.monotonic() - SNAPSHOT_RECEIPT_RESERVE_SECONDS)
+            if work < 1:
+                print(
+                    "brainlayer backup-snapshot deferred: no positive work budget plus the "
+                    f"{SNAPSHOT_RECEIPT_RESERVE_SECONDS}s receipt reserve fits before the calendar deadline",
+                    flush=True,
+                )
+                return BACKUP_DEFERRED_EXIT_CODE  # nothing was started; the calendar records a deferral
+            timeout_seconds = min(timeout_seconds, work)
     if _env_flag_enabled(BACKUP_SUPERVISED_CHILD_ENV):
         return _run_backup_process(timeout_seconds)
     from .job_alerts import report
 
     key = "backup-snapshot" if snapshot_phase else "backup-daily"
     try:
-        code = _supervise_backup_process(timeout_seconds)
+        code = _supervise_backup_process(timeout_seconds, **({"deadline": deadline} if deadline is not None else {}))
     except Exception:
         report(key, "Database backup failed; check the backup log")
         raise
-    report(key, None if code == 0 else "Database backup failed; check the backup log")
+    if code != BACKUP_DEFERRED_EXIT_CODE or deadline is None:  # a child's deadline deferral is not a failure
+        report(key, None if code == 0 else "Database backup failed; check the backup log")
     return code
 
 

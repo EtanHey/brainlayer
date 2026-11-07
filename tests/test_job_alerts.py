@@ -160,13 +160,12 @@ def test_database_backup_exit_reports_and_clears(monkeypatch):
         (1, "fixture"),
         (76, "fixture"),
         (77, "maintenance lock timed out"),
-        (75, "failed to resume 1 launchd service(s): watch"),
-        (75, "failed to quiesce launchd service watch; it remains loaded"),
-        (75, "unknown maintenance failure"),
-        (75, "outside quiet window"),
-        (75, "prefix queue depth growing: before=1 after=2"),
-        (75, "queue depth growing: before=1 after=2; failure"),
-        (75, "unexpected writer holds brainlayer db: pid=42 command=FAILED TO RESUME fd=9u"),
+        (70, "failed to resume 1 launchd service(s): watch"),
+        (70, "failed to quiesce launchd service watch; it remains loaded"),
+        (70, "unknown maintenance failure"),
+        # #1040: the exit code classifies the outcome; a deferral-shaped reason cannot rescue a failure.
+        (70, "outside quiet window: now=12:00 start_hour=4 duration_minutes=120"),
+        (70, "queue depth growing: before=1 after=2"),
         (1, "queue depth growing: before=1 after=2"),
     ],
 )
@@ -210,7 +209,7 @@ def test_maintenance_deferral_logs_without_failure_alert(monkeypatch, isolated_m
     monkeypatch.setattr(job_alerts, "report", lambda *args: notices.append(args))
 
     def defer(*args, **kwargs):
-        raise maintenance.MaintenanceAbort(reason)
+        raise maintenance.MaintenanceAbort(reason, code=maintenance.EXIT_DEFERRED)
 
     monkeypatch.setattr(maintenance, "run_maintenance", defer)
     assert maintenance.main(["--light"]) == 75

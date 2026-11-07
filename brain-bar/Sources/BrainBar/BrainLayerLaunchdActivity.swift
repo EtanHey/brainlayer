@@ -137,7 +137,10 @@ struct BrainLayerMaintenanceEvidence: Equatable, Sendable {
     /// Only the NEWEST stdout record, never an older one searched for.
     enum RunRecord: Equatable, Sendable {
         /// A complete `{"status": "aborted", "reason": …}` line; `writtenAt` is the log's mtime.
-        case aborted(reason: String, writtenAt: Date)
+        /// Since #1040 the record carries its own `outcome` (`deliberate`: true = `deferred`, false =
+        /// `failed`) and `run_id` (`sameRun`: whether it matches the calendar's run-start receipt).
+        /// `nil` means an older record: classified by the legacy reason allowlist and mtime window.
+        case aborted(reason: String, writtenAt: Date, deliberate: Bool? = nil, sameRun: Bool? = nil)
         /// A complete record that is not an abort, e.g. a successful run's `{"status": "ok"}`, with
         /// the `warnings` a successful run may carry (#1061: e.g. search latency above target).
         case notAnAbort(writtenAt: Date, warnings: [String] = [])
@@ -152,8 +155,11 @@ struct BrainLayerMaintenanceEvidence: Equatable, Sendable {
 
 /// `src/brainlayer/maintenance.py` exit codes, as the Maintenance card reads them.
 enum BrainLayerMaintenanceExit {
-    /// `MaintenanceAbort`'s default code: a gate deferral, but also real failures (#1040).
+    /// A deliberate, retryable deferral only. Releases before #1040 also exited 75 for real failures,
+    /// so a 75 record without a structured `outcome` still falls back to the reason allowlist.
     static let deferred: Int32 = 75
+    /// A genuine failure (resume, burn drain, latency, quiesce) since #1040: attention, never Skipped.
+    static let failed: Int32 = 70
     /// A genuine weekly VACUUM failure (older releases also used this for backup skips).
     static let vacuumSkipped: Int32 = 76
     /// A weekly pass older than this, with only skips since, is attention.
@@ -166,6 +172,7 @@ enum BrainLayerMaintenanceExit {
     /// The deliberate gate and optional VACUUM deferrals `maintenance.py` raises with exit 75
     /// (`_check_quiet_window`, `_check_idle`, `_check_lsof_clean`, a refused window-bound hold), matched whole and
     /// case-insensitively. Every other 75 reason is attention: this is an allowlist, not a blacklist.
+    /// Legacy fallback only (#1040): a record's own `outcome` wins whenever it carries one.
     static let deliberateDeferrals = [
         #"^outside quiet window: now=\S+ start_hour=\d+ duration_minutes=\d+$"#,
         #"^recent queue write activity: \d+ file\(s\) modified recently$"#,
@@ -191,6 +198,15 @@ enum BrainLayerMaintenanceExit {
         }
     }
 
+    /// A record's structured `outcome` (#1040): true = deferred, false = failed, nil = older record.
+    static func deliberate(outcome: Any?) -> Bool? {
+        switch outcome as? String {
+        case "deferred": true
+        case "failed": false
+        default: nil
+        }
+    }
+
     enum Verdict: Equatable {
         /// A verified, allowlisted gate deferral, in human words.
         case deferred(String)
@@ -207,17 +223,19 @@ enum BrainLayerMaintenanceExit {
         case nil: return .unexplained("its stdout log was not read")
         case let .unavailable(why): return .unexplained(why)
         case .notAnAbort: return .unexplained("the newest stdout record is not an abort")
-        case .aborted:
+        case let .aborted(_, _, deliberate, _):
             guard let reason = thisRunsReason(record, lastRunAt: lastRunAt) else {
                 return .unexplained("the newest stdout record is not from this run")
             }
-            return isDeliberateDeferral(reason) ? .deferred(humanDeferral(reason)) : .failed(reason)
+            // #1040: the producer's structured outcome decides; reason text only for older records.
+            return (deliberate ?? isDeliberateDeferral(reason)) ? .deferred(humanDeferral(reason)) : .failed(reason)
         }
     }
 
     /// The abort reason, only when the record was written during the run that started at `lastRunAt`.
     static func thisRunsReason(_ record: BrainLayerMaintenanceEvidence.RunRecord?, lastRunAt: Date?) -> String? {
-        guard let lastRunAt, case let .aborted(reason, writtenAt) = record else { return nil }
+        guard let lastRunAt, case let .aborted(reason, writtenAt, _, sameRun) = record else { return nil }
+        if let sameRun { return sameRun ? reason : nil } // Correlated on the record's own run id.
         return isThisRun(writtenAt, lastRunAt: lastRunAt) ? reason : nil
     }
 

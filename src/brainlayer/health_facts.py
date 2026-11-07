@@ -503,12 +503,25 @@ def collect_facts(
         got["canary"] if got["canary"] is not UNOBSERVED else (UNOBSERVED, prior.get("store_canary_seen"))
     )
     stalled_since, embedding_state = embedding_fact(got["unvectored"], embedding_prior, now, window_start)
+    disk_state = prior.get("disk_measurement", {})
+    disk_state = disk_state if isinstance(disk_state, Mapping) else {}
+    measured_at = _aware(disk_state.get("measured_at"))
+    reused_age = None
+    if got["disk"] is not UNOBSERVED:
+        disk_state = {"measured_at": now.isoformat(), "values": list(got["disk"])}
+    elif measured_at is not None and 0 <= (now - measured_at).total_seconds() <= 1800:
+        values = disk_state.get("values")
+        if isinstance(values, list) and len(values) == 4 and all(type(v) is int and v >= 0 for v in values):
+            got["disk"] = tuple(values)
+            reused_age = int((now - measured_at).total_seconds())
     if got["disk"] is not UNOBSERVED:
         free, legacy_peak, reclaim_peak, floor = got["disk"]
         peak = disk_budget(legacy_peak, reclaim_peak, capability)
     else:
         free = peak = floor = UNOBSERVED
     blind, notes, context = classify_issues(result)
+    if reused_age is not None:
+        context["disk"] = f"using earlier measurement ({reused_age}s old; maximum age 1800s)"
     if drain_paused:
         context["stores"] = "; ".join(filter(None, ("drain paused by maintenance", context.get("stores"))))
 
@@ -537,4 +550,5 @@ def collect_facts(
         check_notes=context,
     )
     state = {"store_canary_seen": canary_seen, "embedding": embedding_state, "drain_paused_seen_at": _iso(pause_seen)}
+    state["disk_measurement"] = disk_state
     return facts, state

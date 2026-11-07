@@ -164,6 +164,8 @@ struct BrainBarCalendarHistory: Sendable {
         var journalOrdinal: Int? = nil
         /// Failed runs of this step in a row, ending with this one (S5).
         var consecutiveFailures = 0
+        /// The calendar's run-start receipt id for a maintenance child (#1040), from its `finished` row.
+        var runID: String? = nil
     }
     var runs: [String: Run] = [:]
     var error: String? = nil
@@ -359,7 +361,7 @@ struct BrainBarCalendarHistory: Sendable {
                 result.runs[step] = Run(at: Date(timeIntervalSince1970: ts), code: code, status: status,
                     startedAt: startedAt, reason: row["reason"] as? String, replaces: row["replaces"] as? String,
                     scheduledDate: row["scheduled_date"] as? String ?? result.latestScheduledDate, journalOrdinal: ordinal,
-                    consecutiveFailures: streaks[step] ?? 0)
+                    consecutiveFailures: streaks[step] ?? 0, runID: row["maintenance_run_id"] as? String)
             }
             var streak = 0
             for date in nights.keys.sorted() {
