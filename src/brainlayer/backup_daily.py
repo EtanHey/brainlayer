@@ -420,6 +420,11 @@ class BrainBarSnapshotBusyError(RuntimeError):
 
 # BrainBarServer.handleBackupToolCallAsync sends this before admission; the running writer continues.
 BRAINBAR_SNAPSHOT_BUSY_MESSAGE = "A BrainBar backup snapshot is already in progress."
+# #1413 structured busy contract: the rejection's JSON-RPC `error.data` carries this code. An
+# intermediary that re-wraps it as a tool result may carry it in the result, structuredContent
+# or _meta; older BrainBars send only the message, which stays recognised (legacy).
+BRAINBAR_ERROR_CODE_KEY = "brainlayer_error_code"
+BRAINBAR_SNAPSHOT_BUSY_CODE = "backup_snapshot_busy"
 
 
 class BrainBarDatabaseIdentityError(RuntimeError):
@@ -454,8 +459,35 @@ def _same_database_file(a: str | os.PathLike[str], b: str | os.PathLike[str]) ->
 
 
 def _is_brainbar_snapshot_busy(response: dict[str, Any]) -> bool:
+    """Recognise a pre-admission busy rejection in every shape it reaches us (#1413).
+
+    Over-matching only preserves attempts and their reservations; under-matching treats the
+    rejection as terminal and unlinks a target BrainBar is still writing. So a structured code
+    anywhere, or the busy text in a JSON-RPC error or an isError tool result, counts as busy.
+    """
+    if not isinstance(response, dict):
+        return False
     error = response.get("error")
-    return isinstance(error, dict) and error.get("message") == BRAINBAR_SNAPSHOT_BUSY_MESSAGE
+    if isinstance(error, dict):
+        data = error.get("data")
+        if isinstance(data, dict) and data.get(BRAINBAR_ERROR_CODE_KEY) == BRAINBAR_SNAPSHOT_BUSY_CODE:
+            return True
+        message = error.get("message")
+        if isinstance(message, str) and BRAINBAR_SNAPSHOT_BUSY_MESSAGE in message:
+            return True
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return False
+    for carrier in (result, result.get("structuredContent"), result.get("_meta")):
+        if isinstance(carrier, dict) and carrier.get(BRAINBAR_ERROR_CODE_KEY) == BRAINBAR_SNAPSHOT_BUSY_CODE:
+            return True
+    content = result.get("content")
+    if result.get("isError") and isinstance(content, list):
+        for item in content:
+            text = item.get("text") if isinstance(item, dict) else None
+            if isinstance(text, str) and BRAINBAR_SNAPSHOT_BUSY_MESSAGE in text:
+                return True
+    return False
 
 
 class BackupStoppedError(BaseException):
@@ -789,14 +821,31 @@ def _sweep_stale_backup_attempts(
     max_age_seconds: int | None = None,
     now: float | None = None,
     writer_started_at: float | None = None,
+    writer_snapshot_idle: Callable[[], bool] | None = None,
 ) -> tuple[list[str], list[Path]]:
-    """Remove old, daemon-confirmed attempts while preserving unproven or recent entries."""
+    """Remove old, daemon-confirmed attempts while preserving unproven or recent entries.
+
+    An aged unmarked attempt is reclaimed when a later writer epoch began after it, or when
+    BrainBar positively reports, in the current epoch, that no snapshot is admitted
+    (writer_snapshot_idle, asked at most once and only when such an attempt exists, after its
+    stat: an aged file cannot be a newly admitted target). Age alone never proves the writer
+    stopped (#1413).
+    """
     output_dir = Path(output_dir)
     cutoff = (time.time() if now is None else now) - (
         _configured_backup_attempt_max_age_seconds() if max_age_seconds is None else max_age_seconds
     )
     deleted: list[str] = []
     surviving: list[Path] = []
+    idle_answer: list[bool] = []
+
+    def proven_idle() -> bool:
+        if writer_snapshot_idle is None:
+            return False
+        if not idle_answer:
+            idle_answer.append(writer_snapshot_idle() is True)
+        return idle_answer[0]
+
     for path in sorted(output_dir.glob(".*.db.attempt-*")):
         try:
             if path.name.endswith(".complete"):
@@ -807,9 +856,19 @@ def _sweep_stale_backup_attempts(
             path_mtime = path.stat().st_mtime
             completion_marker = _backup_attempt_completion_marker(path)
             if completion_marker.is_symlink() or not completion_marker.is_file():
-                if path_mtime <= cutoff and writer_started_at is not None and path_mtime < writer_started_at:
+                if (
+                    path_mtime <= cutoff
+                    and writer_started_at is not None
+                    and (path_mtime < writer_started_at or proven_idle())
+                ):
                     path.unlink()
                     deleted.append(path.name)
+                    if path_mtime >= writer_started_at:
+                        print(
+                            f"Backup reclaimed aged unmarked attempt {path.name}: BrainBar reports no snapshot "
+                            f"in progress in writer epoch {writer_started_at}",
+                            flush=True,
+                        )
                 else:
                     surviving.append(path)
                 continue
@@ -972,7 +1031,7 @@ def _backup_attempt_completion_marker(attempt_path: Path) -> Path:
     return attempt_path.with_name(f"{attempt_path.name}.complete")
 
 
-def _brainbar_writer_started_at(socket_path: Path | str | None = None) -> float:
+def _brainbar_initialize_server_info(socket_path: Path | str | None = None) -> dict[str, Any]:
     request = {
         "jsonrpc": "2.0",
         "id": "backup-writer-status",
@@ -986,10 +1045,35 @@ def _brainbar_writer_started_at(socket_path: Path | str | None = None) -> float:
     response = _send_brainbar_json_request(_brainbar_socket_path(socket_path), request, timeout_seconds=5)
     result = response.get("result")
     server_info = result.get("serverInfo") if isinstance(result, dict) else None
-    started_at = server_info.get("backupWriterStartedAtUnix") if isinstance(server_info, dict) else None
-    if not isinstance(started_at, (int, float)) or started_at <= 0:
+    return server_info if isinstance(server_info, dict) else {}
+
+
+def _brainbar_writer_started_at(socket_path: Path | str | None = None) -> float:
+    started_at = _brainbar_initialize_server_info(socket_path).get("backupWriterStartedAtUnix")
+    if isinstance(started_at, bool) or not isinstance(started_at, (int, float)) or started_at <= 0:
         raise RuntimeError("BrainBar initialize response missing backupWriterStartedAtUnix")
     return float(started_at)
+
+
+def _brainbar_snapshot_idle_in_epoch(socket_path: Path | str | None, writer_started_at: float | None) -> bool:
+    """True only if BrainBar, still in writer epoch writer_started_at, reports no admitted snapshot.
+
+    Fail closed: an older BrainBar without the field, a malformed answer, a restart between the
+    two probes (a different epoch) or a failed probe all read as "not proven idle".
+    """
+    if writer_started_at is None:
+        return False
+    try:
+        server_info = _brainbar_initialize_server_info(socket_path)
+    except BackupTimeoutError:
+        raise
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"BrainBar snapshot status unavailable: {type(exc).__name__}", flush=True)
+        return False
+    started_at = server_info.get("backupWriterStartedAtUnix")
+    if isinstance(started_at, bool) or not isinstance(started_at, (int, float)):
+        return False
+    return float(started_at) == writer_started_at and server_info.get("backupSnapshotInProgress") is False
 
 
 def _database_logical_size_bytes(db_path: Path) -> int:
@@ -1786,6 +1870,7 @@ def create_sqlite_backup_artifact(
     stale_attempts_deleted, surviving_attempt_paths = _sweep_stale_backup_attempts(
         output_dir,
         writer_started_at=writer_started_at,
+        writer_snapshot_idle=lambda: _brainbar_snapshot_idle_in_epoch(socket_path, writer_started_at),
     )
     db_size = _database_logical_size_bytes(db_path)
     surviving_attempt_bytes = 0

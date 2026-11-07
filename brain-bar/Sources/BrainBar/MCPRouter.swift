@@ -192,6 +192,12 @@ final class MCPRouter: @unchecked Sendable {
             condition.unlock()
         }
 
+        var isBackupRequested: Bool {
+            condition.lock()
+            defer { condition.unlock() }
+            return backupRequested
+        }
+
         func waitForDrains() {
             condition.lock()
             while activeDrains > 0 { condition.wait() }
@@ -455,6 +461,19 @@ final class MCPRouter: @unchecked Sendable {
         pendingStoreDrainScheduler.backupGate.finishBackup()
     }
 
+    private let vacuumActivity = NSLock()
+    private var activeVacuumCount = 0
+
+    /// #1413 snapshot status: true from socket admission (or handler entry) until the
+    /// snapshot answers. Reported in initialize so a backup client can tell an aged,
+    /// unmarked attempt in this writer epoch from a still-running one.
+    var backupSnapshotInProgress: Bool {
+        vacuumActivity.lock()
+        let active = activeVacuumCount > 0
+        vacuumActivity.unlock()
+        return active || pendingStoreDrainScheduler.backupGate.isBackupRequested
+    }
+
     private static func scheduleExistingPendingStoreScan(
         scheduler: PendingStoreDrainScheduler,
         db: BrainDatabase,
@@ -617,7 +636,8 @@ final class MCPRouter: @unchecked Sendable {
                     "name": "brainbar",
                     "version": "1.0.0",
                     "backupWriterStartedAtUnix": backupWriterStartedAtUnix,
-                ]
+                    "backupSnapshotInProgress": backupSnapshotInProgress,
+                ] as [String: Any]
             ] as [String: Any]
         ]
     }
@@ -1689,6 +1709,14 @@ final class MCPRouter: @unchecked Sendable {
     private func handleBrainBackupVacuumInto(_ args: [String: Any]) throws -> ToolOutput {
         guard let targetPath = args["target_path"] as? String else {
             throw ToolError.missingParameter("target_path")
+        }
+        vacuumActivity.lock()
+        activeVacuumCount += 1
+        vacuumActivity.unlock()
+        defer {
+            vacuumActivity.lock()
+            activeVacuumCount -= 1
+            vacuumActivity.unlock()
         }
         let db = try writeDB()
         // A caller aimed at a different database must never receive this one (2026-10-19:
