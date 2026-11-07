@@ -102,7 +102,7 @@ def _generation(directory):
 
 def _lease_held(directory):
     try:
-        with component_gate(directory):
+        with component_gate(directory, operation="hold-probe"):
             return False  # A shared lock succeeded: no exclusive hold remains.
     except BlockingIOError:
         return True
@@ -169,7 +169,7 @@ def recover_hold(path):
     client.request = bounded_request
     hold = MaintenanceHold(client)
     try:
-        with component_gate(hold.directory, exclusive=True):
+        with component_gate(hold.directory, exclusive=True, operation="maintenance-hold"):
             hold._restore()
     except BlockingIOError:
         enforce_hold_expiry(path)  # A live owner past its cap is ended; the next tick restores.
@@ -278,7 +278,7 @@ class MaintenanceHold:
             self.nested = True
             self.deadline = entry.get("deadline")
             return self
-        gate = component_gate(self.directory, exclusive=True)
+        gate = component_gate(self.directory, exclusive=True, operation="maintenance-hold")
         fd = gate.__enter__()
         self.gate, self.fd = gate, fd
         try:
