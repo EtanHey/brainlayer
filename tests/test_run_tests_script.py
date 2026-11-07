@@ -2248,3 +2248,43 @@ def test_changed_only_scope_maps_t3_provenance_to_its_owners(tmp_path: Path) -> 
     assert "unmapped: src/brainlayer/t3_provenance.py" not in result.stdout + result.stderr
     assert "falling back to full pytest unit suite" not in result.stdout
     assert f"{test_root}/ -v" not in logged
+
+
+def _deadline_probe_helper(tmp_path: Path) -> tuple[Path, Path]:
+    """A heavy-suite helper stand-in that records the deadline argv and wrapper wall limit it got."""
+    record = tmp_path / "helper-argv.log"
+    helper = tmp_path / "deadline_probe_helper.py"
+    helper.write_text(
+        "import os, subprocess, sys\n"
+        f"open({str(record)!r}, 'w').write(repr(sys.argv[1:]) + '\\n' + "
+        "os.environ.get('GOLEMS_HEAVY_TIMEOUT_SECONDS', '<unset>') + '\\n')\n"
+        "sys.exit(subprocess.call(sys.argv[2:]))\n"
+    )
+    return helper, record
+
+
+@pytest.mark.parametrize(
+    ("kind", "want_seconds", "want_wall"),
+    [("tag", "5400", "5460"), ("branch", "1800", "<unset>"), ("tag+branch", "1800", "<unset>")],
+)
+def test_pre_push_hook_gives_a_tag_push_the_release_gate_budget(
+    tmp_path: Path, kind: str, want_seconds: str, want_wall: str
+) -> None:
+    """v1.5.91's tag range mapped the full suite and died twice at the 1800 s deadline (exit 124,
+    no failing test). A release gate that cannot finish is not a gate; a branch push keeps 1800 s."""
+    repo, env_log = _repo_with_the_pre_push_hook(tmp_path)
+    helper, record = _deadline_probe_helper(tmp_path)
+    sha = _rev_parse(repo, "v1.1.0")
+    lines = []
+    if "tag" in kind:
+        lines.append(f"refs/tags/v1.1.0 {sha} refs/tags/v1.1.0 {'0' * 40}")
+    if "branch" in kind:
+        lines.append(f"refs/heads/main {sha} refs/heads/main {'0' * 40}")
+    extra = {"GOLEMS_HEAVY_SUITE_HELPER": str(helper), "HOME": str(tmp_path)}
+
+    result = _run_hook(repo, env_log, "\n".join(lines) + "\n", extra_env=extra)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    argv, wall = record.read_text().splitlines()
+    assert f"'--seconds', '{want_seconds}'" in argv
+    assert wall == want_wall
