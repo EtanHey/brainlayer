@@ -58,7 +58,8 @@ def _make_stub_bin(tmp_path: Path, *, pytest_exit: int, bun_exit: int | None) ->
 # exports it -- then failed its own gate, because three tests below measured the ambient tag branch
 # instead of the branch they built. Anything in these two families is the AMBIENT push's business;
 # a test that wants one sets it explicitly after this call.
-_SCRUBBED_ENV_PREFIXES = ("BRAINLAYER_CHANGED_FILES", "BRAINLAYER_PREPUSH")
+# GOLEMS_HEAVY_TIMEOUT_SECONDS: a real tag push exports it into this very suite (#1675 review).
+_SCRUBBED_ENV_PREFIXES = ("BRAINLAYER_CHANGED_FILES", "BRAINLAYER_PREPUSH", "GOLEMS_HEAVY_TIMEOUT_SECONDS")
 
 
 def _script_env() -> dict[str, str]:
