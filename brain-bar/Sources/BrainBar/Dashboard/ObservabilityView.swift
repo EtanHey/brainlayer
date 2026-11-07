@@ -783,8 +783,7 @@ enum ObservabilityPresentation {
         }
         let error = backups.errorType.flatMap { value -> ObservabilityStatusLine? in
             guard !value.isEmpty else { return nil }
-            let reclaimPrefix = "raw_reclaim_unconfirmed: "
-            if value.hasPrefix(reclaimPrefix) {
+            if let reclaimPrefix = measuredStopPrefix(value) {
                 let lastVerified = backups.dbSnapshot.flatMap { $0.verified && $0.lastAt <= now ? $0.lastAt : nil }
                 let date = lastVerified.map { verified -> String in
                     let day = idleDate(verified, calendar: calendar, locale: locale)
@@ -899,6 +898,14 @@ enum ObservabilityPresentation {
     }
 
     private static let jobAlertPrefix = "job_alert:"
+
+    /// Producer codes that carry a measured, already-safe sentence after `code: ` — the free-space
+    /// reclaim check and the retained-stall capacity deadlock (#1385). Nil for any other value.
+    static let measuredStopCodes = ["raw_reclaim_unconfirmed", "retained_stalled_backup_capacity"]
+    static func measuredStopPrefix(_ errorType: String?) -> String? {
+        guard let errorType else { return nil }
+        return measuredStopCodes.map { "\($0): " }.first { errorType.hasPrefix($0) }
+    }
 
     /// `observability_backup._db_snapshot_freshness` codes, in plain words; nil for any other value.
     static func dbSnapshotSentence(_ errorType: String, thresholdHours: Double?) -> String? {
