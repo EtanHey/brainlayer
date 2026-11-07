@@ -1,0 +1,57 @@
+{
+  "now": "2026-10-31T09:00:00Z",
+  "headline": "Latest backup stopped; last verified backup: Oct 27",
+  "panel_detail": "Not enough disk space; stalled backups kept: 2026-10-28.db.zst, 2026-10-29.db.zst. Move them to another disk, then run the backup again.",
+  "daily_records": [
+    {
+      "attempted_at": "2026-10-27T03:00:00Z",
+      "snapshot_created_at": "2026-10-27T03:01:00Z",
+      "drive_file": {
+        "name": "synthetic.db.zst"
+      },
+      "uploaded": true,
+      "verified": true
+    },
+    {
+      "attempted_at": "2026-10-31T03:00:00Z",
+      "uploaded": false,
+      "verified": false,
+      "error_type": "RetainedStalledBackupCapacityError[2026-10-28.db.zst,2026-10-29.db.zst]",
+      "error_code": "retained_stalled_backup_capacity",
+      "error": "Insufficient capacity; retaining stalled backups: 2026-10-28.db.zst, 2026-10-29.db.zst (identity unconfirmed: 2026-10-29.db.zst); Insufficient free space for backup in /synthetic/backups: needs 9.5 GB",
+      "retained_stalled_backups": [
+        "2026-10-28.db.zst",
+        "2026-10-29.db.zst"
+      ],
+      "retained_stalled_unconfirmed": [
+        "2026-10-29.db.zst"
+      ]
+    }
+  ],
+  "backups": {
+    "state": "measured",
+    "reason": "",
+    "inputs": [],
+    "freshness": "stale",
+    "threshold_hours": 36,
+    "retention_invariant": "PASS",
+    "surviving_archives_30d": 1,
+    "last_verified_upload": {
+      "at": "2026-10-31T03:00:00Z",
+      "age_hours": 6,
+      "archive_id": "synthetic-transcripts",
+      "verified": true
+    },
+    "db_snapshot": {
+      "last_at": "2026-10-27T03:01:00Z",
+      "destination": "synthetic.db.zst",
+      "verified": true
+    },
+    "launchd": {
+      "label": "com.brainlayer.jsonl-backup",
+      "bootstrapped": true,
+      "disabled_dir_present": false
+    },
+    "error_type": "retained_stalled_backup_capacity: Not enough disk space; stalled backups kept: 2026-10-28.db.zst, 2026-10-29.db.zst. Move them to another disk, then run the backup again."
+  }
+}
