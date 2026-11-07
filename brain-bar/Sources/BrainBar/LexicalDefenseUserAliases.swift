@@ -49,9 +49,10 @@ final class LexicalDefenseUserAliases: @unchecked Sendable {
         return homeDirectory.appendingPathComponent(".config/brainlayer/lexical_defense.local.json")
     }
 
-    /// Letters and digits only, compatibility-folded and lowercased: the lookup key on both paths.
+    /// Letters and digits only, compatibility-normalized and case-folded: the lookup key on both paths.
     static func normalize(_ value: String) -> String {
-        let scalars = value.precomposedStringWithCompatibilityMapping.lowercased().unicodeScalars
+        let scalars = value.precomposedStringWithCompatibilityMapping
+            .folding(options: [.caseInsensitive], locale: Locale(identifier: "en_US_POSIX")).unicodeScalars
         return String(String.UnicodeScalarView(scalars.filter { CharacterSet.alphanumerics.contains($0) }))
     }
 

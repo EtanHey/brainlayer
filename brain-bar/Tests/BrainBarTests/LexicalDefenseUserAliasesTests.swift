@@ -23,6 +23,16 @@ final class LexicalDefenseUserAliasesTests: XCTestCase {
         return url
     }
 
+    func testSharedCasefoldParityFixture() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let data = try Data(contentsOf: root.appendingPathComponent("tests/fixtures/lexical_casefold.json"))
+        let rows = try JSONDecoder().decode([[String: String]].self, from: data)
+        for row in rows {
+            XCTAssertEqual(LexicalDefenseUserAliases.normalize(row["input"]!), row["expected"]!)
+        }
+    }
+
     func testDefaultURLIsUserConfigAndEnvironmentOverrides() {
         let home = URL(fileURLWithPath: "/synthetic-home")
         XCTAssertEqual(
