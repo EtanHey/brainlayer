@@ -2429,10 +2429,16 @@ def _assert_backup_owners(files: list[dict[str, Any]], *, folder_id: str, machin
 class RetainedStalledBackupCapacityError(RuntimeError):
     error_code = "retained_stalled_backup_capacity"
 
-    def __init__(self, names: list[str], *, reason: str | None = None):
-        self.error_type = f"RetainedStalledBackupCapacityError[{','.join(names)}]"
+    def __init__(self, names: list[str], *, reason: str | None = None, unconfirmed: list[str] | None = None):
+        # Every retained stall is named, including one whose identity could not be confirmed (#1385).
+        self.names = list(dict.fromkeys([*names, *(unconfirmed or [])]))
+        self.unconfirmed = [name for name in self.names if name in (unconfirmed or [])]
+        self.error_type = f"RetainedStalledBackupCapacityError[{','.join(self.names)}]"
         detail = f"; {reason}" if reason else ""
-        super().__init__(f"Insufficient capacity; retaining stalled backups: {', '.join(names)}{detail}")
+        unconfirmed_detail = f" (identity unconfirmed: {', '.join(self.unconfirmed)})" if self.unconfirmed else ""
+        super().__init__(
+            f"Insufficient capacity; retaining stalled backups: {', '.join(self.names)}{unconfirmed_detail}{detail}"
+        )
 
 
 class RetainedStalledBackupConflictError(RuntimeError):
@@ -3156,12 +3162,16 @@ def _local_snapshot_intact(receipt: Mapping[str, Any]) -> bool:
     """The durable #1387 proof is bound to these exact bytes, not a dated filename."""
     try:
         path = Path(receipt["snapshot"])
+        artifact = receipt.get("local_artifact")
         return (
             receipt.get("local_verified") is True
             and not path.is_symlink()
             and path.is_file()
             and path.stat().st_nlink == 1
-            and receipt.get("local_artifact") == _upload_identity(path)
+            # Cheap disproof first: a missing record or a size change can never equal the hash (#1385).
+            and isinstance(artifact, dict)
+            and artifact.get("size") == path.stat().st_size
+            and artifact == _upload_identity(path)
         )
     except (OSError, KeyError, TypeError, ValueError):
         return False
@@ -3472,8 +3482,25 @@ def _upload_identity(path: Path) -> dict[str, Any]:
     return {"path": str(path.resolve()), "size": path.stat().st_size, "sha256": digest}
 
 
+def _stalled_identity_confirmed(receipt: Mapping[str, Any]) -> bool:
+    """Hash one retained stall against its receipt. Runs only where the bytes are about to be used:
+    the candidate actually resumed, and (in _remove_superseded_stalls) a stall about to be reclaimed (#1385)."""
+    state = receipt.get("resumable_upload")
+    if not isinstance(state, dict):
+        return False
+    try:
+        return _upload_identity(Path(receipt["snapshot"])) == {k: state.get(k) for k in ("path", "size", "sha256")}
+    except (OSError, KeyError, TypeError):
+        return False
+
+
 def _stalled_uploads(log_path: Path, context: dict[str, Any], staging_dir: Path) -> list[dict[str, Any]]:
-    """Latest receipt per artifact; uncertainty disables reclamation, never broadens it."""
+    """Latest receipt per artifact; uncertainty disables reclamation, never broadens it.
+
+    Listing never hashes: each retained stall is ~9.5 GB and most are too old to resume, so only
+    path/size/link/name are checked here. Bytes are proven by _stalled_identity_confirmed at the
+    point of use. A stall failing even these checks is named in context["retained_stalled_unconfirmed"]
+    so a capacity failure can account for every retained file."""
     if not log_path.exists():
         return []
     try:
@@ -3511,9 +3538,12 @@ def _stalled_uploads(log_path: Path, context: dict[str, Any], staging_dir: Path)
                 or _parse_snapshot_date(path.name) is None
                 or path.name not in {f"{path.name[:10]}{suffix}" for suffix in DB_SNAPSHOT_SUFFIXES}
                 or path.stat().st_nlink != 1
-                or _upload_identity(path) != {k: state.get(k) for k in ("path", "size", "sha256")}
+                or str(path.resolve()) != state.get("path")
+                or path.stat().st_size != state.get("size")
             ):
                 print(f"Retaining stalled backup with unconfirmed identity: {path.name}", flush=True)
+                if os.path.lexists(path):
+                    context.setdefault("retained_stalled_unconfirmed", []).append(path.name)
                 continue
             candidates.append(receipt)
         return sorted(
@@ -3581,7 +3611,7 @@ def _remove_superseded_stalls(receipts: list[dict[str, Any]], result: dict[str, 
                 or _snapshot_created_time(receipt) >= _snapshot_created_time(result)
                 or path.is_symlink()
                 or path.stat().st_nlink != 1
-                or _upload_identity(path) != {k: receipt["resumable_upload"].get(k) for k in ("path", "size", "sha256")}
+                or not _stalled_identity_confirmed(receipt)
             ):
                 print(f"Retaining stalled backup without proof it is superseded: {path.name}", flush=True)
                 continue
@@ -3743,15 +3773,20 @@ def run_backup(
             result["upload_state"] = "nothing_pending"
             return result
         stalled = _stalled_uploads(resolved_log_path, result, Path(staging_dir)) if upload else []
-        candidate = next(
-            (
-                r
-                for r in stalled
-                if _safe_upload_url(r["resumable_upload"].get("url"))
+        candidate = None
+        for r in stalled:
+            if not (
+                _safe_upload_url(r["resumable_upload"].get("url"))
                 and _resume_fresh_enough(r, dt.datetime.fromisoformat(result["attempted_at"]))
-            ),
-            None,
-        )
+            ):
+                continue  # Not resumable, so its bytes are never read on this run.
+            if _stalled_identity_confirmed(r):
+                candidate = r
+                break
+            name = Path(r["snapshot"]).name
+            print(f"Retaining stalled backup with unconfirmed identity: {name}", flush=True)
+            result.setdefault("retained_stalled_unconfirmed", []).append(name)
+        stalled = [r for r in stalled if Path(r["snapshot"]).name not in result.get("retained_stalled_unconfirmed", [])]
 
         local_resume = local is not None and not (local.get("uploaded") and local.get("verified"))
         candidate = local if local_resume else candidate
@@ -3802,9 +3837,12 @@ def run_backup(
                     reason += f"; retained compressed snapshots: {_compressed_snapshot_names(Path(staging_dir))}"
                 if floor_breach:
                     reason += f"; retained raw snapshots: {_retained_raw_snapshot_names(Path(staging_dir))}"
-                if stalled and ("Insufficient free space" in reason or "raw free space floor breached" in reason):
+                unconfirmed = list(result.get("retained_stalled_unconfirmed", []))
+                if (stalled or unconfirmed) and (
+                    "Insufficient free space" in reason or "raw free space floor breached" in reason
+                ):
                     raise RetainedStalledBackupCapacityError(
-                        [Path(r["snapshot"]).name for r in stalled], reason=reason
+                        [Path(r["snapshot"]).name for r in stalled], reason=reason, unconfirmed=unconfirmed
                     ) from exc
                 if "Insufficient free space" in reason or floor_breach:
                     raise RuntimeError(reason) from exc
@@ -4079,6 +4117,8 @@ def run_backup(
         error_code = getattr(exc, "error_code", None)
         if isinstance(exc, RawReclaimUnconfirmedError):
             result["raw_reclaim"] = exc.measurements
+        if isinstance(exc, RetainedStalledBackupCapacityError):
+            result["retained_stalled_backups"] = exc.names
         if isinstance(error_code, str):
             result["error_code"] = error_code
         if isinstance(exc, DriveUploadStalledError):

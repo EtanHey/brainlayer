@@ -880,3 +880,131 @@ def test_completed_resume_probe_does_not_count_old_bytes_as_upload_rate(lane):
     assert result["bytes_confirmed"] == 6
     assert result["upload_rate_bps"] == result["upload_bytes_attempted"] == 0
     assert result["upload_probes"] == result["upload_requests"] == 1
+
+
+# --- #1385: retained-stall hash cost and capacity deadlock -------------------------------------
+
+
+@pytest.fixture
+def hash_reads(monkeypatch):
+    """Every whole-file SHA-256 the production path takes, by file name (the real digest still runs)."""
+    reads = []
+    real = backup.hashlib.file_digest
+
+    def counting(handle, digest):
+        reads.append(backup.Path(handle.name).name)
+        return real(handle, digest)
+
+    monkeypatch.setattr(backup.hashlib, "file_digest", counting)
+    return reads
+
+
+def _age_stall(lane, receipt, path, *, hours=72, content=b"abcdef"):
+    """A retained stall too old to resume (default resume window: 36 h)."""
+    import datetime as dt
+
+    path.write_bytes(content)
+    old = (dt.datetime.now(dt.UTC) - dt.timedelta(hours=hours)).isoformat()
+    state = {
+        **receipt["resumable_upload"],
+        "path": str(path.resolve()),
+        "size": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+    return {
+        **receipt,
+        "snapshot": str(path),
+        "snapshot_created_at": old,
+        "attempted_at": old,
+        "resumable_upload": state,
+    }
+
+
+def _capacity_failure(*args, **kwargs):
+    raise RuntimeError("Insufficient free space for backup in /synthetic: needs 9.5 GB")
+
+
+def test_aged_stall_below_space_budget_is_named_without_reading_its_bytes(lane, monkeypatch, hash_reads):
+    receipt = stalled(lane)
+    aged = _age_stall(lane, receipt, lane.snapshot)
+    lane.log.write_text(json.dumps(aged) + "\n")
+    monkeypatch.setattr(backup, "create_sqlite_backup_artifact", _capacity_failure)
+    hash_reads.clear()  # Setup's own upload hashed the file once; count only the daily runs.
+    for _ in range(3):  # Three daily runs in a row against the same deadlock.
+        with pytest.raises(backup.RetainedStalledBackupCapacityError, match=lane.snapshot.name):
+            lane.run("2026-10-20")
+    assert hash_reads == []  # Pre-#1385: one full read of the stall per run.
+    failure = _last_run_receipt(lane.log, snapshot=False)
+    assert failure["error_code"] == "retained_stalled_backup_capacity"
+    assert failure["retained_stalled_backups"] == [lane.snapshot.name]
+    assert lane.snapshot.read_bytes() == b"abcdef"
+    assert not failure.get("superseded_stalled_deleted")
+
+
+@pytest.mark.parametrize("with_confirmed", [True, False])
+def test_capacity_error_accounts_for_every_retained_stall_including_unconfirmed(
+    lane, monkeypatch, hash_reads, with_confirmed
+):
+    receipt = stalled(lane)
+    confirmed = _age_stall(lane, receipt, lane.snapshot)
+    grown_path = lane.root / "2026-10-16.db.gz"
+    grown = _age_stall(lane, receipt, grown_path, hours=96)
+    grown_path.write_bytes(b"abcdef+")  # Size no longer matches its receipt.
+    rows = [grown] + ([confirmed] if with_confirmed else [])
+    if not with_confirmed:
+        lane.snapshot.unlink()
+    lane.log.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setattr(backup, "create_sqlite_backup_artifact", _capacity_failure)
+    hash_reads.clear()
+    with pytest.raises(backup.RetainedStalledBackupCapacityError) as caught:
+        lane.run("2026-10-20")
+    expected = ([lane.snapshot.name] if with_confirmed else []) + [grown_path.name]
+    assert sorted(caught.value.names) == sorted(expected)
+    assert caught.value.unconfirmed == [grown_path.name]
+    failure = _last_run_receipt(lane.log, snapshot=False)
+    assert sorted(failure["retained_stalled_backups"]) == sorted(expected)
+    assert failure["retained_stalled_unconfirmed"] == [grown_path.name]
+    assert all(name in failure["error"] and name in failure["error_type"] for name in expected)
+    assert "identity unconfirmed: 2026-10-16.db.gz" in failure["error"]
+    assert hash_reads == []
+    assert grown_path.read_bytes() == b"abcdef+"
+    assert lane.snapshot.exists() is with_confirmed
+
+
+def test_resumed_stall_is_hashed_once_and_replaced_same_size_inode_is_refused(lane, hash_reads):
+    import os
+
+    stalled(lane)
+    hash_reads.clear()
+    replacement = lane.root / "replacement.tmp"
+    replacement.write_bytes(b"ghijkl")  # Same size, different bytes, new inode.
+    os.replace(replacement, lane.snapshot)
+    lane.outcomes.append(_DriveResponse(200, payload={"id": "fresh"}))
+    result = lane.run("2026-10-18")
+    assert result["uploaded"] and result["snapshot"] != str(lane.snapshot)
+    assert len(lane.posts) == len(lane.creations) == 2  # A fresh snapshot and session, no resume.
+    assert result["retained_stalled_unconfirmed"] == [lane.snapshot.name]
+    # One read as the would-be resume candidate, one by the post-success superseded check; the
+    # fresh snapshot's own identity reads are the rest.
+    assert hash_reads == [lane.snapshot.name, "2026-10-18.db.gz", "2026-10-18.db.gz", lane.snapshot.name]
+    assert lane.snapshot.read_bytes() == b"ghijkl"  # Unproven bytes are never reclaimed.
+    assert lane.snapshot.name not in result.get("superseded_stalled_deleted", [])
+
+
+def test_superseded_reclaim_still_hashes_and_keeps_changed_aged_stall(lane, hash_reads):
+    receipt = stalled(lane)
+    good_path = lane.root / "2026-10-15.db.gz"
+    good = _age_stall(lane, receipt, good_path, hours=96)
+    changed = _age_stall(lane, receipt, lane.snapshot)
+    lane.snapshot.write_bytes(b"ghijkl")  # Same size: only a hash can tell.
+    lane.log.write_text(json.dumps(good) + "\n" + json.dumps(changed) + "\n")
+    hash_reads.clear()
+    lane.outcomes.append(_DriveResponse(200, payload={"id": "fresh"}))
+    result = lane.run("2026-10-20")
+    assert result["uploaded"] and result["verified"]
+    assert result["superseded_stalled_deleted"] == [good_path.name]
+    assert not good_path.exists()
+    assert lane.snapshot.read_bytes() == b"ghijkl"
+    # Reads happen only in the two post-success reclaim checks, never in listing (pre-#1385: three each).
+    stall_reads = [n for n in hash_reads if n in {good_path.name, lane.snapshot.name}]
+    assert stall_reads.count(good_path.name) == stall_reads.count(lane.snapshot.name) == 2
