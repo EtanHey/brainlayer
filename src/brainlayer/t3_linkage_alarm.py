@@ -15,6 +15,7 @@ import logging
 import os
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -99,8 +100,10 @@ def _raise_deduplicated(path: Path, source: str, fingerprint: str, event: alarm.
         and cached["state"] == "pending"
         and 0 <= now - cached["last_alert_at"] < REMINDER_SECONDS
     ):
+        _count(now, "suppressed_unchanged")
         raise event
     emit = True
+    reason = "changed"
     directory = path.parent
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -118,6 +121,7 @@ def _raise_deduplicated(path: Path, source: str, fingerprint: str, event: alarm.
                 logger.warning("Unreadable T3 linkage alarm status %s: %s", path, exc)
                 previous, same, last_alert = {}, False, 0
             emit = not same or not 0 <= now - last_alert < REMINDER_SECONDS
+            reason = "hourly_reminder" if same else "changed"
             record = (
                 dict(previous)
                 if same
@@ -147,10 +151,59 @@ def _raise_deduplicated(path: Path, source: str, fingerprint: str, event: alarm.
         # Another process holds this source's status; without our own receipt, stay loud.
         logger.info("T3 alarm status %s is busy; emitting %s without suppression", path, event.code)
         emit = True
+        reason = "lock_or_persist_failed"
     except OSError:
         # No durable receipt means no suppression; never pretend a failed status write worked.
         logger.error("Could not persist T3 linkage alarm status %s", path, exc_info=True)
         emit = True
+        reason = "lock_or_persist_failed"
+    _count(now, reason if emit else "suppressed_unchanged")
     if emit:
+        event.context.update(emission_reason=reason, source_fingerprint=fingerprint)
         alarm.emit_alarm(event)
     raise event
+
+
+def _counter_directory() -> Path:
+    return status_directory().with_name("t3-linkage-counts")
+
+
+def _count(now: float, reason: str) -> None:
+    """One immutable receipt per observation avoids shared counter write races."""
+    row = {
+        "hour": int(now // REMINDER_SECONDS),
+        "observed": 1,
+        "emitted": int(reason != "suppressed_unchanged"),
+        "suppressed_unchanged": int(reason == "suppressed_unchanged"),
+        "emitted_because_lock_or_persist_failed": int(reason == "lock_or_persist_failed"),
+    }
+    try:
+        directory = _counter_directory()
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / f"{uuid.uuid4().hex}.json"
+        with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as handle:
+            temporary = Path(handle.name)
+            try:
+                json.dump(row, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+                temporary.replace(target)
+            finally:
+                temporary.unlink(missing_ok=True)
+    except OSError:
+        logger.error("Could not persist T3 alarm counters", exc_info=True)
+
+
+def alarm_counts() -> list[dict[str, int]]:
+    """Read persisted per-hour totals without modifying alarm state.
+
+    Counter persistence errors are logged; totals cover durable receipts only.
+    """
+    hours: dict[int, dict[str, int]] = {}
+    for path in _counter_directory().glob("*.json"):
+        row = json.loads(path.read_text())
+        hour = row.pop("hour")
+        total = hours.setdefault(hour, {"hour": hour, **dict.fromkeys(row, 0)})
+        for key, value in row.items():
+            total[key] += value
+    return [hours[hour] for hour in sorted(hours)]

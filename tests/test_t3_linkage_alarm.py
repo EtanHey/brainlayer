@@ -174,3 +174,19 @@ def test_other_process_resolution_invalidates_cached_pending(pending):
     with pytest.raises(BrainLayerAlarm):
         check()
     assert len(events) == 2
+
+
+def test_hourly_counters_count_unchanged_suppression(pending):
+    from brainlayer import t3_linkage_alarm
+
+    _, events, _, check = pending
+    for _ in range(2):
+        with pytest.raises(BrainLayerAlarm):
+            check()
+    rows = t3_linkage_alarm.alarm_counts()
+    assert rows[0]["observed"] == 2
+    assert rows[0]["emitted"] == 1
+    assert rows[0]["suppressed_unchanged"] == 1
+    assert len(events) == 1
+    assert events[0].context["emission_reason"] == "changed"
+    assert len(events[0].context["source_fingerprint"]) == 64
