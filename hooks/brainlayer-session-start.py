@@ -16,6 +16,8 @@ import sqlite3
 import sys
 import time
 
+from brainlayer.archive_lifecycle import lifecycle_active_clauses_present
+
 # Budget: abort if we're taking too long
 DEADLINE_MS = 450
 DEGRADED_PREFIX = "⚠️ DEGRADED: BrainLayer"
@@ -253,6 +255,8 @@ def main():
     result_limit = 2 if light_mode else 5
 
     try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+        active_sql = " AND ".join(lifecycle_active_clauses_present(columns, "c")) or "1=1"
         # Single combined query: decisions + milestones for this project
         # Uses both tags: prefix (catches brain_store'd tagged chunks)
         # and plain content search (catches mentions in conversation)
@@ -264,11 +268,11 @@ def main():
             if scope_project:
                 # Containerized: only show this project's memories
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT c.id, c.content, c.importance, c.created_at, c.content_type
                     FROM chunks_fts f
                     JOIN chunks c ON c.id = f.chunk_id
-                    WHERE chunks_fts MATCH ? AND c.project = ?
+                    WHERE chunks_fts MATCH ? AND {active_sql} AND c.project = ?
                     ORDER BY rank
                     LIMIT ?
                     """,
@@ -276,11 +280,11 @@ def main():
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT c.id, c.content, c.importance, c.created_at, c.content_type
                     FROM chunks_fts f
                     JOIN chunks c ON c.id = f.chunk_id
-                    WHERE chunks_fts MATCH ?
+                    WHERE chunks_fts MATCH ? AND {active_sql}
                     ORDER BY rank
                     LIMIT ?
                     """,
