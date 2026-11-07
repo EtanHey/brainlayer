@@ -1461,6 +1461,8 @@ def test_sequential_providers_refuse_late_provider_before_quiesce(db, live_guard
     remaining = {row[0]: row[1] for row in db.conn.execute("SELECT id, content FROM chunks")}
     assert remaining["exa_labeled"] == tokens["exa_labeled"]
     assert tokens["google_oauth"] not in remaining["c"] and tokens["context7"] not in remaining["context7"]
+
+
 # #1129: a wrapped failure names a fixed cause category and maintenance gate, never its text.
 _EVIL = "/Users/victim/private " + TOKENS["google_oauth_refresh"] + " ctx7sk-" + "1" * 24
 
