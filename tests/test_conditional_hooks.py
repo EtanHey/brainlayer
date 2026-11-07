@@ -862,6 +862,7 @@ class TestStopIndexConditional:
         os.environ["BRAINLAYER_HOOKS_DISABLED"] = "true"
         assert stop_index.should_activate() is True
 
+
 @pytest.mark.parametrize("retired_column", ["superseded_by", "aggregated_into", "archived_at"])
 @pytest.mark.parametrize("scoped", [False, True])
 def test_hooks_exclude_retired_chunks(session_start, prompt_search, monkeypatch, capsys, retired_column, scoped):
@@ -874,7 +875,10 @@ def test_hooks_exclude_retired_chunks(session_start, prompt_search, monkeypatch,
     """)
     for chunk_id in ("active", "retired"):
         content = f"brainlayer decision {chunk_id}"
-        conn.execute("INSERT INTO chunks (id, content, project, created_at) VALUES (?, ?, 'brainlayer', '2026-11-07')", (chunk_id, content))
+        conn.execute(
+            "INSERT INTO chunks (id, content, project, created_at) VALUES (?, ?, 'brainlayer', '2026-11-07')",
+            (chunk_id, content),
+        )
         conn.execute("INSERT INTO chunks_fts VALUES (?, ?, '')", (chunk_id, content))
     conn.execute(f"UPDATE chunks SET {retired_column} = 'retirement' WHERE id = 'retired'")
     rows = prompt_search.fetch_matching_chunks(conn, '"brainlayer"', 5)
