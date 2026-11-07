@@ -211,8 +211,11 @@ def _events(err: str) -> list[tuple[str, ...]]:
 
 def _assert_group_signalled_only_before_reap(err: str) -> None:
     events = _events(err)
-    reaps = [i for i, e in enumerate(events) if e[0] == "reap"]
     kills = [i for i, e in enumerate(events) if e[0] == "killpg"]
+    assert kills, events
+    leader = events[kills[0]][1]
+    # The no-waitid observer spawns ps, whose reap does not unpin the suite pgid.
+    reaps = [i for i, e in enumerate(events) if e[0] == "reap" and e[1] == leader]
     assert reaps and kills, events
     assert max(kills) < reaps[0], f"killpg after the leader was reaped (PID-reuse hazard): {events}"
     assert events[kills[-1]][2] == str(int(signal.SIGKILL)), events
