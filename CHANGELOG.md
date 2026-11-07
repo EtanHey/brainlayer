@@ -58,6 +58,7 @@
 - `content_hash` is rewritten by every content-changing dedupe merge, with an explicit copy-only repair command (#1637, Refs #623); DB-copy proof and runbook in #1649 (rehearsed on a real M1 copy: 166 stale → 0, fingerprints equal).
 
 ### Backup and Drive
+- A busy maintenance lock at 04:00 defers the maintenance step instead of aborting the night (#1668). On the M4 on 11-07 that abort skipped jsonl-backup, wal-checkpoint and backup-daily, so no backup ran; an inherited lease that cannot be re-locked still aborts.
 - One elapsed deadline covers the calendar kill through the snapshot timeout receipt (#1647). A retryable Google token-endpoint failure (5xx/429) is temporary, not "invalid" (#1633). Scrub-at-rest refusals name a value-free cause and gate (#1645).
 
 ### Tests, CI and formal
