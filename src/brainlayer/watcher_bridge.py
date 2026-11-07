@@ -113,17 +113,32 @@ def _strip_system_reminders(text: str) -> str:
 
 def _is_pure_deletion_diff(text: str) -> bool:
     """Check if text is just a file deletion diff with no added context."""
-    stripped = text.strip()
-    # Must contain diff markers
-    if "---" not in stripped and "+++" not in stripped:
-        return False
-    lines = stripped.split("\n")
-    diff_lines = [l for l in lines if l.startswith(("-", "+")) and not l.startswith(("---", "+++"))]
-    if not diff_lines:
-        return False
-    # Pure deletion: all diff lines are removals, no additions
-    additions = [l for l in diff_lines if l.startswith("+")]
-    return len(additions) == 0
+    lines = text.strip().splitlines()
+    # A Markdown rule and bullet list are not a patch. Require paired file
+    # headers and a hunk before accepting any removed lines.
+    in_hunk = False
+    saw_headers = False
+    removals = 0
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("--- ") and i + 1 < len(lines) and lines[i + 1].startswith("+++ "):
+            saw_headers = True
+            in_hunk = False
+            i += 2
+            continue
+        if saw_headers and re.fullmatch(r"@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@.*", line):
+            in_hunk = True
+        elif in_hunk and line.startswith("-"):
+            removals += 1
+        elif in_hunk and line == "\\ No newline at end of file":
+            pass
+        elif not in_hunk and line.startswith(("diff --git ", "index ", "deleted file mode ")):
+            pass
+        else:
+            return False
+        i += 1
+    return saw_headers and removals > 0
 
 
 def _extract_raw_text(entry: dict) -> str:
