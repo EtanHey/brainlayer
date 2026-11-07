@@ -37,8 +37,15 @@ def _exited(child, may_reap: bool) -> bool:
             return os.waitid(os.P_PID, child.pid, flags) is not None
         except ChildProcessError:
             return child.poll() is not None
-    # Without waitid the leader cannot be observed without reaping it.
-    return may_reap and child.poll() is not None
+    if may_reap:
+        return child.poll() is not None
+    # On Python builds without waitid, observe zombie state without consuming
+    # the exit status: the unreaped leader must keep its process-group ID pinned.
+    result = subprocess.run(
+        ["/bin/ps", "-o", "stat=", "-p", str(child.pid)],
+        capture_output=True, text=True, timeout=1,
+    )
+    return result.returncode == 0 and result.stdout.strip().startswith("Z")
 
 
 def _wait_leader(child, seconds: float, interrupted, may_reap: bool) -> bool:

@@ -1818,6 +1818,16 @@
         "target": "subprocess.CalledProcessError"
       }
     },
+    "4ae2234b098a4152b3105daee137a2df3a651ea0d54c0c49033ba753d1fbf0d7": {
+      "non_cloud_purpose": "Local ps inspection of an unreaped suite leader on platforms without waitid; no cloud model subprocess.",
+      "site": {
+        "call_sha256": "d567a0a17f6cb621305b22eb836bb59b2eaf59b76217797c8294fdad52b82e42",
+        "kind": "child_process",
+        "owner": "<module>._exited",
+        "path": "scripts/ci/run_with_deadline.py",
+        "target": "subprocess.run"
+      }
+    },
     "4af5fe0f4e14dac652231ffe290945674586c25b9dbf74783c2d3b9ea216f571": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/fallback_replay.py <module>._git_root_uncached",
       "site": {
