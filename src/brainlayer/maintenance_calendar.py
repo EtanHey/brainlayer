@@ -857,10 +857,13 @@ async def step_hold(client, guard, env, step, now_fn=None):
         return
     hold = MaintenanceHold(client, now_fn=now_fn)  # Calendar holds are always window-bound.
     try:
+        inherited = os.environ.get("BRAINLAYER_MAINTENANCE_FD") is not None
         try:
             await _blocking(hold.__enter__)
         except BlockingIOError as exc:
-            # Another holder owns the maintenance lease: this step defers, the plan (and its
+            if inherited:
+                raise  # Re-locking an inherited lease is custody: it must still abort the run.
+            # A fresh acquisition found another holder: this step defers, the plan (and its
             # backup) continues. Only custody/protocol failures abort the run (M4, 2026-11-07).
             raise HoldBusy(str(exc)) from exc
         await _blocking(guard_lease, guard, hold.fd)
