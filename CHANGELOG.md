@@ -39,6 +39,30 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.91] - 2026-11-07
+
+### BrainBar
+- The status card shows one plain line per problem, each saying what happens next and whether anything is needed from you (#1663). A failed nightly index used to appear three times (job alert, calendar result, retry line); it is now one line. A disk measurement that could not be taken reads "Couldn't check backup disk space. Rechecks every 5 min. Nothing to do."
+- `brain_entity` resolves names case-insensitively before falling back to substring matches (#1632); served `brain_store` accepts an optional self-reported `caller_model` (#1643); compact `brain_search` rows stay under the wire-size gate while probes read the served shape (#1648, includes #1638).
+
+### Index
+- A backlog that drains every night no longer fails the nightly index (#1662). The stall alarm compared each pass with the all-time minimum, so four passes that each indexed more than arrived (M1, 11-02→11-05) still ended "index exited 1". A pass now fails only when it made no progress; a backlog that keeps outgrowing indexing prints a non-failing `INDEX_BACKLOG_GROWING` line.
+- The first calendar run refuses a missing database explicitly; `bootstrap-db` creates one atomically (#1640). Per-turn authoring model is recorded for Claude Code and Codex chunks (#1639).
+
+### Health
+- A busy Mac no longer turns the backup disk check amber (#1666): when the measurement times out under load, the last real measurement (up to 30 min old) is reused and labelled as such.
+- Maintenance exits 70 for real failures and 75 only for deliberate deferrals, and the calendar and BrainBar match each outcome to its run (#1641). `jobs restart --verify` allows for ExitTimeOut and startup settling (#1636).
+
+### Data
+- Runtime schema changes are recorded in `migration_events` in the same transaction as the change, and the FTS repair (tables, triggers, backfill, row-id map) is atomic (#1642, Refs #618). The startup WAL checkpoint still runs only after the one-time chunk-origin backfill.
+- `content_hash` is rewritten by every content-changing dedupe merge, with an explicit copy-only repair command (#1637, Refs #623); DB-copy proof and runbook in #1649 (rehearsed on a real M1 copy: 166 stale → 0, fingerprints equal).
+
+### Backup and Drive
+- One elapsed deadline covers the calendar kill through the snapshot timeout receipt (#1647). A retryable Google token-endpoint failure (5xx/429) is temporary, not "invalid" (#1633). Scrub-at-rest refusals name a value-free cause and gate (#1645).
+
+### Tests, CI and formal
+- CalendarGuard models the supervisor's stall-grace extensions and the TLA+ source pins are current (#1665); CI forwards INT/TERM/HUP to the suite group (#1646); pre-push maps `t3_provenance.py` (#1630); flaky admission-wait bound fixed (#1664); test-only hardening #1631, #1634, #1635.
+
 ## [1.5.90] - 2026-11-04
 
 ### Backup
