@@ -222,3 +222,16 @@ def test_counter_prunes_hours_older_than_seven_days(tmp_path, monkeypatch):
     for hour in (0, 1, 167, 168):
         t3_linkage_alarm._count(hour * 3600, "changed")
     assert {p.name for p in tmp_path.glob("*.json")} == {"1.json", "167.json", "168.json"}
+
+
+def test_busy_counter_lock_does_not_log_traceback(pending, monkeypatch, caplog):
+    from brainlayer import t3_linkage_alarm
+
+    def busy(*_):
+        raise BlockingIOError("counter lock busy")
+
+    monkeypatch.setattr(t3_linkage_alarm.fcntl, "flock", busy)
+    with caplog.at_level("INFO"):
+        t3_linkage_alarm._count(10000, "changed")
+    assert "diagnostic increment skipped" in caplog.text
+    assert not [record for record in caplog.records if record.exc_info]

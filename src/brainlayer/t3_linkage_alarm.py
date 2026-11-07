@@ -204,6 +204,8 @@ def _count(now: float, reason: str) -> None:
             for path in directory.glob("*.json"):
                 if path.stem.isdecimal() and int(path.stem) <= hour - 7 * 24:
                     path.unlink(missing_ok=True)
+    except BlockingIOError:
+        logger.info("T3 alarm counters are busy; diagnostic increment skipped")
     except (OSError, ValueError, TypeError, KeyError):
         logger.error("Could not persist T3 alarm counters", exc_info=True)
 
