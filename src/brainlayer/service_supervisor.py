@@ -259,7 +259,9 @@ class Supervisor:
         unidentified = None
         try:
             with ExitStack() as files:
-                files.enter_context(supervisor_guard.component_gate(self.path.parent))
+                files.enter_context(
+                    supervisor_guard.component_gate(self.path.parent, operation="supervisor:" + " ".join(child.argv))
+                )
                 stdout = files.enter_context(child.stdout.open("ab")) if child.stdout else None
                 stderr = files.enter_context(child.stderr.open("ab")) if child.stderr else None
                 child.process, gate = gated_spawn(

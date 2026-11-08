@@ -772,6 +772,7 @@ def finish(
     replaces=None,
     backup_invocation_id=None,
     maintenance_run_id=None,
+    holders=None,
     preserve_abandonment_alerts=False,
 ):
     status = "stopped" if stopped else "deferred" if code == 75 else "ok" if code == 0 else "failed"
@@ -779,6 +780,7 @@ def finish(
         key: value
         for key, value in dict(
             reason=reason,
+            holders=holders,
             replaces=replaces,
             backup_invocation_id=backup_invocation_id,
             maintenance_run_id=maintenance_run_id,
@@ -865,7 +867,9 @@ async def step_hold(client, guard, env, step, now_fn=None):
                 raise  # Re-locking an inherited lease is custody: it must still abort the run.
             # A fresh acquisition found another holder: this step defers, the plan (and its
             # backup) continues. Only custody/protocol failures abort the run (M4, 2026-11-07).
-            raise HoldBusy(str(exc)) from exc
+            busy = HoldBusy(str(exc))
+            busy.holders = getattr(exc, "holders", [])
+            raise busy from exc
         await _blocking(guard_lease, guard, hold.fd)
         yield env | dict(
             BRAINLAYER_MAINTENANCE_FD=str(hold.fd),
@@ -1095,6 +1099,7 @@ async def run_calendar(
             if stop.is_set():
                 await _blocking(record, directory, event="finished", step=step.name, status="skipped", returncode=None)
                 continue
+            holders = None
             code, missed, reason, step_failed = 1, False, None, False
             invocation = uuid.uuid4().hex if step.name == "backup-daily" else None
             run_id = uuid.uuid4().hex if step.name in MAINTENANCE_STEPS else None
@@ -1175,7 +1180,8 @@ async def run_calendar(
                         except maintenance_control.HoldWindowClosed:
                             # The window closed between the check and the grant: defer, keep the plan going.
                             code, reason = 75, "maintenance-window"
-                        except HoldBusy:
+                        except HoldBusy as exc:
+                            holders = getattr(exc, "holders", [])
                             # Another holder has the lease: defer this step, keep the plan (and backup) going.
                             code, reason = 75, "maintenance-hold-busy"
             except (OSError, RuntimeError, ValueError) as exc:
@@ -1197,6 +1203,7 @@ async def run_calendar(
                 missed,
                 stopped,
                 reason=reason,
+                holders=holders,
                 replaces="maintenance-nightly" if weekly_substitution and step.name == "maintenance-weekly" else None,
                 backup_invocation_id=invocation,
                 maintenance_run_id=run_id,
