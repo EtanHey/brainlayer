@@ -180,6 +180,12 @@ map_changed_files_to_pytests() {
     [ -z "$changed" ] && continue
     changed_files_seen=1
     mapped=0
+    # The reviewed inventory binds sites in every policy-covered source.
+    if grep -Fq -- "\"path\": \"$changed\"" "$ROOT_DIR/scripts/retirement_policy.json"; then
+      for test_path in "$TEST_ROOT"/test_retirement_*.py; do
+        [ -f "$test_path" ] && append_unique "$test_path"
+      done
+    fi
     case "$changed" in
       .github/workflows/*.yml|.github/workflows/*.yaml)
         # Select the workflow's actual owners; unrelated CI guards cannot establish coverage.

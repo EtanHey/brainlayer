@@ -3740,3 +3740,76 @@ def test_supervisor_stop_at_handler_boundary(monkeypatch, window):
             if child.poll() is None:
                 child.kill()
             child.wait()
+
+
+@pytest.mark.parametrize("window", ["spawn", "restore-success", "restore-timeout"])
+def test_supervisor_stop_in_lifecycle_window(monkeypatch, window):
+    from brainlayer import backup_daily
+
+    monkeypatch.delenv("BRAINLAYER_CALENDAR_GUARD_FD", raising=False)
+    original_popen = subprocess.Popen
+    original_restore = backup_daily._restore_backup_signal_handlers
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    children = []
+
+    def spawn(*args, **kwargs):
+        child = original_popen(*args, **kwargs)
+        children.append(child)
+        if window == "spawn":
+            os.kill(os.getpid(), signal.SIGINT)
+        return child
+
+    def restore(handlers):
+        if window.startswith("restore"):
+            os.kill(os.getpid(), signal.SIGINT)
+        original_restore(handlers)
+
+    monkeypatch.setattr(subprocess, "Popen", spawn)
+    monkeypatch.setattr(backup_daily, "_restore_backup_signal_handlers", restore)
+    started = time.monotonic()
+    try:
+        with pytest.raises(BaseException) as stopped:
+            backup_daily._supervise_backup_process(
+                0 if window == "restore-timeout" else 30,
+                command=[sys.executable, "-c", "import time; time.sleep(30)" if window == "spawn" else "pass"],
+            )
+        if window == "spawn":
+            assert time.monotonic() - started < backup_daily.SUPERVISOR_ALARM_GRACE_SECONDS / 2
+            assert children[0].returncode == -signal.SIGINT
+        assert isinstance(stopped.value, SystemExit)
+        assert stopped.value.code == 130
+        assert children and children[0].poll() is not None
+        assert all(signal.getsignal(sig) is handler for sig, handler in previous.items())
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+
+
+@pytest.mark.parametrize("stop", [False, True])
+def test_supervisor_timeout_receipt_survives_late_stop(monkeypatch, tmp_path, stop):
+    from brainlayer import backup_daily
+
+    monkeypatch.delenv("BRAINLAYER_CALENDAR_GUARD_FD", raising=False)
+    log = tmp_path / "timeout.jsonl"
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(log))
+    original_append = backup_daily._append_json_log
+
+    def append(path, receipt):
+        if stop:
+            os.kill(os.getpid(), signal.SIGTERM)
+        original_append(path, receipt)
+
+    monkeypatch.setattr(backup_daily, "_append_json_log", append)
+    if stop:
+        with pytest.raises(SystemExit) as stopped:
+            backup_daily._supervise_backup_process(0, command=[sys.executable, "-c", "pass"])
+        assert stopped.value.code == 143
+    else:
+        assert backup_daily._supervise_backup_process(0, command=[sys.executable, "-c", "pass"]) == 124
+    receipt = json.loads(log.read_text())
+    assert receipt["error_type"] == "BackupTimeoutError"
+    assert receipt["timeout_enforced_by"] == "parent_process_supervisor"

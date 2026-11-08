@@ -2332,3 +2332,31 @@ def test_hook_budget_follows_resolved_selection(tmp_path: Path, kind: str, chang
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert record.read_text().splitlines() == ["5400", seconds]
+
+
+@pytest.mark.parametrize("source", ["backup_daily", "supervisor_guard"])
+def test_changed_only_policy_source_runs_retirement_inventory(tmp_path, source):
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    for name in (
+        f"test_{source}.py",
+        "test_retirement_inventory.py",
+        "test_retirement_source.py",
+        "test_think_recall_integration.py",
+    ):
+        (test_root / name).write_text("placeholder\n")
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+    env = _script_env()
+    env.update(
+        PATH=f"{tmp_path / 'bin'}:{env['PATH']}",
+        BRAINLAYER_TEST_ROOT=str(test_root),
+        BRAINLAYER_USE_UV="0",
+        BRAINLAYER_PREPUSH="1",
+        BRAINLAYER_PREPUSH_SCOPE="changed-only",
+        BRAINLAYER_CHANGED_FILES=f"src/brainlayer/{source}.py",
+        PYTEST_LOG=str(pytest_log),
+        BUN_LOG=str(bun_log),
+    )
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert str(test_root / "test_retirement_inventory.py") in pytest_log.read_text()
