@@ -1060,6 +1060,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "2f75f7aed7dd55d8c04533361f35720c856b007755a64ccc4578d5f58b6ad11d": {
+      "non_cloud_purpose": "Release-prep module binding: scripts/release_changelog_sync.py imports subprocess only for its run() helper; maintainer-run, never imported by the package or any service.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/release_changelog_sync.py",
+        "target": "import subprocess"
+      }
+    },
     "2fb566a3714dc8219451f4079199ff098bdf8471455811ee4e9d8734328dc34f": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/style_index.py <module>._style_dependencies",
       "site": {
@@ -4566,6 +4576,16 @@
         "owner": "<module>.rollback_t3_app_chunks",
         "path": "scripts/retag_t3_app_provenance.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "b321a4c5e4527323580de7c66144e7e8c707e7b34e0ea3d47285b12c1336d7ce": {
+      "non_cloud_purpose": "Release-prep argv-only local git log of PR subjects plus gh pr view title lookups on EtanHey/brainlayer to write the CHANGELOG section; no shell, no model or embedding sender, maintainer-run only.",
+      "site": {
+        "call_sha256": "3bbc32ad8d44717a88d7e6dfcded7d35955a6540a0c58670dcc093bb51d3ad02",
+        "kind": "child_process",
+        "owner": "<module>.run",
+        "path": "scripts/release_changelog_sync.py",
+        "target": "subprocess.check_output"
       }
     },
     "b3343b991cdc6ab1fe01d7372bb3a290c555b0e6a1acc15431f6f9775d39cc14": {
