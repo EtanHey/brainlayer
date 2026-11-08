@@ -1,4 +1,7 @@
 import json
+import os
+
+import pytest
 
 from brainlayer.watcher import JSONLWatcher, WatchRoot
 from brainlayer.watcher_bridge import FlushWatermarks
@@ -54,6 +57,20 @@ def test_off_is_plain_only_with_unchanged_entries(compress, tmp_path, monkeypatc
     assert instance.registry.get(str(plain))[0] == len(plain.read_bytes())
 
 
+def test_bounded_caps_continue_across_cycles_and_skip_old_checkpoints(compress, tmp_path, monkeypatch):
+    paths = [compress(f"{i}.jsonl.zst", rollout(str(i) + " unique archived prompt " * 3)) for i in range(4)]
+    instance, entries = watcher(tmp_path, monkeypatch, cap=1)
+    held = str(paths[0].with_suffix(""))
+    instance.registry.set(held, 40, 123)
+    for _ in range(3):
+        before = len(entries)
+        instance.poll_once()
+        assert len(entries) - before == 1
+    assert len(entries) == 3
+    assert held not in instance._tailers  # no decoder was ever opened for this path
+    instance.stop()
+
+
 def test_transition_resumes_decoded_offset_and_reverse_preserves_identity(compress, tmp_path, monkeypatch):
     plain = tmp_path / "rollout.jsonl"
     prefix = rollout("Original prompt that was already ingested before compression.")
@@ -73,4 +90,25 @@ def test_transition_resumes_decoded_offset_and_reverse_preserves_identity(compre
     plain.write_bytes(prefix + suffix)
     archive.unlink()
     assert instance.poll_once() == 0
+    instance.stop()
+
+
+def test_decoded_budget_utf8_boundaries_and_no_cold_reread(compress, tmp_path, monkeypatch):
+    data = rollout("A multiline\nmessage with 🌱 שלום and enough content to keep.")
+    path = compress("utf8.jsonl.zst", data)
+    os.utime(path, (1, 1))  # preserved old mtimes never exclude archives
+    instance, entries = watcher(tmp_path, monkeypatch, budget=1)
+    reads = 0
+    for _ in range(len(data) + 2):
+        instance.poll_once()
+        tailer = instance._tailers[str(path.with_suffix(""))]
+        assert tailer.bytes_read <= 1
+        reads += tailer.bytes_read
+    assert len(entries) == 1
+    assert reads == len(data)
+    assert "🌱 שלום" in entries[0]["message"]["content"][0]["text"]
+    from brainlayer import codex_zst
+
+    monkeypatch.setattr(codex_zst, "ZstdDecodedFile", lambda *_: pytest.fail("unchanged archive decoded twice"))
+    instance.poll_once()
     instance.stop()
