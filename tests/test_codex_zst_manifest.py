@@ -1,4 +1,5 @@
 import json
+import uuid
 
 from brainlayer.ingest.codex_manifest import ingest_codex_manifest
 from brainlayer.watcher import OffsetRegistry
@@ -69,20 +70,30 @@ def test_manifest_replays_offset_only_forks_without_collapsing_native_id(compres
         pause_sentinel_path=tmp_path / "absent-sentinel",
     )
     first = manifest(tmp_path, [a])
-    assert list(ingest_codex_manifest(first, db_path))[0]["queued"] == 2
+    assert (
+        list(ingest_codex_manifest(first, db_path, receipts_out=tmp_path / f"{uuid.uuid4().hex}.receipts.jsonl"))[0][
+            "queued"
+        ]
+        == 2
+    )
     assert drain_once(**args) == 2
     # The parent's native id already exists in durable chunks. The fork is a new FILE.
     registry = OffsetRegistry(tmp_path / "offsets.json")
     registry.set(str(b.with_suffix("")), 10, 123)
     registry.flush()
     second = manifest(tmp_path, [b])
-    assert list(ingest_codex_manifest(second, db_path))[0]["queued"] == 1
+    assert (
+        list(ingest_codex_manifest(second, db_path, receipts_out=tmp_path / f"{uuid.uuid4().hex}.receipts.jsonl"))[0][
+            "queued"
+        ]
+        == 1
+    )
     events = [json.loads(p.read_text()) for p in (tmp_path / "queue").glob("*.jsonl")]
     assert {e["source_file"] for e in events} == {str(b.with_suffix(""))}
     assert drain_once(**args) == 1
     assert OffsetRegistry(tmp_path / "offsets.json").get(str(b.with_suffix("")))[0] == 10
     selected = manifest(tmp_path, [a, b])
-    list(ingest_codex_manifest(selected, db_path))
+    list(ingest_codex_manifest(selected, db_path, receipts_out=tmp_path / f"{uuid.uuid4().hex}.receipts.jsonl"))
     replay = [json.loads(p.read_text()) for p in (tmp_path / "queue").glob("*.jsonl")]
     assert replay == []
     assert drain_once(**args) == len(replay)
@@ -102,7 +113,11 @@ def test_truncated_manifest_can_queue_a_prefix_but_never_confirms_completion(com
     original.set(str(archive.with_suffix("")), 10, 123)
     original.flush()
     before = (tmp_path / "offsets.json").read_bytes()
-    receipt = list(ingest_codex_manifest(selected, tmp_path / "db.sqlite"))[0]
+    receipt = list(
+        ingest_codex_manifest(
+            selected, tmp_path / "db.sqlite", receipts_out=tmp_path / f"{uuid.uuid4().hex}.receipts.jsonl"
+        )
+    )[0]
     assert receipt["decodable"] is False and "decode failed" in receipt["skip_reason"]
     assert receipt["state"] in {"error", "partially_queued"}
     assert (tmp_path / "offsets.json").read_bytes() == before
