@@ -2357,6 +2357,6 @@ def test_changed_only_policy_source_runs_retirement_inventory(tmp_path, source):
         PYTEST_LOG=str(pytest_log),
         BUN_LOG=str(bun_log),
     )
-    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     assert str(test_root / "test_retirement_inventory.py") in pytest_log.read_text()

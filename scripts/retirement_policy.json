@@ -5228,6 +5228,16 @@
         "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
       }
     },
+    "c6f0b0807a8ae7e386027d5f545fa11096663b1f747da1a9a3993cdbaed84cbf": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>._request_macos_purge subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._handle_backup_timeout",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "c7fdd0d8c183be0d0888c0b901685e6babaca0fec219247fe80efa9d7adc93ba": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ci_ratchet_table.py <module>.socket_owner_binary",
       "site": {

@@ -3747,12 +3747,16 @@ def test_supervisor_stop_in_lifecycle_window(monkeypatch, window):
 
     monkeypatch.setattr(subprocess, "Popen", spawn)
     monkeypatch.setattr(backup_daily, "_restore_backup_signal_handlers", restore)
+    started = time.monotonic()
     try:
         with pytest.raises(BaseException) as stopped:
             backup_daily._supervise_backup_process(
                 0 if window == "restore-timeout" else 30,
-                command=[sys.executable, "-c", "pass"],
+                command=[sys.executable, "-c", "import time; time.sleep(30)" if window == "spawn" else "pass"],
             )
+        if window == "spawn":
+            assert time.monotonic() - started < backup_daily.SUPERVISOR_ALARM_GRACE_SECONDS / 2
+            assert children[0].returncode == -signal.SIGINT
         assert isinstance(stopped.value, SystemExit)
         assert stopped.value.code == 130
         assert children and children[0].poll() is not None
@@ -3764,3 +3768,29 @@ def test_supervisor_stop_in_lifecycle_window(monkeypatch, window):
             if child.poll() is None:
                 child.kill()
             child.wait()
+
+
+@pytest.mark.parametrize("stop", [False, True])
+def test_supervisor_timeout_receipt_survives_late_stop(monkeypatch, tmp_path, stop):
+    from brainlayer import backup_daily
+
+    monkeypatch.delenv("BRAINLAYER_CALENDAR_GUARD_FD", raising=False)
+    log = tmp_path / "timeout.jsonl"
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(log))
+    original_append = backup_daily._append_json_log
+
+    def append(path, receipt):
+        if stop:
+            os.kill(os.getpid(), signal.SIGTERM)
+        original_append(path, receipt)
+
+    monkeypatch.setattr(backup_daily, "_append_json_log", append)
+    if stop:
+        with pytest.raises(SystemExit) as stopped:
+            backup_daily._supervise_backup_process(0, command=[sys.executable, "-c", "pass"])
+        assert stopped.value.code == 143
+    else:
+        assert backup_daily._supervise_backup_process(0, command=[sys.executable, "-c", "pass"]) == 124
+    receipt = json.loads(log.read_text())
+    assert receipt["error_type"] == "BackupTimeoutError"
+    assert receipt["timeout_enforced_by"] == "parent_process_supervisor"
