@@ -395,12 +395,13 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
 
         _record_watcher_liveness(store.conn, chunk_id, ingested_at)
 
-    def replayed_chunk_stored(chunk_id: str) -> bool:
+    def replayed_chunk_stored(chunk_id: str, **dedupe_scope: Any) -> bool:
         """Whether a replayed record's chunk is already stored, so the replay is a no-op.
 
         A replay re-reads records the watcher already acknowledged (#1704 round 2); it is not
-        a new sighting and must not re-merge an existing row. The queue path checks here,
-        read-only, so a corpus replay does not publish one queue file per stored chunk; an
+        a new sighting and must not re-merge an existing row. The direct path checks the id
+        here and dedupe inside its transaction. The queue path checks both here, read-only, so
+        a corpus replay does not publish one fsynced queue file per stored chunk; an
         unanswerable check enqueues and lets the single writer decide.
         """
         nonlocal replay_reader
@@ -409,7 +410,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         try:
             if replay_reader is None:
                 replay_reader = sqlite3.connect(f"file:{resolved_db_path}?mode=ro", uri=True, timeout=1)
-            return replay_reader.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone() is not None
+            if replay_reader.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone():
+                return True
+            return find_duplicate(replay_reader, chunk_id=chunk_id, **dedupe_scope)[0] is not None
         except sqlite3.Error:
             close_replay_reader()
             return False
@@ -625,7 +628,13 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 if source_class == "brain-worker":
                     skipped += 1
                     continue
-                if replay and replayed_chunk_stored(chunk_id):
+                if replay and replayed_chunk_stored(
+                    chunk_id,
+                    content=clean_content,
+                    created_at=created_at,
+                    project=project,
+                    content_type=chunk.content_type.value,
+                ):
                     skipped += 1
                     continue
                 metadata["provenance_tag"] = provenance_decision.provenance_tag

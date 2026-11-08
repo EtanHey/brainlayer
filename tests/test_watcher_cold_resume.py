@@ -17,6 +17,8 @@ import shutil
 import sqlite3
 from contextlib import closing
 
+import pytest
+
 from brainlayer.watcher import JSONLWatcher, WatchRoot
 from brainlayer.watcher_bridge import create_flush_callback
 
@@ -337,7 +339,8 @@ def test_replay_from_zero_after_a_digest_mismatch_changes_no_existing_row(tmp_pa
     assert "replay_until" not in rig.entry("copied.json")
 
 
-def test_replay_of_content_stored_under_another_chunk_id_changes_no_row(tmp_path):
+@pytest.mark.parametrize("mode", ["direct", "arbitrated"])
+def test_replay_of_content_stored_under_another_chunk_id_changes_no_row(tmp_path, monkeypatch, mode):
     """The dedupe branch: a replayed record that matches a chunk from another file is a no-op."""
     rig = _Rig(tmp_path)
     _first_run(rig)
@@ -352,7 +355,10 @@ def test_replay_of_content_stored_under_another_chunk_id_changes_no_row(tmp_path
     with open(other, "r+b") as handle:
         handle.write(_respaced(_source((1, 2))))
     assert other.stat().st_ino == inode
-    rig.drain(rig.watcher("copied-again.json"))
+    published: list[dict] = []
+    flush = _arbitrated_flush(rig, monkeypatch, published) if mode == "arbitrated" else None
+    rig.drain(rig.watcher("copied-again.json", on_flush=flush))
+    assert published == []
 
     with closing(sqlite3.connect(f"file:{rig.db_path}?mode=ro", uri=True)) as conn:
         after = {row[0]: tuple(row) for row in conn.execute("SELECT * FROM chunks")}
@@ -383,37 +389,15 @@ def test_replay_mark_survives_a_restart_mid_replay(tmp_path):
 
 def test_arbitrated_replay_publishes_nothing_for_stored_chunks_and_drain_changes_no_row(tmp_path, monkeypatch):
     """The queue path: the watcher drops a replay of a stored chunk; the drain ignores one."""
-    from brainlayer import watcher_bridge
     from brainlayer.drain import drain_once
     from brainlayer.queue_io import enqueue_watcher_chunk
 
-    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
-    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
     rig = _Rig(tmp_path)
     old = _first_run(rig)
     rig.rewrite_same_inode(_respaced(old) + _encode([{"role": "user", "content": _text(3)}]))
     before = _row_state(rig)
-    published = []
-
-    def counting_enqueue(**kwargs):
-        published.append(kwargs)
-        return enqueue_watcher_chunk(**kwargs)
-
-    monkeypatch.setattr(watcher_bridge, "enqueue_watcher_chunk", counting_enqueue)
-    enqueue = create_flush_callback(db_path=rig.db_path, arbitrated=True)
-
-    def arbitrated(items):
-        result = enqueue(items)
-        drain_once(
-            db_path=rig.db_path,
-            queue_dir=tmp_path / "queue",
-            log_path=tmp_path / "drain.log",
-            pause_sentinel_path=tmp_path / "no-pause.json",
-        )
-        return result
-
-    rig.drain(rig.watcher("copied.json", on_flush=arbitrated))
-    enqueue.close()
+    published: list[dict] = []
+    rig.drain(rig.watcher("copied.json", on_flush=_arbitrated_flush(rig, monkeypatch, published)))
 
     assert [kwargs["content"] for kwargs in published] == [_text(3)]  # only the new record
     after = _row_state(rig)
@@ -444,6 +428,36 @@ def test_arbitrated_replay_publishes_nothing_for_stored_chunks_and_drain_changes
         pause_sentinel_path=tmp_path / "no-pause.json",
     )
     assert _row_state(rig)[stored_id] == stored
+
+
+def _arbitrated_flush(rig: _Rig, monkeypatch, published: list[dict]):
+    """The production queue path: publish through enqueue_watcher_chunk, then drain once."""
+    from brainlayer import watcher_bridge
+    from brainlayer.drain import drain_once
+    from brainlayer.queue_io import enqueue_watcher_chunk
+
+    queue = rig.tmp_path / "queue"
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+    def counting_enqueue(**kwargs):
+        published.append(kwargs)
+        return enqueue_watcher_chunk(**kwargs)
+
+    monkeypatch.setattr(watcher_bridge, "enqueue_watcher_chunk", counting_enqueue)
+    enqueue = create_flush_callback(db_path=rig.db_path, arbitrated=True)
+
+    def flush(items):
+        result = enqueue(items)
+        drain_once(
+            db_path=rig.db_path,
+            queue_dir=queue,
+            log_path=rig.tmp_path / "drain.log",
+            pause_sentinel_path=rig.tmp_path / "no-pause.json",
+        )
+        return result
+
+    return flush
 
 
 def _columns(rig: _Rig) -> list[str]:
