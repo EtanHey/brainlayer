@@ -61,6 +61,7 @@ DRIVE_MACHINE_PROPERTY = "brainlayer_machine"
 # a router hostname or adopt another machine's legacy folder by prefix matching.
 PRIOR_MACHINE_IDS = {"Locals-MacBook-Pro": ("Locals-MBP.lan",)}
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups"
+BACKUP_LOCK_ADMISSION_TIMEOUT_SECONDS = 3.0
 MIN_RAW_FREE_BYTES = 2 * 1024 * 1024 * 1024
 COPY_CHUNK_BYTES = 1024 * 1024
 RECLAIM_CHUNK_BYTES = 64 * 1024 * 1024
@@ -3505,7 +3506,16 @@ def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[...,
         staging_dir.mkdir(parents=True, exist_ok=True)
         with (staging_dir / ".backup.lock").open("a+b") as lock:
             try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                admission_deadline = time.monotonic() + BACKUP_LOCK_ADMISSION_TIMEOUT_SECONDS
+                while True:
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        remaining = admission_deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise
+                        time.sleep(min(0.05, remaining))
             except BlockingIOError as exc:
                 error = f"backup already running in {staging_dir}"
                 resolved_db_path = bound.arguments.get("db_path") or get_db_path()
@@ -4251,7 +4261,9 @@ def _run_backup_process(timeout_seconds: int) -> int:
     signal.signal(signal.SIGALRM, _raise_backup_timeout)
     signal.signal(signal.SIGTERM, _raise_backup_stopped)
     signal.signal(signal.SIGINT, _raise_backup_stopped)
-    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    supervised = _env_flag_enabled(BACKUP_SUPERVISED_CHILD_ENV)
+    if not supervised:
+        signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
         resolved_db_path = get_db_path()
 
@@ -4312,7 +4324,8 @@ def _run_backup_process(timeout_seconds: int) -> int:
         )
         return 1
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
+        if not supervised:
+            signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_alarm_handler)
         signal.signal(signal.SIGTERM, previous_term_handler)
         signal.signal(signal.SIGINT, previous_int_handler)
@@ -4326,6 +4339,33 @@ def _run_backup_process(timeout_seconds: int) -> int:
         )
         else 1
     )
+
+
+def _wait_for_stopped_backup(child, signal_child, stop_signal: int) -> None:
+    """Forward the stop once, then bound cleanup and reap before leaving custody."""
+    if child.poll() is None:
+        try:
+            signal_child(stop_signal)
+        except ProcessLookupError:
+            pass  # The child exited between poll and signal delivery.
+    try:
+        child.wait(timeout=SUPERVISOR_ALARM_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            signal_child(signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        child.wait()
+
+
+def _restore_backup_signal_handlers(previous_signal_handlers: dict[int, Any]) -> None:
+    # Deliver pending stops only once all previous handlers are back in place.
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
+    try:
+        for shutdown_signal, previous_handler in previous_signal_handlers.items():
+            signal.signal(shutdown_signal, previous_handler)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
 
 def _supervise_backup_process(
@@ -4351,15 +4391,22 @@ def _supervise_backup_process(
     def signal_child(signum):
         (os.kill if managed else os.killpg)(child.pid, signum)
 
-    def forward_shutdown_signal(signum, frame) -> None:  # noqa: ARG001
-        if child.poll() is None:
-            signal_child(signum)
-        raise SystemExit(128 + signum)
+    class SupervisorStopped(BaseException):
+        pass
 
-    for shutdown_signal in (signal.SIGTERM, signal.SIGINT):
-        previous_signal_handlers[shutdown_signal] = signal.getsignal(shutdown_signal)
-        signal.signal(shutdown_signal, forward_shutdown_signal)
+    stop_signal = None
+
+    def forward_shutdown_signal(signum, frame) -> None:  # noqa: ARG001
+        nonlocal stop_signal
+        if stop_signal is None:
+            stop_signal = signum
+            # Unwind the normal/timeout wait once; repeated signals leave cleanup alone.
+            raise SupervisorStopped
+
     try:
+        for shutdown_signal in (signal.SIGTERM, signal.SIGINT):
+            previous_signal_handlers[shutdown_signal] = signal.getsignal(shutdown_signal)
+            signal.signal(shutdown_signal, forward_shutdown_signal)
         try:
             wait = timeout_seconds
             if deadline is not None:
@@ -4401,12 +4448,14 @@ def _supervise_backup_process(
             )
             print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
             return 124
+    except SupervisorStopped:
+        _wait_for_stopped_backup(child, signal_child, stop_signal)
+        raise SystemExit(128 + stop_signal)
     finally:
         if managed and child.poll() is None:
             child.kill()
             child.wait()
-        for shutdown_signal, previous_handler in previous_signal_handlers.items():
-            signal.signal(shutdown_signal, previous_handler)
+        _restore_backup_signal_handlers(previous_signal_handlers)
 
 
 def _parse_cli_args(argv: list[str]) -> None:

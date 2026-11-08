@@ -1362,17 +1362,27 @@ def test_cachedelete_does_not_relabel_backup_timeout(monkeypatch, tmp_path):
         _real_macos_purge(tmp_path, 1)
 
 
-def test_backup_run_lock_rejects_overlapping_run(tmp_path):
+def test_backup_run_lock_rejects_overlapping_run(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
     entered = threading.Event()
     release = threading.Event()
+    clock = [0.0]
+    results = []
+    monkeypatch.setattr(backup_daily.time, "monotonic", lambda: clock[0])
+
+    def sleep(seconds):
+        assert not release.is_set()
+        clock[0] += seconds
+
+    monkeypatch.setattr(backup_daily.time, "sleep", sleep)
 
     @backup_daily._serialized_backup_run
     def held_run(staging_dir, log_path):  # noqa: ARG001
         entered.set()
-        assert release.wait(3)
-        return {"verified": True}
+        assert release.wait(10)
+        results.append({"verified": True})
+        return results[-1]
 
     log_path = tmp_path / "backup.log"
     worker = threading.Thread(target=held_run, args=(tmp_path, log_path))
@@ -1382,10 +1392,14 @@ def test_backup_run_lock_rejects_overlapping_run(tmp_path):
         assert datetime.fromisoformat((tmp_path / ".backup.lock").read_text().strip()).tzinfo is not None
         with pytest.raises(RuntimeError, match="backup already running"):
             held_run(tmp_path, log_path)
+        assert clock[0] == pytest.approx(backup_daily.BACKUP_LOCK_ADMISSION_TIMEOUT_SECONDS)
+        assert worker.is_alive()
+        assert results == []
     finally:
         release.set()
         worker.join(3)
     assert not worker.is_alive()
+    assert results == [{"verified": True}]
     refusal = json.loads(log_path.read_text().splitlines()[-1])
     assert refusal["error_type"] == "BackupAlreadyRunningError"
     assert refusal["verified"] is False
@@ -2843,17 +2857,17 @@ def test_launchd_installer_knows_backup_target():
     assert "BRAINLAYER_BACKUP_LOG_PROVENANCE:=real" in wrapper
 
 
-def test_main_enforces_configured_backup_timeout(monkeypatch, capsys):
+def test_unsupervised_process_enforces_configured_backup_timeout(monkeypatch, capsys):
     from brainlayer import backup_daily
 
     def slow_backup(**kwargs):  # noqa: ARG001
         time.sleep(5)
 
     monkeypatch.setenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "1")
-    monkeypatch.setenv(backup_daily.BACKUP_SUPERVISED_CHILD_ENV, "1")
+    monkeypatch.delenv(backup_daily.BACKUP_SUPERVISED_CHILD_ENV, raising=False)
     monkeypatch.setattr(backup_daily, "run_backup", slow_backup)
 
-    assert backup_daily.main() == 124
+    assert backup_daily._run_backup_process(1) == 124
     assert "brainlayer backup timed out after 1s" in capsys.readouterr().out
 
 
@@ -2979,6 +2993,121 @@ def test_supervisor_forwards_launchd_stop_without_timeout_receipt(tmp_path, monk
     receipts = [json.loads(line) for line in log_path.read_text().splitlines()]
     assert receipts[-1]["error_type"] == "BackupStoppedError"
     assert all(receipt.get("error_type") != "BackupTimeoutError" for receipt in receipts)
+
+
+@pytest.mark.parametrize("managed", [False, True])
+def test_supervisor_waits_for_latched_stop_receipt(tmp_path, monkeypatch, managed):
+    import select
+
+    from brainlayer import backup_daily
+
+    ready_r, ready_w = os.pipe()
+    entered_r, entered_w = os.pipe()
+    release_r, release_w = os.pipe()
+    guard_r, guard_w = os.pipe()
+    if managed:
+        monkeypatch.setenv("BRAINLAYER_CALENDAR_GUARD_FD", str(guard_r))
+    else:
+        monkeypatch.delenv("BRAINLAYER_CALENDAR_GUARD_FD", raising=False)
+    log_path = tmp_path / "backup.log"
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(log_path))
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[1] / "src"))
+    child_script = tmp_path / "latched_child.py"
+    child_script.write_text(
+        "import os, signal\nfrom brainlayer import backup_daily as backup\n"
+        "original = backup._append_json_log\n"
+        "def append(*args, **kwargs):\n"
+        f"    os.write({entered_w}, b'E')\n"
+        f"    os.read({release_r}, 1)\n"
+        "    return original(*args, **kwargs)\n"
+        "def run(**kwargs):\n"
+        f"    os.write({ready_w}, b'R')\n"
+        "    while True: signal.pause()\n"
+        "backup._append_json_log = append\nbackup.run_backup = run\n"
+        "raise SystemExit(backup._run_backup_process(30))\n"
+    )
+    spawned = []
+    original_popen = subprocess.Popen
+
+    def capture(*args, **kwargs):
+        kwargs["pass_fds"] = (*kwargs.get("pass_fds", ()), ready_w, entered_w, release_r)
+        child = original_popen(*args, **kwargs)
+        spawned.append(child)
+        return child
+
+    monkeypatch.setattr(subprocess, "Popen", capture)
+    installed = threading.Event()
+    repeated_seen = threading.Event()
+    returned = threading.Event()
+    errors = []
+    original_signal = signal.signal
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+
+    def install(sig, handler):
+        if getattr(handler, "__name__", "") == "forward_shutdown_signal":
+
+            def observed(signum, frame):
+                handler(signum, frame)
+                if signum == signal.SIGINT:
+                    repeated_seen.set()
+
+            result = original_signal(sig, observed)
+            if sig == signal.SIGINT:
+                installed.set()
+            return result
+        return original_signal(sig, handler)
+
+    monkeypatch.setattr(signal, "signal", install)
+
+    def stop_and_release():
+        try:
+            assert installed.wait(10)
+            assert select.select([ready_r], [], [], 10)[0], "child not ready"
+            os.read(ready_r, 1)
+            os.kill(os.getpid(), signal.SIGTERM)
+            assert select.select([entered_r], [], [], 10)[0], "receipt not reached"
+            os.read(entered_r, 1)
+            assert not returned.wait(0.25), "supervisor returned before stop receipt"
+            assert not log_path.exists()
+            assert spawned[0].poll() is None
+            # A repeated stop must not interrupt the child's receipt write.
+            os.kill(os.getpid(), signal.SIGINT)
+            assert repeated_seen.wait(5), "repeated signal not handled before release"
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            os.write(release_w, b"G")
+
+    controller = threading.Thread(target=stop_and_release)
+    controller.start()
+    try:
+        with pytest.raises(SystemExit) as stopped:
+            backup_daily._supervise_backup_process(30, command=[sys.executable, str(child_script)])
+        assert stopped.value.code == 143
+        returned.set()
+        controller.join(timeout=15)
+        if errors:
+            raise errors[0]
+        assert spawned[0].returncode == 143
+        with pytest.raises(ChildProcessError):
+            os.waitpid(spawned[0].pid, os.WNOHANG)
+    finally:
+        returned.set()
+        controller.join(timeout=15)
+        for child in spawned:
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+        for fd in (ready_r, ready_w, entered_r, entered_w, release_r, release_w, guard_r, guard_w):
+            os.close(fd)
+    assert not controller.is_alive()
+    if errors:
+        raise errors[0]
+    assert all(signal.getsignal(sig) == handler for sig, handler in previous.items())
+    receipts = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert [row["error_type"] for row in receipts] == ["BackupStoppedError"]
 
 
 def test_stop_during_purge_never_reaches_writer(tmp_path, monkeypatch):
@@ -3538,3 +3667,57 @@ def test_post_upload_service_rebuild_never_retries_revoked_credentials(tmp_path,
         )
 
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("window", ["before-try", "in-finally"])
+def test_supervisor_stop_at_handler_boundary(monkeypatch, window):
+    """Inject real signals at the two handler-install/restore bytecode windows."""
+    from brainlayer import backup_daily
+
+    monkeypatch.delenv("BRAINLAYER_CALENDAR_GUARD_FD", raising=False)
+    original_signal = signal.signal
+    original_popen = subprocess.Popen
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    spawned = []
+    delivered = []
+
+    def previous_stop(signum, frame):
+        delivered.append(signum)
+        raise SystemExit(128 + signum)
+
+    def capture(*args, **kwargs):
+        child = original_popen(*args, **kwargs)
+        spawned.append(child)
+        return child
+
+    def inject(sig, handler):
+        result = original_signal(sig, handler)
+        installing = getattr(handler, "__name__", "") == "forward_shutdown_signal"
+        if sig == signal.SIGTERM:
+            if window == "before-try" and installing:
+                os.kill(os.getpid(), signal.SIGTERM)
+            elif window == "in-finally" and handler is previous_stop:
+                signal.pthread_kill(threading.get_ident(), signal.SIGINT)
+        return result
+
+    try:
+        for sig in previous:
+            original_signal(sig, previous_stop)
+        monkeypatch.setattr(subprocess, "Popen", capture)
+        monkeypatch.setattr(signal, "signal", inject)
+        script = "import time; time.sleep(30)" if window == "before-try" else "pass"
+        with pytest.raises(SystemExit) as stopped:
+            backup_daily._supervise_backup_process(30, command=[sys.executable, "-c", script])
+        assert stopped.value.code == (143 if window == "before-try" else 130)
+        assert spawned[0].poll() is not None, "child escaped supervisor custody"
+        with pytest.raises(ChildProcessError):
+            os.waitpid(spawned[0].pid, os.WNOHANG)
+        assert all(signal.getsignal(sig) is previous_stop for sig in previous)
+        assert delivered == ([] if window == "before-try" else [signal.SIGINT])
+    finally:
+        for sig, handler in previous.items():
+            original_signal(sig, handler)
+        for child in spawned:
+            if child.poll() is None:
+                child.kill()
+            child.wait()

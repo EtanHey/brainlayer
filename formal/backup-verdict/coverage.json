@@ -1,125 +1,134 @@
 {
-  "sync_note": "All sources pinned at main 62f55b09 (#1600 S1a-5 and #1602 S1a-6 merged), confirmed 2026-11-02 by re-reading every mapped line. health_verdict.py equals S1a-6's 8eecb5ee except #1599's drive_event hunk (a reused receipt reports Drive ok only on a live auth probe), which PipeVerdict's abstract drive observation already respects. backup_daily.py's #1599 same-date reuse re-asserts a still-valid verification (the latest receipt per snapshot, never revoked, removed, abandoned or superseded): an idempotent receipt to both the truth and the reader fold, and its tightened _recent_local_verified_backup is the latest-receipt gate the model uses. Re-pinned backup_daily.py at main ad50657e after #1597 (S3): its hunks are in run_backup's reuse() closure (I/O-policy keys), _run_backup_process and a new constant; every mapped range is byte-identical, shifted +2 (functions) / +7 (run_backup receipt lines). No model change. Re-confirmed S28 at 32703d8e (with the preceding #1612 upload-thread reset): backup_daily.py now records only upload-thread scheduling metadata through a callback before the Drive PUT and excludes that metadata from reused receipts. Neither that observation nor callback changes verified/uploaded/local_removed receipt facts or the modelled receipt reader; the mapped verdict actions retain their same state transitions. Updated line references to the current source; no model change. Re-pinned all sources at main 5a24d4b9 (2026-11-05, lead) after #1622 (S35: upload progress receipts are written during the upload, before any verified receipt, so the latest-receipt gate is unchanged), #1626 (argv parsing only), #1647 (snapshot elapsed deadline: an expired window is an existing deferred outcome) and the job_alerts timestamp sidecar (set/clear semantics unchanged); health_verdict/health_facts/maintenance unchanged. Mapped line references were not re-audited and remain at 62f55b09 as line_refs_at states. No model change.",
+  "sync_note": "All sources pinned at main 62f55b09 (#1600 S1a-5 and #1602 S1a-6 merged), confirmed 2026-11-02 by re-reading every mapped line. health_verdict.py equals S1a-6's 8eecb5ee except #1599's drive_event hunk (a reused receipt reports Drive ok only on a live auth probe), which PipeVerdict's abstract drive observation already respects. backup_daily.py's #1599 same-date reuse re-asserts a still-valid verification (the latest receipt per snapshot, never revoked, removed, abandoned or superseded): an idempotent receipt to both the truth and the reader fold, and its tightened _recent_local_verified_backup is the latest-receipt gate the model uses. Re-pinned backup_daily.py at main ad50657e after #1597 (S3): its hunks are in run_backup's reuse() closure (I/O-policy keys), _run_backup_process and a new constant; every mapped range is byte-identical, shifted +2 (functions) / +7 (run_backup receipt lines). No model change. Re-confirmed S28 at 32703d8e (with the preceding #1612 upload-thread reset): backup_daily.py now records only upload-thread scheduling metadata through a callback before the Drive PUT and excludes that metadata from reused receipts. Neither that observation nor callback changes verified/uploaded/local_removed receipt facts or the modelled receipt reader; the mapped verdict actions retain their same state transitions. Updated line references to the current source; no model change. Re-pinned all sources at main 5a24d4b9 (2026-11-05, lead) after #1622 (S35: upload progress receipts are written during the upload, before any verified receipt, so the latest-receipt gate is unchanged), #1626 (argv parsing only), #1647 (snapshot elapsed deadline: an expired window is an existing deferred outcome) and the job_alerts timestamp sidecar (set/clear semantics unchanged); health_verdict/health_facts/maintenance unchanged. Mapped line references were not re-audited and remain at 62f55b09 as line_refs_at states. No model change. Re-pinned all sources at main 5fda86d2 (2026-11-08) after re-reading every changed hunk since 5a24d4b9. #1685 (backup_daily: _recent_local_verified_backup reads receipts strict=True) changed the VACUUM gate: an uncertain line now returns None (deferred) where the lenient read skipped it. MODEL UPDATED: Damage + WeeklyRead, case bug-1685-lenient-weekly-gate, replayed through the real gate at ff3a8b35 (reproduces) and this tree (does not). The same Damage switch exposed finding-damaged-receipt-dot (health_facts.read_receipts still skips a damaged line). Still matches, no model change: #1641 (maintenance: deferral is exactly exit 75; real failures 70/76/77; the deferred branch and last_weekly-only-on-ok are unchanged, DotTable Run already allows every result), #1668 (calendar: a busy hold defers the step with 75, the plan continues; the existing deferred, not-advanced branch), #1650/#1654 (backup_daily: attempt sweep, busy contract, hashing at point of use; no receipt fact or reader changes; _remove_superseded_stalls still hashes before reclaiming), #1666 (health_facts: disk measurement reuse; disk is modelled only as a free DotTable class), #1671/#1693 (calendar: holder records, runs.jsonl rotation; last_weekly lives in state.json, not runs.jsonl). health_verdict.py and job_alerts.py set/clear semantics unchanged. Re-pinned all sources at main 5882de81 (2026-11-08) after re-reading every changed hunk since 5fda86d2 (review round 1: the 5fda86d2 pin excluded the already-merged #1686 and #1688). #1686 (health_facts.embedding_activity + collect_facts; health_verdict embedding override) changed the embedding check. Fresh daemon evidence of a recent batch moves the stall start to the batch time, and with a non-empty queue the raw embedding result becomes _Raw(AMBER) with no clock and no keep, so evaluate() persists no clock and no grace record on that tick. A load pause with no recent batch only appends a note. MODEL UPDATED: PipeVerdict Daemon (\"none\" pre-#1686, \"progress\" = #1686), the progress and paused observations, and EmbRaw's override. Daemon evidence is taken as truthful, so progress is observable only when the queue is shrinking or VectorsWritten restarted the stall this hour. The replay feeds embedding_activity and embedding_progress_recent into the real evaluate(). current-pipes-embedding passes, conform-embedding-s1a6 conforms (a wrong-clock override diverges), and the new scratch-pause-downgrades case (a pause that also read AMBER) violates RedHoldsUntilEvidence. #1688 (backup_daily: a supervised child arms no ITIMER_REAL; the parent supervisor enforces the timeout): still matches, no model change. A timeout writes only an unverified failure receipt (verified False, uploaded False), which neither the truth nor the reader fold uses. A SIGKILL mid-append is the torn final record the model already treats as never happened. Every mapped backup_daily range sits above the hunk (4254+) and is byte-identical. #1684 (bounded lock admission) and #1692 (hotlane quarantine) were still open at this pin, so not covered. #1672, #1673, #1674, #1687, #1689, #1694, #1695 touch no covered source. Re-confirmed backup_daily.py after #1684 and #1702 (2026-11-08, lead) by re-reading both hunks. #1684 retries the staging-lock flock for up to BACKUP_LOCK_ADMISSION_TIMEOUT_SECONDS (3 s), then raises the same BlockingIOError busy outcome as before. That is admission timing only: no receipt fact, reader or gate changes, and its new module constant shifts every mapped backup_daily ref +1. #1702 changes only supervisor signal custody (_supervise_backup_process forwards one stop, waits a bounded grace and reaps the child before exit, and restores handlers under a blocked mask), at lines 4341+, below every mapped range. It writes no receipt. A killed child's partial append is the torn final record the model already treats as never happened. No model change.",
   "sources": {
     "src/brainlayer/health_verdict.py": {
-      "sha": "5a24d4b9",
-      "sha256": "d8c237ea4b5b3868eeab4c2abffde53aa2ea52d2a2765a9b8df7983756b355cb"
+      "sha": "5882de81",
+      "sha256": "e882d50cb40cd8f759d3f0cbde1b05ca54146d368c781c50ccb316d446ae7421"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "5a24d4b9",
-      "sha256": "ff57d95889d08b2f0dc52abb83a3797c861e6330ecaf90f2e7771118fed9b722"
+      "sha": "5882de81",
+      "sha256": "3be8d358d8b70d38a2fb4902e699e31b4d0fadee5178db9b12f52a8a7dcbb61c"
     },
     "src/brainlayer/maintenance.py": {
-      "sha": "5a24d4b9",
-      "sha256": "cdc7748d68108d686e8945b1890e1914f96957aeefb4e3035c5e8f501e9b8c05"
+      "sha": "5882de81",
+      "sha256": "4b624f51ae2047026dda8599329337a4b8022da375c46c54f428849abecc1587"
     },
     "src/brainlayer/maintenance_calendar.py": {
-      "sha": "5a24d4b9",
-      "sha256": "5a307852afec90364eb48bbfca534d0e85e07c35c09503b24d57e3b72bbe91ac"
+      "sha": "5882de81",
+      "sha256": "8436f998242b4997c8a07099ed5cc6b2b72e030c1ab0e1a2d91473459fecd098"
     },
     "src/brainlayer/job_alerts.py": {
-      "sha": "5a24d4b9",
+      "sha": "5882de81",
       "sha256": "3f0fe1827f62a493d1041cea34610233da7d08d60fe762b51c7c73bba712132e"
     },
     "src/brainlayer/health_facts.py": {
-      "sha": "5a24d4b9",
-      "sha256": "76562ee6364296c023536fb868f670e7dcb7818f8653d9c8228117b970b40e96"
+      "sha": "5882de81",
+      "sha256": "500b95a3f5f633c5ae6ff6bc31b0cfdf3d629ef3c037e6b6f77ea7d6452da647"
     }
   },
-  "line_refs_at": "every path:line is at main 62f55b09",
+  "line_refs_at": "every path:line is at main 5882de81; backup_daily.py, maintenance*.py and job_alerts.py refs did not move; health_verdict.py refs shifted +2 (Facts fields) / +7 (after the embedding override); refs naming 67d23f14 are historical",
   "actions": {
     "BackupVerdict": {
       "TakeSnapshot": [
-        "src/brainlayer/backup_daily.py:3116-3142 (_recent_local_verified_backup: latest receipt per snapshot; #1599 also excludes md5 mismatch, local_removed, abandoned, superseded)",
-        "src/brainlayer/maintenance_calendar.py:199-213 (backup-snapshot step)"
+        "src/brainlayer/backup_daily.py:3265-3289 (_recent_local_verified_backup: strict read since #1685; latest receipt per snapshot; excludes md5 mismatch, local_removed, abandoned, superseded)",
+        "src/brainlayer/maintenance_calendar.py:201-215 (select: backup-snapshot step on weekly nights)"
       ],
       "Upload": [
-        "src/brainlayer/backup_daily.py:3954 (verified receipt appended before reclamation)"
+        "src/brainlayer/backup_daily.py:4149 (verified receipt appended before reclamation)"
       ],
       "RemoveAfterUpload": [
-        "src/brainlayer/backup_daily.py:3964-3971 (local_removed on the verified receipt)"
+        "src/brainlayer/backup_daily.py:4159-4166 (unlink, local_removed)",
+        "src/brainlayer/backup_daily.py:4232 (the final receipt carries local_removed)"
       ],
       "Abandon": [
-        "src/brainlayer/backup_daily.py:3298-3345 (_local_upload_receipt, upload_state abandoned)"
+        "src/brainlayer/backup_daily.py:3447-3496 (_local_upload_receipt, upload_state abandoned at 3484)"
       ],
       "Supersede": [
-        "src/brainlayer/backup_daily.py:3257-3295 (_reclaim_superseded_local; returns unless the newer result is uploaded and verified)"
+        "src/brainlayer/backup_daily.py:3406-3444 (_reclaim_superseded_local; returns unless the newer result is uploaded and verified)"
       ],
       "Revoke": [
-        "src/brainlayer/health_verdict.py:695 (verification_error or drive_md5_match False)"
+        "src/brainlayer/health_verdict.py:702 (verification_error or drive_md5_match False)"
       ],
       "LocalReverify": [
-        "src/brainlayer/health_verdict.py:701-702 (local-only success); #1599 reuse receipts re-assert a valid verification (idempotent)"
+        "src/brainlayer/health_verdict.py:708-709 (local-only success); #1599 reuse receipts re-assert a valid verification (idempotent)"
       ],
       "Reader": [
-        "src/brainlayer/health_verdict.py:664-722 (backup_facts)"
+        "src/brainlayer/health_verdict.py:671-729 (backup_facts)"
       ],
       "Clock": [
-        "src/brainlayer/health_verdict.py:225-246 (_verified_age)"
+        "src/brainlayer/health_verdict.py:227-248 (_verified_age)"
       ],
       "Eval": [
-        "src/brainlayer/health_verdict.py:484-583 (evaluate: unknown, hold, wake grace)",
-        "src/brainlayer/health_verdict.py:538-556 (same_copy grace)"
+        "src/brainlayer/health_verdict.py:491-590 (evaluate: unknown, hold, wake grace)",
+        "src/brainlayer/health_verdict.py:545-563 (same_copy grace)"
       ],
       "Tick": [
-        "src/brainlayer/health_verdict.py:493-498 (ticked_at, resumed_at)"
+        "src/brainlayer/health_verdict.py:500-505 (ticked_at, resumed_at)"
       ],
       "Weekly": [
-        "src/brainlayer/maintenance.py:1388-1408 (freelist gate, deferred)",
-        "src/brainlayer/backup_daily.py:3116-3142 (_recent_local_verified_backup: latest receipt per snapshot; #1599 also excludes md5 mismatch, local_removed, abandoned, superseded)",
-        "src/brainlayer/maintenance_calendar.py:767 (exit 75 is deferred)",
-        "src/brainlayer/maintenance_calendar.py:1172-1174 (last_weekly only on ok)"
+        "src/brainlayer/maintenance.py:1417-1440 (freelist gate; an EXIT_DEFERRED abort is vacuum deferred, #1641)",
+        "src/brainlayer/backup_daily.py:3265-3289 (_recent_local_verified_backup: strict read since #1685; latest receipt per snapshot; excludes md5 mismatch, local_removed, abandoned, superseded)",
+        "src/brainlayer/maintenance_calendar.py:828 (exit 75 is deferred)",
+        "src/brainlayer/maintenance_calendar.py:1230-1236 (HoldWindowClosed / #1668 HoldBusy defer the step with 75)",
+        "src/brainlayer/maintenance_calendar.py:1264-1266 (last_weekly only when weekly, decay and repair-fts are ok)"
+      ],
+      "Damage": [
+        "src/brainlayer/backup_daily.py:314-369 (_scan_backup_receipts / _read_backup_receipts: an uncertain line raises under strict)",
+        "src/brainlayer/health_facts.py:106-130 (read_receipts skips a line it cannot parse; finding-damaged-receipt-dot)"
       ]
     },
     "PipeVerdict": {
       "DriveRaw": [
-        "src/brainlayer/health_verdict.py:335-347 (_drive_auth)",
-        "src/brainlayer/health_verdict.py:621-631 (drive_event; #1599 reused receipts: ok only with drive_auth_probe ok)"
+        "src/brainlayer/health_verdict.py:337-349 (_drive_auth)",
+        "src/brainlayer/health_verdict.py:628-638 (drive_event; #1599 reused receipts: ok only with drive_auth_probe ok)"
       ],
       "IngestRaw": [
-        "src/brainlayer/health_verdict.py:391-413",
-        "src/brainlayer/health_verdict.py:275-316 (_graced_age)"
+        "src/brainlayer/health_verdict.py:393-415",
+        "src/brainlayer/health_verdict.py:277-318 (_graced_age)"
       ],
       "StoresRaw": [
-        "src/brainlayer/health_verdict.py:425-454 (pending via _stall_age, latched canary, evidence = not pending.graced and ...)",
-        "src/brainlayer/health_verdict.py:319-332 (_counter, latch)"
+        "src/brainlayer/health_verdict.py:432-461 (pending via _stall_age, latched canary, evidence = not pending.graced and ...)",
+        "src/brainlayer/health_verdict.py:321-334 (_counter, latch)"
       ],
       "EmbRaw": [
-        "src/brainlayer/health_verdict.py:415-424 (embedding via _stall_age)"
+        "src/brainlayer/health_verdict.py:417-431 (embedding via _stall_age; #1686: recent progress replaces it with _Raw(AMBER), no clock or keep; a pause only appends a note)",
+        "src/brainlayer/health_verdict.py:583-584 (a non-unknown raw with no clock persists clock None: the override drops the stall clock and grace record)",
+        "src/brainlayer/health_facts.py:307-334 (#1686 embedding_activity: fresh hotlane-cpu.json evidence for this DB; progress or a load pause)",
+        "src/brainlayer/health_facts.py:538-549 (#1686: recent progress moves the stall start to the batch time; activity only with a non-empty observed queue)"
       ],
       "Hold": [
-        "src/brainlayer/health_verdict.py:503-537 (S1a-5, merged: good_ticks resets unless observed-good; hysteresis red observing amber stays red; ObservedHysteresis=TRUE)",
+        "src/brainlayer/health_verdict.py:510-544 (S1a-5, merged: good_ticks resets unless observed-good; hysteresis red observing amber stays red; ObservedHysteresis=TRUE)",
         "67d23f14 health_verdict.py:476-507 (ObservedHysteresis=FALSE, replayed by bug-s1a5-* and conform-*-main)"
       ],
       "RoundTrip": [
-        "src/brainlayer/maintenance.py:1544-1575 (_store_roundtrip: every attempt replaces the receipt)",
+        "src/brainlayer/maintenance.py:1585-1617 (_store_roundtrip: every attempt replaces the receipt)",
         "src/brainlayer/health_facts.py:218-262 (receipt write, store_canary_fact)"
       ],
       "VectorsWritten": [
         "src/brainlayer/health_facts.py:264-304 (embedding_window_start anchors the window; embedding_fact)"
       ],
       "GracedAge": [
-        "src/brainlayer/health_verdict.py:275-316 (S1a-6, merged: grace_clock / grace_started_at / grace_until, one window per clock value, opened only when start < resumed_at, expired window kept; GraceOnce=TRUE)",
+        "src/brainlayer/health_verdict.py:277-318 (S1a-6, merged: grace_clock / grace_started_at / grace_until, one window per clock value, opened only when start < resumed_at, expired window kept; GraceOnce=TRUE)",
         "67d23f14 health_verdict.py:273-300 (renewable resumed_at; GraceOnce=FALSE, replayed by bug-renewable-grace* and conform-*-main)"
       ],
       "StallAge": [
-        "src/brainlayer/health_verdict.py:248-272 (_stall_age)"
+        "src/brainlayer/health_verdict.py:250-274 (_stall_age)"
       ]
     },
     "DotTable": {
       "Hold": [
-        "src/brainlayer/health_verdict.py:503-537"
+        "src/brainlayer/health_verdict.py:510-544"
       ],
       "Dot": [
-        "src/brainlayer/health_verdict.py:576-577"
+        "src/brainlayer/health_verdict.py:583-584"
       ],
       "Badge": [
-        "src/brainlayer/health_verdict.py:586-603 (badge_alerts)",
-        "src/brainlayer/health_verdict.py:606-608 (notes_from_job_alerts)"
+        "src/brainlayer/health_verdict.py:593-610 (badge_alerts)",
+        "src/brainlayer/health_verdict.py:613-615 (notes_from_job_alerts)"
       ],
       "Run": [
-        "src/brainlayer/maintenance.py:1612-1656 (main: report on fail / clean / VACUUM-skipped deferral)",
-        "src/brainlayer/job_alerts.py:61-100 (report)"
+        "src/brainlayer/maintenance.py:1678-1717 (_main: report on fail / clean / VACUUM-skipped deferral; deferred is exactly exit 75 since #1641)",
+        "src/brainlayer/job_alerts.py:102-143 (report: set or clear one episode)"
       ]
     }
   },
@@ -130,7 +139,8 @@
     "canary": "CanaryRed is 2 in the model (3 in production); the latch and owed-repayment logic do not depend on the count.",
     "focus": "PipeVerdict explores one check's world per config (Focus); evaluate() couples checks only through ticked_at/resumed_at, which every config keeps.",
     "grace": "Wake grace for ingest, embedding and pending stores is one action inside the tick (_graced_age). GraceOnce persists the window per check exactly as S1a-6's keep dict: written only on ticks that run _graced_age, so a cleared or unknown clock drops it.",
-    "simulation": "Conformance cases run TLC -simulate with one worker (num is per worker), 3,000 traces, depth 60, seed 7."
+    "simulation": "Conformance cases run TLC -simulate with one worker (num is per worker), 3,000 traces, depth 60, seed 7.",
+    "damage": "A damaged receipt is a durable line that no reader can parse (newline-terminated, not JSON, not progress noise). The world still changed; line-skipping readers miss it. At most one per log. A torn final record is not damage: _append_json_log truncates it before the next append, so it never happened."
   },
   "bounds": {
     "BackupVerdict": {
@@ -160,5 +170,5 @@
     "stacked_on": "4e07651b (S1a-5)",
     "note": "merged to main (#1602 62f55b09); the historical head is kept for --src-ref and conform-ingest-s1a5"
   },
-  "merged_main": "62f55b09 (#1600 S1a-5, #1602 S1a-6, #1599 same-date reuse, #1584 BrainBar render)"
+  "merged_main": "5882de81 (#1686 embedding progress vs load pause, #1688 parent-enforced backup timeout, #1685 strict weekly receipts, #1693, #1671, #1668, #1666, #1654, #1650, #1641)"
 }

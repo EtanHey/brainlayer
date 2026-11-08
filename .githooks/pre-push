@@ -109,15 +109,14 @@ if [ "$tag_count" -gt 0 ]; then
 fi
 
 # --- suite budget -----------------------------------------------------------------
-# A branch push gets 1800 s. A tag-only push is a RELEASE gate: its range runs from the last full
-# release, so it can map the whole suite (v1.5.91 mapped 11,913 tests against 366 for v1.5.90), and
-# on a loaded M4 that does not fit in 1800 s -- both v1.5.91 attempts died at 73%/76% with exit 124
-# and no failing test. A gate that cannot finish is not a gate, so a tag push gets 5400 s. The
-# heavy-suite wrapper's own wall limit is raised just above it, so the inner deadline reports first.
-deadline_s=1800
+# Selection happens in run_tests.sh. Keep an outer ceiling for selection/setup too;
+# the inner deadline preserves 1800 s for small mapped runs and 5400 s for full runs.
+deadline_s=5400
+export BRAINLAYER_PREPUSH_SELECT_BUDGET=1
+export GOLEMS_HEAVY_TIMEOUT_SECONDS=5460
+export BRAINLAYER_PREPUSH_RELEASE_BUDGET=0
 if [ "$tag_count" -gt 0 ] && [ "$non_tag_refs" -eq 0 ]; then
-  deadline_s=5400
-  export GOLEMS_HEAVY_TIMEOUT_SECONDS=5460
+  export BRAINLAYER_PREPUSH_RELEASE_BUDGET=1
   echo "==> pre-push: tag push gets the release-gate budget (${deadline_s}s)"
 fi
 
