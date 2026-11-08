@@ -230,6 +230,9 @@ final class MCPRouter: @unchecked Sendable {
     private var readDatabase: BrainDatabase?
     private let hybridSearchClient: HybridSearchClientProtocol?
     private let dbPath: String?
+    private let hybridFlightLock = NSLock()
+    private var hybridFlightActive = false
+    private let hybridSearchExecutor: @Sendable (@escaping @Sendable () -> Void) -> Void
     private let hybridSearchBudget: TimeInterval
     private let receiptStore: BrainBarOperationReceipts
     private let toolProfile: ToolProfile
@@ -271,6 +274,7 @@ final class MCPRouter: @unchecked Sendable {
         profile: String? = nil,
         hybridSearchClient: HybridSearchClientProtocol? = nil,
         hybridSearchBudget: TimeInterval = 0.8,
+        hybridSearchExecutor: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void = { work in DispatchQueue.global(qos: .userInitiated).async(execute: work) },
         dbPath: String? = nil,
         pendingStoreDrainQueue: DispatchQueue? = nil,
         onPendingStoresFlushed: (@Sendable ([BrainDatabase.FlushedPendingStore]) -> Void)? = nil,
@@ -278,6 +282,7 @@ final class MCPRouter: @unchecked Sendable {
         receiptStore: BrainBarOperationReceipts = BrainBarOperationReceipts()
     ) {
         self.toolProfile = Self.resolveToolProfile(profile)
+        self.hybridSearchExecutor = hybridSearchExecutor
         self.hybridSearchClient = hybridSearchClient
         self.hybridSearchBudget = max(0.001, hybridSearchBudget)
         self.receiptStore = receiptStore
@@ -986,14 +991,23 @@ final class MCPRouter: @unchecked Sendable {
             return nil
         }
 
+        let admitted = hybridFlightLock.withLock {
+            guard !hybridFlightActive else { return false }
+            hybridFlightActive = true
+            return true
+        }
+        guard admitted else { return nil }
         let group = DispatchGroup()
         let argumentBox = HybridSearchArgumentBox(arguments: arguments)
         let resultBox = HybridSearchResultBox()
         group.enter()
-        DispatchQueue.global(qos: .userInitiated).async {
+        hybridSearchExecutor {
+            defer {
+                self.hybridFlightLock.withLock { self.hybridFlightActive = false }
+                group.leave()
+            }
             let outcome = Result { try hybridSearchClient.search(arguments: argumentBox.arguments) }
             resultBox.set(outcome)
-            group.leave()
         }
 
         let timeout = DispatchTime.now() + .nanoseconds(Int(hybridSearchBudget * 1_000_000_000))
