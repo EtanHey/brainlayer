@@ -862,7 +862,7 @@ def test_split_cycle_carries_vectors_over_after_busy_write(tmp_path, monkeypatch
         conn.close()
 
 
-def test_split_cycle_skips_poison_row_after_non_lock_write_error(tmp_path, monkeypatch, caplog):
+def test_split_cycle_retries_row_after_non_lock_write_error(tmp_path, monkeypatch, caplog):
     hotlane = _load_hotlane_module()
     db_path = tmp_path / "brainlayer.db"
     conn = sqlite3.connect(db_path)
@@ -892,8 +892,8 @@ def test_split_cycle_skips_poison_row_after_non_lock_write_error(tmp_path, monke
     def write_vectors(_path, vectors):
         chunk_ids = [vector.chunk_id for vector in vectors]
         writes.append(chunk_ids)
-        if "a" in chunk_ids:
-            raise ValueError("poison vector")
+        if len(writes) == 1:
+            raise ValueError("transient vector failure")
         conn.execute("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", (chunk_ids[0],))
         conn.commit()
         return len(chunk_ids)
@@ -912,14 +912,98 @@ def test_split_cycle_skips_poison_row_after_non_lock_write_error(tmp_path, monke
 
     try:
         with caplog.at_level(logging.ERROR, logger="brainlayer.hotlane_brainbar"):
-            with pytest.raises(ValueError, match="poison vector"):
+            with pytest.raises(ValueError, match="transient vector failure"):
                 cycle()
-        assert state.active is True
-        assert state.after_created_at == "2026-09-23T00:00:00Z"
         assert cycle().embedded == 1
-        assert writes == [["a"], ["b"]]
+        assert writes == [["a"], ["a"]]
+        assert cycle().embedded == 1
+        assert writes == [["a"], ["a"], ["b"]]
         assert "chunk_ids=['a']" in caplog.text
         assert "ValueError" in caplog.text
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("failure", ["individual", "batch_fallback", "hot_overlap", "raised"])
+def test_split_cycle_retries_backlog_after_encode_failure(tmp_path, monkeypatch, failure):
+    hotlane = _load_hotlane_module()
+    db_path = tmp_path / "encode-retry.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY, content TEXT, created_at TEXT, archived_at TEXT,
+            superseded_by TEXT, aggregated_into TEXT, archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    conn.executemany(
+        "INSERT INTO chunks (id, content, created_at) VALUES (?, ?, ?)",
+        [(chunk_id, f"text {chunk_id}", f"2026-09-23T00:00:0{index}Z") for index, chunk_id in enumerate("abcde")],
+    )
+    conn.execute("INSERT INTO chunk_vectors_rowids (id) VALUES ('a')")
+    state = hotlane.PendingCandidateScanState()
+    state.active, state.after_created_at, state.after_rowid = True, "2026-09-23T00:00:00Z", 1
+    monkeypatch.setattr(hotlane, "PENDING_CANDIDATE_SCAN_STATE", state)
+    attempts = []
+    writes = []
+    fail = True
+    original_encode = hotlane._embed_candidates
+
+    def encode_one(text):
+        attempts.append(text)
+        if fail and text == "text b":
+            raise RuntimeError("transient encode failure")
+        return [0.0]
+
+    def encode_batch(texts):
+        if fail:
+            raise RuntimeError("transient batch failure")
+        return [encode_one(text) for text in texts]
+
+    def encode_candidates(candidates, **kwargs):
+        if fail and candidates:
+            raise RuntimeError("encode stage failed")
+        return original_encode(candidates, **kwargs)
+
+    if failure == "raised":
+        monkeypatch.setattr(hotlane, "_embed_candidates", encode_candidates)
+
+    def write_vectors(_path, vectors):
+        writes.append([vector.chunk_id for vector in vectors])
+        conn.executemany("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", [(vector.chunk_id,) for vector in vectors])
+        conn.commit()
+        return len(vectors)
+
+    def cycle():
+        return hotlane._run_split_cycle(
+            db_path=db_path,
+            vector_store_cls=lambda _path, readonly=False: SimpleNamespace(conn=conn, close=lambda: None),
+            embed_fn=encode_one,
+            embed_batch_fn=encode_batch if failure == "batch_fallback" else None,
+            recent_limit=1 if failure == "hot_overlap" and fail else 0,
+            candidate_rows_fn=lambda _store, *, limit: [hotlane.EmbedCandidate("b", "text b")],
+            backlog_batch=2,
+            enrich_limit=0,
+            enrich_since_hours=8760,
+            write_vectors_fn=write_vectors,
+        )
+
+    try:
+        if failure == "raised":
+            with pytest.raises(RuntimeError, match="encode stage failed"):
+                cycle()
+        else:
+            assert cycle().embedded == 1
+            assert writes == [["c"]]
+        fail = False
+        attempts.clear()
+        assert cycle().embedded == 2
+        # Retry the failed row immediately, before moving on to the later backlog.
+        assert attempts == (["text b", "text c"] if failure == "raised" else ["text b", "text d"])
+        assert conn.execute("SELECT id FROM chunk_vectors_rowids WHERE id = 'b'").fetchone() == ("b",)
     finally:
         conn.close()
 
