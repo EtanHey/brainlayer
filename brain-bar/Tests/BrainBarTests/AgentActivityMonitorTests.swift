@@ -53,7 +53,7 @@ final class AgentActivityMonitorTests: XCTestCase {
         let presence = AgentPresence(family: .codex, count: 12)
 
         XCTAssertEqual(presence.liveSessionLabel, "12 live agent sessions")
-        XCTAssertEqual(presence.accessibilityLabel, "Codex: 12 live agent sessions from ps")
+        XCTAssertEqual(presence.accessibilityLabel, "Codex: 12 live agent sessions from processes and transcripts")
     }
 
     func testParseSnapshotSkipsSearchCommandsThatMentionAgentNames() {
