@@ -16,7 +16,9 @@ from brainlayer.supervisor_jobs import load_components
 
 @pytest.fixture
 def short_path():
-    with tempfile.TemporaryDirectory(prefix="bl-j-", dir="/tmp") as directory:
+    with tempfile.TemporaryDirectory(
+        prefix="bl-j-", dir=os.environ.get("BRAINLAYER_TEST_SHORT_TMPDIR", "/tmp")
+    ) as directory:
         yield Path(directory)
 
 
