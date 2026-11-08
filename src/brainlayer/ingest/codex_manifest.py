@@ -3,12 +3,14 @@
 import json
 import sqlite3
 import stat
-from contextlib import contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from pathlib import Path
 
 from ..dedupe import _active_clause, _scope_clause, find_duplicate, normalized_exact_hash
+from ..ingest_denylist import is_denylisted
 from ..t3_provenance import compact_codex_header
-from ..watcher import normalize_provider_entry
+from ..watcher import OffsetRegistry, normalize_provider_entry
+from ..watcher_bridge import create_flush_callback
 from ..zstd_stream import ZstdDecodedFile, logical_jsonl_path
 
 
@@ -217,6 +219,94 @@ def _classify_receipt(receipt, dry_run):
             "filtered": "no-queue-candidates",
         }[category]
     )
+
+
+def ingest_codex_manifest(
+    manifest, db_path, *, dry_run=False, max_files=2, max_decoded_bytes=1048576, machine=None, start_at=0
+):
+    """Yield content-free receipts. Native header IDs never decide admission or dedup.
+
+    An explicit manifest re-evaluates ALL bytes of its listed files, including offset-only
+    files. It never resets a checkpoint. Receipts confirm complete validation
+    and durable queue publication; interrupted publication can safely replay canonical ids.
+    """
+    if machine not in {None, "M1", "M4"}:
+        raise ValueError("manifest-machine must be M1 or M4")
+    if max_files <= 0 or max_decoded_bytes <= 0:
+        raise ValueError("manifest budgets must be positive")
+    registry = OffsetRegistry(Path(db_path).parent / "offsets.json")
+    remaining = max_decoded_bytes
+    touched = 0
+    position = 0
+    seen = set()
+    with Path(manifest).open() as handle:
+        for line_number, raw in enumerate(handle, 1):
+            if not raw.strip():
+                continue
+            receipt = _new_receipt(line_number)
+            try:
+                expected = json.loads(raw)
+                if not isinstance(expected, dict):
+                    raise ValueError("manifest-row-is-not-an-object")
+                if machine is not None:
+                    row_machine = expected.get("machine")
+                    if not isinstance(row_machine, str) or row_machine not in {"M1", "M4"}:
+                        raise ValueError("invalid_machine")
+                    if row_machine != machine:
+                        receipt["state"] = "skipped_other_machine"
+                        _classify_receipt(receipt, dry_run)
+                        yield receipt
+                        continue
+                ordinal = position
+                position += 1
+                if ordinal < start_at:
+                    continue
+                path = Path(expected["physical_path"])
+                logical = str(logical_jsonl_path(path))
+                receipt.update(physical_path=str(path), logical_path=logical, stored_offset=registry.get(logical)[0])
+                if (
+                    not path.is_absolute()
+                    or not str(path).endswith(".jsonl.zst")
+                    or expected.get("logical_path") != logical
+                ):
+                    raise ValueError("invalid-manifest-path")
+                if logical in seen:
+                    raise ValueError("duplicate-manifest-path")
+                seen.add(logical)
+                if is_denylisted(str(path)) or is_denylisted(logical):
+                    raise ValueError("ingest-denylist")
+                if touched >= max_files or remaining <= 0:
+                    raise ValueError("admission-budget")
+                touched += 1
+                _verify(path, expected)
+                receipt["decodable"] = False
+                preview = []
+                plan = create_flush_callback(db_path, arbitrated=True, preview_chunks=preview)
+                receipt["state"] = "decodable" if dry_run else "filtered"
+                # Stream bounded decode windows; never accumulate a whole rollout.
+                with (
+                    _committed(db_path) if not dry_run else nullcontext(None) as committed,
+                    closing(_read_entries(path, remaining, receipt)) as reader,
+                ):
+                    if not dry_run:
+                        receipt["live_chunks_at_start"] = _source_chunks(committed, logical)
+                    for entries in reader:
+                        _plan_window(plan, entries, preview, receipt, committed, dry_run)
+                _verify(path, expected)
+                receipt["decodable"] = True
+                if dry_run and not receipt["would_insert"]:
+                    receipt["state"] = "empty" if receipt["records"] == 0 else "filtered"
+                if not dry_run:
+                    # The live watcher owns offsets.json. Queue events carry decoded
+                    # source_end_offset; explicit replay never races or rewrites its registry.
+                    receipt["state"] = (
+                        "queued" if receipt["queued"] else ("committed" if receipt["would_insert"] else "filtered")
+                    )
+            except (OSError, ValueError, TypeError, KeyError, sqlite3.Error) as error:
+                _record_error(receipt, error)
+            _classify_receipt(receipt, dry_run)
+            remaining -= receipt["decoded_bytes"]
+            yield receipt
 
 
 def _new_receipt(line_number):
