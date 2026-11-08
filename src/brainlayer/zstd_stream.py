@@ -34,11 +34,12 @@ class ZstdDecodedFile:
     Early close terminates and reaps our own child, including on parser exceptions.
     """
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, max_record_bytes: int = 128 * 1024 * 1024):
         binary = resolve_zstd()
         if binary is None:
             raise OSError("zstd binary not found (Homebrew prefixes and PATH)")
         self.path = path
+        self.max_record_bytes = max_record_bytes
         self.process = subprocess.Popen(
             [binary, "-d", "-q", "-c", "--", str(path)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
         )
@@ -63,9 +64,13 @@ class ZstdDecodedFile:
             pending.extend(data)
             start = 0
             while (end := pending.find(b"\n", start)) >= 0:
+                if end - start > self.max_record_bytes:
+                    raise OSError("decoded JSONL record exceeds the memory limit")
                 yield bytes(pending[start : end + 1])
                 start = end + 1
             del pending[:start]
+            if len(pending) > self.max_record_bytes:
+                raise OSError("decoded JSONL record exceeds the memory limit")
         if pending:
             yield bytes(pending)
 

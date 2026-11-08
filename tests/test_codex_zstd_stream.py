@@ -72,3 +72,10 @@ def test_decoder_memory_is_bounded_and_early_close_reaps_child(compress):
     with ZstdDecodedFile(path) as stream:
         assert stream.read(1) == b"{"
     assert stream.process.poll() is not None
+
+
+def test_decoder_refuses_a_record_over_its_memory_bound(compress):
+    path = compress("oversized.jsonl.zst", b"x" * 100000)
+    with ZstdDecodedFile(path, max_record_bytes=1024) as stream:
+        with pytest.raises(OSError, match="memory limit"):
+            list(stream)

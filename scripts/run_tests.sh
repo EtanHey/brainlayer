@@ -234,6 +234,21 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      src/brainlayer/zstd_stream.py|src/brainlayer/ingest/codex.py|src/brainlayer/codex_zst.py|src/brainlayer/ingest/codex_manifest.py)
+        case "$changed" in
+          src/brainlayer/zstd_stream.py) zst_tests=(test_codex_zstd_stream.py test_backup_zstd.py) ;;
+          src/brainlayer/ingest/codex.py) zst_tests=(test_ingest_codex.py test_codex_zstd_stream.py) ;;
+          src/brainlayer/codex_zst.py) zst_tests=(test_codex_zst_watcher.py test_jsonl_watcher.py) ;;
+          *) zst_tests=(test_codex_zst_manifest.py test_watcher_bridge.py) ;;
+        esac
+        mapped=1
+        for rel in "${zst_tests[@]}"; do
+          [ -f "$TEST_ROOT/$rel" ] || mapped=0
+        done
+        if [ "$mapped" -eq 1 ]; then
+          for rel in "${zst_tests[@]}"; do append_unique "$TEST_ROOT/$rel"; done
+        fi
+        ;;
       src/brainlayer/watcher.py)
         test_path="$TEST_ROOT/test_jsonl_watcher.py"
         if [ -f "$test_path" ]; then
