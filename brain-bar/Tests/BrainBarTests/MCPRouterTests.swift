@@ -2375,6 +2375,148 @@ No results found.
         XCTAssertEqual(try chunkContents(path: tempDir.appendingPathComponent("brainbar.db").path), ["Rewrite durable item"])
     }
 
+    // #695: the queue line is the F_FULLFSYNC'd copy of a DEFERRED receipt. Replay commits run
+    // under synchronous=NORMAL, so the line may only leave the queue after a barrier has made
+    // those commits durable — never before, and never when the barrier fails.
+    func testReplayDropsQueueRowsOnlyAfterCommitDurabilityBarrier() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restore = setPendingStoreQueuePath(queuePath)
+        defer { restore() }
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        // A retained malformed line forces a real rename rewrite instead of a delete.
+        try "malformed retained line\n".write(to: queuePath, atomically: false, encoding: .utf8)
+        _ = try db.queuePendingStore(content: "Barrier order one", tags: [], importance: 5, source: "mcp")
+        _ = try db.queuePendingStore(content: "Barrier order two", tags: [], importance: 5, source: "mcp")
+        let acknowledged = try Data(contentsOf: queuePath)
+        var events: [String] = []
+        db.pendingStoreReplayDurabilityBarrierForTesting = { [unowned db] in
+            // Forced order: both replay commits are visible, and not one queue byte has moved.
+            XCTAssertEqual(try chunkContents(path: dbPath), ["Barrier order one", "Barrier order two"])
+            XCTAssertEqual(try Data(contentsOf: queuePath), acknowledged)
+            events.append("commit-barrier")
+            try db.syncCommittedWritesToStableStorage()
+        }
+        db.pendingStoreSyncForTesting = { fd in
+            events.append("queue-sync")
+            XCTAssertEqual(fsync(fd), 0)
+        }
+        XCTAssertEqual(db.flushPendingStores().count, 2)
+        XCTAssertEqual(events.first, "commit-barrier", "no queue rewrite may precede the commit barrier: \(events)")
+        XCTAssertEqual(events.filter { $0 == "commit-barrier" }.count, 1)
+        XCTAssertTrue(events.contains("queue-sync"))
+        XCTAssertEqual(try String(contentsOf: queuePath, encoding: .utf8), "malformed retained line\n")
+    }
+
+    func testReplayKeepsAcknowledgedRowsWhenCommitBarrierFailsAndReplaysOnceAfterRestart() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restore = setPendingStoreQueuePath(queuePath)
+        defer { restore() }
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        let queued = try db.queuePendingStore(content: "Barrier failure fixture", tags: [], importance: 5, source: "mcp")
+        let acknowledged = try Data(contentsOf: queuePath)
+        var queueSyncs = 0
+        db.pendingStoreSyncForTesting = { fd in
+            queueSyncs += 1
+            XCTAssertEqual(fsync(fd), 0)
+        }
+        db.pendingStoreReplayDurabilityBarrierForTesting = {
+            throw BrainDatabase.DBError.exec(SQLITE_IOERR, "injected WAL sync failure")
+        }
+        // The row is committed and reported, but its only durable copy must stay queued.
+        XCTAssertEqual(db.flushPendingStores().map(\.storedChunk.chunkID), [queued.chunkID])
+        XCTAssertEqual(try Data(contentsOf: queuePath), acknowledged, "an undurable replay dropped an acknowledged row")
+        XCTAssertEqual(queueSyncs, 0, "no queue rewrite may start after a failed commit barrier")
+        db.close()
+
+        // Restart with the real barrier: the row is recognised as stored, not stored twice,
+        // and only now does the queue let go of it.
+        let restarted = BrainDatabase(path: dbPath)
+        defer { restarted.close() }
+        XCTAssertTrue(restarted.flushPendingStores().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path))
+        XCTAssertEqual(try chunkContents(path: dbPath), ["Barrier failure fixture"])
+    }
+
+    func testCommitDurabilityBarrierSyncsAnOpenWALAndFailsClosedWhenNotOpen() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        _ = try db.store(content: "Barrier WAL fixture", tags: [], importance: 5, source: "mcp")
+        XCTAssertNoThrow(try db.syncCommittedWritesToStableStorage())
+        db.close()
+        XCTAssertThrowsError(try db.syncCommittedWritesToStableStorage())
+    }
+
+    // The barrier calls xSync on a raw sqlite3_file pointer, a direct VFS callback that SQLite's
+    // connection mutex does not cover. A shutdown close() racing a background replay must either
+    // wait for the sync to finish or make the barrier refuse; it may never free the handle in
+    // between. The hook parks the barrier in exactly that window, so the race is forced, not slept.
+    func testCommitDurabilityBarrierRacingCloseNeverSyncsAFreedHandle() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
+        _ = try db.store(content: "Barrier close race fixture", tags: [], importance: 5, source: "mcp")
+
+        let reachedSync = DispatchSemaphore(value: 0)
+        let releaseSync = DispatchSemaphore(value: 0)
+        let barrierDone = DispatchSemaphore(value: 0)
+        let closeReturned = DispatchSemaphore(value: 0)
+        let stateLock = NSLock()
+        var handleFreedMidBarrier = false
+        var barrierResult: Result<Void, Error>?
+        db.commitDurabilityBarrierWillSyncForTesting = {
+            reachedSync.signal()
+            releaseSync.wait()
+            // Without the fix the handle is already gone here. Refusing keeps the failing run
+            // from calling xSync on freed memory; the assertions below still record the defect.
+            stateLock.lock(); defer { stateLock.unlock() }
+            if handleFreedMidBarrier {
+                throw BrainDatabase.DBError.exec(SQLITE_MISUSE, "close() freed the handle mid-barrier")
+            }
+        }
+        Thread.detachNewThread {
+            let result = Result { try db.syncCommittedWritesToStableStorage() }
+            stateLock.lock(); barrierResult = result; stateLock.unlock()
+            barrierDone.signal()
+        }
+        XCTAssertEqual(reachedSync.wait(timeout: .now() + 10), .success, "barrier never reached its sync")
+
+        // Parked between its guard and xSync, the barrier must hold the lock close() takes.
+        let barrierHoldsCloseLock = db.transactionLockIsHeldElsewhereForTesting()
+        XCTAssertTrue(barrierHoldsCloseLock, "close() could free the handle while the barrier is about to sync it")
+        if barrierHoldsCloseLock {
+            Thread.detachNewThread {
+                db.close()
+                closeReturned.signal()
+            }
+        } else {
+            db.close()
+            stateLock.lock(); handleFreedMidBarrier = true; stateLock.unlock()
+            closeReturned.signal()
+        }
+        releaseSync.signal()
+
+        XCTAssertEqual(barrierDone.wait(timeout: .now() + 10), .success, "barrier never finished")
+        XCTAssertEqual(closeReturned.wait(timeout: .now() + 10), .success, "close() never returned after the barrier")
+        stateLock.lock(); let result = barrierResult; stateLock.unlock()
+        XCTAssertNoThrow(try result?.get(), "the barrier that won the race must complete its sync")
+        XCTAssertFalse(db.isOpen)
+        // Once close() has won, a later barrier refuses cleanly instead of touching the handle.
+        XCTAssertThrowsError(try db.syncCommittedWritesToStableStorage()) { error in
+            guard case BrainDatabase.DBError.notOpen = error else {
+                return XCTFail("expected notOpen, got \(error)")
+            }
+        }
+    }
+
     func testDeferredStoreQueueSyncLatency() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -3110,7 +3252,10 @@ No results found.
         var storedContents: [String] = []
         while Date() < deadline {
             storedContents = (try? chunkContents(path: drainingDBPath)) ?? []
-            if storedContents.contains("A router drain must not wait behind another router's scheduler") {
+            // The row is visible at commit; the queue only lets go after the durability barrier
+            // and rewrite that follow, so wait for both before asserting either.
+            if storedContents.contains("A router drain must not wait behind another router's scheduler"),
+               !FileManager.default.fileExists(atPath: drainingQueuePath.path) {
                 break
             }
             Thread.sleep(forTimeInterval: 0.05)
