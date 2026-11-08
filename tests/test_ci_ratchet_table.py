@@ -3252,3 +3252,64 @@ def test_ui_retirement_and_table_use_the_same_explicit_pr_head():
         assert checkouts[0]["with"]["ref"] == "${{ github.event.pull_request.head.sha }}"
     run = workflow_steps()["Collect ratchet rows"]["run"]
     assert "--retirement-report" in run and "--brainbar-render-report" in run
+
+
+# Captured at import, before `isolate_native_view_row` swaps it for a GREEN stub in every test.
+REAL_ROW_BRAINBAR_NO_ENRICHMENT = ratchet.row_brainbar_no_enrichment
+
+
+@pytest.mark.parametrize("ran", [False, True], ids=["gated-skipped", "ran"])
+def test_gated_macos_rows_are_na_when_skipped_and_measured_when_they_ran(tmp_path, monkeypatch, capsys, ran) -> None:
+    """Both gated macOS jobs, through the real CLI: a skipped job is `n/a — gated`, a ran job is measured.
+
+    The row NAME is identical either way, so a reader of the PR comment sees the same row change
+    state rather than a row silently disappearing when the gate says no.
+    """
+    import copy
+
+    from scripts import brainbar_no_enrichment_ratchet as native
+    from tests.test_brainbar_no_enrichment_ratchet import IDENTITY, fixture_report
+
+    monkeypatch.setattr(ratchet, "row_brainbar_no_enrichment", REAL_ROW_BRAINBAR_NO_ENRICHMENT)
+    monkeypatch.setattr(native, "source_identity", lambda *_: copy.deepcopy(IDENTITY))
+    monkeypatch.setattr(ratchet.Probe, "detect", lambda *_: SimpleNamespace(head_sha=HEAD))
+    monkeypatch.setattr(ratchet, "collect", lambda *_: [])
+    rendered: list[ratchet.Row] = []
+    monkeypatch.setattr(ratchet, "render", lambda rows, *_: rendered.extend(rows) or "table")
+    if ran:
+        render_report = tmp_path / "brainbar-render-report.json"
+        render_report.write_text(json.dumps(fixture_report()))
+        argv = [
+            "--retirement-report",
+            str(retirement_receipt(tmp_path, HEAD)),
+            "--brainbar-render-report",
+            str(render_report),
+        ]
+    else:
+        argv = [
+            "--retirement-unavailable",
+            "gated: no retirement path",
+            "--brainbar-render-unavailable",
+            "gated: no render path",
+        ]
+    argv += ["--measured-sha", HEAD, "--watcher-heartbeat-unavailable", "gated: no heartbeat path"]
+    assert ratchet.main(argv) == 0, capsys.readouterr().err
+    by_name = {row.name: row for row in rendered}
+    retirement = by_name["no cloud model call reachable anywhere"]
+    render = by_name[native.ROW]
+    if ran:
+        assert (retirement.status, render.status) == (ratchet.GREEN, ratchet.GREEN)
+        assert "n/a" not in retirement.value and "n/a" not in render.value
+    else:
+        assert (retirement.status, render.status) == (ratchet.NA, ratchet.NA)
+        assert retirement.value == "n/a — gated: no retirement path"
+        assert render.value == "n/a — gated: no render path"
+
+
+def test_gated_macos_report_and_unavailable_flags_are_mutually_exclusive() -> None:
+    for report, unavailable in (
+        ("--retirement-report", "--retirement-unavailable"),
+        ("--brainbar-render-report", "--brainbar-render-unavailable"),
+    ):
+        with pytest.raises(SystemExit):
+            ratchet.main([report, "x.json", unavailable, "gated: both"])
