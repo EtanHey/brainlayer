@@ -43,8 +43,18 @@
 ## [1.5.92] - 2026-11-08
 
 - BrainBar no longer asks to reconnect Drive for a Production OAuth app (#1677).
+- Count Codex threads hosted by app-server in the Agents row (#1687).
 - BrainBar reads recent history and tolerates partially written history lines (#1679).
 - Indexing retries unresolved backlog files (#1680).
+- Give the replacement supervisor a load-tolerant readiness grace (#1697).
+- Don't judge p95 latency from 4 samples (#1695).
+- Pure-deletion filter requires patch structure, so prose is kept (S45) (#1672).
+- Leave supervised timeout to parent (#1688).
+- Tell a stalled embedding backlog apart from one paused by machine load (#1686).
+- Bound T3 alarm counters to retained hourly totals (S43) (#1673).
+- A full-suite branch push gets the release-gate budget (#1694).
+- Copy-only realtime writer rehearsal script for #1661 (S44b) (#1674).
+- Durably replace trimmed queue files (#1689).
 - Rotate runs.jsonl before the history reader's 4 MiB window (#1693).
 - Publish merged files exclusively from hashed bytes (#1690).
 - Reject damaged weekly cleanup receipts (#1685).
