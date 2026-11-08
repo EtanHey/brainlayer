@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import plistlib
 import sqlite3
@@ -1999,3 +2000,142 @@ def test_hotlane_stage_timings_use_fake_clock(tmp_path, monkeypatch):
     assert event["write_ms"] == pytest.approx(40)
     assert event.get("committed_at") is None  # actual vector commits are measured in the writer, not here
     assert "private encoder fixture" not in text
+
+
+@pytest.fixture
+def poison_backlog(tmp_path, monkeypatch):
+    from brainlayer.vector_store import VectorStore
+
+    hotlane = _load_hotlane_module()
+    db = tmp_path / "poison.db"
+    store = VectorStore(db)
+    store.conn.executemany(
+        "INSERT INTO chunks (id,content,metadata,source_file,source,created_at) "
+        "VALUES (?,?,'{}','fixture','claude_code',?)",
+        [(key, key, f"2026-11-01T00:00:0{i}Z") for i, key in enumerate("abcde")],
+    )
+    store.close()
+    monkeypatch.setattr(hotlane, "_sleep", lambda _: None)
+    monkeypatch.setattr("brainlayer.search_repo.clear_hybrid_search_cache", lambda _: None)
+
+    def cycle(embed):
+        return hotlane._run_split_cycle(
+            db_path=db,
+            vector_store_cls=VectorStore,
+            embed_fn=embed,
+            recent_limit=0,
+            backlog_batch=2,
+            enrich_limit=0,
+            enrich_since_hours=0,
+        )
+
+    def vector_ids():
+        store = VectorStore(db, readonly=True)
+        try:
+            return {row[0] for row in store.conn.execute("SELECT id FROM chunk_vectors_rowids")}
+        finally:
+            store.close()
+
+    return hotlane, db, cycle, vector_ids
+
+
+@pytest.mark.parametrize("stage", ["write", "encode"])
+def test_split_cycle_skips_poison_row_after_non_lock_write_error(poison_backlog, caplog, stage):
+    hotlane, db, cycle, vector_ids = poison_backlog
+    attempts = []
+
+    def embed(text):
+        attempts.append(text)
+        if text in "ab":
+            if stage == "encode":
+                raise ValueError("poison encoder input")
+            return [0.1]  # The real sqlite-vec writer rejects the wrong dimension.
+        return [0.1] * 1024
+
+    with caplog.at_level(logging.ERROR, logger=hotlane.LOGGER.name):
+        for _ in range(10):
+            cycle(embed)
+
+    assert vector_ids() == set("cde")
+    assert attempts.count("a") == attempts.count("b") == 3
+    events = [json.loads(line) for line in (db.parent / "writer-telemetry.jsonl").read_text().splitlines()]
+    cycles = [event for event in events if event.get("lane") == "hotlane" and event["event"] == "ingest_finished"]
+    assert cycles[-1]["quarantined_total"] == 2
+    for key in "ab":
+        assert any(
+            f"chunk_id={key}" in record.message
+            and "quarantined" in record.message
+            and "attempts=3" in record.message
+            and "error_type=" in record.message
+            for record in caplog.records
+        )
+
+
+@pytest.mark.parametrize("stage", ["write", "encode"])
+def test_split_cycle_transient_chunk_failure_succeeds_on_second_attempt(poison_backlog, stage):
+    _, _, cycle, vector_ids = poison_backlog
+    attempts = []
+
+    def embed(text):
+        attempts.append(text)
+        if text == "a" and attempts.count(text) == 1:
+            if stage == "encode":
+                raise ValueError("temporary encoder failure")
+            return [0.1]
+        return [0.1] * 1024
+
+    cycle(embed)
+    assert "a" not in vector_ids()
+    cycle(embed)
+    assert "a" in vector_ids()
+    assert attempts.count("a") == 2
+
+
+@pytest.mark.parametrize("error_type", ["BusyError", "LockedError"])
+def test_split_cycle_busy_errors_do_not_consume_poison_cap(poison_backlog, monkeypatch, error_type):
+    hotlane, _, cycle, vector_ids = poison_backlog
+    original = hotlane._upsert_chunk_vector_raw
+    busy = True
+    poison_attempts = []
+
+    def upsert(cursor, chunk_id, embedding, **kwargs):
+        if busy:
+            raise getattr(hotlane.apsw, error_type)("writer occupied")
+        if chunk_id == "a":
+            poison_attempts.append(chunk_id)
+            raise ValueError("bad vector")
+        return original(cursor, chunk_id, embedding, **kwargs)
+
+    monkeypatch.setattr(hotlane, "_upsert_chunk_vector_raw", upsert)
+
+    def embed(_):
+        return [0.1] * 1024
+
+    for _ in range(5):
+        assert cycle(embed).deferred > 0
+    busy = False
+    for _ in range(10):
+        cycle(embed)
+    assert vector_ids() == set("bcde")
+    assert poison_attempts == ["a"] * 3
+
+
+def test_edited_quarantined_chunk_can_recover(poison_backlog):
+    from brainlayer.vector_store import VectorStore
+
+    _, db, cycle, vector_ids = poison_backlog
+
+    def embed(text):
+        if text == "a":
+            raise ValueError("invalid old content")
+        return [0.1] * 1024
+
+    for _ in range(4):
+        cycle(embed)
+    assert vector_ids() == set("bcde")
+    store = VectorStore(db)
+    store.conn.execute("UPDATE chunks SET content = 'repaired' WHERE id = 'a'")
+    store.close()
+    for _ in range(3):
+        cycle(embed)
+    assert vector_ids() == set("abcde")

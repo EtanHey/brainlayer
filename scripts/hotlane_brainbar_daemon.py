@@ -10,6 +10,7 @@ Python enrichment arguments are accepted for compatibility but cannot invoke a m
 from __future__ import annotations
 
 import argparse
+import hashlib
 import inspect
 import json
 import logging
@@ -48,6 +49,7 @@ VECTOR_WRITE_YIELD_SECONDS = 0.005
 # inside the cycle (each try waits up to the hotlane busy timeout at BEGIN IMMEDIATE), then
 # whatever is still unwritten is carried to the next cycle instead of being discarded.
 HOTLANE_WRITE_ATTEMPTS = 3
+MAX_CHUNK_FAILURE_ATTEMPTS = 3
 HOTLANE_WRITE_RETRY_BACKOFF_SECONDS = 0.25
 MAX_CARRIED_VECTORS = 64
 # Hooks the hotlane writer never runs in its Connection() constructor. `connection_optimize`
@@ -165,6 +167,49 @@ class CycleResult(NamedTuple):
 class EmbedCandidate(NamedTuple):
     chunk_id: str
     content: str
+
+
+class ChunkFailureAttempts:
+    """Process-local quarantine; source rows stay intact and restart permits a new try.
+
+    Key by content digest as well as id so an edited chunk can recover. Only failures
+    attributable to an individual chunk count; writer connection errors do not.
+    """
+
+    def __init__(self) -> None:
+        self.attempts: dict[tuple[str, str], int] = {}
+        self.quarantined_total = 0
+
+    def _key(self, candidate: EmbedCandidate) -> tuple[str, str]:
+        return candidate.chunk_id, hashlib.sha256(candidate.content.encode()).hexdigest()
+
+    def count(self, candidate: EmbedCandidate) -> int:
+        return self.attempts.get(self._key(candidate), 0)
+
+    def quarantined(self, candidate: EmbedCandidate) -> bool:
+        return self.count(candidate) >= MAX_CHUNK_FAILURE_ATTEMPTS
+
+    def failed(self, candidate: EmbedCandidate, exc: Exception) -> None:
+        if isinstance(exc, (apsw.BusyError, apsw.LockedError)) or self.quarantined(candidate):
+            return
+        attempts = self.count(candidate) + 1
+        self.attempts[self._key(candidate)] = attempts
+        if attempts == MAX_CHUNK_FAILURE_ATTEMPTS:
+            self.quarantined_total += 1
+        LOGGER.error(
+            "hotlane chunk %s chunk_id=%s error_type=%s attempts=%d quarantined_total=%d",
+            "quarantined" if self.quarantined(candidate) else "retrying",
+            candidate.chunk_id,
+            type(exc).__name__,
+            attempts,
+            self.quarantined_total,
+        )
+
+    def succeeded(self, candidate: EmbedCandidate) -> None:
+        self.attempts.pop(self._key(candidate), None)
+
+
+CHUNK_FAILURE_ATTEMPTS = ChunkFailureAttempts()
 
 
 def _sysctl(name: str) -> str:
@@ -340,7 +385,10 @@ def _candidates_from_scanned_rows(
                 first_candidate_rowid = int(rowid)
             if str(chunk_id) in exclude_ids:
                 continue
-            candidates.append(EmbedCandidate(str(chunk_id), str(content)))
+            candidate = EmbedCandidate(str(chunk_id), str(content))
+            if CHUNK_FAILURE_ATTEMPTS.quarantined(candidate):
+                continue
+            candidates.append(candidate)
             if len(candidates) >= limit:
                 return candidates, first_candidate_rowid, last_inspected_rowid, index == len(rows) - 1
     return candidates, first_candidate_rowid, last_inspected_rowid, True
@@ -379,7 +427,7 @@ class HotCandidateScanner:
         )
         active = {str(chunk_id): EmbedCandidate(str(chunk_id), str(content)) for chunk_id, content in rows}
         for chunk_id in list(self._retries):
-            if chunk_id not in active:
+            if chunk_id not in active or CHUNK_FAILURE_ATTEMPTS.quarantined(active[chunk_id]):
                 del self._retries[chunk_id]
             else:
                 self._retries[chunk_id] = active[chunk_id]
@@ -530,7 +578,10 @@ def _candidate_chunk_rows(store: VectorStore, *, limit: int) -> list[EmbedCandid
             and superseded_by is None
             and aggregated_into is None
         ):
-            candidates.append(EmbedCandidate(str(chunk_id), str(content)))
+            candidate = EmbedCandidate(str(chunk_id), str(content))
+            if CHUNK_FAILURE_ATTEMPTS.quarantined(candidate):
+                continue
+            candidates.append(candidate)
             if len(candidates) >= limit:
                 break
     return candidates
@@ -605,9 +656,12 @@ def _pending_chunk_rows(
             for row in content_rows
             if row[1] and row[2] is None and row[3] is None and row[4] is None
         }
-        candidates.extend(
-            EmbedCandidate(chunk_id, content_by_id[chunk_id]) for chunk_id in candidate_ids if chunk_id in content_by_id
-        )
+        for chunk_id in candidate_ids:
+            if chunk_id not in content_by_id:
+                continue
+            candidate = EmbedCandidate(chunk_id, content_by_id[chunk_id])
+            if not CHUNK_FAILURE_ATTEMPTS.quarantined(candidate):
+                candidates.append(candidate)
 
         after_created_at = id_rows[-1][1]
         after_rowid = int(id_rows[-1][2])
@@ -659,6 +713,7 @@ def _embed_candidates(
         try:
             embedded.append(EmbeddedVector(candidate.chunk_id, candidate.content, embed_fn(candidate.content)))
         except Exception as exc:
+            CHUNK_FAILURE_ATTEMPTS.failed(candidate, exc)
             LOGGER.warning("Failed to embed chunk %s: %s", candidate.chunk_id, exc)
     return embedded
 
@@ -854,6 +909,7 @@ def _write_embedded_vectors_once(
                     metadata = metadata if isinstance(metadata, dict) else {}
                     metrics.committed([{"queued_at": metadata.get("ingest_queued_at"), "metadata": metadata}])
                 metrics.finish("commit")
+                CHUNK_FAILURE_ATTEMPTS.succeeded(EmbedCandidate(chunk_id, content))
                 count += rows_touched
                 progress.written = count
                 progress.processed = vector_index + 1
@@ -867,6 +923,7 @@ def _write_embedded_vectors_once(
                 telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
                 if isinstance(exc, (apsw.BusyError, apsw.LockedError)):
                     raise
+                CHUNK_FAILURE_ATTEMPTS.failed(EmbedCandidate(chunk_id, content), exc)
                 progress.processed = vector_index + 1
                 LOGGER.error(
                     "hotlane vector write skipped chunk_id=%s error_type=%s error=%s",
@@ -947,8 +1004,17 @@ def _run_split_cycle(
     carryover = VECTOR_CARRYOVER if carryover is None else carryover
     metrics = IngestMetrics("hotlane", "hotlane")
     embedded = 0
+
+    def finish(outcome: str = "completed") -> None:
+        metrics.fields["quarantined_total"] = CHUNK_FAILURE_ATTEMPTS.quarantined_total
+        metrics.finish(outcome)
+
     # Peek, not take: a scan or encode failure later in this cycle must not lose them.
-    carried = carryover.peek()
+    carried = [
+        vector
+        for vector in carryover.peek()
+        if not CHUNK_FAILURE_ATTEMPTS.quarantined(EmbedCandidate(vector.chunk_id, vector.content))
+    ]
     carried_by_id = {vector.chunk_id: vector for vector in carried}
     hot_rows: list[EmbedCandidate] = []
     pending_rows: list[EmbedCandidate] = []
@@ -979,6 +1045,8 @@ def _run_split_cycle(
         finally:
             read_store.close()
 
+    hot_rows = [candidate for candidate in hot_rows if not CHUNK_FAILURE_ATTEMPTS.quarantined(candidate)]
+    pending_rows = [candidate for candidate in pending_rows if not CHUNK_FAILURE_ATTEMPTS.quarantined(candidate)]
     pending_candidates = pending_rows
     seen_hot_ids = {candidate.chunk_id for candidate in hot_rows}
     pending_rows = [candidate for candidate in pending_rows if candidate.chunk_id not in seen_hot_ids]
@@ -997,19 +1065,28 @@ def _run_split_cycle(
         )
     except Exception:
         restore_pending_scan()
-        metrics.finish("error")
+        finish("error")
         raise
     vectors.extend(backlog_vectors)
     fresh_ids = {vector.chunk_id for vector in vectors}
     vectors = [vector for vector in carried if vector.chunk_id not in fresh_ids] + vectors
     encoded_content = {vector.chunk_id: vector.content for vector in vectors}
-    if any(encoded_content.get(candidate.chunk_id) != candidate.content for candidate in pending_candidates):
+    if any(
+        encoded_content.get(candidate.chunk_id) != candidate.content
+        and not CHUNK_FAILURE_ATTEMPTS.quarantined(candidate)
+        for candidate in pending_candidates
+    ):
         # Individual encode failures are logged and omitted, including hot/backlog overlaps.
         restore_pending_scan()
     if vectors:
         try:
             embedded += metrics.run("write", write_vectors_fn, db_path, vectors)
             carryover.clear()
+            if any(
+                0 < CHUNK_FAILURE_ATTEMPTS.count(candidate) < MAX_CHUNK_FAILURE_ATTEMPTS
+                for candidate in pending_candidates
+            ):
+                restore_pending_scan()
         except Exception as exc:
             deferred = exc if isinstance(exc, HotlaneVectorWriteDeferred) else None
             is_lock_error = deferred is not None or isinstance(exc, (apsw.BusyError, apsw.LockedError))
@@ -1021,7 +1098,7 @@ def _run_split_cycle(
                     type(exc).__name__,
                 )
             if not is_lock_error:
-                metrics.finish("error")
+                finish("error")
                 raise
             # S17: a busy writer slot never costs the embedded batch. A writer that does not
             # report progress gets all of its vectors carried; its writes are idempotent
@@ -1040,12 +1117,12 @@ def _run_split_cycle(
                 carryover.dropped_total,
                 exc,
             )
-            metrics.finish("deferred")
+            finish("deferred")
             _warn_retired_enrichment(enrich_limit, enrich_since_hours, enrich_fn)
             return CycleResult(embedded=embedded, deferred=len(unwritten), backlog_encoded=len(backlog_vectors))
 
     _warn_retired_enrichment(enrich_limit, enrich_since_hours, enrich_fn)
-    metrics.finish()
+    finish()
     return CycleResult(embedded=embedded, backlog_encoded=len(backlog_vectors))
 
 
