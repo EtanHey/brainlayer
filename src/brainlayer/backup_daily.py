@@ -3266,7 +3266,7 @@ def _recent_local_verified_backup(
     log_path: Path, db_path: Path, *, now: dt.datetime, max_age_hours: float
 ) -> dict[str, Any] | None:
     try:
-        receipts = _read_backup_receipts(log_path)
+        receipts = _read_backup_receipts(log_path, strict=True)
     except (OSError, ValueError):
         return None
     latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
