@@ -101,7 +101,7 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
         }
         let rows = (1...5).map { BrainBarStatusPopoverController.VerdictRow(text: "Problem \($0)") }
         let compact = BrainBarCompactNotices(rows: rows)
-        XCTAssertEqual(compact.visible.map(\.title), ["Problem 1", "Problem 2", "Problem 3"])
+        XCTAssertEqual(compact.visible.map(\.text), ["Problem 1", "Problem 2", "Problem 3"])
         XCTAssertEqual(compact.overflowTitle, "+2 more")
     }
 

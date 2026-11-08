@@ -43,43 +43,76 @@ final class BrainBarCompactMenuTests: XCTestCase {
             Row(text: "old", isOld: true), Row(text: "neutral A"), Row(text: "amber A", state: .amber),
             Row(text: "red", state: .red), Row(text: "neutral B"), Row(text: "amber B", state: .amber),
         ])
-        XCTAssertEqual(compact.entries.map(\.title), ["red", "amber A", "amber B", "neutral A", "neutral B", "old"])
+        XCTAssertEqual(compact.entries.map(\.text), ["red", "amber A", "amber B", "neutral A", "neutral B", "old"])
     }
 
     func testCapsAtThreeEntriesThenCountsEveryRemainingRow() {
         let rows = (1...5).map { Row(text: "Problem \($0)") }
         let compact = BrainBarCompactNotices(rows: rows)
-        XCTAssertEqual(compact.visible.map(\.title), ["Problem 1", "Problem 2", "Problem 3"])
-        XCTAssertEqual(compact.overflow.map(\.title), ["Problem 4", "Problem 5"])
+        XCTAssertEqual(compact.visible.map(\.text), ["Problem 1", "Problem 2", "Problem 3"])
+        XCTAssertEqual(compact.overflow.map(\.text), ["Problem 4", "Problem 5"])
         XCTAssertEqual(compact.overflowTitle, "+2 more")
         XCTAssertNil(BrainBarCompactNotices(rows: Array(rows.prefix(3))).overflowTitle)
         XCTAssertTrue(BrainBarCompactNotices(rows: []).entries.isEmpty)
     }
 
-    func testSupervisorGapsFromOneCauseCollapseIntoOneLineNamingIt() throws {
-        let compact = m1Compact()
-        let groups = compact.entries.filter(\.isGroup)
-        XCTAssertEqual(groups.count, 1)
-        let group = try XCTUnwrap(groups.first)
-        XCTAssertEqual(group.title, "launchd status unavailable — 3 checks can't be read")
-        XCTAssertEqual(group.rows.map(\.text), [
-            "Health monitor: launchd status unavailable",
-            "Supervisor status unavailable for watch",
-            "Kill check unavailable: Watcher supervisor status unavailable",
-        ])
-        // Not a supervisor gap: its own row, never guessed into the group.
-        XCTAssertTrue(compact.entries.contains { !$0.isGroup && $0.title == "Watcher status unknown" })
+    /// Codex #1698 r1: "supervisor unreachable" and an independent launchctl parse failure were
+    /// merged into one "launchd status unavailable" line by keyword. No producer attaches a cause
+    /// two rows share, so no two rows ever merge.
+    func testDifferentCausesAreNeverMerged() {
+        let rows = [
+            Row(text: "Supervisor status unreachable"),
+            Row(text: "Kill check unavailable: launchctl print output could not be parsed"),
+        ]
+        let compact = BrainBarCompactNotices(rows: rows)
+        XCTAssertEqual(compact.entries.map(\.text), rows.map(\.text))
+        XCTAssertEqual(compact.visible.map(\.text), rows.map(\.text))
+        // The M1's real list: every row keeps its own line, launchd-flavoured or not.
+        let m1Rows = BrainBarStatusPopoverController.problemRows(Self.m1Snapshot().verdict,
+                                                                  health: Self.m1Snapshot().healthVerdict)
+        XCTAssertEqual(m1Compact().entries.count, m1Rows.count)
     }
 
-    func testGroupingNeedsTwoRowsAndNeverSwallowsRedOrEarlierRows() {
-        let single = BrainBarCompactNotices(rows: [Row(text: "Supervisor status unavailable for watch")])
-        XCTAssertEqual(single.entries.map(\.title), ["Supervisor status unavailable for watch"])
-        let mixed = BrainBarCompactNotices(rows: [
-            Row(text: "launchd status unavailable", state: .red),
-            Row(text: "Supervisor status unavailable for watch", isOld: true),
-            Row(text: "Kill check unavailable: x"),
-        ])
-        XCTAssertFalse(mixed.entries.contains(where: \.isGroup), "red and earlier rows keep their own line")
+    /// Codex #1698 r1: with three or fewer lines a group's members were reachable only through a
+    /// tooltip. Without overflow, every row is its own visible line.
+    func testThreeOrFewerRowsAreEachAVisibleLineWithoutOverflow() {
+        let rows = [
+            Row(text: "Health monitor: launchd status unavailable"),
+            Row(text: "Supervisor status unavailable for watch"),
+            Row(text: "Watcher status unknown"),
+        ]
+        let compact = BrainBarCompactNotices(rows: rows)
+        XCTAssertNil(compact.overflowTitle)
+        XCTAssertEqual(compact.visible.map(\.text), rows.map(\.text))
+    }
+
+    /// Codex #1698 r1: the Dashboard ranked only red vs. nothing, so unknown checks ahead of an
+    /// amber one pushed it below the cap. It now ranks with the menu's states.
+    func testDashboardRanksAmberAheadOfUnknownLikeTheMenu() throws {
+        let checks: [BrainBarHealthVerdict.Check] = [
+            .init(name: "monitor", state: .unknown, note: "launchd status unavailable"),
+            .init(name: "disk", state: .unknown, note: "backup disk space unmeasured"),
+            .init(name: "stores", state: .unknown, note: "store count unmeasured"),
+            .init(name: "backup_local", state: .amber, note: "newest verified snapshot is 32.9 h old"),
+        ]
+        let health = BrainBarHealthVerdict(dot: .amber, checks: checks, notes: [], evaluatedAt: Date())
+        let snapshot = BrainBarStatusSnapshot(issues: checks.map {
+            BrainBarStatusIssue(id: "verdict.\($0.name)", component: .health, severity: .notice, text: $0.text)
+        }, isChecking: false, healthVerdict: health)
+        let verdict = snapshot.verdict
+        // The Dashboard's list under a verdict dot (`derive(statusVerdict:)`): attention + notices.
+        let items = verdict.attention + verdict.notices
+        let dashboard = BrainBarCompactNotices(rows: BrainBarCompactNotices.dashboardRows(
+            items, verdict: verdict, health: snapshot.healthVerdict))
+        let amber = "Database snapshot (verified): newest verified snapshot is 32.9 h old"
+        XCTAssertEqual(dashboard.visible.first?.text, amber)
+        XCTAssertEqual(dashboard.visible.first?.state, .amber)
+        let menu = BrainBarCompactNotices(rows: BrainBarStatusPopoverController.problemRows(
+            verdict, health: snapshot.healthVerdict))
+        XCTAssertEqual(dashboard.entries.map(\.text), menu.entries.map(\.text), "one list, one order")
+        // Without a verdict (standalone fallback) every item keeps its own line, none red.
+        XCTAssertEqual(BrainBarCompactNotices.dashboardRows(["a", "b"], verdict: nil, health: nil).map(\.state),
+                       [nil, nil])
     }
 
     func testM1ListRendersAtMostThreeEntriesAndKeepsEveryRowReachable() {
@@ -88,16 +121,15 @@ final class BrainBarCompactMenuTests: XCTestCase {
         let compact = BrainBarCompactNotices(rows: rows)
         XCTAssertEqual(rows.count, 9)
         XCTAssertLessThanOrEqual(compact.visible.count, BrainBarCompactNotices.visibleLimit)
-        XCTAssertEqual(compact.visible.map(\.title), [
+        XCTAssertEqual(compact.visible.map(\.text), [
             "Database snapshot (verified): newest verified snapshot is 32.9 h old",
             "Offsite (Drive) database backup: newest Drive copy is 32.9 h old",
             "Embedding: backlog is 5.8 h behind",
         ])
         XCTAssertEqual(compact.overflowTitle, "+6 more")
-        // Nothing hidden: every row is in exactly one entry, and the counts stay true.
-        XCTAssertEqual(compact.entries.flatMap(\.rows).map(\.text).sorted(), rows.map(\.text).sorted())
-        XCTAssertEqual(compact.rowCount, rows.count)
-        XCTAssertEqual(compact.visible.reduce(0) { $0 + $1.rows.count } + compact.overflowRowCount, rows.count)
+        // Nothing hidden: every row is one line, visible or under "+N more", and the counts stay true.
+        XCTAssertEqual(compact.entries.map(\.text).sorted(), rows.map(\.text).sorted())
+        XCTAssertEqual(compact.visible.count + compact.overflow.count, rows.count)
         XCTAssertEqual(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict), "9 things need you")
         XCTAssertEqual(snapshot.verdict.dashboardStatus.headline, "9 things need you")
     }

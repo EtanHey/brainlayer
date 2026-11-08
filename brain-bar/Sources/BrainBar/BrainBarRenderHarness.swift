@@ -16,7 +16,7 @@ enum BrainBarRenderHarness {
         panel.attentionShowsAll = showsAllAttention
         let view = BrainBarDashboardPreview.make(collector: BrainBarDashboardFixture.makeCollector(),
             observabilityResult: result, now: now, calendar: calendar, panelState: panel,
-            observabilityCadence: .known(300), statusVerdict: snapshot.verdict)
+            observabilityCadence: .known(300), statusVerdict: snapshot.verdict, healthVerdict: snapshot.healthVerdict)
         let host = NSHostingView(rootView: view)
         host.appearance = NSAppearance(named: .darkAqua)
         host.frame = NSRect(x: 0, y: 0, width: width, height: 1200)
@@ -45,8 +45,8 @@ enum BrainBarRenderHarness {
         let icon = C.statusIconImage(
             stats: BrainBarDashboardFixture.makeCollector().stats,
             badgeOn: snapshot.verdict.dot != .green, dot: snapshot.verdict.dot)
-        func submenuRow(_ title: String, primary: Bool) -> some View {
-            HStack { Text(title).foregroundStyle(primary ? .primary : .secondary); Spacer(); Image(systemName: "chevron.right") }
+        func submenuRow(_ title: String) -> some View {
+            HStack { Text(title).foregroundStyle(.secondary); Spacer(); Image(systemName: "chevron.right") }
                 .frame(width: width - 28)
         }
         let menu = VStack(alignment: .leading, spacing: 10) {
@@ -56,14 +56,10 @@ enum BrainBarRenderHarness {
                 Image(nsImage: C.headlineDotImage(snapshot.verdict.dot))
                 Text(C.statusLineTitle(for: snapshot.verdict)).fontWeight(.semibold)
             }
-            ForEach(Array(compact.visible.enumerated()), id: \.offset) { _, entry in
-                if entry.isGroup {
-                    submenuRow(entry.title, primary: entry.state != nil)
-                } else {
-                    C.verdictDetailRow(entry.rows[0], width: width - 28)
-                }
+            ForEach(Array(compact.visible.enumerated()), id: \.offset) { _, row in
+                C.verdictDetailRow(row, width: width - 28)
             }
-            if let more = compact.overflowTitle { submenuRow(more, primary: false) }
+            if let more = compact.overflowTitle { submenuRow(more) }
             ForEach(Array(backupLines.enumerated()), id: \.offset) { _, line in
                 Text(line.text).foregroundStyle(Color(nsColor: BrainBarStatusPopoverController.backupReceiptColor(
                     line.tone, verdictMode: snapshot.healthVerdict != nil)))
@@ -75,11 +71,8 @@ enum BrainBarRenderHarness {
         }.font(.system(size: 13)).padding(14).frame(width: width, alignment: .leading)
             .background(Color(nsColor: .windowBackgroundColor))
         let overflow = VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(compact.overflow.enumerated()), id: \.offset) { _, entry in
-                if entry.isGroup { Text(entry.title).foregroundStyle(.secondary) }
-                ForEach(Array(entry.rows.enumerated()), id: \.offset) { _, row in
-                    C.verdictDetailRow(row, width: width - 28, lineLimit: nil)
-                }
+            ForEach(Array(compact.overflow.enumerated()), id: \.offset) { _, row in
+                C.verdictDetailRow(row, width: width - 28, lineLimit: nil)
             }
             Divider()
             Text("Open Dashboard")

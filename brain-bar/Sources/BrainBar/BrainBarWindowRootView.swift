@@ -211,6 +211,9 @@ private struct BrainBarDashboardContent: View {
     var jobsChecking: Bool = false
     /// S5: the shared status snapshot's verdict; nil only for the standalone fallback dashboard.
     var statusVerdict: BrainBarStatusVerdict? = nil
+    /// The producer verdict behind `statusVerdict`: its check states rank the attention list
+    /// (red, amber, unknown) the same way the menu ranks it.
+    var healthVerdict: BrainBarHealthVerdict? = nil
     var vectorScan: BrainBarVectorScan? = nil
     var maintenanceNeedsAttention = false
 
@@ -228,7 +231,8 @@ private struct BrainBarDashboardContent: View {
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: observabilityResult,
             referenceNow: referenceNow, backupReferenceNow: backupReferenceNow, calendar: calendar, locale: locale,
             jobAttentionReasons: jobAttentionReasons, jobsChecking: jobsChecking,
-            statusVerdict: statusVerdict, vectorScan: vectorScan, maintenanceNeedsAttention: maintenanceNeedsAttention,
+            statusVerdict: statusVerdict, healthVerdict: healthVerdict, vectorScan: vectorScan,
+            maintenanceNeedsAttention: maintenanceNeedsAttention,
             panelState: panelState ?? standalonePanelState
         )
         view.observabilityCadenceOverride = observabilityCadence
@@ -263,7 +267,8 @@ private struct BrainBarJobsDashboardContent: View {
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: model.dashboardObservabilityResult,
             observabilityCadence: model.observabilityCadence, backupReferenceNow: model.observabilityNow, panelState: panelState,
             jobAttentionReasons: model.dashboardJobAttentionReasons, jobsChecking: model.dashboardJobsChecking,
-            statusVerdict: model.publishedStatus.verdict, vectorScan: model.healthBadge?.vectorScan,
+            statusVerdict: model.publishedStatus.verdict, healthVerdict: model.publishedStatus.healthVerdict,
+            vectorScan: model.healthBadge?.vectorScan,
             maintenanceNeedsAttention: model.publishedStatus.issues.contains { $0.component == .maintenance })
     }
 }
@@ -1000,6 +1005,7 @@ private struct BrainBarDashboardView: View {
     var jobAttentionReasons: [String] = []
     var jobsChecking: Bool = false
     var statusVerdict: BrainBarStatusVerdict? = nil
+    var healthVerdict: BrainBarHealthVerdict? = nil
     var vectorScan: BrainBarVectorScan? = nil
     var maintenanceNeedsAttention = false
     @ObservedObject var panelState: BrainBarDashboardPanelState
@@ -1355,19 +1361,18 @@ private struct BrainBarDashboardView: View {
     /// Rows past the cap scroll inside this height instead of growing the window.
     static let attentionListMaxHeight: CGFloat = 168
 
-    /// The shared compact list (2026-11-08): three ranked entries, then "+N more" in place.
+    /// The shared compact list (2026-11-08): three rows ranked as the menu ranks them, then
+    /// "+N more" in place.
     private func compactAttentionList(_ items: [String]) -> some View {
-        let compact = BrainBarCompactNotices(rows: items.map { item in
-            BrainBarStatusPopoverController.VerdictRow(
-                text: item, state: statusVerdict?.attention.contains(item) == true ? .red : nil)
-        })
+        let compact = BrainBarCompactNotices(rows: BrainBarCompactNotices.dashboardRows(
+            items, verdict: statusVerdict, health: healthVerdict))
         let showsAll = panelState.attentionShowsAll && !compact.overflow.isEmpty
         return VStack(alignment: .leading, spacing: 7) {
             if showsAll {
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 7) {
-                        ForEach(Array(compact.entries.enumerated()), id: \.offset) { _, entry in
-                            attentionEntry(entry, listsMembers: true)
+                        ForEach(Array(compact.entries.enumerated()), id: \.offset) { _, row in
+                            attentionLine(row.text)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1375,8 +1380,8 @@ private struct BrainBarDashboardView: View {
                 .frame(maxHeight: Self.attentionListMaxHeight)
                 .accessibilityIdentifier("brainbar.dashboard.attention-all")
             } else {
-                ForEach(Array(compact.visible.enumerated()), id: \.offset) { _, entry in
-                    attentionEntry(entry, listsMembers: false)
+                ForEach(Array(compact.visible.enumerated()), id: \.offset) { _, row in
+                    attentionLine(row.text)
                 }
             }
             if let more = compact.overflowTitle {
@@ -1388,28 +1393,7 @@ private struct BrainBarDashboardView: View {
         }
     }
 
-    @ViewBuilder
-    private func attentionEntry(_ entry: BrainBarCompactNotices.Entry, listsMembers: Bool) -> some View {
-        if entry.isGroup {
-            VStack(alignment: .leading, spacing: 4) {
-                attentionLine(entry.title, help: entry.fullText)
-                if listsMembers {
-                    ForEach(Array(entry.rows.enumerated()), id: \.offset) { _, row in
-                        Text(row.text)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.brainBarTextMuted)
-                            .lineLimit(1)
-                            .help(row.text)
-                            .padding(.leading, 13)
-                    }
-                }
-            }
-        } else {
-            attentionLine(entry.title, help: entry.title)
-        }
-    }
-
-    private func attentionLine(_ item: String, help: String) -> some View {
+    private func attentionLine(_ item: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             BrainBarStatusDot(color: Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown), size: 5)
                 .font(.system(size: 12, weight: .medium))
@@ -1418,7 +1402,7 @@ private struct BrainBarDashboardView: View {
                 .foregroundStyle(Color.brainBarTextSecondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .help(help)
+                .help(item)
 #if BRAINBAR_UI
             if let alert = jobAlert, alert.text == item {
                 Button("Show log") { showJobAlertLog(alert) }
@@ -3532,6 +3516,7 @@ enum BrainBarDashboardPreview {
         colorScheme: ColorScheme = .dark,
         /// The shared snapshot's verdict, as the app passes it; nil renders the standalone fallback.
         statusVerdict: BrainBarStatusVerdict? = nil,
+        healthVerdict: BrainBarHealthVerdict? = nil,
         maintenanceNeedsAttention: Bool = false
     ) -> AnyView {
         let dashboard =
@@ -3550,6 +3535,7 @@ enum BrainBarDashboardPreview {
                     panelState: panelState,
                     jobAttentionReasons: jobAttentionReasons,
                     statusVerdict: statusVerdict,
+                    healthVerdict: healthVerdict,
                     maintenanceNeedsAttention: maintenanceNeedsAttention
                 )
             }

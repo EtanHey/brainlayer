@@ -453,43 +453,19 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         return item
     }
 
-    /// A grouped cause or "+N more": a native submenu, so the menu itself never grows.
-    private func submenuItem(title: String, state: BrainBarHealthVerdict.State?, rows: [VerdictRow],
-                             header: String? = nil) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.attributedTitle = NSAttributedString(string: title, attributes: [
-            .font: NSFont.systemFont(ofSize: 13),
-            .foregroundColor: state == nil ? NSColor.secondaryLabelColor : NSColor.labelColor,
-        ])
-        item.toolTip = rows.map(\.text).joined(separator: "\n")
-        let submenu = NSMenu(title: title)
-        submenu.autoenablesItems = false
-        if let header {
-            let headerItem = NSMenuItem(title: header, action: nil, keyEquivalent: "")
-            headerItem.isEnabled = false
-            submenu.addItem(headerItem)
-        }
-        for row in rows { submenu.addItem(infoItem(row, lineLimit: nil)) }
-        item.submenu = submenu
-        return item
-    }
-
-    /// "+N more": every row past the cap, grouped rows under their cause, then Open Dashboard.
+    /// "+N more": a native submenu with every row past the cap, then Open Dashboard, so the menu
+    /// itself never grows.
     private func overflowItem(_ compact: BrainBarCompactNotices) -> NSMenuItem? {
         guard let title = compact.overflowTitle else { return nil }
-        let item = submenuItem(title: title, state: nil, rows: [])
-        guard let submenu = item.submenu else { return item }
-        for entry in compact.overflow {
-            if entry.isGroup {
-                let header = NSMenuItem(title: entry.title, action: nil, keyEquivalent: "")
-                header.isEnabled = false
-                submenu.addItem(header)
-                for row in entry.rows { submenu.addItem(infoItem(row, lineLimit: nil)) }
-            } else if let row = entry.rows.first {
-                submenu.addItem(infoItem(row, lineLimit: nil))
-            }
-        }
-        item.toolTip = compact.overflow.flatMap(\.rows).map(\.text).joined(separator: "\n")
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.attributedTitle = NSAttributedString(string: title, attributes: [
+            .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        item.toolTip = compact.overflow.map(\.text).joined(separator: "\n")
+        let submenu = NSMenu(title: title)
+        submenu.autoenablesItems = false
+        for row in compact.overflow { submenu.addItem(infoItem(row, lineLimit: nil)) }
+        item.submenu = submenu
         submenu.addItem(.separator())
         let open = NSMenuItem(title: "Open Dashboard", action: #selector(openDashboard(_:)), keyEquivalent: "")
         open.target = self
@@ -657,20 +633,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #if BRAINBAR_UI
         if let model = runtime.jobsModel { health = model.publishedStatus.healthVerdict }
 #endif
-        // At most three entries (ranked, grouped by cause), then "+N more"; nothing is dropped.
+        // At most three ranked rows, then "+N more"; nothing is dropped.
         let compact = BrainBarCompactNotices(rows: Self.problemRows(verdict, health: health))
-        var previousState: BrainBarHealthVerdict.State?
-        for (index, entry) in compact.visible.enumerated() {
-            let item: NSMenuItem
-            if entry.isGroup {
-                item = submenuItem(title: entry.title, state: entry.state, rows: entry.rows)
-            } else {
-                let row = entry.rows[0]
-                item = infoItem(row, lineLimit: Self.menuRowLineLimit,
-                                separator: index > 0 && row.state == nil && previousState != nil)
-            }
-            previousState = entry.state
-            verdictItems.append(item)
+        for (index, row) in compact.visible.enumerated() {
+            verdictItems.append(infoItem(row, lineLimit: Self.menuRowLineLimit,
+                separator: index > 0 && row.state == nil && compact.visible[index - 1].state != nil))
         }
         if let overflow = overflowItem(compact) { verdictItems.append(overflow) }
         for (index, item) in verdictItems.enumerated() { menu.insertItem(item, at: 1 + index) }
