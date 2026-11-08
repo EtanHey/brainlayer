@@ -61,6 +61,7 @@ DRIVE_MACHINE_PROPERTY = "brainlayer_machine"
 # a router hostname or adopt another machine's legacy folder by prefix matching.
 PRIOR_MACHINE_IDS = {"Locals-MacBook-Pro": ("Locals-MBP.lan",)}
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups"
+BACKUP_LOCK_ADMISSION_TIMEOUT_SECONDS = 3.0
 MIN_RAW_FREE_BYTES = 2 * 1024 * 1024 * 1024
 COPY_CHUNK_BYTES = 1024 * 1024
 RECLAIM_CHUNK_BYTES = 64 * 1024 * 1024
@@ -3505,7 +3506,7 @@ def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[...,
         staging_dir.mkdir(parents=True, exist_ok=True)
         with (staging_dir / ".backup.lock").open("a+b") as lock:
             try:
-                admission_deadline = time.monotonic() + 3.0
+                admission_deadline = time.monotonic() + BACKUP_LOCK_ADMISSION_TIMEOUT_SECONDS
                 while True:
                     try:
                         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

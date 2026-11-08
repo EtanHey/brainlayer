@@ -95,8 +95,12 @@ def test_only_admitted_body_carries_invocation_and_retry_replaces_old_identity(l
     with (lane.root / ".backup.lock").open("a+b") as lock:
         backup.fcntl.flock(lock, backup.fcntl.LOCK_EX | backup.fcntl.LOCK_NB)
         monkeypatch.setenv(backup.BACKUP_INVOCATION_ENV, "b" * 32)
-        with pytest.raises(backup.BackupAlreadyRunningError):
-            lane.run()
+        clock = [0.0]
+        with monkeypatch.context() as admission:
+            admission.setattr(backup.time, "monotonic", lambda: clock[0])
+            admission.setattr(backup.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+            with pytest.raises(backup.BackupAlreadyRunningError):
+                lane.run()
     loser = _last_run_receipt(lane.log, snapshot=False)
     assert loser["error_type"] == "BackupAlreadyRunningError"
     assert "backup_invocation_id" not in loser
