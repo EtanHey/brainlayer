@@ -46,6 +46,9 @@
 - Count Codex threads hosted by app-server in the Agents row (#1687).
 - BrainBar reads recent history and tolerates partially written history lines (#1679).
 - Indexing retries unresolved backlog files (#1680).
+- Model #1685's strict weekly receipt read and re-pin backup-verdict at main 5fda86d2 (#1699).
+- Pending-store replay drops queue rows only after a WAL durability barrier (#1653).
+- Retry brief staging lock contention (#1684).
 - Give the replacement supervisor a load-tolerant readiness grace (#1697).
 - Don't judge p95 latency from 4 samples (#1695).
 - Pure-deletion filter requires patch structure, so prose is kept (S45) (#1672).
