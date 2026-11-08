@@ -4380,12 +4380,8 @@ def _supervise_backup_process(
     lease = os.environ.get("BRAINLAYER_MAINTENANCE_FD")
     child_env = os.environ.copy()
     child_env[BACKUP_SUPERVISED_CHILD_ENV] = "1"
-    child = subprocess.Popen(
-        command or [sys.executable, "-m", "brainlayer.backup_daily"],
-        env=child_env,
-        start_new_session=not managed,
-        pass_fds=(int(lease),) if managed and lease is not None else (),
-    )
+    child = None
+    interrupt_wait = False
     previous_signal_handlers: dict[int, Any] = {}
 
     def signal_child(signum):
@@ -4401,61 +4397,77 @@ def _supervise_backup_process(
         if stop_signal is None:
             stop_signal = signum
             # Unwind the normal/timeout wait once; repeated signals leave cleanup alone.
-            raise SupervisorStopped
+            if interrupt_wait:
+                raise SupervisorStopped
 
     try:
         for shutdown_signal in (signal.SIGTERM, signal.SIGINT):
             previous_signal_handlers[shutdown_signal] = signal.getsignal(shutdown_signal)
             signal.signal(shutdown_signal, forward_shutdown_signal)
+        child = subprocess.Popen(
+            command or [sys.executable, "-m", "brainlayer.backup_daily"],
+            env=child_env,
+            start_new_session=not managed,
+            pass_fds=(int(lease),) if managed and lease is not None else (),
+        )
+        interrupt_wait = True
+        if stop_signal is not None:
+            raise SupervisorStopped
         try:
-            wait = timeout_seconds
-            if deadline is not None:
-                # Child creation already spent part of the budget; the alarm keeps the full reserve.
-                alarm_at = deadline - SNAPSHOT_RECEIPT_RESERVE_SECONDS
-                wait = max(0.0, min(timeout_seconds, alarm_at - time.monotonic()))
-            return child.wait(timeout=wait)
-        except subprocess.TimeoutExpired:
-            if child.poll() is None:
-                signal_child(signal.SIGALRM)
-                grace = SUPERVISOR_ALARM_GRACE_SECONDS
+            try:
+                wait = timeout_seconds
                 if deadline is not None:
-                    # Never let the grace eat the receipt's own slice of the remaining window.
-                    remaining = deadline - time.monotonic() - SUPERVISOR_RECEIPT_WRITE_SECONDS
-                    grace = max(0.0, min(grace, remaining))
-                try:
-                    child.wait(timeout=grace)
-                except subprocess.TimeoutExpired:
-                    signal_child(signal.SIGKILL)
-                    child.wait()
-            message = f"backup exceeded configured wall-clock timeout ({timeout_seconds}s)"
-            resolved_db_path = get_db_path()
-            _append_json_log(
-                _backup_log_path(None, db_path=resolved_db_path, env=os.environ),
-                {
-                    "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
-                    "db": str(get_db_path()),
-                    "uploaded": False,
-                    "local_removed": False,
-                    "verified": False,
-                    "backup_log_provenance": _backup_log_provenance(),
-                    "attempt_reclamation": "unknown",
-                    "writer_probe_error": None,
-                    "error_type": "BackupTimeoutError",
-                    "error": message,
-                    "timeout_seconds": timeout_seconds,
-                    "timeout_enforced_by": "parent_process_supervisor",
-                },
-            )
-            print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
-            return 124
+                    # Child creation already spent part of the budget; the alarm keeps the full reserve.
+                    alarm_at = deadline - SNAPSHOT_RECEIPT_RESERVE_SECONDS
+                    wait = max(0.0, min(timeout_seconds, alarm_at - time.monotonic()))
+                return child.wait(timeout=wait)
+            except subprocess.TimeoutExpired:
+                if child.poll() is None:
+                    signal_child(signal.SIGALRM)
+                    grace = SUPERVISOR_ALARM_GRACE_SECONDS
+                    if deadline is not None:
+                        # Never let the grace eat the receipt's own slice of the remaining window.
+                        remaining = deadline - time.monotonic() - SUPERVISOR_RECEIPT_WRITE_SECONDS
+                        grace = max(0.0, min(grace, remaining))
+                    try:
+                        child.wait(timeout=grace)
+                    except subprocess.TimeoutExpired:
+                        signal_child(signal.SIGKILL)
+                        child.wait()
+                message = f"backup exceeded configured wall-clock timeout ({timeout_seconds}s)"
+                resolved_db_path = get_db_path()
+                _append_json_log(
+                    _backup_log_path(None, db_path=resolved_db_path, env=os.environ),
+                    {
+                        "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
+                        "db": str(get_db_path()),
+                        "uploaded": False,
+                        "local_removed": False,
+                        "verified": False,
+                        "backup_log_provenance": _backup_log_provenance(),
+                        "attempt_reclamation": "unknown",
+                        "writer_probe_error": None,
+                        "error_type": "BackupTimeoutError",
+                        "error": message,
+                        "timeout_seconds": timeout_seconds,
+                        "timeout_enforced_by": "parent_process_supervisor",
+                    },
+                )
+                print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
+                return 124
+        finally:
+            interrupt_wait = False
     except SupervisorStopped:
-        _wait_for_stopped_backup(child, signal_child, stop_signal)
+        if child is not None:
+            _wait_for_stopped_backup(child, signal_child, stop_signal)
         raise SystemExit(128 + stop_signal)
     finally:
-        if managed and child.poll() is None:
+        if managed and child is not None and child.poll() is None:
             child.kill()
             child.wait()
         _restore_backup_signal_handlers(previous_signal_handlers)
+        if stop_signal is not None:
+            raise SystemExit(128 + stop_signal)
 
 
 def _parse_cli_args(argv: list[str]) -> None:
