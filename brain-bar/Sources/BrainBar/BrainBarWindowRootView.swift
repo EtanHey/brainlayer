@@ -1316,30 +1316,7 @@ private struct BrainBarDashboardView: View {
                     accessibilityLabel: status.headline,
                     onAnimationCompleted: panelState.disclosureAnimationDidComplete
                 ) {
-                    VStack(alignment: .leading, spacing: 7) {
-                        ForEach(Array(attentionItems.enumerated()), id: \.offset) { _, item in
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                BrainBarStatusDot(color: Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown), size: 5)
-                                    .font(.system(size: 12, weight: .medium))
-                                Text(item)
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(Color.brainBarTextSecondary)
-#if BRAINBAR_UI
-                                if let alert = jobAlert, alert.text == item {
-                                    Button("Show log") { showJobAlertLog(alert) }
-                                        .controlSize(.small)
-                                        .help("Opens the failed job's log. If it has no log yet, shows the logs folder.")
-                                    if let message = panelState.jobAlertLogMessage(forReason: alert.reason) {
-                                        Text(message)
-                                            .font(.system(size: 11, weight: .medium))
-                                            .foregroundStyle(Color.brainBarTextMuted)
-                                            .accessibilityIdentifier("brainbar.dashboard.job-alert.log-message")
-                                    }
-                                }
-#endif
-                            }
-                        }
-                    }
+                    compactAttentionList(attentionItems)
                     .padding(.top, 7)
                     .padding(.leading, 20)
                 } label: {
@@ -1374,6 +1351,89 @@ private struct BrainBarDashboardView: View {
         .accessibilityIdentifier("brainbar.dashboard.status")
     }
 
+
+    /// Rows past the cap scroll inside this height instead of growing the window.
+    static let attentionListMaxHeight: CGFloat = 168
+
+    /// The shared compact list (2026-11-08): three ranked entries, then "+N more" in place.
+    private func compactAttentionList(_ items: [String]) -> some View {
+        let compact = BrainBarCompactNotices(rows: items.map { item in
+            BrainBarStatusPopoverController.VerdictRow(
+                text: item, state: statusVerdict?.attention.contains(item) == true ? .red : nil)
+        })
+        let showsAll = panelState.attentionShowsAll && !compact.overflow.isEmpty
+        return VStack(alignment: .leading, spacing: 7) {
+            if showsAll {
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(Array(compact.entries.enumerated()), id: \.offset) { _, entry in
+                            attentionEntry(entry, listsMembers: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: Self.attentionListMaxHeight)
+                .accessibilityIdentifier("brainbar.dashboard.attention-all")
+            } else {
+                ForEach(Array(compact.visible.enumerated()), id: \.offset) { _, entry in
+                    attentionEntry(entry, listsMembers: false)
+                }
+            }
+            if let more = compact.overflowTitle {
+                Button(showsAll ? "Show less" : more) { panelState.attentionShowsAll.toggle() }
+                    .buttonStyle(.link)
+                    .font(.system(size: 12, weight: .medium))
+                    .accessibilityIdentifier("brainbar.dashboard.attention-more")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func attentionEntry(_ entry: BrainBarCompactNotices.Entry, listsMembers: Bool) -> some View {
+        if entry.isGroup {
+            VStack(alignment: .leading, spacing: 4) {
+                attentionLine(entry.title, help: entry.fullText)
+                if listsMembers {
+                    ForEach(Array(entry.rows.enumerated()), id: \.offset) { _, row in
+                        Text(row.text)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.brainBarTextMuted)
+                            .lineLimit(1)
+                            .help(row.text)
+                            .padding(.leading, 13)
+                    }
+                }
+            }
+        } else {
+            attentionLine(entry.title, help: entry.title)
+        }
+    }
+
+    private func attentionLine(_ item: String, help: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            BrainBarStatusDot(color: Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown), size: 5)
+                .font(.system(size: 12, weight: .medium))
+            Text(item)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.brainBarTextSecondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(help)
+#if BRAINBAR_UI
+            if let alert = jobAlert, alert.text == item {
+                Button("Show log") { showJobAlertLog(alert) }
+                    .controlSize(.small)
+                    .help("Opens the failed job's log. If it has no log yet, shows the logs folder.")
+                if let message = panelState.jobAlertLogMessage(forReason: alert.reason) {
+                    Text(message)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.brainBarTextMuted)
+                        .accessibilityIdentifier("brainbar.dashboard.job-alert.log-message")
+                }
+            }
+#endif
+        }
+    }
 
     private func summaryTiles(layout: BrainBarDashboardLayout) -> some View {
         Group {
