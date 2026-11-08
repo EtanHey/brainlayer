@@ -3505,7 +3505,16 @@ def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[...,
         staging_dir.mkdir(parents=True, exist_ok=True)
         with (staging_dir / ".backup.lock").open("a+b") as lock:
             try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                admission_deadline = time.monotonic() + 3.0
+                while True:
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        remaining = admission_deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise
+                        time.sleep(min(0.05, remaining))
             except BlockingIOError as exc:
                 error = f"backup already running in {staging_dir}"
                 resolved_db_path = bound.arguments.get("db_path") or get_db_path()
