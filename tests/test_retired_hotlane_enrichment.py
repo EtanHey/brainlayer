@@ -7,6 +7,14 @@ import pytest
 
 from brainlayer.vector_store import VectorStore
 
+
+@pytest.fixture(autouse=True)
+def _no_real_renice(monkeypatch):
+    """hotlane.main() runs setup_cpu_budget, which on macOS renices THIS pytest process to 20 for good
+    (an unprivileged process can never lower it again). tests/conftest.py fails any test that does."""
+    monkeypatch.setattr("os.setpriority", lambda *args: None)
+
+
 pytestmark = pytest.mark.retired_enrichment
 
 

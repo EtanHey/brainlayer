@@ -289,6 +289,23 @@ def eval_project() -> str:
     return f"eval-{uuid.uuid4().hex[:8]}"
 
 
+_SUITE_NICE_GET = os.getpriority  # bound at import, so a test's monkeypatch cannot hide a leak
+
+
+@pytest.fixture(autouse=True)
+def forbid_suite_process_renice():
+    """Fail the test that raises THIS process's nice value.
+
+    An unprivileged process can never lower its nice again, so one leak poisons every later test
+    that sets a child's priority (setpriority -> EPERM). On macOS, hotlane.main() did exactly that
+    and blocked the v1.5.91 tag gate at test_supervisor_child, far from the culprit.
+    """
+    before = _SUITE_NICE_GET(os.PRIO_PROCESS, 0)
+    yield
+    after = _SUITE_NICE_GET(os.PRIO_PROCESS, 0)
+    assert after == before, f"test reniced the suite process {before} -> {after}; patch os.setpriority"
+
+
 @pytest.fixture(autouse=True)
 def disable_live_gemini_for_unit_tests(monkeypatch, request):
     """Keep unit tests from making live Gemini calls through local shell env."""
