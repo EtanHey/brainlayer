@@ -587,6 +587,7 @@ def collect_facts(
         search_canary_ok=search_canary_fact(result, now),
         embedding_stalled_since=stalled_since,
         embedding_activity=activity,
+        embedding_progress_recent=progress_at is not None,
         disk_free_bytes=free,
         disk_peak_bytes=peak,
         disk_floor_bytes=floor,

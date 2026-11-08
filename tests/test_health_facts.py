@@ -582,8 +582,18 @@ def test_disk_timeout_reuses_measurement_only_within_thirty_minutes(tmp_path, mo
     assert facts.disk_free_bytes is UNOBSERVED
 
 
-@pytest.mark.parametrize("mode", ["running", "high load", "waiting"])
-def test_embedding_completed_batches_and_load_pause_are_not_net_stalls(tmp_path, mode):
+@pytest.mark.parametrize(
+    "mode, encoded, batch_minutes, expected",
+    [
+        ("running", 16, 480, "amber"),
+        ("high load", 0, 2, "amber"),
+        ("high load", 0, 480, "red"),
+        ("waiting", 0, 480, "red"),
+    ],
+)
+def test_embedding_completed_batches_and_load_pause_are_not_net_stalls(
+    tmp_path, mode, encoded, batch_minutes, expected
+):
     config = _config(tmp_path)
     with sqlite3.connect(config.db_path) as conn:
         conn.execute("INSERT INTO chunks VALUES ('pending', 'text', NULL, NULL, NULL, ?)", (NOW.isoformat(),))
@@ -598,19 +608,20 @@ def test_embedding_completed_batches_and_load_pause_are_not_net_stalls(tmp_path,
         "status": "measured",
         "db": str(config.db_path.resolve()),
         "measured_at": NOW.isoformat(),
-        "backlog_encoded": 16 if mode != "waiting" else 0,
+        "backlog_encoded": encoded,
         "backlog_cpu_seconds": 2,
         "backlog_state": mode,
-        "backlog_last_batch_at": (
-            NOW - timedelta(minutes=2) if mode != "waiting" else NOW - timedelta(hours=8)
-        ).isoformat(),
+        "backlog_last_batch_at": (NOW - timedelta(minutes=batch_minutes)).isoformat(),
     }
     (tmp_path / "hotlane-cpu.json").write_text(json.dumps(payload))
     (tmp_path / "hotlane-budget.json").write_text(json.dumps({"backlog_max_load": 10}))
     facts, _ = _collect(config, prior)
     check = evaluate(facts).check("embedding")
-    if mode == "waiting":
-        assert check.state == "red"
+    if expected == "red":
+        from dataclasses import replace
+
+        baseline = evaluate(replace(facts, embedding_activity=None)).check("embedding")
+        assert check.state == baseline.state == "red"
         assert "not shrunk" in check.note
     else:
         assert check.state == "amber"
