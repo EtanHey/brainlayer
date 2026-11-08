@@ -178,13 +178,16 @@ def test_all_success_outcomes_are_accounted_for(world, monkeypatch, delayed_writ
 
         monkeypatch.setattr(runtime_store, "open_writer_store", open_writer)
 
-    first = world.store("otter", before_join=join_started.set if delayed_writer else None)
-    if delayed_writer:
-        assert delayed, "precondition: store must start its background writer"
-    world.store("otter")
-    with monkeypatch.context() as merge:
-        merge.setattr(store_handler, "_new_manual_chunk_id", lambda: first["chunk_id"])
-        world.store("otter", content=world.text("otter") + " Additional details about the river habitat.")
+    # Outcome coverage needs synchronous admissions; contention has its own tests.
+    with monkeypatch.context() as admission:
+        admission.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "2000")
+        first = world.store("otter", before_join=join_started.set if delayed_writer else None)
+        if delayed_writer:
+            assert delayed, "precondition: store must start its background writer"
+        world.store("otter")
+        with monkeypatch.context() as merge:
+            merge.setattr(store_handler, "_new_manual_chunk_id", lambda: first["chunk_id"])
+            world.store("otter", content=world.text("otter") + " Additional details about the river habitat.")
     monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
     world.store("ibis")
     world.drain()

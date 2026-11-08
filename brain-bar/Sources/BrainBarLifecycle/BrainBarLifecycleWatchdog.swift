@@ -103,6 +103,7 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
     /// is treated as a hang.
     public static let daemonProbeTimeout: TimeInterval = 5
 
+    private let delayedScheduler: (@Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void)?
     private let configuration: Configuration
     private let processProvider: @Sendable () -> [pid_t]
     private let processIdentity: @Sendable (pid_t) -> ProcessIdentity?
@@ -120,6 +121,9 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.brainlayer.brainbar.lifecycle-watchdog", qos: .utility)
     private var timer: DispatchSourceTimer?
     private var isRestarting = false
+    private var restartGeneration: UInt64 = 0
+    private var restartAttempts = 0
+    private var nextRestartUptime: TimeInterval = 0
     private var loggedStaleButAnswering = false
     /// A heartbeat the uptime clock cannot judge (missing, legacy wall-only,
     /// unreadable, previous boot) is aged by how long THIS watchdog has seen it
@@ -136,11 +140,13 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         relaunch: @escaping @Sendable (RelaunchCommand) -> Void = { command in
             _ = BrainBarLifecycleWatchdog.run(command: command)
         },
+        delayedScheduler: (@Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void)? = nil,
         clock: HeartbeatClock = .system,
         livenessProbe: (@Sendable () -> Bool)? = nil,
         ownerUID: uid_t = getuid(),
         processIdentity: @escaping @Sendable (pid_t) -> ProcessIdentity? = BrainBarLifecycleWatchdog.readProcessIdentity
     ) {
+        self.delayedScheduler = delayedScheduler
         self.configuration = configuration
         self.processProvider = processProvider
         self.processIdentity = processIdentity
@@ -173,6 +179,7 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
 
     public func stop() {
         queue.sync {
+            restartGeneration &+= 1
             timer?.cancel()
             timer = nil
             isRestarting = false
@@ -189,9 +196,13 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         let (age, subject) = heartbeatAge()
         guard age > configuration.staleTimeout else {
             loggedStaleButAnswering = false
+            restartAttempts = 0
+            nextRestartUptime = 0
             return
         }
 
+        let nowUptime = Double(clock.uptimeNanos()) / 1_000_000_000
+        guard nowUptime >= nextRestartUptime else { return }
         let name = configuration.watchedName
         let staleness = String(format: "%@ for %.0fs awake (limit %.0fs)", subject, age, configuration.staleTimeout)
         let evidence: String
@@ -225,13 +236,24 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
             log("\(name) same-account process does not match expected executable; not kickstarting")
             return
         }
+        restartGeneration &+= 1
+        let generation = restartGeneration
+        restartAttempts += 1
+        let backoff = min(300.0, 5.0 * pow(2.0, Double(min(restartAttempts - 1, 6))))
+        nextRestartUptime = nowUptime + backoff
+        if restartAttempts >= 3 {
+            let alert = "ALERT: \(name) repeated restart attempt \(restartAttempts); backing off \(backoff)s awake"
+            Self.logger.error("\(alert, privacy: .public)")
+            log(alert)
+        }
         let pids = identities.map(\.0)
         guard !pids.isEmpty else {
             isRestarting = true
             log("\(name) \(staleness), \(evidence), and no process is running; requesting launch")
             relaunch(configuration.relaunchCommand)
-            queue.asyncAfter(deadline: .now() + configuration.terminateGraceInterval) { [weak self] in
-                self?.isRestarting = false
+            scheduleDelayed(configuration.terminateGraceInterval) { [weak self] in
+                guard let self, self.restartGeneration == generation else { return }
+                self.isRestarting = false
             }
             return
         }
@@ -241,8 +263,8 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         identities.forEach { pid, identity in
             if ownedIdentity(pid) == identity { terminateProcess(pid, SIGTERM) }
         }
-        queue.asyncAfter(deadline: .now() + configuration.terminateGraceInterval) { [weak self] in
-            guard let self else { return }
+        scheduleDelayed(configuration.terminateGraceInterval) { [weak self] in
+            guard let self, self.restartGeneration == generation else { return }
             identities.forEach { pid, identity in
                 if self.ownedIdentity(pid) == identity { self.terminateProcess(pid, SIGKILL) }
             }
@@ -255,9 +277,18 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
             }
             if !replacement { self.relaunch(self.configuration.relaunchCommand) }
             else { self.log("\(name) process identity changed; leaving replacement running") }
-            self.queue.asyncAfter(deadline: .now() + self.configuration.terminateGraceInterval) { [weak self] in
-                self?.isRestarting = false
+            self.scheduleDelayed(self.configuration.terminateGraceInterval) { [weak self] in
+                guard let self, self.restartGeneration == generation else { return }
+                self.isRestarting = false
             }
+        }
+    }
+
+    private func scheduleDelayed(_ delay: TimeInterval, action: @escaping @Sendable () -> Void) {
+        if let delayedScheduler {
+            delayedScheduler(delay) { [weak self] in self?.queue.async(execute: action) }
+        } else {
+            queue.asyncAfter(deadline: .now() + delay, execute: action)
         }
     }
 
@@ -621,7 +652,7 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
                 expectedExecutablePath: expectedExecutablePath("BrainBar")
             ),
             processProvider: {
-                runningPIDs(named: "BrainBar", bundleIdentifiers: ["com.brainlayer.BrainBar"])
+                runningPIDs(named: "BrainBar", bundleIdentifiers: ["com.brainlayer.brainbar"])
             },
             relaunch: { command in
                 let launchctlSucceeded = run(command: command)
