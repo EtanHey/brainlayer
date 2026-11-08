@@ -126,7 +126,7 @@ struct AgentActivitySnapshot: Sendable, Equatable {
     static let breakdownOrder: [AgentFamily] = [.claude, .codex, .gemini, .cursor]
 
     static let countingDefinition =
-        "Agents = per CLI, the larger of its top-level Claude, Codex, Gemini or Cursor sessions in ps and its sessions with a transcript written in the last 10 minutes (Codex threads inside app-server have no process of their own); app helpers, MCP bridges, sub-agents and each session's child processes are not counted."
+        "Agents = per CLI, the larger of its top-level Claude, Codex, Gemini or Cursor sessions in ps and its sessions with a transcript written in the last 10 minutes (Codex threads inside app-server have no process of their own; Antigravity is counted from ps only); app helpers, MCP bridges, sub-agents and each session's child processes are not counted."
 }
 
 final class AgentActivityMonitor: Sendable {

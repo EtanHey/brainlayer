@@ -79,6 +79,57 @@ final class AgentTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(activity.runtimeRowText, "6 sessions · 1 Claude · 2 Codex · 1 Gemini · 2 Cursor")
     }
 
+    /// Codex review round 1: transcript FILES were counted, not sessions. A Claude session
+    /// resumed in another worktree leaves the same `<session>.jsonl` under both project dirs.
+    func test_one_session_in_two_places_counts_once_and_two_sessions_count_twice() throws {
+        let claude = "e3b0c442-98fc-4c14-9afb-f4c8996fb924"
+        try transcript(".claude/projects/-Users-dev-repo/\(claude).jsonl")
+        try transcript(".claude/projects/-Users-dev-repo--worktrees-wt/\(claude).jsonl", ageSeconds: 30)
+        // A copied Codex rollout: same thread UUID, in two date folders.
+        let codex = "01a1ba31-942c-7e73-b81e-6c60bc949a77"
+        try transcript(".codex/sessions/2026/11/08/rollout-2026-11-08T10-06-13-\(codex).jsonl")
+        try transcript(".codex/sessions/2026/11/07/rollout-2026-11-08T10-06-13-\(codex).jsonl", ageSeconds: 30)
+
+        XCTAssertEqual(AgentTranscriptActivity.count(home: home, now: now)[.claude], 1)
+        XCTAssertEqual(AgentTranscriptActivity.count(home: home, now: now)[.codex], 1)
+
+        try transcript(".claude/projects/-Users-dev-repo/9f86d081-884c-4d63-9a0b-1a2c3d4e5f60.jsonl")
+        try transcript(".codex/sessions/2026/11/08/rollout-2026-11-08T10-06-20-01a1ba31-ae14-7953-ab0d-71cc421279a3.jsonl")
+
+        XCTAssertEqual(AgentTranscriptActivity.count(home: home, now: now)[.claude], 2)
+        XCTAssertEqual(AgentTranscriptActivity.count(home: home, now: now)[.codex], 2)
+    }
+
+    func test_session_id_is_the_codex_thread_uuid_or_the_file_stem() {
+        XCTAssertEqual(
+            AgentTranscriptActivity.sessionID(URL(fileURLWithPath: "/s/2026/11/08/rollout-2026-11-08T10-06-13-01a1ba31-942c-7e73-b81e-6c60bc949a77.jsonl")),
+            "01A1BA31-942C-7E73-B81E-6C60BC949A77"
+        )
+        XCTAssertEqual(AgentTranscriptActivity.sessionID(URL(fileURLWithPath: "/p/repo/abc-123.jsonl")), "abc-123")
+        XCTAssertEqual(AgentTranscriptActivity.sessionID(URL(fileURLWithPath: "/s/rollout-short.jsonl")), "rollout-short")
+    }
+
+    /// The real on-disk shape (`~/.codex/sessions`, names and mtimes only, 2026-11-08): a
+    /// sub-agent rollout is a flat `rollout-<start>-<uuidv7>.jsonl` in the same day folder as
+    /// its parent, so no path rule can drop it. Only the `session_meta` first line can, and the
+    /// marker may sit past any fixed prefix when earlier fields are long.
+    func test_codex_subagent_with_the_real_on_disk_shape_is_excluded_by_its_header_only() throws {
+        let day = ".codex/sessions/2026/11/08/"
+        let parent = day + "rollout-2026-11-08T10-06-13-01a1ba31-942c-7e73-b81e-6c60bc949a77.jsonl"
+        let subagent = day + "rollout-2026-11-08T10-09-07-01a1ba34-39be-7f60-9da9-ac4a475206f6.jsonl"
+        let longSubagent = day + "rollout-2026-11-08T10-10-19-01a1ba35-52b1-71b0-bbc0-f31f8f18af79.jsonl"
+        try transcript(parent, firstLine: #"{"type":"session_meta","payload":{"id":"01a1ba31-942c-7e73-b81e-6c60bc949a77","originator":"T3 Code","source":"vscode"}}"#)
+        try transcript(subagent, firstLine: #"{"type":"session_meta","payload":{"id":"01a1ba34-39be-7f60-9da9-ac4a475206f6","originator":"T3 Code","source":{"subagent":{"thread_spawn":{"parent_thread_id":"01a1ba31-942c-7e73-b81e-6c60bc949a77","depth":1}}}}}"#)
+        let padding = String(repeating: "x", count: 20_000)
+        try transcript(longSubagent, firstLine: #"{"type":"session_meta","payload":{"id":"01a1ba35-52b1-71b0-bbc0-f31f8f18af79","instructions":""# + padding + #"","source":{"subagent":{"thread_spawn":{"depth":1}}}}}"#)
+
+        XCTAssertEqual(AgentTranscriptActivity.count(home: home, now: now)[.codex], 1)
+
+        // Same name, same folder, no marker: it counts. The path played no part.
+        try transcript(subagent, firstLine: #"{"type":"session_meta","payload":{"source":"cli"}}"#)
+        XCTAssertEqual(AgentTranscriptActivity.count(home: home, now: now)[.codex], 2)
+    }
+
     func test_merge_keeps_the_larger_lower_bound_per_cli() {
         let processes = AgentActivitySnapshot(presences: [
             AgentPresence(family: .claude, count: 8), AgentPresence(family: .codex, count: 0),

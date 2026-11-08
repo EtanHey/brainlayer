@@ -8,13 +8,22 @@ import Foundation
 /// Runtime row read "0 Codex" with a dozen Codex threads writing (Etan, 2026-11-08).
 ///
 /// The roots are the watcher's own (`watcher.py` `default_watch_roots`); a source BrainLayer
-/// does not ingest is not counted here either. Sub-agent transcripts are not sessions.
+/// does not ingest is not counted here either. Sub-agent transcripts are not sessions, and a
+/// session is counted once however many transcript files carry it (a resumed or copied Claude
+/// transcript sits under every project directory it ran in).
+///
+/// Antigravity (`agy`) is counted from `ps` only: its conversations
+/// (`~/.gemini/antigravity-cli/conversations/*.db`) are not a wired BrainLayer source. The
+/// Gemini CLI (`~/.gemini/sessions`) and both Cursor roots are scanned here.
 enum AgentTranscriptActivity {
     static let window: TimeInterval = 10 * 60
 
-    /// Codex names a spawned sub-agent thread's origin in its first line's `session_meta`,
-    /// a few hundred bytes in.
-    static let codexHeaderBytes = 4096
+    /// Codex sub-agent rollouts can NOT be told apart by path: on disk (measured 2026-11-08,
+    /// 1,850 rollouts) every thread, sub-agent or not, is a flat
+    /// `YYYY/MM/DD/rollout-<start>-<uuid>.jsonl` beside its parent. Only the first line's
+    /// `session_meta` names the origin (`"source":{"subagent":…}`), so the whole first line is
+    /// read, up to this cap. It runs only on rollouts already inside the window.
+    static let codexFirstLineCap = 256 * 1024
     private static let codexSubagentMarker = Data(#""source":{"subagent""#.utf8)
 
     static func count(
@@ -42,7 +51,22 @@ enum AgentTranscriptActivity {
             + cursorTranscriptRoots.flatMap { recent($0, depth: 3) }
         let gemini = recent(home.appendingPathComponent(".gemini/sessions"), depth: 4)
 
-        return [.claude: claude.count, .codex: codex.count, .cursor: cursor.count, .gemini: gemini.count]
+        func sessions(_ urls: [URL]) -> Int { Set(urls.map(sessionID)).count }
+        return [
+            .claude: sessions(claude), .codex: sessions(codex),
+            .cursor: sessions(cursor), .gemini: sessions(gemini),
+        ]
+    }
+
+    /// The session a transcript belongs to. Claude, Cursor and Gemini name the file after the
+    /// session id; a Codex rollout ends in its thread's UUID after the start timestamp.
+    static func sessionID(_ url: URL) -> String {
+        let stem = url.deletingPathExtension().lastPathComponent
+        if stem.hasPrefix("rollout-"), stem.count > 36 {
+            let tail = String(stem.suffix(36))
+            if let uuid = UUID(uuidString: tail) { return uuid.uuidString }
+        }
+        return stem
     }
 
     /// `*.jsonl` files at most `maxDepth` levels below `root`, modified at or after `cutoff`,
@@ -95,7 +119,16 @@ enum AgentTranscriptActivity {
     private static func isCodexSubagent(_ url: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
-        let header = (try? handle.read(upToCount: codexHeaderBytes)) ?? Data()
-        return header.range(of: codexSubagentMarker) != nil
+        var line = Data()
+        while line.count < codexFirstLineCap,
+              let chunk = try? handle.read(upToCount: min(16 * 1024, codexFirstLineCap - line.count)),
+              !chunk.isEmpty {
+            if let newline = chunk.firstIndex(of: UInt8(ascii: "\n")) {
+                line.append(chunk[chunk.startIndex..<newline])
+                break
+            }
+            line.append(chunk)
+        }
+        return line.range(of: codexSubagentMarker) != nil
     }
 }
