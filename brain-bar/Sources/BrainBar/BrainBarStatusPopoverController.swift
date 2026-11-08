@@ -133,13 +133,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     /// The menu's first row from the shared snapshot (S5).
     nonisolated static func statusLineTitle(for verdict: BrainBarStatusVerdict) -> String {
-        if let dot = verdict.dotOverride {
-            return switch dot {
-            case .red: "Needs attention"
-            case .amber: "Check soon"
-            case .green: verdict.safeHeadline
-            }
-        }
+        if let dot = verdict.dotOverride { return verdict.overrideHeadline(dot) }
         if verdict.needsAttention {
             let reason = verdict.attention.joined(separator: "; ")
             return statusLineTitle(for: BadgeStatePresentation(badgeOn: true, reason: reason, activeCodes: []))
@@ -378,7 +372,6 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     struct VerdictRow: Equatable {
         let text: String
         var state: BrainBarHealthVerdict.State? = nil
-        var opensDashboard = false
         var isOld = false
     }
 
@@ -389,11 +382,6 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
                 : health?.checks.first(where: { $0.text == text })?.state
                     ?? (verdict.attention.contains(text) ? .red : nil), isOld: verdict.oldNotices.contains(text))
         }
-    }
-
-    nonisolated static func cappedProblemRows(_ rows: [VerdictRow]) -> [VerdictRow] {
-        Array(rows.prefix(3)) + (rows.count > 3
-            ? [VerdictRow(text: "+\(rows.count - 3) more — Open Dashboard", opensDashboard: true)] : [])
     }
 
     nonisolated static func verdictRows(_ verdict: BrainBarHealthVerdict, details: [String] = []) -> [VerdictRow] {
@@ -417,7 +405,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         }
     }
 
-    static func verdictDetailRow(_ row: VerdictRow, width: CGFloat, separator: Bool = false) -> some View {
+    /// A menu row never wraps past this many lines; its tooltip keeps the full text.
+    static let menuRowLineLimit = 2
+
+    static func verdictDetailRow(_ row: VerdictRow, width: CGFloat, separator: Bool = false,
+                                 lineLimit: Int? = menuRowLineLimit) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if separator { Divider() }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -425,10 +417,60 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
                     Circle().fill(state == .red ? Color.red : Color.orange).frame(width: 6, height: 6)
                 }
                 Text(row.text).foregroundStyle(row.isOld || row.state == nil ? .secondary : .primary)
+                    .lineLimit(lineLimit)
+                    .truncationMode(.tail)
                     .fixedSize(horizontal: false, vertical: true)
                     .opacity(row.isOld ? 0.58 : 1)
             }
         }.font(.system(size: 13)).frame(width: width, alignment: .leading)
+    }
+
+    /// The headline's dot: the same color the menu-bar icon draws.
+    static func headlineDotImage(_ dot: BrainBarRenderedDot) -> NSImage {
+        let color: NSColor = switch dot {
+        case .green: BrainBarDesignTokens.Colors.statusOK
+        case .amber: BrainBarDesignTokens.Colors.statusAttention
+        case .red: BrainBarDesignTokens.Colors.statusError
+        }
+        let image = NSImage(size: NSSize(width: 9, height: 9), flipped: false) { rect in
+            color.setFill()
+            NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5)).fill()
+            return true
+        }
+        image.accessibilityDescription = "Status \(dot.rawValue)"
+        return image
+    }
+
+    /// One disabled, hosted row; used in the menu and in its submenus.
+    private func infoItem(_ row: VerdictRow, lineLimit: Int?, separator: Bool = false) -> NSMenuItem {
+        let item = NSMenuItem(title: row.text, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.toolTip = row.text
+        let view = NSHostingView(rootView: Self.verdictDetailRow(row, width: Self.menuContentWidth,
+            separator: separator, lineLimit: lineLimit).padding(.horizontal, 14).padding(.vertical, 4))
+        view.frame.size = view.fittingSize
+        item.view = view
+        return item
+    }
+
+    /// "+N more": a native submenu with every row past the cap, then Open Dashboard, so the menu
+    /// itself never grows.
+    private func overflowItem(_ compact: BrainBarCompactNotices) -> NSMenuItem? {
+        guard let title = compact.overflowTitle else { return nil }
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.attributedTitle = NSAttributedString(string: title, attributes: [
+            .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        item.toolTip = compact.overflow.map(\.text).joined(separator: "\n")
+        let submenu = NSMenu(title: title)
+        submenu.autoenablesItems = false
+        for row in compact.overflow { submenu.addItem(infoItem(row, lineLimit: nil)) }
+        item.submenu = submenu
+        submenu.addItem(.separator())
+        let open = NSMenuItem(title: "Open Dashboard", action: #selector(openDashboard(_:)), keyEquivalent: "")
+        open.target = self
+        submenu.addItem(open)
+        return item
     }
 
     private func publishRenderedStatus() {
@@ -591,27 +633,16 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #if BRAINBAR_UI
         if let model = runtime.jobsModel { health = model.publishedStatus.healthVerdict }
 #endif
-        let rows = Self.cappedProblemRows(Self.problemRows(verdict, health: health))
-        for (index, detail) in rows.enumerated() {
-            let item = NSMenuItem(title: detail.text, action: nil, keyEquivalent: "")
-            if detail.opensDashboard {
-                item.action = #selector(openDashboard(_:))
-                item.target = self
-                menu.insertItem(item, at: 1 + index)
-                verdictItems.append(item)
-                continue
-            }
-            item.isEnabled = false
-            item.toolTip = detail.text
-            let row = NSHostingView(rootView: Self.verdictDetailRow(detail, width: Self.menuContentWidth,
-                separator: index > 0 && detail.state == nil && rows[index - 1].state != nil)
-                .padding(.horizontal, 14).padding(.vertical, 4))
-            row.frame.size = row.fittingSize
-            item.view = row
-            menu.insertItem(item, at: 1 + index)
-            verdictItems.append(item)
+        // At most three ranked rows, then "+N more"; nothing is dropped.
+        let compact = BrainBarCompactNotices(rows: Self.problemRows(verdict, health: health))
+        for (index, row) in compact.visible.enumerated() {
+            verdictItems.append(infoItem(row, lineLimit: Self.menuRowLineLimit,
+                separator: index > 0 && row.state == nil && compact.visible[index - 1].state != nil))
         }
+        if let overflow = overflowItem(compact) { verdictItems.append(overflow) }
+        for (index, item) in verdictItems.enumerated() { menu.insertItem(item, at: 1 + index) }
         statusLineItem.title = Self.statusLineTitle(for: verdict)
+        statusLineItem.image = verdict.isChecking && compact.entries.isEmpty ? nil : Self.headlineDotImage(verdict.dot)
         statusLineItem.attributedTitle = NSAttributedString(string: statusLineItem.title,
             attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.labelColor])
         // The row's tooltip keeps every current reason: dot issues first, then neutral notices.

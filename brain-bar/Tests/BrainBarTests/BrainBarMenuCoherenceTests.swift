@@ -94,14 +94,15 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
                 let headline = BrainBarStatusPopoverController.statusLineTitle(for: verdict)
                 XCTAssertEqual(headline == "All good", dot == .green && notes.isEmpty)
                 XCTAssertEqual(headline, verdict.dashboardStatus.headline)
-                if dot == .amber { XCTAssertEqual(headline, "Check soon") }
-                if dot == .red { XCTAssertEqual(headline, "Needs attention") }
+                // Compact headline (2026-11-08): a non-green dot counts its rows; with none, the dot's words.
+                if dot == .amber { XCTAssertEqual(headline, notes.isEmpty ? "Check soon" : "1 thing needs you") }
+                if dot == .red { XCTAssertEqual(headline, notes.isEmpty ? "Needs attention" : "1 thing needs you") }
             }
         }
         let rows = (1...5).map { BrainBarStatusPopoverController.VerdictRow(text: "Problem \($0)") }
-        let capped = BrainBarStatusPopoverController.cappedProblemRows(rows)
-        XCTAssertEqual(capped.map(\.text), ["Problem 1", "Problem 2", "Problem 3", "+2 more — Open Dashboard"])
-        XCTAssertTrue(capped.last?.opensDashboard == true)
+        let compact = BrainBarCompactNotices(rows: rows)
+        XCTAssertEqual(compact.visible.map(\.text), ["Problem 1", "Problem 2", "Problem 3"])
+        XCTAssertEqual(compact.overflowTitle, "+2 more")
     }
 
     func testOldJobAlertStaysVisibleButDoesNotCountInHeader() {
@@ -200,11 +201,15 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
         controller.setBadgeForTesting(badge, alertsURL: directory.appendingPathComponent("job-alerts.json"))
         let menu = controller.contextMenuForTesting
         controller.menuNeedsUpdate(menu)
-        let overflow = try XCTUnwrap(menu.items.first { $0.title == "+2 more — Open Dashboard" })
+        // "+2 more" expands as a submenu holding the hidden rows, then Open Dashboard.
+        let overflow = try XCTUnwrap(menu.items.first { $0.title == "+2 more" })
         XCTAssertTrue(overflow.isEnabled)
-        XCTAssertNotNil(overflow.action)
-        XCTAssertTrue(overflow.target === controller)
         XCTAssertFalse(menu.items.contains { $0.title == "Problem 4" || $0.title == "Problem 5" })
+        let submenu = try XCTUnwrap(overflow.submenu)
+        XCTAssertEqual(submenu.items.filter { !$0.isSeparatorItem }.map(\.title), ["Problem 4", "Problem 5", "Open Dashboard"])
+        let open = try XCTUnwrap(submenu.items.last)
+        XCTAssertNotNil(open.action)
+        XCTAssertTrue(open.target === controller)
     }
 
     func testBackupCardUsesActiveFailureAndKeepsOtherCopyGreen() throws {

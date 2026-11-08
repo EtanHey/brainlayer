@@ -87,8 +87,11 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             XCTAssertEqual(snapshot.healthVerdict == nil ? "fallback" : "verdict", source)
             if source == "fallback" {
                 XCTAssertFalse(snapshot.verdict.needsAttention, "Staleness is uncertainty, not a new red outcome")
-                XCTAssertTrue(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict)
-                    == "Check soon", "Stale fallback has an amber headline")
+                // Compact headline (2026-11-08): the amber dot counts the rows it shows, staleness included.
+                let count = snapshot.verdict.currentRowCount
+                XCTAssertGreaterThan(count, 0)
+                XCTAssertEqual(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict),
+                    count == 1 ? "1 thing needs you" : "\(count) things need you", "Stale fallback has an amber headline")
             }
             if age == 901 { XCTAssertTrue(snapshot.notices.contains { $0.text.hasPrefix("Health check stale since ") }) }
             if state == "green", source == "verdict" {
@@ -204,7 +207,7 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             var inputs = BrainBarStatusSnapshotTests.healthy()
             inputs.badge = try badge(state)
             XCTAssertEqual(BrainBarStatusPopoverController.statusLineTitle(for: BrainBarStatusSnapshot.derive(inputs).verdict),
-                state == "red" ? "Needs attention" : state == "amber" ? "Check soon" : "Memory safe · 1 thing to look at")
+                state == "green" ? "Memory safe · 1 thing to look at" : "2 things need you")
         }
         XCTAssertEqual(BrainBarStatusPopoverController.backupReceiptColor(.red, verdictMode: true), .secondaryLabelColor)
         XCTAssertEqual(BrainBarStatusPopoverController.backupReceiptColor(.red, verdictMode: false),

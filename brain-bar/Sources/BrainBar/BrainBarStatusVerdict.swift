@@ -24,7 +24,7 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
     /// when everything was measured and nothing is pending.
     var dashboardStatus: BrainBarOnePageStatus {
         if let dotOverride {
-            let headline = dotOverride == .red ? "Needs attention" : dotOverride == .amber ? "Check soon" : safeHeadline
+            let headline = overrideHeadline(dotOverride)
             let details = attention + notices + oldNotices
             return .init(headline: headline, reason: details.isEmpty ? nil
                 : details.joined(separator: "; "), tone: dotOverride == .green ? .green : .amber)
@@ -38,6 +38,21 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
         }
         if isChecking { return .init(headline: "Checking…", reason: nil, tone: .neutral) }
         return .init(headline: "All good", reason: nil, tone: .green)
+    }
+
+    /// Every distinct current row; historical rows never count (compact headline, 2026-11-08).
+    var currentRowCount: Int { Set(attention + notices).count }
+
+    /// The menu and Dashboard headline under a verdict dot: a true count of the rows below it.
+    /// Without any row it falls back to the dot's own words.
+    func overrideHeadline(_ dot: BrainBarRenderedDot) -> String {
+        let count = currentRowCount
+        switch dot {
+        case .green: return safeHeadline
+        case .red, .amber:
+            guard count > 0 else { return dot == .red ? "Needs attention" : "Check soon" }
+            return count == 1 ? "1 thing needs you" : "\(count) things need you"
+        }
     }
 
     var safeHeadline: String {
