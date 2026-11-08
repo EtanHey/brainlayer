@@ -6,6 +6,7 @@ Falls back to parsing CWD if no config exists.
 
 import logging
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -84,6 +85,37 @@ def _parse_scopes_simple(path: Path) -> dict:
         return {"scopes": {}, "default": "all"}
 
 
+def canonical_workspace_path(cwd: str, *, repo_root: bool = False) -> str:
+    """Map a linked Git worktree to the main checkout, retaining its subdirectory.
+
+    Git's worktree registry is authoritative; directory/branch names are not repo
+    identities. Non-Git paths keep the existing scope-prefix behaviour.
+    """
+    try:
+        root = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            check=True,
+        ).stdout.strip()
+        registry = subprocess.run(
+            ["git", "-C", cwd, "worktree", "list", "--porcelain", "-z"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            check=True,
+        ).stdout
+        first = registry.split("\0", 1)[0]
+        if first.startswith("worktree "):
+            main = Path(first[len("worktree ") :])
+            relative = Path(cwd).resolve().relative_to(Path(root).resolve())
+            return str(main if repo_root else main / relative)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return cwd
+
+
 def resolve_project_scope() -> Optional[str]:
     """Resolve the current project from CWD using scopes.yaml.
 
@@ -98,7 +130,7 @@ def resolve_project_scope() -> Optional[str]:
         # No config — try CWD heuristic
         return _cwd_heuristic()
 
-    cwd = os.getcwd()
+    cwd = canonical_workspace_path(os.getcwd())
 
     # Check each scope prefix (longest match first)
     matches = []
@@ -328,7 +360,10 @@ def _lead_project_filters(main_project: Optional[str]) -> tuple[str, ...]:
 
 def _cwd_heuristic() -> Optional[str]:
     """Fallback: extract project name from CWD if it looks like ~/Gits/<project>."""
-    cwd = os.getcwd()
+    cwd = canonical_workspace_path(os.getcwd())
+    root = Path(canonical_workspace_path(os.getcwd(), repo_root=True))
+    if (root / ".git").exists():
+        return root.name
     home = str(Path.home())
 
     # Check ~/Gits/<project> pattern

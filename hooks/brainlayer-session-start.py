@@ -17,6 +17,7 @@ import sys
 import time
 
 from brainlayer.archive_lifecycle import lifecycle_active_clauses_present
+from brainlayer.scoping import canonical_workspace_path
 
 # Budget: abort if we're taking too long
 DEADLINE_MS = 450
@@ -177,6 +178,7 @@ def get_project_info(cwd):
     project_name: for display (e.g. golems-packages-coach)
     fts_search_term: for FTS5 queries (e.g. coach)
     """
+    cwd = canonical_workspace_path(cwd)
     basename = os.path.basename(cwd)
 
     # Check if inside golems monorepo package
@@ -249,6 +251,7 @@ def main():
     injected_briefs = []
 
     # Check if this project should be scoped (containerized BrainLayer)
+    cwd = canonical_workspace_path(cwd)
     basename = os.path.basename(cwd)
     scope_project = load_scoped_projects().get(basename)
 

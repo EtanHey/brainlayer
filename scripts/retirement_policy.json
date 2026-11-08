@@ -3042,6 +3042,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "76b96cd710d84f47140eefac4319295420de3e8f819cc6fd9a35abb709efa6d4": {
+      "non_cloud_purpose": "Read-only bounded local Git repository identity lookup (rev-parse and worktree list); subprocess binding/error handling supports those fixed argv operations only. No network, writes, or model sender.",
+      "site": {
+        "call_sha256": "96c33606f8fb50d4d20f4c785c4384e5578e03ceffa2d855e8d4232e50881292",
+        "kind": "child_process",
+        "owner": "<module>.canonical_workspace_path",
+        "path": "src/brainlayer/scoping.py",
+        "target": "subprocess.run"
+      }
+    },
     "77938f041d921232f6d3bd8d370804fe14ffa1e8835f5e685b6b4bb9cd3496da": {
       "non_cloud_purpose": "Local subprocess metadata-check error reference; a failed or timed-out macOS keyring presence check refuses the operator agy probe before CLI spawn.",
       "site": {
@@ -3948,6 +3958,16 @@
         "owner": "<module>.ps_sample",
         "path": "scripts/sprint_gate.py",
         "target": "subprocess.run"
+      }
+    },
+    "9d9d8db500628251835e3fdf22639ac897716bd70ce65dd3a6ed7db8c14786d0": {
+      "non_cloud_purpose": "Read-only bounded local Git repository identity lookup (rev-parse and worktree list); subprocess binding/error handling supports those fixed argv operations only. No network, writes, or model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.canonical_workspace_path",
+        "path": "src/brainlayer/scoping.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "9e5a01fed464d2af61e192eb5ccc24b011c03645489f042ee3e4416a650036a8": {
@@ -5148,6 +5168,16 @@
         "target": "subprocess.run"
       }
     },
+    "c3a97a53503e7872754525edc2e83913aa64b0fd507d7180283e6db96e756ebf": {
+      "non_cloud_purpose": "Read-only bounded local Git repository identity lookup (rev-parse and worktree list); subprocess binding/error handling supports those fixed argv operations only. No network, writes, or model sender.",
+      "site": {
+        "call_sha256": "6239134246ae23a7f043669cab57a385ce2bd260a3533f3ffd619987df4a61eb",
+        "kind": "child_process",
+        "owner": "<module>.canonical_workspace_path",
+        "path": "src/brainlayer/scoping.py",
+        "target": "subprocess.run"
+      }
+    },
     "c3f31975fdedf30b5dd9253999a17e722206e3420e19e1403512910dc958d366": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp/_shared.py <module>",
       "site": {
@@ -5874,6 +5904,16 @@
         "owner": "<module>._style_dependencies",
         "path": "src/brainlayer/pipeline/style_index.py",
         "target": "importlib.import_module"
+      }
+    },
+    "e615b47b179c62815091e0fdf7c87266261bd96d095882f113dd8afcb17d190f": {
+      "non_cloud_purpose": "Read-only bounded local Git repository identity lookup (rev-parse and worktree list); subprocess binding/error handling supports those fixed argv operations only. No network, writes, or model sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/scoping.py",
+        "target": "import subprocess"
       }
     },
     "e78c21d92b37be23eba1a89c3a97b1a18771a3b6d1b0c48bc37ded6d11bb27a4": {
