@@ -2018,13 +2018,13 @@ def poison_backlog(tmp_path, monkeypatch):
     monkeypatch.setattr(hotlane, "_sleep", lambda _: None)
     monkeypatch.setattr("brainlayer.search_repo.clear_hybrid_search_cache", lambda _: None)
 
-    def cycle(embed):
+    def cycle(embed, backlog_batch=2):
         return hotlane._run_split_cycle(
             db_path=db,
             vector_store_cls=VectorStore,
             embed_fn=embed,
             recent_limit=0,
-            backlog_batch=2,
+            backlog_batch=backlog_batch,
             enrich_limit=0,
             enrich_since_hours=0,
         )
@@ -2139,3 +2139,169 @@ def test_edited_quarantined_chunk_can_recover(poison_backlog):
     for _ in range(3):
         cycle(embed)
     assert vector_ids() == set("abcde")
+
+
+def _environmental_error(hotlane, name):
+    import errno
+
+    if name == "ENOSPC":
+        return OSError(errno.ENOSPC, "No space left on device")
+    if name == "EIO":
+        return OSError(errno.EIO, "Input/output error")
+    return getattr(hotlane.apsw, name)("environment unavailable")
+
+
+@pytest.mark.parametrize(
+    ("stage", "error"),
+    [
+        ("write", "FullError"),
+        ("write", "IOError"),
+        ("write", "ReadOnlyError"),
+        ("write", "ENOSPC"),
+        ("encode", "ENOSPC"),
+        ("encode", "EIO"),
+    ],
+)
+def test_disk_full_for_five_cycles_quarantines_nothing_then_recovery_embeds_everything(
+    poison_backlog, monkeypatch, caplog, stage, error
+):
+    hotlane, _, cycle, vector_ids = poison_backlog
+    original = hotlane._upsert_chunk_vector_raw
+    outage = True
+
+    def upsert(cursor, chunk_id, embedding, **kwargs):
+        if outage and stage == "write":
+            raise _environmental_error(hotlane, error)
+        return original(cursor, chunk_id, embedding, **kwargs)
+
+    def embed(_text):
+        if outage and stage == "encode":
+            raise _environmental_error(hotlane, error)
+        return [0.1] * 1024
+
+    monkeypatch.setattr(hotlane, "_upsert_chunk_vector_raw", upsert)
+    with caplog.at_level(logging.ERROR, logger=hotlane.LOGGER.name):
+        for _ in range(5):
+            with pytest.raises(hotlane.HotlaneSystemicFailure):
+                cycle(embed)
+
+    assert hotlane.CHUNK_FAILURE_ATTEMPTS.attempts == {}
+    assert hotlane.CHUNK_FAILURE_ATTEMPTS.quarantined_total == 0
+    assert "systemic" in caplog.text
+    assert "quarantined" not in caplog.text
+    outage = False
+    for _ in range(5):
+        cycle(embed)
+    assert vector_ids() == set("abcde")
+
+
+def test_same_error_for_every_chunk_in_a_cycle_is_systemic_not_poison(poison_backlog):
+    hotlane, _, cycle, vector_ids = poison_backlog
+    broken = True
+
+    def embed(_text):
+        if broken:
+            raise RuntimeError("encoder backend unavailable")
+        return [0.1] * 1024
+
+    for _ in range(5):
+        with pytest.raises(hotlane.HotlaneSystemicFailure):
+            cycle(embed, backlog_batch=5)
+    assert hotlane.CHUNK_FAILURE_ATTEMPTS.quarantined_total == 0
+    broken = False
+    cycle(embed, backlog_batch=5)
+    assert vector_ids() == set("abcde")
+
+
+def test_quarantined_chunk_is_readmitted_loudly_after_ttl(poison_backlog, caplog):
+    hotlane, _, cycle, vector_ids = poison_backlog
+    now = [1000.0]
+    tracker = hotlane.CHUNK_FAILURE_ATTEMPTS
+    tracker.clock = lambda: now[0]
+    healed = False
+    attempts = []
+
+    def embed(text):
+        attempts.append(text)
+        if text == "a" and not healed:
+            raise ValueError("bad input until the encoder is upgraded")
+        return [0.1] * 1024
+
+    for _ in range(6):
+        cycle(embed)
+    assert vector_ids() == set("bcde")
+    assert attempts.count("a") == 3
+    now[0] += tracker.ttl_s - 1
+    cycle(embed)
+    assert attempts.count("a") == 3
+    healed = True
+    now[0] += 2
+    with caplog.at_level(logging.WARNING, logger=hotlane.LOGGER.name):
+        cycle(embed)
+    assert attempts.count("a") == 4
+    assert vector_ids() == set("abcde")
+    assert any("re-admitted" in r.message and "chunk_id=a" in r.message for r in caplog.records)
+    assert tracker.attempts == {}
+
+
+def test_quarantine_ttl_reads_env_and_rejects_bad_values_loudly(monkeypatch, caplog):
+    monkeypatch.setenv("BRAINLAYER_HOTLANE_QUARANTINE_TTL_S", "120")
+    assert _load_hotlane_module().CHUNK_FAILURE_ATTEMPTS.ttl_s == 120
+    monkeypatch.setenv("BRAINLAYER_HOTLANE_QUARANTINE_TTL_S", "-5")
+    with caplog.at_level(logging.WARNING, logger="brainlayer.hotlane_brainbar"):
+        hotlane = _load_hotlane_module()
+    assert hotlane.CHUNK_FAILURE_ATTEMPTS.ttl_s == hotlane.DEFAULT_QUARANTINE_TTL_SECONDS == 3600
+    assert "BRAINLAYER_HOTLANE_QUARANTINE_TTL_S" in caplog.text
+
+
+def test_chunk_failure_attempts_dict_is_bounded_and_pruned():
+    hotlane = _load_hotlane_module()
+    now = [0.0]
+    tracker = hotlane.ChunkFailureAttempts(clock=lambda: now[0], ttl_s=60, max_entries=3)
+    candidates = [hotlane.EmbedCandidate(f"c{i}", f"content {i}") for i in range(6)]
+    for candidate in candidates[:5]:
+        tracker.failed(candidate, ValueError("bad"))
+    assert len(tracker.attempts) == 3
+    assert [tracker.count(c) for c in candidates[:5]] == [0, 0, 1, 1, 1]
+    tracker.succeeded(candidates[4])
+    assert len(tracker.attempts) == 2
+    now[0] += 61
+    tracker.failed(candidates[5], ValueError("bad"))
+    assert len(tracker.attempts) == 1
+    assert tracker.count(candidates[5]) == 1
+    assert hotlane.MAX_CHUNK_FAILURE_ENTRIES >= 1024
+
+
+def test_hotlane_run_backs_off_escalating_on_systemic_failure():
+    hotlane = _load_hotlane_module()
+    outcomes = iter(["systemic", "systemic", "systemic", "ok", "systemic", "error"])
+    sleeps = []
+
+    def fake_cycle(**_kwargs):
+        outcome = next(outcomes)
+        if outcome == "systemic":
+            raise hotlane.HotlaneSystemicFailure("write", "FullError", ["x"])
+        if outcome == "error":
+            raise RuntimeError("ordinary transient")
+        return hotlane.CycleResult()
+
+    hotlane.run(
+        db_path=Path("/tmp/unused.db"),
+        interval=1.0,
+        recent_limit=5,
+        backlog_interval=10.0,
+        backlog_batch=0,
+        enrich_interval=0.0,
+        enrich_limit=0,
+        enrich_since_hours=0,
+        vector_store_cls=lambda _path: SimpleNamespace(close=lambda: None),
+        model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
+        cycle_fn=fake_cycle,
+        queue_depth_fn=lambda _queue_dir: 0,
+        high_priority_queue_depth_fn=lambda _queue_dir: 0,
+        time_fn=lambda: 0.0,
+        sleep_fn=sleeps.append,
+        max_cycles=6,
+    )
+
+    assert sleeps == [2.0, 4.0, 8.0, 1.0, 2.0, 2.0]

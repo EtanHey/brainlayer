@@ -10,6 +10,7 @@ Python enrichment arguments are accepted for compatibility but cannot invoke a m
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import inspect
 import json
@@ -50,6 +51,15 @@ VECTOR_WRITE_YIELD_SECONDS = 0.005
 # whatever is still unwritten is carried to the next cycle instead of being discarded.
 HOTLANE_WRITE_ATTEMPTS = 3
 MAX_CHUNK_FAILURE_ATTEMPTS = 3
+DEFAULT_QUARANTINE_TTL_SECONDS = 3600.0
+MAX_CHUNK_FAILURE_ENTRIES = 4096
+# This many consecutive distinct chunks failing with one error class in one loop is the
+# environment failing, not the chunks. Above the 2-row poison batch the backlog lane sees.
+SYSTEMIC_FAILURE_STREAK = 4
+MAX_SYSTEMIC_BACKOFF_SECONDS = 60.0
+_ENVIRONMENTAL_ERRNOS = frozenset({errno.ENOSPC, errno.EIO, errno.EROFS, errno.EDQUOT})
+_ENVIRONMENTAL_SQLITE_ERRORS = (apsw.FullError, apsw.IOError, apsw.ReadOnlyError)
+_ENVIRONMENTAL_SQLITE_PRIMARY_CODES = frozenset({8, 10, 13})  # READONLY, IOERR, FULL
 HOTLANE_WRITE_RETRY_BACKOFF_SECONDS = 0.25
 MAX_CARRIED_VECTORS = 64
 # Hooks the hotlane writer never runs in its Connection() constructor. `connection_optimize`
@@ -169,36 +179,129 @@ class EmbedCandidate(NamedTuple):
     content: str
 
 
+def _quarantine_ttl_seconds() -> float:
+    raw = os.environ.get("BRAINLAYER_HOTLANE_QUARANTINE_TTL_S")
+    if raw is None:
+        return DEFAULT_QUARANTINE_TTL_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value) or value <= 0:
+        LOGGER.warning(
+            "ignoring invalid BRAINLAYER_HOTLANE_QUARANTINE_TTL_S=%r; using %.0fs",
+            raw,
+            DEFAULT_QUARANTINE_TTL_SECONDS,
+        )
+        return DEFAULT_QUARANTINE_TTL_SECONDS
+    return value
+
+
+def _is_environmental_error(exc: BaseException | None) -> bool:
+    """True when the failure belongs to the machine (disk, I/O, read-only), not to one chunk."""
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, _ENVIRONMENTAL_SQLITE_ERRORS):
+            return True
+        if isinstance(exc, OSError) and exc.errno in _ENVIRONMENTAL_ERRNOS:
+            return True
+        code = getattr(exc, "sqlite_errorcode", None)
+        if isinstance(code, int) and code & 0xFF in _ENVIRONMENTAL_SQLITE_PRIMARY_CODES:
+            return True
+        exc = exc.__cause__ if exc.__cause__ is not None else (None if exc.__suppress_context__ else exc.__context__)
+    return False
+
+
+class HotlaneSystemicFailure(RuntimeError):
+    """A cycle-level failure: the environment, not individual chunks, is failing."""
+
+    def __init__(self, stage: str, error_type: str, chunk_ids: list[str]) -> None:
+        super().__init__(
+            f"hotlane systemic {stage} failure error_type={error_type} chunks={len(chunk_ids)}; "
+            "not counted toward per-chunk quarantine"
+        )
+        self.stage = stage
+        self.error_type = error_type
+        self.chunk_ids = chunk_ids
+
+
 class ChunkFailureAttempts:
     """Process-local quarantine; source rows stay intact and restart permits a new try.
 
     Key by content digest as well as id so an edited chunk can recover. Only failures
-    attributable to an individual chunk count; writer connection errors do not.
+    attributable to an individual chunk count; writer connection errors do not. An entry
+    expires ``ttl_s`` after its last failure, so a quarantined chunk is retried (loudly)
+    without a restart, and the table never holds more than ``max_entries`` keys.
     """
 
-    def __init__(self) -> None:
-        self.attempts: dict[tuple[str, str], int] = {}
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        ttl_s: float | None = None,
+        max_entries: int = MAX_CHUNK_FAILURE_ENTRIES,
+    ) -> None:
+        # key -> (attempts, monotonic time of the last failure); oldest failure first.
+        self.attempts: OrderedDict[tuple[str, str], tuple[int, float]] = OrderedDict()
         self.quarantined_total = 0
+        self.clock = clock
+        self.ttl_s = _quarantine_ttl_seconds() if ttl_s is None else ttl_s
+        self.max_entries = max(1, max_entries)
 
     def _key(self, candidate: EmbedCandidate) -> tuple[str, str]:
         return candidate.chunk_id, hashlib.sha256(candidate.content.encode()).hexdigest()
 
+    def _expire(self, key: tuple[str, str], entry: tuple[int, float], now: float) -> bool:
+        if now - entry[1] < self.ttl_s:
+            return False
+        del self.attempts[key]
+        if entry[0] >= MAX_CHUNK_FAILURE_ATTEMPTS:
+            LOGGER.warning(
+                "hotlane chunk re-admitted after quarantine ttl chunk_id=%s attempts=%d ttl_s=%.0f",
+                key[0],
+                entry[0],
+                self.ttl_s,
+            )
+        return True
+
     def count(self, candidate: EmbedCandidate) -> int:
-        return self.attempts.get(self._key(candidate), 0)
+        key = self._key(candidate)
+        entry = self.attempts.get(key)
+        if entry is None or self._expire(key, entry, self.clock()):
+            return 0
+        return entry[0]
 
     def quarantined(self, candidate: EmbedCandidate) -> bool:
         return self.count(candidate) >= MAX_CHUNK_FAILURE_ATTEMPTS
 
+    def _make_room(self, now: float) -> None:
+        for key, entry in list(self.attempts.items()):
+            if not self._expire(key, entry, now):
+                break  # Ordered by last failure: the rest are younger.
+        while len(self.attempts) >= self.max_entries:
+            key, (attempts, _) = self.attempts.popitem(last=False)
+            LOGGER.warning(
+                "hotlane chunk failure table full; evicting oldest chunk_id=%s attempts=%d max_entries=%d",
+                key[0],
+                attempts,
+                self.max_entries,
+            )
+
     def failed(self, candidate: EmbedCandidate, exc: Exception) -> None:
         if isinstance(exc, (apsw.BusyError, apsw.LockedError)) or self.quarantined(candidate):
             return
+        key = self._key(candidate)
+        now = self.clock()
         attempts = self.count(candidate) + 1
-        self.attempts[self._key(candidate)] = attempts
+        self.attempts.pop(key, None)
+        self._make_room(now)
+        self.attempts[key] = (attempts, now)
         if attempts == MAX_CHUNK_FAILURE_ATTEMPTS:
             self.quarantined_total += 1
         LOGGER.error(
             "hotlane chunk %s chunk_id=%s error_type=%s attempts=%d quarantined_total=%d",
-            "quarantined" if self.quarantined(candidate) else "retrying",
+            "quarantined" if attempts >= MAX_CHUNK_FAILURE_ATTEMPTS else "retrying",
             candidate.chunk_id,
             type(exc).__name__,
             attempts,
@@ -210,6 +313,44 @@ class ChunkFailureAttempts:
 
 
 CHUNK_FAILURE_ATTEMPTS = ChunkFailureAttempts()
+
+
+class _FailureStreak:
+    """Hold one loop's per-chunk failures until they prove to be about the chunk.
+
+    An environmental error, or ``SYSTEMIC_FAILURE_STREAK`` consecutive distinct chunks
+    failing with one error class, raises ``HotlaneSystemicFailure`` and counts nothing.
+    Anything else is charged to its chunk when the streak breaks or the loop ends.
+    """
+
+    def __init__(self, stage: str) -> None:
+        self.stage = stage
+        self.error_type: type[BaseException] | None = None
+        self.members: list[tuple[EmbedCandidate, Exception]] = []
+
+    def _systemic(self, error_type: str, chunk_ids: list[str]) -> HotlaneSystemicFailure:
+        self.members = []
+        self.error_type = None
+        failure = HotlaneSystemicFailure(self.stage, error_type, chunk_ids)
+        LOGGER.error("%s; backing off", failure)
+        return failure
+
+    def failed(self, candidate: EmbedCandidate, exc: Exception) -> None:
+        if _is_environmental_error(exc):
+            ids = [member.chunk_id for member, _ in self.members] + [candidate.chunk_id]
+            raise self._systemic(type(exc).__name__, ids) from exc
+        if type(exc) is not self.error_type:
+            self.flush()
+        self.error_type = type(exc)
+        if all(member.chunk_id != candidate.chunk_id for member, _ in self.members):
+            self.members.append((candidate, exc))
+        if len(self.members) >= SYSTEMIC_FAILURE_STREAK:
+            raise self._systemic(type(exc).__name__, [member.chunk_id for member, _ in self.members]) from exc
+
+    def flush(self) -> None:
+        members, self.members, self.error_type = self.members, [], None
+        for candidate, exc in members:
+            CHUNK_FAILURE_ATTEMPTS.failed(candidate, exc)
 
 
 def _sysctl(name: str) -> str:
@@ -709,12 +850,16 @@ def _embed_candidates(
             LOGGER.warning("Failed to embed hotlane batch: %s", exc)
 
     embedded: list[EmbeddedVector] = []
+    streak = _FailureStreak("encode")
     for candidate in candidates:
         try:
             embedded.append(EmbeddedVector(candidate.chunk_id, candidate.content, embed_fn(candidate.content)))
         except Exception as exc:
-            CHUNK_FAILURE_ATTEMPTS.failed(candidate, exc)
             LOGGER.warning("Failed to embed chunk %s: %s", candidate.chunk_id, exc)
+            streak.failed(candidate, exc)
+        else:
+            streak.flush()
+    streak.flush()
     return embedded
 
 
@@ -862,6 +1007,7 @@ def _write_embedded_vectors_once(
             )
 
     count = 0
+    streak = _FailureStreak("write")
     try:
         for vector_index, (chunk_id, content, embedding) in enumerate(vectors):
             metrics = IngestMetrics("hotlane", "vector")
@@ -909,6 +1055,7 @@ def _write_embedded_vectors_once(
                     metadata = metadata if isinstance(metadata, dict) else {}
                     metrics.committed([{"queued_at": metadata.get("ingest_queued_at"), "metadata": metadata}])
                 metrics.finish("commit")
+                streak.flush()
                 CHUNK_FAILURE_ATTEMPTS.succeeded(EmbedCandidate(chunk_id, content))
                 count += rows_touched
                 progress.written = count
@@ -922,8 +1069,8 @@ def _write_embedded_vectors_once(
                 metrics.finish("error")
                 telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
                 if isinstance(exc, (apsw.BusyError, apsw.LockedError)):
+                    streak.flush()
                     raise
-                CHUNK_FAILURE_ATTEMPTS.failed(EmbedCandidate(chunk_id, content), exc)
                 progress.processed = vector_index + 1
                 LOGGER.error(
                     "hotlane vector write skipped chunk_id=%s error_type=%s error=%s",
@@ -931,8 +1078,10 @@ def _write_embedded_vectors_once(
                     type(exc).__name__,
                     exc,
                 )
+                streak.failed(EmbedCandidate(chunk_id, content), exc)
                 if vector_index < len(vectors) - 1:
                     _sleep(VECTOR_WRITE_YIELD_SECONDS)
+        streak.flush()
     finally:
         if conn is not None:
             conn.close()
@@ -1005,8 +1154,10 @@ def _run_split_cycle(
     metrics = IngestMetrics("hotlane", "hotlane")
     embedded = 0
 
-    def finish(outcome: str = "completed") -> None:
+    def finish(outcome: str = "completed", exc: BaseException | None = None) -> None:
         metrics.fields["quarantined_total"] = CHUNK_FAILURE_ATTEMPTS.quarantined_total
+        if isinstance(exc, HotlaneSystemicFailure):
+            metrics.fields["systemic_failure"] = f"{exc.stage}:{exc.error_type}"
         metrics.finish(outcome)
 
     # Peek, not take: a scan or encode failure later in this cycle must not lose them.
@@ -1063,9 +1214,9 @@ def _run_split_cycle(
         backlog_vectors = metrics.run(
             "encode", _embed_candidates, pending_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn
         )
-    except Exception:
+    except Exception as exc:
         restore_pending_scan()
-        finish("error")
+        finish("error", exc)
         raise
     vectors.extend(backlog_vectors)
     fresh_ids = {vector.chunk_id for vector in vectors}
@@ -1098,7 +1249,7 @@ def _run_split_cycle(
                     type(exc).__name__,
                 )
             if not is_lock_error:
-                finish("error")
+                finish("error", exc)
                 raise
             # S17: a busy writer slot never costs the embedded batch. A writer that does not
             # report progress gets all of its vectors carried; its writes are idempotent
@@ -1244,6 +1395,7 @@ def run(
     backlog_batch = min(max(backlog_batch, 0), MAX_BACKLOG_BATCH)
     LOGGER.info("hotlane adapter started db=%s", db_path)
     idle_sleep = interval
+    systemic_failures = 0
     while not STOP:
         if max_cycles is not None and cycles >= max_cycles:
             break
@@ -1326,18 +1478,28 @@ def run(
                 cpu_sampler.observe(state, result.backlog_encoded, cycle_start=cycle_start)
             if result.embedded:
                 LOGGER.info("embedded=%d", result.embedded)
-        except Exception:
+        except Exception as exc:
             LOGGER.exception("hotlane adapter cycle failed")
             if cpu_sampler is not None:
                 cpu_sampler.observe("error")
             cycles += 1
+            error_sleep = min(interval * 2, 5.0)
+            if isinstance(exc, HotlaneSystemicFailure):
+                # The environment is failing for every chunk: back off geometrically so a
+                # full disk is not re-encoded every few seconds. Never counted per chunk.
+                systemic_failures += 1
+                error_sleep = min(error_sleep * 2 ** (systemic_failures - 1), MAX_SYSTEMIC_BACKOFF_SECONDS)
+                LOGGER.warning("hotlane systemic failure streak=%d; backing off %.1fs", systemic_failures, error_sleep)
+            else:
+                systemic_failures = 0
             # A raised cycle is a RETRY, not an idle cycle (PR #735 review, macroscope):
             # it already slept its own backoff here, and letting it fall through to the
             # geometric idle path would compound repeated transient failures into a much
             # longer retry gap. Reset the idle cadence so recovery stays prompt.
             idle_sleep = interval
-            sleep_fn(min(interval * 2, 5.0))
+            sleep_fn(error_sleep)
             continue
+        systemic_failures = 0
         cycles += 1
         # Work resets the cadence so latency stays at `interval`; an idle cycle backs off
         # geometrically up to MAX_IDLE_INTERVAL_SECONDS instead of probing every second.
