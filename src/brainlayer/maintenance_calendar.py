@@ -368,16 +368,66 @@ def calendar_steps(python, cli, lib_dir, scheduled_date):
     return CalendarPlan(scheduled_date, steps, start)
 
 
-def record(directory, **event):
-    with (directory / "runs.jsonl").open("a+b") as handle:
-        end = handle.seek(0, 2)
-        if end:
-            handle.seek(-1, 2)
-            if handle.read(1) != b"\n":
-                handle.write(b"\n")  # Preserve torn bytes, separating them from the next valid record.
-        handle.write((json.dumps({"ts": time.time(), **event}, sort_keys=True) + "\n").encode())
+RUNS_ROTATE_BYTES = 2 * 1024 * 1024
+
+
+def _journal_replace(path, content):
+    """Publish a durable snapshot without exposing a missing or partial pathname."""
+    temporary = path.with_name(path.name + ".pending")
+    with temporary.open("wb") as handle:
+        handle.write(content)
         handle.flush()
         os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _rotate_runs(path):
+    if path.stat().st_size <= RUNS_ROTATE_BYTES:
+        return
+    content = path.read_bytes()
+    boundaries, offset = [], 0
+    for line in content.splitlines(keepends=True):
+        try:
+            row = json.loads(line)
+        except (ValueError, UnicodeDecodeError):
+            row = None
+        # Recovery attempts belong with their preceding night. Never cut at one.
+        if isinstance(row, dict) and row.get("event") == "runner" and row.get("kind") != "recovery":
+            if offset:
+                boundaries.append(offset)
+        offset += len(line)
+    if not boundaries:
+        return  # One oversized attempt cannot safely be split.
+    # Keep roughly half the limit, rounded outward to a complete attempt.
+    target = len(content) - RUNS_ROTATE_BYTES // 2
+    cut = max((offset for offset in boundaries if offset <= target), default=boundaries[0])
+    # Archive first. A crash before current publication leaves duplicate history,
+    # never a missing current night. One archive generation is intentionally kept.
+    _journal_replace(path.with_name("runs.jsonl.1"), content[:cut])
+    _journal_replace(path, content[cut:])
+
+
+def record(directory, **event):
+    # A stable inode serializes append AND replacement, including admission records
+    # written by contenders that do not own the runner's long-lived custody lock.
+    with (directory / "runs.lock").open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        path = directory / "runs.jsonl"
+        with path.open("a+b") as handle:
+            end = handle.seek(0, 2)
+            if end:
+                handle.seek(-1, 2)
+                if handle.read(1) != b"\n":
+                    handle.write(b"\n")  # Separate torn bytes from the next valid record.
+            handle.write((json.dumps({"ts": time.time(), **event}, sort_keys=True) + "\n").encode())
+            handle.flush()
+            os.fsync(handle.fileno())
+        _rotate_runs(path)
 
 
 def _scan_record(directory, **event):
