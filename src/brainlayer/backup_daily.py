@@ -4364,10 +4364,17 @@ def _supervise_backup_process(
     def signal_child(signum):
         (os.kill if managed else os.killpg)(child.pid, signum)
 
+    class SupervisorStopped(Exception):
+        pass
+
+    stop_signal = None
+
     def forward_shutdown_signal(signum, frame) -> None:  # noqa: ARG001
-        if child.poll() is None:
-            signal_child(signum)
-        raise SystemExit(128 + signum)
+        nonlocal stop_signal
+        if stop_signal is None:
+            stop_signal = signum
+            # Unwind the normal/timeout wait once; repeated signals leave cleanup alone.
+            raise SupervisorStopped
 
     for shutdown_signal in (signal.SIGTERM, signal.SIGINT):
         previous_signal_handlers[shutdown_signal] = signal.getsignal(shutdown_signal)
@@ -4414,6 +4421,21 @@ def _supervise_backup_process(
             )
             print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
             return 124
+    except SupervisorStopped:
+        if child.poll() is None:
+            try:
+                signal_child(stop_signal)
+            except ProcessLookupError:
+                pass  # The child exited between poll and signal delivery.
+        try:
+            child.wait(timeout=SUPERVISOR_ALARM_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            try:
+                signal_child(signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.wait()
+        raise SystemExit(128 + stop_signal)
     finally:
         if managed and child.poll() is None:
             child.kill()
