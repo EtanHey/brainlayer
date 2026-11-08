@@ -4251,7 +4251,9 @@ def _run_backup_process(timeout_seconds: int) -> int:
     signal.signal(signal.SIGALRM, _raise_backup_timeout)
     signal.signal(signal.SIGTERM, _raise_backup_stopped)
     signal.signal(signal.SIGINT, _raise_backup_stopped)
-    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    supervised = _env_flag_enabled(BACKUP_SUPERVISED_CHILD_ENV)
+    if not supervised:
+        signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
         resolved_db_path = get_db_path()
 
@@ -4312,7 +4314,8 @@ def _run_backup_process(timeout_seconds: int) -> int:
         )
         return 1
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
+        if not supervised:
+            signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_alarm_handler)
         signal.signal(signal.SIGTERM, previous_term_handler)
         signal.signal(signal.SIGINT, previous_int_handler)
