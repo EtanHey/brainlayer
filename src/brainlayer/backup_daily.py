@@ -1407,16 +1407,9 @@ def _snapshot_suffix(name: str) -> str | None:
 
 def _resolve_zstd() -> str | None:
     """Absolute zstd path, or None. A set-but-unusable override fails loudly, never falls through."""
-    override = os.environ.get(BACKUP_ZSTD_PATH_ENV)
-    if override is not None:
-        candidate = Path(override)
-        if not candidate.is_absolute() or not candidate.is_file() or not os.access(candidate, os.X_OK):
-            raise ValueError(f"{BACKUP_ZSTD_PATH_ENV} must name an absolute executable zstd: {override!r}")
-        return str(candidate)
-    for candidate in ZSTD_CANDIDATE_PATHS:
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return shutil.which("zstd")
+    from .zstd_stream import resolve_zstd
+
+    return resolve_zstd(BACKUP_ZSTD_PATH_ENV)
 
 
 def _require_zstd() -> str:

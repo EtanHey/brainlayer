@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Iterator, List, Optional
 
 from ..pipeline.classify import transcript_author_model
+from ..zstd_stream import ZstdDecodedFile, logical_jsonl_path
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,9 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
     model: Optional[str] = None
     model_provider: Optional[str] = None
 
-    with open(file_path, "rb") as fh:
+    # Physical compression never changes source_file or the native session identity.
+    source_file = str(logical_jsonl_path(file_path))
+    with (ZstdDecodedFile(file_path) if file_path.name.endswith(".jsonl.zst") else open(file_path, "rb")) as fh:
         for raw in fh:
             raw = raw.strip()
             if not raw:
@@ -215,7 +218,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "session_id": session_id,
                         "sender": "user",
                         "model_provider": model_provider,
-                        "source_file": str(file_path),
+                        "source_file": source_file,
                     },
                 }
                 continue
@@ -245,7 +248,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "sender": "assistant",
                         "model": model,
                         "model_provider": model_provider,
-                        "source_file": str(file_path),
+                        "source_file": source_file,
                     },
                 }
                 continue
@@ -276,7 +279,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "sender": "tool",
                         "call_id": payload.get("call_id"),
                         "model_provider": model_provider,
-                        "source_file": str(file_path),
+                        "source_file": source_file,
                     },
                 }
 
@@ -390,7 +393,7 @@ def ingest_codex_session(
 
     indexed = index_chunks_to_sqlite(
         all_chunks,
-        source_file=str(file_path),
+        source_file=str(logical_jsonl_path(file_path)),
         project=project,
         db_path=db_path,
         # Pass source through the metadata; index_new reads chunk.metadata["source"]
