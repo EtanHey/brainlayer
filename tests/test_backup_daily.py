@@ -2843,17 +2843,17 @@ def test_launchd_installer_knows_backup_target():
     assert "BRAINLAYER_BACKUP_LOG_PROVENANCE:=real" in wrapper
 
 
-def test_main_enforces_configured_backup_timeout(monkeypatch, capsys):
+def test_unsupervised_process_enforces_configured_backup_timeout(monkeypatch, capsys):
     from brainlayer import backup_daily
 
     def slow_backup(**kwargs):  # noqa: ARG001
         time.sleep(5)
 
     monkeypatch.setenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "1")
-    monkeypatch.setenv(backup_daily.BACKUP_SUPERVISED_CHILD_ENV, "1")
+    monkeypatch.delenv(backup_daily.BACKUP_SUPERVISED_CHILD_ENV, raising=False)
     monkeypatch.setattr(backup_daily, "run_backup", slow_backup)
 
-    assert backup_daily.main() == 124
+    assert backup_daily._run_backup_process(1) == 124
     assert "brainlayer backup timed out after 1s" in capsys.readouterr().out
 
 

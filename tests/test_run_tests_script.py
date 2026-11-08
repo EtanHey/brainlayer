@@ -1607,6 +1607,8 @@ def test_script_env_scrubs_an_ambient_prepush_tag_so_a_tag_push_can_pass_its_own
     one that got added downstream (#775) without being added here. The scrub is by PREFIX now, so
     the next sibling cannot reintroduce this: a test that WANTS one sets it explicitly.
     """
+    monkeypatch.setenv("BRAINLAYER_PREPUSH_SELECT_BUDGET", "1")
+    monkeypatch.setenv("BRAINLAYER_PREPUSH_RELEASE_BUDGET", "1")
     monkeypatch.setenv("BRAINLAYER_PREPUSH_TAG", "v9.9.9")
     monkeypatch.setenv("BRAINLAYER_PREPUSH_SCOPE", "full")
     monkeypatch.setenv("BRAINLAYER_PREPUSH_CACHE_DIR", str(tmp_path / "ambient-cache"))
@@ -2005,7 +2007,7 @@ def test_pre_push_heavy_suite_contract(tmp_path: Path, helper_mode: str, suite_e
         helper.write_text(
             "import os, subprocess, sys\n"
             "assert sys.argv[1:] == ['--', 'python3', 'scripts/ci/run_with_deadline.py', "
-            "'--seconds', '1800', '--label', 'pre-push', '--', 'bash', 'scripts/run_tests.sh']\n"
+            "'--seconds', '5400', '--label', 'pre-push', '--', 'bash', 'scripts/run_tests.sh']\n"
             "print('FAKE HEAVY HELPER', flush=True)\n"
             "sys.exit(subprocess.call(sys.argv[2:]))\n"
         )
@@ -2266,13 +2268,13 @@ def _deadline_probe_helper(tmp_path: Path) -> tuple[Path, Path]:
 
 @pytest.mark.parametrize(
     ("kind", "want_seconds", "want_wall"),
-    [("tag", "5400", "5460"), ("branch", "1800", "<unset>"), ("tag+branch", "1800", "<unset>")],
+    [("tag", "5400", "5460"), ("branch", "5400", "5460"), ("tag+branch", "5400", "5460")],
 )
 def test_pre_push_hook_gives_a_tag_push_the_release_gate_budget(
     tmp_path: Path, kind: str, want_seconds: str, want_wall: str
 ) -> None:
     """v1.5.91's tag range mapped the full suite and died twice at the 1800 s deadline (exit 124,
-    no failing test). A release gate that cannot finish is not a gate; a branch push keeps 1800 s."""
+    no failing test). The outer ceiling admits full runs; selection bounds small runs separately."""
     repo, env_log = _repo_with_the_pre_push_hook(tmp_path)
     helper, record = _deadline_probe_helper(tmp_path)
     sha = _rev_parse(repo, "v1.1.0")
@@ -2289,3 +2291,44 @@ def test_pre_push_hook_gives_a_tag_push_the_release_gate_budget(
     argv, wall = record.read_text().splitlines()
     assert f"'--seconds', '{want_seconds}'" in argv
     assert wall == want_wall
+
+
+@pytest.mark.parametrize(
+    ("kind", "changed", "seconds"),
+    [
+        ("branch", "src/brainlayer/drain.py", "5400"),
+        ("branch", "tests/test_small.py", "1800"),
+        ("tag", "tests/test_small.py", "5400"),
+    ],
+)
+def test_hook_budget_follows_resolved_selection(tmp_path: Path, kind: str, changed: str, seconds: str) -> None:
+    repo, env_log = _repo_with_the_pre_push_hook(tmp_path)
+    (repo / "scripts/run_tests.sh").write_text(SCRIPT_PATH.read_text())
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_small.py").write_text("def test_small(): pass\n")
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=None)
+    record = tmp_path / "deadlines.log"
+    (repo / "scripts/ci/run_with_deadline.py").write_text(
+        "import subprocess, sys\n"
+        f"with open({str(record)!r}, 'a') as f: f.write(sys.argv[sys.argv.index('--seconds')+1] + '\\n')\n"
+        "raise SystemExit(subprocess.call(sys.argv[sys.argv.index('--')+1:]))\n"
+    )
+    sha = _rev_parse(repo, "v1.1.0")
+    ref = "refs/tags/v1.1.0" if kind == "tag" else "refs/heads/main"
+    result = _run_hook(
+        repo,
+        env_log,
+        f"{ref} {sha} {ref} {'0' * 40}\n",
+        extra_env={
+            "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+            "BRAINLAYER_TEST_ROOT": str(test_root),
+            "BRAINLAYER_USE_UV": "0",
+            "BRAINLAYER_PREPUSH_SCOPE": "changed-only",
+            "BRAINLAYER_CHANGED_FILES": changed,
+            "PYTEST_LOG": str(pytest_log),
+            "BUN_LOG": str(bun_log),
+        },
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert record.read_text().splitlines() == ["5400", seconds]

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-import shutil
+import os
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .queue_io import _mkdir_durable, _sync_directory, _sync_queue_fd
 
 
 @dataclass
@@ -54,10 +57,18 @@ def _collision_target(dest_dir: Path, source_name: str, content_hash: str, conte
         counter += 1
 
 
-def _copy_atomic(source: Path, target: Path) -> None:
-    tmp = target.with_name(f".{target.name}.tmp")
-    shutil.copyfile(source, tmp)
-    tmp.replace(target)
+def _copy_atomic(content: bytes, target: Path) -> None:
+    temporary = target.with_name(f".{target.name}-{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(content)
+            handle.flush()
+            _sync_queue_fd(handle.fileno())
+        # A link publishes the complete inode atomically, refusing an existing name.
+        os.link(temporary, target)
+        _sync_directory(target.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def merge_queue_dirs(source_dir: Path, dest_dir: Path, *, dry_run: bool = False) -> QueueMergeResult:
@@ -73,7 +84,7 @@ def merge_queue_dirs(source_dir: Path, dest_dir: Path, *, dry_run: bool = False)
     existing_hashes = _read_existing_hashes(dest_dir)
 
     if not dry_run:
-        dest_dir.mkdir(parents=True, exist_ok=True)
+        _mkdir_durable(dest_dir)
 
     for source_path in sorted(path for path in source_dir.iterdir() if path.is_file()):
         if source_path.suffix != ".jsonl":
@@ -92,9 +103,29 @@ def merge_queue_dirs(source_dir: Path, dest_dir: Path, *, dry_run: bool = False)
             target_path = _collision_target(dest_dir, source_path.name, content_hash, content)
             result.collision_renames.append((source_path.name, target_path.name))
 
+        if not dry_run:
+            while True:
+                try:
+                    _copy_atomic(content, target_path)
+                    break
+                except FileExistsError:
+                    try:
+                        if target_path.read_bytes() == content:
+                            result.skipped_exact.append(source_path.name)
+                            break
+                    except FileNotFoundError:
+                        continue
+                    if source_path.name not in result.collisions:
+                        result.collisions.append(source_path.name)
+                    target_path = _collision_target(dest_dir, source_path.name, content_hash, content)
+            if source_path.name in result.skipped_exact:
+                existing_hashes[content_hash] = target_path.name
+                continue
+        if target_path.name != source_path.name:
+            rename = (source_path.name, target_path.name)
+            result.collision_renames = [r for r in result.collision_renames if r[0] != source_path.name]
+            result.collision_renames.append(rename)
         result.copied.append(target_path.name)
         existing_hashes[content_hash] = target_path.name
-        if not dry_run:
-            _copy_atomic(source_path, target_path)
 
     return result
