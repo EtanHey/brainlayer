@@ -69,7 +69,7 @@ enum BrainBarJobOwnership: Equatable, Sendable {
 
     // Same custody checks as install.sh's journal guard. Open every path segment with NOFOLLOW:
     // a parent link must not turn an apparently private journal into a different owner's file.
-    static func readOwnedFile(_ url: URL, privateMode: Bool, limit: Int, tail: Bool = false) throws -> Data? {
+    static func readOwnedFile(_ url: URL, privateMode: Bool, limit: Int, tail: Bool = false, onTruncated: () -> Void = {}) throws -> Data? {
         var fd = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard fd >= 0 else { throw CocoaError(.fileReadNoPermission) }
         defer { Darwin.close(fd) }
@@ -91,20 +91,20 @@ enum BrainBarJobOwnership: Equatable, Sendable {
               info.st_mode & (privateMode ? 0o077 : 0o022) == 0,
               (tail || info.st_size <= limit) else { throw CocoaError(.fileReadNoPermission) }
         let offset = tail ? max(0, info.st_size - Int64(limit) - 1) : 0
+        if offset > 0 { onTruncated() }
         if tail, lseek(fd, offset, SEEK_SET) < 0 { throw CocoaError(.fileReadUnknown) }
         var remaining = tail ? Int(info.st_size - offset) : limit + 1
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 8192)
         while true {
-            if tail && remaining == 0 {
+            let count = Darwin.read(fd, &buffer, min(buffer.count, remaining))
+            guard count >= 0 else { throw CocoaError(.fileReadUnknown) }
+            if count == 0 || (tail && remaining == 0) {
                 if offset > 0, let newline = data.firstIndex(of: 10) {
                     data.removeSubrange(...newline)
                 } else if offset > 0 { data.removeAll() }
                 return data
             }
-            let count = Darwin.read(fd, &buffer, min(buffer.count, remaining))
-            guard count >= 0 else { throw CocoaError(.fileReadUnknown) }
-            if count == 0 { return data }
             guard data.count + count <= limit + (tail ? 1 : 0) else { throw CocoaError(.fileReadTooLarge) }
             data.append(contentsOf: buffer.prefix(count))
             remaining -= count
@@ -149,6 +149,7 @@ struct BrainBarCalendarHistory: Sendable {
         var failed: Bool
         var abandoned: Bool
         var consecutiveFailures = 0
+        var streakComplete = true
         var failedSteps: [String] = []
         var stepProblems: [String: StepProblem] = [:]
         var runnerErrorAt: Date? = nil
@@ -177,6 +178,13 @@ struct BrainBarCalendarHistory: Sendable {
         /// The calendar's run-start receipt id for a maintenance child (#1040), from its `finished` row.
         var runID: String? = nil
     }
+    var truncated = false
+    var uncertaintyNote: String? {
+        var notes: [String] = []
+        if skippedLineCount > 0 { notes.append("Maintenance history skipped \(skippedLineCount) damaged rows") }
+        if truncated { notes.append("Maintenance history is truncated; failure streaks are unknown") }
+        return notes.isEmpty ? nil : notes.joined(separator: "; ")
+    }
     var skippedLineCount = 0
     var runs: [String: Run] = [:]
     var error: String? = nil
@@ -185,10 +193,14 @@ struct BrainBarCalendarHistory: Sendable {
 
     static func read(directory: URL = BrainBarJobOwnership.directory.appendingPathComponent("calendar")) -> Self {
         do {
+            var truncated = false
             guard let data = try BrainBarJobOwnership.readOwnedFile(
-                directory.appendingPathComponent("runs.jsonl"), privateMode: false, limit: 4 * 1024 * 1024, tail: true
+                directory.appendingPathComponent("runs.jsonl"), privateMode: false, limit: 4 * 1024 * 1024, tail: true, onTruncated: { truncated = true }
             ) else { return .empty }
             var result = Self()
+            result.truncated = truncated
+            var hasHeader = !truncated
+            var nightlyHeaders: Set<String> = []
             var starts: [String: Date] = [:]
             var streaks: [String: Int] = [:]
             var abandonedRuns: Set<String> = []
@@ -206,10 +218,19 @@ struct BrainBarCalendarHistory: Sendable {
             var attemptSteps: [String: [String: AttemptStep]] = [:]
             var attemptKinds: [String: String] = [:]
             for (ordinal, line) in String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).enumerated() {
+                // Value-type snapshots make each row atomic, including late validation failures.
+                let checkpoint = (result, starts, streaks, abandonedRuns, nights, unresolvedSteps, stepProblems, unknownFailures, abandonmentFailures, runnerErrors, abandonmentSummaries, openAttempt, pendingRunnerError, attemptSteps, attemptKinds)
                 do {
                     guard let row = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
                     else { throw CocoaError(.fileReadCorruptFile) }
                     let event = row["event"] as? String
+                    if event == "runner" || event == "transcript-recovery" { hasHeader = true }
+                    if !hasHeader { continue }
+                    if event == "runner", (row["kind"] as? String ?? "nightly") == "nightly",
+                       let date = row["scheduled_date"] as? String { nightlyHeaders.insert(date) }
+                    if truncated, row["kind"] as? String == "nightly",
+                       event == "summary" || event == "abandoned",
+                       !nightlyHeaders.contains(row["scheduled_date"] as? String ?? "") { continue }
                     if event == "runner" || event == "transcript-recovery" {
                         starts.removeAll()
                         result.latestScheduledDate = row["scheduled_date"] as? String
@@ -374,7 +395,10 @@ struct BrainBarCalendarHistory: Sendable {
                         startedAt: startedAt, reason: row["reason"] as? String, replaces: row["replaces"] as? String,
                         scheduledDate: row["scheduled_date"] as? String ?? result.latestScheduledDate, journalOrdinal: ordinal,
                         consecutiveFailures: streaks[step] ?? 0, runID: row["maintenance_run_id"] as? String)
-                } catch { result.skippedLineCount += 1 }
+                } catch {
+                    (result, starts, streaks, abandonedRuns, nights, unresolvedSteps, stepProblems, unknownFailures, abandonmentFailures, runnerErrors, abandonmentSummaries, openAttempt, pendingRunnerError, attemptSteps, attemptKinds) = checkpoint
+                    result.skippedLineCount += 1
+                }
             }
             if result.skippedLineCount > 0 && result.runs.isEmpty && nights.isEmpty {
                 result.error = "Maintenance calendar history contains no readable results"
@@ -390,7 +414,8 @@ struct BrainBarCalendarHistory: Sendable {
                 night.failed = night.failed || night.runnerErrorAt != nil || night.unknownFailureAt != nil
                     || night.abandonmentFailureAt != nil
                 streak = night.failed ? streak + 1 : 0
-                night.consecutiveFailures = streak
+                night.consecutiveFailures = truncated ? 0 : streak
+                night.streakComplete = !truncated
                 night.failedSteps = (unresolvedSteps[date] ?? []).sorted()
                 night.stepProblems = stepProblems[date] ?? [:]
                 result.maintenanceNight = night

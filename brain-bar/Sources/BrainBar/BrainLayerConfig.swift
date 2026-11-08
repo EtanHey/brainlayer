@@ -600,6 +600,10 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
                             || disabledLabels.contains("com.brainlayer.maintenance")
                     }
                 }
+                if !job.isContinuous, let note = history.uncertaintyNote {
+                    result.calendarScheduleUncertainty = [result.calendarScheduleUncertainty, note].compactMap { $0 }.joined(separator: "; ")
+                    if history.truncated { result.calendarConsecutiveFailures = nil }
+                }
                 if job == .maintenanceNightly || job == .maintenanceWeekly {
                     result.calendarNightOutcome = history.maintenanceNight
                 }
