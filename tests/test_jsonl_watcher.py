@@ -8,6 +8,7 @@ Covers:
 """
 
 import ast
+import hashlib
 import json
 import os
 import sqlite3
@@ -633,12 +634,19 @@ class TestJSONLTailer:
 
         # First line is 13 bytes + newline = 14
         first_line_bytes = len(b'{"id":"1"}\n')
-        # A stored offset is trusted only with evidence the bytes before it are unchanged:
-        # here, a checkpoint confirmed no earlier than the file's last write (#1656).
-        tailer = JSONLTailer(str(f), offset=first_line_bytes, resume_checkpoint_mtime=f.stat().st_mtime)
+        # A stored offset is trusted only with evidence the bytes before it are unchanged: the
+        # SHA-256 of [0, offset) persisted with the checkpoint (#1656). A legacy checkpoint short
+        # of the file's end is the read/ack race shape and is re-read instead.
+        digest = hashlib.sha256(b'{"id":"1"}\n').hexdigest()
+        tailer = JSONLTailer(str(f), offset=first_line_bytes, resume_prefix=(digest, None))
         lines = tailer.read_new_lines()
         assert len(lines) == 1
         assert lines[0]["id"] == "2"
+        assert not tailer.replaced
+
+        legacy = JSONLTailer(str(f), offset=first_line_bytes, resume_checkpoint_mtime=f.stat().st_mtime)
+        assert [line["id"] for line in legacy.read_new_lines()] == ["1", "2"]
+        assert legacy.replaced
 
     def test_offset_without_evidence_rereads_from_start(self, tmp_path):
         f = tmp_path / "test.jsonl"

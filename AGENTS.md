@@ -438,16 +438,21 @@ brainlayer search "how did I implement authentication"
   Read that before tailing anything. Agents never delete or archive the old files; Etan decides.
 - A vanished JSONL is not a parse failure: `vanished_source_count_total` in
   `watcher-health.json` counts confirmed deletions (lstat ENOENT), which never raise
-  `watcher_file_ingestion_failed`. A path that reappears under the same inode is resumed only
-  if the 256 bytes before its offset AND a digest of its first 4 KiB still match; otherwise it
-  is re-ingested from 0 (#732). A tail alone is not enough: the #1656 DB-copy rehearsal lost two
-  records to a rewrite whose records lined up with the old offset and shared a long suffix.
-- **A stored offset is never trusted on its own word.** Each `offsets.json` entry carries a
-  `fingerprint` (offset + head digest + tail) of the bytes before it. A restarted watcher, or
-  one handed copied offsets, re-checks it before resuming and re-reads from 0 on a mismatch
-  (idempotent: content-hash chunk ids + dedupe). Entries written before fingerprints existed
-  resume only if the file's mtime is no later than the checkpoint's confirm time, so an upgrade
-  does not re-read untouched files from 0; any appended or rewritten file is re-read from 0.
+  `watcher_file_ingestion_failed`. A path that reappears under the same inode, or is rewritten
+  in place, keeps its offset only while the bytes before it are provably the ones consumed;
+  otherwise it is re-ingested from 0 (#732, #1656).
+- **A stored offset is never trusted on its own word.** Each `offsets.json` entry carries
+  `prefix_sha256` (SHA-256 of every byte before the offset, kept incrementally while reading)
+  and `prefix_stat` (`[size, mtime_ns, inode]` those bytes were proven under). A restart with an
+  unchanged stat resumes with no read; a changed one re-hashes the prefix once and re-reads from
+  0 on a mismatch. A live tailer checks a changed file's tail and head cheaply and re-hashes the
+  prefix on the first idle poll after it. Samples are not proof: the #1656 round-2 rehearsal
+  lost records to a rewrite that kept the head and the tail and changed only the middle.
+- Re-reading from 0 adds no rows (content-hash chunk ids), but it bumps `seen_count` on every
+  replayed chunk, so it is not free. Entries without a digest (pre-#1656 or #1656's sampled
+  `fingerprint`) are kept only when the file is exactly `offset` bytes and unmodified since the
+  confirm time, and are then hashed once and upgraded; the read/ack race leaves a longer file and
+  is re-read. Residual: a same-length in-place rewrite racing a pre-upgrade acknowledgement.
 - Socket: `/tmp/brainlayer.sock`
 - Historical enrichment lock: `/tmp/brainlayer-enrichment.lock` (legacy cleanup/safety only)
 - Session dedup: `/tmp/brainlayer_session_*.json`

@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import sqlite3
+from contextlib import closing
 
 from brainlayer.watcher import JSONLWatcher, WatchRoot
 from brainlayer.watcher_bridge import create_flush_callback
@@ -83,7 +84,12 @@ class _Rig:
         assert self.source.stat().st_ino == inode
 
     def contents(self) -> list[str]:
-        with sqlite3.connect(self.db_path) as conn:
+        # Read-only and closed. `with sqlite3.connect(...)` only commits; the read-write handle
+        # it leaves is closed later by GC. stdlib sqlite3 and APSW link separate SQLite copies
+        # whose POSIX locks cannot see each other, so that close looks like the last connection,
+        # checkpoints and unlinks the -wal the flush callback's APSW writer still has open, and
+        # every later row lands in an unlinked file: the [1, 2] the probe receipt saw.
+        with closing(sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)) as conn:
             rows = conn.execute("SELECT content FROM chunks WHERE source_file = ?", (str(self.source),)).fetchall()
         return [row[0] for row in rows]
 
@@ -128,7 +134,7 @@ def test_cold_resume_unchanged_first_poll_then_longer_same_inode_rewrite_stores_
 
 
 def test_cold_resume_rewrite_before_any_poll_is_reingested_from_the_start(tmp_path):
-    """No live anchor exists at all: only the fingerprint persisted with the offset can tell."""
+    """No live anchor exists at all: only the digest persisted with the offset can tell."""
     rig = _Rig(tmp_path)
     _first_run(rig)
     rig.rewrite_same_inode(_source((3, 4, 5, 6)))
@@ -153,11 +159,12 @@ def test_live_tailer_detects_a_boundary_aligned_same_inode_rewrite(tmp_path):
 
 
 def test_cold_resume_append_while_down_resumes_at_the_verified_offset(tmp_path):
-    """The fingerprint must not turn every restart into a full re-read of active files."""
+    """An append while down re-hashes the prefix once, then resumes at the proven offset."""
     rig = _Rig(tmp_path)
     old = _first_run(rig)
     entry = json.loads((tmp_path / "copied.json").read_text())[str(rig.source)]
-    assert isinstance(entry.get("fingerprint"), str)
+    assert entry["prefix_sha256"] == hashlib.sha256(old).hexdigest()
+    assert entry["prefix_stat"][0] == len(old)
     with rig.source.open("ab") as handle:
         handle.write(_encode([{"role": "user", "content": _text(7)}]))
     resumed = rig.watcher("copied.json")
@@ -170,10 +177,12 @@ def test_cold_resume_append_while_down_resumes_at_the_verified_offset(tmp_path):
 
 
 def _strip_fingerprints(path) -> None:
+    """Cut every entry back to the pre-#1656 shape: offset, inode, confirm mtime, generation."""
     data = json.loads(path.read_text())
     for value in data.values():
         if isinstance(value, dict):
-            value.pop("fingerprint", None)
+            for key in ("fingerprint", "prefix_sha256", "prefix_stat"):
+                value.pop(key, None)
     path.write_text(json.dumps(data))
 
 
@@ -200,3 +209,188 @@ def test_legacy_checkpoint_modified_since_confirm_is_reread_from_the_start(tmp_p
     rig.drain(rig.watcher("copied.json"))
 
     assert rig.messages() == [1, 2, 3, 4, 5, 6]
+
+
+# ── #1656 round 2 (receipt DBCOPY-1656b): two more skip paths, ported from the probe harness ──
+
+
+def test_middle_only_rewrite_after_resume_stores_every_row(tmp_path, monkeypatch):
+    """The first 4096 bytes and the 256 before the offset survive; only the middle changes."""
+    meta = json.loads(json.dumps(META))
+    meta["payload"]["padding"] = "x" * 5000
+    monkeypatch.setitem(globals(), "META", meta)
+    rig = _Rig(tmp_path)
+    old = _first_run(rig)
+    resumed = rig.watcher("copied.json")
+    rig.drain(resumed, 3)
+    new = _source((3, 4, 5, 6))
+    assert old[:4096] == new[:4096]
+    assert old[-256:] == new[len(old) - 256 : len(old)]
+    assert old != new[: len(old)]
+
+    rig.rewrite_same_inode(new)
+    rig.drain(resumed, 4)
+
+    assert rig.messages() == [1, 2, 3, 4, 5, 6]
+
+
+def _write_legacy_checkpoint_racing_a_rewrite(rig: _Rig, registry_name: str) -> dict:
+    """Emit a pre-fingerprint checkpoint whose source was rewritten between read and ack.
+
+    The rewrite runs inside the real flush callback, after the rows are stored and before the
+    watcher confirms the offset, so no timestamp is forged: source mtime <= confirm time. The
+    entry is then cut to exactly the fields the pre-#1656 watcher (8fc4f292) persisted.
+    """
+    rig.source.write_bytes(_source((1, 2)))
+    changed = []
+
+    def rewrite_before_confirm(items):
+        result = rig.flush(items)
+        if not changed:
+            rig.rewrite_same_inode(_source((3, 4, 5, 6)))
+            changed.append(True)
+        return result
+
+    prior = JSONLWatcher(
+        watch_roots=[WatchRoot("codex", rig.sessions)],
+        registry_path=rig.tmp_path / registry_name,
+        on_flush=rewrite_before_confirm,
+        batch_size=1,
+        flush_interval_ms=0,
+        registry_flush_interval_s=0,
+        health_path=rig.tmp_path / "legacy-health.json",
+    )
+    prior.poll_once()
+    prior.indexer.flush()
+    prior.registry.flush()
+    assert changed and rig.messages() == [1, 2]
+    path = rig.tmp_path / registry_name
+    data = json.loads(path.read_text())
+    entry = {key: data[str(rig.source)][key] for key in ("offset", "inode", "mtime", "generation")}
+    data[str(rig.source)] = entry
+    path.write_text(json.dumps(data))
+    assert entry["offset"] == len(_source((1, 2)))
+    assert rig.source.stat().st_mtime <= entry["mtime"]
+    return entry
+
+
+def test_legacy_checkpoint_rewritten_between_read_and_ack_stores_every_row(tmp_path):
+    rig = _Rig(tmp_path)
+    _write_legacy_checkpoint_racing_a_rewrite(rig, "offsets.json")
+
+    rig.drain(rig.watcher("offsets.json"), 4)
+
+    assert rig.messages() == [1, 2, 3, 4, 5, 6]
+
+
+def _rows(rig: _Rig) -> dict[str, tuple[str, int]]:
+    with closing(sqlite3.connect(f"file:{rig.db_path}?mode=ro", uri=True)) as conn:
+        query = "SELECT id, content, seen_count FROM chunks WHERE source_file = ?"
+        return {row[0]: (row[1], row[2]) for row in conn.execute(query, (str(rig.source),))}
+
+
+def test_replay_from_zero_after_a_digest_mismatch_adds_no_rows(tmp_path):
+    """Restarting at byte 0 is safe: chunk ids are content hashes, so nothing is duplicated.
+
+    It is not side-effect free: each replayed chunk's seen_count is bumped once
+    (merge_existing_chunk_seen). Pinned here so that cost stays visible.
+    """
+    rig = _Rig(tmp_path)
+    old = _first_run(rig)
+    # Same length, same inode, same parsed records: only the digest can tell the bytes changed.
+    respaced = old.replace(b'"user", "content"', b'"user" ,"content"')
+    assert respaced != old and len(respaced) == len(old)
+    rig.rewrite_same_inode(respaced)
+    before = _rows(rig)
+    rig.drain(rig.watcher("copied.json"))
+
+    after = _rows(rig)
+    assert len(before) == 2
+    assert {chunk_id: content for chunk_id, (content, _) in after.items()} == {
+        chunk_id: content for chunk_id, (content, _) in before.items()
+    }
+    assert {chunk_id: seen for chunk_id, (_, seen) in after.items()} == {
+        chunk_id: seen + 1 for chunk_id, (_, seen) in before.items()
+    }
+
+
+def _count_proofs(monkeypatch) -> list[int]:
+    from brainlayer.watcher import JSONLTailer
+
+    calls: list[int] = []
+    original = JSONLTailer._prove_prefix
+
+    def counting(self, *args, **kwargs):
+        calls.append(self.offset)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(JSONLTailer, "_prove_prefix", counting)
+    return calls
+
+
+def test_steady_state_never_rehashes_while_appending_and_once_when_idle(tmp_path, monkeypatch):
+    calls = _count_proofs(monkeypatch)
+    rig = _Rig(tmp_path)
+    rig.source.write_bytes(_source((1,)))
+    watcher = rig.watcher("offsets.json")
+    rig.drain(watcher, 1)
+    for n in (2, 3, 4):  # an append lands before every poll: never idle, never re-hashed
+        with rig.source.open("ab") as handle:
+            handle.write(_encode([{"role": "user", "content": _text(n)}]))
+        rig.drain(watcher, 1)
+    assert calls == []
+
+    rig.drain(watcher, 3)  # first idle poll proves the prefix once; later ones skip the file
+    assert calls == [len(_source((1, 2, 3, 4)))]
+    assert rig.messages() == [1, 2, 3, 4]
+
+    entry = json.loads((tmp_path / "offsets.json").read_text())[str(rig.source)]
+    assert entry["prefix_sha256"] == hashlib.sha256(_source((1, 2, 3, 4))).hexdigest()
+    assert entry["prefix_stat"][0] == len(_source((1, 2, 3, 4)))
+
+
+def test_cold_resume_of_an_unchanged_file_reads_nothing(tmp_path, monkeypatch):
+    rig = _Rig(tmp_path)
+    _first_run(rig)
+    calls = _count_proofs(monkeypatch)
+    rig.drain(rig.watcher("copied.json"))
+
+    assert calls == []
+    assert rig.messages() == [1, 2]
+
+
+def test_legacy_checkpoint_is_hashed_once_and_then_resumes_for_free(tmp_path, monkeypatch):
+    rig = _Rig(tmp_path)
+    old = _first_run(rig)
+    _strip_fingerprints(tmp_path / "copied.json")
+    calls = _count_proofs(monkeypatch)
+    rig.drain(rig.watcher("copied.json"))
+    assert calls == [len(old)]
+    entry = json.loads((tmp_path / "copied.json").read_text())[str(rig.source)]
+    assert entry["prefix_sha256"] == hashlib.sha256(old).hexdigest()
+
+    rig.drain(rig.watcher("copied.json"))
+    assert calls == [len(old)]
+    assert rig.messages() == [1, 2]
+
+
+def test_rig_reader_never_unlinks_the_writers_wal(tmp_path):
+    """Pin the cause of the probe receipt's [1, 2]: a closed read-write stdlib reader.
+
+    stdlib sqlite3 and APSW are separate SQLite copies in one process. A read-only reader may
+    close freely; the rig used to leave a read-write one for GC, which deletes the live WAL.
+    """
+    import gc
+
+    rig = _Rig(tmp_path)
+    rig.source.write_bytes(_source((1, 2)))
+    watcher = rig.watcher("offsets.json")
+    rig.drain(watcher)
+    assert rig.messages() == [1, 2]
+    gc.collect()
+    assert os.path.exists(f"{rig.db_path}-wal")
+    with rig.source.open("ab") as handle:
+        handle.write(_encode([{"role": "user", "content": _text(3)}]))
+    rig.drain(watcher)
+
+    assert rig.messages() == [1, 2, 3]
