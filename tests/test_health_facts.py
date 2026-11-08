@@ -580,3 +580,58 @@ def test_disk_timeout_reuses_measurement_only_within_thirty_minutes(tmp_path, mo
         assert "earlier measurement" in facts.check_notes["disk"]
     facts, _ = hf.collect_facts(config, result, state, NOW + timedelta(minutes=31))
     assert facts.disk_free_bytes is UNOBSERVED
+
+
+@pytest.mark.parametrize("mode", ["running", "high load", "waiting"])
+def test_embedding_completed_batches_and_load_pause_are_not_net_stalls(tmp_path, mode):
+    config = _config(tmp_path)
+    with sqlite3.connect(config.db_path) as conn:
+        conn.execute("INSERT INTO chunks VALUES ('pending', 'text', NULL, NULL, NULL, ?)", (NOW.isoformat(),))
+    prior = {
+        "embedding": {
+            "count": 1,
+            "since": (NOW - timedelta(hours=8)).isoformat(),
+            "window_start": (NOW - timedelta(days=1)).isoformat(),
+        }
+    }
+    payload = {
+        "status": "measured",
+        "db": str(config.db_path.resolve()),
+        "measured_at": NOW.isoformat(),
+        "backlog_encoded": 16 if mode != "waiting" else 0,
+        "backlog_cpu_seconds": 2,
+        "backlog_state": mode,
+        "backlog_last_batch_at": (
+            NOW - timedelta(minutes=2) if mode != "waiting" else NOW - timedelta(hours=8)
+        ).isoformat(),
+    }
+    (tmp_path / "hotlane-cpu.json").write_text(json.dumps(payload))
+    (tmp_path / "hotlane-budget.json").write_text(json.dumps({"backlog_max_load": 10}))
+    facts, _ = _collect(config, prior)
+    check = evaluate(facts).check("embedding")
+    if mode == "waiting":
+        assert check.state == "red"
+        assert "not shrunk" in check.note
+    else:
+        assert check.state == "amber"
+        assert "not shrunk" not in check.note
+        assert "1 queued" in check.note
+        assert "last batch" in check.note
+        assert ("paused by machine load" if mode == "high load" else "progressing") in check.note
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_load_gate_requires_fresh_evidence_even_without_completed_batch(tmp_path, stale):
+    cpu = {
+        "status": "measured",
+        "db": str(tmp_path.resolve()),
+        "measured_at": (NOW - timedelta(minutes=3) if stale else NOW).isoformat(),
+        "backlog_encoded": 0,
+        "backlog_cpu_seconds": 0,
+        "backlog_state": "high load",
+    }
+    _, text = hf.embedding_activity(cpu, {"backlog_max_load": 10}, tmp_path, NOW)
+    assert (text is None) == stale
+    if text:
+        assert "paused by machine load" in text
+        assert "time unavailable" in text

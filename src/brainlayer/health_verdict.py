@@ -114,6 +114,7 @@ class Facts:
     store_canary_ok: Any = UNOBSERVED  # True only for a persisted, retrieved round trip
     search_canary_ok: Any = UNOBSERVED
     embedding_stalled_since: Any = UNOBSERVED
+    embedding_activity: str | None = None
     disk_free_bytes: Any = UNOBSERVED
     disk_peak_bytes: Any = UNOBSERVED
     disk_floor_bytes: Any = UNOBSERVED
@@ -422,6 +423,8 @@ def _raw_checks(
         "backlog has not shrunk for",
         t.wake_grace_s,
     )
+    if facts.embedding_activity:
+        raw["embedding"] = _Raw(AMBER, facts.embedding_activity)
     pending = _stall_age(
         facts.oldest_pending_store_at,
         p("stores"),
