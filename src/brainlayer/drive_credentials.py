@@ -143,6 +143,20 @@ def _expiry(data: dict[str, Any]) -> dt.datetime | None:
     return parsed.astimezone(dt.UTC).replace(tzinfo=None) if parsed.tzinfo else parsed
 
 
+def _consent_deadline(data: dict[str, Any]) -> dt.datetime | None:
+    """Testing-mode consent requires an explicit timezone; never infer the host's."""
+    consented = data.get("consented_at")
+    if not consented or os.environ.get("BRAINLAYER_DRIVE_OAUTH_TESTING") != "1":
+        return None
+    try:
+        consent_time = dt.datetime.fromisoformat(str(consented).replace("Z", "+00:00"))
+        if consent_time.tzinfo is None:
+            raise ValueError("consent time has no timezone")
+        return consent_time.astimezone(dt.UTC) + dt.timedelta(days=7)
+    except ValueError:
+        raise DriveCredentialError("BrainLayer Drive consent metadata is invalid") from None
+
+
 def load_credentials(
     *,
     token_path: Path | None = None,
@@ -169,14 +183,8 @@ def load_credentials(
         if migrate:
             _migrate_if_missing(token, legacy)
         token_data = _read_object(token, private=True)
-        consented = token_data.get("consented_at")
-        expires = None
-        if consented and os.environ.get("BRAINLAYER_DRIVE_OAUTH_TESTING") == "1":
-            try:
-                consent_time = dt.datetime.fromisoformat(str(consented).replace("Z", "+00:00")).astimezone(dt.UTC)
-            except ValueError:
-                raise DriveCredentialError("BrainLayer Drive consent metadata is invalid") from None
-            expires = consent_time + dt.timedelta(days=7)
+        expires = _consent_deadline(token_data)
+        if expires is not None:
             remaining = expires - (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
             if remaining <= dt.timedelta(0):
                 reason = f"Drive access expired at {expires.isoformat()}: Reconnect in BrainBar"
@@ -249,17 +257,7 @@ def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[
         }
     try:
         data = _read_object(token, private=True)
-        consented = data.get("consented_at")
-        try:
-            expires = (
-                dt.datetime.fromisoformat(str(consented).replace("Z", "+00:00")) + dt.timedelta(days=7)
-                if consented and os.environ.get("BRAINLAYER_DRIVE_OAUTH_TESTING") == "1"
-                else None
-            )
-            if expires and expires.tzinfo is None:
-                raise ValueError("consent time has no timezone")
-        except ValueError:
-            raise DriveCredentialError("BrainLayer Drive consent metadata is invalid") from None
+        expires = _consent_deadline(data)
         current = (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
         days_left = max(0.0, (expires - current).total_seconds() / 86400) if expires else None
         timing = {"expires_at": expires.isoformat() if expires else None, "days_left": days_left}
