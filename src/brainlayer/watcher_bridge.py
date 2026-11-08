@@ -133,8 +133,8 @@ def _is_pure_deletion_diff(text: str) -> bool:
             removals += 1
         elif in_hunk and line == "\\ No newline at end of file":
             pass
-        elif not in_hunk and line.startswith(("diff --git ", "index ", "deleted file mode ")):
-            pass
+        elif line.startswith(("diff --git ", "index ", "deleted file mode ")):
+            in_hunk = False
         else:
             return False
         i += 1

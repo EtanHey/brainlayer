@@ -33,3 +33,19 @@ def test_deletion_patch_is_filtered(text):
 @pytest.mark.parametrize("tail", ["\nExplanation survives.", "\n+new", "\n context"])
 def test_patch_with_surviving_content_is_retained(tail):
     assert not _is_pure_deletion_diff("--- a/file\n+++ b/file\n@@ -1 +0,0 @@\n-old" + tail)
+
+
+@pytest.mark.parametrize("file_count", [2, 3])
+def test_multi_file_git_rm_patch_is_filtered(file_count):
+    patch = "\n".join(
+        f"diff --git a/file{i} b/file{i}\n"
+        "deleted file mode 100644\n"
+        "index abc..000\n"
+        f"--- a/file{i}\n"
+        "+++ /dev/null\n"
+        "@@ -1,2 +0,0 @@\n"
+        "-old\n"
+        "-code"
+        for i in range(file_count)
+    )
+    assert _is_pure_deletion_diff(patch)
