@@ -259,6 +259,7 @@ def run_bridge(
     next_connect_at = 0.0
     reconnect_delay = config.reconnect_ms / 1000
     stdin_eof = False
+    eof_overall_deadline: float | None = None
     eof_idle_deadline: float | None = None
     eof_response_deadline: float | None = None
     pending_responses = 0
@@ -339,6 +340,14 @@ def run_bridge(
             if stdout_failed:
                 return 0
             now = time.monotonic()
+            if eof_overall_deadline is not None and now >= eof_overall_deadline:
+                # Never replay a possibly partially sent request after the host closes.
+                for frame in pending:
+                    request_id = _frame_response_id(frame.data)
+                    if request_id is not None:
+                        in_flight.append(InFlightFrame(frame.data, request_id))
+                fail_in_flight_requests()
+                return 0
             if (
                 stdin_eof
                 and not pending
@@ -390,6 +399,9 @@ def run_bridge(
                 eof_idle_deadline = None
                 eof_response_deadline = None
 
+            if eof_overall_deadline is not None:
+                timeout = max(0.0, min(timeout, eof_overall_deadline - now))
+
             try:
                 readable, writable, _ = select.select(readers, writers, [], timeout)
             except OSError as exc:
@@ -406,6 +418,10 @@ def run_bridge(
                     continue
                 if chunk == b"":
                     stdin_eof = True
+                    eof_overall_deadline = time.monotonic() + max(
+                        config.connect_timeout_ms / 1000,
+                        (config.stdin_eof_drain_ms / 1000) * 10,
+                    )
                     _enqueue_complete_frames(input_buffer, pending, stdin_eof=True)
                     continue
                 if pending_bytes + len(chunk) > config.max_pending_bytes:
