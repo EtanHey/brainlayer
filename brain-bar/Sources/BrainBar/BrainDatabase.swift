@@ -950,6 +950,15 @@ final class BrainDatabase: @unchecked Sendable {
     /// Replaces the barrier that makes replayed commits durable before the queue drops their rows.
     var pendingStoreReplayDurabilityBarrierForTesting: (() throws -> Void)?
 #if DEBUG
+    /// Runs inside the durability barrier after it resolved SQLite's file handle and before it
+    /// calls xSync on it: the exact window a concurrent close() must not be able to free it in.
+    var commitDurabilityBarrierWillSyncForTesting: (() throws -> Void)?
+    /// True when another thread holds transactionLock, the lock close() needs to free the handle.
+    func transactionLockIsHeldElsewhereForTesting() -> Bool {
+        guard transactionLock.try() else { return true }
+        transactionLock.unlock()
+        return false
+    }
     var observeStorePolicyForTesting: ((Int32, Int) -> Void)?
     var onStoreTransactionForTesting: (() -> Void)?
     var onBackupStagingCreatedForTesting: (() -> Void)?
@@ -5215,7 +5224,16 @@ final class BrainDatabase: @unchecked Sendable {
     /// the unix VFS issue F_FULLFSYNC on Darwin, the same device-cache barrier the queue
     /// append uses. Syncing the WAL covers every earlier frame, including rows a previous
     /// replay committed whose queue line is only now being dropped as already stored.
+    ///
+    /// xSync on the raw sqlite3_file is a direct VFS callback, outside SQLite's connection
+    /// mutex, so nothing in SQLite stops close() from freeing that handle mid-call. The barrier
+    /// holds transactionLock (the lock close() takes) from the open check through the sync:
+    /// a racing close() waits for the sync to finish, and a barrier that loses the race finds
+    /// the handle gone and throws notOpen. Lock order matches replay's own store(): callers hold
+    /// the pending-store locks first, then this lock, and nothing takes them in reverse.
     func syncCommittedWritesToStableStorage() throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         guard let db else { throw DBError.notOpen }
         let isWAL = queryPragma(db, name: "journal_mode")?.lowercased() == "wal"
         var file: UnsafeMutablePointer<sqlite3_file>?
@@ -5226,6 +5244,9 @@ final class BrainDatabase: @unchecked Sendable {
         guard let file, let methods = file.pointee.pMethods, let xSync = methods.pointee.xSync else {
             throw DBError.exec(SQLITE_IOERR, "durability barrier: \(isWAL ? "WAL" : "database") file is not open")
         }
+#if DEBUG
+        try commitDurabilityBarrierWillSyncForTesting?()
+#endif
         let syncRC = xSync(file, SQLITE_SYNC_FULL)
         guard syncRC == SQLITE_OK else { throw DBError.exec(syncRC, "durability barrier: sync failed") }
     }
