@@ -562,6 +562,12 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
 
                 conversation_id = chunk.metadata.get("session_id") or file_stem
                 metadata = dict(chunk.metadata)
+                # #655: Codex names its author model per turn, outside the message; the
+                # watcher stamps it on the entry. Only an attributed chunk says where from.
+                if metadata.get("model") and entry.get("_author_model_source"):
+                    metadata["model_source"] = entry["_author_model_source"]
+                if entry.get("_author_model_provider"):
+                    metadata["model_provider"] = entry["_author_model_provider"]
                 observed = entry.get("_ingest_observed_at")
                 if isinstance(observed, (int, float)):
                     metadata["ingest_observed_at"] = observed
