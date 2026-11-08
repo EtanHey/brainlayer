@@ -13,7 +13,7 @@
 (* Each pre-fix behaviour is a constant, so TLC can replay tonight's bugs.  *)
 (* All-fixed values: ClockMode="authoritative", GraceMode="same_copy",     *)
 (* LegacyState=FALSE, Fix1595=TRUE, Fix1596=TRUE, VacuumGate="latest",     *)
-(* DeferredAdvances=FALSE.                                                  *)
+(* DeferredAdvances=FALSE, WeeklyRead="strict".                             *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
@@ -40,7 +40,9 @@ CONSTANTS
     DeferredAdvances, \* scratch break: a deferred weekly run advances last_weekly
     Weekly,           \* explore weekly maintenance --full runs
     Monitor,          \* explore health ticks (the VACUUM gate does not read them)
-    Strict            \* track the ghosts NoFalseGreenStrict needs
+    Strict,           \* track the ghosts NoFalseGreenStrict needs
+    Damage,           \* may one receipt line be unreadable on disk (a non-JSON, non-noise line)
+    WeeklyRead        \* "strict" #1685: any uncertain line disables the gate | "lenient": skip it
 
 Checks == {"snap", "off"}           \* backup_local ("Database snapshot (verified)"), backup_offsite
 Red(c) == IF c = "snap" THEN RedSnap ELSE RedOff
@@ -57,14 +59,19 @@ OffKinds == {"upload_ok", "revoke"}
 (* last receipt touching each snapshot's local copy (lastLoc) and its Drive *)
 (* copy (lastOff). Implementation: backup_facts()' running fold (acc).      *)
 (* Two logs with the same summaries are one state.                          *)
+(* A damaged line still happened in the world (lastLoc/lastOff), but every  *)
+(* reader that skips unparseable lines misses it: acc (health_facts'        *)
+(* read_receipts) and seenLoc (the latest local kind per snapshot as such a *)
+(* reader sees it). dmg records that the log holds an uncertain line.       *)
 VARIABLES
     now, created, file, events, lastLoc, lastOff, acc, \* the world and the log
+    dmg, seenLoc,
     lastTick, resumed, lastReadable,       \* the monitor
     st, clk, dl, uk, removedFlag,          \* persisted verdict state per check
     everRead, kLoc, kOff, sLoc, sOff, prevSt, grace, graceS, \* ghosts
     lastWeekly, weeklyAt, vac               \* weekly VACUUM
 
-world == <<now, created, file, events, lastLoc, lastOff, acc>>
+world == <<now, created, file, events, lastLoc, lastOff, acc, dmg, seenLoc>>
 monitor == <<lastTick, resumed, lastReadable, st, clk, dl, uk, removedFlag>>
 ghosts == <<everRead, kLoc, kOff, sLoc, sOff, prevSt, grace, graceS>>
 weekly == <<lastWeekly, weeklyAt, vac>>
@@ -169,12 +176,15 @@ Eval(readable, r, c) ==
 
 -----------------------------------------------------------------------------
 (* The world.                                                               *)
-AddReceipt(e) ==
+AddReceipt(e) ==                \* bad: this receipt's line is unreadable (at most one per log)
+    \E bad \in (IF Damage /\ ~dmg THEN BOOLEAN ELSE {FALSE}) :
     /\ events < MaxLog
     /\ events' = events + 1
     /\ lastLoc' = [lastLoc EXCEPT ![e.snap] = e.kind]
     /\ lastOff' = IF e.kind \in OffKinds THEN [lastOff EXCEPT ![e.snap] = e.kind] ELSE lastOff
-    /\ acc' = Fold1(acc, e)
+    /\ acc' = IF bad THEN acc ELSE Fold1(acc, e)
+    /\ seenLoc' = IF bad THEN seenLoc ELSE [seenLoc EXCEPT ![e.snap] = e.kind]
+    /\ dmg' = (dmg \/ bad)
 Taken == {s \in Snaps : created[s] # NoTime}
 
 TakeSnapshot(s) ==
@@ -233,7 +243,7 @@ World == /\ \E s \in Snaps : TakeSnapshot(s) \/ Upload(s) \/ RemoveAfterUpload(s
 
 Advance == /\ now < Horizon
            /\ now' = now + 1
-           /\ UNCHANGED <<created, file, events, lastLoc, lastOff, acc, monitor, ghosts, weekly>>
+           /\ UNCHANGED <<created, file, events, lastLoc, lastOff, acc, dmg, seenLoc, monitor, ghosts, weekly>>
 
 -----------------------------------------------------------------------------
 (* One health tick.                                                         *)
@@ -277,8 +287,13 @@ Tick(readable) ==
 
 -----------------------------------------------------------------------------
 (* Weekly maintenance --full: freelist gate, then the fresh-snapshot gate. *)
-GateFresh(s) == s \in Taken /\ file[s] /\ Age(s) <= VacAge /\ Age(s) >= 0
-                /\ (VacuumGate = "latest" => lastLoc[s] \in {"local_ok", "upload_ok"})
+(* _recent_local_verified_backup reads the log strictly since #1685: an     *)
+(* uncertain line makes it return None, so the run defers. The lenient      *)
+(* pre-#1685 read skipped the line and judged the snapshot by its last      *)
+(* readable receipt (seenLoc).                                              *)
+WeeklyBlind == WeeklyRead = "strict" /\ dmg
+GateFresh(s) == ~WeeklyBlind /\ s \in Taken /\ file[s] /\ Age(s) <= VacAge /\ Age(s) >= 0
+                /\ (VacuumGate = "latest" => seenLoc[s] \in {"local_ok", "upload_ok"})
 TrulyFresh == \E s \in Taken : file[s] /\ LocalOK(lastLoc, s) /\ Age(s) <= VacAge
 
 WeeklyRun ==
@@ -305,6 +320,8 @@ Init ==
     /\ lastLoc = [s \in Snaps |-> "none"]
     /\ lastOff = [s \in Snaps |-> "none"]
     /\ acc = Init0
+    /\ dmg = FALSE
+    /\ seenLoc = [s \in Snaps |-> "none"]
     /\ lastTick = NoTime
     /\ resumed = NoTime
     /\ lastReadable = FALSE
@@ -334,6 +351,8 @@ TypeOK ==
     /\ now \in 0..Horizon
     /\ \A c \in Checks : st[c] \in States /\ clk[c] \in Snaps \cup {None}
     /\ events <= MaxLog
+    /\ dmg \in BOOLEAN
+    /\ ~dmg => seenLoc = lastLoc
 
 Fresh(L, O, c, g) ==
     LET k == TrueClock(L, O, c) IN

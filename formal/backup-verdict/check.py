@@ -185,6 +185,16 @@ CASES: list[dict[str, str]] = [
         "what": "a deleted superseded stall comes back as the clock",
     },
     {
+        "name": "bug-1685-lenient-weekly-gate",
+        "module": "BackupVerdict",
+        "prefix": "ff3a8b35",
+        "fixed_here": "yes",
+        "replay": "weekly",
+        "expect": "VacuumNeedsFreshSnapshot",
+        "pr": "#1685",
+        "what": "a damaged revoke line lets the lenient weekly gate VACUUM on a revoked snapshot",
+    },
+    {
         "name": "bug-1587-B4-backlog-ages-out",
         "module": "PipeVerdict",
         "expect": "RedHoldsUntilEvidence",
@@ -344,6 +354,13 @@ CASES: list[dict[str, str]] = [
         "expect": "pass",
         "pr": "",
         "what": "an unobserved tick between two good ticks does not reset the count",
+    },
+    {
+        "name": "finding-damaged-receipt-dot",
+        "module": "BackupVerdict",
+        "expect": "NoFalseGreen",
+        "pr": "",
+        "what": "health_facts.read_receipts skips a damaged line, so a damaged abandon/revoke receipt leaves the dot green",
     },
     # --- design limit and scratch breaks: prove the properties can fail ------------------
     {
@@ -522,6 +539,11 @@ def run_case(case: dict[str, str], out: Path) -> dict[str, object]:
                 "prefix": {"ref": case["prefix"], "error": "no counterexample trace to replay"},
                 "src": {"ref": "working tree", "error": "no counterexample trace to replay"},
             }
+        elif case.get("replay") == "weekly":
+            replays = {
+                "prefix": replay_weekly(case, trace, case["prefix"], out),
+                "src": replay_weekly(case, trace, SRC_REF, out),
+            }
         elif case["module"] == "BackupVerdict":
             replays = {"prefix": replay(case, trace, case["prefix"], out), "src": replay(case, trace, SRC_REF, out)}
         else:
@@ -599,6 +621,43 @@ def replay(case: dict[str, str], states: list, ref: str | None, out: Path) -> di
         reproduces = all(last["src"][c] != "red" for c in ("snap", "off") if last["model"][c] != "red")
     conforms = all(t["src"] == t["model"] for t in ticks)
     return {"ref": ref or "working tree", "reproduces": reproduces, "conforms": conforms, "ticks": ticks}
+
+
+def replay_weekly(case: dict[str, str], states: list, ref: str | None, out: Path) -> dict[str, object]:
+    """Run the counterexample's receipts through the real weekly VACUUM gate at ref.
+
+    Reproduces when the real _recent_local_verified_backup admits the run the model VACUUMed
+    without a truly fresh snapshot (the trace's last weekly run). Conforms when, at every weekly run
+    that reached the gate (freelist high), the real gate admits exactly when the model VACUUMed.
+    """
+    sys.path.insert(0, str(HERE))
+    import replay as rp  # noqa: PLC0415 - sibling script
+
+    where = ref or "working tree"
+    constants = {k: int(v) if v.lstrip("-").isdigit() else v for k, v in cfg_constants(case["name"]).items()}
+    payload = {"constants": constants, "ops": rp.ops_from_trace(states)}
+    if not any(op["op"] == "weekly" for op in payload["ops"]):
+        return {"ref": where, "error": "counterexample has no weekly run to replay"}
+    proc = subprocess.run(
+        [sys.executable, "-S", str(HERE / "replay.py"), "--run-weekly", str(source_tree(ref, out))],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=out,
+    )
+    if proc.returncode != 0:
+        return {"ref": where, "error": proc.stderr.strip().splitlines()[-1:]}
+    runs = json.loads(proc.stdout)
+    gated = [r for r in runs if r["model"] in ("vacuumed", "deferred")]
+    if not gated or runs[-1]["model"] != "vacuumed":
+        return {"ref": where, "error": "the trace does not end on a VACUUM the gate admitted"}
+    return {
+        "ref": where,
+        "reproduces": runs[-1]["src"] == "fresh",
+        "conforms": all((r["src"] == "fresh") == (r["model"] == "vacuumed") for r in gated),
+        "weekly": runs,
+    }
 
 
 def replay_pipe(case: dict[str, str], traces: list, ref: str | None, out: Path) -> dict[str, object]:

@@ -64,7 +64,7 @@ not yet merged is `fixed_here: "no"`, and fails once the fix lands until someone
 
 ## Scope and bounds
 
-- `BackupVerdict`: 2 snapshots, 5 receipts, 6 logical hours (all-fixes run: 1,352,435 distinct
+- `BackupVerdict`: 2 snapshots, 5 receipts, 6 logical hours (all-fixes run: 1,193,217 distinct
   states). The receipt log is kept as its summaries (last local / Drive receipt kind per snapshot,
   plus the reader's running fold), so logs with equal summaries are one state.
 - Thresholds are ordering-preserving logical hours, not production seconds: Grace 1 ≤ VacAge 1 <
@@ -81,7 +81,11 @@ not yet merged is `fixed_here: "no"`, and fails once the fix lands until someone
 ## What is not covered
 
 - The collectors that build `Facts` from files (`health_facts.py`, #1587) are modelled only for
-  #1587 B4 and B5. File reads, timeouts and the 4 MiB tail are out of scope.
+  #1587 B4 and B5, and for one file-read rule: a receipt line that does not parse is skipped
+  (`Damage`, at most one damaged line per log; `finding-damaged-receipt-dot`). Timeouts and the
+  4 MiB tail are out of scope.
+- The weekly gate's strict read (#1685) is modelled as `WeeklyRead`; its counterexample is replayed
+  against the real `_recent_local_verified_backup` on real files (`replay.py --run-weekly`).
 - `ingest`, `embedding` and `stores` traces are replayed against code (they carry each tick's
   observation, `lastObs`). `drive_auth` and dot traces are not replayed.
 - `Supersede` requires a newer verified upload, as `_reclaim_superseded_local` does. The custody
@@ -93,7 +97,7 @@ not yet merged is `fixed_here: "no"`, and fails once the fix lands until someone
 ## Keeping it in step
 
 `coverage.json` pins each covered source by sha256, maps each modelled action to path:line, and
-records bounds and atomicity. Every source is pinned at main 67d23f14. CI runs `--require-sync`,
+records bounds and atomicity. Every source is pinned at main 5fda86d2. CI runs `--require-sync`,
 so any change to a covered source fails this job until someone re-confirms the model and moves the
 pin. When covered code changes:
 re-read the mapped lines, update the model or add a switch, rerun, and only then move the pin.

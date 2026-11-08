@@ -164,6 +164,43 @@ def test_replay_runs_real_source_without_the_package(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("ref", "second", "damaged", "gate"),
+    [
+        (None, None, False, "fresh"),  # one verified local snapshot within VacAge: the gate admits it
+        (None, "revoke", False, "none"),  # its latest receipt revokes it (drive_md5_match False)
+        (None, "abandon", False, "none"),  # abandoned, and the file is gone
+        (None, "revoke", True, "none"),  # #1685: an uncertain line disables the strict gate
+        (None, "local_ok", True, "none"),  # any uncertain line, even one that said nothing new
+        ("ff3a8b35", "revoke", True, "fresh"),  # pre-#1685 lenient read skips it: VACUUM on a revoked copy
+        ("ff3a8b35", "revoke", False, "none"),  # the lenient read still honours a readable revocation
+    ],
+)
+def test_weekly_replay_runs_the_real_gate(tmp_path, ref, second, damaged, gate):
+    ops = [{"op": "receipt", "hour": 0, "kind": "local_ok", "snap": 1, "created": 0, "exact": True}]
+    if second:
+        ops.append(
+            {"op": "receipt", "hour": 0, "kind": second, "snap": 1, "created": 0, "exact": True, "damaged": damaged}
+        )
+    ops.append({"op": "weekly", "hour": 1, "model": "vacuumed"})
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    proc = subprocess.run(
+        [sys.executable, "-S", str(HERE / "replay.py"), "--run-weekly", str(checker.source_tree(ref, tmp_path))],
+        input=__import__("json").dumps({"constants": {"VacAge": 1}, "ops": ops}),
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    assert [r["src"] for r in __import__("json").loads(proc.stdout)] == [gate]
+
+
+def test_weekly_replay_fails_closed_on_a_missing_gate_body():
+    with pytest.raises(RuntimeError, match="lacks"):
+        replay._gate("def _recent_local_verified_backup():\n    return None\n")
+
+
+@pytest.mark.parametrize(
     ("fixed_here", "prefix", "src", "ok"),
     [
         ("yes", (True, True), (False, False), True),  # pre-fix ref reproduces tick for tick; fixed here

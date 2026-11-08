@@ -14,6 +14,12 @@ file, a database or a socket.
 
     python3 -S replay.py --run <dir with health_verdict.py and backup_daily.py> < ops.json
     python3 -S replay.py --run-pipe <same dir> < ops.json       (PipeVerdict stall-check ticks)
+    python3 -S replay.py --run-weekly <same dir> < ops.json     (BackupVerdict weekly VACUUM gate)
+
+--run-weekly is the one mode that touches files: it writes real snapshot files and a real
+backup-daily.log under a fresh directory in the current working directory (check.py runs it
+inside .build.noindex/), because the gate it replays, _recent_local_verified_backup, proves a
+snapshot by hashing its bytes.
 """
 
 from __future__ import annotations
@@ -21,11 +27,15 @@ import __future__
 
 import ast
 import datetime as dt
+import hashlib
 import importlib.util
 import json
+import os
 import re
 import sys
+import time
 import types
+import uuid
 from pathlib import Path
 
 BASE = dt.datetime(2026, 11, 2, 3, tzinfo=dt.UTC)  # 03:00Z, so filename midnight != exact time
@@ -105,8 +115,12 @@ def ops_from_trace(states: list[tuple[str, dict[str, str]]]) -> list[dict]:
                     "snap": snap,
                     "created": created[snap - 1],
                     "exact": exact,
+                    # The one receipt whose line the model marks unreadable (dmg turns TRUE).
+                    "damaged": previous.get("dmg") == "FALSE" and values.get("dmg") == "TRUE",
                 }
             )
+        elif previous is not None and action == "WeeklyRun":
+            ops.append({"op": "weekly", "hour": int(values["now"]), "model": _tla_record(values["vac"])["kind"]})
         elif previous is not None and action == "Tick":
             st = _tla_record(values["st"])
             ops.append(
@@ -176,7 +190,10 @@ def run(src: Path, payload: dict) -> list[dict]:
     out = []
     for op in payload["ops"]:
         if op["op"] == "receipt":
-            receipts.append(receipt(op))
+            if not op.get("damaged"):  # health_facts.read_receipts skips a line it cannot parse
+                receipts.append(receipt(op))
+            continue
+        if op["op"] != "tick":
             continue
         now = BASE + dt.timedelta(hours=op["hour"])
         kwargs = {}
@@ -204,6 +221,95 @@ def run(src: Path, payload: dict) -> list[dict]:
                 "snap_label": hv.CHECK_LABELS["backup_local"],
             }
         )
+    return out
+
+
+# --- weekly VACUUM gate (BackupVerdict, Weekly = TRUE) ------------------------------------
+
+GATE_FUNCTIONS = {
+    "_recent_local_verified_backup",
+    "_read_backup_receipts",
+    "_scan_backup_receipts",
+    "_local_snapshot_intact",
+    "_upload_identity",
+    "_snapshot_created_time",
+    "_parse_snapshot_date",
+    "local_backup_date",
+}
+GATE_CLASSES = {"BackupReceiptUnreadableError"}
+
+
+def _gate(source: str) -> types.FunctionType:
+    """The real _recent_local_verified_backup and the bodies it calls, extracted from one source."""
+    tree = ast.parse(source)
+    nodes = [
+        n
+        for n in tree.body
+        if isinstance(n, ast.FunctionDef)
+        and n.name in GATE_FUNCTIONS
+        or isinstance(n, ast.ClassDef)
+        and n.name in GATE_CLASSES
+        or isinstance(n, ast.Assign)
+        and any(
+            isinstance(t, ast.Name)
+            and (t.id.endswith("_SUFFIX") or t.id in {"DB_SNAPSHOT_SUFFIXES", "_KNOWN_PROGRESS_NOISE"})
+            for t in n.targets
+        )
+    ]
+    found = {n.name for n in nodes if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+    missing = (GATE_FUNCTIONS | GATE_CLASSES) - found
+    if missing:
+        raise RuntimeError(f"backup_daily.py lacks {sorted(missing)}")  # fail closed, never stub a gate body
+    namespace = {"dt": dt, "Path": Path, "Mapping": dict, "Any": object, "re": re, "json": json}
+    namespace |= {"hashlib": hashlib, "os": os}
+    code = ast.Module(body=nodes, type_ignores=[])
+    flags = __future__.annotations.compiler_flag
+    exec(compile(code, "backup_daily.py(extracted)", "exec", flags=flags), namespace)  # noqa: S102 - real source bodies
+    return namespace["_recent_local_verified_backup"]
+
+
+def run_weekly(src: Path, payload: dict) -> list[dict]:
+    """Write the trace's receipts as a real backup-daily.log, one real file per snapshot, and ask
+    the real gate at each weekly run whether a fresh verified local snapshot exists."""
+    os.environ["TZ"] = "UTC"  # local_backup_date() compares local days; BASE..Horizon stays on one
+    time.tzset()
+    gate = _gate((src / "backup_daily.py").read_text())
+    root = Path.cwd() / f"weekly-{uuid.uuid4().hex[:8]}"
+    staging = root / "staging"
+    staging.mkdir(parents=True)
+    log, db = root / "backup-daily.log", root / "brainlayer.db"
+    removes = {"removed", "abandon", "supersede"}  # the model's file[s] turns FALSE
+    out = []
+    for op in payload["ops"]:
+        if op["op"] == "receipt":
+            path = staging / Path(_key(op["snap"])).name
+            if not path.exists() and op["kind"] == "local_ok":
+                path.write_bytes(f"snapshot {op['snap']}\n".encode() * 64)
+            proof = {}
+            if path.is_file():  # the local proof every receipt about an existing artifact carries
+                proof = {
+                    "local_verified": True,
+                    "local_integrity": "ok",
+                    "local_integrity_pragma": "integrity_check",
+                    "local_artifact": {
+                        "path": str(path.resolve()),
+                        "size": path.stat().st_size,
+                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    },
+                }
+            body = {**proof, **receipt(op), "snapshot": str(path), "db": str(db)}
+            line = json.dumps(body, sort_keys=True)
+            # A damaged line: newline-terminated but not JSON, so not a torn final record either.
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write((line[:-1] if op.get("damaged") else line) + "\n")
+            if op["kind"] in removes and path.exists():
+                path.unlink()
+            continue
+        if op["op"] != "weekly":
+            continue
+        now = BASE + dt.timedelta(hours=op["hour"])
+        found = gate(log, db, now=now, max_age_hours=float(payload["constants"]["VacAge"])) if log.exists() else None
+        out.append({"hour": op["hour"], "model": op["model"], "src": "fresh" if found else "none"})
     return out
 
 
@@ -308,11 +414,13 @@ def run_ingest(src: Path, payload: dict, hv: types.ModuleType | None = None) -> 
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] not in ("--run", "--run-pipe"):
+    if len(sys.argv) != 3 or sys.argv[1] not in ("--run", "--run-pipe", "--run-weekly"):
         sys.exit(__doc__)
     payload = json.load(sys.stdin)
     if sys.argv[1] == "--run":
         print(json.dumps(run(Path(sys.argv[2]), payload)))
+    elif sys.argv[1] == "--run-weekly":
+        print(json.dumps(run_weekly(Path(sys.argv[2]), payload)))
     else:  # one payload carries every trace, so one interpreter replays them all
         hv = _load(Path(sys.argv[2]))
         traces = payload["traces"]
