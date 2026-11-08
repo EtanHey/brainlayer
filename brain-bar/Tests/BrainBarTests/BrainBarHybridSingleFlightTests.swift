@@ -19,6 +19,31 @@ final class BrainBarHybridSingleFlightTests: XCTestCase {
     final class Helper: HybridSearchClientProtocol, @unchecked Sendable {
         func search(arguments: [String: Any]) throws -> HybridSearchResponse { .init(text: "helper") }
     }
+    func testHealthyConcurrentSearchesBothReachHybridClient() throws {
+        let entered = DispatchSemaphore(value: 0)
+        let executor = ParkedExecutor()
+        let router = MCPRouter(profile: "full", hybridSearchClient: Helper(), hybridSearchBudget: 5,
+            hybridSearchExecutor: { action in
+                executor.submit(action)
+                entered.signal()
+            })
+        let finished = expectation(description: "both callers finish")
+        finished.expectedFulfillmentCount = 2
+        for _ in 0..<2 {
+            DispatchQueue.global().async {
+                defer { finished.fulfill() }
+                do {
+                    XCTAssertEqual(try router.hybridSearchWithinBudget(arguments: [:])?.text, "helper")
+                } catch { XCTFail("Unexpected error: \(error)") }
+            }
+        }
+        XCTAssertEqual(entered.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(entered.wait(timeout: .now() + 1), .success)
+        executor.drain()
+        wait(for: [finished], timeout: 6)
+        XCTAssertEqual(executor.submissions, 2)
+    }
+
     func testTimedOutSearchKeepsAdmissionUntilWorkerActuallyFinishes() throws {
         let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent(".build.noindex/search-\(UUID().uuidString)")
@@ -32,8 +57,10 @@ final class BrainBarHybridSingleFlightTests: XCTestCase {
             hybridSearchExecutor: { executor.submit($0) })
         router.setDatabases(write: db, read: db)
         for id in 1...3 {
-            _ = router.handle(["jsonrpc": "2.0", "id": id, "method": "tools/call",
+            let response = router.handle(["jsonrpc": "2.0", "id": id, "method": "tools/call",
                 "params": ["name": "brain_search", "arguments": ["query": "fixture"]]])
+            XCTAssertTrue(String(describing: response).contains("Search mode: BrainBar database fallback"))
+            if id > 1 { XCTAssertTrue(String(describing: response).contains("hybrid helper busy past budget")) }
         }
         XCTAssertEqual(executor.submissions, 1, "Timeout must not admit another blocked worker")
         executor.drain()
