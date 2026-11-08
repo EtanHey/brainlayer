@@ -504,6 +504,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                     source_file,
                     t3_linked_session_ids=linked_t3_session_ids,
                     t3_session_identity_cache=t3_session_identity_cache,
+                    t3_session_header=entry.get("_codex_header"),
                 )
             except BrainLayerAlarm:
                 deferred_entries.append(entry)
