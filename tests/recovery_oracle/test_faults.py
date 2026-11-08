@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+from scripts import hotlane_brainbar_daemon as hotlane
+
 from .faults import catch_up, cut_worker, index_batch
 
 pytestmark = [pytest.mark.recovery_oracle, pytest.mark.timeout(30, method="thread")]
@@ -19,13 +21,25 @@ def test_fault_recovery(world, monkeypatch, fault):
         assert world.writer.conn.execute("SELECT COUNT(*) FROM chunks WHERE source='oracle-index'").fetchone() == (1,)
         index_batch(world)
     elif fault == "encoder_raise":
+        # A fresh per-chunk table, so the assertions below see only this fault's charges.
+        attempts = hotlane.ChunkFailureAttempts()
+        monkeypatch.setattr(hotlane, "CHUNK_FAILURE_ATTEMPTS", attempts)
 
         def failed(_text):
             raise RuntimeError("seeded encoder unavailable")
 
         world.drain(embed_fn=failed)
-        assert world.hotlane(embed_fn=failed) == 0
+        stored = world.writer.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        assert stored > 0, "drain must keep FTS rows when the provider fails"
+        # Every chunk failing and the canary failing too is the environment, not the
+        # chunks: hotlane raises for the run loop to back off, and charges nothing.
+        with pytest.raises(hotlane.HotlaneSystemicFailure) as systemic:
+            world.hotlane(embed_fn=failed)
+        assert (systemic.value.stage, systemic.value.error_type) == ("encode", "RuntimeError")
+        assert len(systemic.value.chunk_ids) == min(stored, hotlane.SYSTEMIC_FAILURE_STREAK)
         assert world.writer.conn.execute("SELECT COUNT(*) FROM chunk_vectors").fetchone() == (0,)
+        assert not attempts.attempts, f"systemic failure charged chunks: {dict(attempts.attempts)}"
+        assert attempts.quarantined_total == 0
     else:
         cut_worker(world, fault)
         if fault == "encoder_stall":
@@ -36,6 +50,9 @@ def test_fault_recovery(world, monkeypatch, fault):
     metrics = catch_up(world, timeout=5)
     world.assert_roundtrip()
     world.assert_acknowledged(extra_ids={"indexa", "indexb"} if fault == "index" else ())
+    if fault == "encoder_raise":
+        # The healthy-encoder cycle recovered every chunk and left nothing charged.
+        assert not attempts.attempts and attempts.quarantined_total == 0
     print(
         "recovery_oracle_receipt="
         + json.dumps({"fault": fault, "seed": world.seed, **metrics, **world.assert_latency()}, sort_keys=True)
