@@ -49,7 +49,7 @@ struct BrainBarOperationReceipt: Codable, Equatable, Sendable {
         for (index, line) in lines.enumerated() {
             let value = String(line)
             if value.hasPrefix("## \""), index + 1 < lines.count,
-               lines[index + 1] == TextFormatter.compactSearchLegend,
+               TextFormatter.compactSearchLegends.contains(String(lines[index + 1])),
                let range = value.range(of: "\" ", options: .backwards) {
                 let counts = value[range.upperBound...].split(separator: "/", omittingEmptySubsequences: false)
                 if counts.count == 2, let shown = Int(counts[0]), let total = Int(counts[1]),

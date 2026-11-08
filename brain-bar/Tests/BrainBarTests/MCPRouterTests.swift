@@ -129,7 +129,18 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(result?["protocolVersion"] as? String, "2024-11-05")
         let serverInfo = try XCTUnwrap(result?["serverInfo"] as? [String: Any])
         XCTAssertEqual(serverInfo["backupWriterStartedAtUnix"] as? Double, 1_234.5)
+        XCTAssertEqual(serverInfo["backupSnapshotInProgress"] as? Bool, false)
         XCTAssertEqual(response["id"] as? Int, 1)
+
+        // #1413: the snapshot status follows socket admission, not file age.
+        func snapshotInProgress() -> Bool? {
+            let info = (router.handle(request)["result"] as? [String: Any])?["serverInfo"] as? [String: Any]
+            return info?["backupSnapshotInProgress"] as? Bool
+        }
+        router.backupSnapshotStarted()
+        XCTAssertEqual(snapshotInProgress(), true)
+        router.backupSnapshotFinished()
+        XCTAssertEqual(snapshotInProgress(), false)
 
         // Must declare tool capabilities
         let capabilities = result?["capabilities"] as? [String: Any]

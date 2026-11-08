@@ -91,8 +91,18 @@ final class MCPDietTests: XCTestCase {
         local.setDatabase(db)
         let scoped = try call(local, "brain_search", ["query": "scopeprobe", "project": "fixture"])
         XCTAssertFalse(scoped.contains("|fixture|"), scoped)
+        // #1069: a blanked project column is explained, and only where one was blanked.
+        XCTAssertEqual(scoped.split(separator: "\n").dropFirst().first.map(String.init),
+                       TextFormatter.scopedCompactSearchLegend, scoped)
         let unscoped = try call(local, "brain_search", ["query": "scopeprobe"])
         XCTAssertTrue(unscoped.contains("|fixture|"), unscoped)
+        XCTAssertEqual(unscoped.split(separator: "\n").dropFirst().first.map(String.init),
+                       TextFormatter.compactSearchLegend, unscoped)
+        // A filter that blanks no row leaves the legend unannotated.
+        let unblanked = TextFormatter.formatSearchResults(query: "q", results: [
+            SearchResult(chunkID: "other-id", project: "other", snippet: "content")
+        ], total: 1, scopedProject: "fixture")
+        XCTAssertTrue(unblanked.contains("\n" + TextFormatter.compactSearchLegend + "\n- ID: other-id|"), unblanked)
 
         let helper = RecordingHybridSearchClient(response: HybridSearchResponse(text: "unused", metadata: [
             "structuredContent": ["total": 2, "results": [
@@ -105,6 +115,7 @@ final class MCPDietTests: XCTestCase {
         let text = try call(hybrid, "brain_search", ["query": "scopeprobe", "project": "fixture"])
         XCTAssertFalse(text.contains("|fixture|"), text)
         XCTAssertTrue(text.contains("|other|"), text)
+        XCTAssertTrue(text.contains(TextFormatter.scopedCompactSearchLegend + "\n"), text)
         let full = try call(local, "brain_search", ["query": "scopeprobe", "project": "fixture", "detail": "full"])
         XCTAssertTrue(full.contains("project: fixture"), full)
     }
@@ -240,6 +251,15 @@ final class MCPDietTests: XCTestCase {
             payload["hybrid_request_count"] = hybridClient.requestCount
             try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: receipt))
             let rows = try XCTUnwrap(payload["rows"] as? [[String: Any]])
+            // Receipt for every measured item, so a gate failure names the whole footprint.
+            var totals: [String: Int] = [:]
+            for row in rows {
+                let item = row["item"] as? String ?? "?"
+                totals[item, default: 0] += row["response_bytes"] as? Int ?? 0
+            }
+            let summary = totals.keys.sorted().map { key in "\(key)=\(totals[key] ?? 0)" }.joined(separator: " ")
+            let toolsListBytes = payload["tools_list_bytes"] as? Int ?? -1
+            print("[#1060 diet] \(summary) tools_list=\(toolsListBytes)")
             for (item, ceiling) in [("1 compact IDs", 27_440), ("2 KG default", 29_110)] {
                 let measured = rows.filter { $0["item"] as? String == item }
                 XCTAssertEqual(measured.count, 10)

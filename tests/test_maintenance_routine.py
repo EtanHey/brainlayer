@@ -1014,7 +1014,7 @@ def test_pathological_warm_search_latency_is_failure_not_deferral(tmp_path, monk
     monkeypatch.setattr(maintenance.time, "perf_counter", _latency_clock(ticks))
     with pytest.raises(maintenance.MaintenanceAbort, match="search latency") as caught:
         maintenance._verify_search_latency(tmp_path / "latency.db")
-    assert caught.value.code == 1
+    assert caught.value.code == maintenance.EXIT_FAILED
 
 
 def test_small_latency_overshoot_completes_with_logged_warning(tmp_path, monkeypatch):

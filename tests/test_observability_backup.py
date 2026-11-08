@@ -66,6 +66,58 @@ def test_reclaim_failure_preserves_verified_copy_and_specific_reason(tmp_path, a
     assert recovered["db_snapshot"]["destination"] == "new.db.zst"
 
 
+@pytest.mark.parametrize("alert_key", [None, "backup-daily", "drive-consent"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_retained_stall_capacity_names_files_and_the_safe_action(tmp_path, alert_key, legacy):
+    """#1385: the deadlock reaches BrainBar as a fixed sentence, never the raw producer text."""
+    fixture = json.loads(
+        (
+            Path(__file__).parents[1] / "brain-bar/Tests/BrainBarTests/Fixtures/backup-retained-stall-capacity.json"
+        ).read_text()
+    )
+    daily = [dict(row) for row in fixture["daily_records"]]
+    if legacy:  # Pre-#1385 receipts carry the names only inside error_type.
+        daily[-1].pop("retained_stalled_backups")
+        daily[-1].pop("retained_stalled_unconfirmed")
+    env, recorder = _two_copy_env(tmp_path, transcript_at="2026-10-31T03:00:00Z", daily=daily)
+    if alert_key:
+        Path(env["BRAINLAYER_JOB_ALERT_PATH"]).write_text(
+            json.dumps({alert_key: "Database backup failed; check the backup log"})
+        )
+    now = datetime.fromisoformat(fixture["now"].replace("Z", "+00:00"))
+    result = build_backups_section(env=env, record_input=recorder, now=now)
+    expected = fixture["backups"]["error_type"]
+    assert result["error_type"] == (
+        "job_alert:Database backup failed; check the backup log" if alert_key == "drive-consent" else expected
+    )
+    assert "/synthetic/backups" not in expected and "Insufficient capacity" not in expected
+    assert "2026-10-28.db.zst" in expected and "2026-10-29.db.zst" in expected
+    assert result["db_snapshot"] == fixture["backups"]["db_snapshot"]
+    _assert_backups_schema(result)
+
+
+def test_retained_stall_diagnostic_quotes_only_snapshot_shaped_names():
+    sentence = observability_backup._retained_stall_diagnostic(
+        {
+            "retained_stalled_backups": [
+                "2026-10-28.db.zst",
+                "../secret token=abc",
+                "2026-10-29.db.gz",
+                "2026-10-30.db.zst",
+            ]
+        }
+    )
+    assert sentence == (
+        "Not enough disk space; stalled backups kept: 2026-10-28.db.zst, 2026-10-29.db.gz and 2 more. "
+        "Move them to another disk, then run the backup again."
+    )
+    assert observability_backup._retained_stall_diagnostic({"retained_stalled_backups": ["x\ny"]}) == (
+        "Not enough disk space; 1 stalled backup kept. Move it to another disk, then run the backup again."
+    )
+    many = observability_backup._retained_stall_diagnostic({"retained_stalled_backups": ["2026-10-01.db.zst"] * 500})
+    assert len(many) <= 200  # BrainBar trims a detail at 200 characters.
+
+
 @pytest.mark.parametrize("state", ["pending", "in_progress"])
 @pytest.mark.parametrize(("status", "code"), [("stopped", 143), ("failed", 1), ("ok", 0)])
 @pytest.mark.parametrize("tail", ["", '{"event":', "bad complete row\n"])
@@ -289,7 +341,8 @@ def test_active_job_alert_enters_backup_health_surface_from_supplied_env(tmp_pat
     assert build_backups_section(env=env, record_input=future_record, now=NOW)["state"] == "unmeasurable"
 
 
-def test_usable_expiring_consent_does_not_force_backup_error(tmp_path):
+def test_usable_expiring_consent_does_not_force_backup_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")  # the 7-day clock is Testing-mode only (#1677)
     from types import SimpleNamespace
 
     from brainlayer import drive_credentials, job_alerts

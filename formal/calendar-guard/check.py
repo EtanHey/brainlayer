@@ -222,6 +222,8 @@ def matrix(current, histories):
         Kill="none",
         OperationBudget=4,
         HeartbeatBudget=2,
+        MaxExtensions=3,
+        GraceCap=5,
         Horizon=40,
     )
     j = dict(
@@ -236,7 +238,7 @@ def matrix(current, histories):
         TwoPending=False,
         LostStart=False,
     )
-    gi = ["TypeOK", "ExactlyOneChild", "NoFalseKill", "BoundedTermination"]
+    gi = ["TypeOK", "ExactlyOneChild", "NoPrematureTimeout", "GraceWithinCap", "NoFalseKill", "BoundedTermination"]
     ji = ["TypeOK", "AtMostOneTerminal", "PidReuseSafe", "Custody"]
     cases = [case("current-healthy", "CalendarGuard", g, gi, ["EventuallyReleased"])]
     for phase in ("runner", "custody", "finish"):

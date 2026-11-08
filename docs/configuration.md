@@ -113,6 +113,19 @@ The database path is resolved in this order:
 1. `BRAINLAYER_DB` environment variable (highest priority)
 2. Canonical path `~/.local/share/brainlayer/brainlayer.db` (default)
 
+### First run: an absent database
+
+The scheduled (calendar) `brainlayer index` pass never creates a database. When the resolved path
+does not exist it prints `INDEX_BOOTSTRAP_REQUIRED db=<path> run="brainlayer bootstrap-db"` and
+exits 78, writing nothing. A dangling symlink at the path prints `INDEX_DB_UNAVAILABLE` and exits 1.
+An existing database is never bootstrapped: a partial, foreign or unwritable file still fails the
+runtime schema check. Interactive `brainlayer index` keeps the writer's own refusal.
+
+`brainlayer bootstrap-db` is the explicit first-run creator. It builds the canonical schema in a
+sibling temp file, verifies the runtime schema fingerprint, and publishes it only if nothing is at
+the path. Any existing path, including one created by a concurrent run, is refused unchanged
+(`BOOTSTRAP_REFUSED`, exit 1).
+
 ## Data Sources
 
 BrainLayer reads from these locations by default:
@@ -209,6 +222,32 @@ Plaintext Google keys are intentionally not supported in generated BrainLayer
 env files. Existing configs retain the credential reference for the compatibility
 gate; it does not enable the retired enrichment feature. See
 `scripts/launchd/brainlayer.env.example` for the packaged schema and launchd job gates.
+
+## Personal lexical aliases (optional)
+
+The packaged `lexical_defense_dictionary.json` holds only public product terms. Personal
+search aliases (names, nicknames, private spellings) go in a file that is never shipped:
+`~/.config/brainlayer/lexical_defense.local.json`, or the absolute path in
+`BRAINLAYER_LEXICAL_DEFENSE_LOCAL`. Nothing creates this file for you.
+
+```json
+{"version": 1, "entries": [{"canonical": "Zorbleth", "aliases": ["zbx"], "split_forms": ["zor bleth"]}]}
+```
+
+`brain_search` expands a query token that matches any surface of an entry into that entry's
+surfaces. Both search paths read the file: the hybrid helper (`lexical_defense.py`) and the
+BrainBar native fallback (`LexicalDefenseUserAliases.swift`).
+
+| Case | Policy |
+|---|---|
+| File missing | No user aliases. Search behaves exactly as without the feature. |
+| Over 64 KiB, not UTF-8 JSON, wrong `version`, unknown keys, more than 256 entries, more than 16 `aliases`+`split_forms` per entry, or a surface that is empty, longer than 64 characters, or has no letter or digit | The **whole file** is ignored, with one warning per file version (Python logger / BrainBar `NSLog`). |
+| An entry whose surface is already claimed by a packaged entry, or by an earlier user entry (compared by letters and digits only, case-folded) | That entry is skipped whole and logged. Packaged entries never change. |
+| Cycles (`A→B` plus `B→A`) | The second entry conflicts, so it is skipped. Expansion is one hop and never transitive. |
+| Freshness | The file is `stat()`ed on every search and re-read only when its mtime or size changes. Edits apply to the next search, with no restart. |
+
+User entries never set `protect_from_split`, so they stay out of the grammar, prompt and
+VoiceLayer exports, which read only the packaged dictionary.
 
 ## Scheduled Tasks (macOS)
 
@@ -315,6 +354,19 @@ its existing notice threshold for consecutive deferrals. VACUUM errors, expiry d
 full-maintenance restore failures remain failures with exit **76** and an alert.
 Quiet-window, queue-idle and writer checks run again after backup;
 post-backup gate failure skips service bootout and all DB maintenance with exit **76**.
+
+`python -m brainlayer.maintenance` exit codes (#1040): **0** ok; **75** (`EX_TEMPFAIL`) only for a
+deliberate, retryable deferral (a quiet-window, queue-idle or writer gate, a refused window-bound
+hold, or an optional VACUUM step skipped for backup custody); **70** (`EX_SOFTWARE`) for a genuine
+failure — services that could not be resumed (light/burn), a burn drain that failed, pathological
+search latency, a quiesce or watchdog-hold failure, or any abort that does not declare itself a
+deferral; **76** for a weekly full-pass failure; **77** when the maintenance lock timed out. A
+deferral that then cannot restore its services exits **70** (**76** in a full pass), never 75. Every
+terminal record the run prints, and its row in the maintenance log, carries `status`, `outcome`
+(`ok`/`deferred`/`failed`), `exit_code`, a UTC `ts` and `run_id`. Under the calendar, `run_id` is the
+`maintenance_run_id` on that step's `spawn` and `finished` records (passed in
+`BRAINLAYER_MAINTENANCE_RUN_ID`), so readers correlate on the record, not on a log's mtime; a manual
+run gets a fresh id. Readers fall back to the reason allowlist only for older records without `outcome`.
 
 Every writer pause (a supervisor `MaintenanceHold`) is bounded. It lasts at most
 `BRAINLAYER_MAINTENANCE_HOLD_MAX_S` (default **3600**). A calendar or scheduled maintenance hold is
@@ -442,7 +494,10 @@ hotlane, watcher, drain, index, tier-3 ingest, decay and enrichment using mainte
 that jobs remain unloaded, BrainBar processes are gone and no writable database
 descriptors remain before applying. Any failed gate aborts before writing.
 Service restoration runs in `finally`; services previously down or deliberately
-paused remain down, and resume failures are reported by count. Proof and rehearsal
+paused remain down, and resume failures are reported by count. Refusal JSON adds
+`cause` (a fixed category such as `maintenance-abort`, `sqlite-busy`, `os-error`,
+`scrub-refusal`, or `unknown`) and `gate` (`quiet-window`, `queue-idle`, `lsof-writers`,
+`maintenance-lock`, or null); neither ever carries exception text. Proof and rehearsal
 must use copies and synthetic service stubs; canonical execution belongs to the
 deployment lead's maintenance window.
 
@@ -466,6 +521,16 @@ physical erasure of old WAL/free pages, embeddings, source transcripts or backup
 During the entire command, SQLite diagnostics log only error codes/classes, including
 file handlers; the process's normal SQLite callback is restored after stores close.
 Failures retain value-free causal error categories and cleanup notes.
+
+### Google Drive OAuth client mode
+
+`BRAINLAYER_DRIVE_OAUTH_TESTING=1` enables the local seven-day consent deadline
+for OAuth clients whose Google publishing status is Testing. Leave it unset for
+Production clients (the default): `consented_at` remains metadata, status has no
+local `expires_at`, and only actual credential failures require reconnecting.
+Google rejecting a refresh with `invalid_grant` still raises a consent alert in
+either mode. Set this variable in the environment of the BrainLayer process
+checking or loading Drive credentials.
 
 ### Daily Drive upload recovery
 

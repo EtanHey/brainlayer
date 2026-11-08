@@ -57,6 +57,36 @@ Manual run:
 PYTHONPATH=~/Gits/brainlayer/src python3 -m brainlayer.backup_daily
 ```
 
+## Runbook: a stalled backup blocks new backups (low disk space)
+
+**What you see.** BrainBar's Backups attention reads *"Latest backup stopped; last verified backup:
+<date>. Not enough disk space; stalled backup kept: YYYY-MM-DD.db.zst. Move it to another disk, then
+run the backup again."* Technical details shows error code `retained_stalled_backup_capacity`. The
+failing receipt in `backup-daily.log` lists every retained file in `retained_stalled_backups`, and any
+whose identity could not be confirmed in `retained_stalled_unconfirmed`.
+
+**Why it does not clear by itself.** When a Drive upload stalls, its compressed snapshot (about
+9.5 GB) stays in the backup staging folder, `~/.local/share/brainlayer/backups/` by default, so the
+next run can resume the same upload. After 36 hours it can no longer be resumed. BrainLayer removes
+it only once a newer, fresh backup has uploaded and verified, and it hashes the file first to prove it
+is the snapshot the receipt describes. That newer backup needs the free space the stalled file is
+using. So while the disk stays full, every run stops here. BrainLayer does not delete the file itself,
+because it has no verified copy of that day anywhere else.
+
+**Safe action.**
+
+1. Make sure no backup is running: `pgrep -af '[b]rainlayer.backup_daily'` prints nothing.
+2. Move only the files the message names out of the staging folder, onto another disk (an external
+   drive, for example). Leave every other file in that folder alone: `.backup.lock`, raw `.db`
+   snapshots and attempt files are handled by their own rules.
+3. Let the next scheduled backup run. It takes a fresh snapshot.
+4. Once a newer backup shows as verified, the moved file is an extra point-in-time copy that never
+   reached Drive. Keep it or delete it; BrainLayer no longer tracks it.
+
+A file marked *identity unconfirmed* changed after its receipt was written (different size, path,
+link count or name). BrainLayer cannot tell what it holds, so it never resumes or removes it. The
+same action applies.
+
 ## Restore Drill
 
 1. Pick the newest good snapshot from Google Drive. New snapshots are zstd

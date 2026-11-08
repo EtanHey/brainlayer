@@ -791,6 +791,12 @@ final class BrainBarServer: @unchecked Sendable {
                 "error": [
                     "code": -32000,
                     "message": "A BrainBar backup snapshot is already in progress.",
+                    // #1413 structured busy contract: rejected before admission, so
+                    // nothing was written and the running snapshot was not stopped.
+                    "data": [
+                        "brainlayer_error_code": "backup_snapshot_busy",
+                        "admitted": false,
+                    ] as [String: Any],
                 ] as [String: Any],
             ]
             sendResponse(fd: fd, response: response, useContentLength: useContentLength)

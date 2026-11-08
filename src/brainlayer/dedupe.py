@@ -521,8 +521,14 @@ def _changed_merge_fields(
     merged_tags: list[str],
     created_at: str | None,
     existing_fingerprints: tuple[Any, ...],
+    has_content_hash: bool,
 ) -> dict[str, Any]:
-    """Omit unchanged indexed columns: SQLite UPDATE OF fires even for equal values."""
+    """Omit unchanged indexed columns: SQLite UPDATE OF fires even for equal values.
+
+    Every content change also rewrites ``content_hash`` in the same UPDATE (#623):
+    a stale stored hash made the drain reject fresh enrichment for the merged
+    body forever. A no-op merge leaves ``content_hash`` exactly as it was.
+    """
     fields = compute_dedupe_fields(merged_content, created_at)
     fingerprints = {
         "dedupe_hash": fields.dedupe_hash,
@@ -543,6 +549,11 @@ def _changed_merge_fields(
             content=merged_content,
             char_count=len(merged_content),
         )
+        if has_content_hash:
+            # Lazy: chunk_write imports this module. One hash implementation only.
+            from .chunk_write import canonical_content_hash
+
+            updates["content_hash"] = canonical_content_hash(merged_content)
     merged_tags_json = json.dumps(merged_tags) if merged_tags else None
     # Legacy CSV must be rewritten: only valid JSON populates chunk_tags.
     # Exact representation equality also preserves canonical ordering/formatting.
@@ -637,6 +648,10 @@ def _rollback_failed_merge(cursor: Any, savepoint: str, original: Exception) -> 
     return True
 
 
+def _has_content_hash_column(cursor: Any) -> bool:
+    return "content_hash" in {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
+
+
 def _invalidate_merged_vectors(cursor: Any, chunk_id: str) -> None:
     """Remove stale vectors within the merge savepoint."""
     for table in ("chunk_vectors", "chunk_vectors_binary"):
@@ -702,6 +717,7 @@ def merge_duplicate_chunk(
             merged_tags=merged_tags,
             created_at=existing_created,
             existing_fingerprints=row[7:],
+            has_content_hash=_has_content_hash_column(cursor),
         )
     )
     if merged_importance is not None:
@@ -903,6 +919,7 @@ def merge_existing_chunk_content(
             merged_tags=merged_tags,
             created_at=existing_created,
             existing_fingerprints=row[7:],
+            has_content_hash=_has_content_hash_column(cursor),
         )
     )
     if merged_importance is not None:

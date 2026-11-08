@@ -40,6 +40,14 @@ class DriveCredentialError(RuntimeError):
     """A payload-free credential failure safe for logs and notifications."""
 
 
+class DriveRefreshUnavailableError(DriveCredentialError):
+    """Google's token endpoint failed retryably (5xx/429) after google-auth's own retries.
+
+    Not lost access: the grant was never rejected. ``credential_status`` keeps the local
+    consent clock; backup receipts still read as a refresh failure, not a consent loss.
+    """
+
+
 def resolve_paths(*, environ: dict[str, str] | None = None, home: Path | None = None) -> tuple[Path, Path, Path]:
     environ = os.environ if environ is None else environ
     home = Path.home() if home is None else Path(home)
@@ -135,6 +143,20 @@ def _expiry(data: dict[str, Any]) -> dt.datetime | None:
     return parsed.astimezone(dt.UTC).replace(tzinfo=None) if parsed.tzinfo else parsed
 
 
+def _consent_deadline(data: dict[str, Any]) -> dt.datetime | None:
+    """Testing-mode consent requires an explicit timezone; never infer the host's."""
+    consented = data.get("consented_at")
+    if not consented or os.environ.get("BRAINLAYER_DRIVE_OAUTH_TESTING") != "1":
+        return None
+    try:
+        consent_time = dt.datetime.fromisoformat(str(consented).replace("Z", "+00:00"))
+        if consent_time.tzinfo is None:
+            raise ValueError("consent time has no timezone")
+        return consent_time.astimezone(dt.UTC) + dt.timedelta(days=7)
+    except ValueError:
+        raise DriveCredentialError("BrainLayer Drive consent metadata is invalid") from None
+
+
 def load_credentials(
     *,
     token_path: Path | None = None,
@@ -161,14 +183,8 @@ def load_credentials(
         if migrate:
             _migrate_if_missing(token, legacy)
         token_data = _read_object(token, private=True)
-        consented = token_data.get("consented_at")
-        expires = None
-        if consented:
-            try:
-                consent_time = dt.datetime.fromisoformat(str(consented).replace("Z", "+00:00")).astimezone(dt.UTC)
-            except ValueError:
-                raise DriveCredentialError("BrainLayer Drive consent metadata is invalid") from None
-            expires = consent_time + dt.timedelta(days=7)
+        expires = _consent_deadline(token_data)
+        if expires is not None:
             remaining = expires - (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
             if remaining <= dt.timedelta(0):
                 reason = f"Drive access expired at {expires.isoformat()}: Reconnect in BrainBar"
@@ -211,6 +227,11 @@ def load_credentials(
                         )
                     _report_consent(alert_reporter, reason)
                     raise DriveCredentialError(reason) from None
+                if getattr(exc, "retryable", False) is True:
+                    # A permanent rejection (checked above) always wins over a retryable flag.
+                    raise DriveRefreshUnavailableError(
+                        "Drive token refresh temporarily unavailable: Google's token endpoint failed retryably"
+                    ) from None
                 raise DriveCredentialError("Drive token refresh failed; run brainlayer backup auth") from None
             if persist_refresh:
                 token_data["access_token"] = creds.token
@@ -236,17 +257,7 @@ def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[
         }
     try:
         data = _read_object(token, private=True)
-        consented = data.get("consented_at")
-        try:
-            expires = (
-                dt.datetime.fromisoformat(str(consented).replace("Z", "+00:00")) + dt.timedelta(days=7)
-                if consented
-                else None
-            )
-            if expires and expires.tzinfo is None:
-                raise ValueError("consent time has no timezone")
-        except ValueError:
-            raise DriveCredentialError("BrainLayer Drive consent metadata is invalid") from None
+        expires = _consent_deadline(data)
         current = (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
         days_left = max(0.0, (expires - current).total_seconds() / 86400) if expires else None
         timing = {"expires_at": expires.isoformat() if expires else None, "days_left": days_left}
@@ -255,8 +266,10 @@ def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[
             _report_consent(kwargs.get("alert_reporter", job_alerts.report), reason)
             return {"state": "invalid", "reason": reason, **timing}
         load_credentials(**kwargs, migrate=False, persist_refresh=False, now=now)
-    except TransportError:
+    except (TransportError, DriveRefreshUnavailableError) as exc:
         reason = "status checked offline; last known state"
+        if isinstance(exc, DriveRefreshUnavailableError):
+            reason = "status checked while Google's token endpoint was temporarily unavailable; last known state"
         if days_left is not None and days_left <= 2:
             # Text --status prints only the reason, so name the local consent deadline (never a server time).
             reason = f"{reason}: Drive access expires at {expires.isoformat()}: Reconnect in BrainBar"

@@ -69,7 +69,7 @@ enum BrainBarJobOwnership: Equatable, Sendable {
 
     // Same custody checks as install.sh's journal guard. Open every path segment with NOFOLLOW:
     // a parent link must not turn an apparently private journal into a different owner's file.
-    static func readOwnedFile(_ url: URL, privateMode: Bool, limit: Int) throws -> Data? {
+    static func readOwnedFile(_ url: URL, privateMode: Bool, limit: Int, tail: Bool = false, onTruncated: () -> Void = {}) throws -> Data? {
         var fd = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard fd >= 0 else { throw CocoaError(.fileReadNoPermission) }
         defer { Darwin.close(fd) }
@@ -89,15 +89,25 @@ enum BrainBarJobOwnership: Equatable, Sendable {
         guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
               info.st_uid == getuid(), info.st_nlink == 1,
               info.st_mode & (privateMode ? 0o077 : 0o022) == 0,
-              info.st_size <= limit else { throw CocoaError(.fileReadNoPermission) }
+              (tail || info.st_size <= limit) else { throw CocoaError(.fileReadNoPermission) }
+        let offset = tail ? max(0, info.st_size - Int64(limit) - 1) : 0
+        if offset > 0 { onTruncated() }
+        if tail, lseek(fd, offset, SEEK_SET) < 0 { throw CocoaError(.fileReadUnknown) }
+        var remaining = tail ? Int(info.st_size - offset) : limit + 1
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 8192)
         while true {
-            let count = Darwin.read(fd, &buffer, buffer.count)
+            let count = Darwin.read(fd, &buffer, min(buffer.count, remaining))
             guard count >= 0 else { throw CocoaError(.fileReadUnknown) }
-            if count == 0 { return data }
-            guard data.count + count <= limit else { throw CocoaError(.fileReadTooLarge) }
+            if count == 0 || (tail && remaining == 0) {
+                if offset > 0, let newline = data.firstIndex(of: 10) {
+                    data.removeSubrange(...newline)
+                } else if offset > 0 { data.removeAll() }
+                return data
+            }
+            guard data.count + count <= limit + (tail ? 1 : 0) else { throw CocoaError(.fileReadTooLarge) }
             data.append(contentsOf: buffer.prefix(count))
+            remaining -= count
         }
     }
 }
@@ -139,6 +149,7 @@ struct BrainBarCalendarHistory: Sendable {
         var failed: Bool
         var abandoned: Bool
         var consecutiveFailures = 0
+        var streakComplete = true
         var failedSteps: [String] = []
         var stepProblems: [String: StepProblem] = [:]
         var runnerErrorAt: Date? = nil
@@ -164,7 +175,17 @@ struct BrainBarCalendarHistory: Sendable {
         var journalOrdinal: Int? = nil
         /// Failed runs of this step in a row, ending with this one (S5).
         var consecutiveFailures = 0
+        /// The calendar's run-start receipt id for a maintenance child (#1040), from its `finished` row.
+        var runID: String? = nil
     }
+    var truncated = false
+    var uncertaintyNote: String? {
+        var notes: [String] = []
+        if skippedLineCount > 0 { notes.append("Maintenance history skipped \(skippedLineCount) damaged rows") }
+        if truncated { notes.append("Maintenance history is truncated; failure streaks are unknown") }
+        return notes.isEmpty ? nil : notes.joined(separator: "; ")
+    }
+    var skippedLineCount = 0
     var runs: [String: Run] = [:]
     var error: String? = nil
     var latestScheduledDate: String? = nil
@@ -172,14 +193,19 @@ struct BrainBarCalendarHistory: Sendable {
 
     static func read(directory: URL = BrainBarJobOwnership.directory.appendingPathComponent("calendar")) -> Self {
         do {
+            var truncated = false
             guard let data = try BrainBarJobOwnership.readOwnedFile(
-                directory.appendingPathComponent("runs.jsonl"), privateMode: false, limit: 4 * 1024 * 1024
+                directory.appendingPathComponent("runs.jsonl"), privateMode: false, limit: 4 * 1024 * 1024, tail: true, onTruncated: { truncated = true }
             ) else { return .empty }
             var result = Self()
+            result.truncated = truncated
+            var hasHeader = !truncated
+            var nightlyHeaders: Set<String> = []
             var starts: [String: Date] = [:]
             var streaks: [String: Int] = [:]
             var abandonedRuns: Set<String> = []
             var nights: [String: NightOutcome] = [:]
+            var damagedNights: Set<String> = []
             var unresolvedSteps: [String: Set<String>] = [:]
             var stepProblems: [String: [String: StepProblem]] = [:]
             var unknownFailures: [String: Date] = [:]
@@ -193,173 +219,196 @@ struct BrainBarCalendarHistory: Sendable {
             var attemptSteps: [String: [String: AttemptStep]] = [:]
             var attemptKinds: [String: String] = [:]
             for (ordinal, line) in String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).enumerated() {
-                guard let row = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
-                else { throw CocoaError(.fileReadCorruptFile) }
-                let event = row["event"] as? String
-                if event == "runner" || event == "transcript-recovery" {
-                    starts.removeAll()
-                    result.latestScheduledDate = row["scheduled_date"] as? String
-                    if let date = result.latestScheduledDate {
-                        if attemptKinds[date] == "nightly" {
-                            unresolvedSteps[date, default: []].formUnion((attemptSteps[date] ?? [:]).filter { $0.value.isProblem }.map(\.key))
+                // Value-type snapshots make each row atomic, including late validation failures.
+                let checkpoint = (result, starts, streaks, abandonedRuns, nights, unresolvedSteps, stepProblems, unknownFailures, abandonmentFailures, runnerErrors, abandonmentSummaries, openAttempt, pendingRunnerError, attemptSteps, attemptKinds)
+                do {
+                    guard let row = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+                    else { throw CocoaError(.fileReadCorruptFile) }
+                    let event = row["event"] as? String
+                    if event == "runner" || event == "transcript-recovery" { hasHeader = true }
+                    if !hasHeader { continue }
+                    if event == "runner", (row["kind"] as? String ?? "nightly") == "nightly",
+                       let date = row["scheduled_date"] as? String { nightlyHeaders.insert(date) }
+                    if truncated, row["kind"] as? String == "nightly",
+                       event == "summary" || event == "abandoned",
+                       !nightlyHeaders.contains(row["scheduled_date"] as? String ?? "") { continue }
+                    if event == "runner" || event == "transcript-recovery" {
+                        starts.removeAll()
+                        result.latestScheduledDate = row["scheduled_date"] as? String
+                        if let date = result.latestScheduledDate {
+                            if attemptKinds[date] == "nightly" {
+                                unresolvedSteps[date, default: []].formUnion((attemptSteps[date] ?? [:]).filter { $0.value.isProblem }.map(\.key))
+                            }
+                            attemptSteps[date] = [:]
+                            attemptKinds[date] = row["kind"] as? String ?? (event == "runner" ? "nightly" : "recovery")
+                            abandonmentSummaries.remove(date)
                         }
-                        attemptSteps[date] = [:]
-                        attemptKinds[date] = row["kind"] as? String ?? (event == "runner" ? "nightly" : "recovery")
-                        abandonmentSummaries.remove(date)
+                        openAttempt = result.latestScheduledDate
+                        pendingRunnerError = nil
                     }
-                    openAttempt = result.latestScheduledDate
-                    pendingRunnerError = nil
-                }
-                if event == "runner-error" {
-                    guard let ts = row["ts"] as? Double, ts.isFinite else { throw CocoaError(.fileReadCorruptFile) }
-                    let at = Date(timeIntervalSince1970: ts)
-                    // Older producers left the row undated. Inside an open attempt it belongs to that
-                    // attempt; before any header it failed pre-launch, and its own summary names it.
-                    if let date = row["scheduled_date"] as? String ?? openAttempt {
-                        if (row["kind"] as? String ?? attemptKinds[date]) == "nightly", runnerErrors[date] == nil { runnerErrors[date] = at }
-                    } else if pendingRunnerError == nil {
-                        pendingRunnerError = at
+                    if event == "runner-error" {
+                        guard let ts = row["ts"] as? Double, ts.isFinite else { throw CocoaError(.fileReadCorruptFile) }
+                        let at = Date(timeIntervalSince1970: ts)
+                        // Older producers left the row undated. Inside an open attempt it belongs to that
+                        // attempt; before any header it failed pre-launch, and its own summary names it.
+                        if let date = row["scheduled_date"] as? String ?? openAttempt {
+                            if (row["kind"] as? String ?? attemptKinds[date]) == "nightly", runnerErrors[date] == nil { runnerErrors[date] = at }
+                        } else if pendingRunnerError == nil {
+                            pendingRunnerError = at
+                        }
                     }
-                }
-                if event == "summary" {
-                    if let date = row["scheduled_date"] as? String, let at = pendingRunnerError,
-                       row["kind"] as? String == "nightly", runnerErrors[date] == nil {
-                        runnerErrors[date] = at
-                    }
-                    openAttempt = nil
-                    pendingRunnerError = nil
-                }
-                let nightly = row["kind"] as? String == "nightly"
-                if (nightly && (event == "summary" || event == "abandoned")) ||
-                    (event == "summary" && row["kind"] is String &&
-                        (row["scheduled_date"] as? String).flatMap({ nights[$0] }) != nil) {
-                    guard let date = row["scheduled_date"] as? String,
-                          date.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil,
-                          let ts = row["ts"] as? Double, ts.isFinite else { throw CocoaError(.fileReadCorruptFile) }
-                    let abandoned = event == "abandoned"
-                    let failures = row["failed"] as? Int
-                    guard abandoned || failures.map({ $0 >= 0 }) == true else { throw CocoaError(.fileReadCorruptFile) }
-                    let previous = nights[date]
-                    // A late abandonment can describe an older nightly attempt while the
-                    // active header belongs to hourly recovery. Only its nightly evidence adds problems.
-                    let steps = nightly && attemptKinds[date] != "nightly" ? [:] : attemptSteps[date] ?? [:]
-                    // An abandonment is followed by a synthetic failed=1 summary, not a
-                    // new runner failure. Consume finished evidence only once, at either terminal.
-                    let abandonmentSummary = event == "summary" &&
-                        (row["abandoned"] as? Bool == true || abandonmentSummaries.contains(date))
-                    if abandoned { abandonmentSummaries.insert(date) }
-                    attemptSteps.removeValue(forKey: date)
                     if event == "summary" {
-                        abandonmentSummaries.remove(date)
+                        if let date = row["scheduled_date"] as? String, let at = pendingRunnerError,
+                           row["kind"] as? String == "nightly", runnerErrors[date] == nil {
+                            runnerErrors[date] = at
+                        }
+                        openAttempt = nil
+                        pendingRunnerError = nil
                     }
-                    var unresolved = unresolvedSteps[date] ?? []
-                    unresolved.subtract(steps.filter { $0.value == .succeeded }.map(\.key))
-                    // Recovery/manual attempts can only resolve existing nightly problems.
-                    if nightly && (abandoned || (failures ?? 0) > 0) {
-                        unresolved.formUnion(steps.filter { $0.value.isProblem }.map(\.key))
-                        if let incomplete = row["incomplete_steps"] {
-                            guard let names = incomplete as? [String] else { throw CocoaError(.fileReadCorruptFile) }
-                            unresolved.formUnion(names)
-                            for step in names {
+                    let nightly = row["kind"] as? String == "nightly"
+                    if (nightly && (event == "summary" || event == "abandoned")) ||
+                        (event == "summary" && row["kind"] is String &&
+                            (row["scheduled_date"] as? String).flatMap({ nights[$0] }) != nil) {
+                        guard let date = row["scheduled_date"] as? String,
+                              date.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil,
+                              let ts = row["ts"] as? Double, ts.isFinite else { throw CocoaError(.fileReadCorruptFile) }
+                        let abandoned = event == "abandoned"
+                        let failures = row["failed"] as? Int
+                        guard abandoned || failures.map({ $0 >= 0 }) == true else { throw CocoaError(.fileReadCorruptFile) }
+                        let previous = nights[date]
+                        // A late abandonment can describe an older nightly attempt while the
+                        // active header belongs to hourly recovery. Only its nightly evidence adds problems.
+                        let steps = nightly && attemptKinds[date] != "nightly" ? [:] : attemptSteps[date] ?? [:]
+                        // An abandonment is followed by a synthetic failed=1 summary, not a
+                        // new runner failure. Consume finished evidence only once, at either terminal.
+                        let abandonmentSummary = event == "summary" &&
+                            (row["abandoned"] as? Bool == true || abandonmentSummaries.contains(date))
+                        if abandoned { abandonmentSummaries.insert(date) }
+                        attemptSteps.removeValue(forKey: date)
+                        if event == "summary" {
+                            abandonmentSummaries.remove(date)
+                        }
+                        var unresolved = unresolvedSteps[date] ?? []
+                        unresolved.subtract(steps.filter { $0.value == .succeeded }.map(\.key))
+                        // Recovery/manual attempts can only resolve existing nightly problems.
+                        if nightly && (abandoned || (failures ?? 0) > 0) {
+                            unresolved.formUnion(steps.filter { $0.value.isProblem }.map(\.key))
+                            if let incomplete = row["incomplete_steps"] {
+                                guard let names = incomplete as? [String] else { throw CocoaError(.fileReadCorruptFile) }
+                                unresolved.formUnion(names)
+                                for step in names {
+                                    stepProblems[date, default: [:]][step] = StepProblem(at: Date(timeIntervalSince1970: ts), cutOff: true)
+                                }
+                            }
+                            // Only failed finished rows in THIS attempt explain the summary count.
+                            // Deferred/skipped/stopped steps and inherited problems cannot absorb
+                            // a runner failure. Neither kind of non-step evidence is recoverable
+                            // through later step successes.
+                            let failedHere = steps.values.filter { $0 == .failed }.count
+                            // An incomplete nightly plan reports at least one failure on its own
+                            // (failed=max(1, ...)), so a signal stop is explained by its cut-off steps.
+                            let planIncomplete = steps.values.contains(.incomplete) ||
+                                (row["incomplete_steps"] as? [String])?.isEmpty == false
+                            let expected = max(planIncomplete ? 1 : 0, failedHere)
+                            if unresolved.isEmpty && (abandoned || abandonmentSummary) {
+                                // The abandonment itself is the cause; a later attempt's failure stays separate.
+                                if abandonmentFailures[date] == nil { abandonmentFailures[date] = Date(timeIntervalSince1970: ts) }
+                            } else if unresolved.isEmpty || (!abandoned && !abandonmentSummary && (failures ?? 0) > expected) {
+                                if unknownFailures[date] == nil { unknownFailures[date] = Date(timeIntervalSince1970: ts) }
+                            }
+                        }
+                        unresolvedSteps[date] = unresolved
+                        stepProblems[date] = (stepProblems[date] ?? [:]).filter { unresolved.contains($0.key) }
+                        nights[date] = NightOutcome(scheduledDate: date,
+                            at: nightly ? Date(timeIntervalSince1970: ts) : (previous?.at ?? Date(timeIntervalSince1970: ts)),
+                            failed: !unresolved.isEmpty || unknownFailures[date] != nil || abandonmentFailures[date] != nil
+                                || runnerErrors[date] != nil,
+                            abandoned: abandoned || previous?.abandoned == true)
+                    }
+                    if row["event"] as? String == "spawn", let step = row["step"] as? String,
+                       let ts = row["ts"] as? Double, ts.isFinite {
+                        starts[step] = Date(timeIntervalSince1970: ts)
+                    }
+                    if row["event"] as? String == "abandoned" {
+                        guard let date = row["scheduled_date"] as? String,
+                              let ts = row["ts"] as? Double, ts.isFinite else { throw CocoaError(.fileReadCorruptFile) }
+                        guard row["kind"] as? String == "nightly", abandonedRuns.insert(date).inserted else { continue }
+                        // Step projections are display evidence only; the dot uses the nightly outcomes.
+                        let incomplete = row["incomplete_steps"] as? [String] ?? ["maintenance-nightly", "maintenance-weekly"]
+                        for step in incomplete where ["maintenance-nightly", "maintenance-weekly"].contains(step) {
+                            guard result.runs[step]?.scheduledDate != date else { continue }
+                            if step == "maintenance-nightly", let weekly = result.runs["maintenance-weekly"],
+                               weekly.scheduledDate == date, weekly.status == "ok", weekly.code == 0,
+                               weekly.replaces == "maintenance-nightly" { continue }
+                            streaks[step, default: 0] += 1
+                            result.runs[step] = Run(at: Date(timeIntervalSince1970: ts), code: -1, status: "abandoned",
+                                startedAt: (row["runner_started_at"] as? Double).map(Date.init(timeIntervalSince1970:)),
+                                reason: row["reason"] as? String, scheduledDate: date, journalOrdinal: ordinal,
+                                consecutiveFailures: streaks[step] ?? 0)
+                        }
+                        result.latestScheduledDate = date
+                        continue
+                    }
+                    guard row["event"] as? String == "finished" else { continue }
+                    guard let step = row["step"] as? String, let ts = row["ts"] as? Double, ts.isFinite,
+                          let status = row["status"] as? String else { throw CocoaError(.fileReadCorruptFile) }
+                    // Shutdown records the unstarted remainder as skipped/null. It did not run,
+                    // so preserve the step's preceding result rather than invalidating all history.
+                    let startedAt = starts.removeValue(forKey: step)
+                    let scheduledDate = row["scheduled_date"] as? String ?? result.latestScheduledDate
+                    if status == "skipped", row["returncode"] is NSNull {
+                        if let date = scheduledDate {
+                            attemptSteps[date, default: [:]][step] = .incomplete
+                            if attemptKinds[date] == "nightly", stepProblems[date]?[step] == nil {
                                 stepProblems[date, default: [:]][step] = StepProblem(at: Date(timeIntervalSince1970: ts), cutOff: true)
                             }
                         }
-                        // Only failed finished rows in THIS attempt explain the summary count.
-                        // Deferred/skipped/stopped steps and inherited problems cannot absorb
-                        // a runner failure. Neither kind of non-step evidence is recoverable
-                        // through later step successes.
-                        let failedHere = steps.values.filter { $0 == .failed }.count
-                        // An incomplete nightly plan reports at least one failure on its own
-                        // (failed=max(1, ...)), so a signal stop is explained by its cut-off steps.
-                        let planIncomplete = steps.values.contains(.incomplete) ||
-                            (row["incomplete_steps"] as? [String])?.isEmpty == false
-                        let expected = max(planIncomplete ? 1 : 0, failedHere)
-                        if unresolved.isEmpty && (abandoned || abandonmentSummary) {
-                            // The abandonment itself is the cause; a later attempt's failure stays separate.
-                            if abandonmentFailures[date] == nil { abandonmentFailures[date] = Date(timeIntervalSince1970: ts) }
-                        } else if unresolved.isEmpty || (!abandoned && !abandonmentSummary && (failures ?? 0) > expected) {
-                            if unknownFailures[date] == nil { unknownFailures[date] = Date(timeIntervalSince1970: ts) }
-                        }
+                        continue
                     }
-                    unresolvedSteps[date] = unresolved
-                    stepProblems[date] = (stepProblems[date] ?? [:]).filter { unresolved.contains($0.key) }
-                    nights[date] = NightOutcome(scheduledDate: date,
-                        at: nightly ? Date(timeIntervalSince1970: ts) : (previous?.at ?? Date(timeIntervalSince1970: ts)),
-                        failed: !unresolved.isEmpty || unknownFailures[date] != nil || abandonmentFailures[date] != nil
-                            || runnerErrors[date] != nil,
-                        abandoned: abandoned || previous?.abandoned == true)
-                }
-                if row["event"] as? String == "spawn", let step = row["step"] as? String,
-                   let ts = row["ts"] as? Double, ts.isFinite {
-                    starts[step] = Date(timeIntervalSince1970: ts)
-                }
-                if row["event"] as? String == "abandoned" {
-                    guard let date = row["scheduled_date"] as? String,
-                          let ts = row["ts"] as? Double, ts.isFinite else { throw CocoaError(.fileReadCorruptFile) }
-                    guard row["kind"] as? String == "nightly", abandonedRuns.insert(date).inserted else { continue }
-                    // Step projections are display evidence only; the dot uses the nightly outcomes.
-                    let incomplete = row["incomplete_steps"] as? [String] ?? ["maintenance-nightly", "maintenance-weekly"]
-                    for step in incomplete where ["maintenance-nightly", "maintenance-weekly"].contains(step) {
-                        guard result.runs[step]?.scheduledDate != date else { continue }
-                        if step == "maintenance-nightly", let weekly = result.runs["maintenance-weekly"],
-                           weekly.scheduledDate == date, weekly.status == "ok", weekly.code == 0,
-                           weekly.replaces == "maintenance-nightly" { continue }
-                        streaks[step, default: 0] += 1
-                        result.runs[step] = Run(at: Date(timeIntervalSince1970: ts), code: -1, status: "abandoned",
-                            startedAt: (row["runner_started_at"] as? Double).map(Date.init(timeIntervalSince1970:)),
-                            reason: row["reason"] as? String, scheduledDate: date, journalOrdinal: ordinal,
-                            consecutiveFailures: streaks[step] ?? 0)
-                    }
-                    result.latestScheduledDate = date
-                    continue
-                }
-                guard row["event"] as? String == "finished" else { continue }
-                guard let step = row["step"] as? String, let ts = row["ts"] as? Double, ts.isFinite,
-                      let status = row["status"] as? String else { throw CocoaError(.fileReadCorruptFile) }
-                // Shutdown records the unstarted remainder as skipped/null. It did not run,
-                // so preserve the step's preceding result rather than invalidating all history.
-                let startedAt = starts.removeValue(forKey: step)
-                let scheduledDate = row["scheduled_date"] as? String ?? result.latestScheduledDate
-                if status == "skipped", row["returncode"] is NSNull {
+                    guard let code = row["returncode"] as? Int32,
+                          ["ok", "failed", "deferred", "stopped"].contains(status)
+                    else { throw CocoaError(.fileReadCorruptFile) }
                     if let date = scheduledDate {
-                        attemptSteps[date, default: [:]][step] = .incomplete
-                        if attemptKinds[date] == "nightly", stepProblems[date]?[step] == nil {
-                            stepProblems[date, default: [:]][step] = StepProblem(at: Date(timeIntervalSince1970: ts), cutOff: true)
+                        let outcome: AttemptStep = status == "deferred" || code == 75 ? .deferred :
+                            status == "ok" && code == 0 ? .succeeded : status == "failed" ? .failed : .incomplete
+                        attemptSteps[date, default: [:]][step] = outcome
+                        if outcome == .succeeded {
+                            // A later calendar date completing this step supersedes earlier
+                            // unresolved failures for the same step; older-date replays do not.
+                            for failedDate in unresolvedSteps.keys.filter({ $0 < date }) {
+                                unresolvedSteps[failedDate]?.remove(step)
+                                stepProblems[failedDate]?.removeValue(forKey: step)
+                            }
+                        }
+                        // A retry that never ran cannot replace the original problem's time.
+                        if attemptKinds[date] == "nightly", outcome.isProblem {
+                            stepProblems[date, default: [:]][step] = StepProblem(at: Date(timeIntervalSince1970: ts),
+                                cutOff: status == "stopped", reason: row["reason"] as? String ?? "exit \(code)")
                         }
                     }
-                    continue
-                }
-                guard let code = row["returncode"] as? Int32,
-                      ["ok", "failed", "deferred", "stopped"].contains(status)
-                else { throw CocoaError(.fileReadCorruptFile) }
-                if let date = scheduledDate {
-                    let outcome: AttemptStep = status == "deferred" || code == 75 ? .deferred :
-                        status == "ok" && code == 0 ? .succeeded : status == "failed" ? .failed : .incomplete
-                    attemptSteps[date, default: [:]][step] = outcome
-                    if outcome == .succeeded {
-                        // A later calendar date completing this step supersedes earlier
-                        // unresolved failures for the same step; older-date replays do not.
-                        for failedDate in unresolvedSteps.keys.filter({ $0 < date }) {
-                            unresolvedSteps[failedDate]?.remove(step)
-                            stepProblems[failedDate]?.removeValue(forKey: step)
-                        }
+                    // A deferral (exit 75) did not run the step: it neither extends nor resets the streak.
+                    if status == "failed" || status == "stopped" || (code != 0 && code != 75) {
+                        streaks[step, default: 0] += 1
+                    } else if status == "ok" {
+                        streaks[step] = 0
                     }
-                    // A retry that never ran cannot replace the original problem's time.
-                    if attemptKinds[date] == "nightly", outcome.isProblem {
-                        stepProblems[date, default: [:]][step] = StepProblem(at: Date(timeIntervalSince1970: ts),
-                            cutOff: status == "stopped", reason: row["reason"] as? String ?? "exit \(code)")
+                    result.runs[step] = Run(at: Date(timeIntervalSince1970: ts), code: code, status: status,
+                        startedAt: startedAt, reason: row["reason"] as? String, replaces: row["replaces"] as? String,
+                        scheduledDate: row["scheduled_date"] as? String ?? result.latestScheduledDate, journalOrdinal: ordinal,
+                        consecutiveFailures: streaks[step] ?? 0, runID: row["maintenance_run_id"] as? String)
+                } catch {
+                    (result, starts, streaks, abandonedRuns, nights, unresolvedSteps, stepProblems, unknownFailures, abandonmentFailures, runnerErrors, abandonmentSummaries, openAttempt, pendingRunnerError, attemptSteps, attemptKinds) = checkpoint
+                    result.skippedLineCount += 1
+                    // A rejected row cannot certify its night, even if a later summary succeeds.
+                    // Prefer its explicit date; undated/torn rows belong to the current header.
+                    let rejected = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any]
+                    if let date = rejected?["scheduled_date"] as? String ?? result.latestScheduledDate {
+                        damagedNights.insert(date)
                     }
                 }
-                // A deferral (exit 75) did not run the step: it neither extends nor resets the streak.
-                if status == "failed" || status == "stopped" || (code != 0 && code != 75) {
-                    streaks[step, default: 0] += 1
-                } else if status == "ok" {
-                    streaks[step] = 0
-                }
-                result.runs[step] = Run(at: Date(timeIntervalSince1970: ts), code: code, status: status,
-                    startedAt: startedAt, reason: row["reason"] as? String, replaces: row["replaces"] as? String,
-                    scheduledDate: row["scheduled_date"] as? String ?? result.latestScheduledDate, journalOrdinal: ordinal,
-                    consecutiveFailures: streaks[step] ?? 0)
+            }
+            if result.skippedLineCount > 0 && result.runs.isEmpty && nights.isEmpty {
+                result.error = "Maintenance calendar history is unreadable"
             }
             var streak = 0
             for date in nights.keys.sorted() {
@@ -372,10 +421,11 @@ struct BrainBarCalendarHistory: Sendable {
                 night.failed = night.failed || night.runnerErrorAt != nil || night.unknownFailureAt != nil
                     || night.abandonmentFailureAt != nil
                 streak = night.failed ? streak + 1 : 0
-                night.consecutiveFailures = streak
+                night.consecutiveFailures = truncated ? 0 : streak
+                night.streakComplete = !truncated
                 night.failedSteps = (unresolvedSteps[date] ?? []).sorted()
                 night.stepProblems = stepProblems[date] ?? [:]
-                result.maintenanceNight = night
+                result.maintenanceNight = damagedNights.contains(date) ? nil : night
             }
             return result
         } catch { return Self(error: "Maintenance calendar history is unreadable") }

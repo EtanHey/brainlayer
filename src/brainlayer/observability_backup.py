@@ -108,6 +108,32 @@ def _retention_status() -> str:
     return "FAIL" if errors else "PASS"
 
 
+RETAINED_STALL_CAPACITY_CODE = "retained_stalled_backup_capacity"
+_SAFE_SNAPSHOT_NAME = re.compile(r"\d{4}-\d{2}-\d{2}\.db\.(?:zst|gz)")
+
+
+def _retained_stall_diagnostic(record: Mapping[str, Any]) -> str:
+    """A fixed sentence naming the retained stalls and the one safe action (#1385).
+
+    Only names shaped like a snapshot file are echoed; anything else is counted, never quoted,
+    so a hostile or garbled file name cannot reach BrainBar. Legacy receipts carry the names only
+    inside ``error_type``; newer ones in ``retained_stalled_backups``. Kept short: BrainBar trims
+    a detail at 200 characters."""
+    names = record.get("retained_stalled_backups")
+    if not isinstance(names, list):
+        match = re.fullmatch(r"RetainedStalledBackupCapacityError\[(.*)\]", str(record.get("error_type") or ""))
+        names = [name for name in match.group(1).split(",") if name] if match else []
+    safe = [name for name in names if isinstance(name, str) and _SAFE_SNAPSHOT_NAME.fullmatch(name)]
+    shown, hidden = safe[:2], len(names) - min(len(safe), 2)
+    if not shown:
+        listed = f"{hidden} stalled {'backup' if hidden == 1 else 'backups'} kept" if hidden else "stalled backups kept"
+    else:
+        listed = f"stalled {'backup' if len(names) == 1 else 'backups'} kept: " + ", ".join(shown)
+        listed += f" and {hidden} more" if hidden else ""
+    them = "it" if len(names) == 1 else "them"
+    return f"Not enough disk space; {listed}. Move {them} to another disk, then run the backup again."
+
+
 def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, str | None, bool]:
     real = [
         record
@@ -120,6 +146,7 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
     latest = real[-1]
     error_type = str(latest["error_type"]) if latest.get("error_type") else None
     error_reason = latest.get("error") or latest.get("verification_error")
+    source = latest
     if latest.get("verification_error") and error_type is None:
         error_type = "backup_verification_failed"
     latest_by_snapshot = {record["snapshot"]: record for record in real if isinstance(record.get("snapshot"), str)}
@@ -130,6 +157,7 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
             ):
                 error_type = str(pending.get("error_type") or pending.get("error_code") or "backup_error")
                 error_reason = pending.get("error") or pending.get("verification_error")
+                source = pending
                 break
     if (
         error_type
@@ -137,6 +165,8 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
         and error_reason
     ):
         error_type = f"{error_type}: {error_reason}"
+    if error_type and error_type.startswith("RetainedStalledBackupCapacityError["):
+        error_type = f"{RETAINED_STALL_CAPACITY_CODE}: {_retained_stall_diagnostic(source)}"
     if "google-drive-mcp/tokens.json" in str(latest.get("error", "")):
         error_type = "drive_credentials_missing"
     elif all_errors and error_type is None:
@@ -494,7 +524,9 @@ def build_backups_section(
     job_alerts = active_alerts(resolved_alert_path)
     if job_alerts:
         # The generic DB job alert must not replace this attempt's measured diagnostic.
-        reclaim_failure = (error_type or "").startswith("raw_reclaim_unconfirmed:")
+        reclaim_failure = (error_type or "").startswith(
+            ("raw_reclaim_unconfirmed:", f"{RETAINED_STALL_CAPACITY_CODE}:")
+        )
         generic_db_alerts = all(
             key in {"backup-daily", "backup-snapshot"} and reason == "Database backup failed; check the backup log"
             for key, reason in job_alerts.items()
