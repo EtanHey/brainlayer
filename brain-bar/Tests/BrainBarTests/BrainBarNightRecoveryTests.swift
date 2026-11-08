@@ -420,15 +420,32 @@ final class BrainBarNightRecoveryTests: XCTestCase {
         }
     }
 
-    func testMalformedRowsRemainUnreadable() throws {
-        let rows = [runner(date), finished("jsonl-backup"), summary(date)]
-        for suffix in ["{broken", #"{"event":"finished","step":"jsonl-backup","status":"ok","ts":1003}"#] {
-            let value = try history(rows, suffix: suffix)
-            XCTAssertEqual(value.error, "Maintenance calendar history is unreadable")
-            XCTAssertNil(value.maintenanceNight)
-        }
+    func testMalformedRowsAreSkippedButNeverGreenTheNight() throws {
         var malformedRecovery = summary(date, failed: 0, kind: "recovery")
         malformedRecovery.removeValue(forKey: "failed")
-        XCTAssertEqual(try history(rows + [malformedRecovery]).error, "Maintenance calendar history is unreadable")
+        for failed in [0, 1] {
+            let rows = [runner(date), finished("jsonl-backup", failed == 0 ? "ok" : "failed", failed), summary(date, failed: failed)]
+            let values = try [
+                history(rows, suffix: "{broken"),
+                history(rows, suffix: #"{"event":"finished","step":"jsonl-backup","status":"ok","ts":1003}"#),
+                history(rows + [malformedRecovery]),
+                history([runner(date)], suffix: "{broken\n" + String(data: JSONSerialization.data(withJSONObject: summary(date, failed: failed)), encoding: .utf8)!)
+            ]
+            for value in values {
+                XCTAssertNil(value.error)
+                XCTAssertEqual(value.skippedLineCount, 1)
+                XCTAssertEqual(value.uncertaintyNote, "Maintenance history skipped 1 damaged rows")
+                XCTAssertNil(value.maintenanceNight)
+                let observations = BrainBarSupervisorStatusTests.supervised(history: value).sampleActivity()
+                XCTAssertTrue(observations[.maintenanceNightly]?.calendarScheduleUncertainty?.contains("skipped 1") == true)
+            }
+        }
+    }
+
+    func testOnlyMalformedRowsRemainUnreadable() throws {
+        let value = try history([], suffix: "{broken\n{also broken")
+        XCTAssertEqual(value.error, "Maintenance calendar history is unreadable")
+        XCTAssertEqual(value.skippedLineCount, 2)
+        XCTAssertNil(value.maintenanceNight)
     }
 }

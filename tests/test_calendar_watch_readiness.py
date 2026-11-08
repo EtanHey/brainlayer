@@ -1,8 +1,13 @@
 """Pure readiness checks: fake time/query and private text artifacts only."""
 
+import os
+from pathlib import Path
+
 import pytest
 
-from tests.calendar_watch_readiness import wait_for_calendar_watch
+from tests.calendar_watch_readiness import _fixture_diagnostics, wait_for_calendar_watch
+
+TRUNCATED = "…[truncated after 16384 characters]"
 
 
 class Clock:
@@ -74,8 +79,7 @@ def test_persistent_timeout_keeps_deadline_last_cause_and_private_diagnostics(tm
         "calendar fixture stderr",
         '"event":"finished"',
         "supervisor fixture stderr",
-        "control.sock",
-        "True",
+        "'control.sock exists': True",
         "step",
         "456",
         "guard",
@@ -145,3 +149,87 @@ def test_timeout_after_valid_state_retains_state_without_diagnostic_query(tmp_pa
         wait(query, tmp_path, clock)
     assert failure.value.__cause__ is last_timeout
     assert len(calls) == 5
+
+
+def fail_with_timeouts(path, clock):
+    timeouts = []
+
+    def query():
+        assert clock.now < 3, "query started after readiness deadline"
+        clock.now += 0.6
+        timeouts.append(TimeoutError(f"status timeout {len(timeouts) + 1}"))
+        raise timeouts[-1]
+
+    with pytest.raises(AssertionError, match="not ready within 3s") as failure:
+        wait(query, path, clock)
+    assert failure.value.__cause__ is timeouts[-1]
+    return str(failure.value)
+
+
+def test_false_pid_at_2_99_sleeps_only_the_remainder_and_sends_no_later_query(tmp_path):
+    clock, calls = Clock(), []
+
+    def query():
+        assert clock.now < 3, "query started after readiness deadline"
+        calls.append(clock.now)
+        clock.now = 2.99
+        return status(None)
+
+    with pytest.raises(AssertionError, match="fixture-state") as failure:
+        wait(query, tmp_path, clock)
+    assert calls == [0.0]
+    assert clock.sleeps == [pytest.approx(0.01)]
+    assert clock.now == 3.0
+    assert failure.value.__cause__ is None
+
+
+def test_absent_endpoint_is_bound_to_control_sock_key(tmp_path):
+    assert "'control.sock exists': False" in fail_with_timeouts(tmp_path, Clock())
+
+
+def test_endpoint_stat_error_cannot_mask_readiness_failure_or_cause(tmp_path, monkeypatch):
+    real_exists = Path.exists
+
+    def exists(self, *args, **kwargs):
+        if self.name == "control.sock":
+            raise PermissionError("injected endpoint stat failure")
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", exists)
+    message = fail_with_timeouts(tmp_path, Clock())
+    assert "'control.sock exists': \"unknown: PermissionError('injected endpoint stat failure')\"" in message
+
+
+def test_diagnostics_skip_symlinks_and_nonregular_artifacts_and_report_read_errors(tmp_path, monkeypatch):
+    outside, fixture = tmp_path / "outside", tmp_path / "fixture"
+    outside.mkdir()
+    fixture.mkdir()
+    (outside / "runs.jsonl").write_text("linked-dir-content")
+    (outside / "target").write_text("linked-file-content")
+    (fixture / "calendar").symlink_to(outside, target_is_directory=True)
+    (fixture / "calendar.stderr").symlink_to(outside / "target")
+    (fixture / "step").mkdir()
+    os.mkfifo(fixture / "drain")  # Opening a FIFO would block; it must never be read.
+    (fixture / "errors").write_text("never-read-content")
+    real_open = Path.open
+
+    def open_(self, *args, **kwargs):
+        if self.name == "errors":
+            raise PermissionError("injected read failure")
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_)
+    message = fail_with_timeouts(fixture, Clock())
+    artifacts = _fixture_diagnostics(fixture)
+    assert artifacts["calendar.stderr"] == artifacts["calendar/runs.jsonl"] == "symlink (not read)"
+    for name in ("step", "drain", "watch"):
+        assert artifacts[name] == "missing or not a regular file"
+    assert artifacts["errors"] == "unreadable: PermissionError('injected read failure')"
+    assert "linked-" not in message and "never-read" not in message
+
+
+@pytest.mark.parametrize("tail, suffix", [("", ""), ("TAIL", TRUNCATED)])
+def test_diagnostic_text_limit_counts_characters_and_labels_truncation(tmp_path, tail, suffix):
+    (tmp_path / "errors").write_text("é" * 16384 + tail, encoding="utf-8")  # 2 bytes per char.
+    assert _fixture_diagnostics(tmp_path)["errors"] == "é" * 16384 + suffix
+    assert (TRUNCATED in fail_with_timeouts(tmp_path, Clock())) is bool(suffix)

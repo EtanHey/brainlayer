@@ -37,6 +37,8 @@ final class BrainDatabase: @unchecked Sendable {
     private static let brainLayerQueueDirEnv = "BRAINLAYER_QUEUE_DIR"
     private static let agentWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('mcp', 'manual', 'digest', 'precompact-hook', 'brain_store', 'pending', 'fallback', 'fallback-replay')"
     private static let lexicalDefenseReplacements: [String: [String]] = [:]
+    /// Optional per-user aliases from outside the app (#995); the packaged table above stays empty.
+    var userLexicalAliases = LexicalDefenseUserAliases(claimedSurfaces: Set(BrainDatabase.lexicalDefenseReplacements.keys))
 
     enum TrigramStartupRepairDecision: Equatable {
         case noRepairNeeded
@@ -780,6 +782,9 @@ final class BrainDatabase: @unchecked Sendable {
         // already scrubbed, so replay would otherwise find nothing to record.
         let secretScrubRedactions: [String]?
         let secretScrubQuarantineCount: Int?
+        // #655 Part B: the caller's self-reported model. Absent on records queued
+        // before this field existed, which replay exactly as they did before.
+        let callerModel: String?
 
         enum CodingKeys: String, CodingKey {
             case content
@@ -795,6 +800,7 @@ final class BrainDatabase: @unchecked Sendable {
             case conversationID = "conversation_id"
             case secretScrubRedactions = "secret_scrub_redactions"
             case secretScrubQuarantineCount = "secret_scrub_quarantine_count"
+            case callerModel = "caller_model"
         }
 
         init(
@@ -810,7 +816,8 @@ final class BrainDatabase: @unchecked Sendable {
             chunkID: String? = nil,
             conversationID: String? = nil,
             secretScrubRedactions: [String]? = nil,
-            secretScrubQuarantineCount: Int? = nil
+            secretScrubQuarantineCount: Int? = nil,
+            callerModel: String? = nil
         ) {
             self.content = content
             self.tags = tags
@@ -825,6 +832,7 @@ final class BrainDatabase: @unchecked Sendable {
             self.conversationID = conversationID
             self.secretScrubRedactions = secretScrubRedactions
             self.secretScrubQuarantineCount = secretScrubQuarantineCount
+            self.callerModel = BrainDatabase.normalizedCallerModel(callerModel)
         }
 
         init(from decoder: Decoder) throws {
@@ -842,6 +850,11 @@ final class BrainDatabase: @unchecked Sendable {
             conversationID = try container.decodeIfPresent(String.self, forKey: .conversationID)
             secretScrubRedactions = try container.decodeIfPresent([String].self, forKey: .secretScrubRedactions)
             secretScrubQuarantineCount = try container.decodeIfPresent(Int.self, forKey: .secretScrubQuarantineCount)
+            // Lenient on purpose: a malformed model on a queued line drops the model,
+            // never the memory. A strict decode would strand the whole line.
+            callerModel = BrainDatabase.normalizedCallerModel(
+                try? container.decodeIfPresent(String.self, forKey: .callerModel)
+            )
         }
 
         /// This item with content and tags scrubbed and the findings folded in.
@@ -864,7 +877,8 @@ final class BrainDatabase: @unchecked Sendable {
                 chunkID: chunkID,
                 conversationID: conversationID,
                 secretScrubRedactions: result.metadata["secret_scrub_redactions"] as? [String],
-                secretScrubQuarantineCount: result.metadata["secret_scrub_quarantine_count"] as? Int
+                secretScrubQuarantineCount: result.metadata["secret_scrub_quarantine_count"] as? Int,
+                callerModel: callerModel
             )
         }
 
@@ -875,6 +889,48 @@ final class BrainDatabase: @unchecked Sendable {
             if let secretScrubQuarantineCount { metadata["secret_scrub_quarantine_count"] = secretScrubQuarantineCount }
             return metadata
         }
+
+        /// Everything a replayed row records: scrub findings plus caller model provenance,
+        /// so a replayed row carries the same metadata a direct store would have.
+        var replayMetadata: [String: Any] {
+            scrubMetadata.merging(BrainDatabase.callerModelMetadata(callerModel)) { current, _ in current }
+        }
+    }
+
+    /// Longest caller-reported model accepted, in Unicode scalars. Mirrors the
+    /// `caller_model` maxLength advertised on the brain_store inputSchema.
+    static let callerModelMaxLength = 128
+
+    /// The caller's self-reported model, trimmed, or nil when it cannot be trusted as one.
+    /// Nothing is inferred: absent, blank, over-long, control/format characters, the
+    /// `<synthetic>` placeholder, or anything the secret scrubber would touch → unknown.
+    static func normalizedCallerModel(_ raw: String?) -> String? {
+        guard let model = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !model.isEmpty else {
+            return nil
+        }
+        guard model.unicodeScalars.count <= callerModelMaxLength, model != "<synthetic>" else {
+            return nil
+        }
+        for scalar in model.unicodeScalars {
+            switch scalar.properties.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator, .surrogate, .privateUse, .unassigned:
+                return nil
+            default:
+                continue
+            }
+        }
+        let scrubbed = SecretScrubber.scrub(model)
+        guard scrubbed.text == model, scrubbed.quarantineCount == 0 else {
+            return nil
+        }
+        return model
+    }
+
+    /// Authoring-model provenance for a brain_store row. Written only when the caller
+    /// supplied a valid model; never the enrichment_model / enrichment_backend columns.
+    static func callerModelMetadata(_ raw: String?) -> [String: Any] {
+        guard let model = normalizedCallerModel(raw) else { return [:] }
+        return ["model": model, "model_source": "caller_self_reported"]
     }
 
     private var db: OpaquePointer?
@@ -891,7 +947,18 @@ final class BrainDatabase: @unchecked Sendable {
     var failNextStoreWithBusyForTesting = false
     var pendingStoreSyncForTesting: ((Int32) throws -> Void)?
     var pendingStoreDirectorySyncForTesting: ((URL) throws -> Void)?
+    /// Replaces the barrier that makes replayed commits durable before the queue drops their rows.
+    var pendingStoreReplayDurabilityBarrierForTesting: (() throws -> Void)?
 #if DEBUG
+    /// Runs inside the durability barrier after it resolved SQLite's file handle and before it
+    /// calls xSync on it: the exact window a concurrent close() must not be able to free it in.
+    var commitDurabilityBarrierWillSyncForTesting: (() throws -> Void)?
+    /// True when another thread holds transactionLock, the lock close() needs to free the handle.
+    func transactionLockIsHeldElsewhereForTesting() -> Bool {
+        guard transactionLock.try() else { return true }
+        transactionLock.unlock()
+        return false
+    }
     var observeStorePolicyForTesting: ((Int32, Int) -> Void)?
     var onStoreTransactionForTesting: (() -> Void)?
     var onBackupStagingCreatedForTesting: (() -> Void)?
@@ -1732,6 +1799,7 @@ final class BrainDatabase: @unchecked Sendable {
         source: String,
         project: String? = nil,
         conversationID: String? = nil,
+        callerModel: String? = nil,
         busyTimeoutMillis: Int32 = 30_000,
         retries: Int = 3
     ) throws -> StoreWriteOutcome {
@@ -1756,7 +1824,8 @@ final class BrainDatabase: @unchecked Sendable {
                 conversationID: conversationID,
                 refreshStatistics: true,
                 retries: retries,
-                busyTimeoutMillis: busyTimeoutMillis
+                busyTimeoutMillis: busyTimeoutMillis,
+                metadata: Self.callerModelMetadata(callerModel)
             )
             return .stored(stored)
         } catch {
@@ -1771,7 +1840,8 @@ final class BrainDatabase: @unchecked Sendable {
                 project: project,
                 createdAt: createdAt,
                 chunkID: chunkID,
-                conversationID: conversationID
+                conversationID: conversationID,
+                callerModel: callerModel
             )
             return .queued(queueID: queued.queueID, queuedAt: queued.queuedAt, chunkID: queued.chunkID)
         }
@@ -1828,6 +1898,7 @@ final class BrainDatabase: @unchecked Sendable {
         createdAt: String? = nil,
         chunkID: String? = nil,
         conversationID: String? = nil,
+        callerModel: String? = nil,
         reason: String = "DB_BUSY"
     ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
         try Self.queuePendingStore(
@@ -1840,6 +1911,7 @@ final class BrainDatabase: @unchecked Sendable {
             createdAt: createdAt,
             chunkID: chunkID,
             conversationID: conversationID,
+            callerModel: callerModel,
             reason: reason,
             sync: pendingStoreSyncForTesting,
             directorySync: pendingStoreDirectorySyncForTesting
@@ -1865,6 +1937,7 @@ final class BrainDatabase: @unchecked Sendable {
         createdAt: String? = nil,
         chunkID: String? = nil,
         conversationID: String? = nil,
+        callerModel: String? = nil,
         reason: String = "DB_BUSY",
         sync: ((Int32) throws -> Void)? = nil,
         directorySync: ((URL) throws -> Void)? = nil
@@ -1890,7 +1963,8 @@ final class BrainDatabase: @unchecked Sendable {
             telemetry: DeferredStoreTelemetry.Origin(epoch: Date().timeIntervalSince1970, reason: reason),
             createdAt: createdAt,
             chunkID: chunkID,
-            conversationID: conversationID
+            conversationID: conversationID,
+            callerModel: callerModel
         ).scrubbed()
         var line = try JSONEncoder().encode(item)
         line.append(0x0A)
@@ -1976,7 +2050,7 @@ final class BrainDatabase: @unchecked Sendable {
                             refreshStatistics: false,
                             retries: retries,
                             busyTimeoutMillis: busyTimeoutMillis,
-                            metadata: item.scrubMetadata
+                            metadata: item.replayMetadata
                         )
                         if stored.outcome.storedNew {
                             DeferredStoreTelemetry.record("committed", dbPath: self.path, queueID: queueID,
@@ -1998,7 +2072,14 @@ final class BrainDatabase: @unchecked Sendable {
                     }
                 }
 
-                rewritePendingStoreFile(path: path, snapshot: snapshot, remainingLines: remaining)
+                // The queue line is the durable copy of a DEFERRED receipt, synced with
+                // F_FULLFSYNC before it was acknowledged. Replay commits run under
+                // synchronous=NORMAL, so dropping the line before those WAL frames reach
+                // stable storage would trade a durable copy for one a power loss can
+                // roll back. No barrier, no drop: the rows stay and replay is idempotent.
+                if remaining.count == lines.count || replayedCommitsAreDurable() {
+                    rewritePendingStoreFile(path: path, snapshot: snapshot, remainingLines: remaining)
+                }
                 if !flushed.isEmpty {
                     refreshSearchStatisticsBestEffort()
                 }
@@ -3220,7 +3301,7 @@ final class BrainDatabase: @unchecked Sendable {
         let normalized = token
             .trimmingCharacters(in: .punctuationCharacters.union(.whitespacesAndNewlines))
             .lowercased()
-        return Self.lexicalDefenseReplacements[normalized] ?? []
+        return (Self.lexicalDefenseReplacements[normalized] ?? []) + userLexicalAliases.replacements(for: token)
     }
 
     private func kgAliasReplacements(for token: String) -> [String] {
@@ -4968,7 +5049,8 @@ final class BrainDatabase: @unchecked Sendable {
             chunkID: chunkID,
             conversationID: item.conversationID,
             secretScrubRedactions: item.secretScrubRedactions,
-            secretScrubQuarantineCount: item.secretScrubQuarantineCount
+            secretScrubQuarantineCount: item.secretScrubQuarantineCount,
+            callerModel: item.callerModel
         )
         return try? JSONEncoder().encode(replayItem)
     }
@@ -5120,6 +5202,53 @@ final class BrainDatabase: @unchecked Sendable {
         default:
             throw DBError.step(stepRC)
         }
+    }
+
+    private func replayedCommitsAreDurable() -> Bool {
+        do {
+            if let barrier = pendingStoreReplayDurabilityBarrierForTesting {
+                try barrier()
+            } else {
+                try syncCommittedWritesToStableStorage()
+            }
+            return true
+        } catch {
+            NSLog("[BrainBar] Keeping pending store queue rows: replayed commits not yet durable: %@",
+                  String(describing: error))
+            return false
+        }
+    }
+
+    /// Forces every frame this database has committed onto stable storage, through SQLite's
+    /// own open handle: the WAL in WAL mode, the main file otherwise. SQLITE_SYNC_FULL makes
+    /// the unix VFS issue F_FULLFSYNC on Darwin, the same device-cache barrier the queue
+    /// append uses. Syncing the WAL covers every earlier frame, including rows a previous
+    /// replay committed whose queue line is only now being dropped as already stored.
+    ///
+    /// xSync on the raw sqlite3_file is a direct VFS callback, outside SQLite's connection
+    /// mutex, so nothing in SQLite stops close() from freeing that handle mid-call. The barrier
+    /// holds transactionLock (the lock close() takes) from the open check through the sync:
+    /// a racing close() waits for the sync to finish, and a barrier that loses the race finds
+    /// the handle gone and throws notOpen. Lock order matches replay's own store(): callers hold
+    /// the pending-store locks first, then this lock, and nothing takes them in reverse.
+    func syncCommittedWritesToStableStorage() throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
+        guard let db else { throw DBError.notOpen }
+        let isWAL = queryPragma(db, name: "journal_mode")?.lowercased() == "wal"
+        var file: UnsafeMutablePointer<sqlite3_file>?
+        let rc = sqlite3_file_control(
+            db, "main", isWAL ? SQLITE_FCNTL_JOURNAL_POINTER : SQLITE_FCNTL_FILE_POINTER, &file
+        )
+        guard rc == SQLITE_OK else { throw DBError.exec(rc, "durability barrier: no database file handle") }
+        guard let file, let methods = file.pointee.pMethods, let xSync = methods.pointee.xSync else {
+            throw DBError.exec(SQLITE_IOERR, "durability barrier: \(isWAL ? "WAL" : "database") file is not open")
+        }
+#if DEBUG
+        try commitDurabilityBarrierWillSyncForTesting?()
+#endif
+        let syncRC = xSync(file, SQLITE_SYNC_FULL)
+        guard syncRC == SQLITE_OK else { throw DBError.exec(syncRC, "durability barrier: sync failed") }
     }
 
     private func rewritePendingStoreFile(path: URL, snapshot: Data, remainingLines: [Data]) {
@@ -5454,77 +5583,51 @@ final class BrainDatabase: @unchecked Sendable {
     func lookupEntity(query: String, entityType: String? = nil) throws -> [String: Any]? {
         guard let db else { throw DBError.notOpen }
 
-        // First try exact name match
-        let exactSQL = """
-            SELECT id, entity_type, name, metadata, description, importance
-            FROM kg_entities
-            WHERE name = ?
-              AND (? IS NULL OR entity_type = ?)
-            LIMIT 1
-        """
-        var exactStmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, exactSQL, -1, &exactStmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        bindText(query, to: exactStmt, index: 1)
-        if let entityType {
-            bindText(entityType, to: exactStmt, index: 2)
-            bindText(entityType, to: exactStmt, index: 3)
-        } else {
-            sqlite3_bind_null(exactStmt, 2)
-            sqlite3_bind_null(exactStmt, 3)
-        }
+        // Resolution tiers, first hit wins (#663):
+        //   1. exact name (case-sensitive) — an exact spelling always takes precedence;
+        //   2. exact name, ASCII case-insensitive — so "nimbus" resolves "Nimbus" instead
+        //      of falling through to the substring tier and landing on whichever entity
+        //      merely *contains* the query. Ambiguous case variants are ordered
+        //      deterministically (importance, then binary name, then id);
+        //   3. substring LIKE fallback (unchanged).
+        // The returned `name` is always the stored canonical spelling, never the query.
+        let selectColumns = "SELECT id, entity_type, name, metadata, description, importance FROM kg_entities"
+        let typeFilter = "AND (? IS NULL OR entity_type = ?)"
+        let tiers: [(sql: String, pattern: String)] = [
+            ("\(selectColumns) WHERE name = ? \(typeFilter) LIMIT 1", query),
+            ("\(selectColumns) WHERE name = ? COLLATE NOCASE \(typeFilter) "
+                + "ORDER BY importance DESC, name COLLATE BINARY ASC, id ASC LIMIT 1", query),
+            ("\(selectColumns) WHERE name LIKE ? \(typeFilter) LIMIT 1", "%\(query)%"),
+        ]
 
         var entityId: String?
         var result: [String: Any]?
 
-        if sqlite3_step(exactStmt) == SQLITE_ROW {
-            entityId = columnText(exactStmt, 0)
-            result = [
-                "entity_id": entityId as Any,
-                "entity_type": columnText(exactStmt, 1) as Any,
-                "name": columnText(exactStmt, 2) as Any,
-                "metadata": columnText(exactStmt, 3) as Any,
-                "description": columnText(exactStmt, 4) as Any,
-                "importance": sqlite3_column_double(exactStmt, 5)
-            ]
-        }
-        sqlite3_finalize(exactStmt)
-
-        // If no exact match, try LIKE
-        if result == nil {
-            let likeSQL = """
-                SELECT id, entity_type, name, metadata, description, importance
-                FROM kg_entities
-                WHERE name LIKE ?
-                  AND (? IS NULL OR entity_type = ?)
-                LIMIT 1
-            """
-            var likeStmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, likeSQL, -1, &likeStmt, nil) == SQLITE_OK else {
+        for tier in tiers where result == nil {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, tier.sql, -1, &stmt, nil) == SQLITE_OK else {
                 throw DBError.prepare(sqlite3_errcode(db))
             }
-            bindText("%\(query)%", to: likeStmt, index: 1)
+            defer { sqlite3_finalize(stmt) }
+            bindText(tier.pattern, to: stmt, index: 1)
             if let entityType {
-                bindText(entityType, to: likeStmt, index: 2)
-                bindText(entityType, to: likeStmt, index: 3)
+                bindText(entityType, to: stmt, index: 2)
+                bindText(entityType, to: stmt, index: 3)
             } else {
-                sqlite3_bind_null(likeStmt, 2)
-                sqlite3_bind_null(likeStmt, 3)
+                sqlite3_bind_null(stmt, 2)
+                sqlite3_bind_null(stmt, 3)
             }
-
-            if sqlite3_step(likeStmt) == SQLITE_ROW {
-                entityId = columnText(likeStmt, 0)
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                entityId = columnText(stmt, 0)
                 result = [
                     "entity_id": entityId as Any,
-                    "entity_type": columnText(likeStmt, 1) as Any,
-                    "name": columnText(likeStmt, 2) as Any,
-                    "metadata": columnText(likeStmt, 3) as Any,
-                    "description": columnText(likeStmt, 4) as Any,
-                    "importance": sqlite3_column_double(likeStmt, 5)
+                    "entity_type": columnText(stmt, 1) as Any,
+                    "name": columnText(stmt, 2) as Any,
+                    "metadata": columnText(stmt, 3) as Any,
+                    "description": columnText(stmt, 4) as Any,
+                    "importance": sqlite3_column_double(stmt, 5)
                 ]
             }
-            sqlite3_finalize(likeStmt)
         }
 
         // Get typed relations for found entity (excludes co_occurs_with noise)

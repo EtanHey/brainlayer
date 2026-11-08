@@ -45,6 +45,7 @@ Zero trace files, zero parsed ticks, or a file that parses to nothing is an erro
 | `bug-1595-recovery-reset` | #1595 | RedHoldsUntilEvidence | (pipe model) |
 | `bug-1596-abandoned` | #1596 | NoFalseGreen | 12b9ddd4 reproduces → fixed (main 67d23f14) |
 | `bug-1596-superseded` | #1596 | NoFalseGreen | 12b9ddd4 reproduces → fixed (main 67d23f14) |
+| `bug-1685-lenient-weekly-gate` | #1685 | VacuumNeedsFreshSnapshot | ff3a8b35 reproduces → fixed (main 5fda86d2) |
 | `bug-1587-B4-backlog-ages-out` | #1587 B4 | RedHoldsUntilEvidence | (pipe model) |
 | `bug-1587-B5-stale-canary-success` | #1587 B5 | RedHoldsUntilEvidence | (pipe model) |
 | `bug-1583-S1-alert-lights-dot` | #1583 S1 | NoStuckAlert | (dot model) |
@@ -142,6 +143,23 @@ Replay at 12b9ddd4: reproduces, tick for tick. At main: does not. (REV-FTLA1-R1 
 version superseded without a newer upload, which the producer cannot emit. `Supersede` now requires
 the newer verified upload, and the trace above is producer-reachable.)
 
+### #1685: a damaged revoke line lets the weekly gate VACUUM on a revoked snapshot
+1. Snapshot 1 is locally verified at hour 0 (`local_verified`, `local_integrity: ok`, `local_artifact`).
+2. Its verification is revoked (`drive_md5_match: false`), but that receipt's line in
+   `backup-daily.log` is damaged: newline-terminated, not JSON, so it is neither progress noise
+   nor a torn final record.
+3. Weekly maintenance `--full` asks `_recent_local_verified_backup` for a fresh verified snapshot.
+   The lenient read skips the damaged line, so snapshot 1's latest readable receipt is the
+   verified one. The gate admits it, and VACUUM runs with no verified fresh snapshot.
+
+Replay (`replay.py --run-weekly`): real snapshot files and a real log under `.build.noindex/`,
+read by the real gate extracted from each ref's `backup_daily.py`. At ff3a8b35 (main before
+#1685) the gate returns snapshot 1: reproduces. At main 5fda86d2 `_read_backup_receipts(strict=True)`
+raises `BackupReceiptUnreadableError`, the gate returns `None`, and the run defers with
+`last_weekly` kept. That is fail-closed: VACUUM then stays deferred for as long as the damaged line
+stays in the log. `_append_json_log` truncates a torn tail before it appends, so the writer itself
+does not leave a mid-file damaged line. The case covers damage from anything else.
+
 ### #1587 B4: an embedding stall clears when its rows age out
 1. The embed backlog stalls at hour 0. At hour 3 it has not shrunk for 3 h: `embedding` red.
 2. With the 24 h window not anchored, the stalled rows age out of the query and the backlog reads as empty. The next tick shows **green**, and no vector was written.
@@ -213,6 +231,20 @@ Real code at 67d23f14 gives green at all five ticks (tick for tick). At 8eecb5ee
 red. `bug-renewable-grace-ingest` and `-stores` are the same bug on a dead watcher and on a stuck
 pending store (shortest TLC paths); both reproduce at 67d23f14 and not at 8eecb5ee.
 
+## Found by this model on main 5fda86d2, not fixed here
+
+### `finding-damaged-receipt-dot`: a damaged abandon line leaves the dot green
+1. Snapshot 1 is locally verified at hour 0.
+2. Its upload finds the local file missing (`upload_state: abandoned`), but that receipt's line is damaged.
+3. The tick reads the log through `health_facts.read_receipts`, which skips any line it cannot
+   parse (`health_facts.py:120-126`). `backup_local` is **green** on snapshot 1, which no longer exists.
+
+This is the same uncertainty #1685 closed for the VACUUM gate. The dot still reads leniently.
+Failing closed there would hold the check `unknown` (amber after three ticks) while the damaged line
+stays in the log. Whether that trade is wanted is a product call, so the case expects
+`NoFalseGreen` to fail, as a ratchet: it turns into a mismatch the day the dot's read changes. Not
+replayed: the real reader is the file parser in `health_facts.py`, which `replay.py` does not load.
+
 ## Design limit and scratch breaks
 
 | Case | Rule | Meaning |
@@ -220,4 +252,5 @@ pending store (shortest TLC paths); both reproduce at 67d23f14 and not at 8eecb5
 | `limit-unreadable-log` | NoFalseGreenStrict | While `backup-daily.log` is unreadable, a revocation appended after the last readable tick is invisible. The check keeps the last known copy until that copy ages past red. This is the documented unreadable-fallback design, bounded by the red age, not a bug. |
 | `scratch-vacuum-any-receipt` | VacuumNeedsFreshSnapshot | A gate that trusts any old `local_ok` receipt runs VACUUM on a snapshot revoked since. Shows the property can fail. |
 | `scratch-deferred-advances` | VacuumNeedsFreshSnapshot | A deferred weekly run that advanced `last_weekly` would skip the week. Shows the property can fail. |
+| `scratch-pause-downgrades` | RedHoldsUntilEvidence | #1686 reads AMBER only on recent progress; a load pause with no batch only adds a note. If the pause also read AMBER (`Daemon = "pause"`), an embedding stall past red would step red → amber with no vector written. Shows the property guards #1686's choice. |
 | `scratch-clean-run-keeps-alert` | AlertClears | If a clean run did not clear its alert, the alert would never clear. Shows the liveness property can fail. |

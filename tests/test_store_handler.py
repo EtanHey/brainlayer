@@ -781,7 +781,9 @@ def test_store_busy_budget_refreshes_cold_init_timeout_between_statements(tmp_pa
     with writer_telemetry._ACTIVE_LOCK:
         assert heartbeat_path not in writer_telemetry._ACTIVE_SPANS
     assert not heartbeat_path.exists()
-    assert executed[2:4] == [
+    # executed[1] is the #618 runtime-DDL audit's prior sqlite_schema snapshot.
+    assert executed[1].startswith("SELECT name, type, tbl_name, sql FROM sqlite_schema")
+    assert executed[3:5] == [
         "PRAGMA journal_size_limit = 256000000",
         "PRAGMA wal_autocheckpoint = 10000",
     ]

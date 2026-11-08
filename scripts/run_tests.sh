@@ -440,6 +440,18 @@ map_changed_files_to_pytests() {
           fi
         fi
         ;;
+      src/brainlayer/schema_ddl_ledger.py)
+        # No test_schema_ddl_ledger.py; unmapped, a push escalated to the full suite (2026-11-05).
+        mapped=1
+        for rel in test_runtime_ddl_ledger.py test_1642_atomic_probe.py; do
+          [ -f "$TEST_ROOT/$rel" ] || mapped=0
+        done
+        if [ "$mapped" -eq 1 ]; then
+          for rel in test_runtime_ddl_ledger.py test_1642_atomic_probe.py; do
+            append_unique "$TEST_ROOT/$rel"
+          done
+        fi
+        ;;
       src/brainlayer/hotlane_budget.py)
         # S22: the hotlane CPU budget/sampler is covered by these, not a test_hotlane_budget.py.
         # Unmapped, it escalated a changed-only push to the full suite and timed out heavy-suite.
@@ -447,6 +459,18 @@ map_changed_files_to_pytests() {
         for rel in test_hotlane_cpu_budget.py test_hotlane_cpu_active_budget.py test_hotlane_backpressure.py test_hotlane_brainbar_daemon.py; do
           if [ -f "$TEST_ROOT/$rel" ]; then append_unique "$TEST_ROOT/$rel"; else mapped=0; fi
         done
+        ;;
+      src/brainlayer/scrub_at_rest.py)
+        # No test_scrub_at_rest.py; unmapped, a push escalated to the full suite and timed out (2026-11-05).
+        mapped=1
+        for rel in test_scrub_at_rest_command.py test_secret_scrub_at_rest.py; do
+          [ -f "$TEST_ROOT/$rel" ] || mapped=0
+        done
+        if [ "$mapped" -eq 1 ]; then
+          for rel in test_scrub_at_rest_command.py test_secret_scrub_at_rest.py; do
+            append_unique "$TEST_ROOT/$rel"
+          done
+        fi
         ;;
       src/brainlayer/wal_checkpoint.py)
         # Its tests are named *_module / *_fallback, so the generic test_<module>.py rule misses
@@ -578,6 +602,7 @@ if [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ]; then
   map_changed_files_to_pytests
 fi
 
+full_unit_suite=0
 if [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ -n "$changed_files_scope_error" ]; then
   # Fail CLOSED. The skip below is only legitimate when this script actually established that
   # nothing changed; a scope it could not determine is not a scope it may call empty.
@@ -594,6 +619,7 @@ elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_files_seen"
   echo "==> pytest unit suite"
   echo "WARNING: release tag $BRAINLAYER_PREPUSH_TAG scoped to an EMPTY change set."
   echo "WARNING: a release gate does not skip; running the FULL pytest unit suite."
+  full_unit_suite=1
   pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_files_seen" -eq 0 ]; then
   # A changed-only run that found NOTHING has nothing to test, and escalating that to the full
@@ -613,6 +639,7 @@ elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_source_unma
   # it, so the fix (add a mapping) is visible instead of paid for on every push.
   echo "WARNING: changed-only scope found an unmapped source change; falling back to full pytest unit suite"
   echo "WARNING: unmapped: ${unmapped_changed_files[*]}"
+  full_unit_suite=1
   pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "${#targeted_pytest_files[@]}" -gt 0 ]; then
   pytest_unit_cmd=(run_pytest "${targeted_pytest_files[@]}" -v --tb=short -m "$UNIT_MARK_EXPR")
@@ -622,6 +649,7 @@ elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ -n "${BRAINLAYER_PREP
   echo "==> pytest unit suite"
   echo "WARNING: release tag $BRAINLAYER_PREPUSH_TAG mapped no pytest targets in its range."
   echo "WARNING: a release gate does not skip; running the FULL pytest unit suite."
+  full_unit_suite=1
   pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ]; then
   echo "==> pytest unit suite"
@@ -629,8 +657,21 @@ elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ]; then
   echo
   pytest_unit_cmd=()
 else
+  full_unit_suite=1
   pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
 fi
+# Re-enter once under the selected budget, covering every gate step. The hook's
+# outer ceiling also bounds this initial scope resolution. No second heavy lock.
+if [ "${BRAINLAYER_PREPUSH_SELECT_BUDGET:-0}" = "1" ] && [ "${1:-}" != "--prepush-budgeted" ]; then
+  budget_s=1800
+  if [ "$full_unit_suite" = "1" ] || [ "${BRAINLAYER_PREPUSH_RELEASE_BUDGET:-0}" = "1" ]; then
+    budget_s=5400
+  fi
+  echo "==> pre-push: selected suite budget ${budget_s}s"
+  exec python3 "$ROOT_DIR/scripts/ci/run_with_deadline.py" --seconds "$budget_s" \
+    --label pre-push-selection -- bash "$ROOT_DIR/scripts/run_tests.sh" --prepush-budgeted
+fi
+
 if [ "${#isolated_pytest_files[@]}" -gt 0 ]; then
   for isolated_test in "${isolated_pytest_files[@]}"; do
     if [ "${#pytest_unit_cmd[@]}" -gt 0 ]; then

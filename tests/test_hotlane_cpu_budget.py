@@ -293,3 +293,19 @@ def test_ps_parser_checks_installed_identity(monkeypatch):
     monkeypatch.setattr(ratchet.subprocess, "check_output", lambda *a, **kw: "unrelated process")
     with pytest.raises(ValueError, match="installed"):
         ratchet.ps_sample(123)
+
+
+def test_cpu_receipt_keeps_last_batch_time_across_load_pause(tmp_path):
+    from brainlayer.hotlane_budget import HotlaneCpuSampler
+
+    tick = [0.0]
+    sampler = HotlaneCpuSampler(tmp_path / "fixture.db", clock=lambda: tick[0], cpu_clock=lambda: tick[0])
+    tick[0] = 20
+    sampler.observe("running", backlog_encoded=16, cycle_start=(10, 10))
+    last = json.loads(sampler.path.read_text())["backlog_last_batch_at"]
+    assert datetime.fromisoformat(last).tzinfo is not None
+    tick[0] = 700
+    sampler.observe("high load")
+    receipt = json.loads(sampler.path.read_text())
+    assert receipt["backlog_encoded"] == 0
+    assert receipt["backlog_last_batch_at"] == last

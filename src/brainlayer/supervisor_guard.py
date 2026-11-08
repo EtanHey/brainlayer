@@ -58,18 +58,80 @@ def configured_guard_timeout() -> float:
     return value
 
 
+def gate_event(directory, event, identity):
+    """Serialize bounded diagnostics independently of the maintenance lease."""
+    try:
+        fd = os.open(directory / "maintenance-events.jsonl", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "r+") as stream:
+            info = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_mode & 0o077
+                or info.st_nlink != 1
+            ):
+                raise PermissionError("unsafe maintenance telemetry")
+            fcntl.flock(stream, fcntl.LOCK_EX)
+            rows = [json.loads(line) for line in stream if line.strip()]
+            active = rows[-1].get("active", {}) if rows else {}
+            active = {
+                key: value
+                for key, value in active.items()
+                if value.get("start_time") and start_time(value["pid"]) == value["start_time"]
+            }
+            for row in rows:
+                key = row.get("lease")
+                if row["event"] == "acquired":
+                    active[key] = row
+                elif row["event"] == "released":
+                    active.pop(key, None)
+            holders = [r for r in active.values() if r.get("start_time") and start_time(r["pid"]) == r["start_time"]]
+            row = dict(identity, event=event, ts=time.time())
+            if event == "busy":
+                row["holders"] = holders
+            if event == "acquired":
+                active[identity["lease"]] = dict(identity)
+            elif event == "released":
+                active.pop(identity["lease"], None)
+            row["active"] = active
+            rows.append(row)
+            stream.seek(0)
+            stream.writelines(json.dumps(r) + "\n" for r in rows[-500:])
+            stream.truncate()
+            return holders
+    except (OSError, ValueError):
+        logging.warning("maintenance gate telemetry unavailable", exc_info=True)
+        return []
+
+
 @contextmanager
-def component_gate(directory: Path, *, exclusive=False):
+def component_gate(directory: Path, *, exclusive=False, operation="component"):
     """Close rather than LOCK_UN: inherited descriptors retain the maintenance lease."""
+    acquired = False
+    identity = dict(
+        mode="exclusive" if exclusive else "shared",
+        pid=os.getpid(),
+        start_time=start_time(os.getpid()),
+        operation=operation,
+        lease=os.urandom(16).hex(),
+    )
     fd = os.open(directory / "maintenance.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_nlink != 1:
             raise PermissionError("unsafe maintenance lease")
-        fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            exc.holders = gate_event(directory, "busy", identity)
+            raise
+        acquired = True
+        gate_event(directory, "acquired", identity)
         yield fd
     finally:
         os.close(fd)
+        if acquired:
+            gate_event(directory, "released", identity)
 
 
 def group_exists(pgid: int) -> bool:

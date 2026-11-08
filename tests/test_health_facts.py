@@ -566,3 +566,83 @@ def test_an_unrecordable_attempt_leaves_no_stale_success_standing(tmp_path, monk
     attempt = maintenance._store_roundtrip(config)
     assert attempt["ok"] is None and "not recorded" in attempt["reason"]
     assert hf.store_canary_fact(receipt_path, datetime.now(UTC), None)[0] is UNOBSERVED
+
+
+def test_disk_timeout_reuses_measurement_only_within_thirty_minutes(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    monkeypatch.setattr(hf, "disk_fact", lambda *_: (100_000_000_000, 10, 5, 2))
+    result = HealthCheckResult(checked_at="", ok=True)
+    _, state = hf.collect_facts(config, result, None, NOW)
+    monkeypatch.setattr(hf, "disk_fact", lambda *_: UNOBSERVED)
+    for minute in (5, 10, 15):
+        facts, state = hf.collect_facts(config, result, state, NOW + timedelta(minutes=minute))
+        assert evaluate(facts).check("disk").state == "green"
+        assert "earlier measurement" in facts.check_notes["disk"]
+    facts, _ = hf.collect_facts(config, result, state, NOW + timedelta(minutes=31))
+    assert facts.disk_free_bytes is UNOBSERVED
+
+
+@pytest.mark.parametrize(
+    "mode, encoded, batch_minutes, expected",
+    [
+        ("running", 16, 480, "amber"),
+        ("high load", 0, 2, "amber"),
+        ("high load", 0, 480, "red"),
+        ("waiting", 0, 480, "red"),
+    ],
+)
+def test_embedding_completed_batches_and_load_pause_are_not_net_stalls(
+    tmp_path, mode, encoded, batch_minutes, expected
+):
+    config = _config(tmp_path)
+    with sqlite3.connect(config.db_path) as conn:
+        conn.execute("INSERT INTO chunks VALUES ('pending', 'text', NULL, NULL, NULL, ?)", (NOW.isoformat(),))
+    prior = {
+        "embedding": {
+            "count": 1,
+            "since": (NOW - timedelta(hours=8)).isoformat(),
+            "window_start": (NOW - timedelta(days=1)).isoformat(),
+        }
+    }
+    payload = {
+        "status": "measured",
+        "db": str(config.db_path.resolve()),
+        "measured_at": NOW.isoformat(),
+        "backlog_encoded": encoded,
+        "backlog_cpu_seconds": 2,
+        "backlog_state": mode,
+        "backlog_last_batch_at": (NOW - timedelta(minutes=batch_minutes)).isoformat(),
+    }
+    (tmp_path / "hotlane-cpu.json").write_text(json.dumps(payload))
+    (tmp_path / "hotlane-budget.json").write_text(json.dumps({"backlog_max_load": 10}))
+    facts, _ = _collect(config, prior)
+    check = evaluate(facts).check("embedding")
+    if expected == "red":
+        from dataclasses import replace
+
+        baseline = evaluate(replace(facts, embedding_activity=None)).check("embedding")
+        assert check.state == baseline.state == "red"
+        assert "not shrunk" in check.note
+    else:
+        assert check.state == "amber"
+        assert "not shrunk" not in check.note
+        assert "1 queued" in check.note
+        assert "last batch" in check.note
+        assert ("paused by machine load" if mode == "high load" else "progressing") in check.note
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_load_gate_requires_fresh_evidence_even_without_completed_batch(tmp_path, stale):
+    cpu = {
+        "status": "measured",
+        "db": str(tmp_path.resolve()),
+        "measured_at": (NOW - timedelta(minutes=3) if stale else NOW).isoformat(),
+        "backlog_encoded": 0,
+        "backlog_cpu_seconds": 0,
+        "backlog_state": "high load",
+    }
+    _, text = hf.embedding_activity(cpu, {"backlog_max_load": 10}, tmp_path, NOW)
+    assert (text is None) == stale
+    if text:
+        assert "paused by machine load" in text
+        assert "time unavailable" in text

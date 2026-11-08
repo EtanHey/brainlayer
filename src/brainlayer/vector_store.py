@@ -63,11 +63,14 @@ from .dedupe import (
 from .embeddings import embedding_input
 from .ingest_guard import reject_recursive_mcp_output
 from .kg_repo import KGMixin
+from .schema_ddl_ledger import RuntimeDDLAudit, atomic_ddl_step
 from .search_repo import SearchMixin
 from .session_repo import SessionMixin
 from .tag_normalization import ensure_tag_tombstone_schema
 from .writer_policy import configure_writer_wal_policy
 from .writer_telemetry import start_writer_span
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_BUSY_TIMEOUT_MS = 30_000
 _DEFAULT_READ_BUSY_TIMEOUT_MS = 5_000
@@ -786,11 +789,13 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 raise last_err or apsw.BusyError("write busy deadline exceeded")
             try:
                 self._init_db()
+                self._record_runtime_ddl_success()
                 self._finish_init_writer_telemetry("completed")
                 self._restore_default_write_busy_timeout()
                 return
             except apsw.Error as e:
                 self._finish_init_writer_telemetry("error", error=f"{type(e).__name__}: {e}")
+                self._record_runtime_ddl_failure(e, retryable=_is_retryable_init_error(e))
                 if not _is_retryable_init_error(e):
                     raise
                 last_err = e
@@ -810,6 +815,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 _sleep(delay)
             except BaseException as exc:
                 self._finish_init_writer_telemetry("error", error=f"{type(exc).__name__}: {exc}")
+                if isinstance(exc, Exception):
+                    self._record_runtime_ddl_failure(exc, retryable=False)
                 raise
         raise last_err  # type: ignore[misc]
 
@@ -835,8 +842,27 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             return
         conn.setbusytimeout(_default_write_busy_timeout_ms())
 
+    def _record_runtime_ddl_success(self) -> None:
+        audit = getattr(self, "_ddl_audit", None)
+        if audit is not None:
+            audit.finish_success()
+            self.conn.execute("COMMIT")
+            if getattr(self, "_init_needs_checkpoint", False):
+                # Only after the one-time chunk-origin backfill, as before #618; a FULL
+                # checkpoint on every writer open would stall startup behind readers.
+                self._checkpoint_wal_full(self.conn.cursor())
+        self._init_needs_checkpoint = False
+        self._ddl_audit = None
+
+    def _record_runtime_ddl_failure(self, exc: BaseException, *, retryable: bool) -> None:
+        audit, self._ddl_audit = getattr(self, "_ddl_audit", None), None
+        if audit is not None:
+            audit.finish_failure(exc, retryable=retryable)
+
     def _init_db(self) -> None:
         """Initialize database with vector extension."""
+        self._ddl_audit = None
+        self._init_needs_checkpoint = False
         self.conn = apsw.Connection(str(self.db_path))
 
         # Set busy timeout IMMEDIATELY via APSW native method — before any DDL.
@@ -854,14 +880,20 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             lane="maintenance",
             operation="init",
             span_kind="writer_operation",
-            transaction_mode="implicit_per_statement",
+            transaction_mode="explicit",
         )
 
         cursor = self.conn.cursor()
+        # Snapshot the schema before any DDL so the ensure pass can be recorded (#618).
+        self._ddl_audit = RuntimeDDLAudit.begin(
+            self.conn, path=f"{type(self).__module__}.{type(self).__qualname__}._init_db"
+        )
 
         # WAL mode is persistent on the DB file — set it every time
         cursor.execute("PRAGMA journal_mode = WAL")
         _configure_writer_pragmas(self.conn)
+
+        self.conn.execute("BEGIN IMMEDIATE")
 
         # Create tables
         cursor.execute("""
@@ -1001,7 +1033,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             (migration_name,),
         ).fetchone()
         if migration_done is None:
-            self._checkpoint_wal_full(cursor)
+            self._init_needs_checkpoint = True
             cursor.execute(
                 """
                 UPDATE chunks
@@ -1041,7 +1073,6 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     json.dumps({"backfilled_precompact_checkpoints": backfilled}),
                 ),
             )
-            self._checkpoint_wal_full(cursor)
             self._invalidate_filtered_count_caches()
 
         enrich_status_migration_name = "2026_05_26_enrich_status_v1"
@@ -1172,14 +1203,39 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             pass  # Table doesn't exist yet, will be created below
 
         if _needs_fts_rebuild:
-            cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_insert")
-            cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_operational_insert")
-            cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_delete")
-            cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_operational_delete")
-            cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_update")
-            cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_operational_update")
-            cursor.execute("DROP TABLE IF EXISTS chunks_fts")
-            cursor.execute("DROP TABLE IF EXISTS chunks_fts_operational")
+            # Drop + recreate is all-or-nothing (#618): a failure part-way must not
+            # leave chunks_fts missing or half-replaced with no record of it.
+            _fts_targets = [
+                "chunks_fts",
+                "chunks_fts_operational",
+                "chunks_fts_insert",
+                "chunks_fts_operational_insert",
+                "chunks_fts_delete",
+                "chunks_fts_operational_delete",
+                "chunks_fts_update",
+                "chunks_fts_operational_update",
+            ]
+            with atomic_ddl_step(self.conn, self._ddl_audit, "fts_schema_rebuild", targets=_fts_targets):
+                cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_insert")
+                cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_operational_insert")
+                cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_delete")
+                cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_operational_delete")
+                cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_update")
+                cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_operational_update")
+                cursor.execute("DROP TABLE IF EXISTS chunks_fts")
+                cursor.execute("DROP TABLE IF EXISTS chunks_fts_operational")
+                # Same statement text as the IF NOT EXISTS creates below, so the stored
+                # SQL matches the runtime contract's normalized definition hashes.
+                cursor.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                {_FTS5_COLUMNS}
+            )
+        """)
+                cursor.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts_operational USING fts5(
+                {_FTS5_COLUMNS}
+            )
+        """)
 
         cursor.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(

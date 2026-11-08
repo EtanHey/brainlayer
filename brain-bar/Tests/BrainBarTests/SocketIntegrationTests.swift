@@ -955,6 +955,26 @@ final class SocketIntegrationTests: XCTestCase {
         ])
         let initialize = try? readMCPMessage(fd: probeFD, timeout: 0.5)
         XCTAssertNotNil(initialize?["result"])
+        let heldInfo = (initialize?["result"] as? [String: Any])?["serverInfo"] as? [String: Any]
+        XCTAssertEqual(heldInfo?["backupSnapshotInProgress"] as? Bool, true)
+
+        // #1413 structured busy contract on the served wire: a second snapshot is
+        // rejected before admission with a machine-readable code, never as terminal.
+        let busyFD = try connectClient()
+        defer { close(busyFD) }
+        let busyTarget = brainBarTestTemporaryPath() + "brainbar-busy-backup-\(UUID().uuidString).db"
+        try sendMCPRequest(on: busyFD, request: [
+            "jsonrpc": "2.0", "id": 46, "method": "tools/call",
+            "params": ["name": "brain_backup_vacuum_into", "arguments": ["target_path": busyTarget]],
+        ])
+        let busy = try readMCPMessage(fd: busyFD, timeout: 1)
+        let busyError = try XCTUnwrap(busy["error"] as? [String: Any])
+        XCTAssertEqual(busyError["code"] as? Int, -32000)
+        XCTAssertEqual(busyError["message"] as? String, "A BrainBar backup snapshot is already in progress.")
+        let busyData = try XCTUnwrap(busyError["data"] as? [String: Any])
+        XCTAssertEqual(busyData["brainlayer_error_code"] as? String, "backup_snapshot_busy")
+        XCTAssertEqual(busyData["admitted"] as? Bool, false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: busyTarget))
 
         if initialize != nil {
             try sendMCPRequest(on: probeFD, request: [
@@ -978,6 +998,17 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertNil(backupResponse["error"])
         XCTAssertNotNil(backupResponse["result"])
         XCTAssertTrue(FileManager.default.fileExists(atPath: targetPath + ".complete"))
+
+        let idleFD = try connectClient()
+        defer { close(idleFD) }
+        try sendMCPRequest(on: idleFD, request: [
+            "jsonrpc": "2.0", "id": 47, "method": "initialize",
+            "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
+                       "clientInfo": ["name": "backup-status-idle", "version": "1.0"]],
+        ])
+        let idle = try readMCPMessage(fd: idleFD, timeout: 1)
+        let idleInfo = (idle["result"] as? [String: Any])?["serverInfo"] as? [String: Any]
+        XCTAssertEqual(idleInfo?["backupSnapshotInProgress"] as? Bool, false)
     }
 
     func testBrainStoreDuringBackupIsDurablyDeferredAndDrainsAfterSnapshot() throws {

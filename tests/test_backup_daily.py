@@ -1362,17 +1362,27 @@ def test_cachedelete_does_not_relabel_backup_timeout(monkeypatch, tmp_path):
         _real_macos_purge(tmp_path, 1)
 
 
-def test_backup_run_lock_rejects_overlapping_run(tmp_path):
+def test_backup_run_lock_rejects_overlapping_run(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
     entered = threading.Event()
     release = threading.Event()
+    clock = [0.0]
+    results = []
+    monkeypatch.setattr(backup_daily.time, "monotonic", lambda: clock[0])
+
+    def sleep(seconds):
+        assert not release.is_set()
+        clock[0] += seconds
+
+    monkeypatch.setattr(backup_daily.time, "sleep", sleep)
 
     @backup_daily._serialized_backup_run
     def held_run(staging_dir, log_path):  # noqa: ARG001
         entered.set()
-        assert release.wait(3)
-        return {"verified": True}
+        assert release.wait(10)
+        results.append({"verified": True})
+        return results[-1]
 
     log_path = tmp_path / "backup.log"
     worker = threading.Thread(target=held_run, args=(tmp_path, log_path))
@@ -1382,10 +1392,14 @@ def test_backup_run_lock_rejects_overlapping_run(tmp_path):
         assert datetime.fromisoformat((tmp_path / ".backup.lock").read_text().strip()).tzinfo is not None
         with pytest.raises(RuntimeError, match="backup already running"):
             held_run(tmp_path, log_path)
+        assert clock[0] == pytest.approx(backup_daily.BACKUP_LOCK_ADMISSION_TIMEOUT_SECONDS)
+        assert worker.is_alive()
+        assert results == []
     finally:
         release.set()
         worker.join(3)
     assert not worker.is_alive()
+    assert results == [{"verified": True}]
     refusal = json.loads(log_path.read_text().splitlines()[-1])
     assert refusal["error_type"] == "BackupAlreadyRunningError"
     assert refusal["verified"] is False
@@ -2843,17 +2857,17 @@ def test_launchd_installer_knows_backup_target():
     assert "BRAINLAYER_BACKUP_LOG_PROVENANCE:=real" in wrapper
 
 
-def test_main_enforces_configured_backup_timeout(monkeypatch, capsys):
+def test_unsupervised_process_enforces_configured_backup_timeout(monkeypatch, capsys):
     from brainlayer import backup_daily
 
     def slow_backup(**kwargs):  # noqa: ARG001
         time.sleep(5)
 
     monkeypatch.setenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "1")
-    monkeypatch.setenv(backup_daily.BACKUP_SUPERVISED_CHILD_ENV, "1")
+    monkeypatch.delenv(backup_daily.BACKUP_SUPERVISED_CHILD_ENV, raising=False)
     monkeypatch.setattr(backup_daily, "run_backup", slow_backup)
 
-    assert backup_daily.main() == 124
+    assert backup_daily._run_backup_process(1) == 124
     assert "brainlayer backup timed out after 1s" in capsys.readouterr().out
 
 

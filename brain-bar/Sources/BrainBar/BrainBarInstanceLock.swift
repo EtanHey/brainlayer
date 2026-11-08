@@ -61,6 +61,5 @@ final class BrainBarInstanceLock: @unchecked Sendable {
         guard shouldRelease else { return }
         flock(fd, LOCK_UN)
         close(fd)
-        try? FileManager.default.removeItem(atPath: lockPath)
     }
 }

@@ -304,6 +304,36 @@ def embedding_fact(
     return since, {"count": count, "since": _iso(since), "window_start": _iso(window_start)}
 
 
+def embedding_activity(cpu: Any, budget: Any, db: Path, now: datetime) -> tuple[datetime | None, str | None]:
+    """Only fresh daemon evidence can explain a non-draining net queue."""
+    if not isinstance(cpu, dict) or cpu.get("status") != "measured" or cpu.get("db") != str(db):
+        return None, None
+    measured = _aware(cpu.get("measured_at"))
+    if measured is None or not 0 <= (now - measured).total_seconds() <= 120:
+        return None, None
+    last = _aware(cpu.get("backlog_last_batch_at"))
+    encoded, seconds = cpu.get("backlog_encoded"), cpu.get("backlog_cpu_seconds")
+    progressing = type(encoded) is int and encoded > 0 and isinstance(seconds, (int, float)) and seconds >= 0
+    # Older daemons publish only rolling ten-minute completion evidence. Never
+    # invent an exact last-batch time from the file's heartbeat timestamp.
+    if last is not None and not 0 <= (now - last).total_seconds():
+        return None, None
+    recent = last if last is not None and (now - last).total_seconds() <= 600 else None
+    gate = budget.get("backlog_max_load") if isinstance(budget, dict) else None
+    paused = cpu.get("backlog_state") == "high load" and type(gate) in (int, float) and gate > 0
+    if not paused and not progressing and recent is None:
+        return None, None
+    clock = last.astimezone().strftime("%H:%M") + " (local time)" if last else "time unavailable"
+    label = (
+        "Embedding paused by machine load"
+        if paused
+        else "Embedding progressing but incoming work is keeping the queue full"
+    )
+    return recent or (
+        now - timedelta(seconds=600) if progressing else None
+    ), f"{label}: {{count}} queued, last batch {clock}"
+
+
 def disk_fact(db_path: Path, staging_dir: Path) -> tuple[int, int, int, int]:
     """(Available bytes, legacy-mode requirement, raw-reclaim-mode requirement, raw floor).
 
@@ -461,6 +491,8 @@ def collect_facts(
             "canary": lambda: store_canary_fact(
                 config.store_roundtrip_path or store_roundtrip_path(config.db_path), now, prior.get("store_canary_seen")
             ),
+            "hotlane_cpu": lambda: json.loads((config.db_path.parent / "hotlane-cpu.json").read_text()),
+            "hotlane_budget": lambda: json.loads((config.db_path.parent / "hotlane-budget.json").read_text()),
             "unvectored": lambda: recent_unvectored(config.db_path, window_start, deadline),
             "disk": lambda: disk_fact(config.db_path, staging),
         },
@@ -503,12 +535,37 @@ def collect_facts(
         got["canary"] if got["canary"] is not UNOBSERVED else (UNOBSERVED, prior.get("store_canary_seen"))
     )
     stalled_since, embedding_state = embedding_fact(got["unvectored"], embedding_prior, now, window_start)
+    observed_activity = _pure(
+        lambda: embedding_activity(got["hotlane_cpu"], got["hotlane_budget"], config.db_path, now)
+    )
+    progress_at, activity = observed_activity if observed_activity is not UNOBSERVED else (None, None)
+    if stalled_since is not UNOBSERVED and stalled_since is not None and progress_at is not None:
+        stalled_since = max(stalled_since, progress_at)
+        embedding_state["since"] = _iso(stalled_since)
+    activity = (
+        activity.format(count=got["unvectored"])
+        if activity and got["unvectored"] is not UNOBSERVED and got["unvectored"] > 0
+        else None
+    )
+    disk_state = prior.get("disk_measurement", {})
+    disk_state = disk_state if isinstance(disk_state, Mapping) else {}
+    measured_at = _aware(disk_state.get("measured_at"))
+    reused_age = None
+    if got["disk"] is not UNOBSERVED:
+        disk_state = {"measured_at": now.isoformat(), "values": list(got["disk"])}
+    elif measured_at is not None and 0 <= (now - measured_at).total_seconds() <= 1800:
+        values = disk_state.get("values")
+        if isinstance(values, list) and len(values) == 4 and all(type(v) is int and v >= 0 for v in values):
+            got["disk"] = tuple(values)
+            reused_age = int((now - measured_at).total_seconds())
     if got["disk"] is not UNOBSERVED:
         free, legacy_peak, reclaim_peak, floor = got["disk"]
         peak = disk_budget(legacy_peak, reclaim_peak, capability)
     else:
         free = peak = floor = UNOBSERVED
     blind, notes, context = classify_issues(result)
+    if reused_age is not None:
+        context["disk"] = f"using earlier measurement ({reused_age}s old; maximum age 1800s)"
     if drain_paused:
         context["stores"] = "; ".join(filter(None, ("drain paused by maintenance", context.get("stores"))))
 
@@ -529,6 +586,8 @@ def collect_facts(
         store_canary_ok=canary,
         search_canary_ok=search_canary_fact(result, now),
         embedding_stalled_since=stalled_since,
+        embedding_activity=activity,
+        embedding_progress_recent=progress_at is not None,
         disk_free_bytes=free,
         disk_peak_bytes=peak,
         disk_floor_bytes=floor,
@@ -537,4 +596,5 @@ def collect_facts(
         check_notes=context,
     )
     state = {"store_canary_seen": canary_seen, "embedding": embedding_state, "drain_paused_seen_at": _iso(pause_seen)}
+    state["disk_measurement"] = disk_state
     return facts, state

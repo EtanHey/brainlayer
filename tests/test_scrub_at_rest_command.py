@@ -292,6 +292,7 @@ def live_guard(db, tmp_path, monkeypatch):
     monkeypatch.setattr(chunk_origin_wipe, "_live_db_candidates", lambda: [db.db_path])
     monkeypatch.setattr(maintenance, "run_command", lambda args, **kwargs: subprocess.CompletedProcess(args, 0, "", ""))
     loaded_probe = maintenance._service_is_loaded
+    real_run_gates, real_lsof_clean = maintenance._run_gates, maintenance._check_lsof_clean
     events, loaded = [], {}
     monkeypatch.setattr(maintenance, "_run_gates", lambda config: events.append("gates"))
     monkeypatch.setattr(maintenance, "_check_lsof_clean", lambda config: events.append("no-writers"))
@@ -320,11 +321,14 @@ def live_guard(db, tmp_path, monkeypatch):
         events=events,
         loaded=loaded,
         loaded_probe=loaded_probe,
+        real_run_gates=real_run_gates,
+        real_lsof_clean=real_lsof_clean,
         pause=pause,
         backup=backup,
         receipt=receipt,
         now=now,
         total=total,
+        config_type=config_type,
     )
 
 
@@ -1300,3 +1304,278 @@ def test_sigterm_during_live_scrub_restores_watchdog(db, live_guard, monkeypatch
     assert signal.getsignal(signal.SIGTERM) == previous
     assert live_guard.events[-1] == ("resume", "fleet-watchdog")
     assert not maintenance._watchdog_hold_path().exists()
+
+
+def _budget_clock(monkeypatch, live_guard, db, start, *, start_hour=4, idle_seconds=5):
+    """Real ``_run_gates`` window check on a synthetic clock; idle sampling spends window time."""
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    elapsed = [0.0]
+    now = lambda: start + dt.timedelta(seconds=elapsed[0])  # noqa: E731
+    receipt = dict(
+        live_guard.receipt,
+        attempted_at=(start - dt.timedelta(hours=1)).isoformat(),
+        snapshot_created_at=(start - dt.timedelta(hours=1)).isoformat(),
+    )
+    live_guard.backup.write_text(json.dumps(receipt) + "\n")
+
+    def config(**kwargs):
+        return live_guard.config_type(
+            **kwargs, now_fn=now, quiet_window_start_hour=start_hour, backup_log_path=live_guard.backup
+        )
+
+    monkeypatch.setattr(maintenance, "MaintenanceConfig", config)
+
+    def idle(config):
+        live_guard.events.append("idle")
+        elapsed[0] += idle_seconds
+
+    # Undo the fixture's gate stub: the quiet-window check itself must run.
+    monkeypatch.setattr(maintenance, "_run_gates", live_guard.real_run_gates)
+    monkeypatch.setattr(maintenance, "_check_idle", idle)
+    monkeypatch.setattr(
+        module, "time", SimpleNamespace(monotonic=lambda: elapsed[0], sleep=lambda _: pytest.fail("unexpected sleep"))
+    )
+    return elapsed
+
+
+_PLUS14 = dt.timezone(dt.timedelta(hours=14))
+_MINUS12 = dt.timezone(dt.timedelta(hours=-12))
+
+
+# (local time the budget check sees, quiet-window start hour, admitted?)
+@pytest.mark.parametrize(
+    ("check_at", "start_hour", "admitted"),
+    [
+        pytest.param(dt.datetime(2026, 10, 1, 4, 30, tzinfo=dt.UTC), 4, True, id="early-window"),
+        pytest.param(dt.datetime(2026, 10, 1, 5, 39, 59, tzinfo=dt.UTC), 4, True, id="reserve-plus-1s"),
+        pytest.param(dt.datetime(2026, 10, 1, 5, 40, tzinfo=dt.UTC), 4, False, id="exact-reserve"),
+        pytest.param(dt.datetime(2026, 10, 1, 5, 55, tzinfo=dt.UTC), 4, False, id="late-window"),
+        pytest.param(dt.datetime(2026, 10, 1, 5, 59, 59, tzinfo=dt.UTC), 4, False, id="last-second"),
+        # Window 23:00-01:00 crosses local midnight: the budget is measured from yesterday's start.
+        pytest.param(dt.datetime(2026, 10, 2, 0, 39, 59, tzinfo=dt.UTC), 23, True, id="midnight-plus-1s"),
+        pytest.param(dt.datetime(2026, 10, 2, 0, 40, tzinfo=dt.UTC), 23, False, id="midnight-exact"),
+        pytest.param(dt.datetime(2026, 10, 1, 23, 50, tzinfo=dt.UTC), 23, True, id="midnight-before"),
+        # Local window, not UTC: 05:40+14:00 is 15:40Z on the previous UTC date.
+        pytest.param(dt.datetime(2026, 10, 1, 5, 39, 59, tzinfo=_PLUS14), 4, True, id="utc+14-plus-1s"),
+        pytest.param(dt.datetime(2026, 10, 1, 5, 40, tzinfo=_PLUS14), 4, False, id="utc+14-exact"),
+        pytest.param(dt.datetime(2026, 10, 1, 5, 40, tzinfo=_MINUS12), 4, False, id="utc-12-exact"),
+    ],
+)
+@pytest.mark.parametrize("wait", [0, 1800], ids=["no-wait", "fresh-receipt-wait"])
+def test_guarded_apply_refuses_quiesce_without_run_budget(
+    db, live_guard, monkeypatch, check_at, start_hour, admitted, wait
+):
+    # Issue #1073: the reserve applied only after a real backup wait.
+    idle_seconds = 5
+    _budget_clock(monkeypatch, live_guard, db, check_at - dt.timedelta(seconds=idle_seconds), start_hour=start_hour)
+    result = CliRunner().invoke(
+        app,
+        [
+            "scrub-at-rest",
+            "--db",
+            str(db.db_path),
+            "--allow-live-db",
+            "--expect-rows",
+            str(live_guard.total),
+            "--wait-for-backup-seconds",
+            str(wait),
+        ],
+    )
+    # The window gate itself ran (and passed) on every case before the budget decision.
+    assert "idle" in live_guard.events
+    stops = [e for e in live_guard.events if isinstance(e, tuple) and e[0] == "stop"]
+    content = db.conn.execute("SELECT content FROM chunks WHERE id='c'").fetchone()[0]
+    if admitted:
+        assert result.exit_code == 0, result.output
+        assert stops
+        assert content != TOKENS["google_oauth_access"]
+    else:
+        assert result.exit_code == 1, result.output
+        assert json.loads(result.stdout) == {
+            "error": "at-rest scrub refused or failed",
+            "error_type": "ScrubAtRestError",
+            "reason": "quiet-window-budget",
+            "cause": "scrub-refusal",
+            "gate": None,
+            "detail": None,
+        }
+        assert stops == []
+        assert not any(isinstance(e, tuple) for e in live_guard.events)
+        assert content == TOKENS["google_oauth_access"]
+
+
+def test_sequential_providers_refuse_late_provider_before_quiesce(db, live_guard, monkeypatch):
+    from brainlayer import maintenance
+    from brainlayer.scrub_at_rest import PROVIDER_MODES, _run
+
+    tokens = {
+        "google_oauth": TOKENS["google_oauth_access"],
+        "context7": "ctx7sk-" + "0" * 24,
+        "exa_labeled": "EXA_API_KEY=" + "00000000-0000-0000-0000-000000000000",
+    }
+    for mode in ("context7", "exa_labeled"):
+        db.conn.execute(
+            "INSERT INTO chunks(id,content,metadata,source_file) VALUES(?,?,'{}','fixture')", (mode, tokens[mode])
+        )
+    totals = {
+        mode: sum(t["rows"] for t in _run(db, True, 100, PROVIDER_MODES[mode])["tables"].values()) for mode in tokens
+    }
+    assert all(totals.values())  # Each provider has its own token (counted across chunks and FTS).
+    # Provider 1's budget check sees 05:05; each service-down run then costs 20 minutes.
+    elapsed = _budget_clock(monkeypatch, live_guard, db, dt.datetime(2026, 10, 1, 5, 4, 55, tzinfo=dt.UTC))
+    bootout = maintenance._bootout_service
+
+    def costly_bootout(service):
+        if service == "fleet-watchdog":
+            elapsed[0] += 20 * 60
+        return bootout(service)
+
+    monkeypatch.setattr(maintenance, "_bootout_service", costly_bootout)
+    outcomes = []
+    for mode in tokens:
+        before = len(live_guard.events)
+        result = CliRunner().invoke(
+            app,
+            [
+                "scrub-at-rest",
+                "--db",
+                str(db.db_path),
+                "--providers",
+                mode,
+                "--allow-live-db",
+                "--expect-rows",
+                str(totals[mode]),
+            ],
+        )
+        stopped = any(isinstance(e, tuple) and e[0] == "stop" for e in live_guard.events[before:])
+        reason = None if result.exit_code == 0 else json.loads(result.stdout)["reason"]
+        outcomes.append((mode, result.exit_code, reason, stopped))
+    # Provider 2 checks at 05:25:05 (34m55s left); provider 3 at 05:45:10 (14m50s left).
+    assert outcomes == [
+        ("google_oauth", 0, None, True),
+        ("context7", 0, None, True),
+        ("exa_labeled", 1, "quiet-window-budget", False),
+    ]
+    remaining = {row[0]: row[1] for row in db.conn.execute("SELECT id, content FROM chunks")}
+    assert remaining["exa_labeled"] == tokens["exa_labeled"]
+    assert tokens["google_oauth"] not in remaining["c"] and tokens["context7"] not in remaining["context7"]
+
+
+# #1129: a wrapped failure names a fixed cause category and maintenance gate, never its text.
+_EVIL = "/Users/victim/private " + TOKENS["google_oauth_refresh"] + " ctx7sk-" + "1" * 24
+
+
+class _EvilNamedError(Exception):
+    """An unlisted class: its name and message must not reach the refusal JSON."""
+
+
+_EvilNamedError.__name__ = _EvilNamedError.__qualname__ = "Leak" + TOKENS["google_client_secret"]
+
+
+def _restore_real_gates(monkeypatch, live_guard, keep):
+    from brainlayer import maintenance
+
+    monkeypatch.setattr(maintenance, "_run_gates", live_guard.real_run_gates)
+    for name in ("_check_quiet_window", "_check_idle", "_check_lsof_clean"):
+        if name != keep:
+            monkeypatch.setattr(maintenance, name, lambda config: None)
+    if keep == "_check_lsof_clean":
+        monkeypatch.setattr(maintenance, "_check_lsof_clean", live_guard.real_lsof_clean)
+
+
+@pytest.mark.parametrize(
+    "case, cause, gate",
+    [
+        ("quiet-window", "maintenance-abort", "quiet-window"),
+        ("queue-idle", "maintenance-abort", "queue-idle"),
+        ("lsof-writers", "maintenance-abort", "lsof-writers"),
+        ("maintenance-lock", "maintenance-abort", "maintenance-lock"),
+        ("sqlite-busy", "sqlite-busy", None),
+        ("permission", "permission-denied", None),
+        ("unknown", "unknown", None),
+        ("foreign-gate-frame", "maintenance-abort", None),
+    ],
+)
+def test_cli_refusal_names_value_free_cause_and_gate(db, live_guard, monkeypatch, tmp_path, case, cause, gate):
+    import fcntl
+    import os
+
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    config_type = maintenance.MaintenanceConfig  # live_guard's clock and backup receipt
+    overrides, reached, lock = {}, [], None
+    if case == "quiet-window":
+        _restore_real_gates(monkeypatch, live_guard, "_check_quiet_window")
+        overrides["quiet_window_start_hour"] = 12  # 04:30 fixture clock is outside 12:00-14:00
+    elif case == "queue-idle":
+        _restore_real_gates(monkeypatch, live_guard, "_check_idle")
+        queue = tmp_path / "queue"
+        queue.mkdir()
+        fresh = queue / "fresh.jsonl"
+        fresh.write_text(json.dumps({"content": _EVIL}) + "\n")
+        mtime = live_guard.now.timestamp()
+        os.utime(fresh, (mtime, mtime))
+        overrides.update(queue_dir=queue, idle_sample_seconds=0)
+    elif case == "lsof-writers":
+        _restore_real_gates(monkeypatch, live_guard, "_check_lsof_clean")
+        monkeypatch.setattr(
+            maintenance,
+            "collect_lsof_entries",
+            lambda paths: [maintenance.LsofEntry(pid=4242, command=_EVIL, fd="3u", path=str(paths[0]))],
+        )
+    elif case == "maintenance-lock":
+        monkeypatch.setattr(maintenance, "MAINTENANCE_LOCK_TIMEOUT_SECONDS", 0)
+        lock = (db.db_path.parent / ".maintenance.lock").open("a+b")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    elif case == "foreign-gate-frame":
+        # A non-maintenance frame that merely shares a gate's name is not a gate.
+        def _check_quiet_window(*args):
+            reached.append(case)
+            raise maintenance.MaintenanceAbort(_EVIL)
+
+        monkeypatch.setattr(module, "_apply", _check_quiet_window)
+    else:
+        kind = {"sqlite-busy": apsw.BusyError, "permission": PermissionError, "unknown": _EvilNamedError}[case]
+
+        def fail_apply(*args):
+            reached.append(case)
+            raise kind(_EVIL)
+
+        monkeypatch.setattr(module, "_apply", fail_apply)
+    monkeypatch.setattr(maintenance, "MaintenanceConfig", lambda **kwargs: config_type(**kwargs, **overrides))
+    try:
+        result = CliRunner().invoke(
+            app,
+            ["scrub-at-rest", "--db", str(db.db_path), "--allow-live-db", "--expect-rows", str(live_guard.total)],
+        )
+    finally:
+        if lock is not None:
+            lock.close()
+    assert result.exit_code == 1, result.output
+    assert reached == ([case] if gate is None else [])
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "error": "at-rest scrub refused or failed",
+        "error_type": "ScrubAtRestError",
+        "reason": "scrub-failed",
+        "detail": None,
+        "cause": cause,
+        "gate": gate,
+    }
+    for secret in (_EVIL, "victim", "ctx7sk-", "pid=4242", "Leak", *TOKENS.values()):
+        assert secret not in result.output
+    assert db.conn.execute("SELECT content FROM chunks").fetchone()[0] == TOKENS["google_oauth_access"]
+
+
+def test_cli_refusal_keeps_native_reason_and_category(db, live_guard):
+    result = CliRunner().invoke(app, ["scrub-at-rest", "--db", str(db.db_path), "--allow-live-db"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert (payload["reason"], payload["cause"], payload["gate"]) == (
+        "expected-row-count-required",
+        "scrub-refusal",
+        None,
+    )

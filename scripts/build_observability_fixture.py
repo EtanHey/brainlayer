@@ -94,6 +94,12 @@ def _build_db(path: Path, case: CaseDefinition, pid_root: Path) -> None:
             store.conn.execute("UPDATE chunks SET superseded_by = 'synthetic-00' WHERE id = 'synthetic-21'")
             store.conn.execute("UPDATE chunks SET archived_at = ? WHERE id = 'synthetic-20'", (GENERATED_AT.isoformat().replace("+00:00", "Z"),))  # fmt: skip
         store.conn.execute("UPDATE schema_migrations SET applied_at = ?", (GENERATED_AT.isoformat(),))
+        # #618 runtime-DDL ledger rows carry a uuid, wall clock, pid and duration; pin them like applied_at.
+        store.conn.execute(
+            "UPDATE migration_events SET id = 'runtime-ddl:fixture-' || rowid, detected_at = ?, "
+            "actor = 'fixture-builder', duration_seconds = 0 WHERE from_pattern = 'runtime-ddl'",
+            (GENERATED_AT.timestamp(),),
+        )
         if case.failure == "missing_source_class":
             store.conn.execute("DROP INDEX idx_chunks_source_class")
             store.conn.execute("ALTER TABLE chunks DROP COLUMN source_class")

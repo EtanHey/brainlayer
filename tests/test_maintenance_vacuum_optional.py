@@ -24,6 +24,13 @@ WEEKLY_BACKUP = maintenance._weekly_backup
 RECENT_WEEKLY_BACKUP = maintenance._recent_weekly_verified_backup
 
 
+def _status_and_reason(capsys):
+    """The deferral contract; #1040's run/outcome fields are pinned in test_maintenance_exit_codes."""
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["outcome"] == "deferred" and receipt["exit_code"] == maintenance.EXIT_DEFERRED
+    return {key: receipt[key] for key in ("status", "reason")}
+
+
 @pytest.mark.parametrize("present,age_hours", [(False, 1), (True, 1), (True, 7)])
 def test_r1_snapshot_reuse_preserves_weekly_vacuum_gate(
     weekly, local_lane, local_clock, monkeypatch, capsys, present, age_hours
@@ -94,7 +101,7 @@ def test_optional_vacuum_outcome_and_alerts(weekly, monkeypatch, capsys, cause):
         expected = "fresh weekly backup timed out; VACUUM skipped"
 
         def timeout(_):
-            raise maintenance.MaintenanceAbort(expected)
+            raise maintenance.MaintenanceAbort(expected, code=maintenance.EXIT_DEFERRED)
 
         monkeypatch.setattr(maintenance, "_weekly_backup", timeout)
     elif cause == "short-hold":
@@ -143,7 +150,7 @@ def test_fresh_backup_failure_reason_survives_to_deferred_receipt(weekly, monkey
     process = SimpleNamespace(returncode=code, communicate=lambda **_kw: (stdout, ""))
     monkeypatch.setattr(maintenance.subprocess, "Popen", lambda *_a, **_kw: process)
     assert maintenance.main(["--full"]) == 75
-    assert json.loads(capsys.readouterr().out) == {"status": "deferred", "reason": reason}
+    assert _status_and_reason(capsys) == {"status": "deferred", "reason": reason}
     assert "maintenance-full" not in job_alerts.active_alerts()
 
 
@@ -270,11 +277,11 @@ def test_gate_deferral_preserves_prior_vacuum_failure(weekly, monkeypatch, capsy
     job_alerts.report("maintenance-full", prior)
 
     def defer(_):
-        raise maintenance.MaintenanceAbort(reason)
+        raise maintenance.MaintenanceAbort(reason, code=maintenance.EXIT_DEFERRED)
 
     monkeypatch.setattr(maintenance, "_run_gates", defer)
     assert maintenance.main(["--full"]) == 75
-    assert json.loads(capsys.readouterr().out) == {"status": "deferred", "reason": reason}
+    assert _status_and_reason(capsys) == {"status": "deferred", "reason": reason}
     assert job_alerts.active_alerts()["maintenance-full"] == prior
     assert events == []
 
@@ -291,6 +298,6 @@ def test_freelist_probe_failure_defers_before_hold(weekly, monkeypatch, capsys):
     monkeypatch.setattr(maintenance, "_freelist_ratio", fail)
     assert maintenance.main(["--full"]) == 75
     reason = "freelist probe failed: OperationalError; VACUUM skipped"
-    assert json.loads(capsys.readouterr().out) == {"status": "deferred", "reason": reason}
+    assert _status_and_reason(capsys) == {"status": "deferred", "reason": reason}
     assert job_alerts.active_alerts() == {}
     assert events == []

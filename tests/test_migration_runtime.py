@@ -19,6 +19,76 @@ class Clock:
         self.now += delay
 
 
+@pytest.mark.parametrize("override,ready_at", [(None, 30), ("10", 5), ("120", 100), ("900", 100)])
+def test_readiness_grace_allows_slow_residents(monkeypatch, capsys, override, ready_at):
+    from brainlayer.migration_runtime import wait_supervisor
+
+    monkeypatch.delenv("BRAINLAYER_SUPERVISOR_READY_GRACE_S", raising=False)
+    if override is not None:
+        monkeypatch.setenv("BRAINLAYER_SUPERVISOR_READY_GRACE_S", override)
+    clock = Clock()
+
+    def query():
+        if clock.now < 1:
+            raise FileNotFoundError("socket not ready")
+        return {
+            "watch": {"configured": True, "paused": False, "pid": 4242 if clock.now >= ready_at else None},
+            "idle": {"configured": True, "paused": False, "pid": None},
+        }
+
+    expected = {"watch": Component(("/bin/true",)), "idle": Component(("/bin/true",), interval=300)}
+    wait_supervisor(query, expected, clock=clock, alive=lambda pid: True)
+    assert ready_at <= clock.now < ready_at + 0.2
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == int((ready_at - 0.1) // 10)
+    assert all("watch" in line and "not ready" in line and "idle" not in line for line in lines)
+
+
+@pytest.mark.parametrize("value", ["", "9", "901", "30.5", "no", "-10", "1_0"])
+def test_invalid_ready_grace_refused_before_query(monkeypatch, value):
+    from brainlayer.migration_runtime import wait_supervisor
+
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_READY_GRACE_S", value)
+    with pytest.raises(ValueError, match="BRAINLAYER_SUPERVISOR_READY_GRACE_S.*integer.*10.*900"):
+        wait_supervisor(lambda: pytest.fail("invalid grace reached query"), {"watch": Component(("/bin/true",))})
+
+
+def test_stop_allows_slow_exit_and_reports_progress(monkeypatch, capsys):
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_READY_GRACE_S", "90")
+    clock = Clock()
+
+    def run(argv):
+        return (
+            subprocess.CompletedProcess(argv, 0, "pid = 4242", "")
+            if clock.now < 40
+            else subprocess.CompletedProcess(argv, 113, "", "Could not find service")
+        )
+
+    instance = runtime(run, alive=lambda pid: clock.now < 40)
+    instance.clock = clock
+    instance.stop(OLD)
+    assert 40 <= clock.now < 40.2
+    assert OLD in capsys.readouterr().err
+
+
+def test_custody_allows_slow_exit_and_reports_progress(tmp_path, monkeypatch, capsys):
+    from brainlayer import launchd_consolidation as module
+
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_READY_GRACE_S", "90")
+    clock, custody = Clock(), module.Custody
+    tmp_path.chmod(0o700)
+
+    def delayed_custody(*args, **kwargs):
+        if clock.now < 40:
+            raise BlockingIOError
+        return custody(*args, **kwargs)
+
+    monkeypatch.setattr(module, "Custody", delayed_custody)
+    module.wait_custody(tmp_path, clock=clock)
+    assert 40 <= clock.now < 40.2
+    assert str(tmp_path) in capsys.readouterr().err
+
+
 def runtime(run, alive=lambda pid: False):
     from brainlayer.migration_runtime import LaunchdRuntime
 

@@ -220,7 +220,7 @@ def _fallback_defer_reason(directory):
         finally:
             os.close(fd)
     try:
-        with component_gate(directory):
+        with component_gate(directory, operation="wal-checkpoint"):
             pass
     except BlockingIOError:
         return "heavy-maintenance-hold"

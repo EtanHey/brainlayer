@@ -861,3 +861,34 @@ class TestStopIndexConditional:
     def test_disabled_value_true_not_recognized(self, stop_index):
         os.environ["BRAINLAYER_HOOKS_DISABLED"] = "true"
         assert stop_index.should_activate() is True
+
+
+@pytest.mark.parametrize("retired_column", ["superseded_by", "aggregated_into", "archived_at"])
+@pytest.mark.parametrize("scoped", [False, True])
+def test_hooks_exclude_retired_chunks(session_start, prompt_search, monkeypatch, capsys, retired_column, scoped):
+    conn = sqlite3.connect(":memory:")
+    conn.executescript("""
+        CREATE TABLE chunks (id TEXT, content TEXT, importance REAL, project TEXT,
+            tags TEXT, created_at TEXT, content_type TEXT, superseded_by TEXT,
+            aggregated_into TEXT, archived_at TEXT);
+        CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, content, tags);
+    """)
+    for chunk_id in ("active", "retired"):
+        content = f"brainlayer decision {chunk_id}"
+        conn.execute(
+            "INSERT INTO chunks (id, content, project, created_at) VALUES (?, ?, 'brainlayer', '2026-11-07')",
+            (chunk_id, content),
+        )
+        conn.execute("INSERT INTO chunks_fts VALUES (?, ?, '')", (chunk_id, content))
+    conn.execute(f"UPDATE chunks SET {retired_column} = 'retirement' WHERE id = 'retired'")
+    rows = prompt_search.fetch_matching_chunks(conn, '"brainlayer"', 5)
+    assert [row[0] for row in rows] == ["active"]
+    monkeypatch.setattr(session_start, "get_db_path", lambda: "scratch.db")
+    monkeypatch.setattr(session_start.sqlite3, "connect", lambda *a, **kw: conn)
+    monkeypatch.setattr(session_start, "load_scoped_projects", lambda: {"brainlayer": "brainlayer"} if scoped else {})
+    monkeypatch.setattr(session_start.sys, "stdin", io.StringIO(json.dumps({"cwd": "/projects/brainlayer"})))
+    with pytest.raises(SystemExit):
+        session_start.main()
+    output = capsys.readouterr().out
+    assert "decision active" in output
+    assert "decision retired" not in output

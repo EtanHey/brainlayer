@@ -1234,3 +1234,89 @@ def test_calendar_guard_timeout_defaults_to_120_and_reads_override(tmp_path, mon
     (tmp_path / "brainlayer.env").write_text("BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS=5\n")
     with pytest.raises(ValueError, match="BRAINLAYER_SUPERVISOR_GUARD_TIMEOUT_SECONDS"):
         asyncio.run(run_calendar([], tmp_path / "calendar", tmp_path / "logs", scheduled_date=when))
+
+
+def test_busy_maintenance_hold_defers_the_step_and_the_backup_still_runs(tmp_path, monkeypatch):
+    """M4 2026-11-07: the hold flock was busy at 04:00, BlockingIOError aborted the plan and
+    backup-daily never ran. A busy hold is a deferral, not a custody failure."""
+    from brainlayer import maintenance_calendar as calendar
+
+    tmp_path.chmod(0o700)
+    directory = tmp_path / "calendar"
+    directory.mkdir(mode=0o700)
+    (directory / "state.json").write_text(json.dumps(dict(deferrals={}, last_weekly="2026-11-01")))
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "alerts.json"))
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "fixture.env"))
+    monkeypatch.setattr(
+        calendar.maintenance_control,
+        "control_client",
+        lambda: SimpleNamespace(path=tmp_path / "unused.sock", request=lambda: {}, _disabled=lambda *_a, **_k: set()),
+    )
+
+    class BusyHold:
+        fd, token, deadline = None, "", None
+
+        def __init__(self, *_a, **_k):
+            pass
+
+        def __enter__(self):
+            raise BlockingIOError(35, "Resource temporarily unavailable")
+
+        def __exit__(self, *_a):
+            return False
+
+    monkeypatch.setattr(calendar, "MaintenanceHold", BusyHold)
+    executed = []
+
+    async def execute(step, env, **kwargs):
+        executed.append(step.name)
+        return 0
+
+    monkeypatch.setattr(calendar, "_execute_step", execute)
+    clock = [dt.datetime(2026, 11, 7, 3, 45)]
+
+    async def advance(_seconds):
+        clock[0] = clock[0].replace(hour=4)
+
+    plan = calendar_steps(sys.executable, "/unused", tmp_path, clock[0].date())
+    asyncio.run(run_calendar(plan, directory, tmp_path / "logs", now_fn=lambda: clock[0], sleep_fn=advance))
+    rows = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
+    finished = {row["step"]: row for row in rows if row["event"] == "finished"}
+    assert finished["maintenance-nightly"]["status"] == "deferred", finished["maintenance-nightly"]
+    assert finished["maintenance-nightly"].get("reason") == "maintenance-hold-busy"
+    assert "backup-daily" in executed, executed
+    assert not any(row["event"] == "step-error" for row in rows)
+
+
+def test_busy_inherited_maintenance_lease_still_aborts(monkeypatch):
+    """Review of #1668: only a FRESH busy hold defers; failing to re-lock an inherited lease is custody."""
+    from brainlayer import maintenance_calendar as calendar
+
+    class BusyHold:
+        fd, token, deadline = None, "", None
+
+        def __init__(self, *_a, **_k):
+            pass
+
+        def __enter__(self):
+            raise BlockingIOError(35, "Resource temporarily unavailable")
+
+        def __exit__(self, *_a):
+            return False
+
+    monkeypatch.setattr(calendar, "MaintenanceHold", BusyHold)
+    step = SimpleNamespace(name="maintenance-nightly")
+
+    async def enter(inherited):
+        if inherited:
+            monkeypatch.setenv("BRAINLAYER_MAINTENANCE_FD", "9")
+        else:
+            monkeypatch.delenv("BRAINLAYER_MAINTENANCE_FD", raising=False)
+        async with calendar.step_hold(None, None, {}, step):
+            pass
+
+    with pytest.raises(calendar.HoldBusy):
+        asyncio.run(enter(False))
+    with pytest.raises(BlockingIOError) as raised:
+        asyncio.run(enter(True))
+    assert not isinstance(raised.value, calendar.HoldBusy)
