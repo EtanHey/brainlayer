@@ -2305,3 +2305,49 @@ def test_hotlane_run_backs_off_escalating_on_systemic_failure():
     )
 
     assert sleeps == [2.0, 4.0, 8.0, 1.0, 2.0, 2.0]
+
+
+def test_systemic_backoff_never_overflows():
+    hotlane = _load_hotlane_module()
+    cap = hotlane.MAX_SYSTEMIC_BACKOFF_SECONDS
+    assert hotlane._systemic_backoff_seconds(2.0, 1) == 2.0
+    assert hotlane._systemic_backoff_seconds(2.0, 3) == 8.0
+    for failures in (1_024, 1_025, 1_026, 10_000, 10**9):
+        assert hotlane._systemic_backoff_seconds(2.0, failures) == cap
+        assert hotlane._systemic_backoff_seconds(5.0, failures) == cap
+
+
+def test_hotlane_run_survives_more_than_1025_systemic_cycles():
+    hotlane = _load_hotlane_module()
+    sleeps = []
+    cycles = 1_100
+
+    def fake_cycle(**_kwargs):
+        raise hotlane.HotlaneSystemicFailure("write", "FullError", ["x"])
+
+    hotlane.LOGGER.disabled = True
+    try:
+        hotlane.run(
+            db_path=Path("/tmp/unused.db"),
+            interval=1.0,
+            recent_limit=5,
+            backlog_interval=10.0,
+            backlog_batch=0,
+            enrich_interval=0.0,
+            enrich_limit=0,
+            enrich_since_hours=0,
+            vector_store_cls=lambda _path: SimpleNamespace(close=lambda: None),
+            model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
+            cycle_fn=fake_cycle,
+            queue_depth_fn=lambda _queue_dir: 0,
+            high_priority_queue_depth_fn=lambda _queue_dir: 0,
+            time_fn=lambda: 0.0,
+            sleep_fn=sleeps.append,
+            max_cycles=cycles,
+        )
+    finally:
+        hotlane.LOGGER.disabled = False
+
+    assert len(sleeps) == cycles
+    assert sleeps[:6] == [2.0, 4.0, 8.0, 16.0, 32.0, 60.0]
+    assert set(sleeps[5:]) == {hotlane.MAX_SYSTEMIC_BACKOFF_SECONDS}

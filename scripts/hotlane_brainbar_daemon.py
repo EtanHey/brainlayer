@@ -57,6 +57,8 @@ MAX_CHUNK_FAILURE_ENTRIES = 4096
 # environment failing, not the chunks. Above the 2-row poison batch the backlog lane sees.
 SYSTEMIC_FAILURE_STREAK = 4
 MAX_SYSTEMIC_BACKOFF_SECONDS = 60.0
+# 2**16 times any base of 1 ms or more already exceeds the 60 s cap; never exponentiate past it.
+SYSTEMIC_BACKOFF_MAX_EXPONENT = 16
 _ENVIRONMENTAL_ERRNOS = frozenset({errno.ENOSPC, errno.EIO, errno.EROFS, errno.EDQUOT})
 _ENVIRONMENTAL_SQLITE_ERRORS = (apsw.FullError, apsw.IOError, apsw.ReadOnlyError)
 _ENVIRONMENTAL_SQLITE_PRIMARY_CODES = frozenset({8, 10, 13})  # READONLY, IOERR, FULL
@@ -177,6 +179,17 @@ class CycleResult(NamedTuple):
 class EmbedCandidate(NamedTuple):
     chunk_id: str
     content: str
+
+
+def _systemic_backoff_seconds(base: float, failures: int) -> float:
+    """Geometric backoff for the ``failures``-th consecutive systemic cycle, capped.
+
+    The exponent is clamped BEFORE the power: ``base * 2 ** 1024`` is a float overflow,
+    which would escape ``run()``'s cycle handler and stop the daemon at the 1,025th
+    consecutive systemic cycle (~17 h of a full disk at the 60 s cap).
+    """
+    exponent = min(max(failures - 1, 0), SYSTEMIC_BACKOFF_MAX_EXPONENT)
+    return min(base * 2**exponent, MAX_SYSTEMIC_BACKOFF_SECONDS)
 
 
 def _quarantine_ttl_seconds() -> float:
@@ -1488,7 +1501,7 @@ def run(
                 # The environment is failing for every chunk: back off geometrically so a
                 # full disk is not re-encoded every few seconds. Never counted per chunk.
                 systemic_failures += 1
-                error_sleep = min(error_sleep * 2 ** (systemic_failures - 1), MAX_SYSTEMIC_BACKOFF_SECONDS)
+                error_sleep = _systemic_backoff_seconds(error_sleep, systemic_failures)
                 LOGGER.warning("hotlane systemic failure streak=%d; backing off %.1fs", systemic_failures, error_sleep)
             else:
                 systemic_failures = 0
