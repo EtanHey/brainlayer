@@ -658,7 +658,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                     let noun = count == 1 ? "night" : "nights"
                     issue.text = issue.text.replacingOccurrences(
                         of: #"failed \d+ nights? in a row"#,
-                        with: "failed \(count) \(noun) in a row",
+                        with: observedNight.streakComplete ? "failed \(count) \(noun) in a row" : "failed; earlier failure streak unknown",
                         options: .regularExpression
                     )
                 }

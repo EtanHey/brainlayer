@@ -11,6 +11,13 @@ pytestmark = pytest.mark.retired_enrichment
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _no_real_renice(monkeypatch):
+    """hotlane.main() runs setup_cpu_budget, which on macOS renices THIS pytest process to 20 for good.
+    tests/conftest.py's forbid_suite_process_renice fails any test that does."""
+    monkeypatch.setattr("os.setpriority", lambda *args: None)
+
+
 def test_hotlane_source_template_requires_only_local_embedding():
     config = plistlib.loads((REPO_ROOT / "scripts/launchd/com.brainlayer.hotlane-brainbar.plist").read_bytes())
     assert not any(arg.startswith("--enrich-") for arg in config["ProgramArguments"])

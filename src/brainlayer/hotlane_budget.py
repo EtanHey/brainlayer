@@ -18,6 +18,7 @@ class HotlaneCpuSampler:
         self.backlog_cycles = deque()
         self.last_publish = float("-inf")
         self.state = None
+        self.last_batch_at = None
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.worker = None
@@ -47,6 +48,7 @@ class HotlaneCpuSampler:
     def _observe(self, state, backlog_encoded, cycle_start, cycle_end):
         now, cpu = self.begin_cycle()
         if backlog_encoded:
+            self.last_batch_at = datetime.now(timezone.utc).isoformat()
             # Explicit bounds exclude sleeps and concurrent sampler ticks. The
             # previous observation also permits standalone replay of cycle samples.
             started, cpu_started = cycle_start or self.samples[-1]
@@ -78,6 +80,7 @@ class HotlaneCpuSampler:
             backlog_wall_seconds=sum(cycle[1] for cycle in self.backlog_cycles),
             backlog_cpu_seconds=sum(cycle[2] for cycle in self.backlog_cycles),
             backlog_state=state,
+            backlog_last_batch_at=self.last_batch_at,
         )
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)

@@ -368,16 +368,66 @@ def calendar_steps(python, cli, lib_dir, scheduled_date):
     return CalendarPlan(scheduled_date, steps, start)
 
 
-def record(directory, **event):
-    with (directory / "runs.jsonl").open("a+b") as handle:
-        end = handle.seek(0, 2)
-        if end:
-            handle.seek(-1, 2)
-            if handle.read(1) != b"\n":
-                handle.write(b"\n")  # Preserve torn bytes, separating them from the next valid record.
-        handle.write((json.dumps({"ts": time.time(), **event}, sort_keys=True) + "\n").encode())
+RUNS_ROTATE_BYTES = 2 * 1024 * 1024
+
+
+def _journal_replace(path, content):
+    """Publish a durable snapshot without exposing a missing or partial pathname."""
+    temporary = path.with_name(path.name + ".pending")
+    with temporary.open("wb") as handle:
+        handle.write(content)
         handle.flush()
         os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _rotate_runs(path):
+    if path.stat().st_size <= RUNS_ROTATE_BYTES:
+        return
+    content = path.read_bytes()
+    boundaries, offset = [], 0
+    for line in content.splitlines(keepends=True):
+        try:
+            row = json.loads(line)
+        except (ValueError, UnicodeDecodeError):
+            row = None
+        # Recovery attempts belong with their preceding night. Never cut at one.
+        if isinstance(row, dict) and row.get("event") == "runner" and row.get("kind") != "recovery":
+            if offset:
+                boundaries.append(offset)
+        offset += len(line)
+    if not boundaries:
+        return  # One oversized attempt cannot safely be split.
+    # Keep roughly half the limit, rounded outward to a complete attempt.
+    target = len(content) - RUNS_ROTATE_BYTES // 2
+    cut = max((offset for offset in boundaries if offset <= target), default=boundaries[0])
+    # Archive first. A crash before current publication leaves duplicate history,
+    # never a missing current night. One archive generation is intentionally kept.
+    _journal_replace(path.with_name("runs.jsonl.1"), content[:cut])
+    _journal_replace(path, content[cut:])
+
+
+def record(directory, **event):
+    # A stable inode serializes append AND replacement, including admission records
+    # written by contenders that do not own the runner's long-lived custody lock.
+    with (directory / "runs.lock").open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        path = directory / "runs.jsonl"
+        with path.open("a+b") as handle:
+            end = handle.seek(0, 2)
+            if end:
+                handle.seek(-1, 2)
+                if handle.read(1) != b"\n":
+                    handle.write(b"\n")  # Separate torn bytes from the next valid record.
+            handle.write((json.dumps({"ts": time.time(), **event}, sort_keys=True) + "\n").encode())
+            handle.flush()
+            os.fsync(handle.fileno())
+        _rotate_runs(path)
 
 
 def _scan_record(directory, **event):
@@ -772,6 +822,7 @@ def finish(
     replaces=None,
     backup_invocation_id=None,
     maintenance_run_id=None,
+    holders=None,
     preserve_abandonment_alerts=False,
 ):
     status = "stopped" if stopped else "deferred" if code == 75 else "ok" if code == 0 else "failed"
@@ -779,6 +830,7 @@ def finish(
         key: value
         for key, value in dict(
             reason=reason,
+            holders=holders,
             replaces=replaces,
             backup_invocation_id=backup_invocation_id,
             maintenance_run_id=maintenance_run_id,
@@ -865,7 +917,9 @@ async def step_hold(client, guard, env, step, now_fn=None):
                 raise  # Re-locking an inherited lease is custody: it must still abort the run.
             # A fresh acquisition found another holder: this step defers, the plan (and its
             # backup) continues. Only custody/protocol failures abort the run (M4, 2026-11-07).
-            raise HoldBusy(str(exc)) from exc
+            busy = HoldBusy(str(exc))
+            busy.holders = getattr(exc, "holders", [])
+            raise busy from exc
         await _blocking(guard_lease, guard, hold.fd)
         yield env | dict(
             BRAINLAYER_MAINTENANCE_FD=str(hold.fd),
@@ -1095,6 +1149,7 @@ async def run_calendar(
             if stop.is_set():
                 await _blocking(record, directory, event="finished", step=step.name, status="skipped", returncode=None)
                 continue
+            holders = None
             code, missed, reason, step_failed = 1, False, None, False
             invocation = uuid.uuid4().hex if step.name == "backup-daily" else None
             run_id = uuid.uuid4().hex if step.name in MAINTENANCE_STEPS else None
@@ -1175,7 +1230,8 @@ async def run_calendar(
                         except maintenance_control.HoldWindowClosed:
                             # The window closed between the check and the grant: defer, keep the plan going.
                             code, reason = 75, "maintenance-window"
-                        except HoldBusy:
+                        except HoldBusy as exc:
+                            holders = getattr(exc, "holders", [])
                             # Another holder has the lease: defer this step, keep the plan (and backup) going.
                             code, reason = 75, "maintenance-hold-busy"
             except (OSError, RuntimeError, ValueError) as exc:
@@ -1197,6 +1253,7 @@ async def run_calendar(
                 missed,
                 stopped,
                 reason=reason,
+                holders=holders,
                 replaces="maintenance-nightly" if weekly_substitution and step.name == "maintenance-weekly" else None,
                 backup_invocation_id=invocation,
                 maintenance_run_id=run_id,

@@ -99,8 +99,10 @@ def _raise_deduplicated(path: Path, source: str, fingerprint: str, event: alarm.
         and cached["state"] == "pending"
         and 0 <= now - cached["last_alert_at"] < REMINDER_SECONDS
     ):
+        _count(now, "suppressed_unchanged")
         raise event
     emit = True
+    reason = "changed"
     directory = path.parent
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -118,6 +120,7 @@ def _raise_deduplicated(path: Path, source: str, fingerprint: str, event: alarm.
                 logger.warning("Unreadable T3 linkage alarm status %s: %s", path, exc)
                 previous, same, last_alert = {}, False, 0
             emit = not same or not 0 <= now - last_alert < REMINDER_SECONDS
+            reason = "hourly_reminder" if same else "changed"
             record = (
                 dict(previous)
                 if same
@@ -147,10 +150,95 @@ def _raise_deduplicated(path: Path, source: str, fingerprint: str, event: alarm.
         # Another process holds this source's status; without our own receipt, stay loud.
         logger.info("T3 alarm status %s is busy; emitting %s without suppression", path, event.code)
         emit = True
+        reason = "lock_or_persist_failed"
     except OSError:
         # No durable receipt means no suppression; never pretend a failed status write worked.
         logger.error("Could not persist T3 linkage alarm status %s", path, exc_info=True)
         emit = True
+        reason = "lock_or_persist_failed"
+    _count(now, reason if emit else "suppressed_unchanged")
     if emit:
+        event.context.update(emission_reason=reason, source_fingerprint=fingerprint)
         alarm.emit_alarm(event)
     raise event
+
+
+def _counter_directory() -> Path:
+    return status_directory().with_name("t3-linkage-counts")
+
+
+_COUNTER_KEYS = ("observed", "emitted", "suppressed_unchanged", "emitted_because_lock_or_persist_failed")
+
+
+def _read_counter(path: Path, hour: int) -> dict[str, int]:
+    zero = {"hour": hour, **dict.fromkeys(_COUNTER_KEYS, 0)}
+    try:
+        row = json.loads(path.read_text())
+        if not isinstance(row, dict) or row.get("hour") != hour:
+            raise ValueError("invalid bucket hour")
+        if any(type(row.get(key)) is not int or row[key] < 0 for key in _COUNTER_KEYS):
+            raise ValueError("invalid bucket counters")
+        return {key: row[key] for key in zero}
+    except FileNotFoundError:
+        return zero
+    except (OSError, ValueError, TypeError) as exc:
+        logger.warning("Unreadable T3 alarm counter bucket %s; treating as zero: %s", path, exc)
+        return zero
+
+
+def _count(now: float, reason: str) -> None:
+    """Update bounded hourly diagnostics under a shared lock.
+
+    Only a new bucket is fsynced; crash loss of subsequent increments is acceptable.
+    Retain at most seven days, including the current hour. Counter failures never
+    change alarm emission or suppression.
+    """
+    hour = int(now // REMINDER_SECONDS)
+    increments = {
+        "observed": 1,
+        "emitted": int(reason != "suppressed_unchanged"),
+        "suppressed_unchanged": int(reason == "suppressed_unchanged"),
+        "emitted_because_lock_or_persist_failed": int(reason == "lock_or_persist_failed"),
+    }
+    try:
+        directory = _counter_directory()
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory / "counts.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            target = directory / f"{hour}.json"
+            new_bucket = not target.exists()
+            row = _read_counter(target, hour)
+            for key, value in increments.items():
+                row[key] += value
+            with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as handle:
+                temporary = Path(handle.name)
+                try:
+                    json.dump(row, handle)
+                    handle.flush()
+                    if new_bucket:
+                        os.fsync(handle.fileno())
+                    temporary.replace(target)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            for path in directory.glob("*.json"):
+                if path.stem.isdecimal() and int(path.stem) <= hour - 7 * 24:
+                    path.unlink(missing_ok=True)
+    except BlockingIOError:
+        logger.debug("T3 alarm counters are busy; diagnostic increment skipped")
+    except (OSError, ValueError, TypeError, KeyError):
+        logger.error("Could not persist T3 alarm counters", exc_info=True)
+
+
+def alarm_counts() -> list[dict[str, int]]:
+    """Read diagnostics-only totals for the current and preceding 167 hours.
+
+    Unreadable buckets are logged once per read and treated as zero. Reads never
+    modify receipts or alarm state; expired buckets are ignored even without writes.
+    No BrainBar or health caller consumes these totals yet.
+    """
+    hour = int(time.time() // REMINDER_SECONDS)
+    rows = []
+    for path in _counter_directory().glob("*.json"):
+        if path.stem.isdecimal() and hour - 168 < int(path.stem) <= hour:
+            rows.append(_read_counter(path, int(path.stem)))
+    return sorted(rows, key=lambda row: row["hour"])

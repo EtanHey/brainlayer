@@ -87,7 +87,10 @@ class FakeCredentials:
 
 @pytest.mark.parametrize("hours_left", [48, 24, 0.5])
 @pytest.mark.parametrize("prior_consent_alert", [None, "prior consent failure"])
-def test_valid_upcoming_expiry_is_advisory_and_recovers_only_consent_alert(tmp_path, hours_left, prior_consent_alert):
+def test_valid_upcoming_expiry_is_advisory_and_recovers_only_consent_alert(
+    tmp_path, hours_left, prior_consent_alert, monkeypatch
+):
+    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")
     from brainlayer import drive_credentials, job_alerts
 
     token, client, alerts = tmp_path / "token.json", tmp_path / "client.json", tmp_path / "alerts.json"
@@ -126,7 +129,8 @@ def test_valid_upcoming_expiry_is_advisory_and_recovers_only_consent_alert(tmp_p
 
 
 @pytest.mark.parametrize("failure", ["expired", "invalid_grant", "network", "refresh"])
-def test_upcoming_expiry_does_not_erase_alerts_when_credentials_fail(tmp_path, failure):
+def test_upcoming_expiry_does_not_erase_alerts_when_credentials_fail(tmp_path, failure, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")
     from google.auth.exceptions import TransportError
 
     from brainlayer import drive_credentials, job_alerts
@@ -280,7 +284,8 @@ OFFLINE_REASON = "status checked offline; last known state"
         (7 - 1 / 86400, "expiring"),  # last second before the local deadline
     ],
 )
-def test_offline_status_keeps_local_consent_clock(tmp_path, elapsed_days, expected):
+def test_offline_status_keeps_local_consent_clock(tmp_path, elapsed_days, expected, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")
     from google.auth.exceptions import TransportError
 
     from brainlayer import drive_credentials
@@ -322,6 +327,7 @@ def test_offline_status_keeps_local_consent_clock(tmp_path, elapsed_days, expect
 
 def test_cli_text_status_offline_expiring_prints_local_deadline(tmp_path, monkeypatch):
     """Real CLI text formatter + real credential_status; only the token endpoint is offline."""
+    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")
     from google.auth.exceptions import TransportError
     from google.oauth2.credentials import Credentials
     from typer.testing import CliRunner
@@ -414,7 +420,8 @@ def test_browser_denial_reports_cancelled_without_writing_token(tmp_path):
     assert not token.exists()
 
 
-def test_testing_mode_consent_expires_after_seven_days(tmp_path):
+def test_testing_mode_consent_expires_after_seven_days(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")
     from brainlayer import drive_credentials
 
     token, client = tmp_path / "token.json", tmp_path / "client.json"
@@ -489,7 +496,8 @@ def test_refresh_network_error_stays_retryable_without_token_payload(tmp_path):
 
 
 @pytest.mark.parametrize("hours_left", [48, 36, 0, -1])
-def test_consent_warning_names_exact_expiry_without_changing_gate(tmp_path, hours_left, caplog):
+def test_consent_warning_names_exact_expiry_without_changing_gate(tmp_path, hours_left, caplog, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")
     from brainlayer import drive_credentials
 
     token, client = tmp_path / "token.json", tmp_path / "client.json"
@@ -538,8 +546,9 @@ def _consented_token(tmp_path: Path, consented: datetime) -> tuple[Path, Path]:
     return token, client
 
 
-def test_invalid_grant_names_known_local_deadline_without_claiming_revocation_time(tmp_path):
+def test_invalid_grant_names_known_local_deadline_without_claiming_revocation_time(tmp_path, monkeypatch):
     """#1343: a server revocation inside the local seven-day window keeps the local deadline."""
+    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")
     from brainlayer import drive_credentials
 
     consented = datetime(2026, 10, 17, 18, 50, tzinfo=UTC)
@@ -597,6 +606,7 @@ def test_invalid_grant_without_consent_metadata_keeps_legacy_text(tmp_path):
 
 def test_cli_text_status_shows_local_deadline_on_real_google_refresh_error(tmp_path, monkeypatch):
     """CLI boundary: real google-auth Credentials and RefreshError; only the HTTP refresh is stubbed."""
+    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")
     from google.auth.exceptions import RefreshError
     from google.oauth2.credentials import Credentials
     from typer.testing import CliRunner
@@ -666,8 +676,9 @@ def no_backoff_sleep(monkeypatch):
     ],
 )
 def test_status_retryable_refresh_error_keeps_local_consent_clock(
-    tmp_path, no_backoff_sleep, status, body, elapsed_days, expected
+    tmp_path, no_backoff_sleep, status, body, elapsed_days, expected, monkeypatch
 ):
+    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")
     from brainlayer import drive_credentials
 
     consented = datetime.now(UTC) - timedelta(days=elapsed_days)
@@ -707,8 +718,9 @@ def test_status_retryable_refresh_error_keeps_local_consent_clock(
     ],
 )
 def test_status_permanent_refresh_rejection_stays_invalid(
-    tmp_path, no_backoff_sleep, status, error, expected_reason_start
+    tmp_path, no_backoff_sleep, status, error, expected_reason_start, monkeypatch
 ):
+    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")
     from brainlayer import drive_credentials
 
     consented = datetime.now(UTC) - timedelta(days=2)
@@ -747,6 +759,7 @@ def test_cli_text_status_temporary_token_endpoint_failure_prints_local_deadline(
     tmp_path, monkeypatch, no_backoff_sleep
 ):
     """Real CLI + real google-auth Credentials and retry loop; only the token endpoint answers 503."""
+    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")
     import google.auth.transport.requests as transport
     from typer.testing import CliRunner
 
@@ -773,3 +786,91 @@ def test_cli_text_status_temporary_token_endpoint_failure_prints_local_deadline(
     assert "private-payload" not in text.output + as_json.output
     assert endpoint.calls == 6 and token.read_bytes() == before
     assert not (tmp_path / "alerts.json").exists()
+
+
+@pytest.mark.parametrize("elapsed_days", [6.5, 8])
+@pytest.mark.parametrize("testing", [None, "0", "1"])
+def test_consent_clock_requires_explicit_testing_mode(tmp_path, monkeypatch, elapsed_days, testing):
+    from brainlayer import drive_credentials
+
+    monkeypatch.delenv("BRAINLAYER_DRIVE_OAUTH_TESTING", raising=False)
+    if testing is not None:
+        monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", testing)
+    consented = datetime(2026, 10, 17, tzinfo=UTC)
+    token, client = _consented_token(tmp_path, consented)
+    alerts = []
+    status = drive_credentials.credential_status(
+        token_path=token,
+        client_path=client,
+        credentials_class=FakeCredentials,
+        request_factory=object,
+        now=consented + timedelta(days=elapsed_days),
+        alert_reporter=lambda *args: alerts.append(args),
+    )
+    if testing == "1":
+        assert status["state"] == ("expiring" if elapsed_days < 7 else "invalid")
+        assert status["expires_at"] == (consented + timedelta(days=7)).isoformat()
+    else:
+        assert status["state"] == "valid"
+        assert status["expires_at"] is None
+        assert status["days_left"] is None
+        assert alerts == [("drive-consent", None)]
+
+
+def test_production_invalid_grant_still_reports_consent_failure(tmp_path, monkeypatch):
+    from brainlayer import drive_credentials
+
+    monkeypatch.delenv("BRAINLAYER_DRIVE_OAUTH_TESTING", raising=False)
+    consented = datetime(2026, 10, 17, tzinfo=UTC)
+    token, client = _consented_token(tmp_path, consented)
+    alerts = []
+
+    class Revoked(FakeCredentials):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.expired = True
+            self.fail = True
+
+    status = drive_credentials.credential_status(
+        token_path=token,
+        client_path=client,
+        credentials_class=Revoked,
+        request_factory=object,
+        now=consented + timedelta(days=8),
+        alert_reporter=lambda *args: alerts.append(args),
+    )
+    assert status["state"] == "invalid"
+    assert status["expires_at"] is None
+    assert status["reason"] == "Drive access expired: Reconnect in BrainBar"
+    assert alerts == [("drive-consent", status["reason"])]
+
+
+@pytest.mark.parametrize("testing", [False, True])
+def test_naive_consent_timestamp_agrees_between_loader_and_status(tmp_path, monkeypatch, testing):
+    from brainlayer import drive_credentials
+
+    monkeypatch.delenv("BRAINLAYER_DRIVE_OAUTH_TESTING", raising=False)
+    if testing:
+        monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")
+    consented = datetime(2026, 10, 17, 12)
+    token, client = _consented_token(tmp_path, consented)
+    before = token.read_bytes()
+    kwargs = dict(
+        token_path=token,
+        client_path=client,
+        credentials_class=FakeCredentials,
+        request_factory=object,
+        now=datetime(2026, 10, 18, 12, tzinfo=UTC),
+        alert_reporter=lambda *_: None,
+    )
+    status = drive_credentials.credential_status(**kwargs)
+    if testing:
+        assert status["state"] == "invalid"
+        with pytest.raises(drive_credentials.DriveCredentialError) as caught:
+            drive_credentials.load_credentials(**kwargs)
+        assert str(caught.value) == status["reason"] == "BrainLayer Drive consent metadata is invalid"
+    else:
+        assert status["state"] == "valid"
+        assert status["expires_at"] is None and status["days_left"] is None
+        assert drive_credentials.load_credentials(**kwargs).valid
+    assert token.read_bytes() == before

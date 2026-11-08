@@ -230,6 +230,11 @@ final class MCPRouter: @unchecked Sendable {
     private var readDatabase: BrainDatabase?
     private let hybridSearchClient: HybridSearchClientProtocol?
     private let dbPath: String?
+    private let hybridFlightLock = NSLock()
+    private var hybridFlights: Set<UUID> = []
+    private var stuckHybridFlights: Set<UUID> = []
+    private enum HybridBudgetFailure: Error { case timedOut, busy }
+    private let hybridSearchExecutor: @Sendable (@escaping @Sendable () -> Void) -> Void
     private let hybridSearchBudget: TimeInterval
     private let receiptStore: BrainBarOperationReceipts
     private let toolProfile: ToolProfile
@@ -271,6 +276,7 @@ final class MCPRouter: @unchecked Sendable {
         profile: String? = nil,
         hybridSearchClient: HybridSearchClientProtocol? = nil,
         hybridSearchBudget: TimeInterval = 0.8,
+        hybridSearchExecutor: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void = { work in DispatchQueue.global(qos: .userInitiated).async(execute: work) },
         dbPath: String? = nil,
         pendingStoreDrainQueue: DispatchQueue? = nil,
         onPendingStoresFlushed: (@Sendable ([BrainDatabase.FlushedPendingStore]) -> Void)? = nil,
@@ -278,6 +284,7 @@ final class MCPRouter: @unchecked Sendable {
         receiptStore: BrainBarOperationReceipts = BrainBarOperationReceipts()
     ) {
         self.toolProfile = Self.resolveToolProfile(profile)
+        self.hybridSearchExecutor = hybridSearchExecutor
         self.hybridSearchClient = hybridSearchClient
         self.hybridSearchBudget = max(0.001, hybridSearchBudget)
         self.receiptStore = receiptStore
@@ -941,6 +948,13 @@ final class MCPRouter: @unchecked Sendable {
                     metadata = fallback.metadata
                     kgSection = localKGSection()
                 }
+            } catch let failure as HybridBudgetFailure {
+                let reason = failure == .busy ? "hybrid helper busy past budget" : "hybrid helper exceeded budget"
+                NSLog("[BrainBar] Search mode: BrainBar database fallback (%@)", reason)
+                let fallback = try searchViaBrainBarDatabase()
+                textSection = fallback.text + "\nSearch mode: BrainBar database fallback (\(reason))"
+                metadata = fallback.metadata
+                kgSection = localKGSection()
             } catch {
                 NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", HybridSearchHelperError.loggable(error))
                 let fallback = try searchViaBrainBarDatabase()
@@ -978,7 +992,7 @@ final class MCPRouter: @unchecked Sendable {
         return response.text.contains(" - 0 of 0 shown")
     }
 
-    private func hybridSearchWithinBudget(arguments: [String: Any]) throws -> HybridSearchResponse? {
+    func hybridSearchWithinBudget(arguments: [String: Any]) throws -> HybridSearchResponse? {
         guard let hybridSearchClient else { return nil }
         if let readinessProvider = hybridSearchClient as? HybridSearchReadinessProviding,
            !readinessProvider.isReady {
@@ -986,19 +1000,36 @@ final class MCPRouter: @unchecked Sendable {
             return nil
         }
 
+        let flight = UUID()
+        let admitted = hybridFlightLock.withLock {
+            guard stuckHybridFlights.isEmpty else { return false }
+            hybridFlights.insert(flight)
+            return true
+        }
+        guard admitted else { throw HybridBudgetFailure.busy }
         let group = DispatchGroup()
         let argumentBox = HybridSearchArgumentBox(arguments: arguments)
         let resultBox = HybridSearchResultBox()
         group.enter()
-        DispatchQueue.global(qos: .userInitiated).async {
+        hybridSearchExecutor {
+            defer {
+                self.hybridFlightLock.withLock {
+                    self.hybridFlights.remove(flight)
+                    self.stuckHybridFlights.remove(flight)
+                }
+                group.leave()
+            }
             let outcome = Result { try hybridSearchClient.search(arguments: argumentBox.arguments) }
             resultBox.set(outcome)
-            group.leave()
         }
 
         let timeout = DispatchTime.now() + .nanoseconds(Int(hybridSearchBudget * 1_000_000_000))
         guard group.wait(timeout: timeout) == .success else {
-            return nil
+            hybridFlightLock.withLock {
+                // Completion shares this lock so it cannot leave a stale stuck marker.
+                if hybridFlights.contains(flight) { stuckHybridFlights.insert(flight) }
+            }
+            throw HybridBudgetFailure.timedOut
         }
 
         return try resultBox.get()?.get()
