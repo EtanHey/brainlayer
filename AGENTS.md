@@ -446,13 +446,16 @@ brainlayer search "how did I implement authentication"
   and `prefix_stat` (`[size, mtime_ns, inode]` those bytes were proven under). A restart with an
   unchanged stat resumes with no read; a changed one re-hashes the prefix once and re-reads from
   0 on a mismatch. A live tailer checks a changed file's tail and head cheaply and re-hashes the
-  prefix on the first idle poll after it. Samples are not proof: the #1656 round-2 rehearsal
-  lost records to a rewrite that kept the head and the tail and changed only the middle.
-- Re-reading from 0 adds no rows (content-hash chunk ids), but it bumps `seen_count` on every
-  replayed chunk, so it is not free. Entries without a digest (pre-#1656 or #1656's sampled
-  `fingerprint`) are kept only when the file is exactly `offset` bytes and unmodified since the
-  confirm time, and are then hashed once and upgraded; the read/ack race leaves a longer file and
-  is re-read. Residual: a same-length in-place rewrite racing a pre-upgrade acknowledgement.
+  prefix on the first idle poll, or after at most 8 polls on unproven bytes (`_MAX_UNPROVEN_POLLS`)
+  even if the file never stops growing. EOF is skipped only while the proof names the file's
+  current stat. Samples are not proof: the #1656 round-2 rehearsal lost records to a rewrite
+  that kept the head and the tail and changed only the middle.
+- **Entries without a digest are never trusted** (pre-#1656, or #1656's sampled `fingerprint`):
+  no stat or timestamp shows which version a pre-digest watcher consumed, so they replay from 0
+  once. A replay is not a sighting: records up to the old offset carry `_replay` (persisted as
+  `replay_until` across restarts), and the writer never touches an existing row for them -- no
+  `seen_count`, `last_seen_at`, tags, source position or reactivation -- and only inserts chunks
+  it does not have (#1704 round 2).
 - Socket: `/tmp/brainlayer.sock`
 - Historical enrichment lock: `/tmp/brainlayer-enrichment.lock` (legacy cleanup/safety only)
 - Session dedup: `/tmp/brainlayer_session_*.json`

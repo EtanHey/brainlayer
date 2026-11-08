@@ -207,6 +207,7 @@ def enqueue_watcher_chunk(
     content_class: str | None = None,
     provenance_class: str | None = None,
     source_class: str | None = None,
+    replay: bool = False,
     queue_dir: Path | None = None,
 ) -> Path:
     event = {
@@ -232,6 +233,8 @@ def enqueue_watcher_chunk(
         event["provenance_class"] = provenance_class
     if source_class is not None:
         event["source_class"] = source_class
+    if replay:
+        event["replay"] = True
     return enqueue_jsonl(
         event,
         source="watcher",

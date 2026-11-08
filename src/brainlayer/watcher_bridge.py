@@ -16,6 +16,7 @@ import logging
 import os
 import random
 import re
+import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -368,7 +369,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
     """
     if arbitrated is None:
         arbitrated = os.environ.get("BRAINLAYER_ARBITRATED") == "1"
-    store = None if arbitrated else VectorStore(db_path or get_db_path())
+    resolved_db_path = db_path or get_db_path()
+    store = None if arbitrated else VectorStore(resolved_db_path)
+    replay_reader: sqlite3.Connection | None = None
     liveness_schema_ready = False
     source_projects: dict[str, str] = {}
     resolved_source_identities: dict[str, tuple[int, int, int]] = {}
@@ -391,6 +394,31 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         from .drain import _record_watcher_liveness
 
         _record_watcher_liveness(store.conn, chunk_id, ingested_at)
+
+    def replayed_chunk_stored(chunk_id: str) -> bool:
+        """Whether a replayed record's chunk is already stored, so the replay is a no-op.
+
+        A replay re-reads records the watcher already acknowledged (#1704 round 2); it is not
+        a new sighting and must not re-merge an existing row. The queue path checks here,
+        read-only, so a corpus replay does not publish one queue file per stored chunk; an
+        unanswerable check enqueues and lets the single writer decide.
+        """
+        nonlocal replay_reader
+        if store is not None:
+            return store.conn.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone() is not None
+        try:
+            if replay_reader is None:
+                replay_reader = sqlite3.connect(f"file:{resolved_db_path}?mode=ro", uri=True, timeout=1)
+            return replay_reader.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone() is not None
+        except sqlite3.Error:
+            close_replay_reader()
+            return False
+
+    def close_replay_reader() -> None:
+        nonlocal replay_reader
+        if replay_reader is not None:
+            replay_reader.close()
+            replay_reader = None
 
     def flush_to_db(entries: list[dict[str, Any]]) -> FlushWatermarks:
         """Process raw JSONL entries through pipeline and insert into DB."""
@@ -442,6 +470,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             content_class: str,
             provenance_class: str,
             source_class: str | None,
+            replay: bool,
         ) -> None:
             metrics.run(
                 "publish",
@@ -462,9 +491,11 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 content_class=content_class,
                 provenance_class=provenance_class,
                 source_class=source_class,
+                replay=replay,
             )
 
         for entry in entries:
+            replay = entry.get("_replay") is True
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
             if not t3_linkage_resolved:
@@ -594,6 +625,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 if source_class == "brain-worker":
                     skipped += 1
                     continue
+                if replay and replayed_chunk_stored(chunk_id):
+                    skipped += 1
+                    continue
                 metadata["provenance_tag"] = provenance_decision.provenance_tag
                 metadata["provenance_search_policy"] = provenance_decision.search_policy
                 metadata["provenance_effective_visibility"] = visibility
@@ -618,6 +652,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                             content_class=content_class,
                             provenance_class=provenance_class,
                             source_class=source_class,
+                            replay=replay,
                         )
                     except Exception:
                         entry_confirmed = False
@@ -647,6 +682,11 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                 project=project,
                                 content_type=chunk.content_type.value,
                             )
+                            if duplicate is not None and replay:
+                                metrics.run("commit", cursor.execute, "COMMIT")
+                                transaction_started = False
+                                skipped += 1
+                                break
                             if duplicate is not None:
                                 merge_duplicate_chunk(
                                     store.conn,
@@ -669,7 +709,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                 transaction_started = False
                                 inserted += 1
                                 break
-                            if merge_existing_chunk_seen(
+                            if not replay and merge_existing_chunk_seen(
                                 store.conn,
                                 chunk_id=chunk_id,
                                 incoming={
@@ -757,6 +797,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                         content_class=content_class,
                                         provenance_class=provenance_class,
                                         source_class=source_class,
+                                        replay=replay,
                                     )
                                 except Exception:
                                     logger.exception("spill_failed chunk_id=%s source_file=%s", chunk_id, source_file)
@@ -810,5 +851,10 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             deferred_entries=deferred_entries,
         )
 
-    flush_to_db.close = store.close if store is not None else lambda: None
+    def close() -> None:
+        close_replay_reader()
+        if store is not None:
+            store.close()
+
+    flush_to_db.close = close
     return flush_to_db

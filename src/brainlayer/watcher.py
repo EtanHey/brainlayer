@@ -62,12 +62,16 @@ _MAX_HEALTH_QUARANTINE_DETAILS = 100
 # preserved by a rewrite (#1656 round 2: head and tail kept, middle replaced), so the full digest
 # is the only evidence; it is re-read only when the file changed since that proof. The tail
 # anchor and head digest stay as a cheap early check on every changed read, so a typical rewrite
-# restarts before any mid-record bytes are parsed. Re-ingesting is idempotent (content-hash chunk
-# ids + dedupe); skipping is not (#732).
+# restarts before any mid-record bytes are parsed. A restart replays from 0; replayed records
+# carry `_replay` so the writer never re-counts or rewrites an existing row (#1704 round 2).
 _SOURCE_ANCHOR_BYTES = 256
 _SOURCE_HEAD_BYTES = 4096
 _PREFIX_HASH_READ_BYTES = 1024 * 1024
 _MAX_PENDING_FINGERPRINTS = 4096
+# A changed file is trusted on the cheap check for at most this many polls (reads or drains of
+# already-read records); the next poll re-hashes [0, offset) even if the file is still growing.
+# An idle read proves at once.
+_MAX_UNPROVEN_POLLS = 8
 
 # (size, mtime_ns, inode) of an open source file.
 SourceStat = tuple[int, int, int]
@@ -615,6 +619,14 @@ class OffsetRegistry:
         """Return the current rewind generation for a file."""
         return self._entry_generation(self._data.get(filepath))
 
+    def replay_until(self, filepath: str) -> int:
+        """End of the already-acknowledged bytes a restart from 0 is re-reading, or 0."""
+        entry = self._data.get(filepath)
+        value = entry.get("replay_until") if isinstance(entry, dict) else None
+        if isinstance(value, int) and not isinstance(value, bool) and value > entry.get("offset", 0):
+            return value
+        return 0
+
     def prefix(self, filepath: str) -> PrefixProof | None:
         """SHA-256 of the bytes before the stored offset and the stat it was proven under.
 
@@ -645,14 +657,6 @@ class OffsetRegistry:
         _store_prefix(entry, prefix)
         self._dirty_paths.add(filepath)
         self._dirty = True
-
-    def checkpoint_mtime(self, filepath: str) -> float | None:
-        """Wall-clock time the stored offset was last confirmed, if recorded."""
-        entry = self._data.get(filepath)
-        value = entry.get("mtime") if isinstance(entry, dict) else None
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
-            return float(value)
-        return None
 
     def set(
         self,
@@ -687,6 +691,8 @@ class OffsetRegistry:
         }
         if prefix is not None:
             _store_prefix(entry, prefix)
+        if generation == current_generation and self.replay_until(filepath) > offset:
+            entry["replay_until"] = self.replay_until(filepath)
         self._data[filepath] = entry
         if tombstone is None or valid_inode:
             self._removed.pop(filepath, None)
@@ -824,8 +830,12 @@ class OffsetRegistry:
         self._dirty_paths.discard(filepath)
         self._dirty = True
 
-    def mark_rewind(self, filepath: str, inode: int) -> int:
-        """Start a newer offset generation so a confirmed rewind may move backward."""
+    def mark_rewind(self, filepath: str, inode: int, *, replay_until: int = 0) -> int:
+        """Start a newer offset generation so a confirmed rewind may move backward.
+
+        `replay_until` marks [0, replay_until) as already acknowledged, so a watcher restarted
+        mid-replay still treats those records as a replay, not as new sightings.
+        """
         current_generation = self._entry_generation(self._data.get(filepath))
         tombstone = self._removed.get(filepath)
         tombstone_generation = int(tombstone["generation"]) if tombstone else 0
@@ -835,6 +845,7 @@ class OffsetRegistry:
             "inode": inode,
             "mtime": time.time(),
             "generation": generation,
+            **({"replay_until": replay_until} if replay_until > 0 else {}),
         }
         self._removed.pop(filepath, None)
         self._dirty_paths.add(filepath)
@@ -980,7 +991,7 @@ class TailerSnapshot(NamedTuple):
     proof_stat: SourceStat | None
     last_stat: SourceStat | None
     resume_prefix: PrefixProof | None
-    resume_checkpoint_mtime: float | None
+    unproven_polls: int
 
 
 class JSONLTailer:
@@ -999,7 +1010,7 @@ class JSONLTailer:
         max_record_bytes: int | None = None,
         *,
         resume_prefix: PrefixProof | None = None,
-        resume_checkpoint_mtime: float | None = None,
+        replay_until: int = 0,
     ):
         self.filepath = filepath
         self.offset = offset
@@ -1019,21 +1030,37 @@ class JSONLTailer:
         # SHA-256 of every consumed byte [0, offset). None for a tailer resumed from a stored
         # offset until _establish_offset proves that offset or restarts from 0.
         self._prefix_hash: Any = hashlib.sha256() if offset == 0 else None
-        # The stat under which [0, offset) was last proven equal to the file; None while owed.
+        # The stat under which [0, offset) and the buffer were last proven equal to the file;
+        # None while owed. After every read it is None or `_last_stat`, the stat the buffer was
+        # read under, so a fingerprint built from consumed bytes names the version they came from.
         self._proof_stat: SourceStat | None = None
         self._last_stat: SourceStat | None = None
+        self._unproven_polls = 0
         self._resume_prefix = resume_prefix
-        self._resume_checkpoint_mtime = resume_checkpoint_mtime
+        # Records ending at or before this offset were acknowledged before a restart from 0.
+        self.replay_until = replay_until
         # A digest proven against the file outside a confirmation, for the registry to record.
         self.proven_prefix: tuple[int, PrefixProof] | None = None
         # Prefix proofs at consumed boundaries the registry has not confirmed yet.
         self._fingerprints: dict[int, PrefixProof] = {}
         self.observed_inode = self.get_inode()
 
-    @property
-    def owes_verification(self) -> bool:
-        """Consumed bytes were read after the file changed and are not yet proven (#1656)."""
-        return self._prefix_hash is not None and self.offset > 0 and self._proof_stat is None
+    def proven_at(self, stat: SourceStat | None) -> bool:
+        """Every consumed and buffered byte is proven to be this exact file version (#1704).
+
+        Not "some proof exists": a proof of an older version says nothing about the current one.
+        """
+        return stat is not None and self._proof_stat == stat
+
+    def proof_overdue(self, stat: SourceStat | None) -> bool:
+        """A changed file has been trusted on samples for `_MAX_UNPROVEN_POLLS` polls."""
+        return not self.proven_at(stat) and self._unproven_polls >= _MAX_UNPROVEN_POLLS
+
+    def drain_buffered_lines(self, stat: SourceStat | None, max_lines: int | None = None) -> list[dict]:
+        """Emit already-read records without reading; a poll on unproven bytes counts."""
+        if not self.proven_at(stat):
+            self._unproven_polls += 1
+        return self.read_buffered_lines(max_lines=max_lines)
 
     def snapshot(self) -> TailerSnapshot:
         """Capture everything a failed read must roll back, identity included."""
@@ -1047,13 +1074,13 @@ class JSONLTailer:
             self._proof_stat,
             self._last_stat,
             self._resume_prefix,
-            self._resume_checkpoint_mtime,
+            self._unproven_polls,
         )
 
     @staticmethod
     def origin_snapshot() -> TailerSnapshot:
         """The state of a tailer at byte 0, whose identity is trivially verified."""
-        return TailerSnapshot(0, b"", b"", hashlib.blake2b(digest_size=16), 0, hashlib.sha256(), None, None, None, None)
+        return TailerSnapshot(0, b"", b"", hashlib.blake2b(digest_size=16), 0, hashlib.sha256(), None, None, None, 0)
 
     def restore_snapshot(self, snapshot: TailerSnapshot) -> None:
         """Put the tailer back to a state captured by `snapshot()` before a failed read.
@@ -1071,7 +1098,7 @@ class JSONLTailer:
             self._proof_stat,
             self._last_stat,
             self._resume_prefix,
-            self._resume_checkpoint_mtime,
+            self._unproven_polls,
         ) = snapshot
         self._head_hash = head_hash.copy()
         self._prefix_hash = None if prefix_hash is None else prefix_hash.copy()
@@ -1084,8 +1111,8 @@ class JSONLTailer:
         self._head_len = 0
         self._prefix_hash = hashlib.sha256()
         self._proof_stat = None
+        self._unproven_polls = 0
         self._resume_prefix = None
-        self._resume_checkpoint_mtime = None
         self.proven_prefix = None
         self._fingerprints = {}
 
@@ -1127,6 +1154,7 @@ class JSONLTailer:
             self.offset = 0  # Reset to start of file
             self._buffer = b""
             self._reset_identity()
+            self.replay_until = 0  # the bytes changed; mark_rewind drops the persisted mark too
             self.rewound = True
             logger.warning(
                 "Rewind detected: %s shrank from %d to %d",
@@ -1210,45 +1238,44 @@ class JSONLTailer:
 
         * Resumed from a checkpoint: an unchanged stat proves the persisted digest without a
           read; otherwise [0, offset) is re-hashed once against it. A legacy checkpoint (no
-          digest) is kept only if the file is exactly `offset` bytes and unmodified since the
-          checkpoint was confirmed; the race that rewrites between read and confirmation leaves
-          a longer file (DBCOPY-1656b), so it is re-read. A kept legacy prefix is hashed once
-          and recorded, so the next restart is free.
+          digest) is never trusted: no stat or timestamp can show which version a pre-digest
+          watcher consumed (DBCOPY-1704: a same-length rewrite between read and confirm leaves
+          size == offset and mtime <= confirm), so it replays from 0 as a no-op replay.
         * Live: an unchanged stat needs nothing. A changed one gets the cheap tail/head check
-          and leaves the new bytes owed; the first poll that finds the file idle again re-hashes
-          [0, offset) against the running digest. Sampling alone misses a middle-only rewrite.
+          and leaves the new bytes owed. [0, offset) is re-hashed against the running digest on
+          the first idle read, or once `_MAX_UNPROVEN_POLLS` polls ran on unproven bytes, so a
+          file that never stops growing is still proven. Sampling alone misses a middle rewrite.
         """
         if self._prefix_hash is None:
             self._establish_resumed_offset(f, source_stat)
         elif (self.offset == 0 and not self._buffer) or source_stat == self._proof_stat:
             pass
-        elif source_stat == self._last_stat:
+        elif (self._proof_stat is None and source_stat == self._last_stat) or (
+            self._unproven_polls >= _MAX_UNPROVEN_POLLS
+        ):
             self._prove_prefix(f, source_stat, self._prefix_hash.hexdigest(), "consumed bytes changed")
         elif self._check_anchor(f):
             self._proof_stat = None
+            self._unproven_polls += 1
         else:
             self._restart_replaced("bytes before offset changed")
         if self.offset == 0 and not self._buffer:
             self._proof_stat = source_stat  # nothing consumed: trivially proven
 
     def _establish_resumed_offset(self, f, source_stat: SourceStat) -> None:
-        if self._resume_prefix is not None:
-            digest, proven_stat = self._resume_prefix
-            if proven_stat == source_stat and self.offset == source_stat[0]:
-                # Nothing to read and nothing changed since the proof: no I/O at all. The digest
-                # stays pending; any later change re-enters here and is checked against it.
-                self._proof_stat = source_stat
-                return
-            self._prove_prefix(f, source_stat, digest, "persisted prefix digest does not match")
+        if self._resume_prefix is None:
+            self._restart_replaced("legacy checkpoint without a prefix digest")
             return
-        confirmed_at = self._resume_checkpoint_mtime
-        if confirmed_at is not None and source_stat[0] == self.offset and source_stat[1] / 1e9 <= confirmed_at:
-            self._prove_prefix(f, source_stat, None, "short read")
+        digest, proven_stat = self._resume_prefix
+        if proven_stat == source_stat and self.offset == source_stat[0]:
+            # Nothing to read and nothing changed since the proof: no I/O at all. The digest
+            # stays pending; any later change re-enters here and is checked against it.
+            self._proof_stat = source_stat
             return
-        self._restart_replaced("legacy checkpoint without a prefix digest; file changed or not fully read")
+        self._prove_prefix(f, source_stat, digest, "persisted prefix digest does not match")
 
-    def _prove_prefix(self, f, source_stat: SourceStat, expected: str | None, reason: str) -> bool:
-        """Hash [0, offset) and compare; adopt it as the running digest, or restart from 0."""
+    def _prove_prefix(self, f, source_stat: SourceStat, expected: str, reason: str) -> bool:
+        """Hash [0, offset) and compare with the digest of the bytes actually consumed."""
         prefix_hash = hashlib.sha256()
         head_hash = hashlib.blake2b(digest_size=16)
         head_len = min(_SOURCE_HEAD_BYTES, self.offset)
@@ -1267,7 +1294,7 @@ class JSONLTailer:
         digest = prefix_hash.hexdigest()
         if (
             position != self.offset
-            or (expected is not None and digest != expected)
+            or digest != expected
             or (self._buffer and f.read(len(self._buffer)) != self._buffer)
         ):
             self._restart_replaced(reason)
@@ -1277,8 +1304,8 @@ class JSONLTailer:
         self._head_len = head_len
         self.anchor = tail
         self._proof_stat = source_stat
+        self._unproven_polls = 0
         self._resume_prefix = None
-        self._resume_checkpoint_mtime = None
         # Every boundary already consumed lies inside the bytes just proven.
         self._fingerprints = {end: (fp, source_stat) for end, (fp, _owed) in self._fingerprints.items()}
         self.proven_prefix = (self.offset, (digest, source_stat))
@@ -1308,6 +1335,8 @@ class JSONLTailer:
             self.offset,
             reason,
         )
+        # Everything consumed so far was handed to the writer: re-reading it is a replay.
+        self.replay_until = max(self.replay_until, self.offset)
         self.offset = 0
         self._buffer = b""
         self._reset_identity()
@@ -1651,6 +1680,8 @@ class JSONLWatcher:
         # never ingested.
         self._current_file_stats: dict[str, tuple[float, int, int]] = {}
         self._observed_file_stats: dict[str, tuple[float, int, int]] = {}
+        # The same stat in the tailer's exact (size, mtime_ns, inode) form, for proof checks.
+        self._current_source_stats: dict[str, SourceStat] = {}
         # Denylist verdicts memoised for the duration of one poll. is_denylisted() expands
         # globs and can read file content to attribute subagents; a warm sweep of the real
         # corpus costs ~0.8s, and poll_once was evaluating it four times per file. Cleared
@@ -1782,6 +1813,7 @@ class JSONLWatcher:
         discovered: list[tuple[float, str, str]] = []
         self._file_providers = {}
         self._current_file_stats = {}
+        self._current_source_stats = {}
         self._denylist_memo = {}
         self._denylist_dir_memo = {}
         for root in self.watch_roots:
@@ -1803,6 +1835,11 @@ class JSONLWatcher:
                             logger.debug("Skipping JSONL file during discovery after stat failure: %s: %s", path, e)
                             continue
                         self._current_file_stats[path] = (mtime, stat_result.st_size, stat_result.st_ino)
+                        self._current_source_stats[path] = (
+                            stat_result.st_size,
+                            stat_result.st_mtime_ns,
+                            stat_result.st_ino,
+                        )
                         discovered.append((mtime, path, root.provider))
             except OSError:
                 continue
@@ -1841,8 +1878,8 @@ class JSONLWatcher:
             max_read_bytes_per_file leaves the stat unchanged but the tailer short);
           * a complete line is still buffered from the previous read;
           * quarantined offsets or a recorded ingestion failure are still pending;
-          * bytes consumed after the file last changed are still owed a prefix proof -- the
-            idle poll is exactly when that proof runs (#1656 round 2).
+          * the tailer's prefix proof does not name this exact file version -- a proof of an
+            older version (a buffer drained after a rewrite) is no proof (#1704 round 2).
         """
         previous = self._observed_file_stats.get(filepath)
         current = self._current_file_stats.get(filepath)
@@ -1862,7 +1899,7 @@ class JSONLWatcher:
             and tailer.offset == size
             and tailer.observed_inode in (0, inode)
             and not tailer.has_complete_buffered_line()
-            and not tailer.owes_verification
+            and tailer.proven_at(self._current_source_stats.get(filepath))
             and not self._pending_quarantined_offsets.get(filepath)
             and filepath not in self._file_ingestion_failures
         )
@@ -2276,7 +2313,7 @@ class JSONLWatcher:
             offset=stored_offset,
             max_record_bytes=self.max_record_bytes,
             resume_prefix=self.registry.prefix(filepath),
-            resume_checkpoint_mtime=self.registry.checkpoint_mtime(filepath),
+            replay_until=self.registry.replay_until(filepath),
         )
 
         # Verify inode matches
@@ -2440,7 +2477,15 @@ class JSONLWatcher:
                 try:
                     tailer = self._tailers.get(filepath)
                     drain_buffer = False
-                    if tailer is not None and tailer.has_complete_buffered_line():
+                    source_stat = self._current_source_stats.get(filepath)
+                    # Records already read are drained even if the file changed since: they are
+                    # real records of the version they were read from, and the proof keeps
+                    # naming that version. An overdue proof is read (and proven) instead (#1704).
+                    if (
+                        tailer is not None
+                        and tailer.has_complete_buffered_line()
+                        and not tailer.proof_overdue(source_stat)
+                    ):
                         _registry_offset, registry_inode = self.registry.get(filepath)
                         current_inode = tailer.get_inode()
                         inode_changed = current_inode != 0 and (
@@ -2463,7 +2508,7 @@ class JSONLWatcher:
                         tailer_snapshot = tailer.snapshot()
                         source_inode = tailer.observed_inode
                         source_generation = self.registry.generation(filepath)
-                        new_lines = tailer.read_buffered_lines(max_lines=self.max_lines_per_file)
+                        new_lines = tailer.drain_buffered_lines(source_stat, max_lines=self.max_lines_per_file)
                     else:
                         tailer = self._ensure_tailer(filepath)
                         read_start_offset = tailer.offset
@@ -2495,7 +2540,7 @@ class JSONLWatcher:
                         # A later failure re-reads the new file from 0; never restore the old offset.
                         tailer_snapshot = JSONLTailer.origin_snapshot()
                         self._pending_quarantined_offsets.pop(filepath, None)
-                        self.registry.mark_rewind(filepath, tailer.observed_inode)
+                        self.registry.mark_rewind(filepath, tailer.observed_inode, replay_until=tailer.replay_until)
                         source_inode = tailer.observed_inode
                         source_generation = self.registry.generation(filepath)
                     if tailer.proven_prefix is not None:
@@ -2507,10 +2552,16 @@ class JSONLWatcher:
                             self.registry.annotate_prefix(filepath, proven_offset, proof[1][2], proof)
 
                     normalized_lines = self._normalize_lines(filepath, new_lines) if new_lines else []
+                    replay_until = tailer.replay_until
+                    if tailer.offset >= replay_until:
+                        tailer.replay_until = 0  # the registry drops it once the offset passes too
                     if normalized_lines:
                         for line in normalized_lines:
                             line["_source_inode"] = source_inode
                             line["_source_generation"] = source_generation
+                            end_offset = line.get("_line_end_offset")
+                            if isinstance(end_offset, int) and end_offset <= replay_until:
+                                line["_replay"] = True
                         self.indexer.add(normalized_lines)
                         read_accepted = True
                         self._health_entries_seen += len(normalized_lines)

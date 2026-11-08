@@ -55,16 +55,33 @@ class _Rig:
         self.db_path = tmp_path / "scratch.db"
         self.flush = create_flush_callback(db_path=self.db_path, arbitrated=False)
 
-    def watcher(self, registry_name: str) -> JSONLWatcher:
+    def watcher(self, registry_name: str, on_flush=None, **kwargs) -> JSONLWatcher:
         return JSONLWatcher(
             watch_roots=[WatchRoot("codex", self.sessions)],
             registry_path=self.tmp_path / registry_name,
-            on_flush=self.flush,
+            on_flush=on_flush or self.flush,
             batch_size=1,
             flush_interval_ms=0,
             registry_flush_interval_s=0,
             health_path=self.tmp_path / f"{registry_name}.health.json",
+            **kwargs,
         )
+
+    def rewrite_after_first_flush(self, data: bytes):
+        """A real flush callback that rewrites the source once, after storing, before the ack."""
+        changed = []
+
+        def flush(items):
+            result = self.flush(items)
+            if not changed:
+                self.rewrite_same_inode(data)
+                changed.append(True)
+            return result
+
+        return flush
+
+    def entry(self, registry_name: str) -> dict:
+        return json.loads((self.tmp_path / registry_name).read_text())[str(self.source)]
 
     @staticmethod
     def drain(watcher: JSONLWatcher, polls: int = 2) -> None:
@@ -186,17 +203,20 @@ def _strip_fingerprints(path) -> None:
     path.write_text(json.dumps(data))
 
 
-def test_legacy_checkpoint_unmodified_since_confirm_resumes_without_reingest(tmp_path):
+def test_legacy_checkpoint_unmodified_since_confirm_is_replayed_as_a_no_op(tmp_path):
+    """No legacy checkpoint is trusted, however old its mtime; its replay changes no row."""
     rig = _Rig(tmp_path)
     old = _first_run(rig)
     _strip_fingerprints(tmp_path / "copied.json")
-    entry_mtime = json.loads((tmp_path / "copied.json").read_text())[str(rig.source)]["mtime"]
+    entry_mtime = rig.entry("copied.json")["mtime"]
     os.utime(rig.source, (entry_mtime - 5, entry_mtime - 5))
+    before = _row_state(rig)
     tailer = rig.watcher("copied.json")._ensure_tailer(str(rig.source))
 
-    assert tailer.read_new_lines() == []
-    assert tailer.offset == len(old)
-    assert not tailer.replaced
+    assert [line["_line_end_offset"] for line in tailer.read_new_lines()][-1] == len(old)
+    assert tailer.replaced and tailer.replay_until == len(old)
+    rig.drain(rig.watcher("copied.json"))
+    assert _row_state(rig) == before
 
 
 def test_legacy_checkpoint_modified_since_confirm_is_reread_from_the_start(tmp_path):
@@ -283,35 +303,152 @@ def test_legacy_checkpoint_rewritten_between_read_and_ack_stores_every_row(tmp_p
     assert rig.messages() == [1, 2, 3, 4, 5, 6]
 
 
-def _rows(rig: _Rig) -> dict[str, tuple[str, int]]:
+def _row_state(rig: _Rig) -> dict[str, tuple]:
+    """Every column of every chunk from the fixture source, keyed by chunk id."""
     with closing(sqlite3.connect(f"file:{rig.db_path}?mode=ro", uri=True)) as conn:
-        query = "SELECT id, content, seen_count FROM chunks WHERE source_file = ?"
-        return {row[0]: (row[1], row[2]) for row in conn.execute(query, (str(rig.source),))}
+        rows = conn.execute("SELECT * FROM chunks WHERE source_file = ?", (str(rig.source),)).fetchall()
+    return {row[0]: tuple(row) for row in rows}
 
 
-def test_replay_from_zero_after_a_digest_mismatch_adds_no_rows(tmp_path):
-    """Restarting at byte 0 is safe: chunk ids are content hashes, so nothing is duplicated.
+def _respaced(old: bytes) -> bytes:
+    """Same length, same inode, same parsed records: only the digest can tell the bytes changed."""
+    respaced = old.replace(b'"user", "content"', b'"user" ,"content"')
+    assert respaced != old and len(respaced) == len(old)
+    return respaced
 
-    It is not side-effect free: each replayed chunk's seen_count is bumped once
-    (merge_existing_chunk_seen). Pinned here so that cost stays visible.
+
+def test_replay_from_zero_after_a_digest_mismatch_changes_no_existing_row(tmp_path):
+    """A replay re-reads acknowledged records; it is not another sighting (DBCOPY-1704 #4).
+
+    It used to bump seen_count and last_seen_at on every replayed chunk (+4,121 across 3,649
+    chunks in one rehearsal poll) and rewrite other merged fields on 757 rows. Every column of
+    every existing row must now come through the replay unchanged.
     """
     rig = _Rig(tmp_path)
     old = _first_run(rig)
-    # Same length, same inode, same parsed records: only the digest can tell the bytes changed.
-    respaced = old.replace(b'"user", "content"', b'"user" ,"content"')
-    assert respaced != old and len(respaced) == len(old)
+    respaced = _respaced(old)
     rig.rewrite_same_inode(respaced)
-    before = _rows(rig)
+    before = _row_state(rig)
     rig.drain(rig.watcher("copied.json"))
 
-    after = _rows(rig)
     assert len(before) == 2
-    assert {chunk_id: content for chunk_id, (content, _) in after.items()} == {
-        chunk_id: content for chunk_id, (content, _) in before.items()
-    }
-    assert {chunk_id: seen for chunk_id, (_, seen) in after.items()} == {
-        chunk_id: seen + 1 for chunk_id, (_, seen) in before.items()
-    }
+    assert _row_state(rig) == before
+    assert rig.entry("copied.json")["prefix_sha256"] == hashlib.sha256(respaced).hexdigest()
+    assert "replay_until" not in rig.entry("copied.json")
+
+
+def test_replay_of_content_stored_under_another_chunk_id_changes_no_row(tmp_path):
+    """The dedupe branch: a replayed record that matches a chunk from another file is a no-op."""
+    rig = _Rig(tmp_path)
+    _first_run(rig)
+    other = rig.sessions / "rollout-cold-resume-1656-copy.jsonl"
+    other.write_bytes(_source((1, 2)))
+    rig.drain(rig.watcher("copied.json"))  # a real second sighting: merged and counted
+    with closing(sqlite3.connect(f"file:{rig.db_path}?mode=ro", uri=True)) as conn:
+        before = {row[0]: tuple(row) for row in conn.execute("SELECT * FROM chunks")}
+        assert [row[0] for row in conn.execute("SELECT seen_count FROM chunks")] == [2, 2]
+    rig.copy_registry("copied.json", "copied-again.json")
+    inode = other.stat().st_ino
+    with open(other, "r+b") as handle:
+        handle.write(_respaced(_source((1, 2))))
+    assert other.stat().st_ino == inode
+    rig.drain(rig.watcher("copied-again.json"))
+
+    with closing(sqlite3.connect(f"file:{rig.db_path}?mode=ro", uri=True)) as conn:
+        after = {row[0]: tuple(row) for row in conn.execute("SELECT * FROM chunks")}
+    assert after == before
+    assert json.loads((tmp_path / "copied-again.json").read_text())[str(other)]["prefix_sha256"] == (
+        hashlib.sha256(_respaced(_source((1, 2)))).hexdigest()
+    )
+
+
+def test_replay_mark_survives_a_restart_mid_replay(tmp_path):
+    """A watcher restarted halfway through a replay still treats the rest as a replay."""
+    rig = _Rig(tmp_path)
+    rig.source.write_bytes(_source((1, 2)))
+    rig.drain(rig.watcher("offsets.json", max_lines_per_file=1), 4)
+    old = rig.source.read_bytes()
+    rig.copy_registry("offsets.json", "copied.json")
+    rig.rewrite_same_inode(_respaced(old))
+    before = _row_state(rig)
+
+    rig.drain(rig.watcher("copied.json", max_lines_per_file=1), 1)  # replays META only
+    assert rig.entry("copied.json")["replay_until"] == len(old)
+    assert rig.entry("copied.json")["offset"] < len(old)
+    rig.drain(rig.watcher("copied.json", max_lines_per_file=1), 4)
+
+    assert _row_state(rig) == before
+    assert "replay_until" not in rig.entry("copied.json")
+
+
+def test_arbitrated_replay_publishes_nothing_for_stored_chunks_and_drain_changes_no_row(tmp_path, monkeypatch):
+    """The queue path: the watcher drops a replay of a stored chunk; the drain ignores one."""
+    from brainlayer import watcher_bridge
+    from brainlayer.drain import drain_once
+    from brainlayer.queue_io import enqueue_watcher_chunk
+
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    rig = _Rig(tmp_path)
+    old = _first_run(rig)
+    rig.rewrite_same_inode(_respaced(old) + _encode([{"role": "user", "content": _text(3)}]))
+    before = _row_state(rig)
+    published = []
+
+    def counting_enqueue(**kwargs):
+        published.append(kwargs)
+        return enqueue_watcher_chunk(**kwargs)
+
+    monkeypatch.setattr(watcher_bridge, "enqueue_watcher_chunk", counting_enqueue)
+    enqueue = create_flush_callback(db_path=rig.db_path, arbitrated=True)
+
+    def arbitrated(items):
+        result = enqueue(items)
+        drain_once(
+            db_path=rig.db_path,
+            queue_dir=tmp_path / "queue",
+            log_path=tmp_path / "drain.log",
+            pause_sentinel_path=tmp_path / "no-pause.json",
+        )
+        return result
+
+    rig.drain(rig.watcher("copied.json", on_flush=arbitrated))
+    enqueue.close()
+
+    assert [kwargs["content"] for kwargs in published] == [_text(3)]  # only the new record
+    after = _row_state(rig)
+    assert {chunk_id: after[chunk_id] for chunk_id in before} == before
+    assert rig.messages() == [1, 2, 3]
+
+    # A replay event the watcher could not pre-check is still a no-op in the single writer.
+    stored_id, stored = next(iter(before.items()))
+    columns = _columns(rig)
+    enqueue_watcher_chunk(
+        chunk_id=stored_id,
+        content=stored[columns.index("content")],
+        metadata={},
+        source_file=str(rig.source),
+        project=stored[columns.index("project")],
+        content_type="user_message",
+        value_type="high",
+        created_at="2099-01-01T00:00:00+00:00",
+        conversation_id="cold-resume-1656",
+        source_end_offset=1,
+        tags=["replayed"],
+        replay=True,
+    )
+    drain_once(
+        db_path=rig.db_path,
+        queue_dir=tmp_path / "queue",
+        log_path=tmp_path / "drain.log",
+        pause_sentinel_path=tmp_path / "no-pause.json",
+    )
+    assert _row_state(rig)[stored_id] == stored
+
+
+def _columns(rig: _Rig) -> list[str]:
+    with closing(sqlite3.connect(f"file:{rig.db_path}?mode=ro", uri=True)) as conn:
+        return [row[1] for row in conn.execute("PRAGMA table_info(chunks)")]
 
 
 def _count_proofs(monkeypatch) -> list[int]:
@@ -359,18 +496,18 @@ def test_cold_resume_of_an_unchanged_file_reads_nothing(tmp_path, monkeypatch):
     assert rig.messages() == [1, 2]
 
 
-def test_legacy_checkpoint_is_hashed_once_and_then_resumes_for_free(tmp_path, monkeypatch):
+def test_legacy_checkpoint_is_replayed_once_and_then_resumes_for_free(tmp_path, monkeypatch):
     rig = _Rig(tmp_path)
     old = _first_run(rig)
     _strip_fingerprints(tmp_path / "copied.json")
     calls = _count_proofs(monkeypatch)
     rig.drain(rig.watcher("copied.json"))
-    assert calls == [len(old)]
-    entry = json.loads((tmp_path / "copied.json").read_text())[str(rig.source)]
+    assert calls == []  # replayed from 0: the digest is built from the bytes consumed
+    entry = rig.entry("copied.json")
     assert entry["prefix_sha256"] == hashlib.sha256(old).hexdigest()
 
     rig.drain(rig.watcher("copied.json"))
-    assert calls == [len(old)]
+    assert calls == []
     assert rig.messages() == [1, 2]
 
 
@@ -394,3 +531,106 @@ def test_rig_reader_never_unlinks_the_writers_wal(tmp_path):
     rig.drain(watcher)
 
     assert rig.messages() == [1, 2, 3]
+
+
+# ── #1704 round 2 (receipt DBCOPY-1704): the rehearsal probes that failed on 3a833951 ──
+
+
+def test_buffered_read_ack_race_stores_every_row_live(tmp_path):
+    """Records read ahead of the line limit drain after a rewrite; the stale proof must not skip.
+
+    The rewrite lands inside the real flush callback, after the first batch is stored and before
+    it is confirmed. The buffered old record drains; the proof still names the old version, so
+    EOF must not be skipped until the replacement is verified (DBCOPY-1704 #1).
+    """
+    rig = _Rig(tmp_path)
+    old, new = _source((1, 2)), _source((3, 4))
+    assert len(old) == len(new)
+    rig.source.write_bytes(old)
+    watcher = rig.watcher("offsets.json", on_flush=rig.rewrite_after_first_flush(new), max_lines_per_file=2)
+    rig.drain(watcher, 6)
+
+    assert rig.messages() == [1, 2, 3, 4]
+    stat = rig.source.stat()
+    assert rig.entry("offsets.json")["prefix_stat"] == [stat.st_size, stat.st_mtime_ns, stat.st_ino]
+    assert watcher._can_skip_unchanged(str(rig.source))
+
+
+def test_buffered_read_ack_race_at_the_default_line_limit_stores_every_row_live(tmp_path):
+    """The same race at the production default of 100 lines skipped 101 replacement records."""
+    rig = _Rig(tmp_path)
+    old, new = _source(tuple(range(100, 201))), _source(tuple(range(300, 401)))
+    assert len(old) == len(new)
+    rig.source.write_bytes(old)
+    watcher = rig.watcher("offsets.json", on_flush=rig.rewrite_after_first_flush(new))
+    assert watcher.max_lines_per_file == 100
+    rig.drain(watcher, 6)
+
+    assert rig.messages() == list(range(100, 201)) + list(range(300, 401))
+
+
+def test_legacy_same_length_rewrite_between_read_and_ack_stores_every_row(tmp_path):
+    """size == offset and mtime <= confirm hold naturally; the legacy entry must still replay."""
+    rig = _Rig(tmp_path)
+    old, new = _source((1, 2)), _source((3, 4))
+    assert len(old) == len(new)
+    rig.source.write_bytes(old)
+    rig.drain(rig.watcher("offsets.json", on_flush=rig.rewrite_after_first_flush(new)), 1)
+    _strip_fingerprints(tmp_path / "offsets.json")
+    entry = rig.entry("offsets.json")
+    assert rig.messages() == [1, 2]
+    assert rig.source.stat().st_size == entry["offset"] and rig.source.stat().st_mtime <= entry["mtime"]
+
+    rig.drain(rig.watcher("offsets.json"), 4)
+
+    assert rig.messages() == [1, 2, 3, 4]
+
+
+def test_continuous_appends_cannot_postpone_the_prefix_proof(tmp_path, monkeypatch):
+    """A middle rewrite that keeps head and tail, then an append before every poll (DBCOPY-1704 #3).
+
+    The proof used to wait for an idle poll, so a file that never stops growing was never
+    verified. It now runs on the poll after _MAX_UNPROVEN_POLLS unproven ones; the probe's ten
+    busy polls exceed that bound.
+    """
+    meta = json.loads(json.dumps(META))
+    meta["payload"]["padding"] = "x" * 5000
+    monkeypatch.setitem(globals(), "META", meta)
+    rig = _Rig(tmp_path)
+    _first_run(rig)
+    watcher = rig.watcher("copied.json")
+    rig.drain(watcher, 3)
+    with rig.source.open("ab") as handle:
+        handle.write(_encode([{"role": "user", "content": _text(7)}]))
+    rig.drain(watcher, 2)
+    old, new = rig.source.read_bytes(), _source((3, 4, 7, 5, 6))
+    assert old[:4096] == new[:4096] and old[-256:] == new[len(old) - 256 : len(old)] and old != new[: len(old)]
+    rig.rewrite_same_inode(new)
+
+    for n in range(8, 18):  # ten polls, an append before each: never an idle poll
+        with rig.source.open("ab") as handle:
+            handle.write(_encode([{"role": "user", "content": _text(n)}]))
+        rig.drain(watcher, 1)
+
+    assert rig.messages() == list(range(1, 18))
+
+
+def test_steady_appends_prove_once_per_bound_and_once_when_idle(tmp_path, monkeypatch):
+    """Cost of the bound: one full re-hash per _MAX_UNPROVEN_POLLS + 1 busy polls, plus one idle."""
+    from brainlayer.watcher import _MAX_UNPROVEN_POLLS
+
+    assert _MAX_UNPROVEN_POLLS + 1 <= 10  # the bound the continuous-append probe relies on
+    calls = _count_proofs(monkeypatch)
+    rig = _Rig(tmp_path)
+    rig.source.write_bytes(_source((1,)))
+    watcher = rig.watcher("offsets.json")
+    rig.drain(watcher, 1)
+    busy = 2 * (_MAX_UNPROVEN_POLLS + 1) + 1  # proofs land on busy polls 9 and 18; 19 stays owed
+    for n in range(2, 2 + busy):
+        with rig.source.open("ab") as handle:
+            handle.write(_encode([{"role": "user", "content": _text(n)}]))
+        rig.drain(watcher, 1)
+    assert len(calls) == 2
+    rig.drain(watcher, 3)
+    assert len(calls) == 3
+    assert rig.messages() == list(range(1, 2 + busy))

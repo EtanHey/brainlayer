@@ -635,8 +635,8 @@ class TestJSONLTailer:
         # First line is 13 bytes + newline = 14
         first_line_bytes = len(b'{"id":"1"}\n')
         # A stored offset is trusted only with evidence the bytes before it are unchanged: the
-        # SHA-256 of [0, offset) persisted with the checkpoint (#1656). A legacy checkpoint short
-        # of the file's end is the read/ack race shape and is re-read instead.
+        # SHA-256 of [0, offset) persisted with the checkpoint (#1656). A legacy checkpoint has
+        # none and is replayed from 0, its acknowledged records marked as a replay (#1704).
         digest = hashlib.sha256(b'{"id":"1"}\n').hexdigest()
         tailer = JSONLTailer(str(f), offset=first_line_bytes, resume_prefix=(digest, None))
         lines = tailer.read_new_lines()
@@ -644,9 +644,9 @@ class TestJSONLTailer:
         assert lines[0]["id"] == "2"
         assert not tailer.replaced
 
-        legacy = JSONLTailer(str(f), offset=first_line_bytes, resume_checkpoint_mtime=f.stat().st_mtime)
+        legacy = JSONLTailer(str(f), offset=first_line_bytes)
         assert [line["id"] for line in legacy.read_new_lines()] == ["1", "2"]
-        assert legacy.replaced
+        assert legacy.replaced and legacy.replay_until == first_line_bytes
 
     def test_offset_without_evidence_rereads_from_start(self, tmp_path):
         f = tmp_path / "test.jsonl"

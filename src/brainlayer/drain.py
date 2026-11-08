@@ -546,7 +546,13 @@ def _insert_chunk(conn: apsw.Connection, values: dict[str, Any]) -> None:
     insert_canonical_chunk(conn, values, on_conflict="ignore")
 
 
-def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str:
+def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any], *, replay: bool = False) -> str | None:
+    """Insert or merge a chunk; None when a replayed record finds its chunk already stored.
+
+    A replay re-reads source records the watcher already acknowledged (#1704 round 2). It is not
+    another sighting, so it never touches an existing row -- no seen_count, last_seen_at, tags,
+    source position, reactivation or ingested_at. Only a chunk that is not stored is inserted.
+    """
     if "content" in values and "content_class" not in values:
         values = {
             **values,
@@ -560,6 +566,8 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
             ),
         }
     chunk_id = values["id"]
+    if replay and conn.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone():
+        return None
     duplicate, _ = find_duplicate(
         conn,
         chunk_id=chunk_id,
@@ -569,6 +577,8 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
         content_type=values.get("content_type"),
     )
     if duplicate is not None:
+        if replay:
+            return None
         _merge_watcher_source_position(conn, chunk_id=duplicate.canonical_chunk_id, incoming=values)
         merge_duplicate_chunk(
             conn,
@@ -1086,10 +1096,9 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     source_class = normalize_source_class(event.get("source_class"))
     if source_class is not None and "source_class" in _columns(conn, "chunks"):
         values["source_class"] = source_class
-    stored_chunk_id = _insert_or_merge_chunk(
-        conn,
-        values,
-    )
+    stored_chunk_id = _insert_or_merge_chunk(conn, values, replay=event.get("replay") is True)
+    if stored_chunk_id is None:
+        return ApplyResult()
     _refresh_realtime_watcher_ingested_at(conn, stored_chunk_id, ingested_at)
     _record_watcher_liveness(conn, stored_chunk_id, ingested_at)
     return ApplyResult(chunk_id=stored_chunk_id)
