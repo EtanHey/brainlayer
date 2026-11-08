@@ -151,3 +151,50 @@ def test_queue_merge_skips_destination_file_deleted_by_drain(tmp_path, monkeypat
     result = merge_queue_dirs(source, dest)
 
     assert result.copied == ["m1-1.jsonl"]
+
+
+def test_concurrent_mergers_preserve_both_contents(tmp_path, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from brainlayer import queue_merge
+
+    sources = [tmp_path / "a", tmp_path / "b"]
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    for index, source in enumerate(sources):
+        source.mkdir()
+        _write_event(source / "same.jsonl", str(index))
+    expected = {source.joinpath("same.jsonl").read_bytes() for source in sources}
+    barrier = threading.Barrier(2)
+    publish = queue_merge._copy_atomic
+
+    def gated(source, target):
+        if target.name == "same.jsonl":
+            barrier.wait(timeout=5)
+        return publish(source, target)
+
+    monkeypatch.setattr(queue_merge, "_copy_atomic", gated)
+    with ThreadPoolExecutor(2) as executor:
+        results = list(executor.map(lambda s: queue_merge.merge_queue_dirs(s, dest), sources))
+    assert len(results) == 2
+    assert {p.read_bytes() for p in dest.glob("*.jsonl")} == expected
+
+
+def test_merge_publishes_the_bytes_it_hashed(tmp_path, monkeypatch):
+    from brainlayer import queue_merge
+
+    source = tmp_path / "source"
+    source.mkdir()
+    path = source / "event.jsonl"
+    _write_event(path, "original")
+    expected = path.read_bytes()
+    publish = queue_merge._copy_atomic
+
+    def changed(content, target):
+        _write_event(path, "changed after hashing")
+        return publish(content, target)
+
+    monkeypatch.setattr(queue_merge, "_copy_atomic", changed)
+    queue_merge.merge_queue_dirs(source, tmp_path / "dest")
+    assert (tmp_path / "dest" / "event.jsonl").read_bytes() == expected
