@@ -4341,6 +4341,33 @@ def _run_backup_process(timeout_seconds: int) -> int:
     )
 
 
+def _wait_for_stopped_backup(child, signal_child, stop_signal: int) -> None:
+    """Forward the stop once, then bound cleanup and reap before leaving custody."""
+    if child.poll() is None:
+        try:
+            signal_child(stop_signal)
+        except ProcessLookupError:
+            pass  # The child exited between poll and signal delivery.
+    try:
+        child.wait(timeout=SUPERVISOR_ALARM_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            signal_child(signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        child.wait()
+
+
+def _restore_backup_signal_handlers(previous_signal_handlers: dict[int, Any]) -> None:
+    # Deliver pending stops only once all previous handlers are back in place.
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
+    try:
+        for shutdown_signal, previous_handler in previous_signal_handlers.items():
+            signal.signal(shutdown_signal, previous_handler)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
 def _supervise_backup_process(
     timeout_seconds: int, *, command: list[str] | None = None, deadline: float | None = None
 ) -> int:
@@ -4364,7 +4391,7 @@ def _supervise_backup_process(
     def signal_child(signum):
         (os.kill if managed else os.killpg)(child.pid, signum)
 
-    class SupervisorStopped(Exception):
+    class SupervisorStopped(BaseException):
         pass
 
     stop_signal = None
@@ -4376,10 +4403,10 @@ def _supervise_backup_process(
             # Unwind the normal/timeout wait once; repeated signals leave cleanup alone.
             raise SupervisorStopped
 
-    for shutdown_signal in (signal.SIGTERM, signal.SIGINT):
-        previous_signal_handlers[shutdown_signal] = signal.getsignal(shutdown_signal)
-        signal.signal(shutdown_signal, forward_shutdown_signal)
     try:
+        for shutdown_signal in (signal.SIGTERM, signal.SIGINT):
+            previous_signal_handlers[shutdown_signal] = signal.getsignal(shutdown_signal)
+            signal.signal(shutdown_signal, forward_shutdown_signal)
         try:
             wait = timeout_seconds
             if deadline is not None:
@@ -4422,26 +4449,13 @@ def _supervise_backup_process(
             print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
             return 124
     except SupervisorStopped:
-        if child.poll() is None:
-            try:
-                signal_child(stop_signal)
-            except ProcessLookupError:
-                pass  # The child exited between poll and signal delivery.
-        try:
-            child.wait(timeout=SUPERVISOR_ALARM_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            try:
-                signal_child(signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            child.wait()
+        _wait_for_stopped_backup(child, signal_child, stop_signal)
         raise SystemExit(128 + stop_signal)
     finally:
         if managed and child.poll() is None:
             child.kill()
             child.wait()
-        for shutdown_signal, previous_handler in previous_signal_handlers.items():
-            signal.signal(shutdown_signal, previous_handler)
+        _restore_backup_signal_handlers(previous_signal_handlers)
 
 
 def _parse_cli_args(argv: list[str]) -> None:

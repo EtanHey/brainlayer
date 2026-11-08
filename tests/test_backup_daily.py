@@ -2998,7 +2998,6 @@ def test_supervisor_forwards_launchd_stop_without_timeout_receipt(tmp_path, monk
 @pytest.mark.parametrize("managed", [False, True])
 def test_supervisor_waits_for_latched_stop_receipt(tmp_path, monkeypatch, managed):
     import select
-    import threading
 
     from brainlayer import backup_daily
 
@@ -3668,3 +3667,57 @@ def test_post_upload_service_rebuild_never_retries_revoked_credentials(tmp_path,
         )
 
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("window", ["before-try", "in-finally"])
+def test_supervisor_stop_at_handler_boundary(monkeypatch, window):
+    """Inject real signals at the two handler-install/restore bytecode windows."""
+    from brainlayer import backup_daily
+
+    monkeypatch.delenv("BRAINLAYER_CALENDAR_GUARD_FD", raising=False)
+    original_signal = signal.signal
+    original_popen = subprocess.Popen
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    spawned = []
+    delivered = []
+
+    def previous_stop(signum, frame):
+        delivered.append(signum)
+        raise SystemExit(128 + signum)
+
+    def capture(*args, **kwargs):
+        child = original_popen(*args, **kwargs)
+        spawned.append(child)
+        return child
+
+    def inject(sig, handler):
+        result = original_signal(sig, handler)
+        installing = getattr(handler, "__name__", "") == "forward_shutdown_signal"
+        if sig == signal.SIGTERM:
+            if window == "before-try" and installing:
+                os.kill(os.getpid(), signal.SIGTERM)
+            elif window == "in-finally" and handler is previous_stop:
+                signal.pthread_kill(threading.get_ident(), signal.SIGINT)
+        return result
+
+    try:
+        for sig in previous:
+            original_signal(sig, previous_stop)
+        monkeypatch.setattr(subprocess, "Popen", capture)
+        monkeypatch.setattr(signal, "signal", inject)
+        script = "import time; time.sleep(30)" if window == "before-try" else "pass"
+        with pytest.raises(SystemExit) as stopped:
+            backup_daily._supervise_backup_process(30, command=[sys.executable, "-c", script])
+        assert stopped.value.code == (143 if window == "before-try" else 130)
+        assert spawned[0].poll() is not None, "child escaped supervisor custody"
+        with pytest.raises(ChildProcessError):
+            os.waitpid(spawned[0].pid, os.WNOHANG)
+        assert all(signal.getsignal(sig) is previous_stop for sig in previous)
+        assert delivered == ([] if window == "before-try" else [signal.SIGINT])
+    finally:
+        for sig, handler in previous.items():
+            original_signal(sig, handler)
+        for child in spawned:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
