@@ -992,6 +992,14 @@
         "target": "saved_session.get"
       }
     },
+    "2dc5354a3507b2623d23adb5868127f56a86ccf507e3e8b55ff429fbac2c6e6b": {
+      "non_cloud_purpose": "Native BrainBar lifecycle watchdog (re-reviewed for #1681): restart fencing by generation plus backoff via DispatchQueue asyncAfter. The diff adds no URL, socket, Process or exec site and no network or model sender.",
+      "site": {
+        "body_sha256": "070effe466af9f17e2565ad5dc5ad4ac5a466a9f7b61a4209e3f46eb8821efae",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarLifecycle/BrainBarLifecycleWatchdog.swift"
+      }
+    },
     "2df98a842c0139a5733568c0f508b667e391b0f97e36df9c708ab23a6a01bdbb": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/mine_frustrations.py <module>.main",
       "site": {
@@ -5616,14 +5624,6 @@
         "owner": "<module>._detect_git_sha",
         "path": "src/brainlayer/archive_collapse.py",
         "target": "subprocess.check_output"
-      }
-    },
-    "dadc0867be0ed5245c6164bb0a3573600ed139acc8b4125f63ff91d953f9d75a": {
-      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
-      "site": {
-        "body_sha256": "7388240dfbbe24115265631d078710546c8c6cb07dd7a5ec70d50658dd33cf2c",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBarLifecycle/BrainBarLifecycleWatchdog.swift"
       }
     },
     "db97b9ce7920e3c0f4edb293648b881f444d167786c82b1cfa512d3cd89ac8da": {
