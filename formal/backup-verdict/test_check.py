@@ -164,6 +164,43 @@ def test_replay_runs_real_source_without_the_package(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("ref", "second", "damaged", "gate"),
+    [
+        (None, None, False, "fresh"),  # one verified local snapshot within VacAge: the gate admits it
+        (None, "revoke", False, "none"),  # its latest receipt revokes it (drive_md5_match False)
+        (None, "abandon", False, "none"),  # abandoned, and the file is gone
+        (None, "revoke", True, "none"),  # #1685: an uncertain line disables the strict gate
+        (None, "local_ok", True, "none"),  # any uncertain line, even one that said nothing new
+        ("ff3a8b35", "revoke", True, "fresh"),  # pre-#1685 lenient read skips it: VACUUM on a revoked copy
+        ("ff3a8b35", "revoke", False, "none"),  # the lenient read still honours a readable revocation
+    ],
+)
+def test_weekly_replay_runs_the_real_gate(tmp_path, ref, second, damaged, gate):
+    ops = [{"op": "receipt", "hour": 0, "kind": "local_ok", "snap": 1, "created": 0, "exact": True}]
+    if second:
+        ops.append(
+            {"op": "receipt", "hour": 0, "kind": second, "snap": 1, "created": 0, "exact": True, "damaged": damaged}
+        )
+    ops.append({"op": "weekly", "hour": 1, "model": "vacuumed"})
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    proc = subprocess.run(
+        [sys.executable, "-S", str(HERE / "replay.py"), "--run-weekly", str(checker.source_tree(ref, tmp_path))],
+        input=__import__("json").dumps({"constants": {"VacAge": 1}, "ops": ops}),
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    assert [r["src"] for r in __import__("json").loads(proc.stdout)] == [gate]
+
+
+def test_weekly_replay_fails_closed_on_a_missing_gate_body():
+    with pytest.raises(RuntimeError, match="lacks"):
+        replay._gate("def _recent_local_verified_backup():\n    return None\n")
+
+
+@pytest.mark.parametrize(
     ("fixed_here", "prefix", "src", "ok"),
     [
         ("yes", (True, True), (False, False), True),  # pre-fix ref reproduces tick for tick; fixed here
@@ -320,3 +357,37 @@ def test_passing_outcome_has_no_tail(tmp_path, monkeypatch):
     case = next(c for c in checker.CASES if c["name"] == "current-dot")
     with patch.object(checker.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, PASS_LOG, "")):
         assert checker.run_case(case, tmp_path)["tlc_tail"] is None
+
+
+def test_embedding_daemon_evidence_reaches_evaluate_only_for_1686_observations():
+    """#1686: progress/paused carry embedding_activity; pre-#1686 observations never do."""
+
+    def state(now, emb, backlog="TRUE", stall="3"):
+        return {
+            "now": now,
+            "lastTick": now,
+            "backlog": backlog,
+            "stallSince": stall,
+            "st": '[drive |-> "unknown", ingest |-> "unknown", stores |-> "unknown", embedding |-> "amber"]',
+            "lastObs": f'[drive |-> "unobs", hb |-> "unobs", canary |-> "unobs", queue |-> "unobs", emb |-> "{emb}"]',
+        }
+
+    states = [state("0", "unobs")] + [
+        state(str(i), e, b)
+        for i, (e, b) in enumerate(
+            [("stalled", "TRUE"), ("progress", "TRUE"), ("progress", "FALSE"), ("paused", "TRUE"), ("clear", "FALSE")],
+            start=1,
+        )
+    ]
+    ops = replay.pipe_ops(states, "embedding")
+    assert [op["facts"].get("embedding_progress_recent") for op in ops] == [
+        None,
+        ["bool", True],
+        ["bool", True],
+        ["bool", False],
+        None,
+    ]
+    assert ops[0]["facts"] == {"embedding_stalled_since": ["at", 3]}
+    assert ops[2]["facts"]["embedding_stalled_since"] == ["none"]  # progress on a shrinking queue
+    assert ops[3]["facts"]["embedding_activity"][1].startswith("Embedding paused by machine load")
+    assert "embedding_activity" not in ops[4]["facts"]

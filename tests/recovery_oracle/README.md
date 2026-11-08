@@ -94,6 +94,9 @@ index call's second transaction (first chunk committed), encoder before writing,
 and drain immediately after commit but before queue unlink. Reopen the DB and
 replay real work; retrying index inputs must leave exactly one row per identity.
 Provider exceptions preserve FTS rows with absent vectors until hotlane repairs.
+An encoder that fails every chunk (canary included) is a systemic failure: hotlane
+raises `HotlaneSystemicFailure` for the run loop to back off, writes no vector, and
+charges no chunk toward quarantine; the next healthy-encoder cycle recovers all.
 Catch-up measures exact fixture debt and requires queue=0 and missing vectors=0
 within 5 s. Skipping replay or hotlane must fail that deadline oracle.
 
