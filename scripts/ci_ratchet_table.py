@@ -1776,9 +1776,13 @@ ROW_BUILDERS = (
 )
 
 
-def row_brainbar_no_enrichment(report: Path | None, expected_sha: str | None) -> Row:
+def row_brainbar_no_enrichment(report: Path | None, expected_sha: str | None, unavailable: str | None = None) -> Row:
     from scripts.brainbar_no_enrichment_ratchet import ROW, read_report
 
+    if report is None and unavailable:
+        return Row(
+            ROW, NA, f"n/a — {unavailable}", "macOS actual-view render trigger", "No render measured by this run."
+        )
     payload, problem = read_report(report, expected_sha)
     return Row(
         ROW,
@@ -1830,12 +1834,14 @@ def row_quiesce(report: Path | None, unavailable: str | None, measured_sha: str 
     )
 
 
-def row_retirement(report: Path | None, measured_sha: str | None) -> Row:
+def row_retirement(report: Path | None, measured_sha: str | None, unavailable: str | None = None) -> Row:
     from scripts.retirement_report import validate
 
     name = "no cloud model call reachable anywhere"
     method = "immutable installed wheel (default + dev) + AST source + actual native BrainBar"
     notes = "Synthetic private fixtures; SDK absence gated on merged R10b. Exact-head candidate proof, not deployment."
+    if report is None and unavailable:
+        return Row(name, NA, f"n/a — {unavailable}", method, notes)
     try:
         if report is None:
             raise ValueError("required retirement report missing")
@@ -2188,11 +2194,19 @@ def main(argv: list[str] | None = None) -> int:
         "--quiesce-report", type=Path, help="Real macOS launchd RED/GREEN report; missing or invalid is RED"
     )
     parser.add_argument("--quiesce-unavailable", help="Explicit reason the macOS quiesce replay was not triggered")
-    parser.add_argument(
+    retirement = parser.add_mutually_exclusive_group()
+    retirement.add_argument(
         "--retirement-report", type=Path, help="Required exact-head installed/native global model absence receipt"
     )
-    parser.add_argument(
+    retirement.add_argument(
+        "--retirement-unavailable", help="Explicit reason installed/native replay was not triggered"
+    )
+    render_evidence = parser.add_mutually_exclusive_group()
+    render_evidence.add_argument(
         "--brainbar-render-report", type=Path, help="Actual no-enrichment view evidence; missing is RED"
+    )
+    render_evidence.add_argument(
+        "--brainbar-render-unavailable", help="Explicit reason actual-view render was not triggered"
     )
     parser.add_argument(
         "--watcher-heartbeat-report", type=Path, help="Actual private producer/compiled consumer evidence"
@@ -2230,17 +2244,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     rows = collect(probe, corpus)
     # Main's baseline attestor calibrates the original resource rows, not UI evidence.
-    # Every normal/PR collector run requires this render row, including absent reports.
-    if not args.attest_out or args.brainbar_render_report:
-        rows.append(row_brainbar_no_enrichment(args.brainbar_render_report, probe.head_sha))
+    # PRs require evidence unless the workflow explicitly says the job was trigger-gated.
+    if not args.attest_out or args.brainbar_render_report or args.brainbar_render_unavailable:
+        rows.append(
+            row_brainbar_no_enrichment(args.brainbar_render_report, probe.head_sha, args.brainbar_render_unavailable)
+        )
     if not args.attest_out or args.watcher_heartbeat_report or args.watcher_heartbeat_unavailable:
         rows.append(
             row_watcher_heartbeat(args.watcher_heartbeat_report, args.watcher_heartbeat_unavailable, probe.head_sha)
         )
     if args.quiesce_report or args.quiesce_unavailable:
         rows.append(row_quiesce(args.quiesce_report, args.quiesce_unavailable, args.measured_sha))
-    if args.retirement_report or args.measured_sha:
-        rows.append(row_retirement(args.retirement_report, args.measured_sha))
+    if args.retirement_report or args.retirement_unavailable or args.measured_sha:
+        rows.append(row_retirement(args.retirement_report, args.measured_sha, args.retirement_unavailable))
     now = datetime.now(timezone.utc)
     table = render(rows, probe, args.run_url, now)
 
