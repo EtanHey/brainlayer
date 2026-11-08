@@ -15,6 +15,8 @@ import logging
 import os
 import tempfile
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -24,6 +26,23 @@ from .paths import resolve_db_path
 logger = logging.getLogger(__name__)
 REMINDER_SECONDS = 3600
 _CACHE: dict[Path, tuple[int, dict]] = {}
+
+
+_READ_ONLY = ContextVar("t3_alarm_read_only", default=False)
+
+
+def read_only_active():
+    return _READ_ONLY.get()
+
+
+@contextmanager
+def read_only():
+    """Keep fatal decisions, without changing alarm files or emitting telemetry."""
+    token = _READ_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _READ_ONLY.reset(token)
 
 
 def status_directory() -> Path:
@@ -68,6 +87,8 @@ def runtime_resolved(runtime_path: str | Path, version: int) -> None:
 
 
 def _resolve(path: Path) -> None:
+    if read_only_active():
+        return
     _CACHE.pop(path, None)
     if not path.exists():
         return
@@ -87,6 +108,8 @@ def _resolve(path: Path) -> None:
 
 def _raise_deduplicated(path: Path, source: str, fingerprint: str, event: alarm.BrainLayerAlarm) -> NoReturn:
     """Always raise; emit only on change, hourly, or when no durable receipt exists."""
+    if read_only_active():
+        raise event
     now = time.time()
     entry = _CACHE.get(path)
     try:
