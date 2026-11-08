@@ -52,7 +52,7 @@ def check_drain_liveness(
     heartbeat_fresh = heartbeat_age is not None and heartbeat_age < max(0.0, stale_seconds)
     progress_state = drain_health.get("state")
     progress_alarm = progress_state == PROGRESS_UNKNOWN_CODE or (
-        queue_backlog and progress_state == PROGRESS_STALLED_CODE
+        queue_backlog and progress_state in {PROGRESS_STALLED_CODE, "drain_error", "drain_blocked"}
     )
     if progress_alarm and (heartbeat_fresh or backlog <= 0):
         reason = drain_health.get("reason") or "drain reported unhealthy progress without a reason"

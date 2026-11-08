@@ -116,6 +116,8 @@ def test_empty_queue_resets_stagnation_window_before_new_backlog(tmp_path, monke
     [
         ("drain_progress_stalled", 1, "queue_count=1 last_progress_age_seconds=600"),
         ("drain_progress_unknown", 0, "queue scan failed: PermissionError"),
+        ("drain_error", 1, "transaction failed"),
+        ("drain_blocked", 1, "writer lock unavailable"),
     ],
 )
 def test_fresh_heartbeat_does_not_hide_reported_progress_failure(state, queue_count, reason):
