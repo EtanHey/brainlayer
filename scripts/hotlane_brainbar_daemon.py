@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -57,6 +58,12 @@ MAX_CHUNK_FAILURE_ENTRIES = 4096
 # environment failing, not the chunks. Above the 2-row poison batch the backlog lane sees.
 SYSTEMIC_FAILURE_STREAK = 4
 MAX_SYSTEMIC_BACKOFF_SECONDS = 60.0
+# Known-good operations the failure streak runs to tell a failing environment from that
+# many genuine poison rows (see _FailureStreak).
+HOTLANE_CANARY_TEXT = "BrainLayer hotlane canary: a short, ordinary sentence the encoder must embed."
+HOTLANE_CANARY_CHUNK_ID = "__brainlayer_hotlane_write_canary__"
+HOTLANE_CANARY_COMPONENT = 0.03125
+_DECLARED_VECTOR_DIMENSION = re.compile(r"\bembedding\s+float\s*\[\s*(\d+)\s*\]", re.IGNORECASE)
 # 2**16 times any base of 1 ms or more already exceeds the 60 s cap; never exponentiate past it.
 SYSTEMIC_BACKOFF_MAX_EXPONENT = 16
 _ENVIRONMENTAL_ERRNOS = frozenset({errno.ENOSPC, errno.EIO, errno.EROFS, errno.EDQUOT})
@@ -354,15 +361,46 @@ CHUNK_FAILURE_ATTEMPTS = ChunkFailureAttempts()
 class _FailureStreak:
     """Hold one loop's per-chunk failures until they prove to be about the chunk.
 
-    An environmental error, or ``SYSTEMIC_FAILURE_STREAK`` consecutive distinct chunks
-    failing with one error class, raises ``HotlaneSystemicFailure`` and counts nothing.
-    Anything else is charged to its chunk when the streak breaks or the loop ends.
+    An environmental error (disk/I/O/read-only) raises ``HotlaneSystemicFailure`` at
+    once and counts nothing. ``SYSTEMIC_FAILURE_STREAK`` consecutive distinct chunks
+    failing with one error class is ambiguous -- the environment, or that many genuine
+    poison rows -- so it runs ``canary``, a known-good operation on the same path (a
+    fixed sentence through the same encoder; a correctly shaped vector written for a
+    sentinel id and rolled back). Canary passes: the environment works, so the rows are
+    at fault; they are charged per chunk and the loop goes on, letting later healthy
+    rows land and real poison reach quarantine. Canary fails, or there is none: the
+    streak is systemic and counts nothing. Anything else is charged to its chunk when
+    the streak breaks or the loop ends.
     """
 
-    def __init__(self, stage: str) -> None:
+    def __init__(self, stage: str, canary: Callable[[], None] | None = None) -> None:
         self.stage = stage
+        self.canary = canary
         self.error_type: type[BaseException] | None = None
         self.members: list[tuple[EmbedCandidate, Exception]] = []
+
+    def _environment_works(self, exc: Exception) -> bool:
+        if self.canary is None:
+            return False
+        try:
+            self.canary()
+        except Exception as canary_exc:
+            LOGGER.error(
+                "hotlane %s canary failed after %d chunks failed error_type=%s canary_error_type=%s canary_error=%s",
+                self.stage,
+                len(self.members),
+                type(exc).__name__,
+                type(canary_exc).__name__,
+                canary_exc,
+            )
+            return False
+        LOGGER.warning(
+            "hotlane %s canary passed after %d chunks failed error_type=%s; charging them per chunk",
+            self.stage,
+            len(self.members),
+            type(exc).__name__,
+        )
+        return True
 
     def _systemic(self, error_type: str, chunk_ids: list[str]) -> HotlaneSystemicFailure:
         self.members = []
@@ -381,6 +419,9 @@ class _FailureStreak:
         if all(member.chunk_id != candidate.chunk_id for member, _ in self.members):
             self.members.append((candidate, exc))
         if len(self.members) >= SYSTEMIC_FAILURE_STREAK:
+            if self._environment_works(exc):
+                self.flush()
+                return
             raise self._systemic(type(exc).__name__, [member.chunk_id for member, _ in self.members]) from exc
 
     def flush(self) -> None:
@@ -886,7 +927,7 @@ def _embed_candidates(
             LOGGER.warning("Failed to embed hotlane batch: %s", exc)
 
     embedded: list[EmbeddedVector] = []
-    streak = _FailureStreak("encode")
+    streak = _FailureStreak("encode", canary=lambda: _encode_canary(embed_fn))
     for candidate in candidates:
         try:
             embedded.append(EmbeddedVector(candidate.chunk_id, candidate.content, embed_fn(candidate.content)))
@@ -970,6 +1011,34 @@ def _upsert_chunk_vector_raw(
         )
 
 
+def _declared_vector_dimension(cursor) -> int:
+    row = cursor.execute("SELECT sql FROM sqlite_master WHERE name = 'chunk_vectors'").fetchone()
+    match = _DECLARED_VECTOR_DIMENSION.search(row[0] if row and row[0] else "")
+    if match is None:
+        raise RuntimeError("chunk_vectors declares no FLOAT[n] embedding; write canary inconclusive")
+    return int(match.group(1))
+
+
+def _write_canary(cursor, upsert_chunk_vector: Callable[..., object]) -> None:
+    """A known-good write on the hotlane's own path, always rolled back.
+
+    Writes a vector of the table's declared dimension for a sentinel id that no chunk
+    uses, inside its own transaction, then rolls it back: nothing persists.
+    """
+    dimension = _declared_vector_dimension(cursor)
+    cursor.execute("BEGIN IMMEDIATE")
+    try:
+        upsert_chunk_vector(cursor, HOTLANE_CANARY_CHUNK_ID, [HOTLANE_CANARY_COMPONENT] * dimension)
+    finally:
+        if cursor.connection.in_transaction:
+            cursor.execute("ROLLBACK")
+
+
+def _encode_canary(embed_fn: Callable[[str], list[float]]) -> None:
+    if not len(embed_fn(HOTLANE_CANARY_TEXT)):
+        raise RuntimeError("encoder returned an empty embedding for the canary text")
+
+
 class _WriteProgress:
     def __init__(self) -> None:
         self.written = 0
@@ -1043,7 +1112,7 @@ def _write_embedded_vectors_once(
             )
 
     count = 0
-    streak = _FailureStreak("write")
+    streak = _FailureStreak("write", canary=lambda: _write_canary(cursor, upsert_chunk_vector))
     try:
         for vector_index, (chunk_id, content, embedding) in enumerate(vectors):
             metrics = IngestMetrics("hotlane", "vector")

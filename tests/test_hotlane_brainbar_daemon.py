@@ -2393,3 +2393,122 @@ def test_cycling_more_distinct_failures_than_the_table_still_quarantines():
     assert len(tracker.attempts) == size
     assert sum(tracker.quarantined(c) for c in candidates) == size
     assert tracker.quarantined_total == size
+
+
+@pytest.mark.parametrize("stage", ["encode", "write"])
+@pytest.mark.parametrize("backlog_batch", [5, 4])
+def test_four_poison_rows_sharing_an_error_class_are_quarantined_and_healthy_row_lands(
+    poison_backlog, stage, backlog_batch
+):
+    hotlane, _, cycle, vector_ids = poison_backlog
+    attempts = []
+
+    def embed(text):
+        attempts.append(text)
+        if text in "abcd":
+            if stage == "encode":
+                raise ValueError("poison encoder input")
+            return [0.1]  # The real sqlite-vec writer rejects the wrong dimension.
+        return [0.1] * 1024
+
+    for _ in range(hotlane.MAX_CHUNK_FAILURE_ATTEMPTS + 2):
+        cycle(embed, backlog_batch=backlog_batch)
+
+    assert vector_ids() == {"e"}
+    assert hotlane.CHUNK_FAILURE_ATTEMPTS.quarantined_total == 4
+    for key in "abcd":
+        assert attempts.count(key) == hotlane.MAX_CHUNK_FAILURE_ATTEMPTS
+        assert hotlane.CHUNK_FAILURE_ATTEMPTS.quarantined(hotlane.EmbedCandidate(key, key))
+    assert hotlane.CHUNK_FAILURE_ATTEMPTS.attempts.keys() == {
+        (key, hotlane.hashlib.sha256(key.encode()).hexdigest()) for key in "abcd"
+    }
+
+
+def test_healthy_row_lands_in_the_first_cycle_behind_four_poison_rows(poison_backlog):
+    _, _, cycle, vector_ids = poison_backlog
+
+    def embed(text):
+        if text in "abcd":
+            raise ValueError("poison encoder input")
+        return [0.1] * 1024
+
+    cycle(embed, backlog_batch=5)
+    assert vector_ids() == {"e"}
+
+
+def test_write_canary_rolls_back_and_leaves_no_vector(poison_backlog):
+    from brainlayer.vector_store import VectorStore
+
+    hotlane, db, _, vector_ids = poison_backlog
+    conn = hotlane._open_hotlane_write_connection(db)
+    try:
+        cursor = conn.cursor()
+        hotlane._write_canary(
+            cursor,
+            lambda cur, chunk_id, embedding: hotlane._upsert_chunk_vector_raw(
+                cur, chunk_id, embedding, binary_index_available=True
+            ),
+        )
+        assert not conn.in_transaction
+    finally:
+        conn.close()
+    assert vector_ids() == set()
+    store = VectorStore(db, readonly=True)
+    try:
+        for table in ("chunk_vectors", "chunk_vectors_binary"):
+            rows = store.conn.execute(
+                f"SELECT count(*) FROM {table} WHERE chunk_id = ?", (hotlane.HOTLANE_CANARY_CHUNK_ID,)
+            ).fetchone()
+            assert rows == (0,)
+    finally:
+        store.close()
+
+
+def test_write_stage_failure_that_also_fails_the_canary_is_systemic(poison_backlog, monkeypatch):
+    hotlane, _, cycle, vector_ids = poison_backlog
+    broken = True
+    original = hotlane._upsert_chunk_vector_raw
+
+    def upsert(cursor, chunk_id, embedding, **kwargs):
+        if broken:
+            raise RuntimeError("vector extension unavailable")
+        return original(cursor, chunk_id, embedding, **kwargs)
+
+    monkeypatch.setattr(hotlane, "_upsert_chunk_vector_raw", upsert)
+    for _ in range(5):
+        with pytest.raises(hotlane.HotlaneSystemicFailure):
+            cycle(lambda _text: [0.1] * 1024, backlog_batch=5)
+    assert hotlane.CHUNK_FAILURE_ATTEMPTS.attempts == {}
+    assert hotlane.CHUNK_FAILURE_ATTEMPTS.quarantined_total == 0
+    broken = False
+    cycle(lambda _text: [0.1] * 1024, backlog_batch=5)
+    assert vector_ids() == set("abcde")
+
+
+def test_disk_full_with_poison_rows_present_quarantines_nothing(poison_backlog, monkeypatch):
+    hotlane, _, cycle, vector_ids = poison_backlog
+    original = hotlane._upsert_chunk_vector_raw
+    outage = True
+
+    def upsert(cursor, chunk_id, embedding, **kwargs):
+        if outage:
+            raise hotlane.apsw.FullError("database or disk is full")
+        return original(cursor, chunk_id, embedding, **kwargs)
+
+    def embed(text):
+        if text in "abcd":
+            raise ValueError("poison encoder input")
+        return [0.1] * 1024
+
+    monkeypatch.setattr(hotlane, "_upsert_chunk_vector_raw", upsert)
+    for _ in range(10):
+        with pytest.raises(hotlane.HotlaneSystemicFailure):
+            cycle(embed, backlog_batch=5)
+    # The encode stage charged the poison rows (the canary passed), but the write-stage
+    # outage itself charged nothing: no healthy row is quarantined by a full disk.
+    assert not hotlane.CHUNK_FAILURE_ATTEMPTS.quarantined(hotlane.EmbedCandidate("e", "e"))
+    assert hotlane.CHUNK_FAILURE_ATTEMPTS.count(hotlane.EmbedCandidate("e", "e")) == 0
+    outage = False
+    for _ in range(3):
+        cycle(embed, backlog_batch=5)
+    assert vector_ids() == {"e"}
