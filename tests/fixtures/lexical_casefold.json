@@ -1,0 +1,42 @@
+[
+  {
+    "input": "Straße",
+    "expected": "strasse"
+  },
+  {
+    "input": "STRAẞE",
+    "expected": "strasse"
+  },
+  {
+    "input": "STRASSE",
+    "expected": "strasse"
+  },
+  {
+    "input": "ı",
+    "expected": "ı"
+  },
+  {
+    "input": "I",
+    "expected": "i"
+  },
+  {
+    "input": "Σ",
+    "expected": "σ"
+  },
+  {
+    "input": "ς",
+    "expected": "σ"
+  },
+  {
+    "input": "σ",
+    "expected": "σ"
+  },
+  {
+    "input": "ﬁ",
+    "expected": "fi"
+  },
+  {
+    "input": "FI",
+    "expected": "fi"
+  }
+]

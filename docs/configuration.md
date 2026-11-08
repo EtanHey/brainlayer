@@ -223,6 +223,32 @@ env files. Existing configs retain the credential reference for the compatibilit
 gate; it does not enable the retired enrichment feature. See
 `scripts/launchd/brainlayer.env.example` for the packaged schema and launchd job gates.
 
+## Personal lexical aliases (optional)
+
+The packaged `lexical_defense_dictionary.json` holds only public product terms. Personal
+search aliases (names, nicknames, private spellings) go in a file that is never shipped:
+`~/.config/brainlayer/lexical_defense.local.json`, or the absolute path in
+`BRAINLAYER_LEXICAL_DEFENSE_LOCAL`. Nothing creates this file for you.
+
+```json
+{"version": 1, "entries": [{"canonical": "Zorbleth", "aliases": ["zbx"], "split_forms": ["zor bleth"]}]}
+```
+
+`brain_search` expands a query token that matches any surface of an entry into that entry's
+surfaces. Both search paths read the file: the hybrid helper (`lexical_defense.py`) and the
+BrainBar native fallback (`LexicalDefenseUserAliases.swift`).
+
+| Case | Policy |
+|---|---|
+| File missing | No user aliases. Search behaves exactly as without the feature. |
+| Over 64 KiB, not UTF-8 JSON, wrong `version`, unknown keys, more than 256 entries, more than 16 `aliases`+`split_forms` per entry, or a surface that is empty, longer than 64 characters, or has no letter or digit | The **whole file** is ignored, with one warning per file version (Python logger / BrainBar `NSLog`). |
+| An entry whose surface is already claimed by a packaged entry, or by an earlier user entry (compared by letters and digits only, case-folded) | That entry is skipped whole and logged. Packaged entries never change. |
+| Cycles (`A→B` plus `B→A`) | The second entry conflicts, so it is skipped. Expansion is one hop and never transitive. |
+| Freshness | The file is `stat()`ed on every search and re-read only when its mtime or size changes. Edits apply to the next search, with no restart. |
+
+User entries never set `protect_from_split`, so they stay out of the grammar, prompt and
+VoiceLayer exports, which read only the packaged dictionary.
+
 ## Scheduled Tasks (macOS)
 
 BrainLayer includes launchd plist templates for automated operation:
@@ -495,6 +521,16 @@ physical erasure of old WAL/free pages, embeddings, source transcripts or backup
 During the entire command, SQLite diagnostics log only error codes/classes, including
 file handlers; the process's normal SQLite callback is restored after stores close.
 Failures retain value-free causal error categories and cleanup notes.
+
+### Google Drive OAuth client mode
+
+`BRAINLAYER_DRIVE_OAUTH_TESTING=1` enables the local seven-day consent deadline
+for OAuth clients whose Google publishing status is Testing. Leave it unset for
+Production clients (the default): `consented_at` remains metadata, status has no
+local `expires_at`, and only actual credential failures require reconnecting.
+Google rejecting a refresh with `invalid_grant` still raises a consent alert in
+either mode. Set this variable in the environment of the BrainLayer process
+checking or loading Drive credentials.
 
 ### Daily Drive upload recovery
 

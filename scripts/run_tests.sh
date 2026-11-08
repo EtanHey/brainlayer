@@ -460,6 +460,18 @@ map_changed_files_to_pytests() {
           if [ -f "$TEST_ROOT/$rel" ]; then append_unique "$TEST_ROOT/$rel"; else mapped=0; fi
         done
         ;;
+      src/brainlayer/scrub_at_rest.py)
+        # No test_scrub_at_rest.py; unmapped, a push escalated to the full suite and timed out (2026-11-05).
+        mapped=1
+        for rel in test_scrub_at_rest_command.py test_secret_scrub_at_rest.py; do
+          [ -f "$TEST_ROOT/$rel" ] || mapped=0
+        done
+        if [ "$mapped" -eq 1 ]; then
+          for rel in test_scrub_at_rest_command.py test_secret_scrub_at_rest.py; do
+            append_unique "$TEST_ROOT/$rel"
+          done
+        fi
+        ;;
       src/brainlayer/wal_checkpoint.py)
         # Its tests are named *_module / *_fallback, so the generic test_<module>.py rule misses
         # them and every push paid for the full suite (S30, 2026-11-03).

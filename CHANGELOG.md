@@ -19,6 +19,7 @@
 - Groq rate limiter for enrichment backend (#68)
 
 ### Fixed
+- BrainBar's backup busy rejection now carries a structured `error.data.brainlayer_error_code = "backup_snapshot_busy"` (`admitted: false`). The backup client treats that code, the legacy message, or an `isError` tool result that wraps either as busy, so a wrapped rejection no longer unlinks a still-running earlier VACUUM INTO target. `initialize` reports `serverInfo.backupSnapshotInProgress`. An aged, unmarked attempt from the current writer epoch is reclaimed only when BrainBar positively reports no snapshot in progress in that same epoch. A missing, unknown or restarted status keeps the attempt (Refs #1413).
 - `brain_graph.py`: replaced correlated subquery with literal `'claude_code'` — eliminates N+1 subquery on large DBs (PR #62)
 - Removed `tree-sitter>=0.21.0` from core dependencies
 - `brainlayer serve` docs: removed non-existent `--http` flag
@@ -38,6 +39,41 @@
 - `[kg]` optional extra documented in README and Optional Extras section
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
+
+## [1.5.91] - 2026-11-07
+
+### BrainBar
+- The status card shows one plain line per problem, each saying what happens next and whether anything is needed from you (#1663). A failed nightly index used to appear three times (job alert, calendar result, retry line); it is now one line. A disk measurement that could not be taken reads "Couldn't check backup disk space. Rechecks every 5 min. Nothing to do."
+- `brain_entity` resolves names case-insensitively before falling back to substring matches (#1632); served `brain_store` accepts an optional self-reported `caller_model` (#1643); compact `brain_search` rows stay under the wire-size gate while probes read the served shape (#1648, includes #1638).
+
+### Index
+- A backlog that drains every night no longer fails the nightly index (#1662). The stall alarm compared each pass with the all-time minimum, so four passes that each indexed more than arrived (M1, 11-02→11-05) still ended "index exited 1". A pass now fails only when it made no progress; a backlog that keeps outgrowing indexing prints a non-failing `INDEX_BACKLOG_GROWING` line.
+- The first calendar run refuses a missing database explicitly; `bootstrap-db` creates one atomically (#1640). Per-turn authoring model is recorded for Claude Code and Codex chunks (#1639).
+
+### Health
+- A busy Mac no longer turns the backup disk check amber (#1666): when the measurement times out under load, the last real measurement (up to 30 min old) is reused and labelled as such.
+- Maintenance exits 70 for real failures and 75 only for deliberate deferrals, and the calendar and BrainBar match each outcome to its run (#1641). `jobs restart --verify` allows for ExitTimeOut and startup settling (#1636).
+
+### Data
+- Runtime schema changes are recorded in `migration_events` in the same transaction as the change, and the FTS repair (tables, triggers, backfill, row-id map) is atomic (#1642, Refs #618). The startup WAL checkpoint still runs only after the one-time chunk-origin backfill.
+- `content_hash` is rewritten by every content-changing dedupe merge, with an explicit copy-only repair command (#1637, Refs #623); DB-copy proof and runbook in #1649 (rehearsed on a real M1 copy: 166 stale → 0, fingerprints equal).
+
+### Backup and Drive
+- A busy maintenance lock at 04:00 defers the maintenance step instead of aborting the night (#1668). On the M4 on 11-07 that abort skipped jsonl-backup, wal-checkpoint and backup-daily, so no backup ran; an inherited lease that cannot be re-locked still aborts.
+- One elapsed deadline covers the calendar kill through the snapshot timeout receipt (#1647). A retryable Google token-endpoint failure (5xx/429) is temporary, not "invalid" (#1633). Scrub-at-rest refusals name a value-free cause and gate (#1645).
+
+### Tests, CI and formal
+- CalendarGuard models the supervisor's stall-grace extensions and the TLA+ source pins are current (#1665); CI forwards INT/TERM/HUP to the suite group (#1646); pre-push maps `t3_provenance.py` (#1630); flaky admission-wait bound fixed (#1664); test-only hardening #1631, #1634, #1635.
+
+### Also in this release
+- fix(scrub-at-rest): refuse quiesce without quiet-window run budget (Refs #1073) (#1644).
+- fix(backup): structured BrainBar busy contract + same-epoch snapshot status (Refs #1413) (#1650).
+- fix(backup): hash retained stalls only where used; surface the disk-full deadlock in BrainBar (Refs #1385) (#1654).
+- feat(search): optional user-config lexical alias source on both brain_search paths (Refs #995) (#1655).
+- test(#1377): proof fixtures for weekly VACUUM deadline and hold release (report-only) (#1659).
+- fix(watcher): isolate non-UUID realtime chunk ids by full stem + project (future ingest only) (#1661).
+- fix(ci): run_with_deadline kills past-deadline suites again on macOS without waitid (#1669).
+- fix(hooks): exclude retired chunks from ambient session-start and prompt context (#1670).
 
 ## [1.5.90] - 2026-11-04
 

@@ -56,6 +56,36 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
         XCTAssertFalse(BrainBarStatusSnapshot.derive(inputs).issues.contains { $0.component == .backups })
     }
 
+    /// #1385: a retained-stall capacity deadlock names the files and the one safe action on the
+    /// Dashboard line, the Backups page and the generic job alert — not "reported an error".
+    func testRetainedStallCapacityNamesFilesAndSafeActionEverywhere() throws {
+        struct Fixture: Decodable {
+            let now: Date
+            let headline, panelDetail: String
+            let backups: ObservabilityDocument.Backups
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .iso8601
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "backup-retained-stall-capacity", withExtension: "json", subdirectory: "Fixtures"))
+        let fixture = try decoder.decode(Fixture.self, from: Data(contentsOf: url))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let status = ObservabilityPresentation.backupStatus(for: fixture.backups, locale: locale, now: fixture.now, calendar: calendar)
+        XCTAssertEqual(status.error?.text, fixture.headline + ". " + fixture.panelDetail)
+        XCTAssertEqual(status.error?.tone, .red)
+        XCTAssertTrue(status.error?.text.contains("2026-10-29.db.zst") == true)
+        let page = BrainBarBackupChecks.derive(fixture.backups, now: fixture.now, locale: locale, calendar: calendar)
+        XCTAssertEqual(page.alert, status.error?.text)
+        XCTAssertEqual(page.details.first { $0.label == "Error code" }?.value, "retained_stalled_backup_capacity")
+        let inputs = BrainBarStatusInputs(now: fixture.now, calendar: calendar,
+            jobAlerts: BrainBarJobAlerts(active: ["backup-daily": "Database backup failed; check the backup log"]),
+            backups: .measured(fixture.backups))
+        let snapshot = BrainBarStatusSnapshot.derive(inputs)
+        XCTAssertEqual(snapshot.issues.first { $0.alertKey == "backup-daily" }?.text, status.error?.text)
+        XCTAssertFalse(snapshot.issues.contains { $0.id == "backups.error" }, "one notice per failed attempt")
+    }
+
     func testReclaimMessageKeepsADistinctLiveAlertAndNamesTheYearAcrossYears() throws {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase

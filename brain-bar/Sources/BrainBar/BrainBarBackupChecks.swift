@@ -120,8 +120,6 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         ObservabilityPresentation.relative(date, now: now, locale: locale)
     }
 
-    private static let reclaimCodePrefix = "raw_reclaim_unconfirmed:"
-
     /// The status line's sentence, except that an unrecognised error code reads as a plain
     /// sentence here; the raw code moves to Technical details.
     private static func alertText(_ errorType: String?, statusLine: ObservabilityStatusLine?) -> String? {
@@ -131,7 +129,7 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         }
         let known = ["drive_credentials_restored_backup_pending", "drive_credentials_missing", "FileNotFoundError"]
         guard !errorType.hasPrefix("job_alert:"), !known.contains(errorType),
-              !errorType.hasPrefix(reclaimCodePrefix),
+              ObservabilityPresentation.measuredStopPrefix(errorType) == nil,
               ObservabilityPresentation.dbSnapshotSentence(errorType, thresholdHours: nil) == nil
         else { return statusLine.text }
         return errorType.hasPrefix("jsonl_backup_attempt_")
@@ -177,8 +175,8 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         rows.append(.init(label: "Freshness", value: "\(backups.freshness ?? "unknown")\(threshold)"))
         rows.append(.init(label: "Retention invariant", value: backups.retentionInvariant ?? "unknown"))
         if let errorType = backups.errorType, !errorType.isEmpty, !lines.errorIsJobAlert {
-            // The reclaim diagnostic carries its measured sentence after the code; show only the code.
-            let code = errorType.hasPrefix(reclaimCodePrefix) ? "raw_reclaim_unconfirmed" : errorType
+            // A measured diagnostic carries its sentence after the code; show only the code.
+            let code = ObservabilityPresentation.measuredStopPrefix(errorType).map { String($0.dropLast(2)) } ?? errorType
             rows.append(.init(label: "Error code", value: code))
         }
         return rows

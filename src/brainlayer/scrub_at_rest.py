@@ -54,6 +54,8 @@ LIVE_SERVICES = (
 
 BRAINBAR_EXIT_TIMEOUT_SECONDS = 30.0
 BACKUP_WAIT_SAFE_MARGIN_SECONDS = 20 * 60.0
+# Every guarded apply, waited or not, must leave this much quiet window before it stops writers.
+RUN_BUDGET_RESERVE_SECONDS = BACKUP_WAIT_SAFE_MARGIN_SECONDS
 _QUIESCE_DETAILS = frozenset(
     {"quiesce-services", "brainbar-process-probe", "lsof-writers", "process:BrainBar", "process:BrainBarDaemon"}
     | {
@@ -361,6 +363,13 @@ def _wait_for_verified_backup(path, timeout_seconds):
             raise ScrubAtRestError("verified backup wait timed out", reason="verified-backup-timeout")
 
 
+def _check_run_budget(config):
+    """Refuse service-down work unless the quiet window still covers the run reserve."""
+    # Same boundary as the backup wait: exactly the reserve left is not enough to start.
+    if _remaining_quiet_window_seconds(config) <= RUN_BUDGET_RESERVE_SECONDS:
+        raise ScrubAtRestError("quiet-window run budget exhausted", reason="quiet-window-budget")
+
+
 def _check_no_brainbar_processes():
     # An unregistered UI can open the daemon bundle even after its job is booted out.
     try:
@@ -425,6 +434,8 @@ def _guarded_apply(path, batch_size, expect_rows, selected=PROVIDERS):
     config = maintenance.MaintenanceConfig(db_path=path, backup_reuse_max_age_hours=24)
     _live_requirements(config)
     maintenance._run_gates(config)
+    # Last check before quiescing: gates and the lock wait both spend window time.
+    _check_run_budget(config)
     booted_out, failure = {}, None
     try:
         try:

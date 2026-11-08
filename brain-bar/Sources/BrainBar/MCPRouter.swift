@@ -192,6 +192,12 @@ final class MCPRouter: @unchecked Sendable {
             condition.unlock()
         }
 
+        var isBackupRequested: Bool {
+            condition.lock()
+            defer { condition.unlock() }
+            return backupRequested
+        }
+
         func waitForDrains() {
             condition.lock()
             while activeDrains > 0 { condition.wait() }
@@ -224,6 +230,11 @@ final class MCPRouter: @unchecked Sendable {
     private var readDatabase: BrainDatabase?
     private let hybridSearchClient: HybridSearchClientProtocol?
     private let dbPath: String?
+    private let hybridFlightLock = NSLock()
+    private var hybridFlights: Set<UUID> = []
+    private var stuckHybridFlights: Set<UUID> = []
+    private enum HybridBudgetFailure: Error { case timedOut, busy }
+    private let hybridSearchExecutor: @Sendable (@escaping @Sendable () -> Void) -> Void
     private let hybridSearchBudget: TimeInterval
     private let receiptStore: BrainBarOperationReceipts
     private let toolProfile: ToolProfile
@@ -265,6 +276,7 @@ final class MCPRouter: @unchecked Sendable {
         profile: String? = nil,
         hybridSearchClient: HybridSearchClientProtocol? = nil,
         hybridSearchBudget: TimeInterval = 0.8,
+        hybridSearchExecutor: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void = { work in DispatchQueue.global(qos: .userInitiated).async(execute: work) },
         dbPath: String? = nil,
         pendingStoreDrainQueue: DispatchQueue? = nil,
         onPendingStoresFlushed: (@Sendable ([BrainDatabase.FlushedPendingStore]) -> Void)? = nil,
@@ -272,6 +284,7 @@ final class MCPRouter: @unchecked Sendable {
         receiptStore: BrainBarOperationReceipts = BrainBarOperationReceipts()
     ) {
         self.toolProfile = Self.resolveToolProfile(profile)
+        self.hybridSearchExecutor = hybridSearchExecutor
         self.hybridSearchClient = hybridSearchClient
         self.hybridSearchBudget = max(0.001, hybridSearchBudget)
         self.receiptStore = receiptStore
@@ -455,6 +468,19 @@ final class MCPRouter: @unchecked Sendable {
         pendingStoreDrainScheduler.backupGate.finishBackup()
     }
 
+    private let vacuumActivity = NSLock()
+    private var activeVacuumCount = 0
+
+    /// #1413 snapshot status: true from socket admission (or handler entry) until the
+    /// snapshot answers. Reported in initialize so a backup client can tell an aged,
+    /// unmarked attempt in this writer epoch from a still-running one.
+    var backupSnapshotInProgress: Bool {
+        vacuumActivity.lock()
+        let active = activeVacuumCount > 0
+        vacuumActivity.unlock()
+        return active || pendingStoreDrainScheduler.backupGate.isBackupRequested
+    }
+
     private static func scheduleExistingPendingStoreScan(
         scheduler: PendingStoreDrainScheduler,
         db: BrainDatabase,
@@ -617,7 +643,8 @@ final class MCPRouter: @unchecked Sendable {
                     "name": "brainbar",
                     "version": "1.0.0",
                     "backupWriterStartedAtUnix": backupWriterStartedAtUnix,
-                ]
+                    "backupSnapshotInProgress": backupSnapshotInProgress,
+                ] as [String: Any]
             ] as [String: Any]
         ]
     }
@@ -921,6 +948,13 @@ final class MCPRouter: @unchecked Sendable {
                     metadata = fallback.metadata
                     kgSection = localKGSection()
                 }
+            } catch let failure as HybridBudgetFailure {
+                let reason = failure == .busy ? "hybrid helper busy past budget" : "hybrid helper exceeded budget"
+                NSLog("[BrainBar] Search mode: BrainBar database fallback (%@)", reason)
+                let fallback = try searchViaBrainBarDatabase()
+                textSection = fallback.text + "\nSearch mode: BrainBar database fallback (\(reason))"
+                metadata = fallback.metadata
+                kgSection = localKGSection()
             } catch {
                 NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", HybridSearchHelperError.loggable(error))
                 let fallback = try searchViaBrainBarDatabase()
@@ -958,7 +992,7 @@ final class MCPRouter: @unchecked Sendable {
         return response.text.contains(" - 0 of 0 shown")
     }
 
-    private func hybridSearchWithinBudget(arguments: [String: Any]) throws -> HybridSearchResponse? {
+    func hybridSearchWithinBudget(arguments: [String: Any]) throws -> HybridSearchResponse? {
         guard let hybridSearchClient else { return nil }
         if let readinessProvider = hybridSearchClient as? HybridSearchReadinessProviding,
            !readinessProvider.isReady {
@@ -966,19 +1000,36 @@ final class MCPRouter: @unchecked Sendable {
             return nil
         }
 
+        let flight = UUID()
+        let admitted = hybridFlightLock.withLock {
+            guard stuckHybridFlights.isEmpty else { return false }
+            hybridFlights.insert(flight)
+            return true
+        }
+        guard admitted else { throw HybridBudgetFailure.busy }
         let group = DispatchGroup()
         let argumentBox = HybridSearchArgumentBox(arguments: arguments)
         let resultBox = HybridSearchResultBox()
         group.enter()
-        DispatchQueue.global(qos: .userInitiated).async {
+        hybridSearchExecutor {
+            defer {
+                self.hybridFlightLock.withLock {
+                    self.hybridFlights.remove(flight)
+                    self.stuckHybridFlights.remove(flight)
+                }
+                group.leave()
+            }
             let outcome = Result { try hybridSearchClient.search(arguments: argumentBox.arguments) }
             resultBox.set(outcome)
-            group.leave()
         }
 
         let timeout = DispatchTime.now() + .nanoseconds(Int(hybridSearchBudget * 1_000_000_000))
         guard group.wait(timeout: timeout) == .success else {
-            return nil
+            hybridFlightLock.withLock {
+                // Completion shares this lock so it cannot leave a stale stuck marker.
+                if hybridFlights.contains(flight) { stuckHybridFlights.insert(flight) }
+            }
+            throw HybridBudgetFailure.timedOut
         }
 
         return try resultBox.get()?.get()
@@ -1689,6 +1740,14 @@ final class MCPRouter: @unchecked Sendable {
     private func handleBrainBackupVacuumInto(_ args: [String: Any]) throws -> ToolOutput {
         guard let targetPath = args["target_path"] as? String else {
             throw ToolError.missingParameter("target_path")
+        }
+        vacuumActivity.lock()
+        activeVacuumCount += 1
+        vacuumActivity.unlock()
+        defer {
+            vacuumActivity.lock()
+            activeVacuumCount -= 1
+            vacuumActivity.unlock()
         }
         let db = try writeDB()
         // A caller aimed at a different database must never receive this one (2026-10-19:
