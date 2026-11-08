@@ -1,4 +1,40 @@
-# Measured run (F-TLA1 sync round)
+# Measured run (re-pin at main 5882de81, #1686 and #1688; review round 1)
+
+- Date: 2026-11-08T12:47Z, on the M4, as CI runs it: `pytest formal/backup-verdict/test_check.py`, then
+  `python3 formal/backup-verdict/check.py --require-sync` (TLC `~/.local/bin/tlc`, the v1.7.4 jar whose
+  sha256 is CI's pinned `936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88`, one worker).
+- Tree: main 5882de81 plus this re-pin.
+- Result: **45 / 45 cases matched, no stale source, exit 0.** Total TLC time 432.0 s.
+  Probes (`test_check.py`): 52 passed.
+- Fail-first: with the #1686 override keeping the stall clock (`clk |-> stallSince`) instead of dropping
+  it, `conform-embedding-s1a6` diverges, so the replay reaches the override.
+- New and changed rows (the rest match the tables below):
+
+| Case | Expected = got | Distinct states | s | Replay or conformance (SHA) |
+|---|---|---:|---:|---|
+| current-pipes-embedding (now with `Daemon = "progress"`) | pass | 64,656 | 10.4 |  |
+| conform-embedding-s1a6 (feeds `embedding_activity` / `embedding_progress_recent`) | conforms | simulated | 6.3 | 3,000 traces, 17,955 ticks vs working tree: 0 diverging |
+| conform-embedding-main (`Daemon = "none"`) | conforms | simulated | 5.1 | 3,000 traces, 17,955 ticks vs 67d23f14: 0 diverging |
+| scratch-pause-downgrades | RedHoldsUntilEvidence | 1,138 | 0.8 |  |
+
+# Earlier measured run (re-pin at main 5fda86d2, #1685)
+
+- Date: 2026-11-08T11:39Z, on the M4, as CI runs it: `pytest formal/backup-verdict/test_check.py`, then
+  `TLC_WORKERS=2 TLC_JAR=<v1.7.4 jar> python3 formal/backup-verdict/check.py --require-sync`.
+- Tree: main 5fda86d2 plus this re-pin. The jar's sha256 is CI's pinned
+  `936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88` (banner `TLC2 Version 2.19`).
+- Result: **44 / 44 cases matched, no stale source, exit 0.** Total TLC time 385.7 s.
+  Probes (`test_check.py`): 51 passed.
+- New and changed rows (the rest match the 2026-11-02 table below, which stays as that run's record):
+
+| Case | Expected = got | Distinct states | s | Replay (SHA) |
+|---|---|---:|---:|---|
+| current-backup | pass | 1,193,217 | 44.5 |  |
+| current-vacuum (now with `Damage = TRUE`, strict read) | pass | 287,686 | 7.1 |  |
+| bug-1685-lenient-weekly-gate | VacuumNeedsFreshSnapshot | 87 | 0.7 | ff3a8b35 reproduces, every weekly run / fixed in working tree |
+| finding-damaged-receipt-dot | NoFalseGreen | 54 | 0.7 | (finding, not replayed) |
+
+# Earlier measured run (F-TLA1 sync round)
 
 - Date: 2026-11-02T09:28Z, on the M4, with `TLC_WORKERS=4 formal/backup-verdict/check.sh --require-sync`.
   Models run one at a time; simulation and temporal cases always use one worker.

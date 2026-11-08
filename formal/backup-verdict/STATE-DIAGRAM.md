@@ -50,9 +50,28 @@ stateDiagram-v2
     Revoked --> b1589b5c
     b1589b5c --> Counts
 
-    class b1595,b1596a,b1596s,b1583b5,b1589b5b,b1589b5c bug
+    state "Weekly VACUUM admitted" as Vacuum
+    state "Weekly VACUUM deferred (last_weekly kept)" as Deferred
+    state "#1685: lenient weekly read skips a damaged revoke line" as b1685
+    state "finding: the dot's lenient read skips a damaged abandon/revoke line" as fdmg
+    LocalVerified --> Vacuum: latest receipt within backup_reuse_max_age_hours
+    Revoked --> Deferred: strict read sees the revocation
+    Revoked --> Deferred: strict read meets a damaged line (#1685)
+    Revoked --> b1685
+    b1685 --> Vacuum
+    Abandoned --> fdmg
+    Revoked --> fdmg
+    fdmg --> Counts
+
+    class b1595,b1596a,b1596s,b1583b5,b1589b5b,b1589b5c,b1685 bug
+    class fdmg finding
     class Counts ok
 ```
+
+The orange box is a current-code finding, not fixed here (`finding-damaged-receipt-dot`).
+`health_facts.read_receipts` skips a line it cannot parse, so a damaged `abandoned` or revoking
+receipt leaves the dot on the copy that receipt took away. #1685 closed the same hole for the
+VACUUM gate only.
 
 ## 2. One backup check across a monitoring gap (`BackupVerdict.tla`)
 
@@ -173,7 +192,7 @@ stateDiagram-v2
 | `drive_auth` | ok | refresh failed | consent needed | an observed `ok` | `PipeVerdict` Focus=drive |
 | `integrity` | ok | — | corrupt | a clean result | `DotTable` two-state class |
 | `ingest` | fresh | > 10 min | > 30 min | 2 consecutive good ticks, advancing heartbeat | `PipeVerdict` Focus=ingest (S1a-5 F1–F3; conformance vs real code) |
-| `embedding` | progressing | — | not shrinking > 6 h | vectors written | `PipeVerdict` Focus=embedding (S1a-6 grace; conformance vs real code) |
+| `embedding` | progressing | a batch in the last 10 min while the queue stays full (#1686; a load pause only adds a note) | not shrinking > 6 h | vectors written | `PipeVerdict` Focus=embedding (S1a-6 grace, #1686 `Daemon`; conformance vs real code) |
 | `stores` | ≤ 15 min, canary ok | 15–45 min or 1 fail | > 45 min or 3 fails | canary success, then 2 good ticks | `PipeVerdict` Focus=stores (S1a-6 grace; conformance vs real code) |
 | `search` | ok | 1–2 fails | 3 fails | 2 consecutive good ticks | `DotTable` hysteresis class |
 | `disk` | ≥ peak + 2× floor | < peak + 2× floor | < peak | space recovered | `DotTable` aging class |

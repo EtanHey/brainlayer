@@ -44,6 +44,11 @@ CONSTANTS
                        \* episode (keyed by its clock value), never renewed by a later gap;
                        \* FALSE = today's renewable grace (resumed_at resets on every gap)
     QueueStalls,       \* may the pending-store queue stall (FALSE isolates the canary)
+    Daemon,            \* #1686: hotlane daemon evidence a tick may see for embedding.
+                       \* "none": not read (pre-#1686). "progress" (#1686): a batch written
+                       \* this hour reads AMBER ("progressing ... keeping the queue full"),
+                       \* a load pause with no batch only adds a note. "pause": scratch
+                       \* break, a load pause also reads AMBER (the design #1686 rejected)
     TickAt,            \* hours at which the monitor may tick
     MustTick,          \* scripted schedules: the monitor must tick at every TickAt hour
     AlwaysObserve,     \* every tick observes the focused fact (scripted schedules)
@@ -132,8 +137,17 @@ QueueObs == Only("stores", {"unobs", IF pendStart # NoTime THEN "pending" ELSE "
 HbObs == Only("ingest", {"unobs", "seen"})
 \* Without the anchored window, a stalled backlog's rows can age out of the
 \* 24 h window and read as an empty backlog with no vector written.
+\* #1686 (Daemon # "none"): "progress" is fresh hotlane evidence of a batch.
+\* It is truthful: vectors were written this hour, so either the queue is
+\* shrinking (clear) or VectorsWritten restarted the stall clock at this hour
+\* (stallSince = now; collect_facts moves the stall start to the batch time).
+\* "paused" is a load pause seen on a stalled backlog, of any age.
+DaemonObs == IF Daemon = "none" THEN {}
+             ELSE (IF ~backlog \/ stallSince = now THEN {"progress"} ELSE {})
+                  \cup (IF backlog THEN {"paused"} ELSE {})
 EmbObs == Only("embedding", {"unobs", IF backlog THEN "stalled" ELSE "clear"}
-                            \cup (IF ~AnchoredBacklog /\ backlog THEN {"clear"} ELSE {}))
+                            \cup (IF ~AnchoredBacklog /\ backlog THEN {"clear"} ELSE {})
+                            \cup DaemonObs)
 
 -----------------------------------------------------------------------------
 (* evaluate()'s shared state machine for one check.                        *)
@@ -233,8 +247,15 @@ StoresRaw(q, k) ==
     IN [raw |-> worst, ev |-> ev, fails |-> f1, owed |-> ow, clk |-> p.clk, graced |-> p.graced,
         rec |-> p.rec]
 
-(* embedding: backlog stall start from the anchored window, via _stall_age *)
-EmbRaw(o) == StallAge("embedding", o, IF o = "stalled" THEN stallSince ELSE NoTime, embClk)
+(* embedding: backlog stall start from the anchored window, via _stall_age.*)
+(* #1686: recent progress replaces the stall result with _Raw(AMBER, ...): *)
+(* evidence, never graced, and no clock or keep, so evaluate() persists no *)
+(* clock and no grace record for that tick. A pause only appends a note.   *)
+Override(o) == o = "progress" \/ (o = "paused" /\ Daemon = "pause")
+EmbRaw(o) ==
+    IF Override(o)
+    THEN [raw |-> "amber", ev |-> TRUE, clk |-> NoTime, graced |-> FALSE, rec |-> NoRec]
+    ELSE StallAge("embedding", o, IF o \in {"stalled", "paused"} THEN stallSince ELSE NoTime, embClk)
 
 -----------------------------------------------------------------------------
 (* Positive evidence, per §3d "What clears red", judged from the world.     *)
