@@ -40,6 +40,21 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.92] - 2026-11-08
+
+- BrainBar no longer asks to reconnect Drive for a Production OAuth app (#1677).
+- BrainBar reads recent history and tolerates partially written history lines (#1679).
+- Indexing retries unresolved backlog files (#1680).
+- Rotate runs.jsonl before the history reader's 4 MiB window (#1693).
+- Publish merged files exclusively from hashed bytes (#1690).
+- Reject damaged weekly cleanup receipts (#1685).
+- Record who holds the maintenance lock (names the holder on a busy hold) (#1671).
+- Unify consent deadline parsing (#1683).
+- Admit one helper worker at a time (#1682).
+- Preserve instance lock on release (#1678).
+- Stop hotlane tests renicing the suite process; guard the whole suite (#1676).
+- Give a tag-only push a 5400s release-gate budget (#1675).
+
 ## [1.5.91] - 2026-11-07
 
 ### BrainBar
