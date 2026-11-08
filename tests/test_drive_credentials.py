@@ -843,3 +843,34 @@ def test_production_invalid_grant_still_reports_consent_failure(tmp_path, monkey
     assert status["expires_at"] is None
     assert status["reason"] == "Drive access expired: Reconnect in BrainBar"
     assert alerts == [("drive-consent", status["reason"])]
+
+
+@pytest.mark.parametrize("testing", [False, True])
+def test_naive_consent_timestamp_agrees_between_loader_and_status(tmp_path, monkeypatch, testing):
+    from brainlayer import drive_credentials
+
+    monkeypatch.delenv("BRAINLAYER_DRIVE_OAUTH_TESTING", raising=False)
+    if testing:
+        monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")
+    consented = datetime(2026, 10, 17, 12)
+    token, client = _consented_token(tmp_path, consented)
+    before = token.read_bytes()
+    kwargs = dict(
+        token_path=token,
+        client_path=client,
+        credentials_class=FakeCredentials,
+        request_factory=object,
+        now=datetime(2026, 10, 18, 12, tzinfo=UTC),
+        alert_reporter=lambda *_: None,
+    )
+    status = drive_credentials.credential_status(**kwargs)
+    if testing:
+        assert status["state"] == "invalid"
+        with pytest.raises(drive_credentials.DriveCredentialError) as caught:
+            drive_credentials.load_credentials(**kwargs)
+        assert str(caught.value) == status["reason"] == "BrainLayer Drive consent metadata is invalid"
+    else:
+        assert status["state"] == "valid"
+        assert status["expires_at"] is None and status["days_left"] is None
+        assert drive_credentials.load_credentials(**kwargs).valid
+    assert token.read_bytes() == before
