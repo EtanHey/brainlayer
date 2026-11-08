@@ -274,3 +274,13 @@ def test_unverified_same_date_file_blocks_without_overwrite(tmp_path, monkeypatc
     with pytest.raises(FileExistsError):
         backup.run_backup(db_path=db, staging_dir=staging, log_path=tmp_path / "receipt.jsonl", phase=phase)
     assert archive.read_bytes() == b"partial"
+
+
+@pytest.mark.parametrize("damage", [b"{torn\n", b"\xff\n"])
+def test_weekly_local_gate_rejects_damage_after_valid_receipt(same_date, damage):
+    lane = same_date
+    backup._append_json_log(lane.log, lane.receipt)
+    assert backup._recent_local_verified_backup(lane.log, lane.db, now=lane.now, max_age_hours=6)
+    with lane.log.open("ab") as handle:
+        handle.write(damage)
+    assert backup._recent_local_verified_backup(lane.log, lane.db, now=lane.now, max_age_hours=6) is None
