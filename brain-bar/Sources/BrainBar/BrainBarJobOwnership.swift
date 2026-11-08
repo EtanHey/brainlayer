@@ -205,6 +205,7 @@ struct BrainBarCalendarHistory: Sendable {
             var streaks: [String: Int] = [:]
             var abandonedRuns: Set<String> = []
             var nights: [String: NightOutcome] = [:]
+            var damagedNights: Set<String> = []
             var unresolvedSteps: [String: Set<String>] = [:]
             var stepProblems: [String: [String: StepProblem]] = [:]
             var unknownFailures: [String: Date] = [:]
@@ -398,10 +399,16 @@ struct BrainBarCalendarHistory: Sendable {
                 } catch {
                     (result, starts, streaks, abandonedRuns, nights, unresolvedSteps, stepProblems, unknownFailures, abandonmentFailures, runnerErrors, abandonmentSummaries, openAttempt, pendingRunnerError, attemptSteps, attemptKinds) = checkpoint
                     result.skippedLineCount += 1
+                    // A rejected row cannot certify its night, even if a later summary succeeds.
+                    // Prefer its explicit date; undated/torn rows belong to the current header.
+                    let rejected = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any]
+                    if let date = rejected?["scheduled_date"] as? String ?? result.latestScheduledDate {
+                        damagedNights.insert(date)
+                    }
                 }
             }
             if result.skippedLineCount > 0 && result.runs.isEmpty && nights.isEmpty {
-                result.error = "Maintenance calendar history contains no readable results"
+                result.error = "Maintenance calendar history is unreadable"
             }
             var streak = 0
             for date in nights.keys.sorted() {
@@ -418,7 +425,7 @@ struct BrainBarCalendarHistory: Sendable {
                 night.streakComplete = !truncated
                 night.failedSteps = (unresolvedSteps[date] ?? []).sorted()
                 night.stepProblems = stepProblems[date] ?? [:]
-                result.maintenanceNight = night
+                result.maintenanceNight = damagedNights.contains(date) ? nil : night
             }
             return result
         } catch { return Self(error: "Maintenance calendar history is unreadable") }
