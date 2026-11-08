@@ -61,7 +61,7 @@ def test_normal_collector_keeps_three_missing_evidence_rows(monkeypatch, capsys)
 def test_actual_shell_handoff_refuses_failed_or_missing_producers(tmp_path, failure):
     jobs = yaml.safe_load((ROOT / ".github/workflows/ratchet.yml").read_text())["jobs"]
     collector = next(s for s in jobs["table"]["steps"] if s.get("id") == "collect")["run"]
-    block = collector[collector.index('if [[ "$RETIREMENT_RESULT"') : collector.index("QUIESCE_ARGS=")]
+    block = collector[collector.index("RETIREMENT_ARGS=") : collector.index("QUIESCE_ARGS=")]
     reports = {
         "heartbeat": tmp_path / "heartbeat/heartbeat.json",
         "render": tmp_path / "brainbar-render/brainbar-render-report.json",
@@ -74,6 +74,8 @@ def test_actual_shell_handoff_refuses_failed_or_missing_producers(tmp_path, fail
         os.environ,
         RUNNER_TEMP=str(tmp_path),
         RETIREMENT_RESULT="success",
+        RETIREMENT_GATE="true",
+        RENDER_GATE="true",
         RENDER_RESULT="success",
         HEARTBEAT_RESULT="success",
         HEARTBEAT_GATE="true",
