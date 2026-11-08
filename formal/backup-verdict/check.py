@@ -385,6 +385,13 @@ CASES: list[dict[str, str]] = [
         "what": "a deferred weekly run advances last_weekly",
     },
     {
+        "name": "scratch-pause-downgrades",
+        "module": "PipeVerdict",
+        "expect": "RedHoldsUntilEvidence",
+        "pr": "#1686",
+        "what": "a load pause with no batch reads AMBER, so a red embedding stall leaves red with no vectors written",
+    },
+    {
         "name": "scratch-clean-run-keeps-alert",
         "module": "DotTable",
         "expect": "AlertClears",

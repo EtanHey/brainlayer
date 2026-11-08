@@ -39,7 +39,7 @@ digest-pinned (sha256 `936a2620…0e88`, the same jar as the local one).
 | Module | Models | Properties |
 |---|---|---|
 | `BackupVerdict.tla` | backup-daily receipts (snapshot, upload, removal after a verified upload, abandoned, superseded, revoked, local-only re-verify), `backup_facts()`, `_verified_age`, `evaluate()` for `backup_local` and `backup_offsite` with wake grace, monitoring gaps, unreadable-log ticks, and the weekly VACUUM gate | `NoFalseGreen`, `RedHoldsUntilEvidence`, `TruthfulSnapshotLabel`, `VacuumNeedsFreshSnapshot`, and `NoFalseGreenStrict` (a documented design limit) |
-| `PipeVerdict.tla` | `evaluate()` for `drive_auth` (latch), and for `ingest`, `embedding` and `stores` (pending queue + latched round-trip canary), all three through `_stall_age` → `_graced_age` with wake grace (renewable today, one window per episode under S1a-6), plus hysteresis | `RedHoldsUntilEvidence` (section 3d's "what clears red"), `RedToGreenNeedsConsecutive`, `RedClearsToGreenOnlyOnEvidence` (the docstring's weaker reading) |
+| `PipeVerdict.tla` | `evaluate()` for `drive_auth` (latch), and for `ingest`, `embedding` and `stores` (pending queue + latched round-trip canary), all three through `_stall_age` → `_graced_age` with wake grace (renewable today, one window per episode under S1a-6), plus hysteresis, and #1686's daemon evidence for `embedding` (`Daemon`: recent progress reads amber and drops the stall clock; a load pause only adds a note) | `RedHoldsUntilEvidence` (section 3d's "what clears red"), `RedToGreenNeedsConsecutive`, `RedClearsToGreenOnlyOnEvidence` (the docstring's weaker reading) |
 | `DotTable.tla` | the dot over all 11 checks (five behaviour classes), `badge_alerts()`, and the job-alert lifecycle (`maintenance.main` → `job_alerts.report`) | `NoStuckAlert` (a job alert never lights the dot; dot red ⇔ some check red; all green ⇒ dot green), `MonitorNeverRed`, `AlertClears` (liveness: a clean run clears its alert) |
 
 The properties in one sentence each:
@@ -92,12 +92,16 @@ not yet merged is `fixed_here: "no"`, and fails once the fix lands until someone
   guards and same-local-day / artifact-identity eligibility checks of the producer, and the VACUUM
   gate's same-local-day check, are not modelled: the receipt reader is checked against a superset
   of what the producer emits.
+- The hotlane daemon's own evidence (#1686, `hotlane-cpu.json`) is trusted: the model lets a tick
+  see "progress" only when vectors really were written this hour (`Daemon`). A daemon that claimed
+  batches it never committed would keep the stall clock fresh and the check amber; that is not
+  modelled.
 - BrainBar's Swift rendering, the installed app, and real launchd timing.
 
 ## Keeping it in step
 
 `coverage.json` pins each covered source by sha256, maps each modelled action to path:line, and
-records bounds and atomicity. Every source is pinned at main 5fda86d2. CI runs `--require-sync`,
+records bounds and atomicity. Every source is pinned at main 5882de81. CI runs `--require-sync`,
 so any change to a covered source fails this job until someone re-confirms the model and moves the
 pin. When covered code changes:
 re-read the mapped lines, update the model or add a switch, rerun, and only then move the pin.

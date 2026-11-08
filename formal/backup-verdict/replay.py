@@ -337,6 +337,12 @@ def _fact_at(hour_value: str) -> list:
     return ["at", int(hour_value)] if int(hour_value) >= 0 else ["none"]
 
 
+DAEMON_ACTIVITY = {
+    "progress": "Embedding progressing but incoming work is keeping the queue full: 1 queued, last batch 00:00 (local time)",
+    "paused": "Embedding paused by machine load: 1 queued, last batch time unavailable",
+}
+
+
 def pipe_ops(states: list[dict[str, str]], focus: str) -> list[dict]:
     """One op per health tick (lastTick changes on every tick and nothing else), with the facts
     that tick observed for the focused check, as evaluate() receives them."""
@@ -350,9 +356,19 @@ def pipe_ops(states: list[dict[str, str]], focus: str) -> list[dict]:
             facts["watcher_updated_at"] = ["at", int(after["hb"])] if obs["hb"] == "seen" else ["unobs"]
         elif focus == "embedding":
             e = obs["emb"]
+            stalled = after["backlog"] == "TRUE"
             facts["embedding_stalled_since"] = (
-                ["unobs"] if e == "unobs" else ["none"] if e == "clear" else _fact_at(after["stallSince"])
+                ["unobs"]
+                if e == "unobs"
+                else ["none"]
+                if e == "clear" or (e == "progress" and not stalled)
+                else _fact_at(after["stallSince"])
             )
+            # #1686: hotlane daemon evidence, as collect_facts hands it to evaluate(). Only
+            # Daemon # "none" models emit these, so pre-#1686 refs never receive the fields.
+            if e in DAEMON_ACTIVITY:
+                facts["embedding_activity"] = ["str", DAEMON_ACTIVITY[e]]
+                facts["embedding_progress_recent"] = ["bool", e == "progress"]
         elif focus == "stores":
             q, k = obs["queue"], obs["canary"]
             facts["oldest_pending_store_at"] = (
@@ -394,7 +410,7 @@ def run_pipe(src: Path, payload: dict, hv: types.ModuleType | None = None) -> li
             return hv.UNOBSERVED
         if kind == "none":
             return None
-        if kind == "bool":
+        if kind in ("bool", "str"):
             return fact[1]
         return BASE + dt.timedelta(hours=fact[1])
 

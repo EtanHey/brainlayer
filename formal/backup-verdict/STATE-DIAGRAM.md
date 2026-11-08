@@ -192,7 +192,7 @@ stateDiagram-v2
 | `drive_auth` | ok | refresh failed | consent needed | an observed `ok` | `PipeVerdict` Focus=drive |
 | `integrity` | ok | — | corrupt | a clean result | `DotTable` two-state class |
 | `ingest` | fresh | > 10 min | > 30 min | 2 consecutive good ticks, advancing heartbeat | `PipeVerdict` Focus=ingest (S1a-5 F1–F3; conformance vs real code) |
-| `embedding` | progressing | — | not shrinking > 6 h | vectors written | `PipeVerdict` Focus=embedding (S1a-6 grace; conformance vs real code) |
+| `embedding` | progressing | a batch in the last 10 min while the queue stays full (#1686; a load pause only adds a note) | not shrinking > 6 h | vectors written | `PipeVerdict` Focus=embedding (S1a-6 grace, #1686 `Daemon`; conformance vs real code) |
 | `stores` | ≤ 15 min, canary ok | 15–45 min or 1 fail | > 45 min or 3 fails | canary success, then 2 good ticks | `PipeVerdict` Focus=stores (S1a-6 grace; conformance vs real code) |
 | `search` | ok | 1–2 fails | 3 fails | 2 consecutive good ticks | `DotTable` hysteresis class |
 | `disk` | ≥ peak + 2× floor | < peak + 2× floor | < peak | space recovered | `DotTable` aging class |

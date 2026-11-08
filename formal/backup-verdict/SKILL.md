@@ -81,7 +81,7 @@ lines of TLC's output (F-TLA1-FLAKE).
 
 ## Coverage record
 
-- Sources and sync: `coverage.json`, every source at main 5fda86d2.
+- Sources and sync: `coverage.json`, every source at main 5882de81.
 - Checker: `check.py` (`CASES` is the table), `replay.py` (real-code replay), `test_check.py` (probes).
 - Bounds: 2 snapshots, 5 receipts, 6 logical hours (backups); 7 hours, one check per run (pipes);
   5 classes, unbounded (dot).

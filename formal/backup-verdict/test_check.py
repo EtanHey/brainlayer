@@ -357,3 +357,37 @@ def test_passing_outcome_has_no_tail(tmp_path, monkeypatch):
     case = next(c for c in checker.CASES if c["name"] == "current-dot")
     with patch.object(checker.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, PASS_LOG, "")):
         assert checker.run_case(case, tmp_path)["tlc_tail"] is None
+
+
+def test_embedding_daemon_evidence_reaches_evaluate_only_for_1686_observations():
+    """#1686: progress/paused carry embedding_activity; pre-#1686 observations never do."""
+
+    def state(now, emb, backlog="TRUE", stall="3"):
+        return {
+            "now": now,
+            "lastTick": now,
+            "backlog": backlog,
+            "stallSince": stall,
+            "st": '[drive |-> "unknown", ingest |-> "unknown", stores |-> "unknown", embedding |-> "amber"]',
+            "lastObs": f'[drive |-> "unobs", hb |-> "unobs", canary |-> "unobs", queue |-> "unobs", emb |-> "{emb}"]',
+        }
+
+    states = [state("0", "unobs")] + [
+        state(str(i), e, b)
+        for i, (e, b) in enumerate(
+            [("stalled", "TRUE"), ("progress", "TRUE"), ("progress", "FALSE"), ("paused", "TRUE"), ("clear", "FALSE")],
+            start=1,
+        )
+    ]
+    ops = replay.pipe_ops(states, "embedding")
+    assert [op["facts"].get("embedding_progress_recent") for op in ops] == [
+        None,
+        ["bool", True],
+        ["bool", True],
+        ["bool", False],
+        None,
+    ]
+    assert ops[0]["facts"] == {"embedding_stalled_since": ["at", 3]}
+    assert ops[2]["facts"]["embedding_stalled_since"] == ["none"]  # progress on a shrinking queue
+    assert ops[3]["facts"]["embedding_activity"][1].startswith("Embedding paused by machine load")
+    assert "embedding_activity" not in ops[4]["facts"]
