@@ -1469,20 +1469,19 @@ def _select_priority_queue_files(files: list[Path], batch_size: int, *, cap_enri
 
 
 def _rewrite_events_file(path: Path, events: list[dict[str, Any]]) -> None:
-    tmp_path = path.with_suffix(".tmp")
-    tmp_path.write_text(
-        "".join(json.dumps(event, ensure_ascii=True) + "\n" for event in events),
-        encoding="utf-8",
-    )
-    tmp_path.replace(path)
+    from .queue_io import durable_replace_queue_file
+
+    durable_replace_queue_file(path, "".join(json.dumps(event, ensure_ascii=True) + "\n" for event in events))
 
 
 def _preserve_remaining_events(path: Path, events: list[dict[str, Any]]) -> None:
     if events and all(_event_payload(event).get("kind") == "enrichment_update" for event in events):
         if not _is_enrichment_queue_file(path):
             enrichment_path = path.with_name(f"enrichment-paused-{uuid.uuid4().hex}-{path.name}")
+            from .queue_io import durable_retire_queue_file
+
             _rewrite_events_file(enrichment_path, events)
-            path.unlink()
+            durable_retire_queue_file(path)
             return
     _rewrite_events_file(path, events)
 

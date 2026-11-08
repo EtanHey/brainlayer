@@ -92,6 +92,24 @@ def _write_synced_queue_file(path: Path, text: str) -> None:
         raise
 
 
+def durable_replace_queue_file(path: Path, text: str) -> None:
+    """Publish synced replacement bytes before acknowledging the new directory entry."""
+    temporary = path.with_name(f".{path.name}-{uuid.uuid4().hex}.tmp")
+    _write_synced_queue_file(temporary, text)
+    try:
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    _sync_directory(path.parent)
+
+
+def durable_retire_queue_file(path: Path) -> None:
+    """Retire an old name only after its replacement's publication barrier."""
+    path.unlink()
+    _sync_directory(path.parent)
+
+
 def enqueue_jsonl_batch(events: list[dict[str, Any]], *, source: str, queue_dir: Path | None = None) -> Path:
     """Atomically append one or more write intents as a JSONL file."""
     if not events:
