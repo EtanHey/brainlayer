@@ -11,9 +11,11 @@ from unittest.mock import patch
 
 import pytest
 
+from tests import test_consolidation_plan, test_supervisor_jobs
 from tests.test_consolidation_plan import DOMAIN, NEW, OLD, ROOT
-from tests.test_consolidation_plan import setup as setup
-from tests.test_supervisor_jobs import short_path as short_path
+
+setup = test_consolidation_plan.setup
+short_path = test_supervisor_jobs.short_path
 
 
 class Launchctl:
@@ -110,6 +112,32 @@ def test_partial_bootstrap_failure_reaps_new_then_restores_exact_old_state(setup
     for name, content in before.items():
         assert (setup[1] / name).read_bytes() == content
     assert not (setup[1] / f"{NEW}.plist").exists()
+
+
+def test_readiness_timeout_restores_exact_old_state(setup, monkeypatch):
+    from brainlayer.supervisor_adapters import SupervisorCommands
+    from tests.test_migration_runtime import Clock
+
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_READY_GRACE_S", "10")
+    monkeypatch.setattr(SupervisorCommands, "request", lambda self: {})
+    runner, clock = Launchctl(), Clock()
+    before = {p.name: p.read_bytes() for p in setup[1].iterdir()}
+    with pytest.raises(RuntimeError, match="original files/states restored") as failure:
+        invoke(setup, runner, verify=None, clock=clock)
+    assert "replacement supervisor not ready" in str(failure.value.__cause__)
+    assert 10 <= clock.now < 11
+    assert runner.loaded == {OLD, "com.etanhey.brainlayer-fleet-watchdog"}
+    assert not runner.disabled
+    assert all((setup[1] / name).read_bytes() == content for name, content in before.items())
+    assert not (setup[1] / f"{NEW}.plist").exists()
+
+
+def test_invalid_ready_grace_refused_before_launchctl(setup, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_READY_GRACE_S", "invalid")
+    runner = Launchctl()
+    with pytest.raises(ValueError, match="BRAINLAYER_SUPERVISOR_READY_GRACE_S"):
+        invoke(setup, runner)
+    assert not runner.calls
 
 
 def test_concurrent_migration_refuses_before_any_launchctl_mutation(setup):
