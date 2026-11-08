@@ -27,6 +27,7 @@ import threading
 import time
 from collections.abc import Iterator
 from collections.abc import Set as AbstractSet
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +46,7 @@ except ImportError:  # pragma: no cover - unavailable on POSIX
 from .alarm import BrainLayerAlarm, raise_alarm
 from .ingest_denylist import _match_parts as match_glob_parts
 from .ingest_denylist import is_denylisted, is_directory_denylisted
+from .zstd_stream import logical_jsonl_path
 
 logger = logging.getLogger(__name__)
 
@@ -228,26 +230,36 @@ class _JSONLPatternMatcher:
     pathlib's did).
     """
 
-    def __init__(self, base: str, glob_pattern: str) -> None:
+    def __init__(self, base: str, glob_pattern: str, include_zst: bool = False) -> None:
+        self.include_zst = include_zst
         self.default_pattern = glob_pattern == _RECURSIVE_JSONL_GLOB
         self.pattern_parts = tuple(part for part in glob_pattern.split("/") if part)
         self.suffix_only = bool(self.pattern_parts) and self.pattern_parts[-1] == "*.jsonl"
         self.relative_start = len(base.rstrip(os.sep)) + 1
 
     def __call__(self, entry: os.DirEntry) -> bool:
-        if self.suffix_only and not entry.name.endswith(".jsonl"):
+        name = entry.name.removesuffix(".zst") if self.include_zst else entry.name
+        if self.suffix_only and not name.endswith(".jsonl"):
             return False
         if not entry.is_file():
             return False
         if self.default_pattern:
             return True
-        return match_glob_parts(tuple(entry.path[self.relative_start :].split(os.sep)), self.pattern_parts)
+        return match_glob_parts(
+            tuple(
+                (str(logical_jsonl_path(entry.path)) if self.include_zst else entry.path)[self.relative_start :].split(
+                    os.sep
+                )
+            ),
+            self.pattern_parts,
+        )
 
 
 def _iter_jsonl_files(
     base: Path,
     glob_pattern: str,
     skip_dir: Callable[[str], bool] | None = None,
+    include_zst: bool = False,
 ) -> Iterator[tuple[str, Callable[[], os.stat_result]]]:
     """Yield (path, stat) for every regular file under base that matches glob_pattern.
 
@@ -273,7 +285,7 @@ def _iter_jsonl_files(
     and skip the stat entirely for a file it will not track.
     """
     base_str = str(base)
-    matches = _JSONLPatternMatcher(base_str, glob_pattern)
+    matches = _JSONLPatternMatcher(base_str, glob_pattern, include_zst)
     # No early `return` before the first yield: a generator that can also "return None" reads
     # as a possible non-sequence to static analysis at the unpacking call site.
     pending = [] if skip_dir is not None and skip_dir(base_str) else [base_str]
@@ -949,6 +961,7 @@ class JSONLTailer:
         self.offset = offset
         self.max_record_bytes = max_record_bytes
         self._buffer = b""
+        self.first_record = None
         self.rewound = False  # Set to True when rewind detected
         self.replaced = False  # Set when bytes before the offset changed under the same inode
         self.rewind_old_offset = 0
@@ -1057,13 +1070,9 @@ class JSONLTailer:
             return self.read_buffered_lines(max_lines=max_lines)
 
         try:
-            with open(self.filepath, "rb") as f:
-                if self.anchor is None:
-                    self._verify_resumed_offset(f)
-                elif self.offset:
-                    self._verify_anchor(f)
-                f.seek(self.offset + len(self._buffer))
-                remaining_bytes = max_bytes if max_bytes is not None and max_bytes > 0 else None
+            with self._open_window(max_bytes) as (f, remaining_bytes):
+                if f is None:
+                    return []
                 complete_lines = self._buffer.count(b"\n")
                 current_record_bytes = self._partial_record_bytes()
                 combined = bytearray(self._buffer)
@@ -1214,6 +1223,10 @@ class JSONLTailer:
                 self.last_error = error
                 break
 
+            if starting_offset + consumed_bytes == 0 and getattr(self, "capture_header", False):
+                from .t3_provenance import compact_codex_header
+
+                self.first_record = compact_codex_header(parsed, nl_idx + 1)
             line_end_offset = starting_offset + nl_idx + 1
             consumed_bytes = nl_idx + 1
             if isinstance(parsed, dict):
@@ -1266,6 +1279,16 @@ class JSONLTailer:
             return os.stat(self.filepath).st_ino
         except OSError:
             return 0
+
+    @contextmanager
+    def _open_window(self, max_bytes):
+        with open(self.filepath, "rb") as f:
+            if self.anchor is None:
+                self._verify_resumed_offset(f)
+            elif self.offset:
+                self._verify_anchor(f)
+            f.seek(self.offset + len(self._buffer))
+            yield f, max_bytes if max_bytes is not None and max_bytes > 0 else None
 
 
 # ── Batch Indexer ────────────────────────────────────────────────────────────
