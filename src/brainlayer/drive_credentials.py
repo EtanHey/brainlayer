@@ -171,7 +171,7 @@ def load_credentials(
         token_data = _read_object(token, private=True)
         consented = token_data.get("consented_at")
         expires = None
-        if consented:
+        if consented and os.environ.get("BRAINLAYER_DRIVE_OAUTH_TESTING") == "1":
             try:
                 consent_time = dt.datetime.fromisoformat(str(consented).replace("Z", "+00:00")).astimezone(dt.UTC)
             except ValueError:
@@ -253,7 +253,7 @@ def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[
         try:
             expires = (
                 dt.datetime.fromisoformat(str(consented).replace("Z", "+00:00")) + dt.timedelta(days=7)
-                if consented
+                if consented and os.environ.get("BRAINLAYER_DRIVE_OAUTH_TESTING") == "1"
                 else None
             )
             if expires and expires.tzinfo is None:
