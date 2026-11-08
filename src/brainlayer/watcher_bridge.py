@@ -795,4 +795,5 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             deferred_entries=deferred_entries,
         )
 
+    flush_to_db.close = store.close if store is not None else lambda: None
     return flush_to_db
