@@ -633,10 +633,19 @@ class TestJSONLTailer:
 
         # First line is 13 bytes + newline = 14
         first_line_bytes = len(b'{"id":"1"}\n')
-        tailer = JSONLTailer(str(f), offset=first_line_bytes)
+        # A stored offset is trusted only with evidence the bytes before it are unchanged:
+        # here, a checkpoint confirmed no earlier than the file's last write (#1656).
+        tailer = JSONLTailer(str(f), offset=first_line_bytes, resume_checkpoint_mtime=f.stat().st_mtime)
         lines = tailer.read_new_lines()
         assert len(lines) == 1
         assert lines[0]["id"] == "2"
+
+    def test_offset_without_evidence_rereads_from_start(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        f.write_text('{"id":"1"}\n{"id":"2"}\n')
+        tailer = JSONLTailer(str(f), offset=len(b'{"id":"1"}\n'))
+        assert [line["id"] for line in tailer.read_new_lines()] == ["1", "2"]
+        assert tailer.replaced
 
     def test_empty_file(self, tmp_path):
         f = tmp_path / "test.jsonl"
