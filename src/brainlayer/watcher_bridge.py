@@ -509,6 +509,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 deferred_entries.append(entry)
                 continue
             project = source_projects.get(source_file)
+            if project is None and entry.get("_compressed_archive"):
+                project = _extract_workspace_project(entry)
             source_identity = _source_file_identity(source_file)
             cached_identity = resolved_source_identities.get(source_file)
             if project is not None and source_identity is not None and cached_identity is not None:
@@ -586,6 +588,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
 
                 conversation_id = chunk.metadata.get("session_id") or file_stem
                 metadata = dict(chunk.metadata)
+                if entry.get("codex_native_session_id") is not None:
+                    metadata["codex_native_session_id"] = entry["codex_native_session_id"]
                 observed = entry.get("_ingest_observed_at")
                 if isinstance(observed, (int, float)):
                     metadata["ingest_observed_at"] = observed
@@ -623,6 +627,12 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 metadata["provenance_effective_visibility"] = visibility
                 metadata["source_class"] = source_class
 
+                if entry.get("_archive_reconciliation"):
+                    if _archive_reconciliation_stored(
+                        db_path or get_db_path(), chunk_id, clean_content, created_at, project, chunk.content_type.value
+                    ):
+                        skipped += 1
+                        continue
                 if arbitrated:
                     try:
                         enqueue_chunk(
