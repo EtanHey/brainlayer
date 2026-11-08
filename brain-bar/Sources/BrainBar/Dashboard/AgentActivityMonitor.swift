@@ -45,7 +45,7 @@ struct AgentPresence: Sendable, Equatable {
     }
 
     var accessibilityLabel: String {
-        "\(family.label): \(liveSessionLabel) from ps"
+        "\(family.label): \(liveSessionLabel) from processes and transcripts"
     }
 }
 
@@ -82,6 +82,18 @@ struct AgentActivitySnapshot: Sendable, Equatable {
         presences.first(where: { $0.family == family })?.count ?? 0
     }
 
+    /// Each family's count is the larger of its `ps` sessions and its sessions with a transcript
+    /// written in the last 10 minutes: both are lower bounds. `ps` misses threads hosted by a
+    /// shared server (`codex app-server`); transcripts miss an idle session.
+    func merging(transcriptSessions: [AgentFamily: Int]) -> AgentActivitySnapshot {
+        AgentActivitySnapshot(
+            presences: presences.map {
+                AgentPresence(family: $0.family, count: max($0.count, transcriptSessions[$0.family] ?? 0))
+            },
+            measurement: measurement
+        )
+    }
+
     var summaryText: String {
         if case let .unreadable(reason) = measurement {
             return "Agent activity unavailable: \(reason)"
@@ -114,36 +126,46 @@ struct AgentActivitySnapshot: Sendable, Equatable {
     static let breakdownOrder: [AgentFamily] = [.claude, .codex, .gemini, .cursor]
 
     static let countingDefinition =
-        "Agents = top-level Claude, Codex, Gemini and Cursor CLI sessions; app helpers, MCP bridges and each session's child processes are not counted."
+        "Agents = per CLI, the larger of its top-level Claude, Codex, Gemini or Cursor sessions in ps and its sessions with a transcript written in the last 10 minutes (Codex threads inside app-server have no process of their own); app helpers, MCP bridges, sub-agents and each session's child processes are not counted."
 }
 
 final class AgentActivityMonitor: Sendable {
     private let snapshotProvider: @Sendable () -> String?
     private let executablePathResolver: @Sendable (Int32) -> String?
     private let argv0Resolver: @Sendable (Int32) -> String?
+    private let transcriptSessions: @Sendable () -> [AgentFamily: Int]
 
     /// The live process probes are named explicitly (`.live`) where production builds a
-    /// monitor; tests inject synthetic process rows and path/argv resolvers.
+    /// monitor; tests inject synthetic process rows, path/argv resolvers and transcript counts.
     init(
         snapshotProvider: @escaping @Sendable () -> String?,
         executablePathResolver: @escaping @Sendable (Int32) -> String?,
-        argv0Resolver: @escaping @Sendable (Int32) -> String? = { _ in nil }
+        argv0Resolver: @escaping @Sendable (Int32) -> String? = { _ in nil },
+        transcriptSessions: @escaping @Sendable () -> [AgentFamily: Int] = { [:] }
     ) {
         self.snapshotProvider = snapshotProvider
         self.executablePathResolver = executablePathResolver
         self.argv0Resolver = argv0Resolver
+        self.transcriptSessions = transcriptSessions
     }
 
-    /// The live process table: `ps` rows, and the kernel's executable path per candidate PID.
+    /// The live process table: `ps` rows, and the kernel's executable path per candidate PID;
+    /// and the live transcript roots under the user's home.
     static let live = AgentActivityMonitor(
         snapshotProvider: AgentActivityMonitor.captureProcessSnapshot,
         executablePathResolver: AgentActivityMonitor.kernelExecutablePath,
-        argv0Resolver: AgentActivityMonitor.kernelArgv0
+        argv0Resolver: AgentActivityMonitor.kernelArgv0,
+        transcriptSessions: { liveTranscriptSessions.counts() }
     )
+
+    private static let liveTranscriptSessions = AgentTranscriptActivity.Cache { now in
+        AgentTranscriptActivity.count(home: FileManager.default.homeDirectoryForCurrentUser, now: now)
+    }
 
     func sample() -> AgentActivitySnapshot {
         guard let snapshot = snapshotProvider() else { return .unavailable("ps capture failed") }
         return Self.parse(snapshot, executablePath: executablePathResolver, argv0: argv0Resolver)
+            .merging(transcriptSessions: transcriptSessions())
     }
 
     struct ProcessRow: Equatable {
