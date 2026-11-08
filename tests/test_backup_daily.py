@@ -1369,13 +1369,32 @@ def test_backup_run_lock_rejects_overlapping_run(tmp_path, monkeypatch):
     release = threading.Event()
     clock = [0.0]
     results = []
-    monkeypatch.setattr(backup_daily.time, "monotonic", lambda: clock[0])
+    contender = threading.current_thread()
+    real_time = backup_daily.time
 
-    def sleep(seconds):
+    def contender_sleep(seconds):
+        # Only the refused contender's admission wait may advance the fake clock. Patching the
+        # shared ``time`` module let any other live thread's sleep bleed in (12990s on CI).
+        if threading.current_thread() is not contender:
+            return real_time.sleep(seconds)
         assert not release.is_set()
         clock[0] += seconds
 
-    monkeypatch.setattr(backup_daily.time, "sleep", sleep)
+    class _ModuleClock:
+        """A backup_daily-local stand-in for ``time``; other modules keep the real one."""
+
+        def __getattr__(self, name):
+            return getattr(real_time, name)
+
+        @staticmethod
+        def monotonic():
+            return clock[0]
+
+        @staticmethod
+        def sleep(seconds):
+            return contender_sleep(seconds)
+
+    monkeypatch.setattr(backup_daily, "time", _ModuleClock())
 
     @backup_daily._serialized_backup_run
     def held_run(staging_dir, log_path):  # noqa: ARG001
