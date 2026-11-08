@@ -746,6 +746,21 @@ def test_changed_only_scope_maps_watcher_source_to_jsonl_watcher_tests(tmp_path:
     test_root = tmp_path / "tests"
     test_root.mkdir()
     (test_root / "test_jsonl_watcher.py").write_text("test placeholder\n")
+    for zst_owner in (
+        "test_codex_zst_watcher.py",
+        "test_codex_zst_admission_guards.py",
+        "test_codex_zst_prefix.py",
+        "test_codex_zst_checkpoint_guards.py",
+        "test_codex_zst_legacy_replay.py",
+        "test_codex_zst_restart.py",
+        "test_codex_zst_resume_registry.py",
+        "test_codex_zst_lifecycle.py",
+        "test_codex_zst_conversations.py",
+        "test_codex_zst_header_retention.py",
+        "test_codex_zst_acceptance.py",
+        "test_retirement_ratchet.py",
+    ):
+        (test_root / zst_owner).write_text("test placeholder\n")
     (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
@@ -1328,6 +1343,21 @@ def test_changed_only_scope_resolves_the_changed_set_from_a_tag_range(tmp_path: 
     test_root = tmp_path / "tests"
     test_root.mkdir()
     (test_root / "test_jsonl_watcher.py").write_text("test placeholder\n")
+    for zst_owner in (
+        "test_codex_zst_watcher.py",
+        "test_codex_zst_admission_guards.py",
+        "test_codex_zst_prefix.py",
+        "test_codex_zst_checkpoint_guards.py",
+        "test_codex_zst_legacy_replay.py",
+        "test_codex_zst_restart.py",
+        "test_codex_zst_resume_registry.py",
+        "test_codex_zst_lifecycle.py",
+        "test_codex_zst_conversations.py",
+        "test_codex_zst_header_retention.py",
+        "test_codex_zst_acceptance.py",
+        "test_retirement_ratchet.py",
+    ):
+        (test_root / zst_owner).write_text("test placeholder\n")
     (test_root / "test_source_class.py").write_text("test placeholder\n")
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
@@ -1362,6 +1392,21 @@ def test_changed_only_scope_fails_closed_on_a_range_git_cannot_resolve(tmp_path:
     test_root = tmp_path / "tests"
     test_root.mkdir()
     (test_root / "test_jsonl_watcher.py").write_text("test placeholder\n")
+    for zst_owner in (
+        "test_codex_zst_watcher.py",
+        "test_codex_zst_admission_guards.py",
+        "test_codex_zst_prefix.py",
+        "test_codex_zst_checkpoint_guards.py",
+        "test_codex_zst_legacy_replay.py",
+        "test_codex_zst_restart.py",
+        "test_codex_zst_resume_registry.py",
+        "test_codex_zst_lifecycle.py",
+        "test_codex_zst_conversations.py",
+        "test_codex_zst_header_retention.py",
+        "test_codex_zst_acceptance.py",
+        "test_retirement_ratchet.py",
+    ):
+        (test_root / zst_owner).write_text("test placeholder\n")
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
@@ -1391,6 +1436,21 @@ def test_changed_only_scope_measures_an_empty_tag_range_instead_of_escalating(tm
     test_root = tmp_path / "tests"
     test_root.mkdir()
     (test_root / "test_jsonl_watcher.py").write_text("test placeholder\n")
+    for zst_owner in (
+        "test_codex_zst_watcher.py",
+        "test_codex_zst_admission_guards.py",
+        "test_codex_zst_prefix.py",
+        "test_codex_zst_checkpoint_guards.py",
+        "test_codex_zst_legacy_replay.py",
+        "test_codex_zst_restart.py",
+        "test_codex_zst_resume_registry.py",
+        "test_codex_zst_lifecycle.py",
+        "test_codex_zst_conversations.py",
+        "test_codex_zst_header_retention.py",
+        "test_codex_zst_acceptance.py",
+        "test_retirement_ratchet.py",
+    ):
+        (test_root / zst_owner).write_text("test placeholder\n")
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
@@ -1740,6 +1800,21 @@ def test_changed_only_scope_escalates_an_empty_tag_range_instead_of_skipping(tmp
     test_root = tmp_path / "tests"
     test_root.mkdir()
     (test_root / "test_jsonl_watcher.py").write_text("test placeholder\n")
+    for zst_owner in (
+        "test_codex_zst_watcher.py",
+        "test_codex_zst_admission_guards.py",
+        "test_codex_zst_prefix.py",
+        "test_codex_zst_checkpoint_guards.py",
+        "test_codex_zst_legacy_replay.py",
+        "test_codex_zst_restart.py",
+        "test_codex_zst_resume_registry.py",
+        "test_codex_zst_lifecycle.py",
+        "test_codex_zst_conversations.py",
+        "test_codex_zst_header_retention.py",
+        "test_codex_zst_acceptance.py",
+        "test_retirement_ratchet.py",
+    ):
+        (test_root / zst_owner).write_text("test placeholder\n")
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
@@ -1778,6 +1853,21 @@ def test_changed_only_scope_escalates_a_tag_range_that_maps_nothing(tmp_path: Pa
     test_root = tmp_path / "tests"
     test_root.mkdir()
     (test_root / "test_jsonl_watcher.py").write_text("test placeholder\n")
+    for zst_owner in (
+        "test_codex_zst_watcher.py",
+        "test_codex_zst_admission_guards.py",
+        "test_codex_zst_prefix.py",
+        "test_codex_zst_checkpoint_guards.py",
+        "test_codex_zst_legacy_replay.py",
+        "test_codex_zst_restart.py",
+        "test_codex_zst_resume_registry.py",
+        "test_codex_zst_lifecycle.py",
+        "test_codex_zst_conversations.py",
+        "test_codex_zst_header_retention.py",
+        "test_codex_zst_acceptance.py",
+        "test_retirement_ratchet.py",
+    ):
+        (test_root / zst_owner).write_text("test placeholder\n")
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
@@ -1825,6 +1915,8 @@ CLI_ROOT_SUITES = (
     "test_status_truthfulness.py",
     "test_watch_backfill_cli.py",
     "test_watch_logging.py",
+    "test_codex_zst_acceptance.py",
+    "test_codex_zst_cli_guards.py",
 )
 
 
@@ -2227,6 +2319,12 @@ def test_changed_only_scope_maps_t3_provenance_to_its_owners(tmp_path: Path) -> 
         "test_t3_linkage_alarm.py",
         "test_t3_runtime_alarm_dedup.py",
     )
+    owners += (
+        "test_codex_zst_provenance.py",
+        "test_codex_zst_identity.py",
+        "test_codex_zst_header_retention.py",
+        "test_codex_zst_acceptance.py",
+    )
     for name in owners:
         (test_root / name).write_text("test placeholder\n")
 
@@ -2365,10 +2463,86 @@ def test_changed_only_policy_source_runs_retirement_inventory(tmp_path, source):
 @pytest.mark.parametrize(
     "source,owners",
     [
-        ("zstd_stream.py", ("test_codex_zstd_stream.py", "test_backup_zstd.py")),
+        (
+            "zstd_stream.py",
+            (
+                "test_codex_zstd_stream.py",
+                "test_codex_zst_decoder_limits.py",
+                "test_backup_zstd.py",
+                "test_retirement_ratchet.py",
+            ),
+        ),
         ("ingest/codex.py", ("test_ingest_codex.py", "test_codex_zstd_stream.py")),
-        ("codex_zst.py", ("test_codex_zst_watcher.py", "test_jsonl_watcher.py")),
-        ("ingest/codex_manifest.py", ("test_codex_zst_manifest.py", "test_watcher_bridge.py")),
+        (
+            "codex_zst.py",
+            (
+                "test_codex_zst_watcher.py",
+                "test_jsonl_watcher.py",
+                "test_codex_zst_tailer.py",
+                "test_codex_zst_prefix.py",
+                "test_codex_zst_checkpoint_guards.py",
+                "test_codex_zst_legacy_replay.py",
+                "test_codex_zst_restart.py",
+                "test_codex_zst_resume_registry.py",
+            ),
+        ),
+        (
+            "ingest/codex_manifest.py",
+            (
+                "test_codex_zst_manifest.py",
+                "test_watcher_bridge.py",
+                "test_codex_zst_manifest_reader.py",
+                "test_codex_zst_manifest_outcomes.py",
+                "test_codex_zst_provenance.py",
+                "test_codex_zst_dedup_reader.py",
+                "test_codex_zst_replay_guards.py",
+                "test_codex_zst_alias.py",
+                "test_codex_zst_receipts.py",
+                "test_retirement_ratchet.py",
+            ),
+        ),
+        (
+            "watcher.py",
+            (
+                "test_jsonl_watcher.py",
+                "test_codex_zst_watcher.py",
+                "test_codex_zst_admission_guards.py",
+                "test_codex_zst_prefix.py",
+                "test_codex_zst_checkpoint_guards.py",
+                "test_codex_zst_legacy_replay.py",
+                "test_codex_zst_restart.py",
+                "test_codex_zst_resume_registry.py",
+                "test_codex_zst_lifecycle.py",
+                "test_codex_zst_conversations.py",
+                "test_codex_zst_header_retention.py",
+                "test_codex_zst_acceptance.py",
+                "test_retirement_ratchet.py",
+            ),
+        ),
+        (
+            "watcher_bridge.py",
+            (
+                "test_watcher_bridge.py",
+                "test_codex_zst_reconcile_failure.py",
+                "test_codex_zst_conversations.py",
+                "test_codex_zst_manifest.py",
+                "test_codex_zst_provenance.py",
+                "test_codex_zst_acceptance.py",
+            ),
+        ),
+        (
+            "t3_provenance.py",
+            (
+                "test_t3_app_provenance.py",
+                "test_t3_linkage_alarm.py",
+                "test_t3_runtime_alarm_dedup.py",
+                "test_codex_zst_provenance.py",
+                "test_codex_zst_identity.py",
+                "test_codex_zst_header_retention.py",
+                "test_codex_zst_acceptance.py",
+            ),
+        ),
+        ("cli/__init__.py", CLI_ROOT_SUITES),
     ],
 )
 @pytest.mark.parametrize("missing", [False, True])
