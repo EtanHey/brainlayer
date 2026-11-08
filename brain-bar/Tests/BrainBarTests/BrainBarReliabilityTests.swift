@@ -70,6 +70,25 @@ final class BrainBarReliabilityTests: XCTestCase {
         }
     }
 
+    func testInstanceLockPathSurvivesReleaseAndReacquireContends() throws {
+        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build.noindex/instance-lock-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("instance.lock").path
+        let first = try BrainBarInstanceLock.acquire(lockPath: path)
+        let inode = try FileManager.default.attributesOfItem(atPath: path)[.systemFileNumber] as? NSNumber
+        first.release()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path))
+        let second = try BrainBarInstanceLock.acquire(lockPath: path)
+        defer { second.release() }
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: path)[.systemFileNumber] as? NSNumber, inode)
+        first.release() // A repeated release must not disturb the new owner.
+        XCTAssertThrowsError(try BrainBarInstanceLock.acquire(lockPath: path)) { error in
+            XCTAssertEqual(error as? BrainBarInstanceLock.AcquireError, .alreadyRunning)
+        }
+    }
+
     func testInitializeReturnsImmediatelyWhileStartupDatabaseIsWriteLocked() throws {
         let directory = makeReliabilityTempDirectory()
         let dbPath = directory.appendingPathComponent("brainbar.db").path

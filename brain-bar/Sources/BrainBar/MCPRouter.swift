@@ -192,6 +192,12 @@ final class MCPRouter: @unchecked Sendable {
             condition.unlock()
         }
 
+        var isBackupRequested: Bool {
+            condition.lock()
+            defer { condition.unlock() }
+            return backupRequested
+        }
+
         func waitForDrains() {
             condition.lock()
             while activeDrains > 0 { condition.wait() }
@@ -224,6 +230,11 @@ final class MCPRouter: @unchecked Sendable {
     private var readDatabase: BrainDatabase?
     private let hybridSearchClient: HybridSearchClientProtocol?
     private let dbPath: String?
+    private let hybridFlightLock = NSLock()
+    private var hybridFlights: Set<UUID> = []
+    private var stuckHybridFlights: Set<UUID> = []
+    private enum HybridBudgetFailure: Error { case timedOut, busy }
+    private let hybridSearchExecutor: @Sendable (@escaping @Sendable () -> Void) -> Void
     private let hybridSearchBudget: TimeInterval
     private let receiptStore: BrainBarOperationReceipts
     private let toolProfile: ToolProfile
@@ -239,6 +250,7 @@ final class MCPRouter: @unchecked Sendable {
     private static let stringMaxLengths: [String: Int] = [
         "action": 64,
         "agent_id": 128,
+        "caller_model": BrainDatabase.callerModelMaxLength,
         "chunk_id": chunkIdentifierMaxLength,
         "content": 200_000,
         "detail": 16,
@@ -264,6 +276,7 @@ final class MCPRouter: @unchecked Sendable {
         profile: String? = nil,
         hybridSearchClient: HybridSearchClientProtocol? = nil,
         hybridSearchBudget: TimeInterval = 0.8,
+        hybridSearchExecutor: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void = { work in DispatchQueue.global(qos: .userInitiated).async(execute: work) },
         dbPath: String? = nil,
         pendingStoreDrainQueue: DispatchQueue? = nil,
         onPendingStoresFlushed: (@Sendable ([BrainDatabase.FlushedPendingStore]) -> Void)? = nil,
@@ -271,6 +284,7 @@ final class MCPRouter: @unchecked Sendable {
         receiptStore: BrainBarOperationReceipts = BrainBarOperationReceipts()
     ) {
         self.toolProfile = Self.resolveToolProfile(profile)
+        self.hybridSearchExecutor = hybridSearchExecutor
         self.hybridSearchClient = hybridSearchClient
         self.hybridSearchBudget = max(0.001, hybridSearchBudget)
         self.receiptStore = receiptStore
@@ -355,11 +369,24 @@ final class MCPRouter: @unchecked Sendable {
             "name": name,
             "description": description,
         ]
-        if let inputSchema = definition["inputSchema"] as? [String: Any] {
+        if var inputSchema = definition["inputSchema"] as? [String: Any] {
+            if let hidden = fullPaletteOnlyProperties[name],
+               var properties = inputSchema["properties"] as? [String: Any] {
+                for property in hidden { properties.removeValue(forKey: property) }
+                inputSchema["properties"] = properties
+            }
             compact["inputSchema"] = removingDescriptions(from: inputSchema)
         }
         return compact
     }
+
+    /// Optional properties advertised only once the palette is expanded. They are still
+    /// accepted and validated against the full schema from a core session. The core boot
+    /// payload has a ratified 1600-byte budget that main already fills (#655 Part B:
+    /// advertising caller_model in core costs 49 bytes and is an owner decision).
+    private static let fullPaletteOnlyProperties: [String: Set<String>] = [
+        "brain_store": ["caller_model"],
+    ]
 
     private static func removingDescriptions(from value: Any) -> Any {
         if let dictionary = value as? [String: Any] {
@@ -439,6 +466,19 @@ final class MCPRouter: @unchecked Sendable {
 
     func backupSnapshotFinished() {
         pendingStoreDrainScheduler.backupGate.finishBackup()
+    }
+
+    private let vacuumActivity = NSLock()
+    private var activeVacuumCount = 0
+
+    /// #1413 snapshot status: true from socket admission (or handler entry) until the
+    /// snapshot answers. Reported in initialize so a backup client can tell an aged,
+    /// unmarked attempt in this writer epoch from a still-running one.
+    var backupSnapshotInProgress: Bool {
+        vacuumActivity.lock()
+        let active = activeVacuumCount > 0
+        vacuumActivity.unlock()
+        return active || pendingStoreDrainScheduler.backupGate.isBackupRequested
     }
 
     private static func scheduleExistingPendingStoreScan(
@@ -603,7 +643,8 @@ final class MCPRouter: @unchecked Sendable {
                     "name": "brainbar",
                     "version": "1.0.0",
                     "backupWriterStartedAtUnix": backupWriterStartedAtUnix,
-                ]
+                    "backupSnapshotInProgress": backupSnapshotInProgress,
+                ] as [String: Any]
             ] as [String: Any]
         ]
     }
@@ -907,6 +948,13 @@ final class MCPRouter: @unchecked Sendable {
                     metadata = fallback.metadata
                     kgSection = localKGSection()
                 }
+            } catch let failure as HybridBudgetFailure {
+                let reason = failure == .busy ? "hybrid helper busy past budget" : "hybrid helper exceeded budget"
+                NSLog("[BrainBar] Search mode: BrainBar database fallback (%@)", reason)
+                let fallback = try searchViaBrainBarDatabase()
+                textSection = fallback.text + "\nSearch mode: BrainBar database fallback (\(reason))"
+                metadata = fallback.metadata
+                kgSection = localKGSection()
             } catch {
                 NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", HybridSearchHelperError.loggable(error))
                 let fallback = try searchViaBrainBarDatabase()
@@ -944,7 +992,7 @@ final class MCPRouter: @unchecked Sendable {
         return response.text.contains(" - 0 of 0 shown")
     }
 
-    private func hybridSearchWithinBudget(arguments: [String: Any]) throws -> HybridSearchResponse? {
+    func hybridSearchWithinBudget(arguments: [String: Any]) throws -> HybridSearchResponse? {
         guard let hybridSearchClient else { return nil }
         if let readinessProvider = hybridSearchClient as? HybridSearchReadinessProviding,
            !readinessProvider.isReady {
@@ -952,19 +1000,36 @@ final class MCPRouter: @unchecked Sendable {
             return nil
         }
 
+        let flight = UUID()
+        let admitted = hybridFlightLock.withLock {
+            guard stuckHybridFlights.isEmpty else { return false }
+            hybridFlights.insert(flight)
+            return true
+        }
+        guard admitted else { throw HybridBudgetFailure.busy }
         let group = DispatchGroup()
         let argumentBox = HybridSearchArgumentBox(arguments: arguments)
         let resultBox = HybridSearchResultBox()
         group.enter()
-        DispatchQueue.global(qos: .userInitiated).async {
+        hybridSearchExecutor {
+            defer {
+                self.hybridFlightLock.withLock {
+                    self.hybridFlights.remove(flight)
+                    self.stuckHybridFlights.remove(flight)
+                }
+                group.leave()
+            }
             let outcome = Result { try hybridSearchClient.search(arguments: argumentBox.arguments) }
             resultBox.set(outcome)
-            group.leave()
         }
 
         let timeout = DispatchTime.now() + .nanoseconds(Int(hybridSearchBudget * 1_000_000_000))
         guard group.wait(timeout: timeout) == .success else {
-            return nil
+            hybridFlightLock.withLock {
+                // Completion shares this lock so it cannot leave a stale stuck marker.
+                if hybridFlights.contains(flight) { stuckHybridFlights.insert(flight) }
+            }
+            throw HybridBudgetFailure.timedOut
         }
 
         return try resultBox.get()?.get()
@@ -1047,6 +1112,9 @@ final class MCPRouter: @unchecked Sendable {
         let tags = args["tags"] as? [String] ?? []
         let importance = args["importance"] as? Int ?? 5
         let project = args["project"] as? String
+        // Self-reported by the caller (MCP cannot see who is calling). Never inferred
+        // from agent_id or the session; an invalid value is dropped, not stored.
+        let callerModel = args["caller_model"] as? String
         if deferForBackup {
             return try queueBrainStore(
                 content: content,
@@ -1055,6 +1123,7 @@ final class MCPRouter: @unchecked Sendable {
                 source: "mcp",
                 project: project,
                 conversationID: session.conversationID,
+                callerModel: callerModel,
                 reason: "BACKUP_SNAPSHOT"
             )
         }
@@ -1066,6 +1135,7 @@ final class MCPRouter: @unchecked Sendable {
                 source: "mcp",
                 project: project,
                 conversationID: session.conversationID,
+                callerModel: callerModel,
                 reason: "DB_NOT_OPEN"
             )
         }
@@ -1078,6 +1148,7 @@ final class MCPRouter: @unchecked Sendable {
                 source: "mcp",
                 project: project,
                 conversationID: session.conversationID,
+                callerModel: callerModel,
                 busyTimeoutMillis: Self.mcpStoreBusyTimeoutMillis,
                 retries: Self.mcpStoreRetries
             ) {
@@ -1137,6 +1208,7 @@ final class MCPRouter: @unchecked Sendable {
                 source: "mcp",
                 project: project,
                 conversationID: session.conversationID,
+                callerModel: callerModel,
                 reason: "DB_NOT_OPEN"
             )
         }
@@ -1284,6 +1356,7 @@ final class MCPRouter: @unchecked Sendable {
         source: String,
         project: String?,
         conversationID: String,
+        callerModel: String? = nil,
         reason: String
     ) throws -> ToolOutput {
         guard let dbPath else {
@@ -1297,6 +1370,7 @@ final class MCPRouter: @unchecked Sendable {
             source: source,
             project: project,
             conversationID: conversationID,
+            callerModel: callerModel,
             reason: reason
         )
         return queuedBrainStoreOutput(
@@ -1667,6 +1741,14 @@ final class MCPRouter: @unchecked Sendable {
         guard let targetPath = args["target_path"] as? String else {
             throw ToolError.missingParameter("target_path")
         }
+        vacuumActivity.lock()
+        activeVacuumCount += 1
+        vacuumActivity.unlock()
+        defer {
+            vacuumActivity.lock()
+            activeVacuumCount -= 1
+            vacuumActivity.unlock()
+        }
         let db = try writeDB()
         // A caller aimed at a different database must never receive this one (2026-10-19:
         // a temp-DB run got a 20 GB production copy). Identity is the OPEN file's dev/inode, so a
@@ -1929,6 +2011,7 @@ final class MCPRouter: @unchecked Sendable {
                     "tags": ["type": "array", "items": ["type": "string"], "description": "Tags for categorization"],
                     "importance": ["type": "integer", "description": "Importance score (1-10)"],
                     "project": ["type": "string", "description": "Project context for the stored memory"],
+                    "caller_model": ["type": "string", "description": "Optional: your own model ID, self-reported. Stored as metadata.model; never inferred."],
                 ] as [String: Any],
                 "required": ["content"]
             ] as [String: Any])

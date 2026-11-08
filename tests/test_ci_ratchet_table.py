@@ -2770,6 +2770,15 @@ def test_lsof_failure_is_a_collector_error_not_an_absent_owner(monkeypatch) -> N
         ratchet.socket_owner_binary(Path("/tmp/brainbar.sock"))
 
 
+def test_a_compact_hybrid_answer_is_measured_not_reported_empty(tmp_path: Path, monkeypatch) -> None:
+    # #1069: BrainBar renders hybrid answers in compact form; the old header regex saw no rows.
+    monkeypatch.setattr(ratchet, "socket_owner_binary", lambda _path: (1, ratchet.BRAINBAR_DAEMON_BINARY))
+    legend = "ID|score|project(blank=your filter)|date|source; S=summary P=preview"
+    mock_search(monkeypatch, f'## "q" 1/12\n{legend}\n- ID: rt-1|0.8700||2026-11-04|a.jsonl\nP: hit')
+    selection = detect_latency(mac_probe(tmp_path), {**CORPUS, "queries": ["q"]})
+    assert selection.problem is None and selection.measurement.sample_count == 1
+
+
 def test_fallback_and_empty_search_responses_become_collector_problems(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(ratchet, "socket_owner_binary", lambda _path: (1, ratchet.BRAINBAR_DAEMON_BINARY))
     mock_search(monkeypatch, '## Search results for "q" - 1 of 1 shown\n### 1. local hit', hybrid=False)

@@ -128,6 +128,7 @@ def test_opt_in_retention_sees_prior_ids_without_creating_or_moving_folders():
         verified_file_ids={"new"},
     )
     assert removed == ["2026-10-17.db.gz"]
+    service.files.return_value.get.assert_called_once_with(fileId="stable", fields="parents", supportsAllDrives=True)
     service.files.return_value.update.assert_called_once_with(
         fileId="old", body={"trashed": True}, supportsAllDrives=True
     )

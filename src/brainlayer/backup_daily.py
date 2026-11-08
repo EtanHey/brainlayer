@@ -61,6 +61,7 @@ DRIVE_MACHINE_PROPERTY = "brainlayer_machine"
 # a router hostname or adopt another machine's legacy folder by prefix matching.
 PRIOR_MACHINE_IDS = {"Locals-MacBook-Pro": ("Locals-MBP.lan",)}
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups"
+BACKUP_LOCK_ADMISSION_TIMEOUT_SECONDS = 3.0
 MIN_RAW_FREE_BYTES = 2 * 1024 * 1024 * 1024
 COPY_CHUNK_BYTES = 1024 * 1024
 RECLAIM_CHUNK_BYTES = 64 * 1024 * 1024
@@ -92,6 +93,13 @@ DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = SNAPSHOT_TIMEOUT_CEILING_SECONDS
 # The calendar kills at its budget; the backup's own deadline must fire this much earlier so its
 # supervisor (SIGALRM, 10 s grace, SIGKILL) can still write the BackupTimeoutError receipt.
 SNAPSHOT_RECEIPT_RESERVE_SECONDS = 60
+# The supervisor's SIGALRM -> SIGKILL grace, and the slice of the reserve kept for the receipt itself.
+SUPERVISOR_ALARM_GRACE_SECONDS = 10
+SUPERVISOR_RECEIPT_WRITE_SECONDS = 5
+# One elapsed deadline (#1422): the calendar's kill instant on the system-wide monotonic clock,
+# taken before the spawn, so wrapper/Python startup and child creation are charged against it.
+BACKUP_CALENDAR_DEADLINE_ENV = "BRAINLAYER_BACKUP_CALENDAR_DEADLINE_MONOTONIC"
+BACKUP_DEFERRED_EXIT_CODE = 75
 BACKUP_LOCAL_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS"
 BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
@@ -413,6 +421,11 @@ class BrainBarSnapshotBusyError(RuntimeError):
 
 # BrainBarServer.handleBackupToolCallAsync sends this before admission; the running writer continues.
 BRAINBAR_SNAPSHOT_BUSY_MESSAGE = "A BrainBar backup snapshot is already in progress."
+# #1413 structured busy contract: the rejection's JSON-RPC `error.data` carries this code. An
+# intermediary that re-wraps it as a tool result may carry it in the result, structuredContent
+# or _meta; older BrainBars send only the message, which stays recognised (legacy).
+BRAINBAR_ERROR_CODE_KEY = "brainlayer_error_code"
+BRAINBAR_SNAPSHOT_BUSY_CODE = "backup_snapshot_busy"
 
 
 class BrainBarDatabaseIdentityError(RuntimeError):
@@ -447,8 +460,35 @@ def _same_database_file(a: str | os.PathLike[str], b: str | os.PathLike[str]) ->
 
 
 def _is_brainbar_snapshot_busy(response: dict[str, Any]) -> bool:
+    """Recognise a pre-admission busy rejection in every shape it reaches us (#1413).
+
+    Over-matching only preserves attempts and their reservations; under-matching treats the
+    rejection as terminal and unlinks a target BrainBar is still writing. So a structured code
+    anywhere, or the busy text in a JSON-RPC error or an isError tool result, counts as busy.
+    """
+    if not isinstance(response, dict):
+        return False
     error = response.get("error")
-    return isinstance(error, dict) and error.get("message") == BRAINBAR_SNAPSHOT_BUSY_MESSAGE
+    if isinstance(error, dict):
+        data = error.get("data")
+        if isinstance(data, dict) and data.get(BRAINBAR_ERROR_CODE_KEY) == BRAINBAR_SNAPSHOT_BUSY_CODE:
+            return True
+        message = error.get("message")
+        if isinstance(message, str) and BRAINBAR_SNAPSHOT_BUSY_MESSAGE in message:
+            return True
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return False
+    for carrier in (result, result.get("structuredContent"), result.get("_meta")):
+        if isinstance(carrier, dict) and carrier.get(BRAINBAR_ERROR_CODE_KEY) == BRAINBAR_SNAPSHOT_BUSY_CODE:
+            return True
+    content = result.get("content")
+    if result.get("isError") and isinstance(content, list):
+        for item in content:
+            text = item.get("text") if isinstance(item, dict) else None
+            if isinstance(text, str) and BRAINBAR_SNAPSHOT_BUSY_MESSAGE in text:
+                return True
+    return False
 
 
 class BackupStoppedError(BaseException):
@@ -782,14 +822,31 @@ def _sweep_stale_backup_attempts(
     max_age_seconds: int | None = None,
     now: float | None = None,
     writer_started_at: float | None = None,
+    writer_snapshot_idle: Callable[[], bool] | None = None,
 ) -> tuple[list[str], list[Path]]:
-    """Remove old, daemon-confirmed attempts while preserving unproven or recent entries."""
+    """Remove old, daemon-confirmed attempts while preserving unproven or recent entries.
+
+    An aged unmarked attempt is reclaimed when a later writer epoch began after it, or when
+    BrainBar positively reports, in the current epoch, that no snapshot is admitted
+    (writer_snapshot_idle, asked at most once and only when such an attempt exists, after its
+    stat: an aged file cannot be a newly admitted target). Age alone never proves the writer
+    stopped (#1413).
+    """
     output_dir = Path(output_dir)
     cutoff = (time.time() if now is None else now) - (
         _configured_backup_attempt_max_age_seconds() if max_age_seconds is None else max_age_seconds
     )
     deleted: list[str] = []
     surviving: list[Path] = []
+    idle_answer: list[bool] = []
+
+    def proven_idle() -> bool:
+        if writer_snapshot_idle is None:
+            return False
+        if not idle_answer:
+            idle_answer.append(writer_snapshot_idle() is True)
+        return idle_answer[0]
+
     for path in sorted(output_dir.glob(".*.db.attempt-*")):
         try:
             if path.name.endswith(".complete"):
@@ -800,9 +857,19 @@ def _sweep_stale_backup_attempts(
             path_mtime = path.stat().st_mtime
             completion_marker = _backup_attempt_completion_marker(path)
             if completion_marker.is_symlink() or not completion_marker.is_file():
-                if path_mtime <= cutoff and writer_started_at is not None and path_mtime < writer_started_at:
+                if (
+                    path_mtime <= cutoff
+                    and writer_started_at is not None
+                    and (path_mtime < writer_started_at or proven_idle())
+                ):
                     path.unlink()
                     deleted.append(path.name)
+                    if path_mtime >= writer_started_at:
+                        print(
+                            f"Backup reclaimed aged unmarked attempt {path.name}: BrainBar reports no snapshot "
+                            f"in progress in writer epoch {writer_started_at}",
+                            flush=True,
+                        )
                 else:
                     surviving.append(path)
                 continue
@@ -965,7 +1032,7 @@ def _backup_attempt_completion_marker(attempt_path: Path) -> Path:
     return attempt_path.with_name(f"{attempt_path.name}.complete")
 
 
-def _brainbar_writer_started_at(socket_path: Path | str | None = None) -> float:
+def _brainbar_initialize_server_info(socket_path: Path | str | None = None) -> dict[str, Any]:
     request = {
         "jsonrpc": "2.0",
         "id": "backup-writer-status",
@@ -979,10 +1046,35 @@ def _brainbar_writer_started_at(socket_path: Path | str | None = None) -> float:
     response = _send_brainbar_json_request(_brainbar_socket_path(socket_path), request, timeout_seconds=5)
     result = response.get("result")
     server_info = result.get("serverInfo") if isinstance(result, dict) else None
-    started_at = server_info.get("backupWriterStartedAtUnix") if isinstance(server_info, dict) else None
-    if not isinstance(started_at, (int, float)) or started_at <= 0:
+    return server_info if isinstance(server_info, dict) else {}
+
+
+def _brainbar_writer_started_at(socket_path: Path | str | None = None) -> float:
+    started_at = _brainbar_initialize_server_info(socket_path).get("backupWriterStartedAtUnix")
+    if isinstance(started_at, bool) or not isinstance(started_at, (int, float)) or started_at <= 0:
         raise RuntimeError("BrainBar initialize response missing backupWriterStartedAtUnix")
     return float(started_at)
+
+
+def _brainbar_snapshot_idle_in_epoch(socket_path: Path | str | None, writer_started_at: float | None) -> bool:
+    """True only if BrainBar, still in writer epoch writer_started_at, reports no admitted snapshot.
+
+    Fail closed: an older BrainBar without the field, a malformed answer, a restart between the
+    two probes (a different epoch) or a failed probe all read as "not proven idle".
+    """
+    if writer_started_at is None:
+        return False
+    try:
+        server_info = _brainbar_initialize_server_info(socket_path)
+    except BackupTimeoutError:
+        raise
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"BrainBar snapshot status unavailable: {type(exc).__name__}", flush=True)
+        return False
+    started_at = server_info.get("backupWriterStartedAtUnix")
+    if isinstance(started_at, bool) or not isinstance(started_at, (int, float)):
+        return False
+    return float(started_at) == writer_started_at and server_info.get("backupSnapshotInProgress") is False
 
 
 def _database_logical_size_bytes(db_path: Path) -> int:
@@ -1779,6 +1871,7 @@ def create_sqlite_backup_artifact(
     stale_attempts_deleted, surviving_attempt_paths = _sweep_stale_backup_attempts(
         output_dir,
         writer_started_at=writer_started_at,
+        writer_snapshot_idle=lambda: _brainbar_snapshot_idle_in_epoch(socket_path, writer_started_at),
     )
     db_size = _database_logical_size_bytes(db_path)
     surviving_attempt_bytes = 0
@@ -2422,10 +2515,16 @@ def _assert_backup_owners(files: list[dict[str, Any]], *, folder_id: str, machin
 class RetainedStalledBackupCapacityError(RuntimeError):
     error_code = "retained_stalled_backup_capacity"
 
-    def __init__(self, names: list[str], *, reason: str | None = None):
-        self.error_type = f"RetainedStalledBackupCapacityError[{','.join(names)}]"
+    def __init__(self, names: list[str], *, reason: str | None = None, unconfirmed: list[str] | None = None):
+        # Every retained stall is named, including one whose identity could not be confirmed (#1385).
+        self.names = list(dict.fromkeys([*names, *(unconfirmed or [])]))
+        self.unconfirmed = [name for name in self.names if name in (unconfirmed or [])]
+        self.error_type = f"RetainedStalledBackupCapacityError[{','.join(self.names)}]"
         detail = f"; {reason}" if reason else ""
-        super().__init__(f"Insufficient capacity; retaining stalled backups: {', '.join(names)}{detail}")
+        unconfirmed_detail = f" (identity unconfirmed: {', '.join(self.unconfirmed)})" if self.unconfirmed else ""
+        super().__init__(
+            f"Insufficient capacity; retaining stalled backups: {', '.join(self.names)}{unconfirmed_detail}{detail}"
+        )
 
 
 class RetainedStalledBackupConflictError(RuntimeError):
@@ -3149,12 +3248,16 @@ def _local_snapshot_intact(receipt: Mapping[str, Any]) -> bool:
     """The durable #1387 proof is bound to these exact bytes, not a dated filename."""
     try:
         path = Path(receipt["snapshot"])
+        artifact = receipt.get("local_artifact")
         return (
             receipt.get("local_verified") is True
             and not path.is_symlink()
             and path.is_file()
             and path.stat().st_nlink == 1
-            and receipt.get("local_artifact") == _upload_identity(path)
+            # Cheap disproof first: a missing record or a size change can never equal the hash (#1385).
+            and isinstance(artifact, dict)
+            and artifact.get("size") == path.stat().st_size
+            and artifact == _upload_identity(path)
         )
     except (OSError, KeyError, TypeError, ValueError):
         return False
@@ -3164,7 +3267,7 @@ def _recent_local_verified_backup(
     log_path: Path, db_path: Path, *, now: dt.datetime, max_age_hours: float
 ) -> dict[str, Any] | None:
     try:
-        receipts = _read_backup_receipts(log_path)
+        receipts = _read_backup_receipts(log_path, strict=True)
     except (OSError, ValueError):
         return None
     latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
@@ -3403,7 +3506,16 @@ def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[...,
         staging_dir.mkdir(parents=True, exist_ok=True)
         with (staging_dir / ".backup.lock").open("a+b") as lock:
             try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                admission_deadline = time.monotonic() + BACKUP_LOCK_ADMISSION_TIMEOUT_SECONDS
+                while True:
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        remaining = admission_deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise
+                        time.sleep(min(0.05, remaining))
             except BlockingIOError as exc:
                 error = f"backup already running in {staging_dir}"
                 resolved_db_path = bound.arguments.get("db_path") or get_db_path()
@@ -3465,8 +3577,25 @@ def _upload_identity(path: Path) -> dict[str, Any]:
     return {"path": str(path.resolve()), "size": path.stat().st_size, "sha256": digest}
 
 
+def _stalled_identity_confirmed(receipt: Mapping[str, Any]) -> bool:
+    """Hash one retained stall against its receipt. Runs only where the bytes are about to be used:
+    the candidate actually resumed, and (in _remove_superseded_stalls) a stall about to be reclaimed (#1385)."""
+    state = receipt.get("resumable_upload")
+    if not isinstance(state, dict):
+        return False
+    try:
+        return _upload_identity(Path(receipt["snapshot"])) == {k: state.get(k) for k in ("path", "size", "sha256")}
+    except (OSError, KeyError, TypeError):
+        return False
+
+
 def _stalled_uploads(log_path: Path, context: dict[str, Any], staging_dir: Path) -> list[dict[str, Any]]:
-    """Latest receipt per artifact; uncertainty disables reclamation, never broadens it."""
+    """Latest receipt per artifact; uncertainty disables reclamation, never broadens it.
+
+    Listing never hashes: each retained stall is ~9.5 GB and most are too old to resume, so only
+    path/size/link/name are checked here. Bytes are proven by _stalled_identity_confirmed at the
+    point of use. A stall failing even these checks is named in context["retained_stalled_unconfirmed"]
+    so a capacity failure can account for every retained file."""
     if not log_path.exists():
         return []
     try:
@@ -3504,9 +3633,12 @@ def _stalled_uploads(log_path: Path, context: dict[str, Any], staging_dir: Path)
                 or _parse_snapshot_date(path.name) is None
                 or path.name not in {f"{path.name[:10]}{suffix}" for suffix in DB_SNAPSHOT_SUFFIXES}
                 or path.stat().st_nlink != 1
-                or _upload_identity(path) != {k: state.get(k) for k in ("path", "size", "sha256")}
+                or str(path.resolve()) != state.get("path")
+                or path.stat().st_size != state.get("size")
             ):
                 print(f"Retaining stalled backup with unconfirmed identity: {path.name}", flush=True)
+                if os.path.lexists(path):
+                    context.setdefault("retained_stalled_unconfirmed", []).append(path.name)
                 continue
             candidates.append(receipt)
         return sorted(
@@ -3574,7 +3706,7 @@ def _remove_superseded_stalls(receipts: list[dict[str, Any]], result: dict[str, 
                 or _snapshot_created_time(receipt) >= _snapshot_created_time(result)
                 or path.is_symlink()
                 or path.stat().st_nlink != 1
-                or _upload_identity(path) != {k: receipt["resumable_upload"].get(k) for k in ("path", "size", "sha256")}
+                or not _stalled_identity_confirmed(receipt)
             ):
                 print(f"Retaining stalled backup without proof it is superseded: {path.name}", flush=True)
                 continue
@@ -3736,15 +3868,20 @@ def run_backup(
             result["upload_state"] = "nothing_pending"
             return result
         stalled = _stalled_uploads(resolved_log_path, result, Path(staging_dir)) if upload else []
-        candidate = next(
-            (
-                r
-                for r in stalled
-                if _safe_upload_url(r["resumable_upload"].get("url"))
+        candidate = None
+        for r in stalled:
+            if not (
+                _safe_upload_url(r["resumable_upload"].get("url"))
                 and _resume_fresh_enough(r, dt.datetime.fromisoformat(result["attempted_at"]))
-            ),
-            None,
-        )
+            ):
+                continue  # Not resumable, so its bytes are never read on this run.
+            if _stalled_identity_confirmed(r):
+                candidate = r
+                break
+            name = Path(r["snapshot"]).name
+            print(f"Retaining stalled backup with unconfirmed identity: {name}", flush=True)
+            result.setdefault("retained_stalled_unconfirmed", []).append(name)
+        stalled = [r for r in stalled if Path(r["snapshot"]).name not in result.get("retained_stalled_unconfirmed", [])]
 
         local_resume = local is not None and not (local.get("uploaded") and local.get("verified"))
         candidate = local if local_resume else candidate
@@ -3795,9 +3932,12 @@ def run_backup(
                     reason += f"; retained compressed snapshots: {_compressed_snapshot_names(Path(staging_dir))}"
                 if floor_breach:
                     reason += f"; retained raw snapshots: {_retained_raw_snapshot_names(Path(staging_dir))}"
-                if stalled and ("Insufficient free space" in reason or "raw free space floor breached" in reason):
+                unconfirmed = list(result.get("retained_stalled_unconfirmed", []))
+                if (stalled or unconfirmed) and (
+                    "Insufficient free space" in reason or "raw free space floor breached" in reason
+                ):
                     raise RetainedStalledBackupCapacityError(
-                        [Path(r["snapshot"]).name for r in stalled], reason=reason
+                        [Path(r["snapshot"]).name for r in stalled], reason=reason, unconfirmed=unconfirmed
                     ) from exc
                 if "Insufficient free space" in reason or floor_breach:
                     raise RuntimeError(reason) from exc
@@ -4072,6 +4212,8 @@ def run_backup(
         error_code = getattr(exc, "error_code", None)
         if isinstance(exc, RawReclaimUnconfirmedError):
             result["raw_reclaim"] = exc.measurements
+        if isinstance(exc, RetainedStalledBackupCapacityError):
+            result["retained_stalled_backups"] = exc.names
         if isinstance(error_code, str):
             result["error_code"] = error_code
         if isinstance(exc, DriveUploadStalledError):
@@ -4119,7 +4261,9 @@ def _run_backup_process(timeout_seconds: int) -> int:
     signal.signal(signal.SIGALRM, _raise_backup_timeout)
     signal.signal(signal.SIGTERM, _raise_backup_stopped)
     signal.signal(signal.SIGINT, _raise_backup_stopped)
-    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    supervised = _env_flag_enabled(BACKUP_SUPERVISED_CHILD_ENV)
+    if not supervised:
+        signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
         resolved_db_path = get_db_path()
 
@@ -4180,7 +4324,8 @@ def _run_backup_process(timeout_seconds: int) -> int:
         )
         return 1
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
+        if not supervised:
+            signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_alarm_handler)
         signal.signal(signal.SIGTERM, previous_term_handler)
         signal.signal(signal.SIGINT, previous_int_handler)
@@ -4196,7 +4341,10 @@ def _run_backup_process(timeout_seconds: int) -> int:
     )
 
 
-def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None = None) -> int:
+def _supervise_backup_process(
+    timeout_seconds: int, *, command: list[str] | None = None, deadline: float | None = None
+) -> int:
+    """Run the backup child; with ``deadline`` (monotonic), the receipt is written strictly before it."""
     guard_fd = os.environ.get("BRAINLAYER_CALENDAR_GUARD_FD")
     managed = guard_fd is not None
     if managed:
@@ -4226,12 +4374,22 @@ def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None
         signal.signal(shutdown_signal, forward_shutdown_signal)
     try:
         try:
-            return child.wait(timeout=timeout_seconds)
+            wait = timeout_seconds
+            if deadline is not None:
+                # Child creation already spent part of the budget; the alarm keeps the full reserve.
+                alarm_at = deadline - SNAPSHOT_RECEIPT_RESERVE_SECONDS
+                wait = max(0.0, min(timeout_seconds, alarm_at - time.monotonic()))
+            return child.wait(timeout=wait)
         except subprocess.TimeoutExpired:
             if child.poll() is None:
                 signal_child(signal.SIGALRM)
+                grace = SUPERVISOR_ALARM_GRACE_SECONDS
+                if deadline is not None:
+                    # Never let the grace eat the receipt's own slice of the remaining window.
+                    remaining = deadline - time.monotonic() - SUPERVISOR_RECEIPT_WRITE_SECONDS
+                    grace = max(0.0, min(grace, remaining))
                 try:
-                    child.wait(timeout=10)
+                    child.wait(timeout=grace)
                 except subprocess.TimeoutExpired:
                     signal_child(signal.SIGKILL)
                     child.wait()
@@ -4283,6 +4441,7 @@ def main(argv: list[str] | None = None) -> int:
     _parse_cli_args([] if argv is None else argv)
     timeout_seconds = _configured_backup_timeout_seconds()
     snapshot_phase = os.environ.get("BRAINLAYER_BACKUP_PHASE") == "snapshot"
+    deadline = None
     if snapshot_phase:
         timeout_seconds = min(
             timeout_seconds,
@@ -4296,17 +4455,32 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds = min(timeout_seconds, int(budget))
         if timeout_seconds < 1:
             raise ValueError("snapshot timeout must be positive")
+        if (raw_deadline := os.environ.get(BACKUP_CALENDAR_DEADLINE_ENV)) is not None:
+            deadline = float(raw_deadline)
+            if not math.isfinite(deadline):
+                raise ValueError(f"{BACKUP_CALENDAR_DEADLINE_ENV} must be finite")
+            # Startup so far is charged against the calendar's clock, not added on top of it.
+            work = math.floor(deadline - time.monotonic() - SNAPSHOT_RECEIPT_RESERVE_SECONDS)
+            if work < 1:
+                print(
+                    "brainlayer backup-snapshot deferred: no positive work budget plus the "
+                    f"{SNAPSHOT_RECEIPT_RESERVE_SECONDS}s receipt reserve fits before the calendar deadline",
+                    flush=True,
+                )
+                return BACKUP_DEFERRED_EXIT_CODE  # nothing was started; the calendar records a deferral
+            timeout_seconds = min(timeout_seconds, work)
     if _env_flag_enabled(BACKUP_SUPERVISED_CHILD_ENV):
         return _run_backup_process(timeout_seconds)
     from .job_alerts import report
 
     key = "backup-snapshot" if snapshot_phase else "backup-daily"
     try:
-        code = _supervise_backup_process(timeout_seconds)
+        code = _supervise_backup_process(timeout_seconds, **({"deadline": deadline} if deadline is not None else {}))
     except Exception:
         report(key, "Database backup failed; check the backup log")
         raise
-    report(key, None if code == 0 else "Database backup failed; check the backup log")
+    if code != BACKUP_DEFERRED_EXIT_CODE or deadline is None:  # a child's deadline deferral is not a failure
+        report(key, None if code == 0 else "Database backup failed; check the backup log")
     return code
 
 

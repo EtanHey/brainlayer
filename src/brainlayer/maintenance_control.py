@@ -17,6 +17,9 @@ from .drive_credentials import _atomic_write
 from .supervisor_guard import component_gate, start_time
 
 HOLD_MAX_ENV = "BRAINLAYER_MAINTENANCE_HOLD_MAX_S"
+# The calendar's run-start receipt id for one maintenance child: written on its `spawn` and
+# `finished` records and echoed in every record the child prints, so readers correlate on the id.
+MAINTENANCE_RUN_ID_ENV = "BRAINLAYER_MAINTENANCE_RUN_ID"
 HOLD_GRACE_ENV = "BRAINLAYER_MAINTENANCE_HOLD_GRACE_S"
 HOLD_KILL_AFTER_ENV = "BRAINLAYER_MAINTENANCE_HOLD_KILL_AFTER_S"
 DEFAULT_HOLD_MAX_S = 3600.0
@@ -99,7 +102,7 @@ def _generation(directory):
 
 def _lease_held(directory):
     try:
-        with component_gate(directory):
+        with component_gate(directory, operation="hold-probe"):
             return False  # A shared lock succeeded: no exclusive hold remains.
     except BlockingIOError:
         return True
@@ -166,7 +169,7 @@ def recover_hold(path):
     client.request = bounded_request
     hold = MaintenanceHold(client)
     try:
-        with component_gate(hold.directory, exclusive=True):
+        with component_gate(hold.directory, exclusive=True, operation="maintenance-hold"):
             hold._restore()
     except BlockingIOError:
         enforce_hold_expiry(path)  # A live owner past its cap is ended; the next tick restores.
@@ -275,7 +278,7 @@ class MaintenanceHold:
             self.nested = True
             self.deadline = entry.get("deadline")
             return self
-        gate = component_gate(self.directory, exclusive=True)
+        gate = component_gate(self.directory, exclusive=True, operation="maintenance-hold")
         fd = gate.__enter__()
         self.gate, self.fd = gate, fd
         try:

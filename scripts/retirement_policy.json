@@ -32,14 +32,6 @@
         "target": "socket.socket"
       }
     },
-    "0107e6e15995a69d138fde768e6695d45b98b24d337167e49faf44e39d2baf44": {
-      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
-      "site": {
-        "body_sha256": "566786590c97ee347d95c420a7771a91b1f73e3a1b2ee6441d6955a04067e0bc",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
-      }
-    },
     "012534e611e8853a35e92994ac7216f58bbff44829de58fae28c1ce2927b2cb0": {
       "non_cloud_purpose": "Read-only bounded local git archive of tracked Python sources across all repo import roots plus pyproject metadata; parse the immutable base import closure in memory without extracting or executing code. No network or model sender.",
       "site": {
@@ -1818,6 +1810,16 @@
         "target": "subprocess.CalledProcessError"
       }
     },
+    "4ae2234b098a4152b3105daee137a2df3a651ea0d54c0c49033ba753d1fbf0d7": {
+      "non_cloud_purpose": "Local ps inspection of an unreaped suite leader on platforms without waitid; no cloud model subprocess.",
+      "site": {
+        "call_sha256": "d567a0a17f6cb621305b22eb836bb59b2eaf59b76217797c8294fdad52b82e42",
+        "kind": "child_process",
+        "owner": "<module>._exited",
+        "path": "scripts/ci/run_with_deadline.py",
+        "target": "subprocess.run"
+      }
+    },
     "4af5fe0f4e14dac652231ffe290945674586c25b9dbf74783c2d3b9ea216f571": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/fallback_replay.py <module>._git_root_uncached",
       "site": {
@@ -1888,6 +1890,16 @@
         "target": "import subprocess"
       }
     },
+    "4d1de79fd9491f30a54d31fe85187dd58a9e23769ce6ea4511a6c873a1570e7b": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/jobs.py <module>._run",
+      "site": {
+        "call_sha256": "92ea588f361a98ae851c9d4468db3485eeea0b6087b067e77d850435078cc623",
+        "kind": "child_process",
+        "owner": "<module>._run",
+        "path": "src/brainlayer/jobs.py",
+        "target": "subprocess.run"
+      }
+    },
     "4d280e84087655cf076cedd02d707eb48d1c25bf90783bbbf870a34329987e34": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
       "site": {
@@ -1896,6 +1908,14 @@
         "owner": "<module>.probe_profile",
         "path": "scripts/retirement_run.py",
         "target": "subprocess.check_output"
+      }
+    },
+    "4d352a749e07656f09bc08bb17e2bb9454d544af69ef6f1fe75c0c50227a3795": {
+      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
+      "site": {
+        "body_sha256": "17cf382a40918f9ea07b0080814d158bbae90f7ef66e6e2980aed0b2aa38c713",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
       }
     },
     "4e69eccb163b762d4cba5a290d2f5004897ddf05246d50e49f5e6856330a858a": {
@@ -2288,16 +2308,6 @@
         "target": "import subprocess"
       }
     },
-    "5fdb89dca15e912202ad05d98829d12f449f6548d6a7884a843602ea11f91b7b": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/jobs.py <module>._run",
-      "site": {
-        "call_sha256": "e6e4319857b7d0a6a63a65ddd2edf215e9ce654183cdf80b54908f490e2d35d0",
-        "kind": "child_process",
-        "owner": "<module>._run",
-        "path": "src/brainlayer/jobs.py",
-        "target": "subprocess.run"
-      }
-    },
     "60300f756e30ea5cb7b4db67806afb6ffb534797de3a4bff89e23635d13bef3b": {
       "non_cloud_purpose": "Local AF_UNIX peer UID query via libc getpeereid or SO_PEERCRED; no network/cloud endpoint.",
       "site": {
@@ -2456,16 +2466,6 @@
         "owner": "<module>.upload_file_to_drive_raw",
         "path": "src/brainlayer/backup_daily.py",
         "target": "requests.Session"
-      }
-    },
-    "661b8066c3acc9ace5274c46e2c5a20f35bd71639373ac3136cb52643d88ee48": {
-      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/ci/run_with_deadline.py <module>.main subprocess.TimeoutExpired.",
-      "site": {
-        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
-        "kind": "callable_reference",
-        "owner": "<module>.main",
-        "path": "scripts/ci/run_with_deadline.py",
-        "target": "subprocess.TimeoutExpired"
       }
     },
     "663f8e3260afd2782569d1dca82aa43a95e1a92ebadafb16538db00596a63f42": {
@@ -4360,6 +4360,16 @@
         "target": "subprocess.Popen"
       }
     },
+    "aed8b06c4cec332a279b35f5b0e6a61e4e9dcf86a6bd74c86beb0c0cad5ce5bd": {
+      "non_cloud_purpose": "Read-only SQLite inspection of an explicitly supplied local rehearsal database copy; no network or model invocation.",
+      "site": {
+        "call_sha256": "4c82531793abf62b7e560aa880fb266f165fe431f77b4903d73233e08b2d4dac",
+        "kind": "generic_send",
+        "owner": "<module>.snapshot",
+        "path": "scripts/rehearse_1661.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "aed9b5dea2412a92d4cd4b5defb4ace626bbe2554309872f7bd632c1e5678598": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -4388,16 +4398,6 @@
         "owner": "<module>._icloud_inventory_is_verified",
         "path": "src/brainlayer/jsonl_backup.py",
         "target": "subprocess.TimeoutExpired"
-      }
-    },
-    "af590c54442cf25c4ed1157f5d66ff254a54096665634c7226085f979d90dabd": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ci/run_with_deadline.py <module>.main",
-      "site": {
-        "call_sha256": "54673820a88319d8d6c261ba8467b7faa5d642ef1936b173f3c4ca4da269ee8c",
-        "kind": "child_process",
-        "owner": "<module>.main",
-        "path": "scripts/ci/run_with_deadline.py",
-        "target": "subprocess.Popen"
       }
     },
     "af643a38e080a55652075b8ecc63c50660aafa4e1321ca4b9e6d6ff96606daf9": {
@@ -4660,6 +4660,16 @@
         "target": "subprocess.run"
       }
     },
+    "b651e3b276660a581a152ad71874178f724e5405ec060b2c7dd0e70e31b3733b": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ci/run_with_deadline.py <module>._run",
+      "site": {
+        "call_sha256": "54673820a88319d8d6c261ba8467b7faa5d642ef1936b173f3c4ca4da269ee8c",
+        "kind": "child_process",
+        "owner": "<module>._run",
+        "path": "scripts/ci/run_with_deadline.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "b684440ab14ebfa5e14721c84779c561498f5f7e62e1659a3e383dbbbb12a86a": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jsonl_backup.py <module>._icloud_item_state subprocess.CalledProcessError.",
       "site": {
@@ -4838,14 +4848,6 @@
         "owner": "<module>._run_launchctl",
         "path": "src/brainlayer/cli/__init__.py",
         "target": "subprocess.CompletedProcess"
-      }
-    },
-    "bba6265c8c2f7a4c8363c205499984bcb23f7d892513bad37f8835f43d8afde5": {
-      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
-      "site": {
-        "body_sha256": "566786590c97ee347d95c420a7771a91b1f73e3a1b2ee6441d6955a04067e0bc",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
       }
     },
     "bbec38baa32ca5b4db5f7cab488e4c331dd9a059bb5c5568415d1a25fcbc56d0": {
@@ -5206,6 +5208,14 @@
         "owner": "<module>.AutoActivator._tick",
         "path": "src/brainlayer/brainbar_auto_activation.py",
         "target": "subprocess.run"
+      }
+    },
+    "c6ac28da0602f2e4bb0069cba9f76019fcc6fff9ffe466356c67c7433f064fc4": {
+      "non_cloud_purpose": "Existing local Unix-domain MCP server, including DEBUG-only bounded fixture shutdown and owned-work drains; no cloud model endpoint or model sender. Both UI source and internal daemon symlink identities are intentionally classified.",
+      "site": {
+        "body_sha256": "17cf382a40918f9ea07b0080814d158bbae90f7ef66e6e2980aed0b2aa38c713",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
       }
     },
     "c7fdd0d8c183be0d0888c0b901685e6babaca0fec219247fe80efa9d7adc93ba": {

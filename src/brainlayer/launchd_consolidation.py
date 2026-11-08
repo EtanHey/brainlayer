@@ -30,7 +30,7 @@ from .migration_custody import write_new_file as write_file
 from .migration_journal import archive_replace as update
 from .migration_journal import recover_staging
 from .migration_journal import sync_directory as sync
-from .migration_runtime import LaunchdRuntime, deadline_after, pid_alive, wait_supervisor
+from .migration_runtime import LaunchdRuntime, deadline_after, pid_alive, supervisor_ready_grace, wait_supervisor
 from .policy_reconcile import log_diff
 from .policy_reconcile import plan as policy_plan
 from .policy_reconcile import versions as policy_versions
@@ -48,13 +48,14 @@ def publication_paths(home):
     )
 
 
-def wait_custody(directory, *, clock=time, grace=30):
+def wait_custody(directory, *, clock=time, grace=None):
     """Require the guard's lock and every recorded group to be quiescent; never signal."""
     if not os.path.lexists(directory):
         return
     if directory.resolve() != directory.absolute():
         raise ValueError("linked supervisor custody refused")
-    deadline = deadline_after(clock, grace) + 2
+    deadline = deadline_after(clock, supervisor_ready_grace() if grace is None else grace) + 2
+    next_report = clock.monotonic() + 10
     while True:
         try:
             # Inspect under the kernel lock without clearing previous-boot groups.
@@ -81,6 +82,9 @@ def wait_custody(directory, *, clock=time, grace=30):
             pass
         if clock.monotonic() >= deadline:
             raise RuntimeError("supervisor custody did not exit")
+        if clock.monotonic() >= next_report:
+            print(f"Waiting for supervisor custody to exit: {directory}", file=sys.stderr, flush=True)
+            next_report = clock.monotonic() + 10
         clock.sleep(0.1)
 
 
@@ -136,6 +140,7 @@ def revert(home, journal, domain, run, **options):
 def _migrate(
     *, home, templates, env_file, python, keg, domain, run, alive=pid_alive, verify=None, clock=time, retry=None
 ):
+    supervisor_ready_grace()
     agents, control = home / "Library/LaunchAgents", home / ".local/share/brainlayer/supervisor"
     receipt, manifest = control / "migration.json", control / "jobs.json"
     runtime = LaunchdRuntime(domain, run, alive=alive, clock=clock)

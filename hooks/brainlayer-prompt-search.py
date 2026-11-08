@@ -24,6 +24,8 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 
+from brainlayer.archive_lifecycle import lifecycle_active_clauses_present
+
 from brainlayer import paths
 from brainlayer.classify import classify_prompt
 from brainlayer.phonetic import looks_hebrew, phonetic_key, phonetic_tokens
@@ -1209,6 +1211,8 @@ def build_fts_query(keywords):
 
 
 def fetch_matching_chunks(conn, fts_query, limit, date_from=None):
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+    active_sql = " AND ".join(lifecycle_active_clauses_present(columns, "c")) or "1=1"
     extra_sql = ""
     params = [fts_query]
     if date_from:
@@ -1221,7 +1225,7 @@ def fetch_matching_chunks(conn, fts_query, limit, date_from=None):
         SELECT c.id, c.content, c.importance, c.project, c.tags, c.created_at
         FROM chunks_fts f
         JOIN chunks c ON c.id = f.chunk_id
-        WHERE chunks_fts MATCH ?
+        WHERE chunks_fts MATCH ? AND {active_sql}
         {extra_sql}
         ORDER BY rank
         LIMIT ?

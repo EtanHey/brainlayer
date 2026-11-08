@@ -10,6 +10,7 @@ Filtering layers:
   4. Post-chunk: strip system-reminder injections from content, skip file deletion diffs
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -73,6 +74,26 @@ MIN_RAW_CONTENT_LENGTH = 20
 _SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 
 # Regex for pure file deletion diffs (- lines only, no + lines)
+_NATIVE_SESSION_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def _realtime_chunk_id(file_stem: str, project: str | None, content_hash: str) -> str:
+    """Return the watcher chunk id for one chunk of one source file.
+
+    Native Claude Code session files are named by UUID, so the legacy
+    ``rt-{stem[:8]}-{hash}`` key stays unchanged for them and every stored row
+    keeps its primary key. Any other stem (``cse-…``, ``rollout-…``, cloud
+    exports) shares a fixed prefix, so the legacy key forced identical text
+    from unrelated sessions and projects onto one row. Those get a versioned
+    key over the full stem and the normalized project. Same-project content
+    dedupe is left to ``find_duplicate``, which is already project-scoped.
+    """
+    if _NATIVE_SESSION_UUID_RE.match(file_stem):
+        return f"rt-{file_stem[:8]}-{content_hash}"
+    source_key = hashlib.sha256(f"rt2\0{(project or '').strip().lower()}\0{file_stem}".encode()).hexdigest()[:12]
+    return f"rt2-{source_key}-{content_hash}"
+
+
 _PURE_DELETION_DIFF_RE = re.compile(r"^```(?:diff)?\n(?:-[^\n]*\n)+```$", re.MULTILINE)
 
 
@@ -113,17 +134,32 @@ def _strip_system_reminders(text: str) -> str:
 
 def _is_pure_deletion_diff(text: str) -> bool:
     """Check if text is just a file deletion diff with no added context."""
-    stripped = text.strip()
-    # Must contain diff markers
-    if "---" not in stripped and "+++" not in stripped:
-        return False
-    lines = stripped.split("\n")
-    diff_lines = [l for l in lines if l.startswith(("-", "+")) and not l.startswith(("---", "+++"))]
-    if not diff_lines:
-        return False
-    # Pure deletion: all diff lines are removals, no additions
-    additions = [l for l in diff_lines if l.startswith("+")]
-    return len(additions) == 0
+    lines = text.strip().splitlines()
+    # A Markdown rule and bullet list are not a patch. Require paired file
+    # headers and a hunk before accepting any removed lines.
+    in_hunk = False
+    saw_headers = False
+    removals = 0
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("--- ") and i + 1 < len(lines) and lines[i + 1].startswith("+++ "):
+            saw_headers = True
+            in_hunk = False
+            i += 2
+            continue
+        if saw_headers and re.fullmatch(r"@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@.*", line):
+            in_hunk = True
+        elif in_hunk and line.startswith("-"):
+            removals += 1
+        elif in_hunk and line == "\\ No newline at end of file":
+            pass
+        elif line.startswith(("diff --git ", "index ", "deleted file mode ")):
+            in_hunk = False
+        else:
+            return False
+        i += 1
+    return saw_headers and removals > 0
 
 
 def _extract_raw_text(entry: dict) -> str:
@@ -512,7 +548,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 clean_content = secret_scrub_result.text
                 content_hash = normalized_exact_hash(clean_content)[:16]
                 file_stem = Path(source_file).stem
-                chunk_id = f"rt-{file_stem[:8]}-{content_hash}"
+                chunk_id = _realtime_chunk_id(file_stem, project, content_hash)
 
                 # Layer 4: Post-chunk content filter
                 skip_reason = should_skip_chunk_content(clean_content, chunk_id=chunk_id, source_file=source_file)
@@ -774,4 +810,5 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             deferred_entries=deferred_entries,
         )
 
+    flush_to_db.close = store.close if store is not None else lambda: None
     return flush_to_db
