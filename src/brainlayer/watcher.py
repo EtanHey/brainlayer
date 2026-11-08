@@ -55,12 +55,63 @@ _DEFAULT_WATCH_MAX_RECORD_BYTES = 128 * 1024 * 1024
 _WATCH_READ_CHUNK_BYTES = 64 * 1024
 _MAX_HEALTH_FAILURE_DETAILS = 100
 _MAX_HEALTH_QUARANTINE_DETAILS = 100
+# A tailer's evidence that a path under the same inode (renamed back, or a new file handed a
+# freed inode) is still the file it read: the last consumed bytes ending at its offset, plus a
+# digest of the file's head. The tail alone is not enough -- a rewrite whose records line up
+# with the old offset and share a suffix (the #1656 DB-copy rehearsal) matches any finite tail.
+# Re-ingesting is idempotent (content-hash chunk ids + dedupe); skipping is not (#732).
+_SOURCE_ANCHOR_BYTES = 256
+_SOURCE_HEAD_BYTES = 4096
+_MAX_PENDING_FINGERPRINTS = 4096
+
+
+def _source_fingerprint(offset: int, head_digest: bytes, tail: bytes) -> str:
+    """Identity of the bytes before `offset`, persisted with the checkpoint (#1656)."""
+    fingerprint = hashlib.blake2b(digest_size=16)
+    fingerprint.update(offset.to_bytes(8, "big"))
+    fingerprint.update(head_digest)
+    fingerprint.update(tail)
+    return fingerprint.hexdigest()
 
 
 _OFFSET_PRUNE_RETRY_ENV = "BRAINLAYER_WATCHER_OFFSET_PRUNE_RETRY_S"
 _DEFAULT_OFFSET_PRUNE_RETRY_S = 900.0
 
 MIN_WATCH_POLL_INTERVAL_S = 30.0
+
+
+def describe_stream_destination(fd: int) -> str:
+    """Name where a file descriptor really writes, read from the kernel, not from docs (#732).
+
+    An operator tailed the documented-but-abandoned `~/.local/share/brainlayer/logs/watch.*` and
+    reported a three-month-old lock storm as live. Only the process knows where its logs go, so
+    the watcher states it on startup and in watcher-health.json. Never raises.
+    """
+    try:
+        mode = os.fstat(fd).st_mode
+    except OSError:
+        return "closed"
+    if stat.S_ISREG(mode):
+        try:
+            import fcntl
+
+            get_path = getattr(fcntl, "F_GETPATH", None)  # macOS
+            if get_path is not None:
+                raw = fcntl.fcntl(fd, get_path, bytes(1024))
+                return os.fsdecode(raw.split(b"\0", 1)[0])
+        except (ImportError, OSError):
+            pass
+        try:
+            return os.readlink(f"/proc/self/fd/{fd}")  # Linux
+        except OSError:
+            return "file (path unavailable)"
+    if stat.S_ISFIFO(mode):
+        return "pipe"
+    if stat.S_ISSOCK(mode):
+        return "socket"
+    if stat.S_ISCHR(mode):
+        return "tty" if os.isatty(fd) else "character device"
+    return "unknown"
 
 
 def enforce_min_poll_interval(poll_interval_s: float) -> float:
@@ -548,7 +599,29 @@ class OffsetRegistry:
         """Return the current rewind generation for a file."""
         return self._entry_generation(self._data.get(filepath))
 
-    def set(self, filepath: str, offset: int, inode: int, *, generation: int | None = None):
+    def fingerprint(self, filepath: str) -> str | None:
+        """Identity of the bytes before the stored offset, or None for a legacy entry (#1656)."""
+        entry = self._data.get(filepath)
+        value = entry.get("fingerprint") if isinstance(entry, dict) else None
+        return value if isinstance(value, str) and value else None
+
+    def checkpoint_mtime(self, filepath: str) -> float | None:
+        """Wall-clock time the stored offset was last confirmed, if recorded."""
+        entry = self._data.get(filepath)
+        value = entry.get("mtime") if isinstance(entry, dict) else None
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            return float(value)
+        return None
+
+    def set(
+        self,
+        filepath: str,
+        offset: int,
+        inode: int,
+        *,
+        generation: int | None = None,
+        fingerprint: str | None = None,
+    ):
         """Update offset for a file, optionally preserving its validated generation."""
         current_generation = self._entry_generation(self._data.get(filepath))
         preserve_generation = generation is not None
@@ -565,12 +638,15 @@ class OffsetRegistry:
                 return
             if not preserve_generation:
                 generation = max(generation, int(tombstone["generation"]) + 1, time.time_ns())
-        self._data[filepath] = {
+        entry: dict[str, Any] = {
             "offset": offset,
             "inode": inode,
             "mtime": time.time(),
             "generation": generation,
         }
+        if fingerprint:
+            entry["fingerprint"] = fingerprint
+        self._data[filepath] = entry
         if tombstone is None or valid_inode:
             self._removed.pop(filepath, None)
         self._dirty_paths.add(filepath)
@@ -860,26 +936,87 @@ class JSONLTailer:
     Detects file rewinds (checkpoint restore) when file shrinks.
     """
 
-    def __init__(self, filepath: str, offset: int = 0, max_record_bytes: int | None = None):
+    def __init__(
+        self,
+        filepath: str,
+        offset: int = 0,
+        max_record_bytes: int | None = None,
+        *,
+        resume_fingerprint: str | None = None,
+        resume_checkpoint_mtime: float | None = None,
+    ):
         self.filepath = filepath
         self.offset = offset
         self.max_record_bytes = max_record_bytes
         self._buffer = b""
         self.rewound = False  # Set to True when rewind detected
+        self.replaced = False  # Set when bytes before the offset changed under the same inode
         self.rewind_old_offset = 0
         self.rewind_new_offset = 0
         self.last_error: OSError | json.JSONDecodeError | UnicodeDecodeError | OversizedJSONLRecordError | None = None
         self.failed_record: bytes | None = None
+        # Last consumed bytes ending at `offset`, and a digest of file[0:min(HEAD, offset)].
+        # `anchor` is None until verified against the file: a tailer built from a stored offset
+        # trusts it only if the persisted fingerprint matches, or -- for a legacy checkpoint with
+        # no fingerprint -- the file was not modified after the checkpoint was confirmed (#1656).
+        self.anchor: bytes | None = b"" if offset == 0 else None
+        self._head_hash = hashlib.blake2b(digest_size=16)
+        self._head_len = 0
+        self._resume_fingerprint = resume_fingerprint
+        self._resume_checkpoint_mtime = resume_checkpoint_mtime
+        # Fingerprints at consumed boundaries the registry has not confirmed yet.
+        self._fingerprints: dict[int, str] = {}
         self.observed_inode = self.get_inode()
 
-    def restore_snapshot(self, snapshot: tuple[int, bytes]) -> None:
-        """Put the tailer back to a (offset, buffer) pair captured before a failed read.
+    def snapshot(self) -> tuple[int, bytes, bytes | None, Any, int]:
+        """Capture everything a failed read must roll back, identity included."""
+        return (self.offset, self._buffer, self.anchor, self._head_hash.copy(), self._head_len)
 
-        The watcher used to reach in and unpack straight onto `offset` and `_buffer`; owning
-        the two assignments here keeps the buffer private and gives static analysis a typed
+    @staticmethod
+    def origin_snapshot() -> tuple[int, bytes, bytes | None, Any, int]:
+        """The state of a tailer at byte 0, whose identity is trivially verified."""
+        return (0, b"", b"", hashlib.blake2b(digest_size=16), 0)
+
+    def restore_snapshot(self, snapshot: tuple[int, bytes, bytes | None, Any, int]) -> None:
+        """Put the tailer back to a state captured by `snapshot()` before a failed read.
+
+        Owning the assignments here keeps the buffer private and gives static analysis a typed
         parameter instead of a `tuple | None` it cannot narrow (DeepSource on #781).
         """
-        self.offset, self._buffer = snapshot
+        self.offset, self._buffer, self.anchor, head_hash, self._head_len = snapshot
+        self._head_hash = head_hash.copy()
+        self._fingerprints = {end: fp for end, fp in self._fingerprints.items() if end <= self.offset}
+
+    def _reset_identity(self) -> None:
+        self.anchor = b""
+        self._head_hash = hashlib.blake2b(digest_size=16)
+        self._head_len = 0
+        self._resume_fingerprint = None
+        self._resume_checkpoint_mtime = None
+        self._fingerprints = {}
+
+    def _consume_anchor(self, consumed: bytes) -> None:
+        if self.anchor is None:
+            return  # unverified identity: nothing trustworthy to extend
+        if self._head_len < _SOURCE_HEAD_BYTES:
+            head_part = consumed[: _SOURCE_HEAD_BYTES - self._head_len]
+            self._head_hash.update(head_part)
+            self._head_len += len(head_part)
+        self.anchor = (self.anchor + consumed[-_SOURCE_ANCHOR_BYTES:])[-_SOURCE_ANCHOR_BYTES:]
+
+    def _remember_fingerprint(self, end_offset: int) -> None:
+        if self.anchor is None:
+            return
+        if len(self._fingerprints) >= _MAX_PENDING_FINGERPRINTS:
+            self._fingerprints.pop(min(self._fingerprints))
+        self._fingerprints[end_offset] = _source_fingerprint(end_offset, self._head_hash.digest(), self.anchor)
+
+    def fingerprint_at(self, offset: int) -> str | None:
+        """Fingerprint of the bytes before `offset`, if this tailer consumed up to exactly it."""
+        return self._fingerprints.get(offset)
+
+    def forget_fingerprints_below(self, offset: int) -> None:
+        self._fingerprints = {end: fp for end, fp in self._fingerprints.items() if end >= offset}
 
     def check_rewind(self) -> bool:
         """Check if file has shrunk (checkpoint restore). Returns True if rewound."""
@@ -894,6 +1031,7 @@ class JSONLTailer:
             self.rewind_new_offset = file_size
             self.offset = 0  # Reset to start of file
             self._buffer = b""
+            self._reset_identity()
             self.rewound = True
             logger.warning(
                 "Rewind detected: %s shrank from %d to %d",
@@ -920,6 +1058,10 @@ class JSONLTailer:
 
         try:
             with open(self.filepath, "rb") as f:
+                if self.anchor is None:
+                    self._verify_resumed_offset(f)
+                elif self.offset:
+                    self._verify_anchor(f)
                 f.seek(self.offset + len(self._buffer))
                 remaining_bytes = max_bytes if max_bytes is not None and max_bytes > 0 else None
                 complete_lines = self._buffer.count(b"\n")
@@ -962,6 +1104,81 @@ class JSONLTailer:
             return []
         return self.read_buffered_lines(max_lines=max_lines)
 
+    def _verify_anchor(self, f) -> None:
+        """Restart from 0 when the bytes we already consumed are no longer at our offset (#732).
+
+        An appended-to JSONL never rewrites bytes before the offset, so a mismatch means the
+        path now holds a different file under the same inode number -- deleted and recreated
+        (ext4 reuses a freed inode at once), or replaced in place -- and resuming at the old
+        offset would silently skip that much of it. check_rewind has already handled a file
+        shorter than the offset. The head digest catches a rewrite whose records line up with
+        the old offset and share a suffix longer than the tail (#1656). Costs two small reads
+        per poll, only for files that changed.
+        """
+        anchor = self.anchor or b""
+        expected = anchor + self._buffer[:_SOURCE_ANCHOR_BYTES]
+        f.seek(self.offset - len(anchor))
+        matches = f.read(len(expected)) == expected
+        if matches and self.offset > len(anchor):
+            f.seek(0)
+            matches = hashlib.blake2b(f.read(self._head_len), digest_size=16).digest() == self._head_hash.digest()
+        if not matches:
+            self._restart_replaced("bytes before offset changed")
+
+    def _verify_resumed_offset(self, f) -> None:
+        """Trust a stored offset only with evidence the bytes before it are the ones we read.
+
+        A tailer built from a checkpoint has no live anchor. Priming one from whatever is on disk
+        now would vouch for a file rewritten while the watcher was down or before its first read.
+        The evidence is the fingerprint persisted with the checkpoint, or -- for a checkpoint
+        written before fingerprints existed -- an mtime no later than the time that checkpoint
+        was confirmed, taken from the open handle AFTER the reads: any append or rewrite moves
+        mtime forward, so an untouched file keeps its offset (upgrading does not re-ingest the
+        corpus) while a touched one is re-read. Without either, re-read from 0 (#1656).
+        """
+        head_len = min(_SOURCE_HEAD_BYTES, self.offset)
+        tail_start = max(0, self.offset - _SOURCE_ANCHOR_BYTES)
+        f.seek(0)
+        head = f.read(head_len)
+        f.seek(tail_start)
+        tail = f.read(self.offset - tail_start)
+        expected = self._resume_fingerprint
+        reason = "short read"
+        if len(head) == head_len and len(tail) == self.offset - tail_start:
+            head_hash = hashlib.blake2b(head, digest_size=16)
+            if expected is not None:
+                if _source_fingerprint(self.offset, head_hash.digest(), tail) == expected:
+                    self._adopt_identity(head_hash, head_len, tail)
+                    return
+                reason = "persisted fingerprint does not match"
+            elif self._resume_checkpoint_mtime is not None and (
+                os.fstat(f.fileno()).st_mtime <= self._resume_checkpoint_mtime
+            ):
+                self._adopt_identity(head_hash, head_len, tail)
+                return
+            else:
+                reason = "no persisted fingerprint and the file changed since its checkpoint"
+        self._restart_replaced(reason)
+
+    def _adopt_identity(self, head_hash: Any, head_len: int, tail: bytes) -> None:
+        self.anchor = tail
+        self._head_hash = head_hash
+        self._head_len = head_len
+        self._resume_fingerprint = None
+        self._resume_checkpoint_mtime = None
+
+    def _restart_replaced(self, reason: str) -> None:
+        logger.warning(
+            "Source offset not verified: %s (offset %d: %s); re-reading from 0",
+            self.filepath,
+            self.offset,
+            reason,
+        )
+        self.offset = 0
+        self._buffer = b""
+        self._reset_identity()
+        self.replaced = True
+
     def has_complete_buffered_line(self) -> bool:
         """Return whether an already-read complete record is waiting to be emitted."""
         return b"\n" in self._buffer
@@ -973,6 +1190,7 @@ class JSONLTailer:
         self.failed_record = None
         consumed_bytes = 0
         starting_offset = self.offset
+        boundaries: list[int] = []
 
         while True:
             if max_lines is not None and len(lines) >= max_lines:
@@ -1002,8 +1220,17 @@ class JSONLTailer:
                 parsed["_line_end_offset"] = line_end_offset
                 parsed["_ingest_observed_at"] = time.time()
                 lines.append(parsed)
+                boundaries.append(nl_idx + 1)
 
         if consumed_bytes:
+            # A checkpoint can land on any record end, so each one gets the fingerprint the
+            # registry will persist beside that offset.
+            cursor = 0
+            for boundary in [*boundaries, consumed_bytes]:
+                if boundary > cursor:
+                    self._consume_anchor(self._buffer[cursor:boundary])
+                    self._remember_fingerprint(starting_offset + boundary)
+                    cursor = boundary
             self._buffer = self._buffer[consumed_bytes:]
             self.offset = starting_offset + consumed_bytes
 
@@ -1021,8 +1248,10 @@ class JSONLTailer:
             return None
         start_offset = self.offset
         record = self.failed_record
+        self._consume_anchor(record)
         self._buffer = self._buffer[len(record) :]
         self.offset += len(record)
+        self._remember_fingerprint(self.offset)
         self.failed_record = None
         self.last_error = None
         return start_offset, self.offset, record
@@ -1298,6 +1527,11 @@ class JSONLWatcher:
         self._quarantined_record_count_total = 0
         self._quarantined_records: list[dict[str, Any]] = []
         self._pending_quarantined_offsets: dict[str, list[tuple[int, int, int, int]]] = {}
+        # Sources confirmed gone (lstat ENOENT). Their tailer and registry checkpoint are kept;
+        # a path leaves the set when discovery sees it again (#732).
+        self._vanished_sources: set[str] = set()
+        self._vanished_source_count_total = 0
+        self.log_destinations = {"stdout": describe_stream_destination(1), "stderr": describe_stream_destination(2)}
         self._stop = threading.Event()
         self._last_registry_flush = time.monotonic()
         self.health_path = Path(health_path).expanduser() if health_path else None
@@ -1323,8 +1557,23 @@ class JSONLWatcher:
         for filepath, (offset, source_inode, source_generation) in confirmations.items():
             current_offset, _current_inode = self.registry.get(filepath)
             if offset >= current_offset:
-                self.registry.set(filepath, offset, source_inode, generation=source_generation)
+                self.registry.set(
+                    filepath,
+                    offset,
+                    source_inode,
+                    generation=source_generation,
+                    fingerprint=self._confirmed_fingerprint(filepath, offset, source_inode),
+                )
                 self._advance_quarantined_offsets(filepath, source_inode, source_generation)
+
+    def _confirmed_fingerprint(self, filepath: str, offset: int, source_inode: int) -> str | None:
+        """The live tailer's fingerprint at a confirmed offset; None stores a legacy-shaped entry."""
+        tailer = self._tailers.get(filepath)
+        if tailer is None or tailer.observed_inode != source_inode:
+            return None
+        fingerprint = tailer.fingerprint_at(offset)
+        tailer.forget_fingerprints_below(offset)
+        return fingerprint
 
     def _advance_confirmed_batch(self, watermarks: dict[str, int], batch: list[dict]) -> None:
         """Confirm only offsets produced by the file generation currently being tailed."""
@@ -1366,7 +1615,13 @@ class JSONLWatcher:
                 remaining.append((start_offset, end_offset, pending_inode, pending_generation))
                 continue
             if end_offset > current_offset:
-                self.registry.set(filepath, end_offset, pending_inode, generation=pending_generation)
+                self.registry.set(
+                    filepath,
+                    end_offset,
+                    pending_inode,
+                    generation=pending_generation,
+                    fingerprint=self._confirmed_fingerprint(filepath, end_offset, pending_inode),
+                )
                 current_offset = end_offset
         if remaining:
             self._pending_quarantined_offsets[filepath] = remaining
@@ -1571,6 +1826,39 @@ class JSONLWatcher:
 
     def _clear_file_ingestion_failure(self, filepath: str) -> None:
         self._file_ingestion_failures.pop(filepath, None)
+
+    @staticmethod
+    def _source_is_gone(filepath: str) -> bool:
+        """Confirm a deletion: only lstat ENOENT counts, never a permission or I/O error."""
+        try:
+            os.lstat(filepath)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return False
+
+    def _retire_vanished_source(self, filepath: str, tailer: JSONLTailer | None) -> None:
+        """Record a confirmed-deleted source once, without alarming as a parse failure (#732).
+
+        A deleted JSONL is not unparseable bytes, so it must not reach the parse alarm or keep
+        health alerting. The tailer and registry checkpoint are kept: startup pruning retires the
+        checkpoint with mount evidence, and if the path comes back the tailer's anchor check
+        decides whether the old offset still applies (renamed back) or not (reused inode).
+        """
+        self._clear_file_ingestion_failure(filepath)
+        if tailer is not None:
+            tailer.last_error = None
+            tailer.failed_record = None
+        if filepath in self._vanished_sources:
+            return
+        self._vanished_sources.add(filepath)
+        self._vanished_source_count_total += 1
+        logger.info(
+            "Watcher source vanished (deleted or renamed away): %s at offset %d",
+            filepath,
+            tailer.offset if tailer is not None else self.registry.get(filepath)[0],
+        )
 
     def _quarantine_failed_record(
         self,
@@ -1781,6 +2069,8 @@ class JSONLWatcher:
             "file_ingestion_failures_overflow_count": failure_overflow_count,
             "quarantined_record_count_total": self._quarantined_record_count_total,
             "quarantined_records": list(self._quarantined_records),
+            "vanished_source_count_total": self._vanished_source_count_total,
+            "log_destinations": self.log_destinations,
             **watchdog,
         }
         try:
@@ -1844,7 +2134,14 @@ class JSONLWatcher:
             return tailer
 
         stored_offset, stored_inode = self.registry.get(filepath)
-        tailer = JSONLTailer(filepath, offset=stored_offset, max_record_bytes=self.max_record_bytes)
+        fingerprint = self.registry.fingerprint(filepath)
+        tailer = JSONLTailer(
+            filepath,
+            offset=stored_offset,
+            max_record_bytes=self.max_record_bytes,
+            resume_fingerprint=fingerprint,
+            resume_checkpoint_mtime=None if fingerprint else self.registry.checkpoint_mtime(filepath),
+        )
 
         # Verify inode matches
         current_inode = tailer.get_inode()
@@ -1971,8 +2268,18 @@ class JSONLWatcher:
             }
             self._maybe_prune_offsets(files)
 
+            for filepath, known_tailer in list(self._tailers.items()):
+                if (
+                    filepath not in live_files
+                    and filepath not in self._vanished_sources
+                    and not self._denylisted(filepath)
+                    and self._source_is_gone(filepath)
+                ):
+                    self._retire_vanished_source(filepath, known_tailer)
+
             for filepath in list(self._tailers):
                 if self._denylisted(filepath):
+                    self._vanished_sources.discard(filepath)
                     self._tailers.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
                     self._pending_quarantined_offsets.pop(filepath, None)
@@ -1980,15 +2287,17 @@ class JSONLWatcher:
 
             for filepath in files:
                 if self._denylisted(filepath):
+                    self._vanished_sources.discard(filepath)
                     self._tailers.pop(filepath, None)
                     self._file_providers.pop(filepath, None)
                     self._pending_quarantined_offsets.pop(filepath, None)
                     self.registry.remove(filepath)
                     continue
+                self._vanished_sources.discard(filepath)
                 if self._can_skip_unchanged(filepath):
                     continue
                 tailer: JSONLTailer | None = None
-                tailer_snapshot: tuple[int, bytes] | None = None
+                tailer_snapshot: tuple[int, bytes, bytes | None, Any, int] | None = None
                 source_inode = 0
                 source_generation = 0
                 read_accepted = False
@@ -2015,14 +2324,14 @@ class JSONLWatcher:
 
                     if drain_buffer:
                         read_start_offset = tailer.offset
-                        tailer_snapshot = (tailer.offset, tailer._buffer)
+                        tailer_snapshot = tailer.snapshot()
                         source_inode = tailer.observed_inode
                         source_generation = self.registry.generation(filepath)
                         new_lines = tailer.read_buffered_lines(max_lines=self.max_lines_per_file)
                     else:
                         tailer = self._ensure_tailer(filepath)
                         read_start_offset = tailer.offset
-                        tailer_snapshot = (tailer.offset, tailer._buffer)
+                        tailer_snapshot = tailer.snapshot()
                         source_inode = tailer.observed_inode
                         source_generation = self.registry.generation(filepath)
                         new_lines = tailer.read_new_lines(
@@ -2040,6 +2349,17 @@ class JSONLWatcher:
                             tailer.get_inode(),
                         )
                         tailer.rewound = False  # Reset flag
+                        source_inode = tailer.observed_inode
+                        source_generation = self.registry.generation(filepath)
+                    elif tailer.replaced:
+                        # Same inode, different bytes before the offset: a new file, not a
+                        # checkpoint restore. Restart the generation like an inode change does.
+                        read_start_offset = 0
+                        tailer.replaced = False
+                        # A later failure re-reads the new file from 0; never restore the old offset.
+                        tailer_snapshot = JSONLTailer.origin_snapshot()
+                        self._pending_quarantined_offsets.pop(filepath, None)
+                        self.registry.mark_rewind(filepath, tailer.observed_inode)
                         source_inode = tailer.observed_inode
                         source_generation = self.registry.generation(filepath)
 
@@ -2060,7 +2380,9 @@ class JSONLWatcher:
                         source_inode,
                         source_generation,
                     )
-                    if tailer.last_error is not None:
+                    if isinstance(tailer.last_error, FileNotFoundError) and self._source_is_gone(filepath):
+                        self._retire_vanished_source(filepath, tailer)
+                    elif tailer.last_error is not None:
                         if not self._quarantine_failed_record(
                             filepath,
                             tailer,
@@ -2080,6 +2402,9 @@ class JSONLWatcher:
                         tailer.restore_snapshot(tailer_snapshot)
                         tailer.last_error = error
                         tailer.failed_record = None
+                    if isinstance(error, FileNotFoundError) and self._source_is_gone(filepath):
+                        self._retire_vanished_source(filepath, tailer)
+                        continue
                     logger.exception("Poll file error: %s", filepath)
                     self._record_file_ingestion_failure(filepath, error)
 
@@ -2107,6 +2432,11 @@ class JSONLWatcher:
     def start(self):
         """Start the watcher loop (blocking). Call stop() from another thread."""
         logger.info("JSONL watcher started: %s", self.watch_dir)
+        logger.info(
+            "Watcher logs: stdout -> %s, stderr -> %s",
+            self.log_destinations["stdout"],
+            self.log_destinations["stderr"],
+        )
         start_time = time.monotonic()
 
         # Emit startup telemetry

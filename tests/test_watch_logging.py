@@ -12,6 +12,7 @@ question is answerable from the logs next time.
 """
 
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -76,6 +77,8 @@ def test_watch_subprocess_writes_startup_line_to_stderr(tmp_path):
         "BRAINLAYER_FORBID_EMBEDDING_MODEL": "1",
     }
     marker = "JSONL watcher started"
+    # #732: the process names the file its stderr really reaches, read from the kernel.
+    destinations_marker = f"stderr -> {os.path.realpath(err_path)}"
     with open(out_path, "w") as out_fh, open(err_path, "w") as err_fh:
         proc = subprocess.Popen(
             [
@@ -96,7 +99,7 @@ def test_watch_subprocess_writes_startup_line_to_stderr(tmp_path):
         try:
             deadline = time.monotonic() + 90
             while time.monotonic() < deadline:
-                if marker in err_path.read_text(errors="replace"):
+                if destinations_marker in err_path.read_text(errors="replace"):
                     break
                 if proc.poll() is not None:
                     break
@@ -115,3 +118,4 @@ def test_watch_subprocess_writes_startup_line_to_stderr(tmp_path):
         f"--- stdout ---\n{out_path.read_text(errors='replace')[-2000:]}\n"
         f"--- stderr ---\n{stderr[-2000:]}"
     )
+    assert destinations_marker in stderr, f"watcher did not name its real stderr file:\n{stderr[-2000:]}"
