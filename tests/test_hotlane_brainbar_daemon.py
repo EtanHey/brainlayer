@@ -2262,8 +2262,9 @@ def test_chunk_failure_attempts_dict_is_bounded_and_pruned():
     for candidate in candidates[:5]:
         tracker.failed(candidate, ValueError("bad"))
     assert len(tracker.attempts) == 3
-    assert [tracker.count(c) for c in candidates[:5]] == [0, 0, 1, 1, 1]
-    tracker.succeeded(candidates[4])
+    # Full table: the incoming keys are refused; tracked keys are never evicted.
+    assert [tracker.count(c) for c in candidates[:5]] == [1, 1, 1, 0, 0]
+    tracker.succeeded(candidates[2])
     assert len(tracker.attempts) == 2
     now[0] += 61
     tracker.failed(candidates[5], ValueError("bad"))
@@ -2351,3 +2352,44 @@ def test_hotlane_run_survives_more_than_1025_systemic_cycles():
     assert len(sleeps) == cycles
     assert sleeps[:6] == [2.0, 4.0, 8.0, 16.0, 32.0, 60.0]
     assert set(sleeps[5:]) == {hotlane.MAX_SYSTEMIC_BACKOFF_SECONDS}
+
+
+def test_full_table_of_live_quarantines_is_kept_and_logged_once(caplog):
+    hotlane = _load_hotlane_module()
+    now = [0.0]
+    tracker = hotlane.ChunkFailureAttempts(clock=lambda: now[0], ttl_s=60, max_entries=3)
+    live = [hotlane.EmbedCandidate(f"q{i}", f"poison {i}") for i in range(3)]
+    for _ in range(hotlane.MAX_CHUNK_FAILURE_ATTEMPTS):
+        for candidate in live:
+            tracker.failed(candidate, ValueError("bad"))
+    assert all(tracker.quarantined(c) for c in live)
+
+    newcomers = [hotlane.EmbedCandidate(f"n{i}", f"new {i}") for i in range(5)]
+    now[0] += 30  # Inside the TTL: every quarantine is live.
+    with caplog.at_level(logging.WARNING, logger=hotlane.LOGGER.name):
+        for candidate in newcomers:
+            tracker.failed(candidate, ValueError("bad"))
+    assert all(tracker.quarantined(c) for c in live)
+    assert [tracker.count(c) for c in newcomers] == [0] * 5
+    assert len(tracker.attempts) == 3
+    full = [r for r in caplog.records if "table full; not tracking" in r.message]
+    assert len(full) == 1 and "live_quarantines=3" in full[0].message
+
+    now[0] += 31  # Past the TTL: the quarantines expire and make room.
+    tracker.failed(newcomers[0], ValueError("bad"))
+    assert tracker.count(newcomers[0]) == 1
+
+
+def test_cycling_more_distinct_failures_than_the_table_still_quarantines():
+    hotlane = _load_hotlane_module()
+    now = [0.0]
+    size = 8
+    tracker = hotlane.ChunkFailureAttempts(clock=lambda: now[0], ttl_s=3600, max_entries=size)
+    candidates = [hotlane.EmbedCandidate(f"c{i}", f"poison {i}") for i in range(size + 1)]
+    for _ in range(hotlane.MAX_CHUNK_FAILURE_ATTEMPTS):
+        for candidate in candidates:
+            now[0] += 1
+            tracker.failed(candidate, ValueError("bad"))
+    assert len(tracker.attempts) == size
+    assert sum(tracker.quarantined(c) for c in candidates) == size
+    assert tracker.quarantined_total == size

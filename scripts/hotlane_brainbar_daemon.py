@@ -261,6 +261,7 @@ class ChunkFailureAttempts:
         self.clock = clock
         self.ttl_s = _quarantine_ttl_seconds() if ttl_s is None else ttl_s
         self.max_entries = max(1, max_entries)
+        self._full_logged = False
 
     def _key(self, candidate: EmbedCandidate) -> tuple[str, str]:
         return candidate.chunk_id, hashlib.sha256(candidate.content.encode()).hexdigest()
@@ -288,18 +289,33 @@ class ChunkFailureAttempts:
     def quarantined(self, candidate: EmbedCandidate) -> bool:
         return self.count(candidate) >= MAX_CHUNK_FAILURE_ATTEMPTS
 
-    def _make_room(self, now: float) -> None:
+    def _has_room(self, now: float) -> bool:
+        """Free space by TTL expiry only; never evict a live entry.
+
+        Evicting a live quarantine re-admits it before its TTL. Evicting a below-cap
+        counter is worse under churn: cycling ``max_entries + 1`` distinct failures
+        evicts each key just before it fails again, pinning every counter at 1 so
+        nothing is ever quarantined. Refusing the incoming key (count 0, the least
+        evidence) instead lets the tracked keys reach quarantine; it is admitted once
+        an entry succeeds or expires. Bounded either way: TTL frees every entry.
+        """
         for key, entry in list(self.attempts.items()):
             if not self._expire(key, entry, now):
                 break  # Ordered by last failure: the rest are younger.
-        while len(self.attempts) >= self.max_entries:
-            key, (attempts, _) = self.attempts.popitem(last=False)
+        if len(self.attempts) < self.max_entries:
+            self._full_logged = False
+            return True
+        if not self._full_logged:
+            self._full_logged = True
+            live = sum(1 for attempts, _ in self.attempts.values() if attempts >= MAX_CHUNK_FAILURE_ATTEMPTS)
             LOGGER.warning(
-                "hotlane chunk failure table full; evicting oldest chunk_id=%s attempts=%d max_entries=%d",
-                key[0],
-                attempts,
+                "hotlane chunk failure table full; not tracking new failures until an entry succeeds or "
+                "expires max_entries=%d live_quarantines=%d ttl_s=%.0f",
                 self.max_entries,
+                live,
+                self.ttl_s,
             )
+        return False
 
     def failed(self, candidate: EmbedCandidate, exc: Exception) -> None:
         if isinstance(exc, (apsw.BusyError, apsw.LockedError)) or self.quarantined(candidate):
@@ -307,8 +323,15 @@ class ChunkFailureAttempts:
         key = self._key(candidate)
         now = self.clock()
         attempts = self.count(candidate) + 1
-        self.attempts.pop(key, None)
-        self._make_room(now)
+        if key in self.attempts:
+            del self.attempts[key]  # Re-inserted below as the youngest entry; never grows the table.
+        elif not self._has_room(now):
+            LOGGER.error(
+                "hotlane chunk failure untracked (table full) chunk_id=%s error_type=%s",
+                candidate.chunk_id,
+                type(exc).__name__,
+            )
+            return
         self.attempts[key] = (attempts, now)
         if attempts == MAX_CHUNK_FAILURE_ATTEMPTS:
             self.quarantined_total += 1
