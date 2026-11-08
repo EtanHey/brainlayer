@@ -231,7 +231,86 @@ def test_busy_counter_lock_does_not_log_traceback(pending, monkeypatch, caplog):
         raise BlockingIOError("counter lock busy")
 
     monkeypatch.setattr(t3_linkage_alarm.fcntl, "flock", busy)
-    with caplog.at_level("INFO"):
+    with caplog.at_level("DEBUG"):
         t3_linkage_alarm._count(10000, "changed")
     assert "diagnostic increment skipped" in caplog.text
     assert not [record for record in caplog.records if record.exc_info]
+
+
+def test_real_held_counter_lock_returns_promptly(tmp_path, monkeypatch, caplog):
+    import fcntl
+    import threading
+
+    from brainlayer import t3_linkage_alarm
+
+    monkeypatch.setattr(t3_linkage_alarm, "_counter_directory", lambda: tmp_path)
+    held = threading.Event()
+    release = threading.Event()
+    returned = threading.Event()
+
+    def holder():
+        with (tmp_path / "counts.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            held.set()
+            release.wait(2)
+
+    def count():
+        t3_linkage_alarm._count(10000, "changed")
+        returned.set()
+
+    holder_thread = threading.Thread(target=holder)
+    holder_thread.start()
+    assert held.wait(1)
+    counter_thread = threading.Thread(target=count)
+    try:
+        with caplog.at_level("DEBUG"):
+            counter_thread.start()
+            assert returned.wait(0.1), "counter blocked on a real held lock"
+        assert "diagnostic increment skipped" in caplog.text
+        assert not list(tmp_path.glob("*.json"))
+        assert not any(record.exc_info for record in caplog.records)
+    finally:
+        release.set()
+        holder_thread.join(2)
+        counter_thread.join(2)
+
+
+@pytest.mark.parametrize("contents", ["", "{torn", "[]", '{"hour": 2}'])
+def test_unreadable_counter_bucket_reads_zero_and_repairs(tmp_path, monkeypatch, caplog, contents):
+    from brainlayer import t3_linkage_alarm
+
+    monkeypatch.setattr(t3_linkage_alarm, "_counter_directory", lambda: tmp_path)
+    monkeypatch.setattr(t3_linkage_alarm.time, "time", lambda: 10000)
+    bucket = tmp_path / "2.json"
+    bucket.write_text(contents)
+    rows = t3_linkage_alarm.alarm_counts()
+    assert rows[0]["observed"] == 0
+    assert len(caplog.records) == 1
+    assert not caplog.records[0].exc_info
+    t3_linkage_alarm._count(10000, "changed")
+    t3_linkage_alarm._count(10000, "suppressed_unchanged")
+    assert json.loads(bucket.read_text())["observed"] == 2
+    assert not any(record.exc_info for record in caplog.records)
+
+
+def test_counter_reader_excludes_expired_buckets_without_writes(tmp_path, monkeypatch):
+    from brainlayer import t3_linkage_alarm
+
+    monkeypatch.setattr(t3_linkage_alarm, "_counter_directory", lambda: tmp_path)
+    for hour in (0, 1, 167):
+        t3_linkage_alarm._count(hour * 3600, "changed")
+    monkeypatch.setattr(t3_linkage_alarm.time, "time", lambda: 168 * 3600)
+    assert [row["hour"] for row in t3_linkage_alarm.alarm_counts()] == [1, 167]
+    assert (tmp_path / "0.json").exists()
+
+
+def test_torn_counter_bucket_does_not_poison_later_writes(tmp_path, monkeypatch, caplog):
+    from brainlayer import t3_linkage_alarm
+
+    monkeypatch.setattr(t3_linkage_alarm, "_counter_directory", lambda: tmp_path)
+    bucket = tmp_path / "2.json"
+    bucket.write_text("{torn")
+    t3_linkage_alarm._count(10000, "changed")
+    t3_linkage_alarm._count(10000, "changed")
+    assert not any(record.exc_info for record in caplog.records)
+    assert json.loads(bucket.read_text())["observed"] == 2
