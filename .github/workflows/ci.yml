@@ -127,7 +127,9 @@ jobs:
   swift:
     name: swift (macos-15)
     needs: changes
-    runs-on: macos-15
+    # The job NAME is the required check. Without brain-bar changes every Swift step is skipped,
+    # so take the skip on Linux instead of waiting for a macOS runner (#1727 queued ~3 h for it).
+    runs-on: ${{ needs.changes.outputs.brain_bar == 'true' && 'macos-15' || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -139,6 +141,7 @@ jobs:
           xcode-version: latest-stable
 
       - name: Swift version
+        if: needs.changes.outputs.brain_bar == 'true'
         run: swift --version
 
       - name: Python for the synthetic MCP wire client and helper formatter
