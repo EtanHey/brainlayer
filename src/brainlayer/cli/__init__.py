@@ -4009,14 +4009,24 @@ def watch_backfill(
     )
     processed = 0
     cycles = 0
-    while cycles < max_cycles:
-        cycles += 1
-        count = watcher.poll_once()
-        processed += count
-        if count == 0 and not watcher.last_poll_made_progress:
-            break
-    watcher.indexer.flush()
-    watcher.registry.flush()
+    try:
+        while cycles < max_cycles:
+            cycles += 1
+            count = watcher.poll_once()
+            processed += count
+            if count == 0 and not watcher.last_poll_made_progress:
+                break
+        watcher.indexer.flush()
+        watcher.registry.flush()
+    finally:
+        watcher.stop()  # Reap retained zstd decoders on budget exits and failures.
+    pending = watcher.archive_status()
+    unfinished = sum(value for key, value in pending.items() if key != "represented_cold")
+    if sum(pending.values()):
+        breakdown = " ".join(f"{key}={value}" for key, value in pending.items())
+        rprint(f"held_archives={sum(pending.values())} {breakdown} processed_entries={processed} cycles={cycles}")
+    if unfinished:
+        raise typer.Exit(2)
     rprint(f"processed_entries={processed} cycles={cycles} registry={registry_path}")
 
 
@@ -4681,6 +4691,22 @@ def ingest_codex(
     since_days: int = typer.Option(None, "--since-days", "-d", help="Only process last N days"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Parse but do not write to DB"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Print each classified entry"),
+    receipts_out: Optional[Path] = typer.Option(
+        None, "--receipts-out", help="New durable JSONL receipt file; required for non-dry manifest replay."
+    ),
+    from_manifest: Optional[Path] = typer.Option(
+        None, "--from-manifest", help="Admit only stat-pinned compressed files in this JSONL manifest."
+    ),
+    manifest_machine: Optional[str] = typer.Option(
+        None, "--manifest-machine", help="Select this machine's manifest rows."
+    ),
+    manifest_start: int = typer.Option(
+        0, "--manifest-start", min=0, help="Start at this zero-based row within the selected machine."
+    ),
+    max_files: int = typer.Option(2, "--max-files", min=1, help="Manifest file admission cap."),
+    max_decoded_bytes: int = typer.Option(
+        1048576, "--max-decoded-bytes", min=1, help="Manifest total decoded-byte budget."
+    ),
 ) -> None:
     """Ingest Codex (GPT-5.4) session transcripts into BrainLayer.
 
@@ -4692,6 +4718,40 @@ def ingest_codex(
 
     db_path = DEFAULT_DB_PATH
 
+    if from_manifest:
+        from ..ingest.codex_manifest import ingest_codex_manifest
+        from ..paths import resolve_db_path
+
+        if path or project or since_days:
+            raise typer.BadParameter("--from-manifest cannot be combined with path, --project or --since-days")
+        if not from_manifest.is_file():
+            raise typer.BadParameter(f"manifest file not found: {from_manifest}")
+        if manifest_machine not in {None, "M1", "M4"}:
+            raise typer.BadParameter("--manifest-machine must be M1 or M4")
+        if not dry_run and receipts_out is None:
+            raise typer.BadParameter("--receipts-out is required for non-dry manifest runs")
+        failed = False
+        try:
+            for receipt in ingest_codex_manifest(
+                from_manifest,
+                resolve_db_path(),
+                dry_run=dry_run,
+                max_files=max_files,
+                max_decoded_bytes=max_decoded_bytes,
+                machine=manifest_machine,
+                start_at=manifest_start,
+                receipts_out=receipts_out,
+            ):
+                print(json.dumps(receipt, sort_keys=True))
+                failed |= bool(receipt["skip_reason"])
+        except (OSError, ValueError) as error:
+            raise typer.BadParameter(str(error)) from error
+        if failed:
+            raise typer.Exit(2)
+        return
+
+    if receipts_out is not None:
+        raise typer.BadParameter("--receipts-out requires --from-manifest")
     try:
         if path and path.is_file():
             rprint(f"[bold blue]זיכרון[/] — Ingesting Codex session: [bold]{path.name}[/]")
