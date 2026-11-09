@@ -821,6 +821,33 @@ def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp
         assert str(test_root / filename) in logged
 
 
+def test_changed_only_tag_with_mapped_sources_runs_exact_targeted_set(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    target = test_root / "test_backup_daily.py"
+    target.write_text("test placeholder\n")
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+    env = _script_env()
+    env.update(
+        PATH=f"{tmp_path / 'bin'}:{env['PATH']}",
+        BRAINLAYER_TEST_ROOT=str(test_root),
+        BRAINLAYER_USE_UV="0",
+        BRAINLAYER_PREPUSH="1",
+        BRAINLAYER_PREPUSH_SCOPE="changed-only",
+        BRAINLAYER_PREPUSH_TAG="v9.0.0",
+        BRAINLAYER_CHANGED_FILES="src/brainlayer/backup_daily.py",
+        PYTEST_LOG=str(pytest_log),
+        BUN_LOG=str(bun_log),
+    )
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+    assert result.returncode == 0
+    unit_calls = [line for line in pytest_log.read_text().splitlines() if " -m " in line]
+    assert len(unit_calls) == 1
+    assert [arg for arg in unit_calls[0].split(" -v", 1)[0].split() if not arg.startswith("--")] == [str(target)]
+    assert "FULL pytest unit suite" not in result.stdout
+    assert "mapped tests plus fixed smoke" not in result.stdout
+
+
 @pytest.mark.parametrize("release", [False, True])
 def test_changed_only_scope_falls_back_when_mapped_and_unmapped_sources_change(tmp_path: Path, release: bool) -> None:
     test_root = tmp_path / "tests"
