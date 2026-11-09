@@ -586,7 +586,12 @@ def test_run_doctor_fails_loudly_when_brainbar_version_check_fails(tmp_path, mon
     def command_runner(args: list[str]) -> SimpleNamespace:
         if args[:2] == ["launchctl", "print"]:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
-        assert args == ["bash", str(version_check)]
+        from brainlayer import __version__
+
+        expected = ["bash", str(version_check)]
+        if not source_checkout:
+            expected.extend(["--installed", __version__])
+        assert args == expected
         return SimpleNamespace(returncode=1, stdout="", stderr="[brainlayer-version-check] ERROR: cask drift\n")
 
     result = run_doctor(
@@ -643,7 +648,12 @@ def test_run_doctor_reports_brainbar_version_check_runner_exception(tmp_path, mo
     def command_runner(args: list[str]) -> SimpleNamespace:
         if args[:2] == ["launchctl", "print"]:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
-        assert args == ["bash", str(version_check)]
+        from brainlayer import __version__
+
+        expected = ["bash", str(version_check)]
+        if not source_checkout:
+            expected.extend(["--installed", __version__])
+        assert args == expected
         raise RuntimeError("runner unavailable")
 
     result = run_doctor(

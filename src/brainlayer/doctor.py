@@ -725,7 +725,12 @@ def _check_brainbar_version_consistency(
         return
 
     try:
-        check = command_runner(["bash", str(version_check_path)])
+        command = ["bash", str(version_check_path)]
+        if not _running_from_source_checkout():
+            from brainlayer import __version__
+
+            command.extend(["--installed", __version__])
+        check = command_runner(command)
     except Exception as exc:
         result.issues.append(
             DoctorIssue(
