@@ -273,7 +273,7 @@ def load_credentials(
 
 
 def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[str, Any]:
-    """Check the owned token only; do not migrate or write a refreshed token."""
+    """Check the owned token without migration; persist successful refresh facts."""
     from google.auth.exceptions import TransportError
 
     token, _, _ = _paths(kwargs.get("token_path"), kwargs.get("client_path"), None)
@@ -294,7 +294,7 @@ def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[
             reason = f"Drive access expired at {expires.isoformat()}: Reconnect in BrainBar"
             _report_consent(kwargs.get("alert_reporter", job_alerts.report), reason)
             return {"state": "invalid", "reason": reason, **timing}
-        creds = load_credentials(**kwargs, migrate=False, persist_refresh=False, now=now)
+        creds = load_credentials(**kwargs, migrate=False, persist_refresh=True, now=now)
         expires = _consent_deadline({"refresh_expires_at": creds.brainlayer_refresh_expires_at})
         days_left = max(0.0, (expires - current).total_seconds() / 86400) if expires else None
         timing = {"expires_at": expires.isoformat() if expires else None, "days_left": days_left}

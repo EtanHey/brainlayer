@@ -894,7 +894,7 @@ def test_google_response_controls_lifetime_through_real_refresh(tmp_path, second
     kwargs = dict(
         token_path=token, client_path=client, request_factory=lambda: endpoint, alert_reporter=lambda *_: None, now=now
     )
-    drive_credentials.load_credentials(**kwargs)
+    drive_credentials.credential_status(**kwargs)
     stored = json.loads(token.read_text())
     assert stored["refresh_expires_at"] == (
         "permanent" if seconds is None else (now + timedelta(seconds=seconds)).isoformat()
