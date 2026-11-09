@@ -2360,3 +2360,40 @@ def test_changed_only_policy_source_runs_retirement_inventory(tmp_path, source):
     result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     assert str(test_root / "test_retirement_inventory.py") in pytest_log.read_text()
+
+
+@pytest.mark.parametrize(
+    "source,owners",
+    [
+        ("zstd_stream.py", ("test_codex_zstd_stream.py", "test_backup_zstd.py")),
+        ("ingest/codex.py", ("test_ingest_codex.py", "test_codex_zstd_stream.py")),
+        ("codex_zst.py", ("test_codex_zst_watcher.py", "test_jsonl_watcher.py")),
+        ("ingest/codex_manifest.py", ("test_codex_zst_manifest.py", "test_watcher_bridge.py")),
+    ],
+)
+@pytest.mark.parametrize("missing", [False, True])
+def test_zst_owner_mapping_retains_full_suite_if_any_owner_is_missing(tmp_path, source, owners, missing):
+    root = tmp_path / "tests"
+    root.mkdir()
+    for name in owners[:-1] if missing else owners:
+        (root / name).write_text("test placeholder\n")
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+    env = _script_env()
+    env.update(
+        PATH=f"{tmp_path / 'bin'}:{env['PATH']}",
+        BRAINLAYER_TEST_ROOT=str(root),
+        BRAINLAYER_USE_UV="0",
+        BRAINLAYER_PREPUSH="1",
+        BRAINLAYER_PREPUSH_SCOPE="changed-only",
+        BRAINLAYER_CHANGED_FILES=f"src/brainlayer/{source}",
+        PYTEST_LOG=str(pytest_log),
+        BUN_LOG=str(bun_log),
+    )
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False)
+    assert result.returncode == 0, result.stdout
+    if missing:
+        assert "falling back to full pytest unit suite" in result.stdout
+        assert f"{root}/ -v" in pytest_log.read_text()
+    else:
+        assert "falling back to full pytest unit suite" not in result.stdout
+        assert all(str(root / name) in pytest_log.read_text() for name in owners)

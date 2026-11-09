@@ -298,6 +298,9 @@ jobs:
           path: ~/.cache/huggingface
           key: ${{ runner.os }}-hf-bge-large-en-v1.5-bge-m3
 
+      - name: Install zstd fixture decoder
+        run: sudo apt-get update && sudo apt-get install -y zstd
+
       - name: Install
         run: pip install -e ".[dev]"
 

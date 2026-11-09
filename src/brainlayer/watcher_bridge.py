@@ -357,6 +357,30 @@ def _content_class_for_visibility(base_content_class: str, visibility: str) -> s
     return "cold"
 
 
+def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, project, content_type):
+    """A reread of acknowledged archive bytes is not another sighting."""
+    import sqlite3
+    from contextlib import closing
+
+    try:
+        with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            if db.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone():
+                return True
+            return (
+                find_duplicate(
+                    db,
+                    chunk_id=chunk_id,
+                    content=content,
+                    created_at=created_at,
+                    project=project,
+                    content_type=content_type,
+                )[0]
+                is not None
+            )
+    except sqlite3.Error as error:
+        raise OSError("archive reconciliation lookup failed; checkpoint held") from error
+
+
 # ── Flush callback ───────────────────────────────────────────────────────────
 
 
