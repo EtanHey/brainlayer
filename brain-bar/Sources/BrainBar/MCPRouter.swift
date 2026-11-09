@@ -275,7 +275,10 @@ final class MCPRouter: @unchecked Sendable {
     init(
         profile: String? = nil,
         hybridSearchClient: HybridSearchClientProtocol? = nil,
-        hybridSearchBudget: TimeInterval = 0.8,
+        // Live M4 helper replay includes entity-scoped KNN plus a generic retry.
+        // Even with point vector reads it exceeds 0.8s; retain a bounded wait
+        // that admits that path instead of discarding its completed hybrid work.
+        hybridSearchBudget: TimeInterval = 4.0,
         hybridSearchExecutor: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void = { work in DispatchQueue.global(qos: .userInitiated).async(execute: work) },
         dbPath: String? = nil,
         pendingStoreDrainQueue: DispatchQueue? = nil,
@@ -1085,6 +1088,10 @@ final class MCPRouter: @unchecked Sendable {
             "query": query,
             "num_results": limit,
             "source": source ?? "all",
+            // Native unscoped search already spans the corpus (including its
+            // lexical fallback). The service has no project CWD; Python's
+            // implicit worker policy would otherwise deny every result.
+            "consumer": project == nil ? "orchestrator" : "worker",
             "detail": detail ?? "compact"
         ]
         if let project {

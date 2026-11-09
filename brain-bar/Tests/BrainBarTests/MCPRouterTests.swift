@@ -565,6 +565,7 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(helper.requests.first?["query"] as? String, "techgym speakers workshop")
         XCTAssertEqual(helper.requests.first?["num_results"] as? Int, 3)
         XCTAssertEqual(helper.requests.first?["project"] as? String, "brainlayer")
+        XCTAssertEqual(helper.requests.first?["consumer"] as? String, "worker")
         XCTAssertEqual(helper.requests.first?["source"] as? String, "all")
         XCTAssertEqual(helper.requests.first?["tag"] as? String, "speakers-workshop")
         XCTAssertEqual(helper.requests.first?["importance_min"] as? Double, 8)
@@ -575,6 +576,21 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(route["route"], "hybrid_helper")
         XCTAssertNil(result["isError"], "Hybrid helper metadata must not overwrite reserved MCP result keys.")
         XCTAssertNotNil(result["content"] as? [[String: Any]], "Hybrid helper metadata must not overwrite MCP content.")
+    }
+
+    func testUnscopedNativeSearchExplicitlyRequestsCorpusScope() throws {
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-corpus-scope-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        let helper = RecordingHybridSearchClient(response: HybridSearchResponse(text: "hybrid fixture"))
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
+        router.setDatabase(db)
+        let response = router.handle(toolCall(id: 180, name: "brain_search", arguments: ["query": "fixture"]))
+        XCTAssertTrue(try toolText(response).contains("hybrid fixture"))
+        XCTAssertNil(helper.requests.first?["project"])
+        XCTAssertEqual(helper.requests.first?["consumer"] as? String, "orchestrator",
+                       "The service runs without a project CWD; implicit worker scope denies every corpus result")
     }
 
     func testBrainSearchFullHybridGatesOnlyKGPreamble() throws {

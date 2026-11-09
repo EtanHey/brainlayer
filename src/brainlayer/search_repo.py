@@ -955,19 +955,19 @@ class SearchMixin:
         )
         return min(effective_k, _SQLITE_VEC_MAX_K)
 
+    def _load_chunk_embedding_rows(self, chunk_ids: List[str]) -> list[tuple]:
+        """Use vec0's primary-key plan; IN currently scans every stored vector."""
+        cursor = self._read_cursor()
+        rows = []
+        for chunk_id in dict.fromkeys(chunk_ids):
+            rows.extend(cursor.execute("SELECT chunk_id, embedding FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,)))
+        return rows
+
     def _load_chunk_embeddings(self, chunk_ids: List[str]) -> Dict[str, np.ndarray]:
         """Fetch float embeddings for the provided chunk IDs."""
         if not chunk_ids:
             return {}
-
-        cursor = self._read_cursor()
-        placeholders = ",".join("?" for _ in chunk_ids)
-        rows = list(
-            cursor.execute(
-                f"SELECT chunk_id, embedding FROM chunk_vectors WHERE chunk_id IN ({placeholders})",
-                chunk_ids,
-            )
-        )
+        rows = self._load_chunk_embedding_rows(chunk_ids)
         return {
             chunk_id: np.frombuffer(embedding_blob, dtype=np.float32).copy()
             for chunk_id, embedding_blob in rows
@@ -1830,14 +1830,7 @@ class SearchMixin:
         if not ids:
             return semantic_results
 
-        cursor = self._read_cursor()
-        placeholders = ",".join("?" for _ in ids)
-        rows = list(
-            cursor.execute(
-                f"SELECT chunk_id, embedding FROM chunk_vectors WHERE chunk_id IN ({placeholders})",
-                ids,
-            )
-        )
+        rows = self._load_chunk_embedding_rows(ids)
         if not rows:
             return semantic_results
 

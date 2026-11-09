@@ -1,4 +1,5 @@
 import json
+import tempfile
 import threading
 import time
 import uuid
@@ -43,7 +44,7 @@ def test_status_reports_helper_readiness(tmp_path):
 
 
 def test_helper_does_not_bind_socket_until_warm_finishes(tmp_path):
-    socket_path = Path(f"/tmp/bl-hh-{uuid.uuid4().hex[:8]}.sock")
+    socket_path = Path(tempfile.gettempdir()) / f"bl-hh-{uuid.uuid4().hex[:8]}.sock"
     try:
         socket_path.unlink()
     except FileNotFoundError:
