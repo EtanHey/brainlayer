@@ -2185,3 +2185,12 @@ def test_roundtrip_probe_retrieves_current_probe_among_residual_probes(tmp_path)
     # The probe owns only its current row; interrupted older probes remain intact.
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 8
+
+
+def test_installed_version_check_never_selects_developer_script(monkeypatch):
+    from brainlayer import doctor
+
+    monkeypatch.setattr(doctor, "_running_from_source_checkout", lambda: False)
+    assert doctor.default_version_check_path() == (
+        Path(doctor.__file__).resolve().parent / "launchd" / "brainlayer-version-check.sh"
+    )

@@ -97,6 +97,8 @@ def _running_from_source_checkout() -> bool:
 
 
 def default_version_check_path() -> Path:
+    if not _running_from_source_checkout():
+        return Path(__file__).resolve().parent / "launchd" / "brainlayer-version-check.sh"
     current_tree_script = Path(__file__).resolve().parents[2] / "scripts" / "brainlayer-version-check.sh"
     if current_tree_script.is_file():
         return current_tree_script
