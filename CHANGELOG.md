@@ -40,6 +40,33 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.93] - 2026-11-09
+
+### Codex .jsonl.zst ingest
+
+- Bounded decoder and read-only reconciliation (#1708).
+- Isolate bounded tailer and terminal record quarantine (#1710).
+- Preserve archive resume and author attribution (#1727).
+- Persist confirmed archive admission and report held checkpoints (#1728).
+- Validate streamed provenance without retaining header payloads (#1729).
+- Reconcile manifest candidates and dedup outcomes atomically (#1730).
+- Require durable complete manifest replay receipts (#1731).
+- Expose bounded backfill CLI and retain archive headers (#1732).
+- Preserve Codex author context in manifest replay (#1736).
+- test(zst): retain bounded acceptance guards (#1733; landed via #1736)
+
+### Other changes
+
+- Close backup supervisor signal lifecycle windows (#1705).
+- Bound unmapped changed-only checks with smoke tests (#1721).
+- Retry bounded supervisor status reads before steps (#1711).
+- Align legacy author-model fixture with safe resume (#1720).
+- Carry Codex turn_context author model across realtime reads (#1651).
+- Surface failed progress with a fresh heartbeat (#1707).
+- Deleted JSONL is not a parse alarm; verify bytes before resuming a same-inode path; name real log files (#1656).
+- Bound EOF drain while requests remain unsent (#1691).
+- Compact status menu and Dashboard attention list (#1698).
+
 ## [1.5.92] - 2026-11-08
 
 - BrainBar no longer asks to reconnect Drive for a Production OAuth app (#1677).
