@@ -240,6 +240,21 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      src/brainlayer/zstd_stream.py|src/brainlayer/ingest/codex.py|src/brainlayer/codex_zst.py|src/brainlayer/ingest/codex_manifest.py)
+        case "$changed" in
+          src/brainlayer/zstd_stream.py) zst_tests=(test_codex_zstd_stream.py test_backup_zstd.py) ;;
+          src/brainlayer/ingest/codex.py) zst_tests=(test_ingest_codex.py test_codex_zstd_stream.py) ;;
+          src/brainlayer/codex_zst.py) zst_tests=(test_codex_zst_watcher.py test_jsonl_watcher.py) ;;
+          *) zst_tests=(test_codex_zst_manifest.py test_watcher_bridge.py) ;;
+        esac
+        mapped=1
+        for rel in "${zst_tests[@]}"; do
+          [ -f "$TEST_ROOT/$rel" ] || mapped=0
+        done
+        if [ "$mapped" -eq 1 ]; then
+          for rel in "${zst_tests[@]}"; do append_unique "$TEST_ROOT/$rel"; done
+        fi
+        ;;
       src/brainlayer/watcher.py)
         test_path="$TEST_ROOT/test_jsonl_watcher.py"
         if [ -f "$test_path" ]; then
@@ -640,13 +655,26 @@ elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_files_seen"
   echo
   pytest_unit_cmd=()
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_source_unmapped" -eq 1 ]; then
-  # An unmapped SOURCE change is the opposite case: there IS something to test and no targeted way
-  # to test it, so the escalation stays. It just no longer happens quietly -- it names what forced
-  # it, so the fix (add a mapping) is visible instead of paid for on every push.
-  echo "WARNING: changed-only scope found an unmapped source change; falling back to full pytest unit suite"
-  echo "WARNING: unmapped: ${unmapped_changed_files[*]}"
-  full_unit_suite=1
-  pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
+  if [ -n "${BRAINLAYER_PREPUSH_TAG:-}" ]; then
+    echo "WARNING: release tag $BRAINLAYER_PREPUSH_TAG has unmapped changes; running the FULL pytest unit suite."
+    echo "WARNING: unmapped: ${unmapped_changed_files[*]}"
+    full_unit_suite=1
+    pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
+  else
+    echo "WARNING: changed-only scope found unmapped changes; running mapped tests plus fixed smoke"
+    echo "WARNING: unmapped: ${unmapped_changed_files[*]}"
+    echo "WARNING: the full suite is left to hosted CI."
+    for smoke in \
+      "test_store.py" \
+      "test_hybrid_search.py::TestHybridSearch::test_hybrid_search_returns_results" \
+      "test_brainstore.py::TestStoreMemory" \
+      "test_jsonl_watcher.py::TestOffsetRegistry" \
+      "test_jsonl_watcher.py::TestJSONLTailer"
+    do
+      append_unique "$TEST_ROOT/$smoke"
+    done
+    pytest_unit_cmd=(run_pytest "${targeted_pytest_files[@]}" -v --tb=short -m "$UNIT_MARK_EXPR")
+  fi
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "${#targeted_pytest_files[@]}" -gt 0 ]; then
   pytest_unit_cmd=(run_pytest "${targeted_pytest_files[@]}" -v --tb=short -m "$UNIT_MARK_EXPR")
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ -n "${BRAINLAYER_PREPUSH_TAG:-}" ]; then

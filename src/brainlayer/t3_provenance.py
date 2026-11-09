@@ -6,11 +6,12 @@ import json
 import os
 import re
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
 from . import t3_linkage_alarm
-from .alarm import raise_alarm
+from .alarm import build_alarm, raise_alarm
 from .t3_sources import DEFAULT_T3_STATE_DB as DEFAULT_T3_STATE_DB
 from .t3_sources import resolve_t3_sources
 
@@ -21,63 +22,102 @@ _V2_TABLE = "orchestration_v2_projection_provider_threads"
 _HEADER_LIMIT = 1024 * 1024
 
 
+def _raise_read_only_alarm(code: str, message: str, context: dict | None = None) -> NoReturn:
+    raise build_alarm(code, message, context)
+
+
 def _projection_version(value: int | None) -> int | None:
     selected = str(value if value is not None else os.environ.get("BRAINLAYER_T3_PROJECTION_VERSION", ""))
     if not selected:
         return None
     if selected not in {"1", "2"}:
-        raise_alarm("t3_runtime_selection_invalid", "T3 projection version must be 1 or 2")
+        (_raise_read_only_alarm if t3_linkage_alarm.read_only_active() else raise_alarm)(
+            "t3_runtime_selection_invalid", "T3 projection version must be 1 or 2"
+        )
     return int(selected)
 
 
-def codex_header_identity(source_file: str | Path, cache: dict | None = None) -> tuple[str, bool]:
+@dataclass(frozen=True)
+class CompactCodexHeader:
+    identity: tuple[str, bool] | None
+    size: int
+    error: str | None = None
+
+
+def compact_codex_header(record, size):
+    """Validate once, retaining neither instructions nor the source payload."""
+    try:
+        return CompactCodexHeader(_validate_codex_header(record), size)
+    except (ValueError, TypeError, AttributeError) as error:
+        return CompactCodexHeader(None, size, str(error))
+
+
+def _validate_codex_header(record):
+    payload = record.get("payload") if isinstance(record, dict) else None
+    if record.get("type") != "session_meta" or not isinstance(payload, dict):
+        raise ValueError("first record must be session_meta")
+    session_id = payload.get("id")
+    if not isinstance(session_id, str) or not _CODEX_SESSION_ID_RE.fullmatch(session_id):
+        raise ValueError("session_meta.id must be a UUID")
+    alternate = payload.get("session_id")
+    if alternate is not None:
+        if not isinstance(alternate, str) or not _CODEX_SESSION_ID_RE.fullmatch(alternate):
+            raise ValueError("session_meta.session_id must be a UUID")
+        if alternate.lower() != session_id.lower():
+            parent = payload.get("parent_thread_id")
+            if not isinstance(parent, str) or not _CODEX_SESSION_ID_RE.fullmatch(parent):
+                raise ValueError("fork parent_thread_id must be a UUID")
+            if parent.lower() != alternate.lower():
+                # Nested subagents retain the root session_id, but name their
+                # immediate parent both here and in the structural source.
+                source = payload.get("source")
+                subagent = source.get("subagent") if isinstance(source, dict) else None
+                spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+                recorded_parent = spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
+                depth = spawn.get("depth") if isinstance(spawn, dict) else None
+                if (
+                    not isinstance(recorded_parent, str)
+                    or recorded_parent.lower() != parent.lower()
+                    or type(depth) is not int
+                    or depth < 2
+                ):
+                    raise ValueError("session_meta identity fields disagree")
+    return (session_id.lower(), payload.get("originator") == "T3 Code")
+
+
+def codex_header_identity(
+    source_file: str | Path, cache: dict | None = None, header: tuple[dict, int] | CompactCodexHeader | None = None
+) -> tuple[str, bool]:
     """Read bounded session_meta identity; never infer a fork identity from its filename."""
     path = Path(source_file)
     try:
-        stat = path.stat()
-        key = (str(path), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
-        if cache is not None and key in cache:
-            return cache[key]
-        with path.open("rb") as handle:
-            line = handle.readline(_HEADER_LIMIT + 1)
-        if len(line) > _HEADER_LIMIT or not line.endswith(b"\n"):
-            raise ValueError("session header is incomplete or exceeds the bounded read")
-        record = json.loads(line)
-        payload = record.get("payload") if isinstance(record, dict) else None
-        if record.get("type") != "session_meta" or not isinstance(payload, dict):
-            raise ValueError("first record must be session_meta")
-        session_id = payload.get("id")
-        if not isinstance(session_id, str) or not _CODEX_SESSION_ID_RE.fullmatch(session_id):
-            raise ValueError("session_meta.id must be a UUID")
-        alternate = payload.get("session_id")
-        if alternate is not None:
-            if not isinstance(alternate, str) or not _CODEX_SESSION_ID_RE.fullmatch(alternate):
-                raise ValueError("session_meta.session_id must be a UUID")
-            if alternate.lower() != session_id.lower():
-                parent = payload.get("parent_thread_id")
-                if not isinstance(parent, str) or not _CODEX_SESSION_ID_RE.fullmatch(parent):
-                    raise ValueError("fork parent_thread_id must be a UUID")
-                if parent.lower() != alternate.lower():
-                    # Nested subagents retain the root session_id, but name their
-                    # immediate parent both here and in the structural source.
-                    source = payload.get("source")
-                    subagent = source.get("subagent") if isinstance(source, dict) else None
-                    spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
-                    recorded_parent = spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
-                    depth = spawn.get("depth") if isinstance(spawn, dict) else None
-                    if (
-                        not isinstance(recorded_parent, str)
-                        or recorded_parent.lower() != parent.lower()
-                        or type(depth) is not int
-                        or depth < 2
-                    ):
-                        raise ValueError("session_meta identity fields disagree")
-        result = (session_id.lower(), payload.get("originator") == "T3 Code")
-        if cache is not None:
+        key = None
+        if isinstance(header, CompactCodexHeader):
+            if header.error or header.identity is None or not 0 < header.size <= _HEADER_LIMIT:
+                raise ValueError(header.error or "session header exceeds the bounded read")
+            return header.identity
+        if header is None:
+            stat = path.stat()
+            key = (str(path), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+            if cache is not None and key in cache:
+                return cache[key]
+            with path.open("rb") as handle:
+                line = handle.readline(_HEADER_LIMIT + 1)
+            if len(line) > _HEADER_LIMIT or not line.endswith(b"\n"):
+                raise ValueError("session header is incomplete or exceeds the bounded read")
+            record = json.loads(line)
+        else:
+            # Already decoded FIRST newline-terminated record, with its actual byte size.
+            # Validation below is identical to the file reader; this never chooses a file key.
+            record, size = header
+            if type(size) is not int or not 0 < size <= _HEADER_LIMIT:
+                raise ValueError("session header exceeds the bounded read")
+        result = _validate_codex_header(record)
+        if cache is not None and key is not None:
             cache[key] = result
         return result
     except (OSError, ValueError, TypeError, AttributeError) as exc:
-        raise_alarm(
+        (_raise_read_only_alarm if t3_linkage_alarm.read_only_active() else raise_alarm)(
             "t3_session_identity_invalid",
             "could not establish bounded Codex session identity",
             {"path": str(path), "error": str(exc)},
@@ -97,6 +137,7 @@ def is_t3_app_initiated_codex_session(
     linked_session_ids: set[str] | None = None,
     projection_version: int | None = None,
     session_identity_cache: dict | None = None,
+    session_header: tuple[dict, int] | CompactCodexHeader | None = None,
 ) -> bool:
     """Return whether a Codex transcript is explicitly linked by T3 runtime state.
 
@@ -118,7 +159,7 @@ def is_t3_app_initiated_codex_session(
         if session_identity_cache is not None:
             session_identity_cache[selection_key] = sources
     session_id, t3_origin = (
-        codex_header_identity(source_file, session_identity_cache)
+        codex_header_identity(source_file, session_identity_cache, session_header)
         if any(v == 2 for _, v in sources)
         else (codex_session_id_from_source(source_file), False)
     )
