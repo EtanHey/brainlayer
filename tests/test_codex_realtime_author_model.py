@@ -154,8 +154,10 @@ def test_resume_from_a_legacy_offset_entry_rebuilds_context_from_the_file(env):
     source = _source(sessions)
     prefix = _encode([_meta(), _turn(MODEL_C), _assistant(_say(0))])
     source.write_bytes(prefix + _encode([_assistant(_say(1))]))
+    # Legacy offsets are trusted only if the file has not changed since confirmation (#1656).
+    stat = source.stat()
     (tmp_path / "offsets.json").write_text(
-        json.dumps({str(source): {"offset": len(prefix), "inode": os.stat(source).st_ino, "mtime": 1.0}})
+        json.dumps({str(source): {"offset": len(prefix), "inode": stat.st_ino, "mtime": stat.st_mtime}})
     )
 
     _drain(_watcher(tmp_path, sessions))
