@@ -427,7 +427,7 @@ def test_vector_search_does_not_starve_normal_results_after_many_checkpoints(tmp
     assert results["ids"][0] == ["normal-after-many-checkpoints"]
 
 
-def test_vector_search_does_not_overfetch_for_checkpoint_filter_when_no_checkpoints_exist(tmp_path, monkeypatch):
+def test_vector_search_conservatively_overfetches_without_scanning_checkpoint_content(tmp_path, monkeypatch):
     store = VectorStore(tmp_path / "vector-no-checkpoint-overfetch.db")
     query_embedding = [0.0] * 1024
     for index in range(5):
@@ -456,7 +456,7 @@ def test_vector_search_does_not_overfetch_for_checkpoint_filter_when_no_checkpoi
     store.search(query_embedding=query_embedding, n_results=2)
     store.close()
 
-    assert captured_k == [2]
+    assert captured_k == [12]
 
 
 def test_store_memory_checkpoint_invalidates_checkpoint_count_cache(tmp_path):
@@ -470,7 +470,7 @@ def test_store_memory_checkpoint_invalidates_checkpoint_count_cache(tmp_path):
         chunk_origin=CHUNK_ORIGIN_UNKNOWN,
     )
     assert store.search(query_embedding=query_embedding, n_results=1)["ids"][0] == ["normal-after-checkpoint"]
-    assert store._checkpoint_count_cache == 0
+    assert store._checkpoint_count_cache == 1
 
     store_memory(
         store=store,
@@ -502,7 +502,7 @@ def test_external_checkpoint_write_invalidates_cached_checkpoint_count(tmp_path)
         assert reader.search(query_embedding=query_embedding, n_results=1)["ids"][0] == [
             "normal-after-external-checkpoint"
         ]
-        assert reader._checkpoint_count_cache == 0
+        assert reader._checkpoint_count_cache == 1
 
         _insert_chunk(
             writer,

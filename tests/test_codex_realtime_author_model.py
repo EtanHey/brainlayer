@@ -9,6 +9,7 @@ Drives the production path: JSONLWatcher -> watcher_bridge flush -> synthetic sc
 import json
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -104,7 +105,9 @@ def _drain(watcher: JSONLWatcher) -> None:
 
 
 def _rows(tmp_path: Path) -> dict[str, dict]:
-    with sqlite3.connect(tmp_path / "scratch.db") as conn:
+    # stdlib SQLite and APSW have separate lock bookkeeping; a late RW close can
+    # unlink the live APSW writer's WAL. Read-only readers must also close explicitly.
+    with closing(sqlite3.connect((tmp_path / "scratch.db").resolve().as_uri() + "?mode=ro", uri=True)) as conn:
         rows = conn.execute("SELECT content, metadata FROM chunks").fetchall()
     return {content: json.loads(metadata) for content, metadata in rows}
 
@@ -309,3 +312,19 @@ def test_arbitrated_queue_carries_the_same_attribution(env):
     }
     assert by_content[_say(2)]["model_source"] == "codex_turn_context"
     assert all(meta["model_provider"] == "fixture-provider" for meta in by_content.values())
+
+
+def test_scratch_readers_keep_the_writers_wal(env):
+    import gc
+
+    tmp_path, sessions = env
+    source = _source(sessions)
+    source.write_bytes(_encode([_meta(), _turn(MODEL_A), _assistant(_say(0))]))
+    watcher = _watcher(tmp_path, sessions)
+    _drain(watcher)
+    assert _models(tmp_path) == {_say(0): MODEL_A}
+    gc.collect()
+    assert (tmp_path / "scratch.db-wal").exists()
+    _append(source, [_turn(MODEL_B), _assistant(_say(1))])
+    _drain(watcher)
+    assert _models(tmp_path) == {_say(0): MODEL_A, _say(1): MODEL_B}

@@ -362,6 +362,16 @@
         "target": "saved_session.get"
       }
     },
+    "152cdf6415721d6ea1fb2b947ce5abba37bfa20f4a29692d539e5506d6b936ee": {
+      "non_cloud_purpose": "Read-only local SQLite lookup of acknowledged archive chunks before reconciliation publication; no network or model provider.",
+      "site": {
+        "call_sha256": "9a4bf3ca1e022b1d497b7f102e2b9d433c16fe05b6ac3bdd44a677ffd423fb0e",
+        "kind": "generic_send",
+        "owner": "<module>._archive_reconciliation_stored",
+        "path": "src/brainlayer/watcher_bridge.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "15535a145e5492d50ea89bc81c4edabe6ddb9611955c7029b027fbd8f2d3e913": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/launchd/throughput-watchdog.py <module>._bounded_nul_paths subprocess.TimeoutExpired.",
       "site": {
@@ -592,6 +602,16 @@
         "target": "import subprocess"
       }
     },
+    "1db81477b0a1daf8c56f7512f9728e4fea39166a153ad7374f86a15128b98162": {
+      "non_cloud_purpose": "Read-only local Git repository/worktree identity lookup with caller-bounded timeout; no network or cloud execution.",
+      "site": {
+        "call_sha256": "e205631bd99645f04468e66681061f8e836a9918bd0e6ae2ddd9d0f72462bf7f",
+        "kind": "child_process",
+        "owner": "<module>.canonical_workspace_path",
+        "path": "src/brainlayer/scoping.py",
+        "target": "subprocess.run"
+      }
+    },
     "1dbae240c09cdf5aec0a7705e0d65cbbdd6e3ddef3d11435fd732e2af945e3ea": {
       "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
       "site": {
@@ -620,6 +640,16 @@
         "owner": "<module>.recover_hold.bounded_request",
         "path": "src/brainlayer/maintenance_control.py",
         "target": "request"
+      }
+    },
+    "1e4f7469181c346a5934892674c250c4ed79b8c112c31f253d4368a0c5b65359": {
+      "non_cloud_purpose": "Dictionary lookup of already-decoded Codex session metadata (id/cwd), not an HTTP session. File path/stem remains canonical identity; native header ids are metadata only. No network or model sender.",
+      "site": {
+        "call_sha256": "cc5793dba89cf4945e9bb9470cf6781e8323e4931013a238627e075b669eeb03",
+        "kind": "generic_send",
+        "owner": "<module>.JSONLWatcher._normalize_lines",
+        "path": "src/brainlayer/watcher.py",
+        "target": "self._codex_sessions.get"
       }
     },
     "1e8e00d27af9e90f5bd8cec7d595bc318c44e7f138747cecbb1759ad81456ee1": {
@@ -1248,6 +1278,16 @@
         "owner": "<module>",
         "path": "scripts/retirement_probe.py",
         "target": "import socket"
+      }
+    },
+    "34e69277091eabe06e1d49fbf6c83d3edd069a45aaa0d19c5d273b9d714bb7dd": {
+      "non_cloud_purpose": "Local zstd CLI decoding of an explicitly admitted immutable Codex archive to bounded stdout reads; decoder errors are reported and the owned child is reaped. Resolved executable is the existing zstd tool, with no model arguments or network sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/zstd_stream.py",
+        "target": "import subprocess"
       }
     },
     "3575c7a4f7898a2f8d57c3d03896a4423c633fd0ed0b64df42d0717b3e86515f": {
@@ -3950,6 +3990,16 @@
         "target": "subprocess.run"
       }
     },
+    "9d9d8db500628251835e3fdf22639ac897716bd70ce65dd3a6ed7db8c14786d0": {
+      "non_cloud_purpose": "Read-only bounded local Git repository identity lookup (rev-parse and worktree list); subprocess binding/error handling supports those fixed argv operations only. No network, writes, or model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.canonical_workspace_path",
+        "path": "src/brainlayer/scoping.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "9e5a01fed464d2af61e192eb5ccc24b011c03645489f042ee3e4416a650036a8": {
       "non_cloud_purpose": "S22 local subprocess exception type used to fail closed when pinned /bin/ps cannot verify the live hotlane producer PID; no process launch or network sender at this reference.",
       "site": {
@@ -4088,6 +4138,16 @@
         "owner": "<module>.reindex_episode",
         "path": "scripts/diarize_episodes.py",
         "target": "subprocess.run"
+      }
+    },
+    "a35b8737a0f0f5355795127477584918f7a572682dfaaa6733b3366a20a97886": {
+      "non_cloud_purpose": "Local zstd CLI decoding of an explicitly admitted immutable Codex archive to bounded stdout reads; decoder errors are reported and the owned child is reaped. Resolved executable is the existing zstd tool, with no model arguments or network sender.",
+      "site": {
+        "call_sha256": "b00f34fc6f0646f72817b11dd453d9c2996720c7aab4e38a26b34f203818d7ee",
+        "kind": "child_process",
+        "owner": "<module>.ZstdDecodedFile.__init__",
+        "path": "src/brainlayer/zstd_stream.py",
+        "target": "subprocess.Popen"
       }
     },
     "a454ce24aaae925f6275c2510fcc25b304f560036c3d08900b38f392f4efe1ad": {
@@ -5656,6 +5716,16 @@
         "target": "subprocess.check_output"
       }
     },
+    "dab755c1f1649b5ed91aa0ad39d981b059ae5038eb83d43a7c6e90fb4737a781": {
+      "non_cloud_purpose": "Read-only SQLite file URI (mode=ro) against the existing BrainLayer DB, checking one per-file canonical chunk id before durable queue publication. No model or network sender and no second database writer.",
+      "site": {
+        "call_sha256": "9a4bf3ca1e022b1d497b7f102e2b9d433c16fe05b6ac3bdd44a677ffd423fb0e",
+        "kind": "generic_send",
+        "owner": "<module>._committed",
+        "path": "src/brainlayer/ingest/codex_manifest.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "db97b9ce7920e3c0f4edb293648b881f444d167786c82b1cfa512d3cd89ac8da": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
@@ -5876,6 +5946,16 @@
         "target": "importlib.import_module"
       }
     },
+    "e615b47b179c62815091e0fdf7c87266261bd96d095882f113dd8afcb17d190f": {
+      "non_cloud_purpose": "Read-only bounded local Git repository identity lookup (rev-parse and worktree list); subprocess binding/error handling supports those fixed argv operations only. No network, writes, or model sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/scoping.py",
+        "target": "import subprocess"
+      }
+    },
     "e78c21d92b37be23eba1a89c3a97b1a18771a3b6d1b0c48bc37ded6d11bb27a4": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -6053,6 +6133,16 @@
         "kind": "child_process",
         "owner": "<module>._staging_snapshots_may_exist",
         "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.run"
+      }
+    },
+    "ee21dfa186e5ab166b460baa3d63f941a47c0a7b7cd073cbf61f5d58d4a9bbed": {
+      "non_cloud_purpose": "Read-only local Git repository/worktree identity lookup with caller-bounded timeout; no network or cloud execution.",
+      "site": {
+        "call_sha256": "b00f0a54ed0cf0fca73d2af9f30ed148c9de1cea6ab377ebf72b2c2c27ffee59",
+        "kind": "child_process",
+        "owner": "<module>.canonical_workspace_path",
+        "path": "src/brainlayer/scoping.py",
         "target": "subprocess.run"
       }
     },

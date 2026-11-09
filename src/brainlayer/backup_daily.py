@@ -1408,16 +1408,9 @@ def _snapshot_suffix(name: str) -> str | None:
 
 def _resolve_zstd() -> str | None:
     """Absolute zstd path, or None. A set-but-unusable override fails loudly, never falls through."""
-    override = os.environ.get(BACKUP_ZSTD_PATH_ENV)
-    if override is not None:
-        candidate = Path(override)
-        if not candidate.is_absolute() or not candidate.is_file() or not os.access(candidate, os.X_OK):
-            raise ValueError(f"{BACKUP_ZSTD_PATH_ENV} must name an absolute executable zstd: {override!r}")
-        return str(candidate)
-    for candidate in ZSTD_CANDIDATE_PATHS:
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return shutil.which("zstd")
+    from .zstd_stream import resolve_zstd
+
+    return resolve_zstd(BACKUP_ZSTD_PATH_ENV)
 
 
 def _require_zstd() -> str:
@@ -2583,7 +2576,7 @@ def upload_file_to_drive_raw(
     stall_limit = (
         _drive_upload_stall_max_attempts() if os.environ.get(DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV) else max_attempts
     )
-    sent = stalled_attempts = http_attempts = 0
+    sent = stalled_attempts = 0
     slept = 0.0
     stall_started: float | None = None
     probe = resume_session_url is not None
@@ -2699,7 +2692,7 @@ def upload_file_to_drive_raw(
                         return completed
                     if is_probe and response.status_code in {404, 410}:
                         raise DriveSessionExpiredError("Drive upload session expired")
-                    if response.status_code in {429, 500, 502, 503, 504}:
+                    if response.status_code in {408, 429} or 500 <= response.status_code < 600:
                         raise _DriveRetryableHTTPError(f"Drive HTTP {response.status_code}")
                     response.raise_for_status()  # Auth/consent and other 4xx fail immediately.
                     if response.status_code != 308:
@@ -2712,7 +2705,6 @@ def upload_file_to_drive_raw(
                         raise RuntimeError(
                             f"Drive returned invalid confirmed offset {confirmed}; expected {sent}..{total}"
                         )
-                    http_attempts = 0
                     if confirmed > sent:
                         if resume_session_url is not None and not bytes_attempted:
                             rate_base = confirmed  # Existing remote bytes are not this invocation's rate.
@@ -2727,7 +2719,7 @@ def upload_file_to_drive_raw(
                     probe, recovering = confirmed == total, False
                 except BackupTimeoutError:
                     raise
-                except (_DriveUploadNeedsProbe, *_DRIVE_TRANSIENT_NETWORK_ERRORS) as exc:
+                except (_DriveRetryableHTTPError, _DriveUploadNeedsProbe, *_DRIVE_TRANSIENT_NETWORK_ERRORS) as exc:
                     stall_started = time.monotonic() if stall_started is None else stall_started
                     stalled_attempts += 1
                     retries += 1
@@ -2738,14 +2730,9 @@ def upload_file_to_drive_raw(
                     session = requests.Session()
                     if is_probe:
                         backoff()
+                    # HTTP failures can commit bytes too. Query the server before
+                    # retransmitting, using the same bounded stall budget as resets.
                     probe = True
-                except _DriveRetryableHTTPError:
-                    http_attempts += 1
-                    retries += 1
-                    report_progress()
-                    if http_attempts >= max_attempts:
-                        raise
-                    _sleep(min(60, 2 ** min(http_attempts, 6), request_deadline(60)))
     except BaseException as exc:
         _redact_upload_exception(exc)
         raise

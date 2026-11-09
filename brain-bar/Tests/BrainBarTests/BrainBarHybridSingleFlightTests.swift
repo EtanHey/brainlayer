@@ -60,6 +60,10 @@ final class BrainBarHybridSingleFlightTests: XCTestCase {
             let response = router.handle(["jsonrpc": "2.0", "id": id, "method": "tools/call",
                 "params": ["name": "brain_search", "arguments": ["query": "fixture"]]])
             XCTAssertTrue(String(describing: response).contains("Search mode: BrainBar database fallback"))
+            let result = try XCTUnwrap(response["result"] as? [String: Any])
+            let route = try XCTUnwrap(result["_meta"] as? [String: String])
+            XCTAssertEqual(route["s"], "l")
+            XCTAssertEqual(route["why"], id == 1 ? "budget_exceeded" : "helper_busy")
             if id > 1 { XCTAssertTrue(String(describing: response).contains("hybrid helper busy past budget")) }
         }
         XCTAssertEqual(executor.submissions, 1, "Timeout must not admit another blocked worker")

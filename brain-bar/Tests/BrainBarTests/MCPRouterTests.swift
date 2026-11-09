@@ -570,6 +570,9 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(helper.requests.first?["importance_min"] as? Double, 8)
         XCTAssertEqual(helper.requests.first?["detail"] as? String, "compact")
         XCTAssertNotNil(result["structuredContent"])
+        let route = try XCTUnwrap(result["_meta"] as? [String: String])
+        XCTAssertEqual(route, ["s": "h"])
+        XCTAssertNil((result["structuredContent"] as? [String: Any])?["query"])
         XCTAssertNil(result["isError"], "Hybrid helper metadata must not overwrite reserved MCP result keys.")
         XCTAssertNotNil(result["content"] as? [[String: Any]], "Hybrid helper metadata must not overwrite MCP content.")
     }
@@ -703,6 +706,9 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertTrue(text.contains("fallback result from BrainBar database search"), text)
         XCTAssertTrue(text.contains("fallback-fts"), "Compact results retain canonical chunk IDs")
         XCTAssertNil(result["structuredContent"])
+        let route = try XCTUnwrap(result["_meta"] as? [String: String])
+        XCTAssertEqual(route["s"], "l")
+        XCTAssertEqual(route["why"], "helper_error")
     }
 
     func testBrainSearchFallsBackToBrainBarDatabaseWhenHybridHelperReturnsEmptyResults() throws {
