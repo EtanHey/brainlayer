@@ -57,6 +57,7 @@
 
 ### Other changes
 
+- fix(backup): resume committed bytes after transient Drive HTTP failures (#1726)
 - Close backup supervisor signal lifecycle windows (#1705).
 - Bound unmapped changed-only checks with smoke tests (#1721).
 - Retry bounded supervisor status reads before steps (#1711).
