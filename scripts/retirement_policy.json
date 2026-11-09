@@ -632,6 +632,16 @@
         "target": "request"
       }
     },
+    "1e4f7469181c346a5934892674c250c4ed79b8c112c31f253d4368a0c5b65359": {
+      "non_cloud_purpose": "Dictionary lookup of already-decoded Codex session metadata (id/cwd), not an HTTP session. File path/stem remains canonical identity; native header ids are metadata only. No network or model sender.",
+      "site": {
+        "call_sha256": "cc5793dba89cf4945e9bb9470cf6781e8323e4931013a238627e075b669eeb03",
+        "kind": "generic_send",
+        "owner": "<module>.JSONLWatcher._normalize_lines",
+        "path": "src/brainlayer/watcher.py",
+        "target": "self._codex_sessions.get"
+      }
+    },
     "1e8e00d27af9e90f5bd8cec7d595bc318c44e7f138747cecbb1759ad81456ee1": {
       "non_cloud_purpose": "Owner-only local Unix supervisor control; restart/pause/resume wait for the advertised component exit grace plus cleanup margin. No model or network sender.",
       "site": {
