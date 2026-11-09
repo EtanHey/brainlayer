@@ -258,9 +258,9 @@ map_changed_files_to_pytests() {
         ;;
       src/brainlayer/watcher.py|src/brainlayer/watcher_bridge.py)
         if [ "$changed" = "src/brainlayer/watcher.py" ]; then
-          zst_tests=(test_jsonl_watcher.py test_codex_realtime_author_model.py test_codex_zst_author_model.py test_codex_zst_watcher.py test_codex_zst_admission_guards.py test_codex_zst_prefix.py test_codex_zst_checkpoint_guards.py test_codex_zst_legacy_replay.py test_codex_zst_restart.py test_codex_zst_resume_registry.py test_codex_zst_lifecycle.py test_codex_zst_conversations.py test_codex_zst_header_retention.py test_codex_zst_acceptance.py test_retirement_ratchet.py)
+          zst_tests=(test_jsonl_watcher.py test_codex_realtime_author_model.py test_codex_zst_author_model.py test_codex_zst_quarantine_context.py test_codex_zst_watcher.py test_codex_zst_admission_guards.py test_codex_zst_prefix.py test_codex_zst_checkpoint_guards.py test_codex_zst_legacy_replay.py test_codex_zst_restart.py test_codex_zst_resume_registry.py test_codex_zst_lifecycle.py test_codex_zst_conversations.py test_codex_zst_header_retention.py test_codex_zst_acceptance.py test_retirement_ratchet.py)
         else
-          zst_tests=(test_watcher_bridge.py test_codex_realtime_author_model.py test_codex_zst_author_model.py test_codex_zst_reconcile_failure.py test_codex_zst_conversations.py test_codex_zst_manifest.py test_codex_zst_provenance.py test_codex_zst_acceptance.py)
+          zst_tests=(test_watcher_bridge.py test_codex_realtime_author_model.py test_codex_zst_author_model.py test_codex_zst_quarantine_context.py test_codex_zst_reconcile_failure.py test_codex_zst_conversations.py test_codex_zst_manifest.py test_codex_zst_provenance.py test_codex_zst_acceptance.py)
         fi
         mapped=1
         # Later slices add owners incrementally; the primary owner is mandatory.
@@ -384,8 +384,6 @@ map_changed_files_to_pytests() {
           "$TEST_ROOT/test_status_truthfulness.py"
           "$TEST_ROOT/test_watch_backfill_cli.py"
           "$TEST_ROOT/test_watch_logging.py"
-          "$TEST_ROOT/test_codex_zst_acceptance.py"
-          "$TEST_ROOT/test_codex_zst_cli_guards.py"
         )
         cli_root_complete=1
         for cli_root_test in "${cli_root_tests[@]}"; do
@@ -397,6 +395,10 @@ map_changed_files_to_pytests() {
         if [ "$cli_root_complete" -eq 1 ]; then
           for cli_root_test in "${cli_root_tests[@]}"; do
             append_unique "$cli_root_test"
+          done
+          # Zst slices introduce these owners after the core CLI suites.
+          for rel in test_codex_zst_acceptance.py test_codex_zst_cli_guards.py; do
+            if [ -f "$TEST_ROOT/$rel" ]; then append_unique "$TEST_ROOT/$rel"; fi
           done
           mapped=1
         fi
@@ -666,13 +668,26 @@ elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_files_seen"
   echo
   pytest_unit_cmd=()
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_source_unmapped" -eq 1 ]; then
-  # An unmapped SOURCE change is the opposite case: there IS something to test and no targeted way
-  # to test it, so the escalation stays. It just no longer happens quietly -- it names what forced
-  # it, so the fix (add a mapping) is visible instead of paid for on every push.
-  echo "WARNING: changed-only scope found an unmapped source change; falling back to full pytest unit suite"
-  echo "WARNING: unmapped: ${unmapped_changed_files[*]}"
-  full_unit_suite=1
-  pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
+  if [ -n "${BRAINLAYER_PREPUSH_TAG:-}" ]; then
+    echo "WARNING: release tag $BRAINLAYER_PREPUSH_TAG has unmapped changes; running the FULL pytest unit suite."
+    echo "WARNING: unmapped: ${unmapped_changed_files[*]}"
+    full_unit_suite=1
+    pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
+  else
+    echo "WARNING: changed-only scope found unmapped changes; running mapped tests plus fixed smoke"
+    echo "WARNING: unmapped: ${unmapped_changed_files[*]}"
+    echo "WARNING: the full suite is left to hosted CI."
+    for smoke in \
+      "test_store.py" \
+      "test_hybrid_search.py::TestHybridSearch::test_hybrid_search_returns_results" \
+      "test_brainstore.py::TestStoreMemory" \
+      "test_jsonl_watcher.py::TestOffsetRegistry" \
+      "test_jsonl_watcher.py::TestJSONLTailer"
+    do
+      append_unique "$TEST_ROOT/$smoke"
+    done
+    pytest_unit_cmd=(run_pytest "${targeted_pytest_files[@]}" -v --tb=short -m "$UNIT_MARK_EXPR")
+  fi
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "${#targeted_pytest_files[@]}" -gt 0 ]; then
   pytest_unit_cmd=(run_pytest "${targeted_pytest_files[@]}" -v --tb=short -m "$UNIT_MARK_EXPR")
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ -n "${BRAINLAYER_PREPUSH_TAG:-}" ]; then
