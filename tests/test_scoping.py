@@ -3,6 +3,7 @@
 import importlib.util
 import io
 import json
+import os
 import sqlite3
 import subprocess
 import time
@@ -19,7 +20,7 @@ def workspace(tmp_path, request):
     repo.mkdir(parents=True)
 
     def git(*args):
-        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, env=_clean_git_env())
 
     git("init")
     git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init")
@@ -31,6 +32,10 @@ def workspace(tmp_path, request):
     worktree = paths[request.param]
     git("worktree", "add", "--detach", str(worktree), "HEAD")
     return repo, worktree
+
+
+def _clean_git_env():
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 
 
 def test_scope_from_worktree(workspace, monkeypatch):
@@ -138,7 +143,7 @@ def test_non_git_path_is_unchanged(tmp_path):
 def test_standalone_repo_outside_gits_stays_unscoped(tmp_path, monkeypatch):
     repo = tmp_path / "Desktop" / "standalone"
     repo.mkdir(parents=True)
-    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, env=_clean_git_env())
     monkeypatch.chdir(repo)
     monkeypatch.setattr(scoping, "_load_scopes", lambda: {})
     assert scoping.resolve_project_scope() is None
