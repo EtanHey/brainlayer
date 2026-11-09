@@ -2131,3 +2131,47 @@ def test_doctor_fresh_backlog_does_not_hide_old_or_unknown_age(tmp_path, old_age
         assert result.exit_code == 1
         assert issues["vector_parity_gap"].severity == "fatal"
         assert issues["vector_parity_gap"].details["oldest_age_hours"] == old_age
+
+
+def test_roundtrip_probe_retrieves_current_probe_among_residual_probes(tmp_path):
+    from brainlayer import doctor
+    from brainlayer.chunk_write import insert_canonical_chunk
+
+    db_path = tmp_path / "residual-probes.db"
+    store = VectorStore(db_path)
+    try:
+        cursor = store.conn.cursor()
+        for index in range(8):
+            chunk_id = f"doctor-probe-residual-{index}"
+            content = f"doctor vector roundtrip probe {chunk_id}"
+            insert_canonical_chunk(
+                cursor,
+                {
+                    "id": chunk_id,
+                    "content": content,
+                    "metadata": {"doctor_probe": True},
+                    "source_file": "doctor-probe",
+                    "project": doctor.DOCTOR_PROBE_PROJECT,
+                    "content_type": "doctor_probe",
+                    "value_type": "HIGH",
+                    "char_count": len(content),
+                    "source": "doctor",
+                    "tags": ["doctor-probe"],
+                    "summary": content,
+                    "created_at": NOW.isoformat(),
+                    "chunk_origin": "unknown",
+                    "seen_count": 1,
+                    "last_seen_at": NOW.isoformat(),
+                    "content_class": "operational",
+                },
+                on_conflict="abort",
+            )
+            store._upsert_chunk_vector(cursor, chunk_id, doctor._probe_embedding(content))
+    finally:
+        store.close()
+
+    ok, _, reason = doctor._roundtrip_probe(db_path, timeout_seconds=0.1)
+    assert ok, reason
+    # The probe owns only its current row; interrupted older probes remain intact.
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 8

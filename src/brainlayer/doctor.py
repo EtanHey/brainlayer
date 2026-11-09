@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import random
 import re
 import shlex
 import sqlite3
@@ -513,9 +514,13 @@ def _index_completeness(db_path: Path, *, verify_payload: bool = False) -> dict[
 
 
 def _probe_embedding(text: str) -> list[float]:
-    if "doctor vector roundtrip probe" in text:
-        return [1.0] + [0.0] * 1023
-    return [0.0, 1.0] + [0.0] * 1022
+    # Each probe must be its own nearest neighbour, including in the binary
+    # index. Interrupted probes can survive cleanup; a constant vector ties
+    # with those rows and makes rank-one retrieval an invalid health check.
+    rng = random.Random(text)
+    vector = [rng.uniform(-1.0, 1.0) for _ in range(1024)]
+    norm = math.sqrt(sum(value * value for value in vector))
+    return [value / norm for value in vector]
 
 
 def _cleanup_probe(store: VectorStore, chunk_id: str) -> None:
