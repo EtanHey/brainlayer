@@ -1,3 +1,5 @@
+import uuid
+
 """Bounded retries must advance past content already committed under another source."""
 
 import json
@@ -29,12 +31,14 @@ def test_dedup_retries_complete_without_seen_bumps(compress, tmp_path, monkeypat
     header = rollout().splitlines(keepends=True)[0]
     seed = manifest(tmp_path, [compress("existing.jsonl.zst", header + b"".join(records[:seed_count]))])
     for _ in range(2):
-        list(ingest_codex_manifest(seed, db))
+        list(ingest_codex_manifest(seed, db, receipts_out=tmp_path / f"{uuid.uuid4().hex}.receipts.jsonl"))
         drain_once(**drain)
     selected = manifest(tmp_path, [compress("replay.jsonl.zst", header + b"".join(records))])
     total = 0
     for _ in range(20):
-        receipt = list(ingest_codex_manifest(selected, db))[0]
+        receipt = list(
+            ingest_codex_manifest(selected, db, receipts_out=tmp_path / f"{uuid.uuid4().hex}.receipts.jsonl")
+        )[0]
         total += receipt["queued"]
         drain_once(**drain)
         if receipt["class"] == "accepted":
@@ -44,7 +48,7 @@ def test_dedup_retries_complete_without_seen_bumps(compress, tmp_path, monkeypat
     with sqlite3.connect(db) as conn:
         before = conn.execute("SELECT id, seen_count FROM chunks ORDER BY id").fetchall()
     monkeypatch.setattr("brainlayer.codex_zst.queue_has_capacity", lambda: False)
-    retry = list(ingest_codex_manifest(selected, db))[0]
+    retry = list(ingest_codex_manifest(selected, db, receipts_out=tmp_path / f"{uuid.uuid4().hex}.receipts.jsonl"))[0]
     assert retry["queued"] == 0 and retry["duplicate_content"] == seed_count
     assert retry["live_chunks_at_start"] == count - seed_count and retry["filtered"] == 0
     assert len(retry["duplicate_matches"]) == min(seed_count, 5)
