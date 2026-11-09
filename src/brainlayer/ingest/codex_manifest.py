@@ -10,7 +10,7 @@ from pathlib import Path
 from ..dedupe import _active_clause, _scope_clause, find_duplicate, normalized_exact_hash
 from ..ingest_denylist import is_denylisted
 from ..t3_provenance import compact_codex_header
-from ..watcher import OffsetRegistry, normalize_provider_entry
+from ..watcher import CodexTurnContext, OffsetRegistry, fold_codex_turn_context, normalize_provider_entry
 from ..watcher_bridge import create_flush_callback
 from ..zstd_stream import ZstdDecodedFile, logical_jsonl_path
 
@@ -31,6 +31,7 @@ def _read_entries(path, limit, receipt):
     pending = bytearray()
     session = (None, None)
     header = None
+    context = CodexTurnContext(0, 0)
     logical = str(logical_jsonl_path(path))
     with ZstdDecodedFile(path) as stream:
         while receipt["decoded_bytes"] < limit:
@@ -75,8 +76,14 @@ def _read_entries(path, limit, receipt):
                     if not isinstance(payload, dict):
                         raise ValueError("session_meta payload is not an object")
                     session = (payload.get("id"), payload.get("cwd"))
+                context = fold_codex_turn_context(context, line)
                 entry = normalize_provider_entry(line, "codex")
                 if entry:
+                    if context.model_provider:
+                        entry["_author_model_provider"] = context.model_provider
+                    if context.model and entry.get("type") == "assistant" and isinstance(entry.get("message"), dict):
+                        entry["message"] = {**entry["message"], "model": context.model}
+                        entry["_author_model_source"] = "codex_turn_context"
                     entry.update(
                         _source_file=logical,
                         _line_end_offset=offset,
