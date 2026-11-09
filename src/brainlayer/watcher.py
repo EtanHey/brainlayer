@@ -709,6 +709,7 @@ class OffsetRegistry:
         *,
         generation: int | None = None,
         fingerprint: str | None = None,
+        archive: dict[str, int] | None = None,
     ):
         """Update offset for a file, optionally preserving its validated generation."""
         current_generation = self._entry_generation(self._data.get(filepath))
@@ -734,6 +735,12 @@ class OffsetRegistry:
         }
         if fingerprint:
             entry["fingerprint"] = fingerprint
+        if archive is None and generation == current_generation:
+            archive = self.archive(filepath)
+            if archive and fingerprint != self.fingerprint(filepath):
+                archive.pop("complete_offset", None)
+        if archive is not None:
+            entry["archive"] = dict(archive)
         self._data[filepath] = entry
         if tombstone is None or valid_inode:
             self._removed.pop(filepath, None)
@@ -1010,6 +1017,14 @@ class OffsetRegistry:
         for filepath in missing:
             self.remove(filepath)
         return len(missing)
+
+    def archive(self, filepath: str) -> dict[str, int] | None:
+        marker = self._data.get(filepath, {}).get("archive")
+        if isinstance(marker, dict) and all(
+            type(marker.get(k)) is int and marker[k] >= 0 for k in ("size", "mtime_ns", "ino")
+        ):
+            return dict(marker)
+        return None
 
 
 # ── JSONL Tailer ─────────────────────────────────────────────────────────────
@@ -1670,22 +1685,33 @@ class JSONLWatcher:
     def _advance_confirmed_offsets(self, confirmations: dict[str, tuple[int, int, int]]) -> None:
         for filepath, (offset, source_inode, source_generation) in confirmations.items():
             current_offset, _current_inode = self.registry.get(filepath)
+            fingerprint = self._confirmed_fingerprint(filepath, offset, source_inode)
+            archive = self._confirmed_archive(filepath, offset)
+            compressed = self._physical_files.get(filepath, filepath).endswith(".zst")
+            # A recreated decoder cannot vouch for an older batch until replay catches up.
+            # Keep the prior checkpoint; never turn a proven archive into a legacy entry.
+            if (compressed and (fingerprint is None or archive is None)) or (
+                self._zst_enabled and self.registry.archive(filepath) is not None and fingerprint is None
+            ):
+                continue
             if offset >= current_offset:
                 self.registry.set(
                     filepath,
                     offset,
                     source_inode,
                     generation=source_generation,
-                    fingerprint=self._confirmed_fingerprint(filepath, offset, source_inode),
+                    fingerprint=fingerprint,
+                    archive=archive,
                 )
                 self._advance_quarantined_offsets(filepath, source_inode, source_generation)
 
     def _confirmed_fingerprint(self, filepath: str, offset: int, source_inode: int) -> str | None:
-        """The live tailer's fingerprint at a confirmed offset; None stores a legacy-shaped entry."""
         tailer = self._tailers.get(filepath)
         if tailer is None or tailer.observed_inode != source_inode:
             return None
         fingerprint = tailer.fingerprint_at(offset)
+        if fingerprint is None and hasattr(tailer, "decoder") and tailer.offset == offset and tailer.anchor is not None:
+            fingerprint = _source_fingerprint(offset, tailer._head_hash.digest(), tailer.anchor)
         tailer.forget_fingerprints_below(offset)
         return fingerprint
 
@@ -1733,12 +1759,20 @@ class JSONLWatcher:
                 remaining.append((start_offset, end_offset, pending_inode, pending_generation))
                 continue
             if end_offset > current_offset:
+                fingerprint = self._confirmed_fingerprint(filepath, end_offset, pending_inode)
+                archive = self._confirmed_archive(filepath, end_offset)
+                if self._physical_files.get(filepath, filepath).endswith(".zst") and (
+                    fingerprint is None or archive is None
+                ):
+                    remaining.append((start_offset, end_offset, pending_inode, pending_generation))
+                    continue
                 self.registry.set(
                     filepath,
                     end_offset,
                     pending_inode,
                     generation=pending_generation,
-                    fingerprint=self._confirmed_fingerprint(filepath, end_offset, pending_inode),
+                    fingerprint=fingerprint,
+                    archive=archive,
                 )
                 current_offset = end_offset
         if remaining:
@@ -2274,6 +2308,7 @@ class JSONLWatcher:
             "quarantined_record_count_total": self._quarantined_record_count_total,
             "quarantined_records": list(self._quarantined_records),
             "vanished_source_count_total": self._vanished_source_count_total,
+            **({"held_archives": self.archive_status()["represented_cold"]} if self._zst_enabled else {}),
             "log_destinations": self.log_destinations,
             **watchdog,
         }
@@ -2350,12 +2385,16 @@ class JSONLWatcher:
             if physical.endswith(".zst") and offset == 0:
                 # A former plain-path prune may have tombstoned this now-live archive.
                 self.registry.set(filepath, offset, Path(physical).stat().st_ino, fingerprint=fingerprint)
+            archive = self.registry.archive(filepath) if physical.endswith(".zst") else None
+            if archive and tuple(archive[k] for k in ("size", "mtime_ns", "ino")) != self._archive_stats.get(filepath):
+                archive.pop("complete_offset", None)
             self.registry.set(
                 filepath,
                 offset,
                 tailer.observed_inode,
                 generation=self.registry.generation(filepath),
                 fingerprint=fingerprint,
+                archive=archive,
             )
             return tailer
         if filepath in self._tailers:
@@ -2386,6 +2425,9 @@ class JSONLWatcher:
             else self.registry.checkpoint_mtime(filepath),
         )
 
+        if self._zst_enabled and self.registry.archive(filepath) is not None:
+            tailer._archive_reconcile_through = stored_offset
+            tailer._resume_checkpoint_mtime = None
         # Verify inode matches
         current_inode = tailer.get_inode()
         if stored_inode != 0 and current_inode != 0 and current_inode != stored_inode:
@@ -2550,9 +2592,15 @@ class JSONLWatcher:
                 if compressed:
                     if filepath in self._tailers:
                         self._tailers[filepath].bytes_read = 0
+                    if self._archive_complete(filepath):
+                        continue
                     # An old decoded offset is representation evidence, not completeness proof.
                     # Cold represented sessions are held at zero decode cost for reconciliation.
-                    if filepath not in self._tailers and self.registry.get(filepath)[0] > 0:
+                    if (
+                        filepath not in self._tailers
+                        and self.registry.get(filepath)[0] > 0
+                        and self.registry.archive(filepath) is None
+                    ):
                         continue
                     failure = self._file_ingestion_failures.get(filepath, {})
                     if getattr(self._tailers.get(filepath), "archive_token", None) == self._archive_stats.get(filepath):
@@ -2700,6 +2748,13 @@ class JSONLWatcher:
                         tailer.offset != tailer_snapshot[0] or tailer._buffer != tailer_snapshot[1]
                     ):
                         self.last_poll_made_progress = True
+                    if compressed and tailer.decoded_eof and not tailer._buffer:
+                        if self.registry.get(filepath)[0] == tailer.offset and not self.indexer.has_buffered_source(
+                            filepath
+                        ):
+                            self._advance_confirmed_offsets(
+                                {filepath: (tailer.offset, source_inode, source_generation)}
+                            )
                     read_accepted = True
                 except Exception as error:
                     if tailer is not None and tailer_snapshot is not None and not read_accepted:
@@ -2834,6 +2889,49 @@ class JSONLWatcher:
         self._stop.set()
         if not self._running:
             self._close_decoders()
+
+    def _confirmed_archive(self, filepath, offset):
+        tailer = self._tailers.get(filepath)
+        proven = getattr(tailer, "_verified_archive_stat", None)
+        if hasattr(tailer, "decoder") and proven is not None:
+            marker = dict(zip(("size", "mtime_ns", "ino"), proven))
+            if tailer.decoded_eof and not tailer._buffer and offset == tailer.offset:
+                marker["complete_offset"] = offset
+            return marker
+        return None
+
+    def _archive_complete(self, filepath):
+        marker = self.registry.archive(filepath)
+        fingerprint = self.registry.fingerprint(filepath)
+        stat = self._archive_stats.get(filepath)
+        return (
+            marker is not None
+            and fingerprint is not None
+            and stat is not None
+            and marker.get("complete_offset") == self.registry.get(filepath)[0]
+            and tuple(marker[k] for k in ("size", "mtime_ns", "ino")) == stat
+        )
+
+    def archive_status(self):
+        status = dict(represented_cold=0, unadmitted=0, incomplete=0, failed=0)
+        for logical, physical in self._physical_files.items():
+            if not physical.endswith(".jsonl.zst"):
+                continue
+            if self._archive_complete(logical):
+                continue
+            tailer = self._tailers.get(logical)
+            if tailer is None:
+                key = (
+                    "represented_cold"
+                    if self.registry.get(logical)[0] > 0 and self.registry.archive(logical) is None
+                    else "unadmitted"
+                )
+            elif logical in self._file_ingestion_failures or tailer.terminal_failure:
+                key = "failed"
+            else:
+                key = "incomplete"
+            status[key] += 1
+        return status
 
     def _drop_tailer(self, filepath):
         tailer = self._tailers.pop(filepath, None)
