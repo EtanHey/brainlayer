@@ -5696,6 +5696,16 @@
         "target": "subprocess.check_output"
       }
     },
+    "dab755c1f1649b5ed91aa0ad39d981b059ae5038eb83d43a7c6e90fb4737a781": {
+      "non_cloud_purpose": "Read-only SQLite file URI (mode=ro) against the existing BrainLayer DB, checking one per-file canonical chunk id before durable queue publication. No model or network sender and no second database writer.",
+      "site": {
+        "call_sha256": "9a4bf3ca1e022b1d497b7f102e2b9d433c16fe05b6ac3bdd44a677ffd423fb0e",
+        "kind": "generic_send",
+        "owner": "<module>._committed",
+        "path": "src/brainlayer/ingest/codex_manifest.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "db97b9ce7920e3c0f4edb293648b881f444d167786c82b1cfa512d3cd89ac8da": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {

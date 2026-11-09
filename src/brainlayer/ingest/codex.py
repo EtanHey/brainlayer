@@ -133,7 +133,8 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
     model: Optional[str] = None
     model_provider: Optional[str] = None
 
-    # Physical compression never changes source_file or the native session identity.
+    # Canonical identity is the logical FILE path. Native session ids are metadata only;
+    # forks can share a first session_meta id and must never collapse whole files.
     source_file = str(logical_jsonl_path(file_path))
     with ZstdDecodedFile(file_path) if file_path.name.endswith(".jsonl.zst") else open(file_path, "rb") as fh:
         for raw in fh:
@@ -326,6 +327,8 @@ def ingest_codex_session(
 
     Returns the number of chunks indexed.
     """
+    if file_path.name.endswith(".jsonl.zst") and not dry_run:
+        raise ValueError("Compressed writes require ingest-codex --from-manifest (existing queue writer)")
     from ..pipeline.chunk import Chunk, chunk_content
     from ..pipeline.classify import ClassifiedContent, ContentType, ContentValue
 
