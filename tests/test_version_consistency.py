@@ -375,7 +375,8 @@ def test_installed_mode_ignores_stale_sibling_checkout_and_git_tag(tmp_path):
     fixture, stale_tap, version = _copy_version_fixture(tmp_path)
     installed_tap = tmp_path / "installed-tap"
     (installed_tap / "Casks").mkdir(parents=True)
-    (installed_tap / "Casks/brainbar.rb").write_text(f'cask "brainbar" do\n  version "{version}"\nend\n')
+    # A tap AHEAD of this Mac means an update is available; installed mode must not consult it.
+    (installed_tap / "Casks/brainbar.rb").write_text('cask "brainbar" do\n  version "99.0.0"\nend\n')
     (stale_tap / "Casks/brainbar.rb").write_text('version "0.0.1"\n')
     app = tmp_path / "Info.plist"
     app.write_bytes(plistlib.dumps({"BrainLayerReleaseVersion": version}))

@@ -5,6 +5,7 @@ import os
 import plistlib
 import sqlite3
 import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -586,11 +587,11 @@ def test_run_doctor_fails_loudly_when_brainbar_version_check_fails(tmp_path, mon
     def command_runner(args: list[str]) -> SimpleNamespace:
         if args[:2] == ["launchctl", "print"]:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
-        from brainlayer import __version__
+        from brainlayer import __version__, doctor
 
         expected = ["bash", str(version_check)]
         if not source_checkout:
-            expected.extend(["--installed", __version__])
+            expected.extend(["--installed", __version__, str(doctor.INSTALLED_BRAINBAR_INFO_PLIST), sys.executable])
         assert args == expected
         return SimpleNamespace(returncode=1, stdout="", stderr="[brainlayer-version-check] ERROR: cask drift\n")
 
@@ -648,11 +649,11 @@ def test_run_doctor_reports_brainbar_version_check_runner_exception(tmp_path, mo
     def command_runner(args: list[str]) -> SimpleNamespace:
         if args[:2] == ["launchctl", "print"]:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
-        from brainlayer import __version__
+        from brainlayer import __version__, doctor
 
         expected = ["bash", str(version_check)]
         if not source_checkout:
-            expected.extend(["--installed", __version__])
+            expected.extend(["--installed", __version__, str(doctor.INSTALLED_BRAINBAR_INFO_PLIST), sys.executable])
         assert args == expected
         raise RuntimeError("runner unavailable")
 

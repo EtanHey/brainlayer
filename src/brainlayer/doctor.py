@@ -96,6 +96,9 @@ def _running_from_source_checkout() -> bool:
     return (root / ".git").exists() and not in_keg
 
 
+INSTALLED_BRAINBAR_INFO_PLIST = Path("/Applications/BrainBar.app/Contents/Info.plist")
+
+
 def default_version_check_path() -> Path:
     if not _running_from_source_checkout():
         return Path(__file__).resolve().parent / "launchd" / "brainlayer-version-check.sh"
@@ -731,7 +734,7 @@ def _check_brainbar_version_consistency(
         if not _running_from_source_checkout():
             from brainlayer import __version__
 
-            command.extend(["--installed", __version__])
+            command.extend(["--installed", __version__, str(INSTALLED_BRAINBAR_INFO_PLIST), sys.executable])
         check = command_runner(command)
     except Exception as exc:
         result.issues.append(

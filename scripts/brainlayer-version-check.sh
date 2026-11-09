@@ -6,38 +6,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_ROOT="${BRAINLAYER_VERSION_CHECK_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FAILED=0
 
-# Doctor passes the version imported by its installed interpreter. This mode
-# deliberately ignores release-preparation overrides and checkout git metadata.
+# Doctor passes the version imported by its installed interpreter, and that interpreter.
+# Installed mode compares only what is INSTALLED: the package and BrainBar.app. It ignores
+# release-preparation overrides, checkout git metadata and the Homebrew tap: a tap ahead of
+# this Mac means an update is available, not that the install is inconsistent.
 if [[ "${1:-}" == "--installed" ]]; then
-    exec python3 - "$2" "${3:-/Applications/BrainBar.app/Contents/Info.plist}" <<'PYINSTALLED'
-import pathlib
+    exec "${4:-python3}" - "$2" "${3:-/Applications/BrainBar.app/Contents/Info.plist}" <<'PYINSTALLED'
 import plistlib
-import re
-import subprocess
 import sys
 
 try:
     version, plist_path = sys.argv[1:]
-    tap = subprocess.check_output(
-        ["brew", "--repo", "etanhey/layers"], text=True
-    ).strip()
-    if not tap:
-        raise ValueError("installed Homebrew tap could not be resolved")
-    cask = (pathlib.Path(tap) / "Casks/brainbar.rb").read_text()
-    match = re.search(r'^\s*version "([^"]+)"', cask, re.MULTILINE)
-    if not match:
-        raise ValueError("installed tap cask version missing")
     with open(plist_path, "rb") as handle:
         app = plistlib.load(handle)
     app_version = app.get("BrainLayerReleaseVersion") or app.get("CFBundleShortVersionString")
-    if version != match[1] or version != app_version:
-        raise ValueError(
-            f"installed package={version}, BrainBar={app_version}, tap={match[1]}"
-        )
-except (OSError, ValueError, subprocess.SubprocessError) as exc:
+    if version != app_version:
+        raise ValueError(f"installed package={version}, BrainBar={app_version}")
+except (OSError, ValueError, plistlib.InvalidFileException) as exc:
     print(f"[brainlayer-version-check] ERROR: {exc}", file=sys.stderr)
     raise SystemExit(1)
-print(f"[brainlayer-version-check] PASS: installed package/BrainBar/tap {version}")
+print(f"[brainlayer-version-check] PASS: installed package/BrainBar {version}")
 PYINSTALLED
 fi
 
