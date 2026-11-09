@@ -744,7 +744,23 @@ class SearchMixin:
             use_chunk_tags=getattr(self, "_chunk_tags_available", True),
         )
 
+    def _filtered_knn_population_bound(self) -> int:
+        """Bound excluded rows without inspecting any content or tags.
+
+        k cannot exceed sqlite-vec's 4096 limit. Counting at most that many
+        entries in a covering index is a conservative bound for every exclusion
+        count, even after writes. The real predicates still filter KNN results;
+        an underfilled initial query still retries up to the hard k limit.
+        """
+        row = (
+            self._read_cursor()
+            .execute("SELECT COUNT(*) FROM (SELECT 1 FROM chunks LIMIT ?)", (_SQLITE_VEC_MAX_K,))
+            .fetchone()
+        )
+        return int(row[0]) if row else 0
+
     def _audit_recursion_count(self) -> int:
+        """Return a conservative population bound, not an exact exclusion count."""
         cached_count = getattr(self, "_audit_recursion_count_cache", None)
         current_data_version = self._checkpoint_cache_data_version()
         cached_data_version = getattr(self, "_audit_recursion_count_cache_data_version", None)
@@ -753,17 +769,7 @@ class SearchMixin:
 
         for attempt in range(3):
             try:
-                row = (
-                    self._read_cursor()
-                    .execute(
-                        f"""
-                        SELECT COUNT(*) FROM chunks
-                        WHERE NOT ({self._audit_recursion_exclusion_sql("id", "tags", "content")})
-                        """
-                    )
-                    .fetchone()
-                )
-                audit_count = int(row[0]) if row else 0
+                audit_count = self._filtered_knn_population_bound()
                 setattr(self, "_audit_recursion_count_cache", audit_count)
                 setattr(self, "_audit_recursion_count_cache_data_version", current_data_version)
                 return audit_count
@@ -847,19 +853,7 @@ class SearchMixin:
             checkpoint_count = 0
             for attempt in range(3):
                 try:
-                    checkpoint_count = int(
-                        self._read_cursor()
-                        .execute(
-                            f"""
-                            SELECT COUNT(*) FROM chunks
-                            WHERE chunk_origin = ?
-                               OR NOT ({_precompact_content_exclusion_sql("content")})
-                            """,
-                            (CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,),
-                        )
-                        .fetchone()[0]
-                        or 0
-                    )
+                    checkpoint_count = self._filtered_knn_population_bound()
                     setattr(self, "_checkpoint_count_cache", checkpoint_count)
                     setattr(self, "_checkpoint_count_cache_data_version", current_data_version)
                     break
