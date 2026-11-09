@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 SWIFT_GATE_CONDITION = "needs.changes.outputs.brain_bar == 'true'"
 SWIFT_TEST_WRAPPER = "python3 Tests/BrainBarTests/Scripts/run_swift_tests.py"
+SWIFT_RUNNER = "${{ " + SWIFT_GATE_CONDITION + " && 'macos-15' || 'ubuntu-latest' }}"
 
 
 def _workflow_path() -> Path:
@@ -231,15 +232,31 @@ def test_swift_job_selects_swift_6_xcode_before_version_check():
     assert xcode_index < swift_version_index, "Xcode selection must happen before swift --version"
 
 
-def test_swift_job_uses_macos_15_runner_for_newer_xcode():
+def test_swift_job_uses_macos_15_only_when_brain_bar_changed():
+    """Python-only changes take the skip on Linux instead of queueing for macOS.
+
+    The required check is the job NAME, so it stays "swift (macos-15)". Before this, a
+    Python-only PR waited ~3 h in the macOS queue just to echo "skipped" (#1727, 2026-11-09).
+    """
     workflow = _load_workflow()
     swift_job = _find_swift_job(workflow)
     assert swift_job is not None, "CI must include a macOS Swift job before runner selection can be verified"
 
     _job_id, job = swift_job
 
-    assert job.get("runs-on") == "macos-15"
+    assert job.get("runs-on") == SWIFT_RUNNER
     assert job.get("name") == "swift (macos-15)"
+
+
+def test_linux_skip_path_runs_only_os_neutral_steps():
+    workflow = _load_workflow()
+    _job_id, job = _find_swift_job(workflow)
+    on_skip_path = [
+        step.get("uses") or step.get("run")
+        for step in job["steps"]
+        if step.get("if") in (None, "needs.changes.outputs.brain_bar != 'true'")
+    ]
+    assert on_skip_path == ["actions/checkout@v4", 'echo "no brain-bar changes — swift build/test skipped"']
 
 
 def test_swift_required_gate_has_a_bounded_job_timeout():
