@@ -5,6 +5,7 @@ import io
 import json
 import sqlite3
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -63,12 +64,20 @@ def test_session_start_returns_repo_results(workspace, monkeypatch, capsys):
             content = f"repo-a decision sentinel for {project}"
             conn.execute("INSERT INTO chunks VALUES (?, ?, 8, '2026-11-09', 'text', ?)", (project, content, project))
             conn.execute("INSERT INTO chunks_fts VALUES (?, ?, '')", (project, content))
+    canonical_calls = []
+
+    def canonicalize(cwd, **kwargs):
+        canonical_calls.append((cwd, kwargs))
+        return scoping.canonical_workspace_path(cwd, **kwargs)
+
+    monkeypatch.setattr(hook, "canonical_workspace_path", canonicalize)
     monkeypatch.setattr(hook, "get_db_path", lambda: db)
     monkeypatch.setattr(hook, "load_scoped_projects", lambda: {"repo-a": "repo-a"})
     monkeypatch.setattr(hook, "should_activate", lambda _: (True, False))
     monkeypatch.setattr(hook.sys, "stdin", io.StringIO(json.dumps({"cwd": str(worktree)})))
     with pytest.raises(SystemExit):
         hook.main()
+    assert canonical_calls == [(str(worktree), {"timeout": 0.2})]
     output = capsys.readouterr().out
     assert "decision sentinel for repo-a" in output
     assert "decision sentinel for repo-b" not in output
@@ -124,3 +133,22 @@ def test_subdirectory_keeps_configured_scope(workspace, monkeypatch):
 def test_non_git_path_is_unchanged(tmp_path):
     missing = tmp_path / "nonexistent"
     assert scoping.canonical_workspace_path(str(missing)) == str(missing)
+
+
+def test_standalone_repo_outside_gits_stays_unscoped(tmp_path, monkeypatch):
+    repo = tmp_path / "Desktop" / "standalone"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(scoping, "_load_scopes", lambda: {})
+    assert scoping.resolve_project_scope() is None
+
+
+def test_git_timeout_returns_original_cwd_within_hook_budget(tmp_path, monkeypatch):
+    git = tmp_path / "git"
+    git.write_text("#!/bin/sh\nexec /bin/sleep 2\n")
+    git.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    start = time.monotonic()
+    assert scoping.canonical_workspace_path(str(tmp_path), timeout=0.2) == str(tmp_path)
+    assert time.monotonic() - start < 0.45

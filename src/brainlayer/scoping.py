@@ -85,7 +85,7 @@ def _parse_scopes_simple(path: Path) -> dict:
         return {"scopes": {}, "default": "all"}
 
 
-def canonical_workspace_path(cwd: str, *, repo_root: bool = False) -> str:
+def canonical_workspace_path(cwd: str, *, repo_root: bool = False, timeout: float = 1) -> str:
     """Map a linked Git worktree to the main checkout, retaining its subdirectory.
 
     Git's worktree registry is authoritative; directory/branch names are not repo
@@ -96,14 +96,14 @@ def canonical_workspace_path(cwd: str, *, repo_root: bool = False) -> str:
             ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            timeout=1,
+            timeout=timeout,
             check=True,
         ).stdout.strip()
         registry = subprocess.run(
             ["git", "-C", cwd, "worktree", "list", "--porcelain", "-z"],
             capture_output=True,
             text=True,
-            timeout=1,
+            timeout=timeout,
             check=True,
         ).stdout
         first = registry.split("\0", 1)[0]
@@ -360,9 +360,10 @@ def _lead_project_filters(main_project: Optional[str]) -> tuple[str, ...]:
 
 def _cwd_heuristic() -> Optional[str]:
     """Fallback: extract project name from CWD if it looks like ~/Gits/<project>."""
-    cwd = canonical_workspace_path(os.getcwd())
+    original_cwd = os.getcwd()
+    cwd = canonical_workspace_path(original_cwd)
     root = Path(canonical_workspace_path(os.getcwd(), repo_root=True))
-    if (root / ".git").exists():
+    if cwd != original_cwd and (root / ".git").exists():
         return root.name
     home = str(Path.home())
 

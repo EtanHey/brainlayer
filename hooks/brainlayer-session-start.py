@@ -178,7 +178,6 @@ def get_project_info(cwd):
     project_name: for display (e.g. golems-packages-coach)
     fts_search_term: for FTS5 queries (e.g. coach)
     """
-    cwd = canonical_workspace_path(cwd)
     basename = os.path.basename(cwd)
 
     # Check if inside golems monorepo package
@@ -229,7 +228,7 @@ def main():
     if not activate:
         sys.exit(0)
 
-    cwd = hook_input.get("cwd", os.getcwd())
+    cwd = canonical_workspace_path(hook_input.get("cwd", os.getcwd()), timeout=0.2)
     project, search_term = get_project_info(cwd)
 
     db_path = get_db_path()
@@ -251,7 +250,6 @@ def main():
     injected_briefs = []
 
     # Check if this project should be scoped (containerized BrainLayer)
-    cwd = canonical_workspace_path(cwd)
     basename = os.path.basename(cwd)
     scope_project = load_scoped_projects().get(basename)
 
