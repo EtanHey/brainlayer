@@ -6,7 +6,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
-from .watcher import JSONLTailer, _source_fingerprint
+from .watcher import CodexTurnContext, JSONLTailer, _source_fingerprint, fold_codex_turn_context
 from .zstd_stream import ZstdDecodedFile
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,9 @@ class ZstdTailer(JSONLTailer):
     def __init__(self, filepath, offset=0, max_record_bytes=None, *, resume_fingerprint=None):
         super().__init__(filepath, offset, max_record_bytes, resume_fingerprint=resume_fingerprint)
         self._replay = None
+        self._context_bytes = bytearray()
+        self._context_oversized = False
+        self._context_markers = b""
         self._archive_stat = None
         self._verified_archive_stat = None
         self._expected_fingerprint = resume_fingerprint
@@ -123,6 +126,10 @@ class ZstdTailer(JSONLTailer):
                 self._header_done = False
             self._archive_stat = source_stat
             self._replay = JSONLTailer(self.filepath)
+            self._replay.codex_turn_context = CodexTurnContext(0, self.offset)
+            self._context_bytes.clear()
+            self._context_oversized = False
+            self._context_markers = b""
             self.decoder = ZstdDecodedFile(Path(self.filepath))
         elif source_stat != self._archive_stat:
             self.close()
@@ -138,7 +145,9 @@ class ZstdTailer(JSONLTailer):
                     raise OSError("compressed rollout ends before its decoded checkpoint")
                 position = decoder.position - len(data)
                 self._capture_prefix_header(data)
-                self._replay._consume_anchor(data[: max(0, self.offset - position)])
+                consumed = data[: max(0, self.offset - position)]
+                self._capture_prefix_context(consumed)
+                self._replay._consume_anchor(consumed)
                 buffered = data[max(0, self.offset - position) :]
                 buffer_start = max(0, position - self.offset)
                 if buffered != self._buffer[buffer_start : buffer_start + len(buffered)]:
@@ -164,6 +173,7 @@ class ZstdTailer(JSONLTailer):
                     raise OSError("compressed source changed during prefix verification")
                 self._adopt_identity(self._replay._head_hash, self._replay._head_len, self._replay.anchor)
                 self._verified_archive_stat = source_stat
+                self.codex_turn_context = self._replay.codex_turn_context
                 self._replay = None
             yield decoder, remaining
             if self.source_stat() != source_stat:
@@ -176,6 +186,37 @@ class ZstdTailer(JSONLTailer):
             raise
         finally:
             self.bytes_read = decoder.position - start
+
+    def _capture_prefix_context(self, data):
+        """Fold decoded prefix records before the checkpoint, within the record ceiling.
+
+        Publish the context only after the prefix fingerprint and archive stat verify.
+        This uses the existing replay budget, never a second decode or a physical-file scan.
+        """
+        for part in data.splitlines(keepends=True):
+            self._context_bytes.extend(part)
+            if b"turn_context" in self._context_bytes:
+                self._context_markers = b"turn_context"
+            elif b"session_meta" in self._context_bytes and not self._context_markers:
+                self._context_markers = b"session_meta"
+            if len(self._context_bytes) > (self.max_record_bytes or 1048576):
+                self._context_oversized = True
+                # Keep enough overlap to detect a marker split across decode windows.
+                del self._context_bytes[:-16]
+            if not part.endswith(b"\n"):
+                continue
+            context = self._replay.codex_turn_context
+            if self._context_oversized:
+                record = {"type": self._context_markers.decode(), "payload": {}}
+            else:
+                try:
+                    record = json.loads(self._context_bytes)
+                except (ValueError, UnicodeDecodeError):
+                    record = {"type": "turn_context", "payload": {}} if self._context_markers == b"turn_context" else {}
+            self._replay.codex_turn_context = fold_codex_turn_context(context, record)
+            self._context_bytes.clear()
+            self._context_oversized = False
+            self._context_markers = b""
 
     def _capture_prefix_header(self, data):
         if self._header_done:
