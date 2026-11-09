@@ -1288,6 +1288,74 @@ def test_busy_maintenance_hold_defers_the_step_and_the_backup_still_runs(tmp_pat
     assert not any(row["event"] == "step-error" for row in rows)
 
 
+@pytest.mark.parametrize(
+    "failure,timeouts,expected_calls,succeeds",
+    [
+        (TimeoutError, 1, 3, True),
+        (TimeoutError, 2, 4, True),
+        (TimeoutError, 3, 3, False),
+        (PermissionError, 1, 1, False),
+        (ValueError, 1, 1, False),
+        (RuntimeError, 1, 1, False),
+    ],
+)
+def test_calendar_status_timeout_is_bounded_without_skipping_backup(
+    tmp_path, monkeypatch, failure, timeouts, expected_calls, succeeds
+):
+    """M4 Nov 8: the status read before decay timed out; upload never spawned."""
+    from brainlayer import maintenance_calendar as calendar
+
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "alerts.json"))
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "fixture.env"))
+    calls = []
+
+    def status():
+        calls.append("status")
+        if len(calls) <= timeouts:
+            raise failure("private error detail")
+        return {}
+
+    monkeypatch.setattr(
+        calendar.maintenance_control,
+        "control_client",
+        lambda: SimpleNamespace(path=tmp_path / "unused.sock", request=status, _disabled=lambda *_a, **_k: set()),
+    )
+    marker = tmp_path / "executed"
+    steps = [
+        calendar.Step(
+            name,
+            (
+                sys.executable,
+                "-c",
+                f"from pathlib import Path; p=Path({str(marker)!r}); p.open('a').write({name + chr(10)!r})",
+            ),
+            10,
+        )
+        for name in ("decay", "backup-daily")
+    ]
+    directory = tmp_path / "calendar"
+    result = asyncio.run(
+        run_calendar(steps, directory, tmp_path / "logs", now_fn=lambda: dt.datetime(2026, 11, 8, 5, 20))
+    )
+    assert result == (0 if succeeds else 1)
+    assert len(calls) == expected_calls
+    assert (marker.read_text().splitlines() if marker.exists() else []) == (
+        ["decay", "backup-daily"] if succeeds else []
+    )
+    journal = (directory / "runs.jsonl").read_text()
+    rows = [json.loads(line) for line in journal.splitlines()]
+    finished = {row["step"]: row["status"] for row in rows if row["event"] == "finished"}
+    assert finished == (
+        {"decay": "ok", "backup-daily": "ok"} if succeeds else {"decay": "failed", "backup-daily": "skipped"}
+    )
+    retries = [row for row in rows if row["event"] == "supervisor-status-timeout"]
+    assert [row["attempt"] for row in retries] == (list(range(1, timeouts + 1)) if failure is TimeoutError else [])
+    assert all(row["step"] == "decay" for row in retries)
+    assert "private error detail" not in journal
+    with calendar.Custody(directory):
+        pass
+
+
 def test_busy_inherited_maintenance_lease_still_aborts(monkeypatch):
     """Review of #1668: only a FRESH busy hold defers; failing to re-lock an inherited lease is custody."""
     from brainlayer import maintenance_calendar as calendar
