@@ -1,6 +1,7 @@
 """Stat-pinned, read-only planning and bounded queue admission of explicit rollouts."""
 
 import json
+import os
 import sqlite3
 import stat
 from contextlib import closing, contextmanager, nullcontext
@@ -175,6 +176,11 @@ def _plan_window(plan, entries, preview, receipt, committed, dry_run):
         if match:
             if match[0] != row["chunk_id"] or match[1] != row["source_file"]:
                 receipt["duplicate_content"] += 1
+                receipt["all_duplicate_matches"].append(
+                    dict(
+                        candidate_chunk_id=row["chunk_id"], chunk_id=match[0], source_file=match[1], mechanism=match[2]
+                    )
+                )
                 example = dict(chunk_id=match[0], source_file=match[1])
                 if len(receipt["duplicate_matches"]) < 5 and example not in receipt["duplicate_matches"]:
                     receipt["duplicate_matches"].append(example)
@@ -183,6 +189,7 @@ def _plan_window(plan, entries, preview, receipt, committed, dry_run):
             raise ValueError("queue-backpressure")
         enqueue_watcher_chunk(**row)
         receipt["queued"] += 1
+        receipt["queued_chunk_ids"].append(row["chunk_id"])
 
 
 def _classify_receipt(receipt, dry_run):
@@ -222,6 +229,50 @@ def _classify_receipt(receipt, dry_run):
 
 
 def ingest_codex_manifest(
+    manifest,
+    db_path,
+    *,
+    dry_run=False,
+    max_files=2,
+    max_decoded_bytes=1048576,
+    machine=None,
+    start_at=0,
+    receipts_out=None,
+):
+    """Replay with an exclusive, durable receipt ledger; stdout examples remain bounded.
+
+    Each ledger row includes every candidate-to-canonical match and the live durable IDs
+    observed under this logical source at row start. Queued IDs are reported separately:
+    the single writer, rather than this reader, decides which queued candidates become rows.
+    """
+    if not isinstance(machine, (str, type(None))) or machine not in {None, "M1", "M4"}:
+        raise ValueError("manifest-machine must be M1 or M4")
+    if max_files <= 0 or max_decoded_bytes <= 0:
+        raise ValueError("manifest budgets must be positive")
+    if not dry_run and receipts_out is None:
+        raise ValueError("receipts-out is required for non-dry manifest runs")
+    with Path(receipts_out).open("x") if receipts_out is not None else nullcontext(None) as ledger:
+        for receipt in _ingest_codex_manifest(
+            manifest,
+            db_path,
+            dry_run=dry_run,
+            max_files=max_files,
+            max_decoded_bytes=max_decoded_bytes,
+            machine=machine,
+            start_at=start_at,
+        ):
+            if ledger is not None:
+                ledger.write(json.dumps(receipt, sort_keys=True) + "\n")
+                ledger.flush()
+                os.fsync(ledger.fileno())
+            yield {
+                k: v
+                for k, v in receipt.items()
+                if k not in {"all_duplicate_matches", "live_chunk_ids_at_start", "queued_chunk_ids"}
+            }
+
+
+def _ingest_codex_manifest(
     manifest, db_path, *, dry_run=False, max_files=2, max_decoded_bytes=1048576, machine=None, start_at=0
 ):
     """Yield content-free receipts. Native header IDs never decide admission or dedup.
@@ -289,7 +340,8 @@ def ingest_codex_manifest(
                     closing(_read_entries(path, remaining, receipt)) as reader,
                 ):
                     if not dry_run:
-                        receipt["live_chunks_at_start"] = _source_chunks(committed, logical)
+                        receipt["live_chunk_ids_at_start"] = _source_chunk_ids(committed, logical)
+                        receipt["live_chunks_at_start"] = len(receipt["live_chunk_ids_at_start"])
                     for entries in reader:
                         _plan_window(plan, entries, preview, receipt, committed, dry_run)
                 _verify(path, expected)
@@ -323,6 +375,9 @@ def _new_receipt(line_number):
         live_chunks_at_start=0,
         duplicate_content=0,
         duplicate_matches=[],
+        all_duplicate_matches=[],
+        live_chunk_ids_at_start=[],
+        queued_chunk_ids=[],
         filtered=0,
         skip_reason="",
         state="held",
@@ -346,11 +401,14 @@ def _record_error(receipt, error):
         receipt["decodable"] = False
 
 
-def _source_chunks(db, source_file):
+def _source_chunk_ids(db, source_file):
     return (
-        db.execute(
-            f"SELECT COUNT(*) FROM chunks WHERE source_file = ? AND {_active_clause(db)}", (source_file,)
-        ).fetchone()[0]
+        [
+            r[0]
+            for r in db.execute(
+                f"SELECT id FROM chunks WHERE source_file = ? AND {_active_clause(db)} ORDER BY id", (source_file,)
+            )
+        ]
         if db
-        else 0
+        else []
     )
