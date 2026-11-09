@@ -518,8 +518,8 @@ def test_changed_only_transaction_sources_require_both_complete_sweeps(tmp_path:
     unit = pytest_log.read_text().splitlines()[0]
     assert "crash_sweep" not in unit  # The local marker expression must retain the sweeps.
     if missing:
-        assert "falling back to full pytest unit suite" in result.stdout
-        assert f"{test_root}/ -v" in unit
+        assert "mapped tests plus fixed smoke" in result.stdout
+        assert f"{test_root}/ -v" not in unit
     else:
         assert all(str(test_root / name) in unit for name in suites)
         assert module == "policy_reconcile" or str(test_root / f"test_{module}.py") in unit
@@ -619,9 +619,9 @@ def test_groq_pipeline_mapping_is_fail_closed_when_a_named_suite_is_missing(
     )
 
     assert result.returncode == 0, result.stdout
-    assert "falling back to full pytest unit suite" in result.stdout
+    assert "mapped tests plus fixed smoke" in result.stdout
     assert "unmapped: src/brainlayer/pipeline/groq.py" in result.stdout
-    assert f"{test_root}/ -v" in pytest_log.read_text()
+    assert f"{test_root}/ -v" not in pytest_log.read_text()
 
 
 def test_changed_only_scope_maps_kg_rebuild_script_to_its_owner(tmp_path: Path) -> None:
@@ -670,9 +670,9 @@ def test_kg_rebuild_script_mapping_escalates_when_its_owner_is_missing(tmp_path:
     )
 
     assert result.returncode == 0, result.stdout
-    assert "falling back to full pytest unit suite" in result.stdout
+    assert "mapped tests plus fixed smoke" in result.stdout
     assert "unmapped: scripts/kg_rebuild.py" in result.stdout
-    assert f"{test_root}/ -v" in pytest_log.read_text()
+    assert f"{test_root}/ -v" not in pytest_log.read_text()
 
 
 def test_changed_only_scope_maps_the_release_tag_gate_to_its_own_test(tmp_path: Path) -> None:
@@ -736,10 +736,10 @@ def test_changed_only_scope_escalates_when_the_release_gate_test_is_missing(tmp_
     )
 
     assert result.returncode == 0
-    assert "falling back to full pytest unit suite" in result.stdout
+    assert "mapped tests plus fixed smoke" in result.stdout
     assert "WARNING: unmapped: scripts/release_tag_contains.py" in result.stdout
     logged = pytest_log.read_text()
-    assert f"{test_root}/ -v" in logged
+    assert f"{test_root}/ -v" not in logged
 
 
 def test_changed_only_scope_maps_watcher_source_to_jsonl_watcher_tests(tmp_path: Path) -> None:
@@ -821,7 +821,8 @@ def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp
         assert str(test_root / filename) in logged
 
 
-def test_changed_only_scope_falls_back_when_mapped_and_unmapped_sources_change(tmp_path: Path) -> None:
+@pytest.mark.parametrize("release", [False, True])
+def test_changed_only_scope_falls_back_when_mapped_and_unmapped_sources_change(tmp_path: Path, release: bool) -> None:
     test_root = tmp_path / "tests"
     test_root.mkdir()
     (test_root / "test_backup_daily.py").write_text("test placeholder\n")
@@ -841,11 +842,19 @@ def test_changed_only_scope_falls_back_when_mapped_and_unmapped_sources_change(t
     env["PYTEST_LOG"] = str(pytest_log)
     env["BUN_LOG"] = str(bun_log)
 
+    if release:
+        env["BRAINLAYER_PREPUSH_TAG"] = "v9.0.0"
     result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
 
     assert result.returncode == 0
-    assert "falling back to full pytest unit suite" in result.stdout
-    assert f"{test_root}/ -v" in pytest_log.read_text()
+    if release:
+        assert "FULL pytest unit suite" in result.stdout
+        assert f"{test_root}/ -v" in pytest_log.read_text()
+        return
+    assert "mapped tests plus fixed smoke" in result.stdout
+    assert f"{test_root}/ -v" not in pytest_log.read_text()
+    assert "test_brainstore.py::TestStoreMemory" in pytest_log.read_text()
+    assert str(test_root / "test_backup_daily.py") in pytest_log.read_text()
 
 
 def test_changed_only_scope_falls_back_to_full_suite_for_unmapped_source(tmp_path: Path) -> None:
@@ -868,11 +877,12 @@ def test_changed_only_scope_falls_back_to_full_suite_for_unmapped_source(tmp_pat
     result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
 
     assert result.returncode == 0
-    assert "falling back to full pytest unit suite" in result.stdout
+    assert "mapped tests plus fixed smoke" in result.stdout
     # The escalation names what forced it, so the missing mapping is visible rather than paid for
     # silently on every push.
     assert "WARNING: unmapped: src/brainlayer/mcp/search_handler.py" in result.stdout
-    assert f"{test_root}/ -v" in pytest_log.read_text()
+    assert f"{test_root}/ -v" not in pytest_log.read_text()
+    assert "test_brainstore.py::TestStoreMemory" in pytest_log.read_text()
 
 
 def test_changed_only_scope_skips_the_unit_suite_for_a_measured_empty_diff(tmp_path: Path) -> None:
@@ -935,8 +945,8 @@ def test_changed_only_scope_falls_back_to_full_suite_for_nested_hook_source(tmp_
     result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
 
     assert result.returncode == 0
-    assert "falling back to full pytest unit suite" in result.stdout
-    assert f"{test_root}/ -v" in pytest_log.read_text()
+    assert "mapped tests plus fixed smoke" in result.stdout
+    assert f"{test_root}/ -v" not in pytest_log.read_text()
 
 
 def test_changed_files_env_preserves_paths_with_spaces(tmp_path: Path) -> None:
@@ -1014,8 +1024,8 @@ def test_changed_only_scope_falls_back_for_excluded_real_db_test_edit(tmp_path: 
 
     assert result.returncode == 0
     logged = pytest_log.read_text()
-    assert "falling back to full pytest unit suite" in result.stdout
-    assert f"{test_root}/ -v" in logged
+    assert "mapped tests plus fixed smoke" in result.stdout
+    assert f"{test_root}/ -v" not in logged
     assert f"--ignore={test_root / 'test_vector_store.py'}" in logged
 
 
@@ -1241,10 +1251,10 @@ def test_changed_only_scope_escalates_when_the_build_sha_sibling_is_missing(
     )
 
     assert result.returncode == 0
-    assert "falling back to full pytest unit suite" in result.stdout
+    assert "mapped tests plus fixed smoke" in result.stdout
     assert "WARNING: unmapped: src/brainlayer/__init__.py" in result.stdout
     logged = pytest_log.read_text()
-    assert f"{test_root}/ -v" in logged
+    assert f"{test_root}/ -v" not in logged
 
 
 def test_changed_only_scope_escalates_when_the_version_consistency_sibling_is_missing(
@@ -1281,10 +1291,10 @@ def test_changed_only_scope_escalates_when_the_version_consistency_sibling_is_mi
     )
 
     assert result.returncode == 0
-    assert "falling back to full pytest unit suite" in result.stdout
+    assert "mapped tests plus fixed smoke" in result.stdout
     assert "WARNING: unmapped: src/brainlayer/__init__.py" in result.stdout
     logged = pytest_log.read_text()
-    assert f"{test_root}/ -v" in logged
+    assert f"{test_root}/ -v" not in logged
 
 
 def test_changed_only_scope_escalates_when_both_init_suites_are_missing(
@@ -1312,9 +1322,9 @@ def test_changed_only_scope_escalates_when_both_init_suites_are_missing(
     )
 
     assert result.returncode == 0
-    assert "falling back to full pytest unit suite" in result.stdout
+    assert "mapped tests plus fixed smoke" in result.stdout
     logged = pytest_log.read_text()
-    assert f"{test_root}/ -v" in logged
+    assert f"{test_root}/ -v" not in logged
 
 
 def test_changed_only_scope_resolves_the_changed_set_from_a_tag_range(tmp_path: Path) -> None:
@@ -1883,9 +1893,9 @@ def test_cli_root_mapping_is_fail_closed_when_a_named_suite_is_missing(tmp_path:
     result = _run_cli_root_script(env)
 
     assert result.returncode == 0, result.stdout
-    assert "falling back to full pytest unit suite" in result.stdout
+    assert "mapped tests plus fixed smoke" in result.stdout
     assert "unmapped: src/brainlayer/cli/__init__.py" in result.stdout
-    assert f"{test_root}/ -v" in pytest_log.read_text()
+    assert f"{test_root}/ -v" not in pytest_log.read_text()
 
 
 def test_changed_only_scope_maps_the_index_watchdog_to_its_tests(tmp_path: Path) -> None:
@@ -1950,7 +1960,7 @@ def test_index_watchdog_mapping_is_fail_closed_when_a_named_suite_is_missing(tmp
     result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False)
 
     assert result.returncode == 0
-    assert "falling back to full pytest unit suite" in result.stdout
+    assert "mapped tests plus fixed smoke" in result.stdout
     assert "unmapped: src/brainlayer/index_watchdog.py" in result.stdout
 
 
@@ -1982,7 +1992,7 @@ def test_a_mapped_watchdog_change_still_falls_back_when_another_source_is_unmapp
     result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False)
 
     assert result.returncode == 0
-    assert "falling back to full pytest unit suite" in result.stdout
+    assert "mapped tests plus fixed smoke" in result.stdout
     assert "src/brainlayer/no_such_module.py" in result.stdout
 
 
@@ -2061,9 +2071,9 @@ def test_harness_runtime_mapping_escalates_when_companion_is_missing(tmp_path: P
     result = _run_cli_root_script(env)
 
     assert result.returncode == 0, result.stdout
-    assert "falling back to full pytest unit suite" in result.stdout
+    assert "mapped tests plus fixed smoke" in result.stdout
     assert f"unmapped: scripts/{script}.py" in result.stdout
-    assert f"{test_root}/ -v" in pytest_log.read_text()
+    assert f"{test_root}/ -v" not in pytest_log.read_text()
 
 
 IDX_FOCUSED_MAPPINGS = (
@@ -2128,9 +2138,9 @@ def test_idx_cohort_mapping_escalates_when_a_companion_is_missing(tmp_path: Path
     env["BRAINLAYER_CHANGED_FILES"] = f"src/brainlayer/{module}.py"
     result = _run_cli_root_script(env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "falling back to full pytest unit suite" in result.stdout
+    assert "mapped tests plus fixed smoke" in result.stdout
     assert f"unmapped: src/brainlayer/{module}.py" in result.stdout
-    assert f"{test_root}/ -v" in pytest_log.read_text()
+    assert f"{test_root}/ -v" not in pytest_log.read_text()
 
 
 @pytest.mark.parametrize("workflow", ["brainbar-release.yml", "ci.yml", "unowned.yaml"])
@@ -2162,7 +2172,7 @@ def test_workflow_changes_run_referencing_guards_or_escalate(tmp_path, workflow)
         assert f"{test_root}/ -v" not in unit
     else:
         assert f"unmapped: .github/workflows/{workflow}" in result.stdout
-        assert f"{test_root}/ -v" in unit
+        assert f"{test_root}/ -v" not in unit
 
 
 @pytest.mark.parametrize("missing", ["test_ci_swift_gate.py", "test_ci_crash_sweeps.py"])
@@ -2177,7 +2187,7 @@ def test_ci_workflow_missing_named_contract_escalates(tmp_path, missing):
     result = _run_cli_root_script(env)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "unmapped: .github/workflows/ci.yml" in result.stdout
-    assert f"{test_root}/ -v" in pytest_log.read_text().splitlines()[0]
+    assert f"{test_root}/ -v" not in pytest_log.read_text().splitlines()[0]
 
 
 def test_changed_only_scope_maps_hotlane_budget_to_its_owners(tmp_path: Path) -> None:
@@ -2296,7 +2306,7 @@ def test_pre_push_hook_gives_a_tag_push_the_release_gate_budget(
 @pytest.mark.parametrize(
     ("kind", "changed", "seconds"),
     [
-        ("branch", "src/brainlayer/drain.py", "5400"),
+        ("branch", "src/brainlayer/drain.py", "1800"),
         ("branch", "tests/test_small.py", "1800"),
         ("tag", "tests/test_small.py", "5400"),
     ],
