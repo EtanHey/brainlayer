@@ -384,12 +384,16 @@ def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, proje
 # ── Flush callback ───────────────────────────────────────────────────────────
 
 
-def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | None = None) -> callable:
+def create_flush_callback(
+    db_path: Path | None = None, *, arbitrated: bool | None = None, preview_chunks: list[dict] | None = None
+) -> callable:
     """Create an on_flush callback that processes JSONL lines into BrainLayer.
 
     Returns a callable that takes a list[dict] of raw JSONL entries and
     inserts them as chunks into the database (deferred embedding).
     """
+    if preview_chunks is not None:
+        arbitrated = True
     if arbitrated is None:
         arbitrated = os.environ.get("BRAINLAYER_ARBITRATED") == "1"
     store = None if arbitrated else VectorStore(db_path or get_db_path())
@@ -469,7 +473,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         ) -> None:
             metrics.run(
                 "publish",
-                enqueue_watcher_chunk,
+                enqueue_watcher_chunk if preview_chunks is None else lambda **row: preview_chunks.append(row),
                 chunk_id=chunk_id,
                 content=clean_content,
                 metadata=metadata,
@@ -504,11 +508,14 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                     source_file,
                     t3_linked_session_ids=linked_t3_session_ids,
                     t3_session_identity_cache=t3_session_identity_cache,
+                    t3_session_header=entry.get("_codex_header"),
                 )
             except BrainLayerAlarm:
                 deferred_entries.append(entry)
                 continue
             project = source_projects.get(source_file)
+            if project is None and entry.get("_compressed_archive"):
+                project = _extract_workspace_project(entry)
             source_identity = _source_file_identity(source_file)
             cached_identity = resolved_source_identities.get(source_file)
             if project is not None and source_identity is not None and cached_identity is not None:
@@ -592,6 +599,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                     metadata["model_source"] = entry["_author_model_source"]
                 if entry.get("_author_model_provider"):
                     metadata["model_provider"] = entry["_author_model_provider"]
+                if entry.get("codex_native_session_id") is not None:
+                    metadata["codex_native_session_id"] = entry["codex_native_session_id"]
                 observed = entry.get("_ingest_observed_at")
                 if isinstance(observed, (int, float)):
                     metadata["ingest_observed_at"] = observed
@@ -629,6 +638,12 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                 metadata["provenance_effective_visibility"] = visibility
                 metadata["source_class"] = source_class
 
+                if entry.get("_archive_reconciliation") and preview_chunks is None:
+                    if _archive_reconciliation_stored(
+                        db_path or get_db_path(), chunk_id, clean_content, created_at, project, chunk.content_type.value
+                    ):
+                        skipped += 1
+                        continue
                 if arbitrated:
                     try:
                         enqueue_chunk(
@@ -810,6 +825,10 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             if entry_confirmed:
                 confirm_entry(entry, source_file)
 
+        if preview_chunks is not None:
+            return FlushWatermarks(
+                confirmed_offsets, inserted=inserted, skipped=skipped, deferred_entries=deferred_entries
+            )
         latency_ms = (_time.monotonic() - flush_start) * 1000
 
         if inserted > 0:

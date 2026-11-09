@@ -242,24 +242,33 @@ map_changed_files_to_pytests() {
         ;;
       src/brainlayer/zstd_stream.py|src/brainlayer/ingest/codex.py|src/brainlayer/codex_zst.py|src/brainlayer/ingest/codex_manifest.py)
         case "$changed" in
-          src/brainlayer/zstd_stream.py) zst_tests=(test_codex_zstd_stream.py test_backup_zstd.py) ;;
+          src/brainlayer/zstd_stream.py) zst_tests=(test_codex_zstd_stream.py test_codex_zst_decoder_limits.py test_backup_zstd.py test_retirement_ratchet.py) ;;
           src/brainlayer/ingest/codex.py) zst_tests=(test_ingest_codex.py test_codex_zstd_stream.py) ;;
-          src/brainlayer/codex_zst.py) zst_tests=(test_codex_zst_watcher.py test_jsonl_watcher.py) ;;
-          *) zst_tests=(test_codex_zst_manifest.py test_watcher_bridge.py) ;;
+          src/brainlayer/codex_zst.py) zst_tests=(test_codex_zst_watcher.py test_jsonl_watcher.py test_codex_zst_author_model.py test_codex_zst_tailer.py test_codex_zst_prefix.py test_codex_zst_checkpoint_guards.py test_codex_zst_legacy_replay.py test_codex_zst_restart.py test_codex_zst_resume_registry.py) ;;
+          *) zst_tests=(test_codex_zst_manifest.py test_watcher_bridge.py test_codex_zst_manifest_reader.py test_codex_zst_manifest_outcomes.py test_codex_zst_provenance.py test_codex_zst_dedup_reader.py test_codex_zst_replay_guards.py test_codex_zst_alias.py test_codex_zst_receipts.py test_retirement_ratchet.py) ;;
         esac
         mapped=1
-        for rel in "${zst_tests[@]}"; do
-          [ -f "$TEST_ROOT/$rel" ] || mapped=0
-        done
+        # Later slices add owners incrementally; the primary owner is mandatory.
+        [ -f "$TEST_ROOT/${zst_tests[0]}" ] || mapped=0
         if [ "$mapped" -eq 1 ]; then
-          for rel in "${zst_tests[@]}"; do append_unique "$TEST_ROOT/$rel"; done
+          for rel in "${zst_tests[@]}"; do
+            if [ -f "$TEST_ROOT/$rel" ]; then append_unique "$TEST_ROOT/$rel"; fi
+          done
         fi
         ;;
-      src/brainlayer/watcher.py)
-        test_path="$TEST_ROOT/test_jsonl_watcher.py"
-        if [ -f "$test_path" ]; then
-          append_unique "$test_path"
-          mapped=1
+      src/brainlayer/watcher.py|src/brainlayer/watcher_bridge.py)
+        if [ "$changed" = "src/brainlayer/watcher.py" ]; then
+          zst_tests=(test_jsonl_watcher.py test_codex_realtime_author_model.py test_codex_zst_author_model.py test_codex_zst_quarantine_context.py test_codex_zst_watcher.py test_codex_zst_admission_guards.py test_codex_zst_prefix.py test_codex_zst_checkpoint_guards.py test_codex_zst_legacy_replay.py test_codex_zst_restart.py test_codex_zst_resume_registry.py test_codex_zst_lifecycle.py test_codex_zst_conversations.py test_codex_zst_header_retention.py test_codex_zst_acceptance.py test_retirement_ratchet.py)
+        else
+          zst_tests=(test_watcher_bridge.py test_codex_realtime_author_model.py test_codex_zst_author_model.py test_codex_zst_quarantine_context.py test_codex_zst_reconcile_failure.py test_codex_zst_conversations.py test_codex_zst_manifest.py test_codex_zst_provenance.py test_codex_zst_acceptance.py)
+        fi
+        mapped=1
+        # Later slices add owners incrementally; the primary owner is mandatory.
+        [ -f "$TEST_ROOT/${zst_tests[0]}" ] || mapped=0
+        if [ "$mapped" -eq 1 ]; then
+          for rel in "${zst_tests[@]}"; do
+            if [ -f "$TEST_ROOT/$rel" ]; then append_unique "$TEST_ROOT/$rel"; fi
+          done
         fi
         ;;
       src/brainlayer/pipeline/enrichment.py|src/brainlayer/pipeline/groq.py|src/brainlayer/pipeline/kg_extraction_groq.py)
@@ -386,6 +395,10 @@ map_changed_files_to_pytests() {
         if [ "$cli_root_complete" -eq 1 ]; then
           for cli_root_test in "${cli_root_tests[@]}"; do
             append_unique "$cli_root_test"
+          done
+          # Zst slices introduce these owners after the core CLI suites.
+          for rel in test_codex_zst_acceptance.py test_codex_zst_cli_guards.py; do
+            if [ -f "$TEST_ROOT/$rel" ]; then append_unique "$TEST_ROOT/$rel"; fi
           done
           mapped=1
         fi
@@ -514,8 +527,8 @@ map_changed_files_to_pytests() {
           [ -f "$TEST_ROOT/$rel" ] || mapped=0
         done
         if [ "$mapped" -eq 1 ]; then
-          for rel in test_t3_app_provenance.py test_t3_linkage_alarm.py test_t3_runtime_alarm_dedup.py; do
-            append_unique "$TEST_ROOT/$rel"
+          for rel in test_t3_app_provenance.py test_t3_linkage_alarm.py test_t3_runtime_alarm_dedup.py test_codex_zst_provenance.py test_codex_zst_identity.py test_codex_zst_header_retention.py test_codex_zst_acceptance.py; do
+            if [ -f "$TEST_ROOT/$rel" ]; then append_unique "$TEST_ROOT/$rel"; fi
           done
         fi
         ;;
