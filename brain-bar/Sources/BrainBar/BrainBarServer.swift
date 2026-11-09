@@ -185,7 +185,9 @@ final class BrainBarServer: @unchecked Sendable {
     /// below the UI budget while still bounding serial-queue stalls.
     static let maxWriteRetries = 50
     private static let readOnlyBusyTimeoutMillis: Int32 = 250
-    static let hybridSearchBudgetSeconds: TimeInterval = 0.8
+    /// The router's measured budget (#1725). A separate literal here (0.8s since #416) silently
+    /// overrode it: installed 1.5.94 served 0/20 live agent searches through hybrid.
+    static let hybridSearchBudgetSeconds: TimeInterval = MCPRouter.defaultHybridSearchBudget
     static let hybridHelperSocketIOTimeoutSeconds: TimeInterval = 120
     /// Where this server's lifecycle and trace lines go besides unified logging.
     /// `.none` (tests, the UI target) writes no file at all; the daemon passes

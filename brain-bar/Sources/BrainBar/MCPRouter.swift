@@ -236,6 +236,10 @@ final class MCPRouter: @unchecked Sendable {
     private enum HybridBudgetFailure: Error { case timedOut, busy }
     private let hybridSearchExecutor: @Sendable (@escaping @Sendable () -> Void) -> Void
     private let hybridSearchBudget: TimeInterval
+    /// Live M4 retrieval includes entity-scoped KNN plus a generic retry. A cold request exceeded
+    /// 4s and cascaded into busy fallbacks; leave scheduling/I/O headroom over the measured 4.4s
+    /// tail, with a bounded wait. BrainBarServer passes this same value; do not fork it.
+    static let defaultHybridSearchBudget: TimeInterval = 6.0
     private let receiptStore: BrainBarOperationReceipts
     private let toolProfile: ToolProfile
     private let pendingStoreDrainScheduler: PendingStoreDrainScheduler
@@ -275,10 +279,7 @@ final class MCPRouter: @unchecked Sendable {
     init(
         profile: String? = nil,
         hybridSearchClient: HybridSearchClientProtocol? = nil,
-        // Live M4 retrieval includes entity-scoped KNN plus a generic retry.
-        // A cold request exceeded 4s and cascaded into busy fallbacks; leave
-        // scheduling/I/O headroom over the measured 4.4s tail, with a bounded wait.
-        hybridSearchBudget: TimeInterval = 6.0,
+        hybridSearchBudget: TimeInterval = MCPRouter.defaultHybridSearchBudget,
         hybridSearchExecutor: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void = { work in DispatchQueue.global(qos: .userInitiated).async(execute: work) },
         dbPath: String? = nil,
         pendingStoreDrainQueue: DispatchQueue? = nil,
