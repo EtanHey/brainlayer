@@ -40,6 +40,12 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.95] - 2026-11-09
+
+### Search
+
+- BrainBar's production server now uses the router's 6 s hybrid budget. It still passed 0.8 s, so installed 1.5.94 served 0/20 live agent searches through hybrid (#1741).
+
 ## [1.5.94] - 2026-11-09
 
 ### Search
