@@ -77,6 +77,9 @@ try:
         ]
         for item, tool, arguments in calls:
             raw, result = request('tools/call', {'name': tool, 'arguments': arguments})
+            if tool == 'brain_search' and os.environ.get('MCP_DIET_HYBRID') == '1':
+                assert result['_meta'] == {'s': 'h'}, result
+                assert 'query' not in result.get('structuredContent', {}), result
             text = '\n'.join(c.get('text', '') for c in result['content'])
             if tool == 'brain_search' and arguments.get('detail') != 'full' and os.environ.get('MCP_DIET_HYBRID') == '1':
                 assert 'decision summary ' in text and 'content snippet ' in text, text

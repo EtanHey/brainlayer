@@ -362,6 +362,16 @@
         "target": "saved_session.get"
       }
     },
+    "152cdf6415721d6ea1fb2b947ce5abba37bfa20f4a29692d539e5506d6b936ee": {
+      "non_cloud_purpose": "Read-only local SQLite lookup of acknowledged archive chunks before reconciliation publication; no network or model provider.",
+      "site": {
+        "call_sha256": "9a4bf3ca1e022b1d497b7f102e2b9d433c16fe05b6ac3bdd44a677ffd423fb0e",
+        "kind": "generic_send",
+        "owner": "<module>._archive_reconciliation_stored",
+        "path": "src/brainlayer/watcher_bridge.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "15535a145e5492d50ea89bc81c4edabe6ddb9611955c7029b027fbd8f2d3e913": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/launchd/throughput-watchdog.py <module>._bounded_nul_paths subprocess.TimeoutExpired.",
       "site": {
@@ -620,6 +630,16 @@
         "owner": "<module>.recover_hold.bounded_request",
         "path": "src/brainlayer/maintenance_control.py",
         "target": "request"
+      }
+    },
+    "1e4f7469181c346a5934892674c250c4ed79b8c112c31f253d4368a0c5b65359": {
+      "non_cloud_purpose": "Dictionary lookup of already-decoded Codex session metadata (id/cwd), not an HTTP session. File path/stem remains canonical identity; native header ids are metadata only. No network or model sender.",
+      "site": {
+        "call_sha256": "cc5793dba89cf4945e9bb9470cf6781e8323e4931013a238627e075b669eeb03",
+        "kind": "generic_send",
+        "owner": "<module>.JSONLWatcher._normalize_lines",
+        "path": "src/brainlayer/watcher.py",
+        "target": "self._codex_sessions.get"
       }
     },
     "1e8e00d27af9e90f5bd8cec7d595bc318c44e7f138747cecbb1759ad81456ee1": {
@@ -1248,6 +1268,16 @@
         "owner": "<module>",
         "path": "scripts/retirement_probe.py",
         "target": "import socket"
+      }
+    },
+    "34e69277091eabe06e1d49fbf6c83d3edd069a45aaa0d19c5d273b9d714bb7dd": {
+      "non_cloud_purpose": "Local zstd CLI decoding of an explicitly admitted immutable Codex archive to bounded stdout reads; decoder errors are reported and the owned child is reaped. Resolved executable is the existing zstd tool, with no model arguments or network sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/zstd_stream.py",
+        "target": "import subprocess"
       }
     },
     "3575c7a4f7898a2f8d57c3d03896a4423c633fd0ed0b64df42d0717b3e86515f": {
@@ -4088,6 +4118,16 @@
         "owner": "<module>.reindex_episode",
         "path": "scripts/diarize_episodes.py",
         "target": "subprocess.run"
+      }
+    },
+    "a35b8737a0f0f5355795127477584918f7a572682dfaaa6733b3366a20a97886": {
+      "non_cloud_purpose": "Local zstd CLI decoding of an explicitly admitted immutable Codex archive to bounded stdout reads; decoder errors are reported and the owned child is reaped. Resolved executable is the existing zstd tool, with no model arguments or network sender.",
+      "site": {
+        "call_sha256": "b00f34fc6f0646f72817b11dd453d9c2996720c7aab4e38a26b34f203818d7ee",
+        "kind": "child_process",
+        "owner": "<module>.ZstdDecodedFile.__init__",
+        "path": "src/brainlayer/zstd_stream.py",
+        "target": "subprocess.Popen"
       }
     },
     "a454ce24aaae925f6275c2510fcc25b304f560036c3d08900b38f392f4efe1ad": {

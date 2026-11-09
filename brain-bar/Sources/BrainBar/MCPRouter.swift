@@ -902,7 +902,7 @@ final class MCPRouter: @unchecked Sendable {
                     detail: args["detail"] as? String ?? "compact",
                     scopedProject: project
                 ),
-                ["_meta": ["brainlayer/search": ["route": "lexical_fallback", "reason": reason]]]
+                ["_meta": ["s": "l", "why": reason]]
             )
         }
 
@@ -1065,12 +1065,16 @@ final class MCPRouter: @unchecked Sendable {
         return notices.isEmpty ? "" : "\n" + notices.joined(separator: "\n")
     }
 
+    // Wire contract: _meta.s is h (hybrid helper) or l (local lexical fallback).
+    // Only fallback includes why; these route values are stable for share measurements.
     private func sanitizedHybridMetadata(_ metadata: [String: Any]) -> [String: Any] {
         var allowed: [String: Any] = [:]
-        if let structuredContent = metadata["structuredContent"] {
+        if var structuredContent = metadata["structuredContent"] as? [String: Any] {
+            // The query already appears in the text envelope; send it only once.
+            structuredContent.removeValue(forKey: "query")
             allowed["structuredContent"] = structuredContent
         }
-        allowed["_meta"] = ["brainlayer/search": ["route": "hybrid_helper"]]
+        allowed["_meta"] = ["s": "h"]
         return allowed
     }
 
