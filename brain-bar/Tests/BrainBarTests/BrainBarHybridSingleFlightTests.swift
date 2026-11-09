@@ -19,10 +19,10 @@ final class BrainBarHybridSingleFlightTests: XCTestCase {
     final class Helper: HybridSearchClientProtocol, @unchecked Sendable {
         func search(arguments: [String: Any]) throws -> HybridSearchResponse { .init(text: "helper") }
     }
-    func testDefaultBudgetAdmitsHelperBeyondLegacy800Milliseconds() throws {
+    func testDefaultBudgetAdmitsMeasuredColdHelperLatency() throws {
         let router = MCPRouter(profile: "full", hybridSearchClient: Helper(),
             hybridSearchExecutor: { action in
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.9, execute: action)
+                DispatchQueue.global().asyncAfter(deadline: .now() + 4.1, execute: action)
             })
         XCTAssertEqual(try router.hybridSearchWithinBudget(arguments: [:])?.text, "helper")
     }

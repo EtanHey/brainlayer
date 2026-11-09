@@ -275,10 +275,10 @@ final class MCPRouter: @unchecked Sendable {
     init(
         profile: String? = nil,
         hybridSearchClient: HybridSearchClientProtocol? = nil,
-        // Live M4 helper replay includes entity-scoped KNN plus a generic retry.
-        // Even with point vector reads it exceeds 0.8s; retain a bounded wait
-        // that admits that path instead of discarding its completed hybrid work.
-        hybridSearchBudget: TimeInterval = 4.0,
+        // Live M4 retrieval includes entity-scoped KNN plus a generic retry.
+        // A cold request exceeded 4s and cascaded into busy fallbacks; leave
+        // scheduling/I/O headroom over the measured 4.4s tail, with a bounded wait.
+        hybridSearchBudget: TimeInterval = 6.0,
         hybridSearchExecutor: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void = { work in DispatchQueue.global(qos: .userInitiated).async(execute: work) },
         dbPath: String? = nil,
         pendingStoreDrainQueue: DispatchQueue? = nil,
