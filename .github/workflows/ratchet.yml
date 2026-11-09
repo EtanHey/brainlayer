@@ -59,6 +59,8 @@ jobs:
       reason: ${{ steps.decide.outputs.reason }}
       quiesce: ${{ steps.decide.outputs.quiesce }}
       heartbeat: ${{ steps.decide.outputs.heartbeat }}
+      retirement: ${{ steps.decide.outputs.retirement }}
+      no_enrichment: ${{ steps.decide.outputs.no_enrichment }}
     steps:
       # fetch-depth 0 so the base commit is present for the diff below. `gh api
       # repos/.../pulls/N/files` was the obvious way to list changed files and it is WRONG here:
@@ -125,6 +127,22 @@ jobs:
             heartbeat=true
           fi
           echo "heartbeat=$heartbeat" >> "$GITHUB_OUTPUT"
+          # The Linux unit suite checks all Python source/transport identities against the closed
+          # policy (test_retirement_ast_portability); new sites must update that policy. Pay for
+          # installed/native replay when its policy, harness, package inputs or native code change.
+          retirement=false
+          if jq -e 'index("ratchet:retirement")' <<<"$LABELS" > /dev/null || \
+             grep -Eq '^(pyproject\.toml|MANIFEST\.in|setup\.(py|cfg)|scripts/(retirement_.*|ci_ratchet_table\.py)|brain-bar/(Sources/.*|Tests/.*|Package\.(swift|resolved))|tests/test_retirement_.*\.py|\.github/workflows/ratchet\.yml)$' "$changed"; then
+            retirement=true
+          fi
+          echo "retirement=$retirement" >> "$GITHUB_OUTPUT"
+          # AppKit/OCR proves native views and icons; all BrainBar files can affect that build.
+          no_enrichment=false
+          if jq -e 'index("ratchet:no-enrichment")' <<<"$LABELS" > /dev/null || \
+             grep -Eq '^(brain-bar/.*|scripts/(brainbar_no_enrichment_ratchet|brainbar_source_identity|ci_ratchet_table)\.py|tests/test_brainbar_no_enrichment_ratchet\.py|\.github/workflows/ratchet\.yml)$' "$changed"; then
+            no_enrichment=true
+          fi
+          echo "no_enrichment=$no_enrichment" >> "$GITHUB_OUTPUT"
 
   heartbeat:
     name: watcher heartbeat freshness and recovery
@@ -395,6 +413,8 @@ jobs:
 
   retirement:
     name: global model retirement (installed + native)
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.outputs.retirement == 'true' }}
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -436,6 +456,8 @@ jobs:
 
   no-enrichment-render:
     name: BrainBar renders no enrichment status
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.outputs.no_enrichment == 'true' }}
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -711,14 +733,15 @@ jobs:
       #     jobs, and a superseded run reaching the comment step could PATCH a stale table over the
       #     newer run's.
       - name: Read exact-head retirement outcome
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && needs.gate.outputs.retirement != 'false' }}
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: global-model-retirement
           path: ${{ runner.temp }}/retirement
 
       - name: Download actual-view render receipt
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && needs.gate.outputs.no_enrichment != 'false' }}
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
@@ -741,7 +764,9 @@ jobs:
           QUIESCE_RESULT: ${{ needs.quiesce.result }}
           QUIESCE_GATE: ${{ needs.gate.outputs.quiesce }}
           RETIREMENT_RESULT: ${{ needs.retirement.result }}
+          RETIREMENT_GATE: ${{ needs.gate.outputs.retirement }}
           RENDER_RESULT: ${{ needs.no-enrichment-render.result }}
+          RENDER_GATE: ${{ needs.gate.outputs.no_enrichment }}
           HEARTBEAT_RESULT: ${{ needs.heartbeat.result }}
           HEARTBEAT_GATE: ${{ needs.gate.outputs.heartbeat }}
           TRIGGER_RESULT: ${{ needs.gate.result }}
@@ -786,13 +811,21 @@ jobs:
           # green -- a false green in the ratchet itself. The collector now fails closed and reports
           # RED for either case. rc is captured without `set +e` so a real crash still cannot pass.
           rc=0
-          if [[ "$RETIREMENT_RESULT" != success ]]; then
+          RETIREMENT_ARGS=(--retirement-unavailable 'gated: no affected path or ratchet:retirement label')
+          if [[ "$RETIREMENT_GATE" != false || "$TRIGGER_RESULT" != success ]]; then
             mkdir -p "${RUNNER_TEMP}/retirement"
-            printf '{}' > "${RUNNER_TEMP}/retirement/retirement-report.json"
+            if [[ "$RETIREMENT_RESULT" != success || "$TRIGGER_RESULT" != success ]]; then
+              printf '{}' > "${RUNNER_TEMP}/retirement/retirement-report.json"
+            fi
+            RETIREMENT_ARGS=(--retirement-report "${RUNNER_TEMP}/retirement/retirement-report.json")
           fi
-          if [[ "$RENDER_RESULT" != success ]]; then
+          RENDER_ARGS=(--brainbar-render-unavailable 'gated: no affected path or ratchet:no-enrichment label')
+          if [[ "$RENDER_GATE" != false || "$TRIGGER_RESULT" != success ]]; then
             mkdir -p "${RUNNER_TEMP}/brainbar-render"
-            printf '{}' > "${RUNNER_TEMP}/brainbar-render/brainbar-render-report.json"
+            if [[ "$RENDER_RESULT" != success || "$TRIGGER_RESULT" != success ]]; then
+              printf '{}' > "${RUNNER_TEMP}/brainbar-render/brainbar-render-report.json"
+            fi
+            RENDER_ARGS=(--brainbar-render-report "${RUNNER_TEMP}/brainbar-render/brainbar-render-report.json")
           fi
           HEARTBEAT_ARGS=(--watcher-heartbeat-unavailable 'macOS native probe trigger-gated: no affected path or ratchet:heartbeat label')
           if [[ "$HEARTBEAT_GATE" != false || "$TRIGGER_RESULT" != success ]]; then
@@ -816,8 +849,8 @@ jobs:
             "${SIGNATURE_ARGS[@]}" \
             "${QUIESCE_ARGS[@]}" \
             "${HEARTBEAT_ARGS[@]}" \
-            --retirement-report "${RUNNER_TEMP}/retirement/retirement-report.json" \
-            --brainbar-render-report "${RUNNER_TEMP}/brainbar-render/brainbar-render-report.json" \
+            "${RETIREMENT_ARGS[@]}" \
+            "${RENDER_ARGS[@]}" \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --out "${RUNNER_TEMP}/ratchet.md" || rc=$?
           if [[ ! -s "${RUNNER_TEMP}/ratchet.md" ]]; then
