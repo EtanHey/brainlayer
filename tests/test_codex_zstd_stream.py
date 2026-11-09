@@ -7,7 +7,7 @@ import subprocess
 import pytest
 
 from brainlayer.ingest.codex import parse_codex_session
-from brainlayer.zstd_stream import resolve_zstd
+from brainlayer.zstd_stream import ZstdDecodedFile, resolve_zstd
 
 
 @pytest.fixture
@@ -48,3 +48,18 @@ def test_parser_keeps_plain_identity_and_native_id(compress):
     assert entries[0]["session_id"] == "native-id"
     assert entries[0]["metadata"]["source_file"] == str(path.with_suffix(""))
     assert "\nUTF-8 message: שלום 🌱" in entries[0]["content"]
+
+
+@pytest.mark.parametrize("damage", ["malformed", "truncated"])
+def test_corrupt_archive_is_an_error(compress, damage):
+    path = compress("bad.jsonl.zst", rollout())
+    data = path.read_bytes()
+    path.write_bytes(b"not zstd" if damage == "malformed" else data[:-4])
+    with pytest.raises(OSError, match="decode failed"):
+        list(parse_codex_session(path))
+
+
+def test_decoder_refuses_a_record_over_its_memory_bound(compress):
+    path = compress("oversized.jsonl.zst", b"x" * 100000)
+    with ZstdDecodedFile(path, max_record_bytes=1024) as stream, pytest.raises(OSError, match="memory limit"):
+        list(stream)
