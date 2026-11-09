@@ -40,6 +40,25 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.94] - 2026-11-09
+
+### Search
+
+- Restore native hybrid routing with bounded vector reads: unscoped BrainBar calls run as the orchestrator consumer instead of deny-all, point reads replace vec0 IN-scans, and the helper budget rises to 6 s (#1725).
+- Bound filtered KNN sizing and expose the fallback route in compact `_meta` (#1717).
+- Scope linked worktrees to their canonical repository, so search from inside a worktree finds the repo's memory (#1713).
+
+### Health
+
+- Doctor: per-probe synthetic vectors, so residual probes no longer tie with the round-trip probe and raise a false FATAL (#1739).
+
+### CI and tests
+
+- Take the required swift (macos-15) skip on Linux when brain-bar is unchanged (#1738).
+- Gate the macOS retirement and no-enrichment ratchets to the paths they guard (#1709).
+- Require pre-push test mappings for new source modules (#1723).
+- Preserve watcher WAL across Codex scratch reads in tests (#1735).
+
 ## [1.5.93] - 2026-11-09
 
 ### Codex .jsonl.zst ingest
