@@ -2136,6 +2136,14 @@ class JSONLWatcher:
         discarded = tailer.discard_failed_record()
         if discarded is None:
             raise RuntimeError("quarantined record no longer matches the tailer buffer")
+        context = tailer.codex_turn_context
+        if context is not None and context.inode == source_inode and context.offset == start_offset:
+            tailer.codex_turn_context = CodexTurnContext(
+                source_inode,
+                end_offset,
+                None if b"turn_context" in record else context.model,
+                context.model_provider,
+            )
         self._pending_quarantined_offsets.setdefault(filepath, []).append(
             (start_offset, end_offset, source_inode, source_generation)
         )

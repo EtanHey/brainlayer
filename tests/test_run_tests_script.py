@@ -1952,8 +1952,6 @@ CLI_ROOT_SUITES = (
     "test_status_truthfulness.py",
     "test_watch_backfill_cli.py",
     "test_watch_logging.py",
-    "test_codex_zst_acceptance.py",
-    "test_codex_zst_cli_guards.py",
 )
 
 
@@ -2579,11 +2577,15 @@ def test_changed_only_policy_source_runs_retirement_inventory(tmp_path, source):
                 "test_codex_zst_acceptance.py",
             ),
         ),
-        ("cli/__init__.py", CLI_ROOT_SUITES),
+        ("cli/__init__.py", CLI_ROOT_SUITES + ("test_codex_zst_acceptance.py", "test_codex_zst_cli_guards.py")),
     ],
 )
 @pytest.mark.parametrize("missing", [False, True])
 def test_zst_owner_mapping_requires_primary_and_includes_available_owners(tmp_path, source, owners, missing):
+    _assert_zst_owner_mapping(tmp_path, source, owners, missing)
+
+
+def _assert_zst_owner_mapping(tmp_path, source, owners, missing):
     root = tmp_path / "tests"
     root.mkdir()
     for name in owners[1:] if missing else owners:
@@ -2603,8 +2605,13 @@ def test_zst_owner_mapping_requires_primary_and_includes_available_owners(tmp_pa
     result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False)
     assert result.returncode == 0, result.stdout
     if missing:
-        assert "falling back to full pytest unit suite" in result.stdout
-        assert f"{root}/ -v" in pytest_log.read_text()
+        assert "running mapped tests plus fixed smoke" in result.stdout
+        assert str(root / owners[0]) not in pytest_log.read_text().split()
+        assert f"{root}/ -v" not in pytest_log.read_text()
     else:
         assert "falling back to full pytest unit suite" not in result.stdout
         assert all(str(root / name) in pytest_log.read_text() for name in owners)
+
+
+def test_cli_mapping_before_later_zst_owners_exist(tmp_path):
+    _assert_zst_owner_mapping(tmp_path, "cli/__init__.py", CLI_ROOT_SUITES, False)
