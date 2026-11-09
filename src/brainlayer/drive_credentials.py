@@ -173,10 +173,13 @@ class _TokenResponseRequest:
 
     def __call__(self, *args: Any, **kwargs: Any):
         response = self.request(*args, **kwargs)
-        if response.status == 200:
-            payload = json.loads(response.data)
-            if isinstance(payload, dict) and payload.get("access_token"):
-                self.token_response = payload
+        try:
+            if response.status == 200:
+                payload = json.loads(response.data)
+                if isinstance(payload, dict) and payload.get("access_token"):
+                    self.token_response = payload
+        except (AttributeError, TypeError, ValueError):
+            pass  # Observation only: an unreadable body must never fail google-auth's own refresh.
         return response
 
 

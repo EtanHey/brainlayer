@@ -924,3 +924,13 @@ def test_legacy_consent_date_is_unknown(tmp_path, monkeypatch, testing):
     )
     assert status["state"] == "valid"
     assert status["expires_at"] is None
+
+
+def test_token_response_observer_never_fails_the_refresh_on_an_unreadable_body():
+    from brainlayer.drive_credentials import _TokenResponseRequest
+
+    response = SimpleNamespace(status=200, data=b"<html>not json</html>")
+    observed = _TokenResponseRequest(lambda *args, **kwargs: response)
+
+    assert observed(method="POST", url="https://oauth2.googleapis.com/token") is response
+    assert observed.token_response is None
