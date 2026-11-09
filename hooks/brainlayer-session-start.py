@@ -17,6 +17,7 @@ import sys
 import time
 
 from brainlayer.archive_lifecycle import lifecycle_active_clauses_present
+from brainlayer.scoping import canonical_workspace_path
 
 # Budget: abort if we're taking too long
 DEADLINE_MS = 450
@@ -227,7 +228,7 @@ def main():
     if not activate:
         sys.exit(0)
 
-    cwd = hook_input.get("cwd", os.getcwd())
+    cwd = canonical_workspace_path(hook_input.get("cwd", os.getcwd()), timeout=0.2)
     project, search_term = get_project_info(cwd)
 
     db_path = get_db_path()
