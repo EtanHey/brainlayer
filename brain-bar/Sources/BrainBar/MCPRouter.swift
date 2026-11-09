@@ -879,7 +879,7 @@ final class MCPRouter: @unchecked Sendable {
             return TextFormatter.formatKGFacts(entity: first.name, facts: facts)
         }
 
-        func searchViaBrainBarDatabase() throws -> (text: String, metadata: [String: Any]) {
+        func searchViaBrainBarDatabase(reason: String) throws -> (text: String, metadata: [String: Any]) {
             let results = try db.search(
                 query: query,
                 limit: limit,
@@ -899,7 +899,7 @@ final class MCPRouter: @unchecked Sendable {
                     detail: args["detail"] as? String ?? "compact",
                     scopedProject: project
                 ),
-                [:]
+                ["_meta": ["brainlayer/search": ["route": "lexical_fallback", "reason": reason]]]
             )
         }
 
@@ -921,7 +921,7 @@ final class MCPRouter: @unchecked Sendable {
                 if let response {
                     if hybridSearchResponseIsEmpty(response) {
                         NSLog("[BrainBar] Hybrid search helper returned empty results, falling back to BrainBar database search")
-                        let fallback = try searchViaBrainBarDatabase()
+                        let fallback = try searchViaBrainBarDatabase(reason: "empty_results")
                         textSection = fallback.text
                         metadata = fallback.metadata
                         kgSection = localKGSection()
@@ -943,7 +943,7 @@ final class MCPRouter: @unchecked Sendable {
                     }
                 } else {
                     NSLog("[BrainBar] Hybrid search helper exceeded %.3fs budget, falling back to BrainBar database search", hybridSearchBudget)
-                    let fallback = try searchViaBrainBarDatabase()
+                    let fallback = try searchViaBrainBarDatabase(reason: "not_ready")
                     textSection = fallback.text
                     metadata = fallback.metadata
                     kgSection = localKGSection()
@@ -951,19 +951,19 @@ final class MCPRouter: @unchecked Sendable {
             } catch let failure as HybridBudgetFailure {
                 let reason = failure == .busy ? "hybrid helper busy past budget" : "hybrid helper exceeded budget"
                 NSLog("[BrainBar] Search mode: BrainBar database fallback (%@)", reason)
-                let fallback = try searchViaBrainBarDatabase()
+                let fallback = try searchViaBrainBarDatabase(reason: failure == .busy ? "helper_busy" : "budget_exceeded")
                 textSection = fallback.text + "\nSearch mode: BrainBar database fallback (\(reason))"
                 metadata = fallback.metadata
                 kgSection = localKGSection()
             } catch {
                 NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", HybridSearchHelperError.loggable(error))
-                let fallback = try searchViaBrainBarDatabase()
+                let fallback = try searchViaBrainBarDatabase(reason: "helper_error")
                 textSection = fallback.text
                 metadata = fallback.metadata
                 kgSection = localKGSection()
             }
         } else {
-            let fallback = try searchViaBrainBarDatabase()
+            let fallback = try searchViaBrainBarDatabase(reason: "helper_not_eligible")
             textSection = fallback.text
             metadata = fallback.metadata
             kgSection = localKGSection()
@@ -1067,6 +1067,7 @@ final class MCPRouter: @unchecked Sendable {
         if let structuredContent = metadata["structuredContent"] {
             allowed["structuredContent"] = structuredContent
         }
+        allowed["_meta"] = ["brainlayer/search": ["route": "hybrid_helper"]]
         return allowed
     }
 
