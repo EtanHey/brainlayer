@@ -8,8 +8,8 @@ from pathlib import Path
 from . import backup_daily as backup
 from .drive_credentials import _atomic_write
 from .paths import get_db_path
+from .supervisor_jobs import UPLOAD_RECOVERY_TIMEOUT
 
-UPLOAD_RECOVERY_TIMEOUT = 3690
 UPLOAD_TARGET_ENV = "BRAINLAYER_BACKUP_UPLOAD_SNAPSHOT"
 
 
