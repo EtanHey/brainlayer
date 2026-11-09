@@ -16,7 +16,7 @@ from typing import Literal, cast
 
 from .content_class import normalize_content_class
 from .ingest_denylist import is_denylisted, memory_reader_attribution
-from .t3_provenance import T3_APP_SESSION, is_t3_app_initiated_codex_session
+from .t3_provenance import T3_APP_SESSION, CompactCodexHeader, is_t3_app_initiated_codex_session
 
 SearchPolicy = Literal["KEEP", "ISOLATE", "OUT"]
 EffectiveVisibility = Literal["default", "operational", "cold"]
@@ -179,6 +179,7 @@ def classify_provenance(
     t3_linked_session_ids: set[str] | None = None,
     t3_projection_version: int | None = None,
     t3_session_identity_cache: dict | None = None,
+    t3_session_header: tuple[dict, int] | CompactCodexHeader | None = None,
 ) -> ProvenanceDecision:
     """Classify a source path into an auditable provenance search policy."""
     del content_class
@@ -195,6 +196,7 @@ def classify_provenance(
             linked_session_ids=t3_linked_session_ids,
             projection_version=t3_projection_version,
             session_identity_cache=t3_session_identity_cache,
+            session_header=t3_session_header,
         )
     )
     if is_t3_app_session:
