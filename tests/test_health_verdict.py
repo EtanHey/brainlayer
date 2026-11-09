@@ -924,3 +924,16 @@ def test_f3_graced_stale_ingest_resets_recovery():
         run(next_good.state, now=NOW + 3 * H + 2 * M, watcher_updated_at=NOW + 3 * H + 2 * M).check("ingest").state
         == hv.GREEN
     )
+
+
+def test_drive_attention_has_one_actionable_item():
+    verdict = run(
+        drive_auth="consent_needed",
+        notes=hv.notes_from_job_alerts({"drive-consent": "Drive access expired: Reconnect in BrainBar"}),
+    )
+    items = [
+        item for item in hv.badge_alerts(verdict) if item["code"] in ("outcome_drive_auth", "job_alert_drive-consent")
+    ]
+    assert len(items) == 1
+    assert items[0]["message"] == "Drive access expired: Reconnect in BrainBar"
+    assert items[0]["severity"] == "critical"

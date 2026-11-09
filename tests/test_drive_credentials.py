@@ -99,7 +99,7 @@ def test_valid_upcoming_expiry_is_advisory_and_recovers_only_consent_alert(
     consented = datetime(2026, 10, 17, 18, 50, tzinfo=UTC)
     expires = consented + timedelta(days=7)
     data = json.loads(token.read_text())
-    data["consented_at"] = consented.isoformat()
+    data["refresh_expires_at"] = (consented + timedelta(days=7)).isoformat()
     token.write_text(json.dumps(data))
     before = token.read_bytes()
     # A real job's failure is preserved even if its text resembles the advisory.
@@ -140,7 +140,7 @@ def test_upcoming_expiry_does_not_erase_alerts_when_credentials_fail(tmp_path, f
     _client(client)
     consented = datetime(2026, 10, 17, tzinfo=UTC)
     data = json.loads(token.read_text())
-    data["consented_at"] = consented.isoformat()
+    data["refresh_expires_at"] = (consented + timedelta(days=7)).isoformat()
     token.write_text(json.dumps(data))
     alerts.write_text(json.dumps({"drive-consent": "prior failure", "backup-daily": "upload failed"}))
 
@@ -295,7 +295,7 @@ def test_offline_status_keeps_local_consent_clock(tmp_path, elapsed_days, expect
     _client(client)
     consented = datetime(2026, 9, 30, tzinfo=UTC)
     data = json.loads(token.read_text())
-    data["consented_at"] = consented.isoformat()
+    data["refresh_expires_at"] = (consented + timedelta(days=7)).isoformat()
     token.write_text(json.dumps(data))
 
     class Offline(FakeCredentials):
@@ -339,7 +339,7 @@ def test_cli_text_status_offline_expiring_prints_local_deadline(tmp_path, monkey
     _client(client)
     consented = datetime.now(UTC) - timedelta(days=5, hours=12)
     data = json.loads(token.read_text())
-    data["consented_at"] = consented.isoformat()
+    data["refresh_expires_at"] = (consented + timedelta(days=7)).isoformat()
     data["expiry"] = "2000-01-01T00:00:00"  # stale access token forces the refresh attempt
     token.write_text(json.dumps(data))
     before = token.read_bytes()
@@ -375,6 +375,8 @@ def test_authorize_writes_only_owned_token_with_drive_scope(tmp_path):
     _client(client)
 
     class Flow:
+        oauth2session = SimpleNamespace(token={})
+
         @classmethod
         def from_client_secrets_file(cls, path, *, scopes):
             assert path == str(client)
@@ -408,6 +410,8 @@ def test_browser_denial_reports_cancelled_without_writing_token(tmp_path):
     _client(client)
 
     class Flow:
+        oauth2session = SimpleNamespace(token={})
+
         @classmethod
         def from_client_secrets_file(cls, path, *, scopes):
             return cls()
@@ -429,7 +433,7 @@ def test_testing_mode_consent_expires_after_seven_days(tmp_path, monkeypatch):
     _client(client)
     consented = datetime(2026, 9, 30, tzinfo=UTC)
     data = json.loads(token.read_text())
-    data["consented_at"] = consented.isoformat()
+    data["refresh_expires_at"] = (consented + timedelta(days=7)).isoformat()
     token.write_text(json.dumps(data))
     kwargs = dict(
         token_path=token,
@@ -506,7 +510,7 @@ def test_consent_warning_names_exact_expiry_without_changing_gate(tmp_path, hour
     consented = datetime(2026, 10, 17, 18, 50, tzinfo=UTC)
     expires = consented + timedelta(days=7)
     data = json.loads(token.read_text())
-    data["consented_at"] = consented.isoformat()
+    data["refresh_expires_at"] = (consented + timedelta(days=7)).isoformat()
     token.write_text(json.dumps(data))
     before = token.read_bytes()
     alerts = []
@@ -541,7 +545,7 @@ def _consented_token(tmp_path: Path, consented: datetime) -> tuple[Path, Path]:
     _token(token)
     _client(client)
     data = json.loads(token.read_text())
-    data["consented_at"] = consented.isoformat()
+    data["refresh_expires_at"] = (consented + timedelta(days=7)).isoformat()
     token.write_text(json.dumps(data))
     return token, client
 
@@ -807,14 +811,8 @@ def test_consent_clock_requires_explicit_testing_mode(tmp_path, monkeypatch, ela
         now=consented + timedelta(days=elapsed_days),
         alert_reporter=lambda *args: alerts.append(args),
     )
-    if testing == "1":
-        assert status["state"] == ("expiring" if elapsed_days < 7 else "invalid")
-        assert status["expires_at"] == (consented + timedelta(days=7)).isoformat()
-    else:
-        assert status["state"] == "valid"
-        assert status["expires_at"] is None
-        assert status["days_left"] is None
-        assert alerts == [("drive-consent", None)]
+    assert status["state"] == ("expiring" if elapsed_days < 7 else "invalid")
+    assert status["expires_at"] == (consented + timedelta(days=7)).isoformat()
 
 
 def test_production_invalid_grant_still_reports_consent_failure(tmp_path, monkeypatch):
@@ -823,6 +821,9 @@ def test_production_invalid_grant_still_reports_consent_failure(tmp_path, monkey
     monkeypatch.delenv("BRAINLAYER_DRIVE_OAUTH_TESTING", raising=False)
     consented = datetime(2026, 10, 17, tzinfo=UTC)
     token, client = _consented_token(tmp_path, consented)
+    data = json.loads(token.read_text())
+    data.pop("refresh_expires_at", None)
+    token.write_text(json.dumps(data))
     alerts = []
 
     class Revoked(FakeCredentials):
@@ -864,13 +865,62 @@ def test_naive_consent_timestamp_agrees_between_loader_and_status(tmp_path, monk
         alert_reporter=lambda *_: None,
     )
     status = drive_credentials.credential_status(**kwargs)
-    if testing:
-        assert status["state"] == "invalid"
-        with pytest.raises(drive_credentials.DriveCredentialError) as caught:
-            drive_credentials.load_credentials(**kwargs)
-        assert str(caught.value) == status["reason"] == "BrainLayer Drive consent metadata is invalid"
-    else:
-        assert status["state"] == "valid"
-        assert status["expires_at"] is None and status["days_left"] is None
-        assert drive_credentials.load_credentials(**kwargs).valid
+    assert status["state"] == "invalid"
+    with pytest.raises(drive_credentials.DriveCredentialError) as caught:
+        drive_credentials.load_credentials(**kwargs)
+    assert str(caught.value) == status["reason"] == "BrainLayer Drive consent metadata is invalid"
     assert token.read_bytes() == before
+
+
+@pytest.mark.parametrize("seconds", [None, 3600])
+def test_google_response_controls_lifetime_through_real_refresh(tmp_path, seconds):
+    from brainlayer import drive_credentials
+
+    token, client = tmp_path / "token.json", tmp_path / "client.json"
+    _token(token)
+    _client(client)
+    now = datetime.now(UTC)
+    data = json.loads(token.read_text())
+    data["expiry"] = (now - timedelta(hours=1)).isoformat()
+    token.write_text(json.dumps(data))
+    response = {"access_token": "new", "expires_in": 86400, "token_type": "Bearer"}
+    if seconds is not None:
+        response["refresh_token_expires_in"] = seconds
+
+    def endpoint(**kwargs):
+        assert kwargs["url"] == "https://example.invalid/token"
+        return SimpleNamespace(status=200, data=json.dumps(response).encode())
+
+    kwargs = dict(
+        token_path=token, client_path=client, request_factory=lambda: endpoint, alert_reporter=lambda *_: None, now=now
+    )
+    drive_credentials.load_credentials(**kwargs)
+    stored = json.loads(token.read_text())
+    assert stored["refresh_expires_at"] == (
+        "permanent" if seconds is None else (now + timedelta(seconds=seconds)).isoformat()
+    )
+    status = drive_credentials.credential_status(**kwargs)
+    assert status["state"] == ("valid" if seconds is None else "expiring")
+    assert status["days_left"] == (None if seconds is None else seconds / 86400)
+
+
+@pytest.mark.parametrize("testing", ["0", "1"])
+def test_legacy_consent_date_is_unknown(tmp_path, monkeypatch, testing):
+    from brainlayer import drive_credentials
+
+    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", testing)
+    token, client = tmp_path / "token.json", tmp_path / "client.json"
+    _token(token)
+    _client(client)
+    data = json.loads(token.read_text())
+    data["consented_at"] = "2000-01-01T00:00:00+00:00"
+    token.write_text(json.dumps(data))
+    status = drive_credentials.credential_status(
+        token_path=token,
+        client_path=client,
+        credentials_class=FakeCredentials,
+        request_factory=object,
+        alert_reporter=lambda *_: None,
+    )
+    assert status["state"] == "valid"
+    assert status["expires_at"] is None
