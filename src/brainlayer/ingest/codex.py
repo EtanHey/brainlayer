@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Iterator, List, Optional
 
 from ..pipeline.classify import transcript_author_model
+from ..zstd_stream import ZstdDecodedFile, logical_jsonl_path
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,10 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
     model: Optional[str] = None
     model_provider: Optional[str] = None
 
-    with open(file_path, "rb") as fh:
+    # Canonical identity is the logical FILE path. Native session ids are metadata only;
+    # forks can share a first session_meta id and must never collapse whole files.
+    source_file = str(logical_jsonl_path(file_path))
+    with ZstdDecodedFile(file_path) if file_path.name.endswith(".jsonl.zst") else open(file_path, "rb") as fh:
         for raw in fh:
             raw = raw.strip()
             if not raw:
@@ -215,7 +219,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "session_id": session_id,
                         "sender": "user",
                         "model_provider": model_provider,
-                        "source_file": str(file_path),
+                        "source_file": source_file,
                     },
                 }
                 continue
@@ -245,7 +249,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "sender": "assistant",
                         "model": model,
                         "model_provider": model_provider,
-                        "source_file": str(file_path),
+                        "source_file": source_file,
                     },
                 }
                 continue
@@ -276,7 +280,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
                         "sender": "tool",
                         "call_id": payload.get("call_id"),
                         "model_provider": model_provider,
-                        "source_file": str(file_path),
+                        "source_file": source_file,
                     },
                 }
 
@@ -323,6 +327,8 @@ def ingest_codex_session(
 
     Returns the number of chunks indexed.
     """
+    if file_path.name.endswith(".jsonl.zst") and not dry_run:
+        raise ValueError("Compressed writes require ingest-codex --from-manifest (existing queue writer)")
     from ..pipeline.chunk import Chunk, chunk_content
     from ..pipeline.classify import ClassifiedContent, ContentType, ContentValue
 
@@ -390,7 +396,7 @@ def ingest_codex_session(
 
     indexed = index_chunks_to_sqlite(
         all_chunks,
-        source_file=str(file_path),
+        source_file=str(logical_jsonl_path(file_path)),
         project=project,
         db_path=db_path,
         # Pass source through the metadata; index_new reads chunk.metadata["source"]
