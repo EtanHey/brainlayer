@@ -2409,11 +2409,13 @@ def test_changed_only_policy_source_runs_retirement_inventory(tmp_path, source):
     ],
 )
 @pytest.mark.parametrize("missing", [False, True])
-def test_zst_owner_mapping_retains_full_suite_if_any_owner_is_missing(tmp_path, source, owners, missing):
+@pytest.mark.parametrize("tag", [False, True])
+def test_zst_owner_mapping_never_silently_skips_a_missing_owner(tmp_path, source, owners, missing, tag):
     root = tmp_path / "tests"
     root.mkdir()
     for name in owners[:-1] if missing else owners:
         (root / name).write_text("test placeholder\n")
+    (root / "test_paths.py").write_text("test placeholder\n")
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
     env = _script_env()
     env.update(
@@ -2422,15 +2424,31 @@ def test_zst_owner_mapping_retains_full_suite_if_any_owner_is_missing(tmp_path, 
         BRAINLAYER_USE_UV="0",
         BRAINLAYER_PREPUSH="1",
         BRAINLAYER_PREPUSH_SCOPE="changed-only",
-        BRAINLAYER_CHANGED_FILES=f"src/brainlayer/{source}",
+        BRAINLAYER_CHANGED_FILES=f"src/brainlayer/{source}\ntests/test_paths.py",
         PYTEST_LOG=str(pytest_log),
         BUN_LOG=str(bun_log),
     )
+    if tag:
+        env["BRAINLAYER_PREPUSH_TAG"] = "v9.9.9"
     result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False)
     assert result.returncode == 0, result.stdout
     if missing:
-        assert "falling back to full pytest unit suite" in result.stdout
-        assert f"{root}/ -v" in pytest_log.read_text()
+        assert f"WARNING: unmapped: src/brainlayer/{source}" in result.stdout
+        if tag:
+            assert "running the FULL pytest unit suite" in result.stdout
+            assert f"{root}/ -v" in pytest_log.read_text()
+        else:
+            assert "running mapped tests plus fixed smoke" in result.stdout
+            assert f"{root}/ -v" not in pytest_log.read_text()
+            assert str(root / "test_paths.py") in pytest_log.read_text()
+            for smoke in (
+                "test_store.py",
+                "test_hybrid_search.py::TestHybridSearch::test_hybrid_search_returns_results",
+                "test_brainstore.py::TestStoreMemory",
+                "test_jsonl_watcher.py::TestOffsetRegistry",
+                "test_jsonl_watcher.py::TestJSONLTailer",
+            ):
+                assert str(root / smoke) in pytest_log.read_text()
     else:
         assert "falling back to full pytest unit suite" not in result.stdout
         assert all(str(root / name) in pytest_log.read_text() for name in owners)
