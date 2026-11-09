@@ -602,6 +602,16 @@
         "target": "import subprocess"
       }
     },
+    "1db81477b0a1daf8c56f7512f9728e4fea39166a153ad7374f86a15128b98162": {
+      "non_cloud_purpose": "Read-only local Git repository/worktree identity lookup with caller-bounded timeout; no network or cloud execution.",
+      "site": {
+        "call_sha256": "e205631bd99645f04468e66681061f8e836a9918bd0e6ae2ddd9d0f72462bf7f",
+        "kind": "child_process",
+        "owner": "<module>.canonical_workspace_path",
+        "path": "src/brainlayer/scoping.py",
+        "target": "subprocess.run"
+      }
+    },
     "1dbae240c09cdf5aec0a7705e0d65cbbdd6e3ddef3d11435fd732e2af945e3ea": {
       "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
       "site": {
@@ -3980,6 +3990,16 @@
         "target": "subprocess.run"
       }
     },
+    "9d9d8db500628251835e3fdf22639ac897716bd70ce65dd3a6ed7db8c14786d0": {
+      "non_cloud_purpose": "Read-only bounded local Git repository identity lookup (rev-parse and worktree list); subprocess binding/error handling supports those fixed argv operations only. No network, writes, or model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.canonical_workspace_path",
+        "path": "src/brainlayer/scoping.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "9e5a01fed464d2af61e192eb5ccc24b011c03645489f042ee3e4416a650036a8": {
       "non_cloud_purpose": "S22 local subprocess exception type used to fail closed when pinned /bin/ps cannot verify the live hotlane producer PID; no process launch or network sender at this reference.",
       "site": {
@@ -5926,6 +5946,16 @@
         "target": "importlib.import_module"
       }
     },
+    "e615b47b179c62815091e0fdf7c87266261bd96d095882f113dd8afcb17d190f": {
+      "non_cloud_purpose": "Read-only bounded local Git repository identity lookup (rev-parse and worktree list); subprocess binding/error handling supports those fixed argv operations only. No network, writes, or model sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/scoping.py",
+        "target": "import subprocess"
+      }
+    },
     "e78c21d92b37be23eba1a89c3a97b1a18771a3b6d1b0c48bc37ded6d11bb27a4": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -6103,6 +6133,16 @@
         "kind": "child_process",
         "owner": "<module>._staging_snapshots_may_exist",
         "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.run"
+      }
+    },
+    "ee21dfa186e5ab166b460baa3d63f941a47c0a7b7cd073cbf61f5d58d4a9bbed": {
+      "non_cloud_purpose": "Read-only local Git repository/worktree identity lookup with caller-bounded timeout; no network or cloud execution.",
+      "site": {
+        "call_sha256": "b00f0a54ed0cf0fca73d2af9f30ed148c9de1cea6ab377ebf72b2c2c27ffee59",
+        "kind": "child_process",
+        "owner": "<module>.canonical_workspace_path",
+        "path": "src/brainlayer/scoping.py",
         "target": "subprocess.run"
       }
     },

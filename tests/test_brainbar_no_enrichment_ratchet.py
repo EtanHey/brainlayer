@@ -129,11 +129,12 @@ def test_any_restored_status_count_or_job_row_is_red(tmp_path, text):
     assert table.row_brainbar_no_enrichment(path, SHA).status == table.RED
 
 
-def test_ci_always_hands_missing_render_to_fail_closed_row():
+def test_ci_requires_render_evidence_when_triggered():
     root = Path(__file__).resolve().parents[1]
     workflow = yaml.safe_load((root / ".github/workflows/ratchet.yml").read_text())
     job = workflow["jobs"]["no-enrichment-render"]
-    assert job["runs-on"] == "macos-15" and "if" not in job
+    assert job["runs-on"] == "macos-15"
+    assert "needs.gate.outputs.no_enrichment == 'true'" in job["if"]
     collect = next(step for step in workflow["jobs"]["table"]["steps"] if step.get("name") == "Collect ratchet rows")
     assert "--brainbar-render-report" in collect["run"]
     upload = next(step for step in job["steps"] if step.get("name") == "Retain synthetic render receipt only")
