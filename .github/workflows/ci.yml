@@ -275,6 +275,8 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Include the PR merge commit parents for the mapping allowlist ratchet.
 
       - uses: actions/setup-python@v5
         with:

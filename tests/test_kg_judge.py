@@ -374,6 +374,7 @@ def test_git_shellout_tests_scrub_inherited_git_env():
         "test_retirement_artifact.py",
         "test_retirement_dependency.py",
         "test_run_tests_script.py",
+        "test_prepush_mapping_coverage.py",
         "test_scoping.py",
         "test_version_consistency.py",
         "test_write_queue.py",
