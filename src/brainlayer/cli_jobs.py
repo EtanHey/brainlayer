@@ -17,6 +17,7 @@ def register(app, jobs_app):
         state_dir: Path | None = typer.Option(None, "--state-dir"),
         logs_dir: Path = typer.Option(Path.home() / "Library/Logs/brainlayer", "--logs-dir"),
         recover_transcripts: bool = typer.Option(False, "--recover-transcripts"),
+        recover_upload: bool = typer.Option(False, "--recover-upload"),
         recover_failed: bool = typer.Option(False, "--recover-failed"),
         status: bool = typer.Option(
             False, "--status", help="Check failed-step recovery admission without running steps"
@@ -30,7 +31,7 @@ def register(app, jobs_app):
             date = dt.date.fromisoformat(scheduled_date) if scheduled_date else dt.date.today()
         except ValueError as exc:
             raise typer.BadParameter("date must be ISO YYYY-MM-DD") from exc
-        if recover_failed and recover_transcripts:
+        if sum((recover_failed, recover_transcripts, recover_upload)) > 1:
             raise typer.BadParameter("Choose --recover-failed or --recover-transcripts")
         if status and not recover_failed:
             raise typer.BadParameter("--status requires --recover-failed")
@@ -49,6 +50,7 @@ def register(app, jobs_app):
                     logs_dir,
                     install_signals=True,
                     transcript_recovery=recover_transcripts,
+                    **(dict(upload_recovery=True) if recover_upload else {}),
                     **(
                         dict(failed_recovery=True, recovery_status=status, recovery_result=result)
                         if recover_failed

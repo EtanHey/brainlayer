@@ -290,11 +290,25 @@ def _probe_calendar_custody(directory):
     return True
 
 
-async def _failed_recovery_admission(plan, directory, now, guard_timeout, shutdown_timeout, reply):
-    selection = await _blocking(failed_recovery_selection, directory)
+async def _failed_recovery_admission(plan, directory, now, guard_timeout, shutdown_timeout, reply, upload=False):
+    reservation = None
+    if upload:
+        from .maintenance_upload_recovery import pending_upload_step
+
+        step, reservation, reason = await _blocking(pending_upload_step, plan, directory)
+        history = await _blocking(failed_recovery_selection, directory)
+        selection = dict(
+            steps=[step.name] if step else [], scheduled_date=history["scheduled_date"] or now.date().isoformat()
+        )
+        if step is None:
+            await _blocking(record, directory, event="upload-recovery-skip", reason=reason)
+            reply.update(selection, status="nothing-to-retry", reason=reason)
+            return ()
+    else:
+        selection = await _blocking(failed_recovery_selection, directory)
     reply.update(selection)
     candidates = plan.candidates if isinstance(plan, CalendarPlan) else plan
-    steps = tuple(step for step in candidates if step.name in selection["steps"])
+    steps = (step,) if upload else tuple(step for step in candidates if step.name in selection["steps"])
     if {step.name for step in steps} != set(selection["steps"]):
         raise ValueError("Recovery plan is missing a selected step")
     blocked, window, reason = await _blocking(_retry_window, plan, steps, now, guard_timeout, shutdown_timeout)
@@ -310,6 +324,19 @@ async def _failed_recovery_admission(plan, directory, now, guard_timeout, shutdo
             reply.update(status="refused", reason="Maintenance or a retry step is disabled or paused")
         else:
             reply.update(status="ready", reason="Only failed daytime-safe steps will retry; no services pause")
+            if upload:
+                from .maintenance_upload_recovery import reserve_upload_attempt
+
+                attempt = await _blocking(reserve_upload_attempt, reservation)
+                await _blocking(
+                    record,
+                    directory,
+                    event="upload-recovery-attempt",
+                    snapshot=step.env["BRAINLAYER_BACKUP_UPLOAD_SNAPSHOT"],
+                    attempt=attempt,
+                )
+    if upload and reply["status"] != "ready":
+        await _blocking(record, directory, event="upload-recovery-skip", reason=reply["reason"])
     return steps
 
 
@@ -596,7 +623,9 @@ def backup_deadline(step):
     if step.name != "backup-daily":
         return step.timeout
     path = Path(os.environ.get("BRAINLAYER_ENV_FILE", get_user_env_path()))
-    configured = configured_brainlayer_env_value("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", path)
+    configured = step.env.get("BRAINLAYER_BACKUP_TIMEOUT_SECONDS") or configured_brainlayer_env_value(
+        "BRAINLAYER_BACKUP_TIMEOUT_SECONDS", path
+    )
     seconds = int(
         configured if configured is not None else os.environ.get("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "28800")
     )
@@ -1029,9 +1058,11 @@ async def run_calendar(
     defer_after=3,
     transcript_recovery=False,
     failed_recovery=False,
+    upload_recovery=False,
     recovery_status=False,
     recovery_result=None,
 ):
+    failed_recovery = failed_recovery or upload_recovery
     if failed_recovery and transcript_recovery:
         raise ValueError("Choose only one recovery mode")
     reply = recovery_result if recovery_result is not None else {}
@@ -1075,13 +1106,15 @@ async def run_calendar(
     runner_started_at = None
     loop = asyncio.get_running_loop()
     try:
+        await _blocking(custody.recover, min(1, shutdown_timeout / 2))
         if failed_recovery:
             plan = steps
-            steps = await _failed_recovery_admission(plan, directory, now_fn(), guard_timeout, shutdown_timeout, reply)
+            steps = await _failed_recovery_admission(
+                plan, directory, now_fn(), guard_timeout, shutdown_timeout, reply, upload=upload_recovery
+            )
             if reply["status"] != "ready":
                 return 0
             date = dt.date.fromisoformat(reply["scheduled_date"])
-        await _blocking(custody.recover, min(1, shutdown_timeout / 2))  # Reap stale writers before any journal scan.
         state_path = directory / "state.json"
         state = await _blocking(
             lambda: json.loads(state_path.read_text()) if state_path.exists() else dict(deferrals={})
@@ -1131,7 +1164,7 @@ async def run_calendar(
             scheduled_date=date.isoformat(),
         )
         if failed_recovery:
-            reply.update(status="accepted", reason="Transcript backup retried successfully")
+            reply.update(status="accepted", reason="Backup retried successfully")
         if install_signals:
             for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
                 handlers[sig] = signal.getsignal(sig)
@@ -1269,7 +1302,7 @@ async def run_calendar(
                 replaces="maintenance-nightly" if weekly_substitution and step.name == "maintenance-weekly" else None,
                 backup_invocation_id=invocation,
                 maintenance_run_id=run_id,
-                preserve_abandonment_alerts=transcript_recovery or failed_recovery,
+                preserve_abandonment_alerts=(transcript_recovery or failed_recovery) and not upload_recovery,
             )
         active_step = None
         plan_complete = bool(steps) and not stop.is_set() and len(results) == len(steps)
