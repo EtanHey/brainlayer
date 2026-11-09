@@ -10,11 +10,13 @@ real watcher flush callback on a scratch DB, so a skipped record is a missing ro
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import os
 import shutil
 import sqlite3
+from contextlib import closing
 
 from brainlayer.watcher import JSONLWatcher, WatchRoot
 from brainlayer.watcher_bridge import create_flush_callback
@@ -83,7 +85,7 @@ class _Rig:
         assert self.source.stat().st_ino == inode
 
     def contents(self) -> list[str]:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
             rows = conn.execute("SELECT content FROM chunks WHERE source_file = ?", (str(self.source),)).fetchall()
         return [row[0] for row in rows]
 
@@ -199,4 +201,14 @@ def test_legacy_checkpoint_modified_since_confirm_is_reread_from_the_start(tmp_p
     os.utime(rig.source, (entry_mtime + 5, entry_mtime + 5))
     rig.drain(rig.watcher("copied.json"))
 
+    assert rig.messages() == [1, 2, 3, 4, 5, 6]
+
+
+def test_scratch_readers_keep_the_writers_wal(tmp_path):
+    rig = _Rig(tmp_path)
+    _first_run(rig)
+    gc.collect()
+    assert rig.db_path.with_name(rig.db_path.name + "-wal").exists()
+    rig.rewrite_same_inode(_source((3, 4, 5, 6)))
+    rig.drain(rig.watcher("copied.json"))
     assert rig.messages() == [1, 2, 3, 4, 5, 6]

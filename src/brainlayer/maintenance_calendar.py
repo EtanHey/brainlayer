@@ -1171,7 +1171,19 @@ async def run_calendar(
                     code, reason = 75, "maintenance-window"
                 else:
                     step = bounded
-                    disabled = client._disabled(await _blocking(client.request), include_paused=failed_recovery)
+                    # A status read is idempotent: allow up to three 2s socket attempts under
+                    # load before aborting the night. Never replay pause/resume or hold grants.
+                    for attempt in range(1, 4):
+                        try:
+                            states = await _blocking(client.request)
+                            break
+                        except TimeoutError:
+                            await _blocking(
+                                record, directory, event="supervisor-status-timeout", step=step.name, attempt=attempt
+                            )
+                            if attempt == 3 or stop.is_set():
+                                raise
+                    disabled = client._disabled(states, include_paused=failed_recovery)
                     if f"com.brainlayer.{_service_name(step)}" in disabled or "com.brainlayer.maintenance" in disabled:
                         code, reason = 75, "disabled"
                     elif not await _window(directory, step, now_fn, sleep_fn, stop):
