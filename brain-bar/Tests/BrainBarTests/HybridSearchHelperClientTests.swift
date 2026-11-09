@@ -170,6 +170,14 @@ final class HybridSearchHelperClientTests: XCTestCase {
         XCTAssertEqual(value, 1)
     }
 
+    /// The production server passes its budget explicitly, so it must be the router's measured default.
+    /// #1725 raised MCPRouter's default to 6s, but BrainBarServer still passed 0.8s: installed 1.5.94
+    /// served 0/20 live agent searches through hybrid (budget_exceeded, then helper_busy cascades).
+    func testProductionServerUsesTheRouterHybridBudget() {
+        XCTAssertEqual(BrainBarServer.hybridSearchBudgetSeconds, MCPRouter.defaultHybridSearchBudget)
+        XCTAssertGreaterThanOrEqual(BrainBarServer.hybridSearchBudgetSeconds, 6.0)
+    }
+
     func testBrainBarHelperSocketTimeoutIsDecoupledFromSearchBudget() {
         XCTAssertGreaterThan(
             BrainBarServer.hybridHelperSocketIOTimeoutSeconds,
