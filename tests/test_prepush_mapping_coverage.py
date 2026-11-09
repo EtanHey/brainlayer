@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST = ROOT / "scripts/prepush_unmapped_legacy.json"
 
 
+def _clean_git_env():
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def unmapped(paths):
     # Execute the production mapper, stopping before the runner starts any gates.
     definitions = (ROOT / "scripts/run_tests.sh").read_text().split('\ncd "$ROOT_DIR"\n')[0]
@@ -63,6 +67,7 @@ def test_legacy_allowlist_can_only_shrink():
     previous = subprocess.run(
         ["git", "show", f"{base}:scripts/prepush_unmapped_legacy.json"],
         cwd=ROOT,
+        env=_clean_git_env(),
         capture_output=True,
         text=True,
         check=False,
@@ -73,7 +78,10 @@ def test_legacy_allowlist_can_only_shrink():
         # Bootstrap only: every exception must already exist on the base, never a new PR module.
         existing = set(
             subprocess.check_output(
-                ["git", "ls-tree", "-r", "--name-only", base, "src/brainlayer"], cwd=ROOT, text=True
+                ["git", "ls-tree", "-r", "--name-only", base, "src/brainlayer"],
+                cwd=ROOT,
+                env=_clean_git_env(),
+                text=True,
             ).splitlines()
         )
         assert legacy <= existing, "New source modules cannot be grandfathered"
