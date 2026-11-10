@@ -576,7 +576,8 @@ def test_blocking_callable_without_qualname_is_tracked_before_start(tmp_path):
 
 
 @pytest.mark.parametrize("stage", ["scheduler", "startup-error", "formatting"])
-def test_slow_scheduler_logging_does_not_block_status(native, monkeypatch, stage):
+@pytest.mark.parametrize("journal", ["available", "unavailable"])
+def test_slow_scheduler_logging_does_not_block_status(native, monkeypatch, stage, journal):
     import asyncio
     import logging
     import threading
@@ -612,7 +613,8 @@ def test_slow_scheduler_logging_does_not_block_status(native, monkeypatch, stage
     child = Component((sys.executable, "-c", "pass"), interval=1, enabled=False)
     child.retry_at = time.monotonic() - 12
     supervisor = Supervisor({"probe": child}, path / "control.sock")
-    supervisor.diagnostics = DiagnosticSink.open(path / "operations.jsonl")
+    journal_path = path / "operations.jsonl" if journal == "available" else path / "missing" / "operations.jsonl"
+    supervisor.diagnostics = DiagnosticSink.open(journal_path, journal_optional=True)
 
     def request():
         try:
@@ -652,11 +654,15 @@ def test_slow_scheduler_logging_does_not_block_status(native, monkeypatch, stage
         asyncio.run(scenario())
     finally:
         supervisor.diagnostics.close(drain=2)
-    events = [json.loads(line) for line in (path / "operations.jsonl").read_text().splitlines()]
     assert not errors, errors
     assert replies and "probe" in replies[0]
-    assert events[0]["event"] == ("interval-delayed" if stage == "scheduler" else "component-startup-failed")
-    assert events[0]["component"] == "probe"
+    if journal == "available":
+        events = [json.loads(line) for line in journal_path.read_text().splitlines()]
+        assert events[0]["event"] == ("interval-delayed" if stage == "scheduler" else "component-startup-failed")
+        assert events[0]["component"] == "probe"
+    else:
+        assert not journal_path.exists()
+        assert "journal unavailable" in messages.pop(0)
     assert len(messages) == 1
     assert (
         "periodic component probe delayed" if stage == "scheduler" else "RuntimeError: private startup failure"

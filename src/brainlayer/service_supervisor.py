@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import math
 import os
 import signal
@@ -470,10 +469,9 @@ class Supervisor:
                         handlers[sig] = signal.getsignal(sig)
                         loop.add_signal_handler(sig, self.stop.set)
                 self.parent_birth = start_time(os.getpid())
-                try:
-                    self.diagnostics = DiagnosticSink.open(self.path.parent / "operation-events.jsonl")
-                except (OSError, RuntimeError):
-                    logging.warning("operation diagnostic sink unavailable; timeout enforcement remains active")
+                self.diagnostics = DiagnosticSink.open(
+                    self.path.parent / "operation-events.jsonl", journal_optional=True
+                )
                 self.guard = launch_guard(self.custody, self.guard_timeout, grace, self.shutdown_timeout)
                 await server.start_serving()
                 while not self.stop.is_set():
