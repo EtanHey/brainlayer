@@ -3829,7 +3829,12 @@ def run_backup(
                         flush=True,
                     )
         local = (
-            _local_upload_receipt(resolved_log_path, result, Path(staging_dir))
+            _local_upload_receipt(
+                resolved_log_path,
+                result,
+                Path(staging_dir),
+                snapshot_name=os.environ.get("BRAINLAYER_BACKUP_UPLOAD_SNAPSHOT"),
+            )
             if phase == "upload"
             else _recent_local_verified_backup(
                 resolved_log_path,
@@ -3850,7 +3855,16 @@ def run_backup(
             now = dt.datetime.fromisoformat(result["attempted_at"])
             if created and local_backup_date(created) == local_backup_date(now) and _local_snapshot_intact(local):
                 return reuse(local)
+        if (
+            phase == "upload"
+            and local is not None
+            and (expected_sha := os.environ.get("BRAINLAYER_BACKUP_UPLOAD_SHA256"))
+        ):
+            if local["local_artifact"]["sha256"] != expected_sha:
+                raise RuntimeError("Selected recovery snapshot identity changed")
         if phase == "upload" and local is None:
+            if os.environ.get("BRAINLAYER_BACKUP_UPLOAD_SNAPSHOT"):
+                raise RuntimeError("Selected recovery snapshot is no longer pending or intact")
             nothing_pending = True
             result["upload_state"] = "nothing_pending"
             return result
@@ -4278,7 +4292,9 @@ def _run_backup_process(timeout_seconds: int) -> int:
             )
 
         result = run_phase()
-        if os.environ.get("BRAINLAYER_BACKUP_PHASE") == "upload":
+        if os.environ.get("BRAINLAYER_BACKUP_PHASE") == "upload" and not os.environ.get(
+            "BRAINLAYER_BACKUP_UPLOAD_SNAPSHOT"
+        ):
             while result.get("verified"):
                 next_result = run_phase()
                 if next_result.get("snapshot") == result.get("snapshot"):
