@@ -46,11 +46,11 @@
 	<key>ThrottleInterval</key>
 	<integer>10</integer>
 	<key>Nice</key>
-	<integer>10</integer>
+	<integer>0</integer>
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Standard</string>
 	<key>LowPriorityIO</key>
-	<true/>
+	<false/>
 	<key>SoftResourceLimits</key>
 	<dict>
 		<key>NumberOfFiles</key>

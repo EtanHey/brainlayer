@@ -1293,7 +1293,7 @@ def test_busy_maintenance_hold_defers_the_step_and_the_backup_still_runs(tmp_pat
     [
         (TimeoutError, 1, 3, True),
         (TimeoutError, 2, 4, True),
-        (TimeoutError, 3, 3, False),
+        (TimeoutError, 3, 5, True),
         (PermissionError, 1, 1, False),
         (ValueError, 1, 1, False),
         (RuntimeError, 1, 1, False),
@@ -1302,11 +1302,15 @@ def test_busy_maintenance_hold_defers_the_step_and_the_backup_still_runs(tmp_pat
 def test_calendar_status_timeout_is_bounded_without_skipping_backup(
     tmp_path, monkeypatch, failure, timeouts, expected_calls, succeeds
 ):
-    """M4 Nov 8: the status read before decay timed out; upload never spawned."""
+    """M4 Nov 10: the status read before decay timed out; upload never spawned."""
     from brainlayer import maintenance_calendar as calendar
 
     monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "alerts.json"))
     monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "fixture.env"))
+
+    async def no_wait(_seconds):
+        pass
+
     calls = []
 
     def status():
@@ -1335,7 +1339,9 @@ def test_calendar_status_timeout_is_bounded_without_skipping_backup(
     ]
     directory = tmp_path / "calendar"
     result = asyncio.run(
-        run_calendar(steps, directory, tmp_path / "logs", now_fn=lambda: dt.datetime(2026, 11, 8, 5, 20))
+        run_calendar(
+            steps, directory, tmp_path / "logs", now_fn=lambda: dt.datetime(2026, 11, 8, 5, 20), sleep_fn=no_wait
+        )
     )
     assert result == (0 if succeeds else 1)
     assert len(calls) == expected_calls
@@ -1388,3 +1394,194 @@ def test_busy_inherited_maintenance_lease_still_aborts(monkeypatch):
     with pytest.raises(BlockingIOError) as raised:
         asyncio.run(enter(True))
     assert not isinstance(raised.value, calendar.HoldBusy)
+
+
+@pytest.mark.parametrize("outage,interrupt", [(8, False), (float("inf"), False), (float("inf"), True)])
+def test_status_outage_defers_safely_and_stop_interrupts_backoff(tmp_path, monkeypatch, outage, interrupt):
+    from brainlayer import maintenance_calendar as calendar
+
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "alerts.json"))
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "fixture.env"))
+    elapsed = [0.0]
+    real_event = asyncio.Event
+    events = []
+
+    def event():
+        value = real_event()
+        events.append(value)
+        return value
+
+    monkeypatch.setattr(calendar.asyncio, "Event", event)
+
+    async def advance(seconds):
+        elapsed[0] += seconds
+        if interrupt:
+            events[0].set()  # The runner's stop event, before the heartbeat event.
+        await asyncio.sleep(0)
+
+    def status():
+        if elapsed[0] < outage:
+            raise TimeoutError("private detail")
+        return {}
+
+    monkeypatch.setattr(
+        calendar.maintenance_control,
+        "control_client",
+        lambda: SimpleNamespace(path=tmp_path / "unused.sock", request=status, _disabled=lambda *_a, **_k: set()),
+    )
+    marker = tmp_path / "children"
+    steps = [
+        calendar.Step(name, (sys.executable, "-c", f"open({str(marker)!r}, 'a').write({name!r}+'\\n')"), 10)
+        for name in ("decay", "backup-daily")
+    ]
+    directory = tmp_path / "calendar"
+    result = asyncio.run(
+        run_calendar(
+            steps, directory, tmp_path / "logs", sleep_fn=advance, now_fn=lambda: dt.datetime(2026, 11, 8, 5, 20)
+        )
+    )
+    rows = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
+    finished = [row for row in rows if row["event"] == "finished"]
+    if outage == 8:
+        assert result == 0
+        assert marker.read_text().splitlines() == ["decay", "backup-daily"]
+    elif interrupt:
+        assert result == 1
+        assert not marker.exists()
+        assert elapsed[0] < 1
+    else:
+        assert result == 0
+        assert not marker.exists()
+        assert len(finished) == 2
+        assert all(row["status"] == "deferred" and row["reason"] == "supervisor-status-unavailable" for row in finished)
+        assert rows[-1]["failed"] == 0
+        assert elapsed[0] == pytest.approx(180)
+
+
+@pytest.mark.parametrize("outage,interrupt", [(8, False), (float("inf"), False), (float("inf"), True)])
+def test_runner_start_status_backoff_at_real_adapter_seam(tmp_path, monkeypatch, outage, interrupt):
+    """M1 Nov 8 failed inside adapt_commands, before any calendar step could start."""
+    import signal
+    from contextlib import asynccontextmanager
+    from dataclasses import replace
+
+    from brainlayer import maintenance_calendar as calendar
+    from brainlayer.supervisor_adapters import SupervisorCommands
+
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "alerts.json"))
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "fixture.env"))
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_SOCKET", str(tmp_path / "unused.sock"))
+    elapsed, requests, callbacks = [0.0], [], {}
+
+    def request(self, action="status", component="*", *, timeout=2, owner=""):
+        assert action == "status" and component == "*" and timeout == 2 and owner == ""
+        requests.append(elapsed[0])
+        if elapsed[0] < outage:
+            elapsed[0] += timeout  # The real socket's timeout, on a private deterministic clock.
+            raise TimeoutError("private supervisor detail")
+        return {}
+
+    monkeypatch.setattr(SupervisorCommands, "request", request)
+    monkeypatch.setattr(SupervisorCommands, "_disabled", lambda *_a, **_kw: set())
+
+    @asynccontextmanager
+    async def hold(_client, _guard, env, _step, _now):
+        yield env  # Hold mutations are outside this status-read regression.
+
+    monkeypatch.setattr(calendar, "step_hold", hold)
+
+    async def advance(seconds):
+        elapsed[0] += seconds
+        if interrupt:
+            callbacks[signal.SIGTERM]()
+        await asyncio.sleep(0)
+
+    marker = tmp_path / "children"
+    now = dt.datetime(2026, 11, 10, 5, 20)
+    plan = calendar.calendar_steps(sys.executable, "/unused", tmp_path, now.date())
+    plan = replace(
+        plan,
+        candidates=tuple(
+            replace(step, argv=(sys.executable, "-c", f"open({str(marker)!r}, 'a').write({step.name!r}+'\\n')"))
+            for step in plan.candidates
+        ),
+    )
+    directory = tmp_path / "calendar"
+    directory.mkdir(mode=0o700)
+    (directory / "state.json").write_text(json.dumps(dict(deferrals={}, last_weekly="2026-11-08")))
+    names = [step.name for step in plan.select(dt.date(2026, 11, 8))]
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        monkeypatch.setattr(loop, "add_signal_handler", lambda sig, cb: callbacks.__setitem__(sig, cb))
+        monkeypatch.setattr(loop, "remove_signal_handler", lambda sig: callbacks.pop(sig, None))
+        return await calendar.run_calendar(
+            plan, directory, tmp_path / "logs", now_fn=lambda: now, sleep_fn=advance, install_signals=True
+        )
+
+    result = asyncio.run(run())
+    journal = (directory / "runs.jsonl").read_text()
+    rows = [json.loads(line) for line in journal.splitlines()]
+    assert not any(row["event"] == "runner-error" for row in rows)
+    assert "private supervisor detail" not in journal
+    retries = [row for row in rows if row["event"] == "supervisor-status-timeout"]
+    assert all(row.get("phase") == "runner-start" for row in retries)
+    if outage == 8:
+        assert result == 0
+        assert marker.read_text().splitlines() == [name for name in names if name != "index"]
+        assert requests[:3] == pytest.approx([0, 4, 10])
+        assert len(requests) == 3 + len(names) - 1  # Index is outside its pre-04:00 window.
+        assert [row["attempt"] for row in retries] == [1, 2]
+    elif interrupt:
+        assert result == 1
+        assert not marker.exists()
+        assert len(requests) == 1
+        assert elapsed[0] < 3
+        assert rows[-1]["complete"] is False
+    else:
+        assert result == 0
+        assert not marker.exists()
+        assert len(requests) == 7
+        assert elapsed[0] == pytest.approx(104)
+        assert [row["attempt"] for row in retries] == list(range(1, 8))
+        finished = [row for row in rows if row["event"] == "finished"]
+        assert [row["step"] for row in finished] == names
+        assert all(row["status"] == "deferred" and row["reason"] == "supervisor-status-unavailable" for row in finished)
+        assert rows[-1]["failed"] == 0 and rows[-1]["deferred"] == len(names)
+        selection = calendar.failed_recovery_selection(directory)
+        assert [row["step"] for row in selection["failures"]] == names
+        assert "jsonl-backup" in selection["steps"]
+        assert "backup-daily" in [row["step"] for row in selection["deferred"]]
+        outage = 0
+        now += dt.timedelta(days=1)
+        plan = replace(plan, scheduled_date=now.date())
+        assert asyncio.run(run()) == 0
+        assert marker.read_text().splitlines() == [name for name in names if name != "index"]
+        assert set(json.loads((directory / "state.json").read_text())["deferrals"]) == {calendar.KEYS["index"]}
+    with calendar.Custody(directory):
+        pass
+
+
+@pytest.mark.parametrize("failure", [PermissionError, ValueError, RuntimeError])
+def test_runner_start_status_custody_and_protocol_errors_still_abort(tmp_path, monkeypatch, failure):
+    from brainlayer import maintenance_calendar as calendar
+    from brainlayer.supervisor_adapters import SupervisorCommands
+
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_SOCKET", str(tmp_path / "unused.sock"))
+    calls = []
+
+    def request(*_a, **_kw):
+        calls.append("status")
+        raise failure("private supervisor detail")
+
+    monkeypatch.setattr(SupervisorCommands, "request", request)
+    marker = tmp_path / "child"
+    step = calendar.Step("backup-daily", (sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"), 10)
+    directory = tmp_path / "calendar"
+    with pytest.raises(failure):
+        asyncio.run(calendar.run_calendar([step], directory, tmp_path / "logs"))
+    assert calls == ["status"]
+    assert not marker.exists()
+    journal = (directory / "runs.jsonl").read_text()
+    assert "runner-error" in journal and failure.__name__ in journal
+    assert "supervisor-status-timeout" not in journal and "private supervisor detail" not in journal
