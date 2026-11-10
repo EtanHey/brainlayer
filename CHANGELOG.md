@@ -40,6 +40,16 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.96] - 2026-11-10
+
+### Hardening
+
+- fix(alerts): a replacing step's success clears the replaced step's alert (#1744)
+- fix(ci): the allowlist ratchet reads its base from history it actually has (#1747)
+- fix(calendar): retry a pending database backup upload the same day (#1743)
+- fix(doctor): version check compares what is installed, not dev checkouts (#1746)
+- fix(supervisor): keep status responsive and defer transport outages (#1749)
+
 ## [1.5.95] - 2026-11-09
 
 ### Search
