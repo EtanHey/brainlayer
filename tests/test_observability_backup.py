@@ -369,11 +369,19 @@ def test_usable_expiring_consent_does_not_force_backup_error(tmp_path, monkeypat
         )
     )
     alerts.write_text(json.dumps({"drive-consent": "prior consent episode"}))
+    refresh_calls = []
+    before = token.read_bytes()
     status = drive_credentials.credential_status(
         token_path=token,
         client_path=client,
         now=NOW,
-        credentials_class=lambda **_: SimpleNamespace(valid=True, expired=False, expiry=None),
+        credentials_class=lambda **values: SimpleNamespace(
+            token=values["token"],
+            valid=True,
+            expired=False,
+            expiry=values["expiry"],
+            refresh=lambda request: refresh_calls.append(request),
+        ),
         request_factory=object,
         alert_reporter=lambda key, reason: job_alerts.report(key, reason, path=alerts, notify=lambda _: None),
     )
@@ -384,6 +392,8 @@ def test_usable_expiring_consent_does_not_force_backup_error(tmp_path, monkeypat
 
     result = build_backups_section(env=env, record_input=record, now=NOW)
 
+    assert len(refresh_calls) == 1
+    assert token.read_bytes() == before
     assert status["state"] == "expiring"
     assert result["freshness"] == "fresh"
     assert result["error_type"] is None
