@@ -112,6 +112,11 @@ final class BrainBarDriveAuthTests: XCTestCase {
         XCTAssertEqual(DriveAuthStatus.parse(result(#"{"state":"sparkly"}"#)).reason, "unrecognised Drive state \"sparkly\"")
     }
 
+    func test_missing_deadline_is_explicit() {
+        let valid = present(.init(state: .valid, reason: nil, expiresAt: nil))
+        XCTAssertEqual(valid.line, "Connected; no grant deadline reported")
+    }
+
     func test_each_status_state_presents_what_to_do() {
         let valid = present(.init(state: .valid, reason: nil, expiresAt: date("2026-10-05T09:00:00Z")))
         XCTAssertEqual(valid.line, "Connected: reconnect by 2026-10-05T09:00:00Z")
@@ -133,6 +138,7 @@ final class BrainBarDriveAuthTests: XCTestCase {
         let invalid = present(.init(state: .invalid, reason: "invalid_grant", expiresAt: nil))
         XCTAssertEqual(invalid.line, "Drive access expired or was revoked. Backups can't upload.")
         XCTAssertTrue(invalid.showsReconnect && invalid.needsAttention)
+        XCTAssertEqual(invalid.tone, .attention)
 
         let unknown = present(.init(state: .unknown, reason: "brainlayer CLI not found", expiresAt: nil))
         XCTAssertEqual(unknown.line, "Drive status unknown — brainlayer CLI not found")

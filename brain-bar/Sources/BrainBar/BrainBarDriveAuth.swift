@@ -111,7 +111,7 @@ struct DriveAuthPresentation: Equatable, Sendable {
         }
         switch state {
         case .valid:
-            line = status.expiresAt.map { "Connected: reconnect by \(formatDate($0))" } ?? "Connected"
+            line = status.expiresAt.map { "Connected: reconnect by \(formatDate($0))" } ?? "Connected; no grant deadline reported"
             detail = nil
             tone = .connected
             showsReconnect = false
