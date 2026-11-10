@@ -870,8 +870,8 @@ def test_google_response_controls_lifetime_through_real_refresh(tmp_path, second
     )
     drive_credentials.credential_status(**kwargs)
     stored = json.loads(token.read_text())
-    assert stored["refresh_expires_at"] == (
-        "permanent" if seconds is None else (now + timedelta(seconds=seconds)).isoformat()
+    assert stored.get("refresh_expires_at") == (
+        None if seconds is None else (now + timedelta(seconds=seconds)).isoformat()
     )
     status = drive_credentials.credential_status(**kwargs)
     assert status["state"] == ("valid" if seconds is None else "expiring")
@@ -906,3 +906,37 @@ def test_token_response_observer_never_fails_the_refresh_on_an_unreadable_body()
 
     assert observed(method="POST", url="https://oauth2.googleapis.com/token") is response
     assert observed.token_response is None
+
+
+@pytest.mark.parametrize("known_deadline", [False, True])
+@pytest.mark.parametrize("reply", [{}, {"refresh_token_expires_in": None}])
+def test_refresh_omission_never_infers_permanent(tmp_path, known_deadline, reply):
+    from brainlayer import drive_credentials
+
+    token, client = tmp_path / "token.json", tmp_path / "client.json"
+    _token(token)
+    _client(client)
+    now = datetime.now(UTC)
+    deadline = (now + timedelta(days=5)).isoformat()
+    data = json.loads(token.read_text())
+    data["expiry"] = (now - timedelta(hours=1)).isoformat()
+    if known_deadline:
+        data["refresh_expires_at"] = deadline
+    token.write_text(json.dumps(data))
+
+    def endpoint(**kwargs):
+        assert kwargs["url"] == "https://example.invalid/token"
+        return SimpleNamespace(
+            status=200, data=json.dumps({"access_token": "new", "expires_in": 86400, **reply}).encode()
+        )
+
+    status = drive_credentials.credential_status(
+        token_path=token,
+        client_path=client,
+        request_factory=lambda: endpoint,
+        alert_reporter=lambda *_: None,
+        now=now,
+    )
+    stored = json.loads(token.read_text())
+    assert stored.get("refresh_expires_at") == (deadline if known_deadline else None)
+    assert status["expires_at"] == (deadline if known_deadline else None)
