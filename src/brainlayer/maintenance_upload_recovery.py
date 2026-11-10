@@ -29,7 +29,15 @@ def pending_upload_step(plan, directory):
     latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
     state_path = directory / "upload-recovery.json"
     attempts = json.loads(state_path.read_text()) if state_path.exists() else {}
-    if not isinstance(attempts, dict) or any(type(n) is not int or n < 0 for n in attempts.values()):
+    if not isinstance(attempts, dict) or any(
+        not isinstance(entry, dict)
+        or set(entry) != {"attempts", "bytes_confirmed"}
+        or type(entry["attempts"]) is not int
+        or not 0 <= entry["attempts"] <= 2
+        or type(entry["bytes_confirmed"]) is not int
+        or entry["bytes_confirmed"] < 0
+        for entry in attempts.values()
+    ):
         raise ValueError("Invalid upload recovery attempts")
     exhausted = False
     for receipt in reversed(list(latest.values())):
@@ -52,7 +60,18 @@ def pending_upload_step(plan, directory):
         # Identity is verified again by the upload child under its staging lock. The selector
         # uses the durable verification, never spends minutes hashing on the calendar heartbeat.
         key = json.dumps([str(path.resolve()), artifact["sha256"]])
-        if attempts.get(key, 0) >= 2:
+        committed = receipt.get("bytes_confirmed", 0)
+        previous = attempts.get(key, dict(attempts=0, bytes_confirmed=0))
+        if (
+            type(committed) is not int
+            or not 0 <= committed <= path.stat().st_size
+            or previous["bytes_confirmed"] > path.stat().st_size
+        ):
+            raise ValueError("Invalid committed upload bytes")
+        # A reservation counts until durable Drive progress proves that attempt advanced.
+        # Compare before testing exhaustion so a second advancing attempt can unlock a third.
+        count = 0 if committed > previous["bytes_confirmed"] else previous["attempts"]
+        if count >= 2:
             exhausted = True
             continue
         step = next(s for s in plan.candidates if s.name == "backup-daily")
@@ -68,19 +87,19 @@ def pending_upload_step(plan, directory):
                     "BRAINLAYER_BACKUP_TIMEOUT_SECONDS": "3600",
                 },
             ),
-            (state_path, attempts, key),
+            (state_path, attempts, key, dict(attempts=count + 1, bytes_confirmed=committed)),
             "pending-upload",
         )
     return None, None, "attempts-exhausted" if exhausted else "no-pending-local-snapshot"
 
 
 def reserve_upload_attempt(reservation):
-    path, attempts, key = reservation
-    attempts[key] = attempts.get(key, 0) + 1
+    path, attempts, key, entry = reservation
+    attempts[key] = entry
     _atomic_write(path, attempts)
     fd = os.open(path.parent, os.O_RDONLY)
     try:
         os.fsync(fd)
     finally:
         os.close(fd)
-    return attempts[key]
+    return entry["attempts"]

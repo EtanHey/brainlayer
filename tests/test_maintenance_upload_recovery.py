@@ -36,7 +36,15 @@ metadata = dict(id='remote', name=path.name, size=str(path.stat().st_size),
 service = SimpleNamespace(files=lambda: SimpleNamespace(get=lambda **k: SimpleNamespace(execute=lambda **k: metadata)))
 b.build_drive_service = lambda *a: service
 b.verify_sqlite_backup_artifact = lambda *a, **k: dict(verified=True, verification_mode='quick', local_md5=b._md5_file(path))
+prior = [r for r in b._read_backup_receipts(Path(os.environ['BRAINLAYER_BACKUP_LOG_PATH'])) if r.get('snapshot') == str(path)][-1]
 def upload(*a, **k):
+    if os.environ.get('INTERRUPT_UPLOAD') == '1':
+        os._exit(23)
+    if 'ADVANCE_UPLOAD' in os.environ:
+        confirmed = min(path.stat().st_size, prior.get('bytes_confirmed', 0) + int(os.environ['ADVANCE_UPLOAD']))
+        k['progress_callback']('https://www.googleapis.com/upload/drive/v3/files?upload_id=fixture', confirmed)
+        if confirmed < path.stat().st_size:
+            raise b.BackupTimeoutError('isolated per-attempt work budget exhausted')
     if os.environ.get('FAIL_UPLOAD') == '1':
         raise RuntimeError('isolated upload failure')
     return metadata
@@ -161,7 +169,9 @@ def test_failed_child_consumes_attempt_and_retains_snapshot(upload_lane, monkeyp
     assert run(upload_lane) == 1
     assert snapshot.exists()
     assert runner.rows()[-1]["failed"] == 1
-    assert list(json.loads((runner.directory / "upload-recovery.json").read_text()).values()) == [1]
+    assert list(json.loads((runner.directory / "upload-recovery.json").read_text()).values()) == [
+        dict(attempts=1, bytes_confirmed=0)
+    ]
 
 
 def test_supervisor_registers_hourly_upload_recovery(tmp_path, monkeypatch):
@@ -235,3 +245,103 @@ def test_real_upload_child_honors_selected_artifact(upload_lane):
     latest = {r["snapshot"]: r for r in map(json.loads, log.read_text().splitlines()) if "snapshot" in r}
     assert latest[str(selected)]["uploaded"] is True
     assert latest[str(snapshot)]["uploaded"] is False
+
+
+@pytest.fixture
+def repeating_upload_lane(upload_lane, monkeypatch):
+    from types import SimpleNamespace
+
+    lane, _, _, _ = upload_lane
+
+    def guard(*_args, **_kwargs):
+        stream = (lane.directory.parent / "heartbeat").open("ab", buffering=0)
+        return SimpleNamespace(
+            pid=12345,
+            stdin=stream,
+            lease_channel=SimpleNamespace(close=lambda: None),
+            poll=lambda: 0 if stream.closed else None,
+        )
+
+    monkeypatch.setattr(calendar, "launch_guard", guard)
+    return upload_lane
+
+
+@pytest.mark.parametrize("initial_stall", [False, True])
+def test_slow_upload_progress_can_complete_after_more_than_two_attempts(
+    repeating_upload_lane, monkeypatch, initial_stall
+):
+    lane, _, snapshot, log = repeating_upload_lane
+    if initial_stall:
+        monkeypatch.setenv("ADVANCE_UPLOAD", "0")
+        assert run(repeating_upload_lane) == 1
+    monkeypatch.setenv("ADVANCE_UPLOAD", "5")
+    for expected in (5, 10, 15):
+        assert run(repeating_upload_lane) == 1
+        latest = [r for r in backup._read_backup_receipts(log) if r.get("snapshot") == str(snapshot)][-1]
+        assert latest["bytes_confirmed"] == expected
+    assert run(repeating_upload_lane) == 0
+    latest = [r for r in backup._read_backup_receipts(log) if r.get("snapshot") == str(snapshot)][-1]
+    assert latest["verified"] is True and latest["uploaded"] is True
+    reservations = [r for r in lane.rows() if r["event"] == "upload-recovery-attempt"]
+    assert len(reservations) == (5 if initial_stall else 4)
+    assert [r["attempt"] for r in reservations] == ([1, 2, 1, 1, 1] if initial_stall else [1, 1, 1, 1])
+    state = json.loads((lane.directory / "upload-recovery.json").read_text())
+    assert list(state.values()) == [dict(attempts=1, bytes_confirmed=15)]
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_two_real_children_without_progress_exhaust_cap(repeating_upload_lane, monkeypatch, interrupted):
+    lane, _, _, _ = repeating_upload_lane
+    monkeypatch.setenv("INTERRUPT_UPLOAD" if interrupted else "ADVANCE_UPLOAD", "1" if interrupted else "0")
+    assert run(repeating_upload_lane) == 1
+    assert run(repeating_upload_lane) == 1
+    assert run(repeating_upload_lane) == 0
+    assert len([r for r in lane.rows() if r["event"] == "spawn"]) == 2
+    assert lane.rows()[-1]["reason"] == "attempts-exhausted"
+    state = json.loads((lane.directory / "upload-recovery.json").read_text())
+    assert list(state.values()) == [dict(attempts=2, bytes_confirmed=0)]
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        1,
+        True,
+        None,
+        {},
+        dict(attempts=True, bytes_confirmed=0),
+        dict(attempts=-1, bytes_confirmed=0),
+        dict(attempts=3, bytes_confirmed=0),
+        dict(attempts=1, bytes_confirmed=True),
+        dict(attempts=1, bytes_confirmed=-1),
+        dict(attempts=1, bytes_confirmed=1.5),
+        dict(attempts=1, bytes_confirmed=0, extra=1),
+    ],
+)
+def test_invalid_attempt_state_fails_closed(upload_lane, entry):
+    from brainlayer.maintenance_upload_recovery import pending_upload_step
+
+    lane, plan, snapshot, _ = upload_lane
+    state = lane.directory / "upload-recovery.json"
+    state.write_text(json.dumps({"snapshot-key": entry}))
+    before = state.read_bytes()
+    with calendar.Custody(lane.directory), pytest.raises(ValueError, match="Invalid upload recovery attempts"):
+        pending_upload_step(plan, lane.directory)
+    assert state.read_bytes() == before and snapshot.exists()
+
+
+@pytest.mark.parametrize("committed", [True, -1, 1.5, "5", 999999])
+def test_invalid_committed_byte_receipt_cannot_reset_attempts(upload_lane, committed):
+    from brainlayer.maintenance_upload_recovery import pending_upload_step, reserve_upload_attempt
+
+    lane, plan, _, log = upload_lane
+    _, reservation, _ = pending_upload_step(plan, lane.directory)
+    reserve_upload_attempt(reservation)
+    receipt = json.loads(log.read_text())
+    receipt["bytes_confirmed"] = committed
+    log.write_text(json.dumps(receipt) + "\n")
+    state = lane.directory / "upload-recovery.json"
+    before = state.read_bytes()
+    with calendar.Custody(lane.directory), pytest.raises(ValueError, match="Invalid committed upload bytes"):
+        pending_upload_step(plan, lane.directory)
+    assert state.read_bytes() == before
