@@ -1552,7 +1552,6 @@ def test_runner_start_status_backoff_at_real_adapter_seam(tmp_path, monkeypatch,
         assert [row["step"] for row in selection["failures"]] == names
         assert "jsonl-backup" in selection["steps"]
         assert "backup-daily" in [row["step"] for row in selection["deferred"]]
-        # Next night's normal admission sees the recorded deferrals and clears them on success.
         outage = 0
         now += dt.timedelta(days=1)
         plan = replace(plan, scheduled_date=now.date())

@@ -12,6 +12,7 @@ import queue
 import stat
 import threading
 import time
+import traceback
 
 
 class DiagnosticSink:
@@ -58,6 +59,19 @@ class DiagnosticSink:
                     continue
                 if event is None:
                     break
+                exc_info = event.pop("exc_info", None)
+                if exc_info is not None:
+                    event["traceback"] = "".join(traceback.format_exception(*exc_info))[-2048:]
+                logger = logging.getLogger("brainlayer.service_supervisor")
+                if event.get("event") == "interval-delayed":
+                    logger.warning(
+                        "periodic component %s delayed %.1fs: %s",
+                        event["component"],
+                        event["delay_s"],
+                        event["reason"],
+                    )
+                elif event.get("event") == "component-startup-failed":
+                    logger.error("supervisor component startup failed\n%s", event.get("traceback") or event["error"])
                 row = (json.dumps(event, sort_keys=True) + "\n").encode()
                 if len(row) > min(4096, self.capacity):
                     continue

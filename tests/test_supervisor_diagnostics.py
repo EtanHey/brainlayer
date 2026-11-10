@@ -3,6 +3,33 @@
 import json
 import os
 
+import pytest
+
+
+@pytest.mark.parametrize("failure", ["io", "oversized"])
+def test_human_warning_survives_journal_failure(tmp_path, monkeypatch, caplog, failure):
+    from brainlayer import supervisor_diagnostics as module
+
+    sink = module.DiagnosticSink.open(tmp_path / "events.jsonl")
+    write = os.write
+
+    def failed_write(fd, data):
+        if fd == sink.fd:
+            raise OSError("private journal failure")
+        return write(fd, data)
+
+    if failure == "io":
+        monkeypatch.setattr(module.os, "write", failed_write)
+    sink.emit(
+        event="interval-delayed",
+        component="probe",
+        delay_s=12,
+        reason="scheduler-gap",
+        padding="x" * (9000 if failure == "oversized" else 0),
+    )
+    sink.close(drain=1)
+    assert "periodic component probe delayed 12.0s: scheduler-gap" in caplog.text
+
 
 def test_diagnostic_sink_is_capped_and_blocked_writer_cannot_block_emit(tmp_path, monkeypatch):
     import threading

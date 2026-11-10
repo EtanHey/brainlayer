@@ -1,4 +1,4 @@
-"""Explicitly started resident supervisor; no production commands or launchd wiring."""
+"""Resident job supervision with guarded child custody and a responsive control socket."""
 
 from __future__ import annotations
 
@@ -252,7 +252,6 @@ class Supervisor:
             pause_owner=child.pause_owner,
             error=child.error,
         )
-        logging.getLogger(__name__).warning("periodic component %s delayed %.1fs: %s", name, delay, reason)
 
     def _start(self, child: Component):
         gate = None
@@ -334,7 +333,14 @@ class Supervisor:
                 try:
                     child.startup.result()
                 except Exception as exc:
-                    logging.getLogger(__name__).exception("supervisor component startup failed")
+                    emit(
+                        self.diagnostics,
+                        event="component-startup-failed",
+                        component=next(name for name, component in self.components.items() if component is child),
+                        exception=type(exc).__name__,
+                        error=str(exc),
+                        exc_info=(type(exc), exc, exc.__traceback__),
+                    )
                     self._failed(child, f"startup failed: {exc}")
                 finally:
                     child.startup = None
@@ -365,7 +371,7 @@ class Supervisor:
                         child.failures, child.error = 0, ""
                 else:
                     self._failed(child, f"exited {child.process.returncode}")
-                child.cleanup = asyncio.create_task(self._reap(child))  # Never under the control lock.
+                child.cleanup = asyncio.create_task(self._reap(child))
             if (
                 child.interval
                 and child.process
@@ -473,7 +479,6 @@ class Supervisor:
                 while not self.stop.is_set():
                     if self.guard.poll() is not None:
                         raise RuntimeError("supervisor heartbeat guard exited")
-                    # A responsive loop may wait for slow I/O, but a stuck worker has a finite budget.
                     if self._heartbeat_allowed():
                         self._send("H")
                     self._tick()

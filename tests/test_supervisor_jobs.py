@@ -64,6 +64,10 @@ def test_independent_wal_fallback_registered_once_without_calendar(tmp_path, mon
     assert child.env["BRAINLAYER_DB"] == str(tmp_path / "db")
     assert child.env["BRAINLAYER_BACKUP_STAGING_DIR"] == str(tmp_path / "backups")
     assert sum(c.argv == child.argv for c in components.values()) == 1
+    expected_policy = dict(Nice=10, ProcessType="Background", LowPriorityIO=True) if sys.platform == "darwin" else {}
+    assert child.policy == expected_policy
+    if sys.platform == "darwin":
+        assert components["brainbar-activation"].policy == expected_policy
     inherited = load_components(manifest(tmp_path), tmp_path / "control.sock")["wal-checkpoint-fallback"]
     assert inherited.env["BRAINLAYER_DB"] == str(tmp_path / "parent-db")
 
@@ -161,7 +165,6 @@ def test_successful_interval_waits_without_failure_backoff_or_catchup(short_path
             assert child.last_exit_code == 0 and child.failures == 0
             await asyncio.sleep(0.2)
             assert child.starts == 1 and child.process is None
-            # A missed interval starts once; its next deadline is in the future.
             child.retry_at = time.monotonic() - 100
             s._tick()
             await s._wait_start(child)
@@ -222,6 +225,44 @@ def test_loader_preserves_child_resource_policy(tmp_path):
         SoftResourceLimits={"NumberOfFiles": 4096}, Nice=10, LowPriorityIO=True, ProcessType="Background"
     )
     assert child.backoff == 5
+
+
+def test_control_plane_has_foreground_policy():
+    import plistlib
+
+    template = Path(__file__).resolve().parents[1] / "scripts/launchd/com.brainlayer.daemon.plist"
+    policy = plistlib.loads(template.read_bytes())
+    assert (policy["Nice"], policy["ProcessType"], policy["LowPriorityIO"]) == (0, "Standard", False)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Darwin control-plane resource policy")
+def test_control_plane_policy_is_foreground_in_real_child(tmp_path):
+    import plistlib
+
+    from brainlayer.supervisor_guard import gated_spawn
+    from brainlayer.supervisor_jobs import resource_policy
+
+    template = Path(__file__).resolve().parents[1] / "scripts/launchd/com.brainlayer.daemon.plist"
+    policy = resource_policy(plistlib.loads(template.read_bytes()))
+    code = (
+        "import ctypes,json,os; print(json.dumps(dict(nice=os.getpriority(os.PRIO_PROCESS,0),"
+        "background=os.getpriority(4,0),io=ctypes.CDLL(None).getiopolicy_np(0,0))))"
+    )
+    output = tmp_path / "policy.json"
+    with output.open("wb") as stream:
+        child, gate = gated_spawn((sys.executable, "-c", code), os.environ, stream, None, policy=policy)
+    try:
+        os.write(gate, b"R")
+        os.close(gate)
+        gate = None
+        assert child.wait(timeout=10) == 0
+        assert json.loads(output.read_text()) == dict(nice=0, background=0, io=0)
+    finally:
+        if gate is not None:
+            os.close(gate)
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
 
 
 def test_repository_managed_plist_keys_and_policy_are_preserved(short_path):
@@ -454,7 +495,7 @@ def test_overdue_periodic_job_reports_blocker_without_log_storm(tmp_path, monkey
             for _ in range(10):
                 s._tick()
             assert [(r["component"], r["reason"], r["delay_s"]) for r in rows] == [("health-check", blocked, 100)]
-            assert f"periodic component health-check delayed 100.0s: {blocked}" in caplog.text
+            assert caplog.text == ""
             clock[0] += 60
             s._tick()
             assert len(rows) == 2
