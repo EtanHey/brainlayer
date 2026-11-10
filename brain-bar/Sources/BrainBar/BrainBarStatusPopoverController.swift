@@ -480,11 +480,15 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         if let model = runtime.jobsModel { health = model.publishedStatus.healthVerdict ?? model.healthBadge?.healthVerdict }
 #endif
         let verdict = currentVerdict
+        var items = verdict.currentItems
+        if verdict.dot != .green && items.isEmpty {
+            items = [.init(text: "Health check: \(verdict.dot.rawValue)", kind: .notice)]
+        }
         let receipt = BrainBarUIStatusReceipt(renderedAt: Date(), dot: verdict.dot,
             source: verdict.dotOverride == nil || verdict.healthVerdictIsStale ? "fallback" : "verdict", verdictEvaluatedAt: health?.evaluatedAt,
-            reasons: verdict.currentRows,
+            reasons: items.map(\.text),
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
-            gitCommit: Bundle.main.object(forInfoDictionaryKey: "GitCommit") as? String ?? "unknown")
+            gitCommit: Bundle.main.object(forInfoDictionaryKey: "GitCommit") as? String ?? "unknown", items: items)
         statusPublisher.publish(receipt, to: BrainBarUIStatusReceipt.url(dbPath: dbPath))
     }
 
@@ -531,6 +535,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     func setLogPathsForTesting(_ paths: BrainBarBackupSources.Paths) { logPathsOverride = paths }
 #endif
     func flushStatusReceiptForTesting() { statusPublisher.flush() }
+    var statusVerdictForTesting: BrainBarStatusVerdict { currentVerdict }
     var statusDotForTesting: Bool { currentVerdict.needsAttention }
     /// The badge input retained when the real status-item image was rendered; nil before rendering.
     var renderedStatusDotForTesting: Bool? { lastRenderedIcon?.badgeOn }

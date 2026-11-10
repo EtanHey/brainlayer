@@ -20,8 +20,7 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
 
     var needsAttention: Bool { !attention.isEmpty }
 
-    /// The Dashboard headline: a count only for dot issues; notices are neutral; "All good" only
-    /// when everything was measured and nothing is pending.
+    /// Only attention rows count as things that need you. Notices remain neutral.
     var dashboardStatus: BrainBarOnePageStatus {
         if let dotOverride {
             let headline = overrideHeadline(dotOverride)
@@ -30,7 +29,7 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
                 : details.joined(separator: "; "), tone: dotOverride == .green ? .green : .amber)
         }
         if !attention.isEmpty {
-            return .init(headline: currentRowCount == 1 ? "1 thing needs you" : "\(currentRowCount) things need you",
+            return .init(headline: attentionRowCount == 1 ? "1 thing needs you" : "\(attentionRowCount) things need you",
                          reason: currentRows.joined(separator: "; "), tone: .amber)
         }
         if !notices.isEmpty || !oldNotices.isEmpty {
@@ -47,11 +46,14 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
     }
 
     var currentRowCount: Int { currentRows.count }
+    var attentionRowCount: Int { Set(attention).count }
+    var currentItems: [BrainBarUIStatusItem] {
+        currentRows.map { .init(text: $0, kind: attention.contains($0) ? .attention : .notice) }
+    }
 
-    /// The menu and Dashboard headline under a verdict dot: a true count of the rows below it.
-    /// Without any row it falls back to the dot's own words.
+    /// A non-green dot without attention rows uses the dot's own words.
     func overrideHeadline(_ dot: BrainBarRenderedDot) -> String {
-        let count = currentRowCount
+        let count = attentionRowCount
         switch dot {
         case .green: return safeHeadline
         case .red, .amber:
@@ -119,6 +121,12 @@ struct BrainBarHealthVerdict: Codable, Equatable, Sendable {
     }
 }
 
+struct BrainBarUIStatusItem: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Sendable { case attention, notice }
+    let text: String
+    let kind: Kind
+}
+
 struct BrainBarUIStatusReceipt: Codable, Equatable, Sendable {
     let renderedAt: Date
     let dot: BrainBarRenderedDot
@@ -127,10 +135,11 @@ struct BrainBarUIStatusReceipt: Codable, Equatable, Sendable {
     let reasons: [String]
     let appVersion: String
     let gitCommit: String
+    var items: [BrainBarUIStatusItem] = []
 
     func hasSameContent(as other: Self) -> Bool {
         dot == other.dot && source == other.source && verdictEvaluatedAt == other.verdictEvaluatedAt
-            && reasons == other.reasons && appVersion == other.appVersion && gitCommit == other.gitCommit
+            && reasons == other.reasons && items == other.items && appVersion == other.appVersion && gitCommit == other.gitCommit
     }
 
     static func url(dbPath: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
@@ -144,6 +153,8 @@ struct BrainBarUIStatusReceipt: Codable, Equatable, Sendable {
             "rendered_at": iso.string(from: renderedAt), "dot": dot.rawValue, "source": source,
             "verdict_evaluated_at": verdictEvaluatedAt.map { iso.string(from: $0) } as Any? ?? NSNull(),
             "reasons": reasons, "app_version": appVersion, "git_commit": gitCommit,
+            "items": items.map { ["text": $0.text, "kind": $0.kind.rawValue] },
+            "attention_count": items.filter { $0.kind == .attention }.count,
         ]
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]).write(to: url, options: .atomic)

@@ -84,10 +84,23 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             now: BrainBarOnePageTestFixture.now
         )
         XCTAssertNil(presentation.indexedToday)
-        XCTAssertEqual(presentation.indexedTodayUnavailableText, "Indexed today could not be read: no sample")
+        XCTAssertEqual(presentation.indexedTodayUnavailableText, "not measured yet today")
         // #965: agent writes come from the DB, not this unmeasured document.
         XCTAssertEqual(presentation.agentWritesCount, 175)
         XCTAssertEqual(presentation.agentWritesText, "brain_store calls by agents, last 24 h")
+    }
+
+    @MainActor
+    func testFailedStoresReadPreservesDeadlineAndHandlesEmptyReason() throws {
+        for reason in ["database query deadline exceeded (20s budget)", "  "] {
+            let presentation = try makePresentation(
+                result: BrainBarOnePageTestFixture.unmeasuredResult(reason: reason),
+                now: BrainBarOnePageTestFixture.now)
+            XCTAssertNil(presentation.indexedToday)
+            XCTAssertEqual(presentation.indexedTodayUnavailableText,
+                reason == "  " ? "Indexed today unavailable: stores measurement unavailable"
+                    : "Indexed today could not be read: \(reason)")
+        }
     }
 
     @MainActor
@@ -524,6 +537,10 @@ enum BrainBarOnePageTestFixture {
         ))
     }
 
+    static func unmeasuredResult(reason: String) throws -> ObservabilityReadResult {
+        .readable(try document(byHour: nil, measured: false, storesReason: reason))
+    }
+
     static func staleUnmeasuredResult() throws -> ObservabilityReadResult {
         .readable(try document(byHour: nil, generatedAt: now.addingTimeInterval(-900), measured: false))
     }
@@ -569,7 +586,8 @@ enum BrainBarOnePageTestFixture {
         byHour: [ObservabilityDocument.HourBucket]?,
         generatedAt: Date = now,
         backupsVerified: Bool = true,
-        measured: Bool = true
+        measured: Bool = true,
+        storesReason: String = "no sample"
     ) throws -> ObservabilityDocument {
         let url = try XCTUnwrap(Bundle.module.url(
             forResource: "observability-main-58849a70",
@@ -586,7 +604,7 @@ enum BrainBarOnePageTestFixture {
             windowHours: base.windowHours,
             stores: .init(
                 state: measured ? "measured" : "unmeasurable",
-                reason: measured ? "" : "no sample",
+                reason: measured ? "" : storesReason,
                 inputs: [],
                 totalChunks: measured ? 797_727 : nil,
                 inWindow: measured ? .init(count: 18, byHour: byHour) : nil

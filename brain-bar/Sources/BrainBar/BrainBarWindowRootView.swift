@@ -715,7 +715,13 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
             indexedToday = nil
             if case let .readable(document) = observability {
                 let reason = document.stores.reason.trimmingCharacters(in: .whitespacesAndNewlines)
-                indexedTodayUnavailableText = "Indexed today could not be read: \(reason.isEmpty ? "stores measurement unavailable" : reason)"
+                if reason == "no sample" {
+                    indexedTodayUnavailableText = "not measured yet today"
+                } else if reason.isEmpty {
+                    indexedTodayUnavailableText = "Indexed today unavailable: stores measurement unavailable"
+                } else {
+                    indexedTodayUnavailableText = "Indexed today could not be read: \(reason)"
+                }
             } else if case let .unreadable(reason) = observability {
                 indexedTodayUnavailableText = "Indexed today unavailable: \(reason)"
             } else {
