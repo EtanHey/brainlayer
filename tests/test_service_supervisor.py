@@ -140,7 +140,6 @@ def test_startup_reports_early_supervisor_death(native, monkeypatch):
 
 
 def test_nonzero_shutdown_failure_carries_child_stderr(native, monkeypatch):
-    # Negative control: a known child error must reach the shutdown failure output (#1362).
     boot = BOOT.replace(
         "asyncio.run(main())", "try: asyncio.run(main())\nfinally: raise RuntimeError('known child shutdown error')"
     )
@@ -574,6 +573,100 @@ def test_blocking_callable_without_qualname_is_tracked_before_start(tmp_path):
         assert not supervisor.operations
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stage", ["scheduler", "startup-error", "formatting"])
+@pytest.mark.parametrize("journal", ["available", "unavailable"])
+def test_slow_scheduler_logging_does_not_block_status(native, monkeypatch, stage, journal):
+    import asyncio
+    import logging
+    import threading
+    import traceback
+
+    from brainlayer.supervisor_adapters import SupervisorCommands
+    from brainlayer.supervisor_diagnostics import DiagnosticSink
+
+    path = native[0]
+    ready, release = threading.Event(), threading.Event()
+    replies, errors, messages = [], [], []
+    original_format = traceback.format_exception
+
+    def blocked_format(*args, **kwargs):
+        ready.set()
+        assert release.wait(5)
+        return original_format(*args, **kwargs)
+
+    if stage == "formatting":
+        monkeypatch.setattr(traceback, "format_exception", blocked_format)
+
+    class BlockedLog(logging.Handler):
+        def emit(self, record):
+            messages.append(record.getMessage())
+            if stage != "formatting":
+                ready.set()
+                assert release.wait(5)
+
+    logger = logging.getLogger("brainlayer.service_supervisor")
+    monkeypatch.setattr(logger, "handlers", [BlockedLog()])
+    monkeypatch.setattr(logger, "propagate", False)
+    monkeypatch.setattr(logger, "level", logging.WARNING)
+    child = Component((sys.executable, "-c", "pass"), interval=1, enabled=False)
+    child.retry_at = time.monotonic() - 12
+    supervisor = Supervisor({"probe": child}, path / "control.sock")
+    journal_path = path / "operations.jsonl" if journal == "available" else path / "missing" / "operations.jsonl"
+    supervisor.diagnostics = DiagnosticSink.open(journal_path, journal_optional=True)
+
+    def request():
+        try:
+            assert ready.wait(5)
+            replies.append(SupervisorCommands(supervisor.path, lambda _: None).request())
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            release.set()
+
+    def report():
+        try:
+            if stage == "scheduler":
+                supervisor._report_interval_delay(child, "scheduler-gap")
+            else:
+                child.interval = 0
+                child.startup = asyncio.get_running_loop().create_future()
+                child.startup.set_exception(RuntimeError("private startup failure"))
+                supervisor._tick()
+        finally:
+            ready.set()
+
+    async def scenario():
+        async with await asyncio.start_unix_server(supervisor._control, path=str(supervisor.path)):
+            supervisor.path.chmod(0o600)
+            client = threading.Thread(target=request)
+            client.start()
+            asyncio.get_running_loop().call_soon(report)
+            try:
+                await asyncio.to_thread(client.join, 6)
+                assert not client.is_alive()
+            finally:
+                release.set()
+                client.join(1)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        supervisor.diagnostics.close(drain=2)
+    assert not errors, errors
+    assert replies and "probe" in replies[0]
+    if journal == "available":
+        events = [json.loads(line) for line in journal_path.read_text().splitlines()]
+        assert events[0]["event"] == ("interval-delayed" if stage == "scheduler" else "component-startup-failed")
+        assert events[0]["component"] == "probe"
+    else:
+        assert not journal_path.exists()
+        assert "journal unavailable" in messages.pop(0)
+    assert len(messages) == 1
+    assert (
+        "periodic component probe delayed" if stage == "scheduler" else "RuntimeError: private startup failure"
+    ) in messages[0]
 
 
 def test_supervisor_guard_timeout_defaults_to_120_and_reads_override(tmp_path, monkeypatch):

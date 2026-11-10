@@ -22,6 +22,7 @@ from .supervisor_adapters import ALIASES
 TRANSCRIPT_RECOVERY_RUN_TIMEOUT = 7500
 TRANSCRIPT_RECOVERY_EXIT_TIMEOUT = 60
 UPLOAD_RECOVERY_TIMEOUT = 3690
+_BACKGROUND_JOB_POLICY = dict(Nice=10, ProcessType="Background", LowPriorityIO=True)
 RESOURCE_POLICY_KEYS = ("SoftResourceLimits", "Nice", "LowPriorityIO", "ProcessType")
 
 PLIST_KEYS = set(
@@ -152,6 +153,7 @@ def load_components(path: Path, socket_path: Path) -> dict[str, Component]:
             exit_timeout=2,
             stdout=socket_path.with_name("wal-fallback.out.log"),
             stderr=socket_path.with_name("wal-fallback.err.log"),
+            policy=_BACKGROUND_JOB_POLICY.copy() if sys.platform == "darwin" else {},
         ),
     )
     components["wal-checkpoint-fallback"].schedule_after(900)
@@ -182,6 +184,7 @@ def with_brainbar_monitor(components, path):
             exit_timeout=2,
             stdout=path.with_name("brainbar-activation.log"),
             stderr=path.with_name("brainbar-activation.err.log"),
+            policy=_BACKGROUND_JOB_POLICY.copy(),
         )
         source = components.get("observability")
         if source is not None and source.env.get("BRAINLAYER_ENV_FILE"):

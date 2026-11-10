@@ -1,10 +1,9 @@
-"""Explicitly started resident supervisor; no production commands or launchd wiring."""
+"""Resident job supervision with guarded child custody and a responsive control socket."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import math
 import os
 import signal
@@ -252,7 +251,6 @@ class Supervisor:
             pause_owner=child.pause_owner,
             error=child.error,
         )
-        logging.getLogger(__name__).warning("periodic component %s delayed %.1fs: %s", name, delay, reason)
 
     def _start(self, child: Component):
         gate = None
@@ -334,7 +332,14 @@ class Supervisor:
                 try:
                     child.startup.result()
                 except Exception as exc:
-                    logging.getLogger(__name__).exception("supervisor component startup failed")
+                    emit(
+                        self.diagnostics,
+                        event="component-startup-failed",
+                        component=next(name for name, component in self.components.items() if component is child),
+                        exception=type(exc).__name__,
+                        error=str(exc),
+                        exc_info=(type(exc), exc, exc.__traceback__),
+                    )
                     self._failed(child, f"startup failed: {exc}")
                 finally:
                     child.startup = None
@@ -365,7 +370,7 @@ class Supervisor:
                         child.failures, child.error = 0, ""
                 else:
                     self._failed(child, f"exited {child.process.returncode}")
-                child.cleanup = asyncio.create_task(self._reap(child))  # Never under the control lock.
+                child.cleanup = asyncio.create_task(self._reap(child))
             if (
                 child.interval
                 and child.process
@@ -464,16 +469,14 @@ class Supervisor:
                         handlers[sig] = signal.getsignal(sig)
                         loop.add_signal_handler(sig, self.stop.set)
                 self.parent_birth = start_time(os.getpid())
-                try:
-                    self.diagnostics = DiagnosticSink.open(self.path.parent / "operation-events.jsonl")
-                except (OSError, RuntimeError):
-                    logging.warning("operation diagnostic sink unavailable; timeout enforcement remains active")
+                self.diagnostics = DiagnosticSink.open(
+                    self.path.parent / "operation-events.jsonl", journal_optional=True
+                )
                 self.guard = launch_guard(self.custody, self.guard_timeout, grace, self.shutdown_timeout)
                 await server.start_serving()
                 while not self.stop.is_set():
                     if self.guard.poll() is not None:
                         raise RuntimeError("supervisor heartbeat guard exited")
-                    # A responsive loop may wait for slow I/O, but a stuck worker has a finite budget.
                     if self._heartbeat_allowed():
                         self._send("H")
                     self._tick()
