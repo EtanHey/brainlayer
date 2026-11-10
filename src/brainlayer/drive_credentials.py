@@ -166,7 +166,7 @@ def _grant_metadata(response: dict[str, Any], now: dt.datetime) -> str | None:
             raise ValueError("boolean lifetime")
         return (now.astimezone(dt.UTC) + dt.timedelta(seconds=float(seconds))).isoformat()
     except (TypeError, ValueError, OverflowError):
-        LOGGER.warning("Ignoring invalid refresh-token lifetime metadata; retaining known grant lifetime")
+        LOGGER.warning("Ignoring invalid refresh-token lifetime metadata")
         return None
 
 
