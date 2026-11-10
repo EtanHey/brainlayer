@@ -5,6 +5,7 @@ import os
 import plistlib
 import sqlite3
 import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -586,7 +587,12 @@ def test_run_doctor_fails_loudly_when_brainbar_version_check_fails(tmp_path, mon
     def command_runner(args: list[str]) -> SimpleNamespace:
         if args[:2] == ["launchctl", "print"]:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
-        assert args == ["bash", str(version_check)]
+        from brainlayer import __version__, doctor
+
+        expected = ["bash", str(version_check)]
+        if not source_checkout:
+            expected.extend(["--installed", __version__, str(doctor.INSTALLED_BRAINBAR_INFO_PLIST), sys.executable])
+        assert args == expected
         return SimpleNamespace(returncode=1, stdout="", stderr="[brainlayer-version-check] ERROR: cask drift\n")
 
     result = run_doctor(
@@ -643,7 +649,12 @@ def test_run_doctor_reports_brainbar_version_check_runner_exception(tmp_path, mo
     def command_runner(args: list[str]) -> SimpleNamespace:
         if args[:2] == ["launchctl", "print"]:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
-        assert args == ["bash", str(version_check)]
+        from brainlayer import __version__, doctor
+
+        expected = ["bash", str(version_check)]
+        if not source_checkout:
+            expected.extend(["--installed", __version__, str(doctor.INSTALLED_BRAINBAR_INFO_PLIST), sys.executable])
+        assert args == expected
         raise RuntimeError("runner unavailable")
 
     result = run_doctor(
@@ -2175,3 +2186,12 @@ def test_roundtrip_probe_retrieves_current_probe_among_residual_probes(tmp_path)
     # The probe owns only its current row; interrupted older probes remain intact.
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 8
+
+
+def test_installed_version_check_never_selects_developer_script(monkeypatch):
+    from brainlayer import doctor
+
+    monkeypatch.setattr(doctor, "_running_from_source_checkout", lambda: False)
+    assert doctor.default_version_check_path() == (
+        Path(doctor.__file__).resolve().parent / "launchd" / "brainlayer-version-check.sh"
+    )

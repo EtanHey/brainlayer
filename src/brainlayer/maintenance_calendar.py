@@ -1,4 +1,4 @@
-"""Inactive scheduled calendar runner with isolated groups and scoped writer holds."""
+"""Scheduled calendar runner with isolated groups and scoped writer holds."""
 
 import asyncio
 import datetime as dt
@@ -290,11 +290,25 @@ def _probe_calendar_custody(directory):
     return True
 
 
-async def _failed_recovery_admission(plan, directory, now, guard_timeout, shutdown_timeout, reply):
-    selection = await _blocking(failed_recovery_selection, directory)
+async def _failed_recovery_admission(plan, directory, now, guard_timeout, shutdown_timeout, reply, upload=False):
+    reservation = None
+    if upload:
+        from .maintenance_upload_recovery import pending_upload_step
+
+        step, reservation, reason = await _blocking(pending_upload_step, plan, directory)
+        history = await _blocking(failed_recovery_selection, directory)
+        selection = dict(
+            steps=[step.name] if step else [], scheduled_date=history["scheduled_date"] or now.date().isoformat()
+        )
+        if step is None:
+            await _blocking(record, directory, event="upload-recovery-skip", reason=reason)
+            reply.update(selection, status="nothing-to-retry", reason=reason)
+            return ()
+    else:
+        selection = await _blocking(failed_recovery_selection, directory)
     reply.update(selection)
     candidates = plan.candidates if isinstance(plan, CalendarPlan) else plan
-    steps = tuple(step for step in candidates if step.name in selection["steps"])
+    steps = (step,) if upload else tuple(step for step in candidates if step.name in selection["steps"])
     if {step.name for step in steps} != set(selection["steps"]):
         raise ValueError("Recovery plan is missing a selected step")
     blocked, window, reason = await _blocking(_retry_window, plan, steps, now, guard_timeout, shutdown_timeout)
@@ -310,6 +324,19 @@ async def _failed_recovery_admission(plan, directory, now, guard_timeout, shutdo
             reply.update(status="refused", reason="Maintenance or a retry step is disabled or paused")
         else:
             reply.update(status="ready", reason="Only failed daytime-safe steps will retry; no services pause")
+            if upload:
+                from .maintenance_upload_recovery import reserve_upload_attempt
+
+                attempt = await _blocking(reserve_upload_attempt, reservation)
+                await _blocking(
+                    record,
+                    directory,
+                    event="upload-recovery-attempt",
+                    snapshot=step.env["BRAINLAYER_BACKUP_UPLOAD_SNAPSHOT"],
+                    attempt=attempt,
+                )
+    if upload and reply["status"] != "ready":
+        await _blocking(record, directory, event="upload-recovery-skip", reason=reply["reason"])
     return steps
 
 
@@ -596,7 +623,9 @@ def backup_deadline(step):
     if step.name != "backup-daily":
         return step.timeout
     path = Path(os.environ.get("BRAINLAYER_ENV_FILE", get_user_env_path()))
-    configured = configured_brainlayer_env_value("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", path)
+    configured = step.env.get("BRAINLAYER_BACKUP_TIMEOUT_SECONDS") or configured_brainlayer_env_value(
+        "BRAINLAYER_BACKUP_TIMEOUT_SECONDS", path
+    )
     seconds = int(
         configured if configured is not None else os.environ.get("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "28800")
     )
@@ -1024,6 +1053,23 @@ async def _admit_calendar(steps, directory, date, transcript_recovery, guard_tim
         raise
 
 
+async def _supervisor_status(read, directory, stop, sleep_fn, *, step=None):
+    # Replaying a grant after an ambiguous timeout can duplicate a mutation.
+    for attempt, delay in enumerate((2, 4, 8, 16, 30, 30, 0), 1):
+        if stop.is_set():
+            break
+        try:
+            return await _blocking(read)
+        except TimeoutError:
+            detail = dict(step=step) if step is not None else dict(phase="runner-start")
+            await _blocking(record, directory, event="supervisor-status-timeout", attempt=attempt, **detail)
+            while delay > 0 and not stop.is_set():
+                interval = min(0.1, delay)
+                await sleep_fn(interval)
+                delay -= interval
+    return None
+
+
 async def run_calendar(
     steps,
     directory,
@@ -1039,9 +1085,11 @@ async def run_calendar(
     defer_after=3,
     transcript_recovery=False,
     failed_recovery=False,
+    upload_recovery=False,
     recovery_status=False,
     recovery_result=None,
 ):
+    failed_recovery = failed_recovery or upload_recovery
     if failed_recovery and transcript_recovery:
         raise ValueError("Choose only one recovery mode")
     reply = recovery_result if recovery_result is not None else {}
@@ -1085,13 +1133,15 @@ async def run_calendar(
     runner_started_at = None
     loop = asyncio.get_running_loop()
     try:
+        await _blocking(custody.recover, min(1, shutdown_timeout / 2))
         if failed_recovery:
             plan = steps
-            steps = await _failed_recovery_admission(plan, directory, now_fn(), guard_timeout, shutdown_timeout, reply)
+            steps = await _failed_recovery_admission(
+                plan, directory, now_fn(), guard_timeout, shutdown_timeout, reply, upload=upload_recovery
+            )
             if reply["status"] != "ready":
                 return 0
             date = dt.date.fromisoformat(reply["scheduled_date"])
-        await _blocking(custody.recover, min(1, shutdown_timeout / 2))  # Reap stale writers before any journal scan.
         state_path = directory / "state.json"
         state = await _blocking(
             lambda: json.loads(state_path.read_text()) if state_path.exists() else dict(deferrals={})
@@ -1116,7 +1166,6 @@ async def run_calendar(
         steps = tuple(steps)
         weekly_substitution = planned and any(step.name == "maintenance-weekly" for step in steps)
         index_overran_window = False
-        client = maintenance_control.control_client()
         await _blocking(logs.mkdir, parents=True, exist_ok=True)
 
         def start_guard():
@@ -1141,16 +1190,18 @@ async def run_calendar(
             scheduled_date=date.isoformat(),
         )
         if failed_recovery:
-            reply.update(status="accepted", reason="Transcript backup retried successfully")
+            reply.update(status="accepted", reason="Backup retried successfully")
         if install_signals:
             for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
                 handlers[sig] = signal.getsignal(sig)
                 loop.add_signal_handler(sig, stop.set)
+        client = await _supervisor_status(maintenance_control.control_client, directory, stop, sleep_fn)
         env = os.environ | dict(
             BRAINLAYER_CALENDAR_STEP="1",
             BRAINLAYER_CALENDAR_GUARD_FD=str(guard.stdin.fileno()),
-            BRAINLAYER_SUPERVISOR_SOCKET=str(client.path),
         )
+        if client is not None:
+            env["BRAINLAYER_SUPERVISOR_SOCKET"] = str(client.path)
         env.pop("BRAINLAYER_BACKUP_SUPERVISED_CHILD", None)
         env.pop(BACKUP_INVOCATION_ENV, None)
         env.pop(MAINTENANCE_RUN_ID_ENV, None)  # Never let an inherited id stand for this run.
@@ -1177,24 +1228,20 @@ async def run_calendar(
                     bounded = await _blocking(_bounded_index_step, step, now_fn(), shutdown_timeout)
                 elif step.name == "backup-snapshot":
                     bounded = await _blocking(_bounded_snapshot_step, step, now_fn(), shutdown_timeout)
-                if bounded is None:
+                if client is None:
+                    code, reason = 75, "supervisor-status-unavailable"
+                elif bounded is None:
                     code, reason = 75, "maintenance-window"
                 else:
                     step = bounded
-                    # A status read is idempotent: allow up to three 2s socket attempts under
-                    # load before aborting the night. Never replay pause/resume or hold grants.
-                    for attempt in range(1, 4):
-                        try:
-                            states = await _blocking(client.request)
-                            break
-                        except TimeoutError:
-                            await _blocking(
-                                record, directory, event="supervisor-status-timeout", step=step.name, attempt=attempt
-                            )
-                            if attempt == 3 or stop.is_set():
-                                raise
-                    disabled = client._disabled(states, include_paused=failed_recovery)
-                    if f"com.brainlayer.{_service_name(step)}" in disabled or "com.brainlayer.maintenance" in disabled:
+                    states = await _supervisor_status(client.request, directory, stop, sleep_fn, step=step.name)
+                    if stop.is_set():
+                        code = 143
+                    elif states is None:
+                        code, reason = 75, "supervisor-status-unavailable"
+                    elif f"com.brainlayer.{_service_name(step)}" in client._disabled(
+                        states, include_paused=failed_recovery
+                    ) or "com.brainlayer.maintenance" in client._disabled(states, include_paused=failed_recovery):
                         code, reason = 75, "disabled"
                     elif not await _window(directory, step, now_fn, sleep_fn, stop):
                         code, missed = (143, False) if stop.is_set() else (75, True)
@@ -1250,11 +1297,9 @@ async def run_calendar(
                                         window_end = started.replace(hour=6, minute=0, second=0, microsecond=0)
                                         index_overran_window = started < window_end <= ended
                         except maintenance_control.HoldWindowClosed:
-                            # The window closed between the check and the grant: defer, keep the plan going.
                             code, reason = 75, "maintenance-window"
                         except HoldBusy as exc:
                             holders = getattr(exc, "holders", [])
-                            # Another holder has the lease: defer this step, keep the plan (and backup) going.
                             code, reason = 75, "maintenance-hold-busy"
             except (OSError, RuntimeError, ValueError) as exc:
                 await _blocking(record, directory, event="step-error", step=step.name, error=type(exc).__name__)
@@ -1279,7 +1324,7 @@ async def run_calendar(
                 replaces="maintenance-nightly" if weekly_substitution and step.name == "maintenance-weekly" else None,
                 backup_invocation_id=invocation,
                 maintenance_run_id=run_id,
-                preserve_abandonment_alerts=transcript_recovery or failed_recovery,
+                preserve_abandonment_alerts=(transcript_recovery or failed_recovery) and not upload_recovery,
             )
         active_step = None
         plan_complete = bool(steps) and not stop.is_set() and len(results) == len(steps)
