@@ -157,11 +157,17 @@ def _consent_deadline(data: dict[str, Any]) -> dt.datetime | None:
         raise DriveCredentialError("BrainLayer Drive consent metadata is invalid") from None
 
 
-def _grant_metadata(response: dict[str, Any], now: dt.datetime) -> str:
+def _grant_metadata(response: dict[str, Any], now: dt.datetime) -> str | None:
     seconds = response.get("refresh_token_expires_in")
     if seconds is None:
         return "permanent"
-    return (now.astimezone(dt.UTC) + dt.timedelta(seconds=float(seconds))).isoformat()
+    try:
+        if isinstance(seconds, bool):
+            raise ValueError("boolean lifetime")
+        return (now.astimezone(dt.UTC) + dt.timedelta(seconds=float(seconds))).isoformat()
+    except (TypeError, ValueError, OverflowError):
+        LOGGER.warning("Ignoring invalid refresh-token lifetime metadata; retaining known grant lifetime")
+        return None
 
 
 class _TokenResponseRequest:
@@ -260,17 +266,19 @@ def load_credentials(
                         "Drive token refresh temporarily unavailable: Google's token endpoint failed retryably"
                     ) from None
                 raise DriveCredentialError("Drive token refresh failed; run brainlayer backup auth") from None
-            if observed.token_response is not None:
-                token_data["refresh_expires_at"] = _grant_metadata(
-                    observed.token_response, now or dt.datetime.now(dt.UTC)
-                )
+            if observed.token_response is not None and (
+                observed.token_response.get("refresh_token_expires_in") is not None
+                or token_data.get("refresh_expires_at") is None
+            ):
+                lifetime = _grant_metadata(observed.token_response, now or dt.datetime.now(dt.UTC))
+                if lifetime is not None:
+                    token_data["refresh_expires_at"] = lifetime
             if persist_refresh:
                 token_data["access_token"] = creds.token
                 token_data["expiry"] = creds.expiry.isoformat() if creds.expiry else None
                 _atomic_write(token, token_data)
         creds.brainlayer_refresh_expires_at = token_data.get("refresh_expires_at")
         # Upcoming expiry is credential_status's advisory, not a failed job.
-        # Clear a prior consent episode only after credentials load successfully.
         _report_consent(alert_reporter, None)
         return creds
 
