@@ -184,6 +184,7 @@ def load_credentials(
         if migrate:
             _migrate_if_missing(token, legacy)
         token_data = _read_object(token, private=True)
+        original_token_data = token_data.copy()
         expires = _consent_deadline(token_data)
         if expires is not None:
             remaining = expires - (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
@@ -235,9 +236,11 @@ def load_credentials(
                     ) from None
                 raise DriveCredentialError("Drive token refresh failed; run brainlayer backup auth") from None
             if persist_refresh:
-                token_data["access_token"] = creds.token
-                token_data["expiry"] = creds.expiry.isoformat() if creds.expiry else None
-                _atomic_write(token, token_data)
+                if creds.token != token_data.get("access_token") or creds.expiry != _expiry(token_data):
+                    token_data["access_token"] = creds.token
+                    token_data["expiry"] = creds.expiry.isoformat() if creds.expiry else None
+                if token_data != original_token_data:
+                    _atomic_write(token, token_data)
         # Upcoming expiry is credential_status's advisory, not a failed job.
         _report_consent(alert_reporter, None)
         return creds
