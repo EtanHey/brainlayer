@@ -940,6 +940,7 @@ def test_embedding_activity_never_creates_attention(age, activity, progress, exp
         embedding_stalled_since=NOW - age,
         embedding_activity=activity,
         embedding_progress_recent=progress,
+        embedding_paused_by_load=bool(activity and "paused" in activity),
     )
     check = verdict.check("embedding")
     assert check.state == expected
@@ -950,3 +951,10 @@ def test_embedding_activity_never_creates_attention(age, activity, progress, exp
         assert len(alerts) == 1
         if activity:
             assert activity in check.note
+
+
+def test_load_pause_severity_does_not_depend_on_display_copy():
+    check = run(
+        embedding_stalled_since=NOW - 8 * H, embedding_activity="New display copy", embedding_paused_by_load=True
+    ).check("embedding")
+    assert check.state == hv.AMBER

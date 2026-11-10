@@ -116,6 +116,7 @@ class Facts:
     embedding_stalled_since: Any = UNOBSERVED
     embedding_activity: str | None = None
     embedding_progress_recent: bool = False
+    embedding_paused_by_load: bool = False
     disk_free_bytes: Any = UNOBSERVED
     disk_peak_bytes: Any = UNOBSERVED
     disk_floor_bytes: Any = UNOBSERVED
@@ -426,9 +427,7 @@ def _raw_checks(
     )
     embedding = raw["embedding"]
     if facts.embedding_activity and embedding.state in (AMBER, RED):
-        if embedding.state == RED and (
-            facts.embedding_progress_recent or facts.embedding_activity.startswith("Embedding paused by machine load")
-        ):
+        if embedding.state == RED and (facts.embedding_progress_recent or facts.embedding_paused_by_load):
             embedding.state = AMBER
         embedding.note += f"; {facts.embedding_activity}"
     pending = _stall_age(
