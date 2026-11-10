@@ -1024,6 +1024,24 @@ async def _admit_calendar(steps, directory, date, transcript_recovery, guard_tim
         raise
 
 
+async def _supervisor_status(read, directory, stop, sleep_fn, *, step=None):
+    # Seven 2s reads plus 90s backoff, at startup and before each step. Only
+    # idempotent status reads retry; custody/protocol errors and mutations do not.
+    for attempt, delay in enumerate((2, 4, 8, 16, 30, 30, 0), 1):
+        if stop.is_set():
+            break
+        try:
+            return await _blocking(read)
+        except TimeoutError:
+            detail = dict(step=step) if step is not None else dict(phase="runner-start")
+            await _blocking(record, directory, event="supervisor-status-timeout", attempt=attempt, **detail)
+            while delay > 0 and not stop.is_set():
+                interval = min(0.1, delay)
+                await sleep_fn(interval)
+                delay -= interval
+    return None
+
+
 async def run_calendar(
     steps,
     directory,
@@ -1116,7 +1134,6 @@ async def run_calendar(
         steps = tuple(steps)
         weekly_substitution = planned and any(step.name == "maintenance-weekly" for step in steps)
         index_overran_window = False
-        client = maintenance_control.control_client()
         await _blocking(logs.mkdir, parents=True, exist_ok=True)
 
         def start_guard():
@@ -1146,11 +1163,13 @@ async def run_calendar(
             for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
                 handlers[sig] = signal.getsignal(sig)
                 loop.add_signal_handler(sig, stop.set)
+        client = await _supervisor_status(maintenance_control.control_client, directory, stop, sleep_fn)
         env = os.environ | dict(
             BRAINLAYER_CALENDAR_STEP="1",
             BRAINLAYER_CALENDAR_GUARD_FD=str(guard.stdin.fileno()),
-            BRAINLAYER_SUPERVISOR_SOCKET=str(client.path),
         )
+        if client is not None:
+            env["BRAINLAYER_SUPERVISOR_SOCKET"] = str(client.path)
         env.pop("BRAINLAYER_BACKUP_SUPERVISED_CHILD", None)
         env.pop(BACKUP_INVOCATION_ENV, None)
         env.pop(MAINTENANCE_RUN_ID_ENV, None)  # Never let an inherited id stand for this run.
@@ -1177,27 +1196,13 @@ async def run_calendar(
                     bounded = await _blocking(_bounded_index_step, step, now_fn(), shutdown_timeout)
                 elif step.name == "backup-snapshot":
                     bounded = await _blocking(_bounded_snapshot_step, step, now_fn(), shutdown_timeout)
-                if bounded is None:
+                if client is None:
+                    code, reason = 75, "supervisor-status-unavailable"
+                elif bounded is None:
                     code, reason = 75, "maintenance-window"
                 else:
                     step = bounded
-                    # Seven 2s requests plus 90s backoff tolerate scheduler gaps without
-                    # replaying mutations. Unreadable policy never authorizes a child.
-                    states = None
-                    for attempt, delay in enumerate((2, 4, 8, 16, 30, 30, 0), 1):
-                        if stop.is_set():
-                            break
-                        try:
-                            states = await _blocking(client.request)
-                            break
-                        except TimeoutError:
-                            await _blocking(
-                                record, directory, event="supervisor-status-timeout", step=step.name, attempt=attempt
-                            )
-                            while delay > 0 and not stop.is_set():
-                                interval = min(0.1, delay)
-                                await sleep_fn(interval)
-                                delay -= interval
+                    states = await _supervisor_status(client.request, directory, stop, sleep_fn, step=step.name)
                     if stop.is_set():
                         code = 143
                     elif states is None:
