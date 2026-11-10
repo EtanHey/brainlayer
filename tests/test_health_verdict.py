@@ -958,3 +958,16 @@ def test_load_pause_severity_does_not_depend_on_display_copy():
         embedding_stalled_since=NOW - 8 * H, embedding_activity="New display copy", embedding_paused_by_load=True
     ).check("embedding")
     assert check.state == hv.AMBER
+
+
+def test_drive_attention_has_one_actionable_item():
+    verdict = run(
+        drive_auth="consent_needed",
+        notes=hv.notes_from_job_alerts({"drive-consent": "Drive access expired: Reconnect in BrainBar"}),
+    )
+    items = [
+        item for item in hv.badge_alerts(verdict) if item["code"] in ("outcome_drive_auth", "job_alert_drive-consent")
+    ]
+    assert len(items) == 1
+    assert items[0]["message"] == "Drive access expired: Reconnect in BrainBar"
+    assert items[0]["severity"] == "critical"
