@@ -1299,7 +1299,7 @@ def test_busy_maintenance_hold_defers_the_step_and_the_backup_still_runs(tmp_pat
             for error in (ConnectionRefusedError, ConnectionResetError, BrokenPipeError, FileNotFoundError)
         ],
         (PermissionError, 1, 1, False),
-        (ValueError, 1, 1, False),
+        (ValueError, 2, 4, True),
         (RuntimeError, 1, 1, False),
     ],
 )
@@ -1358,9 +1358,14 @@ def test_calendar_status_timeout_is_bounded_without_skipping_backup(
     assert finished == (
         {"decay": "ok", "backup-daily": "ok"} if succeeds else {"decay": "failed", "backup-daily": "skipped"}
     )
-    retries = [row for row in rows if row["event"] == "supervisor-status-timeout"]
+    retries = [row for row in rows if row["event"] in {"supervisor-status-timeout", "supervisor-status-unavailable"}]
     assert [row["attempt"] for row in retries] == (list(range(1, timeouts + 1)) if succeeds else [])
     assert all(row["step"] == "decay" for row in retries)
+    assert all(
+        row["event"] == ("supervisor-status-timeout" if failure is TimeoutError else "supervisor-status-unavailable")
+        and row["error"] == failure.__name__
+        for row in retries
+    )
     assert "private error detail" not in journal
     with calendar.Custody(directory):
         pass
@@ -1463,7 +1468,16 @@ def test_status_outage_defers_safely_and_stop_interrupts_backoff(tmp_path, monke
 
 
 @pytest.mark.parametrize(
-    "failure", [TimeoutError, ConnectionRefusedError, ConnectionResetError, BrokenPipeError, FileNotFoundError]
+    "failure",
+    [
+        TimeoutError,
+        ConnectionRefusedError,
+        ConnectionResetError,
+        BrokenPipeError,
+        FileNotFoundError,
+        ValueError,
+        lambda message: json.JSONDecodeError(message, "{", 1),
+    ],
 )
 @pytest.mark.parametrize("outage,interrupt", [(8, False), (float("inf"), False), (float("inf"), True)])
 def test_runner_start_status_backoff_at_real_adapter_seam(tmp_path, monkeypatch, outage, interrupt, failure):
@@ -1531,8 +1545,15 @@ def test_runner_start_status_backoff_at_real_adapter_seam(tmp_path, monkeypatch,
     rows = [json.loads(line) for line in journal.splitlines()]
     assert not any(row["event"] == "runner-error" for row in rows)
     assert "private supervisor detail" not in journal
-    retries = [row for row in rows if row["event"] == "supervisor-status-timeout"]
+    retries = [row for row in rows if row["event"] in {"supervisor-status-timeout", "supervisor-status-unavailable"}]
     assert all(row.get("phase") == "runner-start" for row in retries)
+    assert all(
+        row["event"] == ("supervisor-status-timeout" if failure is TimeoutError else "supervisor-status-unavailable")
+        for row in retries
+    )
+    assert all(
+        row["error"] == ("JSONDecodeError" if not isinstance(failure, type) else failure.__name__) for row in retries
+    )
     if outage == 8:
         assert result == 0
         assert marker.read_text().splitlines() == [name for name in names if name != "index"]
@@ -1569,7 +1590,7 @@ def test_runner_start_status_backoff_at_real_adapter_seam(tmp_path, monkeypatch,
         pass
 
 
-@pytest.mark.parametrize("failure", [PermissionError, ValueError, RuntimeError])
+@pytest.mark.parametrize("failure", [PermissionError, RuntimeError])
 def test_runner_start_status_custody_and_protocol_errors_still_abort(tmp_path, monkeypatch, failure):
     from brainlayer import maintenance_calendar as calendar
     from brainlayer.supervisor_adapters import SupervisorCommands
@@ -1609,7 +1630,7 @@ def test_backup_not_run_always_alerts_through_calendar(tmp_path, monkeypatch, mo
     def status():
         calls.append(1)
         if mode == "protocol" and len(calls) == 1:
-            raise ValueError("invalid protocol")
+            raise RuntimeError("invalid protocol")
         if mode == "deferred":
             raise TimeoutError("unavailable")
         return {}
@@ -1643,3 +1664,28 @@ def test_backup_not_run_always_alerts_through_calendar(tmp_path, monkeypatch, mo
     else:
         assert not marker.exists()
         assert "backup-daily" in job_alerts.active_alerts(alerts)
+
+
+def test_good_backup_clears_prior_alert_through_calendar(tmp_path, monkeypatch):
+    from brainlayer import maintenance_calendar as calendar
+
+    alerts = tmp_path / "alerts.json"
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(alerts))
+    monkeypatch.setattr(
+        calendar, "report", lambda key, reason: job_alerts.report(key, reason, path=alerts, notify=lambda _: None)
+    )
+    monkeypatch.setattr(
+        calendar.maintenance_control,
+        "control_client",
+        lambda: SimpleNamespace(path=tmp_path / "unused.sock", request=lambda: {}, _disabled=lambda *_a, **_k: set()),
+    )
+    job_alerts.report(
+        "backup-daily",
+        "BrainLayer backup-daily did not complete; see calendar results and logs",
+        path=alerts,
+        notify=lambda _: None,
+    )
+    assert "backup-daily" in job_alerts.active_alerts(alerts)
+    step = calendar.Step("backup-daily", (sys.executable, "-c", "pass"), 10)
+    assert asyncio.run(calendar.run_calendar([step], tmp_path / "calendar", tmp_path / "logs")) == 0
+    assert "backup-daily" not in job_alerts.active_alerts(alerts)

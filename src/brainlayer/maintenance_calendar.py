@@ -1060,9 +1060,23 @@ async def _supervisor_status(read, directory, stop, sleep_fn, *, step=None):
             break
         try:
             return await _blocking(read)
-        except (TimeoutError, ConnectionRefusedError, ConnectionResetError, BrokenPipeError, FileNotFoundError):
+        except (
+            TimeoutError,
+            ConnectionRefusedError,
+            ConnectionResetError,
+            BrokenPipeError,
+            FileNotFoundError,
+            ValueError,
+        ) as exc:
             detail = dict(step=step) if step is not None else dict(phase="runner-start")
-            await _blocking(record, directory, event="supervisor-status-timeout", attempt=attempt, **detail)
+            await _blocking(
+                record,
+                directory,
+                event="supervisor-status-timeout" if isinstance(exc, TimeoutError) else "supervisor-status-unavailable",
+                error=type(exc).__name__,
+                attempt=attempt,
+                **detail,
+            )
             while delay > 0 and not stop.is_set():
                 interval = min(0.1, delay)
                 await sleep_fn(interval)
@@ -1131,9 +1145,8 @@ async def run_calendar(
     kind = "recovery" if transcript_recovery or failed_recovery else "nightly" if planned else "manual"
     manual_failed = 0
     runner_started_at = None
-    backup_expected = not (transcript_recovery or failed_recovery) and any(
-        step.name == "backup-daily" for step in (steps.candidates if planned else steps)
-    )
+    # Recovery owes only its selected steps; a nightly owes its plan even if startup fails.
+    expected_steps = () if transcript_recovery or failed_recovery else (steps.candidates if planned else steps)
     loop = asyncio.get_running_loop()
     try:
         await _blocking(custody.recover, min(1, shutdown_timeout / 2))
@@ -1144,6 +1157,7 @@ async def run_calendar(
             )
             if reply["status"] != "ready":
                 return 0
+            expected_steps = steps
             date = dt.date.fromisoformat(reply["scheduled_date"])
         state_path = directory / "state.json"
         state = await _blocking(
@@ -1167,7 +1181,7 @@ async def run_calendar(
             marker = dt.date.fromisoformat(state["last_weekly"]) if state.get("last_weekly") else None
             steps = steps.select(marker)
         steps = tuple(steps)
-        backup_expected = any(step.name == "backup-daily" for step in steps)
+        expected_steps = steps
         weekly_substitution = planned and any(step.name == "maintenance-weekly" for step in steps)
         index_overran_window = False
         await _blocking(logs.mkdir, parents=True, exist_ok=True)
@@ -1366,7 +1380,8 @@ async def run_calendar(
         raise
     finally:
         try:
-            if backup_expected and results.get("backup-daily") != "ok":
+            # Alert I/O must finish while the guard heartbeat is still running.
+            if any(step.name == "backup-daily" for step in expected_steps) and results.get("backup-daily") != "ok":
                 try:
                     await _blocking(
                         report,
