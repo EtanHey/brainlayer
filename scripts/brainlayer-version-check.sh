@@ -6,6 +6,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_ROOT="${BRAINLAYER_VERSION_CHECK_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FAILED=0
 
+# Doctor passes the version imported by its installed interpreter, and that interpreter.
+# Installed mode compares only what is INSTALLED: the package and BrainBar.app. It ignores
+# release-preparation overrides, checkout git metadata and the Homebrew tap: a tap ahead of
+# this Mac means an update is available, not that the install is inconsistent.
+if [[ "${1:-}" == "--installed" ]]; then
+    exec "${4:-python3}" - "$2" "${3:-/Applications/BrainBar.app/Contents/Info.plist}" <<'PYINSTALLED'
+import plistlib
+import sys
+
+try:
+    version, plist_path = sys.argv[1:]
+    with open(plist_path, "rb") as handle:
+        app = plistlib.load(handle)
+    app_version = app.get("BrainLayerReleaseVersion") or app.get("CFBundleShortVersionString")
+    if version != app_version:
+        raise ValueError(f"installed package={version}, BrainBar={app_version}")
+except (OSError, ValueError, plistlib.InvalidFileException) as exc:
+    print(f"[brainlayer-version-check] ERROR: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+print(f"[brainlayer-version-check] PASS: installed package/BrainBar {version}")
+PYINSTALLED
+fi
+
 default_tap_root() {
     local sibling
     sibling="$(cd "$PACKAGE_ROOT/.." && pwd)/homebrew-layers"
