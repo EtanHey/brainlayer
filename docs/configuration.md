@@ -523,15 +523,15 @@ During the entire command, SQLite diagnostics log only error codes/classes, incl
 file handlers; the process's normal SQLite callback is restored after stores close.
 Failures retain value-free causal error categories and cleanup notes.
 
-### Google Drive OAuth client mode
+### Google Drive authorization lifetime
 
-`BRAINLAYER_DRIVE_OAUTH_TESTING=1` enables the local seven-day consent deadline
-for OAuth clients whose Google publishing status is Testing. Leave it unset for
-Production clients (the default): `consented_at` remains metadata, status has no
-local `expires_at`, and only actual credential failures require reconnecting.
-Google rejecting a refresh with `invalid_grant` still raises a consent alert in
-either mode. Set this variable in the environment of the BrainLayer process
-checking or loading Drive credentials.
+Google's token response determines the grant lifetime. Authorization and successful
+refreshes store `refresh_expires_at`: an explicit UTC deadline when Google returns
+`refresh_token_expires_in`, or `"permanent"` when it omits that field.
+Older tokens without this metadata have an unknown lifetime until their next refresh;
+`consented_at` is metadata and never implies a deadline. Status warns within two days
+of a reported deadline. An expired reported deadline or an actual `invalid_grant`
+requires reconnecting in BrainBar.
 
 ### Daily Drive upload recovery
 
