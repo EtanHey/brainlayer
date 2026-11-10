@@ -35,7 +35,7 @@ struct DriveAuthStatus: Equatable, Sendable {
                 : "brainlayer backup auth --status failed (exit \(result.terminationStatus))")
         }
         let raw = object["state"] as? String ?? ""
-        guard let state = State(rawValue: raw), state != .unknown else {
+        guard let state = State(rawValue: raw) else {
             return unknown("unrecognised Drive state \"\(DriveAuthJSON.sanitized(raw) ?? "")\"")
         }
         return DriveAuthStatus(
