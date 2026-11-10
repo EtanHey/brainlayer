@@ -585,9 +585,9 @@ def test_disk_timeout_reuses_measurement_only_within_thirty_minutes(tmp_path, mo
 @pytest.mark.parametrize(
     "mode, encoded, batch_minutes, expected",
     [
-        ("running", 16, 480, "amber"),
-        ("high load", 0, 2, "amber"),
-        ("high load", 0, 480, "red"),
+        ("running", 16, 480, "green"),
+        ("high load", 0, 2, "green"),
+        ("high load", 0, 480, "amber"),
         ("waiting", 0, 480, "red"),
     ],
 )
@@ -623,9 +623,11 @@ def test_embedding_completed_batches_and_load_pause_are_not_net_stalls(
         baseline = evaluate(replace(facts, embedding_activity=None)).check("embedding")
         assert check.state == baseline.state == "red"
         assert "not shrunk" in check.note
+    elif expected == "green":
+        assert check.state == "green"
     else:
         assert check.state == "amber"
-        assert "not shrunk" not in check.note
+        assert "not shrunk" in check.note
         assert "1 queued" in check.note
         assert "last batch" in check.note
         assert ("paused by machine load" if mode == "high load" else "progressing") in check.note

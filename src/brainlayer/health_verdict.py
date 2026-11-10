@@ -424,11 +424,13 @@ def _raw_checks(
         "backlog has not shrunk for",
         t.wake_grace_s,
     )
-    if facts.embedding_activity:
-        if facts.embedding_progress_recent:
-            raw["embedding"] = _Raw(AMBER, facts.embedding_activity)
-        else:
-            raw["embedding"].note += f"; {facts.embedding_activity}"
+    embedding = raw["embedding"]
+    if facts.embedding_activity and embedding.state in (AMBER, RED):
+        if embedding.state == RED and (
+            facts.embedding_progress_recent or facts.embedding_activity.startswith("Embedding paused by machine load")
+        ):
+            embedding.state = AMBER
+        embedding.note += f"; {facts.embedding_activity}"
     pending = _stall_age(
         facts.oldest_pending_store_at,
         p("stores"),

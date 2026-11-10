@@ -924,3 +924,29 @@ def test_f3_graced_stale_ingest_resets_recovery():
         run(next_good.state, now=NOW + 3 * H + 2 * M, watcher_updated_at=NOW + 3 * H + 2 * M).check("ingest").state
         == hv.GREEN
     )
+
+
+@pytest.mark.parametrize(
+    "age, activity, progress, expected",
+    [
+        (10 * M, "Embedding progressing: 1 queued", True, hv.GREEN),
+        (2 * H, "Embedding progressing: 3500 queued", True, hv.AMBER),
+        (8 * H, "Embedding paused by machine load: 3500 queued", False, hv.AMBER),
+        (8 * H, None, False, hv.RED),
+    ],
+)
+def test_embedding_activity_never_creates_attention(age, activity, progress, expected):
+    verdict = run(
+        embedding_stalled_since=NOW - age,
+        embedding_activity=activity,
+        embedding_progress_recent=progress,
+    )
+    check = verdict.check("embedding")
+    assert check.state == expected
+    alerts = [item for item in hv.badge_alerts(verdict) if item["code"] == "outcome_embedding"]
+    if expected == hv.GREEN:
+        assert not alerts
+    else:
+        assert len(alerts) == 1
+        if activity:
+            assert activity in check.note
