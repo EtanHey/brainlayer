@@ -851,14 +851,24 @@ def finish(
         else:
             state["deferrals"].pop(key, None)
             notice = (key, None if code == 0 else f"BrainLayer {step.name} exited {code}; see its log")
-    _atomic_write(directory / "state.json", state)
     protected = state.get("incomplete_run")
+    replaced_key = KEYS.get(replaces) if code == 0 and not stopped else None
+    if replaced_key and preserve_abandonment_alerts and protected and replaced_key in _abandonment_alerts(protected):
+        replaced_key = None
+    if replaced_key:
+        state["deferrals"].pop(replaced_key, None)
+    _atomic_write(directory / "state.json", state)
     if notice is not None and not (preserve_abandonment_alerts and protected and key in _abandonment_alerts(protected)):
         try:
             report(*notice)
         except OSError as exc:
             # An alert-file failure does not undo a completed step or imply lost custody.
             record(directory, event="alert-error", step=step.name, error=type(exc).__name__)
+    if replaced_key:
+        try:
+            report(replaced_key, None)
+        except OSError as exc:
+            record(directory, event="alert-error", step=replaces, error=type(exc).__name__)
     return status
 
 
