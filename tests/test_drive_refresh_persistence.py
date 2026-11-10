@@ -7,11 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 
-@pytest.mark.parametrize("changed", [False, True])
-def test_refresh_replaces_file_only_for_changed_access_facts(tmp_path, monkeypatch, changed):
+@pytest.mark.parametrize("entry", ["loader", "status"])
+@pytest.mark.parametrize("changed", ["none", "access", "lifetime"])
+def test_refresh_replaces_file_only_for_changed_access_facts(tmp_path, monkeypatch, changed, entry):
     import google.auth._helpers as helpers
 
-    from brainlayer.drive_credentials import load_credentials
+    from brainlayer.drive_credentials import credential_status, load_credentials
 
     now = datetime(2026, 11, 10, tzinfo=UTC)
     monkeypatch.setattr(helpers, "utcnow", lambda: now.replace(tzinfo=None))
@@ -47,26 +48,38 @@ def test_refresh_replaces_file_only_for_changed_access_facts(tmp_path, monkeypat
             status=200,
             data=json.dumps(
                 {
-                    "access_token": "fake-new" if changed else "fake-access",
+                    "access_token": "fake-new" if changed == "access" else "fake-access",
                     "expires_in": 43200,
+                    **({"refresh_token_expires_in": 86400} if changed == "lifetime" else {}),
                 }
             ).encode(),
         )
 
+    first = None
     for _ in range(2):
-        load_credentials(
+        kwargs = dict(
             token_path=token,
             client_path=client,
             request_factory=lambda: endpoint,
-            force_refresh=True,
-            persist_refresh=True,
             alert_reporter=lambda *_: None,
             now=now,
         )
+        if entry == "loader":
+            load_credentials(**kwargs, force_refresh=True, persist_refresh=True)
+        else:
+            assert credential_status(**kwargs)["state"] in {"valid", "expiring"}
+        stamp = token.read_bytes(), token.stat().st_ino, token.stat().st_mtime_ns
+        if first is None:
+            first = stamp
+        else:
+            assert stamp == first
     assert len(calls) == 2
     after = token.read_bytes(), token.stat().st_ino, token.stat().st_mtime_ns
-    if changed:
-        assert json.loads(token.read_text())["access_token"] == "fake-new"
+    if changed != "none":
+        if changed == "access":
+            assert json.loads(token.read_text())["access_token"] == "fake-new"
+        else:
+            assert json.loads(token.read_text())["refresh_expires_at"] == (now + timedelta(days=1)).isoformat()
         assert after != before
     else:
         assert after == before

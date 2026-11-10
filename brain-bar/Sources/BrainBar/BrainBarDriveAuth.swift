@@ -2,7 +2,7 @@ import Foundation
 
 // "Reconnect Google Drive" (Etan: "click once and never again"). BrainBar reads and renews the
 // Drive access that BrainLayer's backups use ONLY through the backend's CLI contract:
-//   brainlayer backup auth --status --json → {"state":"valid"|"expiring"|"missing"|"invalid",
+//   brainlayer backup auth --status --json → {"state":"valid"|"expiring"|"missing"|"invalid"|"unknown",
 //                                            "reason":…, "expires_at":…, "days_left":…}
 //   brainlayer backup auth --json          → {"status":"ok"|"cancelled"|"timeout"|"error", "reason":…}
 // It only stats the token file; it never reads its contents and never shows a token.
