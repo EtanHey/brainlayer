@@ -21,6 +21,7 @@ from .supervisor_adapters import ALIASES
 
 TRANSCRIPT_RECOVERY_RUN_TIMEOUT = 7500
 TRANSCRIPT_RECOVERY_EXIT_TIMEOUT = 60
+UPLOAD_RECOVERY_TIMEOUT = 3690
 RESOURCE_POLICY_KEYS = ("SoftResourceLimits", "Nice", "LowPriorityIO", "ProcessType")
 
 PLIST_KEYS = set(
@@ -218,6 +219,18 @@ def with_brainbar_monitor(components, path):
                 stdout=logs / "transcript-backup-recovery.out.log",
                 stderr=logs / "transcript-backup-recovery.err.log",
                 policy=source.policy.copy(),
+            )
+            from dataclasses import replace
+
+            recovery = components["transcript-backup-recovery"]
+            components["database-upload-recovery"] = replace(
+                recovery,
+                argv=tuple("--recover-upload" if arg == "--recover-transcripts" else arg for arg in recovery.argv),
+                env=recovery.env
+                | {key: value for key, value in source.env.items() if key.startswith("BRAINLAYER_BACKUP_")},
+                run_timeout=UPLOAD_RECOVERY_TIMEOUT + 120,
+                stdout=logs / "database-upload-recovery.out.log",
+                stderr=logs / "database-upload-recovery.err.log",
             )
     return components
 
