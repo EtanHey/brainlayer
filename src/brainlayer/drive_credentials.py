@@ -276,7 +276,13 @@ def load_credentials(
                 if lifetime is not None:
                     token_data["refresh_expires_at"] = lifetime
             if persist_refresh:
-                if creds.token != token_data.get("access_token") or creds.expiry != _expiry(token_data):
+                previous_expiry = _expiry(token_data)
+                expiry_changed = (
+                    creds.expiry != previous_expiry
+                    if creds.expiry is None or previous_expiry is None
+                    else abs((creds.expiry - previous_expiry).total_seconds()) > 60
+                )
+                if creds.token != token_data.get("access_token") or expiry_changed:
                     token_data["access_token"] = creds.token
                     token_data["expiry"] = creds.expiry.isoformat() if creds.expiry else None
                 if token_data != original_token_data:
