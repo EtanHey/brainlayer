@@ -266,9 +266,9 @@ def load_credentials(
                         "Drive token refresh temporarily unavailable: Google's token endpoint failed retryably"
                     ) from None
                 raise DriveCredentialError("Drive token refresh failed; run brainlayer backup auth") from None
-            if observed.token_response is not None and (
-                observed.token_response.get("refresh_token_expires_in") is not None
-                or token_data.get("refresh_expires_at") is None
+            if (
+                observed.token_response is not None
+                and observed.token_response.get("refresh_token_expires_in") is not None
             ):
                 lifetime = _grant_metadata(observed.token_response, now or dt.datetime.now(dt.UTC))
                 if lifetime is not None:
