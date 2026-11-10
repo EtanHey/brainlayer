@@ -84,7 +84,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             now: BrainBarOnePageTestFixture.now
         )
         XCTAssertNil(presentation.indexedToday)
-        XCTAssertEqual(presentation.indexedTodayUnavailableText, "not measured yet today")
+        XCTAssertEqual(presentation.indexedTodayUnavailableText, "Indexed today could not be read: no sample")
         // #965: agent writes come from the DB, not this unmeasured document.
         XCTAssertEqual(presentation.agentWritesCount, 175)
         XCTAssertEqual(presentation.agentWritesText, "brain_store calls by agents, last 24 h")

@@ -4,6 +4,15 @@ import XCTest
 
 @MainActor
 final class BrainBarHealthVerdictTests: XCTestCase {
+    func testExportedRowsIncludeNoticesAndDeduplicateInWindowOrder() {
+        let verdict = BrainBarStatusVerdict(attention: ["Backup failed"],
+            notices: ["Maintenance failed", "Backup failed"], oldNotices: ["Yesterday"],
+            isChecking: false, dotOverride: .amber)
+        XCTAssertEqual(verdict.currentRows, ["Backup failed", "Maintenance failed"])
+        XCTAssertEqual(verdict.currentRowCount, verdict.currentRows.count)
+        XCTAssertEqual(verdict.dashboardStatus.headline, "2 things need you")
+    }
+
     private let now = BrainBarStatusSnapshotTests.now
 
     private func badge(_ dot: String?, age: Double = 0, generatedAge: Double = 0,
@@ -264,7 +273,8 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             XCTAssertNotNil(json["verdict_evaluated_at"])
             XCTAssertNotNil(json["app_version"])
             XCTAssertNotNil(json["git_commit"])
-            XCTAssertEqual((json["reasons"] as? [String])?.isEmpty, state == "green")
+            XCTAssertEqual(json["reasons"] as? [String],
+                BrainBarStatusPopoverController.verdictRows(raw.healthVerdict!).map(\.text))
             if state != "green" {
                 XCTAssertEqual(BrainBarStatusPopoverController.verdictRows(health).map(\.text),
                     ["Database snapshot (verified): Fixture backup age", "Weekly maintenance deferred"])
@@ -287,7 +297,7 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             XCTAssertEqual(receipt["source"] as? String, "fallback")
             XCTAssertNotNil(receipt["verdict_evaluated_at"] as? String)
             let reasons = try XCTUnwrap(receipt["reasons"] as? [String])
-            XCTAssertTrue(reasons.first?.hasPrefix("Health check stale since ") == true)
+            XCTAssertTrue(reasons.contains { $0.hasPrefix("Health check stale since ") })
             XCTAssertFalse(reasons.contains(raw.reason))
             XCTAssertTrue(controller.contextMenuForTesting.items.contains { $0.title.hasPrefix("Health check stale since ") })
         }

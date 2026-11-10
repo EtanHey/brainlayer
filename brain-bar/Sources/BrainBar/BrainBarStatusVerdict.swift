@@ -29,9 +29,9 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
             return .init(headline: headline, reason: details.isEmpty ? nil
                 : details.joined(separator: "; "), tone: dotOverride == .green ? .green : .amber)
         }
-        if let first = attention.first {
-            return .init(headline: attention.count == 1 ? "1 thing needs you" : "\(attention.count) things need you",
-                         reason: ([first] + notices).joined(separator: "; "), tone: .amber)
+        if !attention.isEmpty {
+            return .init(headline: currentRowCount == 1 ? "1 thing needs you" : "\(currentRowCount) things need you",
+                         reason: currentRows.joined(separator: "; "), tone: .amber)
         }
         if !notices.isEmpty || !oldNotices.isEmpty {
             return .init(headline: "Status notice", reason: (notices + oldNotices).joined(separator: "; "), tone: .neutral)
@@ -41,7 +41,12 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
     }
 
     /// Every distinct current row; historical rows never count (compact headline, 2026-11-08).
-    var currentRowCount: Int { Set(attention + notices).count }
+    var currentRows: [String] {
+        var seen = Set<String>()
+        return (attention + notices).filter { seen.insert($0).inserted }
+    }
+
+    var currentRowCount: Int { currentRows.count }
 
     /// The menu and Dashboard headline under a verdict dot: a true count of the rows below it.
     /// Without any row it falls back to the dot's own words.
@@ -56,7 +61,7 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
     }
 
     var safeHeadline: String {
-        let count = Set(attention + notices).count
+        let count = currentRowCount
         return count == 0 ? "All good" : "Memory safe · \(count) \(count == 1 ? "thing" : "things") to look at"
     }
 

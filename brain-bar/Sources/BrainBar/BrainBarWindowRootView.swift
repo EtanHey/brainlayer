@@ -630,7 +630,7 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
                         agentActivity: agentActivity, now: now, calendar: calendar, locale: locale,
                         observabilityCadence: observabilityCadence, backupNow: backupNow)
         if statusVerdict.dotOverride != nil {
-            presentation.attentionItems = statusVerdict.attention + statusVerdict.notices
+            presentation.attentionItems = statusVerdict.currentRows
         }
         presentation.backupLines = backupRunLines(presentation.backupLines, verdict: statusVerdict)
         return presentation
@@ -713,8 +713,9 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         } else {
             totalIndexedChunks = stats.chunkCount
             indexedToday = nil
-            if case .readable = observability {
-                indexedTodayUnavailableText = "not measured yet today"
+            if case let .readable(document) = observability {
+                let reason = document.stores.reason.trimmingCharacters(in: .whitespacesAndNewlines)
+                indexedTodayUnavailableText = "Indexed today could not be read: \(reason.isEmpty ? "stores measurement unavailable" : reason)"
             } else if case let .unreadable(reason) = observability {
                 indexedTodayUnavailableText = "Indexed today unavailable: \(reason)"
             } else {

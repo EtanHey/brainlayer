@@ -377,7 +377,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     nonisolated static func problemRows(_ verdict: BrainBarStatusVerdict, health: BrainBarHealthVerdict?) -> [VerdictRow] {
         var seen = Set<String>()
-        return (verdict.attention + verdict.notices + verdict.oldNotices).filter { seen.insert($0).inserted }.map { text in
+        return (verdict.currentRows + verdict.oldNotices).filter { seen.insert($0).inserted }.map { text in
             VerdictRow(text: text, state: health?.dot == .green ? nil
                 : health?.checks.first(where: { $0.text == text })?.state
                     ?? (verdict.attention.contains(text) ? .red : nil), isOld: verdict.oldNotices.contains(text))
@@ -480,16 +480,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         if let model = runtime.jobsModel { health = model.publishedStatus.healthVerdict ?? model.healthBadge?.healthVerdict }
 #endif
         let verdict = currentVerdict
-        var reasons = verdict.dotOverride == nil ? verdict.attention
-            : health?.checks.filter { $0.state != .green }.map(\.text) ?? []
-        if verdict.healthVerdictIsStale, let health {
-            reasons = [health.fallbackNotice(now: Date())]
-                + (health.dot == .red ? health.checks.filter { $0.state == .red }.map(\.text) : [])
-        }
-        if verdict.dot != .green && reasons.isEmpty { reasons = ["Health check: \(verdict.dot.rawValue)"] }
         let receipt = BrainBarUIStatusReceipt(renderedAt: Date(), dot: verdict.dot,
             source: verdict.dotOverride == nil || verdict.healthVerdictIsStale ? "fallback" : "verdict", verdictEvaluatedAt: health?.evaluatedAt,
-            reasons: verdict.dot == .green ? [] : reasons,
+            reasons: verdict.currentRows,
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
             gitCommit: Bundle.main.object(forInfoDictionaryKey: "GitCommit") as? String ?? "unknown")
         statusPublisher.publish(receipt, to: BrainBarUIStatusReceipt.url(dbPath: dbPath))
