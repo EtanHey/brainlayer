@@ -1,4 +1,4 @@
-"""Inactive scheduled calendar runner with isolated groups and scoped writer holds."""
+"""Scheduled calendar runner with isolated groups and scoped writer holds."""
 
 import asyncio
 import datetime as dt
@@ -1053,6 +1053,23 @@ async def _admit_calendar(steps, directory, date, transcript_recovery, guard_tim
         raise
 
 
+async def _supervisor_status(read, directory, stop, sleep_fn, *, step=None):
+    # Replaying a grant after an ambiguous timeout can duplicate a mutation.
+    for attempt, delay in enumerate((2, 4, 8, 16, 30, 30, 0), 1):
+        if stop.is_set():
+            break
+        try:
+            return await _blocking(read)
+        except TimeoutError:
+            detail = dict(step=step) if step is not None else dict(phase="runner-start")
+            await _blocking(record, directory, event="supervisor-status-timeout", attempt=attempt, **detail)
+            while delay > 0 and not stop.is_set():
+                interval = min(0.1, delay)
+                await sleep_fn(interval)
+                delay -= interval
+    return None
+
+
 async def run_calendar(
     steps,
     directory,
@@ -1149,7 +1166,6 @@ async def run_calendar(
         steps = tuple(steps)
         weekly_substitution = planned and any(step.name == "maintenance-weekly" for step in steps)
         index_overran_window = False
-        client = maintenance_control.control_client()
         await _blocking(logs.mkdir, parents=True, exist_ok=True)
 
         def start_guard():
@@ -1179,11 +1195,13 @@ async def run_calendar(
             for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
                 handlers[sig] = signal.getsignal(sig)
                 loop.add_signal_handler(sig, stop.set)
+        client = await _supervisor_status(maintenance_control.control_client, directory, stop, sleep_fn)
         env = os.environ | dict(
             BRAINLAYER_CALENDAR_STEP="1",
             BRAINLAYER_CALENDAR_GUARD_FD=str(guard.stdin.fileno()),
-            BRAINLAYER_SUPERVISOR_SOCKET=str(client.path),
         )
+        if client is not None:
+            env["BRAINLAYER_SUPERVISOR_SOCKET"] = str(client.path)
         env.pop("BRAINLAYER_BACKUP_SUPERVISED_CHILD", None)
         env.pop(BACKUP_INVOCATION_ENV, None)
         env.pop(MAINTENANCE_RUN_ID_ENV, None)  # Never let an inherited id stand for this run.
@@ -1210,24 +1228,20 @@ async def run_calendar(
                     bounded = await _blocking(_bounded_index_step, step, now_fn(), shutdown_timeout)
                 elif step.name == "backup-snapshot":
                     bounded = await _blocking(_bounded_snapshot_step, step, now_fn(), shutdown_timeout)
-                if bounded is None:
+                if client is None:
+                    code, reason = 75, "supervisor-status-unavailable"
+                elif bounded is None:
                     code, reason = 75, "maintenance-window"
                 else:
                     step = bounded
-                    # A status read is idempotent: allow up to three 2s socket attempts under
-                    # load before aborting the night. Never replay pause/resume or hold grants.
-                    for attempt in range(1, 4):
-                        try:
-                            states = await _blocking(client.request)
-                            break
-                        except TimeoutError:
-                            await _blocking(
-                                record, directory, event="supervisor-status-timeout", step=step.name, attempt=attempt
-                            )
-                            if attempt == 3 or stop.is_set():
-                                raise
-                    disabled = client._disabled(states, include_paused=failed_recovery)
-                    if f"com.brainlayer.{_service_name(step)}" in disabled or "com.brainlayer.maintenance" in disabled:
+                    states = await _supervisor_status(client.request, directory, stop, sleep_fn, step=step.name)
+                    if stop.is_set():
+                        code = 143
+                    elif states is None:
+                        code, reason = 75, "supervisor-status-unavailable"
+                    elif f"com.brainlayer.{_service_name(step)}" in client._disabled(
+                        states, include_paused=failed_recovery
+                    ) or "com.brainlayer.maintenance" in client._disabled(states, include_paused=failed_recovery):
                         code, reason = 75, "disabled"
                     elif not await _window(directory, step, now_fn, sleep_fn, stop):
                         code, missed = (143, False) if stop.is_set() else (75, True)
@@ -1283,11 +1297,9 @@ async def run_calendar(
                                         window_end = started.replace(hour=6, minute=0, second=0, microsecond=0)
                                         index_overran_window = started < window_end <= ended
                         except maintenance_control.HoldWindowClosed:
-                            # The window closed between the check and the grant: defer, keep the plan going.
                             code, reason = 75, "maintenance-window"
                         except HoldBusy as exc:
                             holders = getattr(exc, "holders", [])
-                            # Another holder has the lease: defer this step, keep the plan (and backup) going.
                             code, reason = 75, "maintenance-hold-busy"
             except (OSError, RuntimeError, ValueError) as exc:
                 await _blocking(record, directory, event="step-error", step=step.name, error=type(exc).__name__)

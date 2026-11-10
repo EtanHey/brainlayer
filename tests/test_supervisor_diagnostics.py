@@ -1,7 +1,32 @@
-"""Private bounded diagnostic sink behavior; mapped by the module filename."""
-
 import json
 import os
+
+import pytest
+
+
+@pytest.mark.parametrize("failure", ["io", "oversized"])
+def test_human_warning_survives_journal_failure(tmp_path, monkeypatch, caplog, failure):
+    from brainlayer import supervisor_diagnostics as module
+
+    sink = module.DiagnosticSink.open(tmp_path / "events.jsonl")
+    write = os.write
+
+    def failed_write(fd, data):
+        if fd == sink.fd:
+            raise OSError("private journal failure")
+        return write(fd, data)
+
+    if failure == "io":
+        monkeypatch.setattr(module.os, "write", failed_write)
+    sink.emit(
+        event="interval-delayed",
+        component="probe",
+        delay_s=12,
+        reason="scheduler-gap",
+        padding="x" * (9000 if failure == "oversized" else 0),
+    )
+    sink.close(drain=1)
+    assert "periodic component probe delayed 12.0s: scheduler-gap" in caplog.text
 
 
 def test_diagnostic_sink_is_capped_and_blocked_writer_cannot_block_emit(tmp_path, monkeypatch):
@@ -104,3 +129,59 @@ def test_refuses_unsafe_sink_paths(tmp_path):
     for path in (symlink, hardlink, fifo, readable):
         with pytest.raises(OSError):
             DiagnosticSink.open(path)
+
+
+@pytest.mark.parametrize("close_error", [False, True])
+def test_human_logging_continues_after_journal_write_failure(tmp_path, monkeypatch, caplog, close_error):
+    import threading
+
+    from brainlayer import supervisor_diagnostics as module
+
+    sink = module.DiagnosticSink.open(tmp_path / "events.jsonl")
+    journal_fd, write = sink.fd, os.write
+    failed = threading.Event()
+
+    def failed_write(fd, data):
+        if fd == journal_fd:
+            failed.set()
+            raise OSError("private full disk")
+        return write(fd, data)
+
+    monkeypatch.setattr(module.os, "write", failed_write)
+    if close_error:
+        close, raised = os.close, []
+
+        def failed_close(fd):
+            close(fd)
+            if fd == journal_fd and not raised:
+                raised.append(fd)
+                raise OSError("private close failure")
+
+        monkeypatch.setattr(module.os, "close", failed_close)
+    try:
+        sink.emit(event="interval-delayed", component="first", delay_s=2, reason="scheduler-gap")
+        assert failed.wait(1)
+        sink.emit(event="interval-delayed", component="second", delay_s=3, reason="scheduler-gap")
+        try:
+            raise RuntimeError("later startup failure")
+        except RuntimeError as error:
+            sink.emit(
+                event="component-startup-failed", error=str(error), exc_info=(type(error), error, error.__traceback__)
+            )
+    finally:
+        sink.close(drain=1)
+    assert "periodic component first delayed 2.0s" in caplog.text
+    assert "periodic component second delayed 3.0s" in caplog.text
+    assert "RuntimeError: later startup failure" in caplog.text
+
+
+def test_human_logging_survives_unavailable_journal(tmp_path, caplog):
+    from brainlayer.supervisor_diagnostics import DiagnosticSink
+
+    sink = DiagnosticSink.open(tmp_path / "missing-parent" / "events.jsonl", journal_optional=True)
+    assert sink.fd is None
+    sink.emit(event="interval-delayed", component="probe", delay_s=4, reason="scheduler-gap")
+    sink.emit(event="component-startup-failed", error="startup without journal")
+    sink.close(drain=1)
+    assert "periodic component probe delayed 4.0s" in caplog.text
+    assert "supervisor component startup failed\nstartup without journal" in caplog.text
