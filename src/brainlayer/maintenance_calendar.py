@@ -1181,9 +1181,12 @@ async def run_calendar(
                     code, reason = 75, "maintenance-window"
                 else:
                     step = bounded
-                    # A status read is idempotent: allow up to three 2s socket attempts under
-                    # load before aborting the night. Never replay pause/resume or hold grants.
-                    for attempt in range(1, 4):
+                    # Seven 2s requests plus 90s backoff tolerate scheduler gaps without
+                    # replaying mutations. Unreadable policy never authorizes a child.
+                    states = None
+                    for attempt, delay in enumerate((2, 4, 8, 16, 30, 30, 0), 1):
+                        if stop.is_set():
+                            break
                         try:
                             states = await _blocking(client.request)
                             break
@@ -1191,10 +1194,17 @@ async def run_calendar(
                             await _blocking(
                                 record, directory, event="supervisor-status-timeout", step=step.name, attempt=attempt
                             )
-                            if attempt == 3 or stop.is_set():
-                                raise
-                    disabled = client._disabled(states, include_paused=failed_recovery)
-                    if f"com.brainlayer.{_service_name(step)}" in disabled or "com.brainlayer.maintenance" in disabled:
+                            while delay > 0 and not stop.is_set():
+                                interval = min(0.1, delay)
+                                await sleep_fn(interval)
+                                delay -= interval
+                    if stop.is_set():
+                        code = 143
+                    elif states is None:
+                        code, reason = 75, "supervisor-status-unavailable"
+                    elif f"com.brainlayer.{_service_name(step)}" in client._disabled(
+                        states, include_paused=failed_recovery
+                    ) or "com.brainlayer.maintenance" in client._disabled(states, include_paused=failed_recovery):
                         code, reason = 75, "disabled"
                     elif not await _window(directory, step, now_fn, sleep_fn, stop):
                         code, missed = (143, False) if stop.is_set() else (75, True)

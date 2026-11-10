@@ -1293,7 +1293,7 @@ def test_busy_maintenance_hold_defers_the_step_and_the_backup_still_runs(tmp_pat
     [
         (TimeoutError, 1, 3, True),
         (TimeoutError, 2, 4, True),
-        (TimeoutError, 3, 3, False),
+        (TimeoutError, 3, 5, True),
         (PermissionError, 1, 1, False),
         (ValueError, 1, 1, False),
         (RuntimeError, 1, 1, False),
@@ -1307,6 +1307,10 @@ def test_calendar_status_timeout_is_bounded_without_skipping_backup(
 
     monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "alerts.json"))
     monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "fixture.env"))
+
+    async def no_wait(_seconds):
+        pass
+
     calls = []
 
     def status():
@@ -1335,7 +1339,9 @@ def test_calendar_status_timeout_is_bounded_without_skipping_backup(
     ]
     directory = tmp_path / "calendar"
     result = asyncio.run(
-        run_calendar(steps, directory, tmp_path / "logs", now_fn=lambda: dt.datetime(2026, 11, 8, 5, 20))
+        run_calendar(
+            steps, directory, tmp_path / "logs", now_fn=lambda: dt.datetime(2026, 11, 8, 5, 20), sleep_fn=no_wait
+        )
     )
     assert result == (0 if succeeds else 1)
     assert len(calls) == expected_calls
@@ -1388,3 +1394,65 @@ def test_busy_inherited_maintenance_lease_still_aborts(monkeypatch):
     with pytest.raises(BlockingIOError) as raised:
         asyncio.run(enter(True))
     assert not isinstance(raised.value, calendar.HoldBusy)
+
+
+@pytest.mark.parametrize("outage,interrupt", [(8, False), (float("inf"), False), (float("inf"), True)])
+def test_status_outage_defers_safely_and_stop_interrupts_backoff(tmp_path, monkeypatch, outage, interrupt):
+    from brainlayer import maintenance_calendar as calendar
+
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "alerts.json"))
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "fixture.env"))
+    elapsed = [0.0]
+    real_event = asyncio.Event
+    events = []
+
+    def event():
+        value = real_event()
+        events.append(value)
+        return value
+
+    monkeypatch.setattr(calendar.asyncio, "Event", event)
+
+    async def advance(seconds):
+        elapsed[0] += seconds
+        if interrupt:
+            events[0].set()  # The runner's stop event, before the heartbeat event.
+        await asyncio.sleep(0)
+
+    def status():
+        if elapsed[0] < outage:
+            raise TimeoutError("private detail")
+        return {}
+
+    monkeypatch.setattr(
+        calendar.maintenance_control,
+        "control_client",
+        lambda: SimpleNamespace(path=tmp_path / "unused.sock", request=status, _disabled=lambda *_a, **_k: set()),
+    )
+    marker = tmp_path / "children"
+    steps = [
+        calendar.Step(name, (sys.executable, "-c", f"open({str(marker)!r}, 'a').write({name!r}+'\\n')"), 10)
+        for name in ("decay", "backup-daily")
+    ]
+    directory = tmp_path / "calendar"
+    result = asyncio.run(
+        run_calendar(
+            steps, directory, tmp_path / "logs", sleep_fn=advance, now_fn=lambda: dt.datetime(2026, 11, 8, 5, 20)
+        )
+    )
+    rows = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
+    finished = [row for row in rows if row["event"] == "finished"]
+    if outage == 8:
+        assert result == 0
+        assert marker.read_text().splitlines() == ["decay", "backup-daily"]
+    elif interrupt:
+        assert result == 1
+        assert not marker.exists()
+        assert elapsed[0] < 1
+    else:
+        assert result == 0
+        assert not marker.exists()
+        assert len(finished) == 2
+        assert all(row["status"] == "deferred" and row["reason"] == "supervisor-status-unavailable" for row in finished)
+        assert rows[-1]["failed"] == 0
+        assert elapsed[0] == pytest.approx(180)
