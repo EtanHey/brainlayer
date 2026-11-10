@@ -3181,6 +3181,10 @@ No results found.
             storedContents = (try? chunkContents(path: dbPath)) ?? []
             if storedContents.contains(queuedContent) {
                 storedObservations += 1
+                if storedObservations == 1 {
+                    XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path),
+                                  "queue must remain durable while its commit barrier is held")
+                }
                 // Cleanup must remain pending through the first visible-row observation.
                 if storedObservations == 2 { releaseDurability.signal() }
                 if !FileManager.default.fileExists(atPath: queuePath.path) { break }
