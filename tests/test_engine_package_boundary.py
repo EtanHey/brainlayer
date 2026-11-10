@@ -35,6 +35,7 @@ def test_pyproject_declares_pure_engine_package_boundary() -> None:
         "scripts/tier0-watchdog.sh",
         # The wheel force-includes this script, so the sdist must carry its source too.
         "scripts/release-verify-signatures.sh",
+        "scripts/brainlayer-version-check.sh",
         "README.md",
         "LICENSE",
         "server.json",

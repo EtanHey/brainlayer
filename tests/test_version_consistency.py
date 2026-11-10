@@ -367,3 +367,40 @@ def test_script_env_scrubs_every_version_check_override(monkeypatch: pytest.Monk
     leaked = [name for name in _script_env() if name.startswith(("GIT_", "BRAINLAYER_VERSION_CHECK_"))]
 
     assert leaked == []
+
+
+def test_installed_mode_ignores_stale_sibling_checkout_and_git_tag(tmp_path):
+    import plistlib
+
+    fixture, stale_tap, version = _copy_version_fixture(tmp_path)
+    installed_tap = tmp_path / "installed-tap"
+    (installed_tap / "Casks").mkdir(parents=True)
+    # A tap AHEAD of this Mac means an update is available; installed mode must not consult it.
+    (installed_tap / "Casks/brainbar.rb").write_text('cask "brainbar" do\n  version "99.0.0"\nend\n')
+    (stale_tap / "Casks/brainbar.rb").write_text('version "0.0.1"\n')
+    app = tmp_path / "Info.plist"
+    app.write_bytes(plistlib.dumps({"BrainLayerReleaseVersion": version}))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    brew = bin_dir / "brew"
+    brew.write_text(
+        f'#!/bin/sh\n[ "$1" = "--repo" ] && [ "$2" = "etanhey/layers" ] || exit 2\nprintf "%s\\n" "{installed_tap}"\n'
+    )
+    brew.chmod(0o755)
+    env = _script_env()
+    env.update(
+        PATH=f"{bin_dir}:{env['PATH']}",
+        BRAINLAYER_VERSION_CHECK_REPO_ROOT=str(fixture),
+        BRAINLAYER_VERSION_CHECK_TAP_ROOT=str(stale_tap),
+        BRAINLAYER_VERSION_CHECK_GIT_TAG="v0.0.1",
+    )
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--installed", version, str(app)], env=env, text=True, capture_output=True
+    )
+    assert result.returncode == 0, result.stderr
+    app.write_bytes(plistlib.dumps({"BrainLayerReleaseVersion": "0.0.1"}))
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--installed", version, str(app)], env=env, text=True, capture_output=True
+    )
+    assert result.returncode == 1
+    assert "BrainBar=0.0.1" in result.stderr
