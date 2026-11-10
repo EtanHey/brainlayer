@@ -3114,6 +3114,13 @@ No results found.
         let db = BrainDatabase(path: dbPath)
         defer { db.close() }
         db.failNextStoreWithBusyForTesting = true
+        let durabilityEntered = DispatchSemaphore(value: 0)
+        let releaseDurability = DispatchSemaphore(value: 0)
+        defer { releaseDurability.signal() }
+        db.commitDurabilityBarrierWillSyncForTesting = {
+            durabilityEntered.signal()
+            XCTAssertEqual(releaseDurability.wait(timeout: .now() + 5), .success)
+        }
 
         let router = MCPRouter(profile: "full", pendingStoreDrainQueue: drainQueue)
         defer { withExtendedLifetime(router) {} }
@@ -3167,11 +3174,16 @@ No results found.
         }
 
         let deadline = Date().addingTimeInterval(2.0)
+        XCTAssertEqual(durabilityEntered.wait(timeout: .now() + 2), .success)
+        var storedObservations = 0
         var storedContents: [String] = []
         while Date() < deadline {
             storedContents = (try? chunkContents(path: dbPath)) ?? []
             if storedContents.contains(queuedContent) {
-                break
+                storedObservations += 1
+                // Cleanup must remain pending through the first visible-row observation.
+                if storedObservations == 2 { releaseDurability.signal() }
+                if !FileManager.default.fileExists(atPath: queuePath.path) { break }
             }
             Thread.sleep(forTimeInterval: 0.05)
         }
