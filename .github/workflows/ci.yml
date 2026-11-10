@@ -276,7 +276,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2  # Include the PR merge commit parents for the mapping allowlist ratchet.
+          fetch-depth: 2  # Include the merge parents; the event base is fetched explicitly below.
+
+      - name: Fetch immutable PR base for the allowlist ratchet
+        if: github.event_name == 'pull_request'
+        env:
+          RATCHET_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git fetch --no-tags --depth=1 origin "$RATCHET_BASE_SHA"
 
       - uses: actions/setup-python@v5
         with:
