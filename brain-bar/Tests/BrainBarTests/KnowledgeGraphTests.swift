@@ -46,7 +46,7 @@ final class KGDatabaseTests: XCTestCase {
         )
 
         let cache = EntityCache()
-        cache.load(from: handle)
+        cache.load(from: db)
 
         XCTAssertEqual(cache.detectEntities(in: "Andrew Kelley and But Ben").map(\.name), ["Andrew Kelley"])
     }

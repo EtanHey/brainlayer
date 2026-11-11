@@ -30,7 +30,6 @@ RECEIPT_TAIL_BYTES = 4 * 1024 * 1024
 STORE_ROUNDTRIP_MAX_AGE_S = 36 * 3600
 STORE_ROUNDTRIP_FILE = "store-roundtrip.json"
 EMBEDDING_WINDOW_HOURS = 24
-DRIVE_CONSENT_DAYS = 7  # Same testing-app consent lifetime drive_credentials.credential_status uses.
 
 # "Couldn't look" codes: the monitor's own blind spots, never an outcome.
 BLIND_CODES = frozenset(
@@ -153,7 +152,8 @@ def drive_auth_fact(
     if token is None or not token.get("refresh_token"):
         return "consent_needed"
     consented = _aware(token.get("consented_at"))
-    if consented is not None and now >= consented + timedelta(days=DRIVE_CONSENT_DAYS):
+    expires = _aware(token.get("refresh_expires_at"))
+    if expires is not None and now >= expires:
         return "consent_needed"
     known = [event for event in events if event is not None and (consented is None or event[0] > consented)]
     return max(known, key=lambda event: event[0])[1] if known else "ok"

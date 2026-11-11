@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import plistlib
 import subprocess
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -342,7 +344,6 @@ def test_active_job_alert_enters_backup_health_surface_from_supplied_env(tmp_pat
 
 
 def test_usable_expiring_consent_does_not_force_backup_error(tmp_path, monkeypatch):
-    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")  # the 7-day clock is Testing-mode only (#1677)
     from types import SimpleNamespace
 
     from brainlayer import drive_credentials, job_alerts
@@ -353,7 +354,7 @@ def test_usable_expiring_consent_does_not_force_backup_error(tmp_path, monkeypat
             {
                 "access_token": "fixture-access",
                 "refresh_token": "fixture-refresh",
-                "consented_at": "2026-09-07T12:00:00Z",
+                "refresh_expires_at": "2026-09-14T12:00:00Z",
             }
         )
     )
@@ -677,6 +678,7 @@ def test_production_defaults_are_db_relative(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setattr(observability_backup.jsonl_backup, "DEFAULT_LOG_PATH", logs / "jsonl-backup.log")
     disabled = tmp_path / "Library" / "LaunchAgents" / ".disabled-retention-P0"
     disabled.mkdir(parents=True)
+    os.utime(disabled, (time.time(), time.time()))
     launchd = tmp_path / "launchd.txt"
     launchd.write_bytes((FIXTURES / "launchd" / "healthy-dev.txt").read_bytes())
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -702,13 +704,16 @@ def test_producer_without_observability_wiring_measures_all_sections(
     db = tmp_path / "snapshot" / "brainlayer.db"
     db.parent.mkdir(parents=True)
     db.write_bytes(case.read_bytes())
+    os.utime(db, (time.time(), time.time()))
     logs = db.parent / "logs"
     logs.mkdir()
     for name in ("jsonl-backup.log", "backup-daily.log"):
         (logs / name).write_bytes((FIXTURES / "logs" / "healthy-dev" / name).read_bytes())
+        os.utime(logs / name, (time.time(), time.time()))
     monkeypatch.setattr(observability_backup.jsonl_backup, "DEFAULT_LOG_PATH", logs / "jsonl-backup.log")
     disabled = tmp_path / "Library" / "LaunchAgents" / ".disabled-retention-P0"
     disabled.mkdir(parents=True)
+    os.utime(disabled, (time.time(), time.time()))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     launchd_text = (FIXTURES / "launchd" / "healthy-dev.txt").read_text(encoding="utf-8")
     real_run = subprocess.run
@@ -725,7 +730,7 @@ def test_producer_without_observability_wiring_measures_all_sections(
     document, _ = observability_surface.build_document(env={"BRAINLAYER_DB": str(db)})
 
     for section in ("stores", "emitters", "author_unknown", "backups"):
-        assert document[section]["state"] == "measured"
+        assert document[section]["state"] == "measured", document[section]
     assert document["transport"]["state"] == "unmeasurable"
     schema = json.loads((FIXTURES / "observability-schema.v2.json").read_text(encoding="utf-8"))
     jsonschema.validate(document, schema)
@@ -797,13 +802,16 @@ def test_subprocess_error_keeps_document_measured_except_for_backups(
     db = tmp_path / "snapshot" / "brainlayer.db"
     db.parent.mkdir(parents=True)
     db.write_bytes(case.read_bytes())
+    os.utime(db, (time.time(), time.time()))
     logs = db.parent / "logs"
     logs.mkdir()
     for name in ("jsonl-backup.log", "backup-daily.log"):
         (logs / name).write_bytes((FIXTURES / "logs" / "healthy-dev" / name).read_bytes())
+        os.utime(logs / name, (time.time(), time.time()))
     monkeypatch.setattr(observability_backup.jsonl_backup, "DEFAULT_LOG_PATH", logs / "jsonl-backup.log")
     disabled = tmp_path / "Library" / "LaunchAgents" / ".disabled-retention-P0"
     disabled.mkdir(parents=True)
+    os.utime(disabled, (time.time(), time.time()))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     real_run = subprocess.run
     monkeypatch.setattr(

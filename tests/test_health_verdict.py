@@ -977,3 +977,16 @@ def test_r2_backup_crossing_red_during_confirmed_sleep_keeps_catch_up():
         awake_clock_s=1030 + T.wake_grace_s + 1,
     )
     assert expired.check("backup_local").state == hv.RED
+
+
+def test_drive_attention_has_one_actionable_item():
+    verdict = run(
+        drive_auth="consent_needed",
+        notes=hv.notes_from_job_alerts({"drive-consent": "Drive access expired: Reconnect in BrainBar"}),
+    )
+    items = [
+        item for item in hv.badge_alerts(verdict) if item["code"] in ("outcome_drive_auth", "job_alert_drive-consent")
+    ]
+    assert len(items) == 1
+    assert items[0]["message"] == "Drive access expired: Reconnect in BrainBar"
+    assert items[0]["severity"] == "critical"

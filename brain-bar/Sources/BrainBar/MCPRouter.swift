@@ -441,8 +441,8 @@ final class MCPRouter: @unchecked Sendable {
     func setDatabases(write writeDB: BrainDatabase, read readDB: BrainDatabase) {
         database = writeDB
         readDatabase = readDB
-        entityCache.load(from: readDB.dbHandle)
-        entityCache.startRefreshTimer(db: readDB.dbHandle)
+        entityCache.load(from: readDB)
+        entityCache.startRefreshTimer(db: readDB)
         scheduleDrainForExistingPendingStores(db: writeDB)
     }
 

@@ -77,7 +77,7 @@ def test_fresh_evidence_fills_every_fact(tmp_path: Path) -> None:
         (
             "drive_auth",
             "drive_token_path",
-            '{"refresh_token": "r", "consented_at": "2026-10-20T00:00:00+00:00"}',
+            '{"refresh_token": "r", "refresh_expires_at": "2026-10-20T00:00:00+00:00"}',
             "consent_needed",
         ),
         ("store_canary_ok", "store_roundtrip_path", None, UNOBSERVED),
@@ -671,3 +671,28 @@ def test_r2_collector_pairs_tick_with_boot_and_awake_clock(tmp_path, monkeypatch
     assert calls == [["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"]]
     assert facts.boot_session == "test-boot"
     assert facts.awake_clock_s == 995.0
+
+
+@pytest.mark.parametrize("deadline", [None, "permanent", "2026-11-30T00:00:00+00:00"])
+def test_old_consent_does_not_expire_without_reported_deadline(deadline):
+    from brainlayer.health_facts import drive_auth_fact
+
+    token = {"refresh_token": "fixture", "consented_at": "2000-01-01T00:00:00+00:00"}
+    if deadline is not None:
+        token["refresh_expires_at"] = deadline
+    assert drive_auth_fact(token, NOW, []) == "ok"
+
+
+def test_reported_deadline_and_receipts_determine_offline_auth():
+    from brainlayer.health_facts import drive_auth_fact
+
+    token = {
+        "refresh_token": "fixture",
+        "consented_at": (NOW - timedelta(hours=1)).isoformat(),
+        "refresh_expires_at": NOW.isoformat(),
+    }
+    assert drive_auth_fact(token, NOW, []) == "consent_needed"
+    token["refresh_expires_at"] = "permanent"
+    assert drive_auth_fact(token, NOW, [(NOW - timedelta(hours=2), "consent_needed")]) == "ok"
+    assert drive_auth_fact(token, NOW, [(NOW, "refresh_failed")]) == "refresh_failed"
+    assert drive_auth_fact(token, NOW, [(NOW, "ok")]) == "ok"
