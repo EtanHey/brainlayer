@@ -21,6 +21,7 @@ Usage:
   python scripts/score_entity_health.py [--db PATH] [--contracts PATH]
 """
 
+import argparse
 import json
 import math
 import sys
@@ -261,13 +262,23 @@ def score_all_entities(store, contracts: Dict[str, Dict[str, Any]]) -> int:
     return scored
 
 
-def main():
-    """CLI entry point: score all entities in the production database."""
+def main(argv: Optional[list] = None):
+    """CLI entry point: score all entities in --db (default: the resolved BrainLayer database)."""
+    parser = argparse.ArgumentParser(description="Score entity health against type contracts.")
+    parser.add_argument("--db", type=Path, help="database to score (default: BRAINLAYER_DB or the canonical path)")
+    parser.add_argument(
+        "--contracts",
+        type=Path,
+        default=Path(__file__).parent.parent / "contracts" / "entity-types.yaml",
+        help="entity type contracts YAML",
+    )
+    args = parser.parse_args(argv)
+
     from brainlayer.paths import get_db_path
     from brainlayer.vector_store import VectorStore
 
-    db_path = get_db_path()
-    contracts_path = Path(__file__).parent.parent / "contracts" / "entity-types.yaml"
+    db_path = args.db.expanduser() if args.db else get_db_path()
+    contracts_path = args.contracts.expanduser()
 
     if not contracts_path.exists():
         print(f"ERROR: Contracts file not found at {contracts_path}")
