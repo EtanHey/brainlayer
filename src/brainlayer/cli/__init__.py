@@ -603,7 +603,9 @@ class _CalendarIndexCheckpoint:
 
 @app.command("observability")
 def observability_command(
-    ensure_indexes: bool = typer.Option(False, "--ensure-indexes", help="Build indexes explicitly while services are stopped."),
+    ensure_indexes: bool = typer.Option(
+        False, "--ensure-indexes", help="Build indexes explicitly while services are stopped."
+    ),
     write: bool = typer.Option(False, "--write", help="Write observability.json beside the resolved database."),
     stdout: bool = typer.Option(False, "--stdout", help="Print the observability document instead of writing it."),
 ) -> None:
