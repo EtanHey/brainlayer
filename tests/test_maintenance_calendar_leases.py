@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from brainlayer.maintenance_calendar import Step, run_calendar
+from brainlayer.supervisor_guard import start_time
 from tests.calendar_watch_readiness import wait_for_calendar_watch
 from tests.test_maintenance_control import control, native  # noqa: F401
 from tests.test_service_supervisor import eventually, exists
@@ -97,13 +98,19 @@ raise SystemExit(asyncio.run(run_calendar([Step('maintenance-nightly',(sys.execu
         step = int((path / "step").read_text())
         group = os.getpgid(step)
         assert all(v["pid"] is None for v in query()["components"].values())
+        if death == "both":
+            os.kill(parent.pid, signal.SIGSTOP)
+            _, stopped = os.waitpid(parent.pid, os.WUNTRACED)
+            assert os.WIFSTOPPED(stopped)
         if death in {"guard", "both"}:
             events = [json.loads(l) for l in (path / "calendar" / "runs.jsonl").read_text().splitlines()]
-            os.kill(next(r["guard"] for r in events if r["event"] == "runner"), signal.SIGKILL)
+            guard_record = next(r for r in events if r["event"] == "runner")
+            os.kill(guard_record["guard"], signal.SIGKILL)
         if death != "guard":
             os.kill(parent.pid, {"freeze": signal.SIGSTOP, "term": signal.SIGTERM, "both": signal.SIGKILL}[death])
         assert parent.wait(timeout=3) == (-signal.SIGKILL if death in {"freeze", "both"} else 1)
         if death == "both":
+            eventually(lambda: start_time(guard_record["guard"]) is None)
             os.kill(step, 0)
             # Cleanup still reaps the writer, but a killed run must be reported as failed.
             assert asyncio.run(run_calendar([], path / "calendar", path / "logs")) == 1
