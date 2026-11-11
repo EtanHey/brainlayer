@@ -310,6 +310,10 @@ def test_shell_dispatch_uses_keg_interpreter_only_after_signatures(tmp_path, act
     scripts = keg / "libexec/venv/lib/python3.13/site-packages/brainlayer/launchd"
     scripts.mkdir(parents=True)
     shutil.copy(ROOT / "scripts/launchd/install.sh", scripts)
+    shutil.copy(ROOT / "scripts/launchd/brainlayer-env-run.sh", scripts)
+    env_file = tmp_path / "home/.config/brainlayer/brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("BRAINLAYER_DB=/fixture/custom.db\n")
     (keg / "bin").mkdir()
     (keg / "libexec/venv/bin").mkdir()
     opt = tmp_path / "opt/brainlayer"
@@ -317,7 +321,7 @@ def test_shell_dispatch_uses_keg_interpreter_only_after_signatures(tmp_path, act
     opt.symlink_to(keg)
     python = keg / "libexec/venv/bin/python"
     python.write_text(
-        f'#!{sys.executable}\nimport json,os,sys\nfrom pathlib import Path\nPath(os.environ["DISPATCH"]).write_text(json.dumps(sys.argv[1:]))\n'
+        f'#!{sys.executable}\nimport json,os,sys\nfrom pathlib import Path\np=Path(os.environ["DISPATCH"])\nwith p.open("a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n'
     )
     binary = keg / "bin/brainlayer"
     binary.write_text("#!/bin/sh\nexit 0\n")
@@ -337,7 +341,12 @@ def test_shell_dispatch_uses_keg_interpreter_only_after_signatures(tmp_path, act
     if gate:
         assert not dispatch.exists()
     else:
-        args = json.loads(dispatch.read_text())
+        calls = [json.loads(line) for line in dispatch.read_text().splitlines()]
+        args = calls[-1]
+        if action == "consolidate":
+            assert calls[-2] == ["-m", "brainlayer", "observability", "--ensure-indexes"]
+        else:
+            assert "--ensure-indexes" not in str(calls)
         assert args[:3] == ["-m", "brainlayer.launchd_install", action]
         assert args[args.index("--domain") + 1] == DOMAIN
         if action == "consolidate":

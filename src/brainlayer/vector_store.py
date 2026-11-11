@@ -1164,10 +1164,6 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             "CREATE INDEX IF NOT EXISTS idx_chunks_last_retrieved ON chunks(last_retrieved) WHERE archived_at IS NULL"
         )
 
-        from .observability_indexes import migrate_observability_indexes
-
-        migrate_observability_indexes(cursor)
-
         # Vector table (1024 dims for bge-large-en-v1.5)
         cursor.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vectors USING vec0(

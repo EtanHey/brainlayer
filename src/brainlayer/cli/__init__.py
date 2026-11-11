@@ -603,10 +603,19 @@ class _CalendarIndexCheckpoint:
 
 @app.command("observability")
 def observability_command(
+    ensure_indexes: bool = typer.Option(False, "--ensure-indexes", help="Build indexes explicitly while services are stopped."),
     write: bool = typer.Option(False, "--write", help="Write observability.json beside the resolved database."),
     stdout: bool = typer.Option(False, "--stdout", help="Print the observability document instead of writing it."),
 ) -> None:
     """Produce the versioned BrainLayer observability document."""
+    if ensure_indexes:
+        if write or stdout:
+            raise typer.BadParameter("--ensure-indexes cannot be combined with --write or --stdout")
+        from ..observability_indexes import ensure_observability_indexes
+        from ..paths import get_db_path
+
+        typer.echo(json.dumps(ensure_observability_indexes(get_db_path()), sort_keys=True))
+        return
     if write and stdout:
         raise typer.BadParameter("choose either --write or --stdout")
     from ..observability_surface import write_document
