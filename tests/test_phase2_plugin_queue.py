@@ -224,3 +224,31 @@ def test_flush_queue_keeps_only_unsent_events_after_partial_failure(tmp_path):
     ]
     rows = [json.loads(line) for line in queue_path.read_text().splitlines()]
     assert rows == [{"hook_event": "PostToolUse", "index": 2}]
+
+
+def _flush_with_brainbar_reply(tmp_path, monkeypatch, name, reply):
+    hook = _load_module(HOOK_HELPER_PATH, f"brainbar_hook_{name}")
+    flusher = _load_module(QUEUE_FLUSHER_PATH, f"queue_flusher_{name}")
+    queue_path = tmp_path / ".memory-queue.jsonl"
+    event = {"hook_event": "PostToolUse", "tool_name": "Bash", "importance": 5}
+    flusher.append_queue_event(queue_path, event)
+    monkeypatch.setattr(hook, "call_mcp_tool", lambda _name, _arguments: reply)
+    flushed = flusher.flush_queue(queue_path, hook._send_queue_batch_to_brainbar)
+    rows = [json.loads(line) for line in queue_path.read_text().splitlines()]
+    return flushed, rows, event
+
+
+def test_flush_keeps_events_when_brainbar_rejects_store(tmp_path, monkeypatch):
+    rejected = {"isError": True, "content": [{"type": "text", "text": "ERROR: nothing stored"}]}
+    flushed, rows, event = _flush_with_brainbar_reply(tmp_path, monkeypatch, "rejects", rejected)
+
+    assert flushed == 0
+    assert rows == [event]
+
+
+def test_flush_clears_events_when_brainbar_accepts_store(tmp_path, monkeypatch):
+    accepted = {"content": [{"type": "text", "text": "Stored abc"}]}
+    flushed, rows, _event = _flush_with_brainbar_reply(tmp_path, monkeypatch, "accepts", accepted)
+
+    assert flushed == 1
+    assert rows == []
