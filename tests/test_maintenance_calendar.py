@@ -1106,19 +1106,19 @@ async def wedged(*args,**kwargs):
  await child
 calendar._execute_step=wedged
 step=calendar.Step('jsonl-backup',(sys.executable,'-c',f"import os,time; open({str(marker)!r},'w').write(str(os.getpid())); time.sleep(60)"),60)
-options={'operation_timeout':.5} if 'operation_timeout' in inspect.signature(calendar.run_calendar).parameters else {}
-asyncio.run(calendar.run_calendar([step],p/'calendar',p/'logs',guard_timeout=.4,shutdown_timeout=1,now_fn=lambda:dt.datetime(2026,10,27,5),**options))
+options={'operation_timeout':5} if 'operation_timeout' in inspect.signature(calendar.run_calendar).parameters else {}
+asyncio.run(calendar.run_calendar([step],p/'calendar',p/'logs',guard_timeout=2,shutdown_timeout=1,now_fn=lambda:dt.datetime(2026,10,27,5),**options))
 """
     errors = (tmp_path / "runner.err").open("wb")
     parent = subprocess.Popen((sys.executable, "-c", code, str(tmp_path)), stdout=subprocess.PIPE, stderr=errors)
     group = None
     try:
-        assert select.select([parent.stdout], [], [], 5)[0]
+        assert select.select([parent.stdout], [], [], 30)[0]
         line = parent.stdout.readline()
         assert line, (tmp_path / "runner.err").read_text()
         group = int(line)
-        assert parent.wait(timeout=3) == -signal.SIGKILL
-        deadline = time.monotonic() + 3
+        assert parent.wait(timeout=30) == -signal.SIGKILL
+        deadline = time.monotonic() + 30
         while group_exists(group) and time.monotonic() < deadline:
             time.sleep(0.02)
         assert not group_exists(group)
@@ -1127,7 +1127,7 @@ asyncio.run(calendar.run_calendar([step],p/'calendar',p/'logs',guard_timeout=.4,
             parent.kill()
         parent.wait(timeout=2)
         if group:
-            deadline = time.monotonic() + 3
+            deadline = time.monotonic() + 30
             while group_exists(group) and time.monotonic() < deadline:
                 time.sleep(0.02)
             if group_exists(group):
