@@ -32,7 +32,10 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from ..vector_store import VectorStore
 
 # AIDEV-NOTE: spaCy is lazy-loaded to avoid slow import on every pipeline import.
 # Only loaded when use_spacy_ner=True and sanitize() is first called.
