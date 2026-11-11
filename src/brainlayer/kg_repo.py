@@ -1297,11 +1297,9 @@ class KGMixin:
         cursor = self._read_cursor()
 
         rel_filter = ""
-        params: list = [entity_id, max_depth]
         if relation_types:
             placeholders = ", ".join("?" for _ in relation_types)
             rel_filter = f"AND r.relation_type IN ({placeholders})"
-            params = [entity_id] + relation_types + [max_depth]
 
         if relation_types:
             query = f"""
@@ -1323,7 +1321,8 @@ class KGMixin:
                 WHERE r.depth > 0
                 ORDER BY r.depth, e.name
             """
-            params_list = [entity_id, entity_id] + relation_types + [max_depth]
+            # Placeholder order: seed id, path seed, depth bound (WHERE re.depth < ?), then rel_filter.
+            params_list = [entity_id, entity_id, max_depth] + relation_types
         else:
             query = """
                 WITH RECURSIVE reachable(entity_id, depth, path) AS (
