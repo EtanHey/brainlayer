@@ -1092,7 +1092,9 @@ def test_important_capacity_cannot_bypass_surviving_attempt_raw_reserve(tmp_path
     output_dir = tmp_path / "out"
     _create_source_db(source, chunk_count=2)
     output_dir.mkdir()
-    (output_dir / ".2026-05-13.db.attempt-1-recent").write_bytes(b"x")
+    recent = output_dir / ".2026-05-13.db.attempt-1-recent"
+    recent.write_bytes(b"x")
+    os.utime(recent, (time.time(), time.time()))
     raw_free = 20_000_000_000
     db_size = raw_free - backup_daily.MIN_RAW_FREE_BYTES - 1
 
