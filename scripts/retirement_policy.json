@@ -3630,6 +3630,16 @@
         "target": "client.sendall"
       }
     },
+    "8ceb345bdb6860f00b5cccbde1f9c4e73fe30276d1b563bf2a79b7b025907390": {
+      "non_cloud_purpose": "Explicit installer-only local SQLite file connection (mode=rw) to build observability indexes with disk guard and pre/post WAL checkpoints; no network or model sender.",
+      "site": {
+        "call_sha256": "0ae0c6c65beed1cadac08ebcee0432f76329df7c061ba0211a41131d53357cc0",
+        "kind": "generic_send",
+        "owner": "<module>.ensure_observability_indexes",
+        "path": "src/brainlayer/observability_indexes.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "8d62779434448bc0c806048055edb1bef58cf0812ca6a420de57b456c2d27d72": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/chunk_origin_backfill.py <module>.backfill_chunk_origin_provenance",
       "site": {
