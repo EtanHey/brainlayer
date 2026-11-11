@@ -85,6 +85,11 @@ class FakeCredentials:
         self.token = "refreshed"
 
 
+class UnchangedCredentials(FakeCredentials):
+    def refresh(self, request):
+        pass
+
+
 @pytest.mark.parametrize("hours_left", [48, 24, 0.5])
 @pytest.mark.parametrize("prior_consent_alert", [None, "prior consent failure"])
 def test_valid_upcoming_expiry_is_advisory_and_recovers_only_consent_alert(
@@ -112,7 +117,7 @@ def test_valid_upcoming_expiry_is_advisory_and_recovers_only_consent_alert(
     status = drive_credentials.credential_status(
         token_path=token,
         client_path=client,
-        credentials_class=FakeCredentials,
+        credentials_class=UnchangedCredentials,
         request_factory=object,
         alert_reporter=report,
         now=expires - timedelta(hours=hours_left),
@@ -163,7 +168,7 @@ def test_upcoming_expiry_does_not_erase_alerts_when_credentials_fail(tmp_path, f
     )
 
     remaining = job_alerts.active_alerts(alerts)
-    assert status["state"] == ("expiring" if failure == "network" else "invalid")
+    assert status["state"] == ("unknown" if failure == "network" else "invalid")
     assert remaining["backup-daily"] == "upload failed"
     assert "drive-consent" in remaining
     if failure in {"network", "refresh"}:
@@ -263,7 +268,7 @@ def test_status_json_stays_safe_on_refresh_transport_failure(tmp_path):
             raise TransportError("private-payload")
 
     status = drive_credentials.credential_status(token_path=token, client_path=client, credentials_class=Offline)
-    assert status["state"] == "valid" and "private-payload" not in json.dumps(status)
+    assert status["state"] == "unknown" and "private-payload" not in json.dumps(status)
 
 
 OFFLINE_REASON = "status checked offline; last known state"
@@ -308,7 +313,7 @@ def test_offline_status_keeps_local_consent_clock(tmp_path, days_left, expected,
         now=expires - timedelta(days=days_left),
     )
     deadline = expires.isoformat()
-    assert status["state"] == expected
+    assert status["state"] == "unknown"
     assert status["expires_at"] == deadline
     assert status["days_left"] == pytest.approx(days_left)
     assert "offline" in status["reason"]
@@ -352,7 +357,7 @@ def test_cli_text_status_offline_expiring_prints_local_deadline(tmp_path, monkey
     assert text.exit_code == 0 and as_json.exit_code == 0
     assert text.output == f"{OFFLINE_REASON}: Drive access expires at {deadline}: Reconnect in BrainBar\n"
     payload = json.loads(as_json.output)
-    assert payload["state"] == "expiring" and payload["expires_at"] == deadline
+    assert payload["state"] == "unknown" and payload["expires_at"] == deadline
     assert 1 < payload["days_left"] < 2
     assert payload["reason"] == text.output.rstrip("\n")
     assert "private-payload" not in text.output + as_json.output
@@ -506,7 +511,7 @@ def test_consent_warning_names_exact_expiry_without_changing_gate(tmp_path, hour
     kwargs = dict(
         token_path=token,
         client_path=client,
-        credentials_class=FakeCredentials,
+        credentials_class=UnchangedCredentials,
         request_factory=object,
         now=expires - timedelta(hours=hours_left),
         alert_reporter=lambda *args: alerts.append(args),
@@ -682,7 +687,7 @@ def test_status_retryable_refresh_error_keeps_local_consent_clock(
         alert_reporter=lambda *args: alerts.append(args),
     )
 
-    assert result["state"] == expected and result["expires_at"] == deadline
+    assert result["state"] == ("invalid" if expected == "invalid" else "unknown") and result["expires_at"] == deadline
     assert "private-payload" not in json.dumps(result)
     assert token.read_bytes() == before
     if expected == "invalid":  # the local clock already ran out; no refresh is attempted
@@ -767,7 +772,7 @@ def test_cli_text_status_temporary_token_endpoint_failure_prints_local_deadline(
     assert text.exit_code == 0 and as_json.exit_code == 0
     assert text.output == f"{TEMPORARY_REASON}: Drive access expires at {deadline}: Reconnect in BrainBar\n"
     payload = json.loads(as_json.output)
-    assert payload["state"] == "expiring" and payload["expires_at"] == deadline
+    assert payload["state"] == "unknown" and payload["expires_at"] == deadline
     assert payload["reason"] == text.output.rstrip("\n")
     assert "private-payload" not in text.output + as_json.output
     assert endpoint.calls == 6 and token.read_bytes() == before

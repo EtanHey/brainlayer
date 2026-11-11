@@ -1381,7 +1381,10 @@ async def run_calendar(
     finally:
         try:
             # Alert I/O must finish while the guard heartbeat is still running.
-            if any(step.name == "backup-daily" for step in expected_steps) and results.get("backup-daily") != "ok":
+            if any(step.name == "backup-daily" for step in expected_steps) and results.get("backup-daily") not in (
+                "ok",
+                "deferred",
+            ):
                 try:
                     await _blocking(
                         report,

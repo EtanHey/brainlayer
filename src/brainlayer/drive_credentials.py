@@ -198,6 +198,7 @@ def load_credentials(
     request_factory: Any = None,
     migrate: bool = True,
     persist_refresh: bool = True,
+    force_refresh: bool = False,
     now: dt.datetime | None = None,
     alert_reporter: Any = job_alerts.report,
 ):
@@ -215,6 +216,7 @@ def load_credentials(
         if migrate:
             _migrate_if_missing(token, legacy)
         token_data = _read_object(token, private=True)
+        original_token_data = token_data.copy()
         expires = _consent_deadline(token_data)
         if expires is not None:
             remaining = expires - (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
@@ -241,7 +243,7 @@ def load_credentials(
         except (KeyError, TypeError, ValueError, DriveCredentialError):
             raise DriveCredentialError("Google OAuth client or BrainLayer token is invalid") from None
         refresh_before = dt.datetime.now(dt.UTC).replace(tzinfo=None) + dt.timedelta(hours=2)
-        if creds.expired or not creds.valid or (creds.expiry and creds.expiry < refresh_before):
+        if force_refresh or creds.expired or not creds.valid or (creds.expiry and creds.expiry < refresh_before):
             try:
                 observed = _TokenResponseRequest(request_factory())
                 creds.refresh(observed)
@@ -274,9 +276,17 @@ def load_credentials(
                 if lifetime is not None:
                     token_data["refresh_expires_at"] = lifetime
             if persist_refresh:
-                token_data["access_token"] = creds.token
-                token_data["expiry"] = creds.expiry.isoformat() if creds.expiry else None
-                _atomic_write(token, token_data)
+                previous_expiry = _expiry(token_data)
+                expiry_changed = (
+                    creds.expiry != previous_expiry
+                    if creds.expiry is None or previous_expiry is None
+                    else abs((creds.expiry - previous_expiry).total_seconds()) > 60
+                )
+                if creds.token != token_data.get("access_token") or expiry_changed:
+                    token_data["access_token"] = creds.token
+                    token_data["expiry"] = creds.expiry.isoformat() if creds.expiry else None
+                if token_data != original_token_data:
+                    _atomic_write(token, token_data)
         creds.brainlayer_refresh_expires_at = token_data.get("refresh_expires_at")
         # Upcoming expiry is credential_status's advisory, not a failed job.
         _report_consent(alert_reporter, None)
@@ -284,7 +294,7 @@ def load_credentials(
 
 
 def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[str, Any]:
-    """Check the owned token without migration; persist successful refresh facts."""
+    """Probe the owned grant without migration; persist only changed refresh facts."""
     from google.auth.exceptions import TransportError
 
     token, _, _ = _paths(kwargs.get("token_path"), kwargs.get("client_path"), None)
@@ -305,7 +315,7 @@ def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[
             reason = f"Drive access expired at {expires.isoformat()}: Reconnect in BrainBar"
             _report_consent(kwargs.get("alert_reporter", job_alerts.report), reason)
             return {"state": "invalid", "reason": reason, **timing}
-        creds = load_credentials(**kwargs, migrate=False, persist_refresh=True, now=now)
+        creds = load_credentials(**kwargs, migrate=False, persist_refresh=True, force_refresh=True, now=now)
         expires = _consent_deadline({"refresh_expires_at": creds.brainlayer_refresh_expires_at})
         days_left = max(0.0, (expires - current).total_seconds() / 86400) if expires else None
         timing = {"expires_at": expires.isoformat() if expires else None, "days_left": days_left}
@@ -316,8 +326,7 @@ def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[
         if days_left is not None and days_left <= 2:
             # Text --status prints only the reason, so name the local consent deadline (never a server time).
             reason = f"{reason}: Drive access expires at {expires.isoformat()}: Reconnect in BrainBar"
-            return {"state": "expiring", "reason": reason, **timing}
-        return {"state": "valid", "reason": reason, **timing}
+        return {"state": "unknown", "reason": reason, **timing}
     except DriveCredentialError as exc:
         return {"state": "invalid", "reason": str(exc), "expires_at": None, "days_left": None}
     if days_left is not None and days_left <= 2:

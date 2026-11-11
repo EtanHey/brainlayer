@@ -1663,7 +1663,7 @@ def test_backup_not_run_always_alerts_through_calendar(tmp_path, monkeypatch, mo
         assert "backup-daily" not in job_alerts.active_alerts(alerts)
     else:
         assert not marker.exists()
-        assert "backup-daily" in job_alerts.active_alerts(alerts)
+        assert ("backup-daily" in job_alerts.active_alerts(alerts)) == (mode != "deferred")
 
 
 def test_good_backup_clears_prior_alert_through_calendar(tmp_path, monkeypatch):
@@ -1689,3 +1689,32 @@ def test_good_backup_clears_prior_alert_through_calendar(tmp_path, monkeypatch):
     step = calendar.Step("backup-daily", (sys.executable, "-c", "pass"), 10)
     assert asyncio.run(calendar.run_calendar([step], tmp_path / "calendar", tmp_path / "logs")) == 0
     assert "backup-daily" not in job_alerts.active_alerts(alerts)
+
+
+@pytest.mark.parametrize("code", [1, 23, 75])
+def test_backup_exit_alert_policy_through_calendar(tmp_path, monkeypatch, code):
+    from brainlayer import maintenance_calendar as calendar
+
+    alerts = tmp_path / "alerts.json"
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(alerts))
+    monkeypatch.setattr(
+        calendar, "report", lambda key, reason: job_alerts.report(key, reason, path=alerts, notify=lambda _: None)
+    )
+    monkeypatch.setattr(
+        calendar.maintenance_control,
+        "control_client",
+        lambda: SimpleNamespace(path=tmp_path / "unused.sock", request=lambda: {}, _disabled=lambda *_a, **_k: set()),
+    )
+    step = calendar.Step("backup-daily", (sys.executable, "-c", f"raise SystemExit({code})"), 10)
+    for night in range(1, 4 if code == 75 else 2):
+        now = dt.datetime(2026, 11, night, 2, tzinfo=dt.UTC)
+        assert asyncio.run(
+            calendar.run_calendar([step], tmp_path / "calendar", tmp_path / "logs", now_fn=lambda: now)
+        ) == int(code != 75)
+        active = job_alerts.active_alerts(alerts)
+        if code == 75 and night < 3:
+            assert "backup-daily" not in active
+        else:
+            assert active["backup-daily"] == (
+                "Deferred 3 nights" if code == 75 else f"BrainLayer backup-daily exited {code}; see its log"
+            )
