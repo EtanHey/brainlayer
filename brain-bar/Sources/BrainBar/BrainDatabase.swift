@@ -5752,6 +5752,7 @@ final class BrainDatabase: @unchecked Sendable {
         return facts
     }
 
+    /// Expose the raw db pointer for EntityCache loading.
     var dbHandle: OpaquePointer? { db }
 
     struct EnrichmentStatsSummary: Equatable, Sendable {
