@@ -302,8 +302,17 @@ def test_legacy_shell_path_reopens_after_journaled_return(tmp_path, phase, busy)
     assert journal.exists()
 
 
-@pytest.mark.parametrize("action,gate", [("consolidate", 0), ("consolidation-rollback", 0), ("consolidate", 1)])
-def test_shell_dispatch_uses_keg_interpreter_only_after_signatures(tmp_path, action, gate):
+@pytest.mark.parametrize(
+    "action,gate,ensure_error",
+    [
+        ("consolidate", 0, ""),
+        ("consolidation-rollback", 0, ""),
+        ("consolidate", 1, ""),
+        ("consolidate", 0, "missing DB"),
+        ("consolidate", 0, "build error"),
+    ],
+)
+def test_shell_dispatch_uses_keg_interpreter_only_after_signatures(tmp_path, action, gate, ensure_error):
     import shutil
 
     keg = tmp_path / "Cellar/brainlayer/9.9.9"
@@ -321,7 +330,7 @@ def test_shell_dispatch_uses_keg_interpreter_only_after_signatures(tmp_path, act
     opt.symlink_to(keg)
     python = keg / "libexec/venv/bin/python"
     python.write_text(
-        f'#!{sys.executable}\nimport json,os,sys\nfrom pathlib import Path\np=Path(os.environ["DISPATCH"])\nwith p.open("a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n'
+        f'#!{sys.executable}\nimport json,os,sys\nfrom pathlib import Path\np=Path(os.environ["DISPATCH"])\nwith p.open("a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\nif "--ensure-indexes" in sys.argv and os.environ.get("ENSURE_ERROR"): print(os.environ["ENSURE_ERROR"], file=sys.stderr); sys.exit(9)\n'
     )
     binary = keg / "bin/brainlayer"
     binary.write_text("#!/bin/sh\nexit 0\n")
@@ -333,11 +342,19 @@ def test_shell_dispatch_uses_keg_interpreter_only_after_signatures(tmp_path, act
     result = subprocess.run(
         ["/bin/bash", str(scripts / "install.sh"), action],
         env=os.environ
-        | {"HOME": str(tmp_path / "home"), "DISPATCH": str(dispatch), "BRAINLAYER_LAUNCHD_DOMAIN": DOMAIN},
+        | {
+            "HOME": str(tmp_path / "home"),
+            "DISPATCH": str(dispatch),
+            "BRAINLAYER_LAUNCHD_DOMAIN": DOMAIN,
+            "ENSURE_ERROR": ensure_error,
+        },
         capture_output=True,
         text=True,
     )
     assert result.returncode == gate, result.stderr
+    if ensure_error:
+        assert ensure_error in result.stderr
+        assert "WARN: observability ensure failed (rc=9" in result.stderr
     if gate:
         assert not dispatch.exists()
     else:

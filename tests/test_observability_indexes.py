@@ -43,7 +43,7 @@ def ensure(path, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_DB", str(path))
     result = CliRunner().invoke(app, ["observability", "--ensure-indexes"])
     assert result.exit_code == 0, result.output
-    return json.loads(result.output)
+    return json.loads(result.stdout)
 
 
 def test_ensure_command_and_each_query_plan(tmp_path, monkeypatch):
@@ -71,7 +71,7 @@ def test_ensure_command_and_each_query_plan(tmp_path, monkeypatch):
             "idx_chunks_observability_time",
             "idx_chunks_observability_source",
             "idx_chunks_observability_time",
-            "idx_chunks_source_class",
+            ("idx_chunks_observability_source", "idx_chunks_source_class"),
             "idx_chunks_observability_author",
             "idx_chunks_observability_author",
             "idx_chunks_observability_author",
@@ -80,7 +80,11 @@ def test_ensure_command_and_each_query_plan(tmp_path, monkeypatch):
         )
         # COUNT(*) may choose any covering index; every other query has its own required plan.
         for i in range(1, len(expected_indexes)):
-            assert expected_indexes[i] in " ".join(plans[i]), (i, plans[i])
+            allowed = expected_indexes[i]
+            if isinstance(allowed, tuple):
+                assert set(allowed) & {name for plan in plans[i] for name in plan.split()}, (i, plans[i])
+            else:
+                assert allowed in " ".join(plans[i]), (i, plans[i])
             assert "SCAN chunks" not in plans[i], (i, plans[i])
 
 
@@ -146,6 +150,70 @@ def test_build_checkpoints_outside_transaction_with_long_timeout(tmp_path, monke
     assert ensure(path, monkeypatch)["status"] == "built"
     assert options[0]["timeout"] == 300
     assert options[0]["isolation_level"] is None
-    checkpoints = [i for i, sql in enumerate(statements) if sql == "PRAGMA wal_checkpoint(TRUNCATE)"]
+    checkpoints = [i for i, sql in enumerate(statements) if sql == "PRAGMA wal_checkpoint(PASSIVE)"]
     assert len(checkpoints) == 2
     assert checkpoints[0] < statements.index("BEGIN IMMEDIATE") < statements.index("COMMIT") < checkpoints[1]
+
+
+def test_reader_keeps_checkpoint_busy_without_blocking_build(tmp_path, monkeypatch):
+    path = fixture_db(tmp_path)
+    with sqlite3.connect(path, isolation_level=None) as writer, sqlite3.connect(path) as reader:
+        writer.execute("PRAGMA journal_mode=WAL")
+        reader.execute("BEGIN")
+        reader.execute("SELECT COUNT(*) FROM chunks").fetchone()
+        writer.execute("UPDATE chunks SET content='changed' WHERE id='0'")
+        result = ensure(path, monkeypatch)
+        assert result["status"] == "built"
+        assert [item["state"] for item in result["checkpoints"]] == ["busy", "busy"]
+        reader.rollback()
+
+
+@pytest.mark.parametrize("build_fails", [False, True])
+def test_checkpoint_error_preserves_build_outcome(tmp_path, monkeypatch, build_fails):
+    from brainlayer import observability_indexes
+
+    path = fixture_db(tmp_path)
+    connect = sqlite3.connect
+
+    class CheckpointError(sqlite3.Connection):
+        def execute(self, sql, *args, **kwargs):
+            if "wal_checkpoint" in sql:
+                raise sqlite3.OperationalError("checkpoint unavailable")
+            return super().execute(sql, *args, **kwargs)
+
+    monkeypatch.setattr(
+        observability_indexes.sqlite3, "connect", lambda *a, **kw: connect(*a, **kw, factory=CheckpointError)
+    )
+    if build_fails:
+        monkeypatch.setattr(
+            observability_indexes, "INDEXES", ("CREATE INDEX IF NOT EXISTS idx_bad ON chunks(missing_column)",)
+        )
+    monkeypatch.setenv("BRAINLAYER_DB", str(path))
+    result = CliRunner().invoke(app, ["observability", "--ensure-indexes"])
+    if build_fails:
+        assert result.exit_code != 0
+        assert "missing_column" in str(result.exception)
+    else:
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["status"] == "built"
+    assert '"phase": "after", "state": "error"' in result.stderr
+    assert "checkpoint unavailable" in result.stderr
+
+
+def test_unindexed_producer_deadline_reports_unmeasurable_reason(tmp_path, monkeypatch):
+    from brainlayer import observability_surface
+    from tests.test_observability_surface import _producer_env
+
+    env = _producer_env(tmp_path)
+    with sqlite3.connect(env["BRAINLAYER_DB"]) as db:
+        assert (
+            db.execute("SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'idx_chunks_observability_%'").fetchone()[0]
+            == 0
+        )
+    # Fixture reads are fast; force the real subprocess deadline to exercise the
+    # same fallback as the measured 20-second miss on the unindexed production DB.
+    monkeypatch.setattr(observability_surface, "DB_QUERY_TIMEOUT_SECONDS", 0.001)
+    document, _ = observability_surface.build_document(env=env)
+    for name in observability_surface.DB_SECTIONS:
+        assert document[name]["state"] == "unmeasurable"
+        assert "database query deadline exceeded" in document[name]["reason"]

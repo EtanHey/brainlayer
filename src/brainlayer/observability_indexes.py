@@ -1,6 +1,8 @@
 """Explicit install-time index build; runtime opens never migrate these indexes."""
 
+import json
 import sqlite3
+import sys
 import time
 from contextlib import closing
 from pathlib import Path
@@ -17,7 +19,7 @@ REQUIRED_COLUMNS = frozenset(("id", "created_at", "source_class", "archived_at",
 
 
 def ensure_observability_indexes(path: Path) -> dict:
-    """Run explicitly while installer services are stopped, outside store init."""
+    """Run with writers stopped; WAL readers may retain checkpoint frames."""
     started = time.monotonic()
     with closing(
         sqlite3.connect(path.resolve().as_uri() + "?mode=rw", uri=True, isolation_level=None, timeout=300)
@@ -49,12 +51,19 @@ def ensure_observability_indexes(path: Path) -> dict:
                 "estimated_index_bytes": estimated,
             }
 
-        def checkpoint():
-            result = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-            if result[0]:
-                raise RuntimeError(f"observability index checkpoint busy: {result}")
+        checkpoints = []
 
-        checkpoint()
+        def checkpoint(phase):
+            try:
+                result = db.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+                state = "busy" if result[0] or result[1] != result[2] else "complete"
+                record = {"phase": phase, "state": state, "result": list(result)}
+            except sqlite3.Error as exc:
+                record = {"phase": phase, "state": "error", "reason": str(exc)}
+            checkpoints.append(record)
+            print("observability checkpoint: " + json.dumps(record), file=sys.stderr)
+
+        checkpoint("before")
         try:
             db.execute("BEGIN IMMEDIATE")
             for sql in INDEXES:
@@ -65,9 +74,10 @@ def ensure_observability_indexes(path: Path) -> dict:
                 db.execute("ROLLBACK")
             raise
         finally:
-            checkpoint()
+            checkpoint("after")
     return {
         "status": "built",
+        "checkpoints": checkpoints,
         "elapsed_seconds": time.monotonic() - started,
         "estimated_index_bytes": estimated,
         "required_bytes": required,
