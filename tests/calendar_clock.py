@@ -6,7 +6,8 @@ import time
 
 
 def pin_wall_clock(monkeypatch, instant):
-    original_datetime, original_date = dt.datetime, dt.date
+    """Pin wall time and return cleanup for aliases imported before teardown."""
+    original_datetime, original_date, original_time = dt.datetime, dt.date, time.time
     started = time.monotonic()
 
     class DateTimeMeta(type):
@@ -42,4 +43,20 @@ def pin_wall_clock(monkeypatch, instant):
                 monkeypatch.setattr(module, name, Date)
     monkeypatch.setattr(dt, "datetime", DateTime)
     monkeypatch.setattr(dt, "date", Date)
-    monkeypatch.setattr(time, "time", lambda: instant.timestamp() + time.monotonic() - started)
+
+    def wall_time():
+        return instant.timestamp() + time.monotonic() - started
+
+    monkeypatch.setattr(time, "time", wall_time)
+
+    def restore_late_imports():
+        for module in tuple(sys.modules.values()):
+            for name, value in tuple(getattr(module, "__dict__", {}).items()):
+                if value is DateTime:
+                    setattr(module, name, original_datetime)
+                elif value is Date:
+                    setattr(module, name, original_date)
+                elif value is wall_time:
+                    setattr(module, name, original_time)
+
+    return restore_late_imports

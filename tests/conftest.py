@@ -949,8 +949,9 @@ def deterministic_calendar_wall_clock(request, monkeypatch):
     previous_tz = os.environ.get("TZ")
     monkeypatch.setenv("TZ", "UTC")
     time.tzset()
-    pin_wall_clock(monkeypatch, dt.datetime(2026, 10, 18, 12, tzinfo=dt.UTC))
+    restore_clock_imports = pin_wall_clock(monkeypatch, dt.datetime(2026, 10, 18, 12, tzinfo=dt.UTC))
     yield
+    restore_clock_imports()
     if previous_tz is None:
         os.environ.pop("TZ", None)
     else:
