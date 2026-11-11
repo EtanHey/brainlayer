@@ -660,6 +660,31 @@ def test_load_gate_requires_fresh_evidence_even_without_completed_batch(tmp_path
         assert "time unavailable" in text
 
 
+def test_r2_collector_pairs_tick_with_boot_and_awake_clock(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import brainlayer.health_check as hc
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW + timedelta(seconds=5)
+
+    calls = []
+    monkeypatch.setattr(hf, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(hf, "datetime", Clock)
+    monkeypatch.setattr(hf.time, "monotonic", lambda: 1000.0)
+    monkeypatch.setattr(
+        hc,
+        "_default_command_runner",
+        lambda args: calls.append(args) or SimpleNamespace(returncode=0, stdout="test-boot\n"),
+    )
+    facts, _ = _collect(_config(tmp_path))
+    assert calls == [["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"]]
+    assert facts.boot_session == "test-boot"
+    assert facts.awake_clock_s == 995.0
+
+
 @pytest.mark.parametrize("deadline", [None, "permanent", "2026-11-30T00:00:00+00:00"])
 def test_old_consent_does_not_expire_without_reported_deadline(deadline):
     from brainlayer.health_facts import drive_auth_fact

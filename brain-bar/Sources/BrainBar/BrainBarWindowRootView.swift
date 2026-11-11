@@ -774,7 +774,7 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         if generatedAt > now {
             return .untrustworthy("observability generated_at is in the future")
         }
-        if now.timeIntervalSince(generatedAt) > cadence.interval * 2 {
+        if BrainBarSleepHistory.shared.elapsed(since: generatedAt, now: now) > cadence.interval * 2 {
             return .untrustworthy("observability as of \(shortTime(generatedAt, calendar: calendar, locale: locale))")
         }
         if let sameDayBoundary, generatedAt < sameDayBoundary {

@@ -107,17 +107,17 @@ struct BrainBarHealthVerdict: Codable, Equatable, Sendable {
     var renderedDot: BrainBarRenderedDot {
         switch dot { case .green: .green; case .amber, .unknown: .amber; case .red: .red }
     }
-    func isFresh(now: Date) -> Bool { (0...900).contains(now.timeIntervalSince(evaluatedAt)) }
+    func isFresh(now: Date, sleepHistory: BrainBarSleepHistory = .shared) -> Bool { (0...900).contains(sleepHistory.elapsed(since: evaluatedAt, now: now)) }
     var staleRenderedDot: BrainBarRenderedDot { dot == .red ? .red : .amber }
-    func fallbackNotice(now: Date, calendar: Calendar = .current) -> String {
-        let age = now.timeIntervalSince(evaluatedAt)
+    func fallbackNotice(now: Date, calendar: Calendar = .current, sleepHistory: BrainBarSleepHistory = .shared) -> String {
+        let age = sleepHistory.elapsed(since: evaluatedAt, now: now)
         if age < 0 { return "Health check result is dated in the future" }
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "HH:mm"
-        return "Health check stale since \(formatter.string(from: evaluatedAt))"
+        return "Health check stale since \(formatter.string(from: now.addingTimeInterval(-age)))"
     }
 }
 
@@ -189,4 +189,12 @@ final class BrainBarUIStatusPublisher: @unchecked Sendable {
 
     /// Drain on shutdown so the final receipt cannot outlive its runtime directory.
     func flush() { queue.sync {} }
+}
+
+/// Catch-up always ends after bounded awake time, even if didWake never arrives.
+struct BrainBarWakeCatchUp {
+    private var deadline: Double? = nil
+    mutating func sleeping(uptime: Double = Double(DispatchTime.now().uptimeNanoseconds) / 1e9) { deadline = uptime + 180 }
+    mutating func woke(uptime: Double, grace: Double = 180) { deadline = uptime + grace }
+    func isPending(uptime: Double) -> Bool { deadline.map { uptime < $0 } ?? false }
 }

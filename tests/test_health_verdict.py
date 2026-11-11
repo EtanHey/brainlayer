@@ -926,6 +926,59 @@ def test_f3_graced_stale_ingest_resets_recovery():
     )
 
 
+def test_darkwakes_do_not_accumulate_sleep_as_heartbeat_age():
+    verdict = run(watcher_updated_at=NOW, boot_session="test-boot", awake_clock_s=1000)
+    for tick in range(1, 25):
+        verdict = run(
+            verdict.state,
+            now=NOW + tick * 10 * M,
+            watcher_updated_at=NOW,
+            boot_session="test-boot",
+            awake_clock_s=1000 + tick * 3,
+        )
+        assert verdict.check("ingest").state == hv.GREEN
+
+
+def test_awake_monitor_gap_and_reboot_do_not_count_as_confirmed_sleep():
+    first = run(watcher_updated_at=NOW, boot_session="a", awake_clock_s=100)
+    awake = run(first.state, now=NOW + 31 * M, watcher_updated_at=NOW, boot_session="a", awake_clock_s=1960)
+    assert awake.check("ingest").state == hv.RED
+    reboot = run(first.state, now=NOW + 14 * M, watcher_updated_at=NOW, boot_session="b", awake_clock_s=110)
+    assert reboot.check("ingest").state == hv.AMBER
+
+
+def test_r2_incident_moving_heartbeat_excludes_overlapping_sleep():
+    tick = NOW.replace(hour=10, minute=22)
+    first = run(now=tick, watcher_updated_at=tick, boot_session="incident", awake_clock_s=1000)
+    heartbeat = tick.replace(minute=24, second=45)
+    read = tick.replace(minute=39)
+    # Sleep 10:24:57–10:38:37: 820 seconds asleep, 200 seconds awake.
+    woke = run(first.state, now=read, watcher_updated_at=heartbeat, boot_session="incident", awake_clock_s=1200)
+    assert woke.check("ingest").state == hv.GREEN
+    assert woke.check("ingest").age_s < T.ingest_amber_s
+    # The new heartbeat then dies while awake. No further suspension is credited.
+    stalled = run(
+        woke.state, now=read + 31 * M, watcher_updated_at=heartbeat, boot_session="incident", awake_clock_s=3060
+    )
+    assert stalled.check("ingest").state == hv.RED
+
+
+def test_r2_backup_crossing_red_during_confirmed_sleep_keeps_catch_up():
+    copy = NOW - 54 * H + 5 * M
+    first = run(backup_local_verified_at=copy, boot_session="backup", awake_clock_s=1000)
+    woke = run(first.state, now=NOW + 20 * M, backup_local_verified_at=copy, boot_session="backup", awake_clock_s=1030)
+    assert woke.check("backup_local").state == hv.AMBER
+    assert "catch-up" in woke.check("backup_local").note
+    expired = run(
+        woke.state,
+        now=NOW + 20 * M + timedelta(seconds=T.wake_grace_s + 1),
+        backup_local_verified_at=copy,
+        boot_session="backup",
+        awake_clock_s=1030 + T.wake_grace_s + 1,
+    )
+    assert expired.check("backup_local").state == hv.RED
+
+
 @pytest.mark.parametrize(
     "age, activity, progress, expected",
     [
