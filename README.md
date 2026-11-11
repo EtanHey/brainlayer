@@ -300,7 +300,7 @@ brainlayer search "query"     # Semantic + keyword search
 brainlayer stats              # Database statistics
 brainlayer brain-export       # Brain graph JSON for visualization
 brainlayer export-obsidian    # Export to Obsidian vault
-brainlayer dashboard          # Interactive TUI
+brainlayer dashboard          # Interactive TUI (source checkout only)
 ```
 
 ## Testing
