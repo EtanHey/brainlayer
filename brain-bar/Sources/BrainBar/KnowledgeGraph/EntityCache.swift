@@ -70,10 +70,14 @@ final class EntityCache: @unchecked Sendable {
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 60, repeating: 60)
-        timer.setEventHandler { [weak self, weak db] in
+        let handler: @Sendable () -> Void = { [weak self, weak db] in
             guard let db else { return }
             self?.load(from: db)
         }
+        timer.setEventHandler(handler: handler)
+#if DEBUG
+        refreshHandlerForTesting = handler
+#endif
         timer.resume()
         refreshTimer = timer
     }
@@ -84,6 +88,12 @@ final class EntityCache: @unchecked Sendable {
     }
 
 #if DEBUG
+    private var refreshHandlerForTesting: (@Sendable () -> Void)?
+
+    func fireRefreshTimerForTesting() {
+        refreshHandlerForTesting?()
+    }
+
     func enqueueWorkForTesting(_ work: @escaping @Sendable () -> Void) {
         queue.async(execute: work)
     }
