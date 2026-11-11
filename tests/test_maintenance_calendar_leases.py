@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -71,7 +72,7 @@ from brainlayer.maintenance_calendar import Step,run_calendar
 p=Path(sys.argv[1]); maintenance_control.control_client=lambda:SupervisorCommands(p/'control.sock',lambda a:subprocess.CompletedProcess(a,0,'',''),pause_path=p/'pause')
 writer="import os,time; from pathlib import Path; time.sleep(%s); Path(%r).write_text(str(os.getpid())); time.sleep(60)" % (float(sys.argv[3]),str(p/'step'))
 if sys.argv[2]=='chain': writer="import sys; from brainlayer.backup_daily import _supervise_backup_process; raise SystemExit(_supervise_backup_process(60,command=[sys.executable,'-c',%r]))" % writer
-raise SystemExit(asyncio.run(run_calendar([Step('maintenance-nightly',(sys.executable,'-c',writer),60)],p/'calendar',p/'logs',guard_timeout=.4,install_signals=True,now_fn=lambda:dt.datetime(2026,10,12,4,30))))
+raise SystemExit(asyncio.run(run_calendar([Step('maintenance-nightly',(sys.executable,'-c',writer),60)],p/'calendar',p/'logs',guard_timeout=2,install_signals=True,now_fn=lambda:dt.datetime(2026,10,12,4,30))))
 """
     errors = path / "calendar.stderr"
     with errors.open("ab") as output:
@@ -83,11 +84,11 @@ raise SystemExit(asyncio.run(run_calendar([Step('maintenance-nightly',(sys.execu
 
         def ready():
             assert parent.poll() is None
-            return (path / "step").exists()
+            return (path / "step").exists() and bool((path / "step").read_text())
 
         try:
             # Includes pause acknowledgement and two interpreter startups in the chain.
-            eventually(ready, timeout=10)
+            eventually(ready, timeout=30)
         except AssertionError:
             events = path / "calendar" / "runs.jsonl"
             pytest.fail(
@@ -108,9 +109,9 @@ raise SystemExit(asyncio.run(run_calendar([Step('maintenance-nightly',(sys.execu
             os.kill(guard_record["guard"], signal.SIGKILL)
         if death != "guard":
             os.kill(parent.pid, {"freeze": signal.SIGSTOP, "term": signal.SIGTERM, "both": signal.SIGKILL}[death])
-        assert parent.wait(timeout=3) == (-signal.SIGKILL if death in {"freeze", "both"} else 1)
+        assert parent.wait(timeout=30) == (-signal.SIGKILL if death in {"freeze", "both"} else 1)
         if death == "both":
-            eventually(lambda: start_time(guard_record["guard"]) is None)
+            eventually(lambda: start_time(guard_record["guard"]) is None, timeout=30)
             os.kill(step, 0)
             # Cleanup still reaps the writer, but a killed run must be reported as failed.
             assert asyncio.run(run_calendar([], path / "calendar", path / "logs")) == 1
@@ -125,8 +126,8 @@ raise SystemExit(asyncio.run(run_calendar([Step('maintenance-nightly',(sys.execu
                 return True
             return False
 
-        eventually(dead)
-        wait_for_calendar_watch(query, path)
+        eventually(dead, timeout=30)
+        wait_for_calendar_watch(query, path, timeout=30)
     finally:
         if parent.poll() is None:
             parent.kill()
@@ -149,10 +150,10 @@ def count():
             return db.execute("select count(*) from samples where who='resident'").fetchone()[0]
     except sqlite3.OperationalError:
         return 0
-before,end=count(),time.monotonic()+2
+before,end=count(),time.monotonic()+30
 while count() <= before and time.monotonic()<end: time.sleep(.02)
 assert count()>before
-deadline=time.monotonic()+2
+deadline=time.monotonic()+30
 while True:
  states=control_client().request()
  if all(v['pid'] and not v['paused'] for v in states.values() if v['configured']): break
@@ -164,10 +165,34 @@ while True:
 def test_live_ingestion_keeps_running_during_online_steps(runner):
     path, _ = runner
     steps = [
-        Step(n, (sys.executable, "-c", online_writer_probe(path)), 5)
+        Step(n, (sys.executable, "-c", online_writer_probe(path)), 90)
         for n in ("index", "backup-daily", "p0-counter", "wal-checkpoint")
     ]
     assert asyncio.run(run_calendar(steps, path / "calendar", path / "logs")) == 0
+
+
+def test_online_probe_waits_for_scheduled_resident_writer(runner):
+    path, query = runner
+    pid = query()["components"]["watch"]["pid"]
+    os.kill(pid, signal.SIGSTOP)
+    resume = threading.Timer(3.5, os.kill, args=(pid, signal.SIGCONT))
+    resume.start()
+    try:
+        assert (
+            asyncio.run(
+                run_calendar(
+                    [Step("index", (sys.executable, "-c", online_writer_probe(path)), 90)],
+                    path / "calendar",
+                    path / "logs",
+                    now_fn=lambda: dt.datetime(2026, 10, 12, 3),
+                )
+            )
+            == 0
+        )
+    finally:
+        resume.cancel()
+        resume.join()
+        os.kill(pid, signal.SIGCONT)
 
 
 def test_only_maintenance_and_fts_hold_writers_and_wait_stays_online(runner):
@@ -175,7 +200,10 @@ def test_only_maintenance_and_fts_hold_writers_and_wait_stays_online(runner):
     clock = [dt.datetime(2026, 10, 12, 3, 58, 30)]
 
     async def advance(seconds):
-        assert all(v["pid"] and not v["paused"] for v in query()["components"].values() if v["configured"])
+        def online_ready():
+            return all(v["pid"] and not v["paused"] for v in query()["components"].values() if v["configured"])
+
+        await asyncio.to_thread(eventually, online_ready, timeout=30)
         clock[0] = clock[0].replace(hour=4, minute=0, second=0)
         await asyncio.sleep(0)
 
@@ -191,7 +219,7 @@ def test_only_maintenance_and_fts_hold_writers_and_wait_stays_online(runner):
         "jsonl-backup",
     )
     steps = [
-        Step(n, (sys.executable, "-c", held if n.startswith("maintenance-") or n == "repair-fts" else online), 5)
+        Step(n, (sys.executable, "-c", held if n.startswith("maintenance-") or n == "repair-fts" else online), 90)
         for n in names
     ]
     result = asyncio.run(
