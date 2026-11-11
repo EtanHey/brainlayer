@@ -344,7 +344,6 @@ def test_active_job_alert_enters_backup_health_surface_from_supplied_env(tmp_pat
 
 
 def test_usable_expiring_consent_does_not_force_backup_error(tmp_path, monkeypatch):
-    monkeypatch.setenv("BRAINLAYER_DRIVE_OAUTH_TESTING", "1")  # the 7-day clock is Testing-mode only (#1677)
     from types import SimpleNamespace
 
     from brainlayer import drive_credentials, job_alerts
@@ -355,7 +354,7 @@ def test_usable_expiring_consent_does_not_force_backup_error(tmp_path, monkeypat
             {
                 "access_token": "fixture-access",
                 "refresh_token": "fixture-refresh",
-                "consented_at": "2026-09-07T12:00:00Z",
+                "refresh_expires_at": "2026-09-14T12:00:00Z",
             }
         )
     )

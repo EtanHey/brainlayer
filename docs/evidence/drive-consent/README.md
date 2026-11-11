@@ -3,7 +3,7 @@
 Status: source implementation evidence; pending independent review and installed verification.
 Implementer: Codex, gpt-6.1-sol (DRIVE lane).
 
-The seven-day consent gate remains unchanged. The backend now reports `expiring`
+Expiry uses the deadline reported by Google, with no deadline inferred from consent time. The backend now reports `expiring`
 at 48 hours remaining, including offline status. BrainBar presents the deadline
 at 49 hours to allow for its 30-minute refresh interval and show the reminder at
 least 48 hours before expiry while running. Expired consent remains rejected.

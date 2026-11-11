@@ -606,7 +606,16 @@ def badge_alerts(verdict: Verdict) -> list[dict[str, str]]:
         for check in verdict.checks
         if check.state != GREEN
     ]
-    active.extend({"code": note.code, "severity": "warning", "message": note.message} for note in verdict.notes)
+    consent = next((note for note in verdict.notes if note.code == "job_alert_drive-consent"), None)
+    if consent:
+        for item in active:
+            if item["code"] == OUTCOME_CODE_PREFIX + "drive_auth":
+                item["message"] = consent.message
+    active.extend(
+        {"code": note.code, "severity": "warning", "message": note.message}
+        for note in verdict.notes
+        if not (note is consent and any(item["code"] == OUTCOME_CODE_PREFIX + "drive_auth" for item in active))
+    )
     return active
 
 

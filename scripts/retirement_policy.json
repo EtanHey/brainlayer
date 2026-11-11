@@ -2942,6 +2942,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "726262acac34f424fcb85e0ba8e0479aee90e9b3ed2f7a24ce5158c8d623bd4b": {
+      "non_cloud_purpose": "Google Drive OAuth refresh transport wrapper: delegates the existing token request to google-auth and observes only successful token lifetime metadata; no LLM enrichment or model sender.",
+      "site": {
+        "call_sha256": "2213b9887b382f66abb386fb650420b32d7bde8aa216b190ab4a1d0a877b2eda",
+        "kind": "generic_send",
+        "owner": "<module>._TokenResponseRequest.__call__",
+        "path": "src/brainlayer/drive_credentials.py",
+        "target": "self.request"
+      }
+    },
     "728edf293557e1d1928eb944369f59950afcf2b9f1d1d26e0f64f1ecaf49ca44": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls requests.Session().send.",
       "site": {
