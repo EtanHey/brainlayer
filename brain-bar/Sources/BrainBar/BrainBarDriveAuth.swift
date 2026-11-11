@@ -2,7 +2,7 @@ import Foundation
 
 // "Reconnect Google Drive" (Etan: "click once and never again"). BrainBar reads and renews the
 // Drive access that BrainLayer's backups use ONLY through the backend's CLI contract:
-//   brainlayer backup auth --status --json → {"state":"valid"|"expiring"|"missing"|"invalid",
+//   brainlayer backup auth --status --json → {"state":"valid"|"expiring"|"missing"|"invalid"|"unknown",
 //                                            "reason":…, "expires_at":…, "days_left":…}
 //   brainlayer backup auth --json          → {"status":"ok"|"cancelled"|"timeout"|"error", "reason":…}
 // It only stats the token file; it never reads its contents and never shows a token.
@@ -35,7 +35,7 @@ struct DriveAuthStatus: Equatable, Sendable {
                 : "brainlayer backup auth --status failed (exit \(result.terminationStatus))")
         }
         let raw = object["state"] as? String ?? ""
-        guard let state = State(rawValue: raw), state != .unknown else {
+        guard let state = State(rawValue: raw) else {
             return unknown("unrecognised Drive state \"\(DriveAuthJSON.sanitized(raw) ?? "")\"")
         }
         return DriveAuthStatus(
@@ -111,7 +111,7 @@ struct DriveAuthPresentation: Equatable, Sendable {
         }
         switch state {
         case .valid:
-            line = status.expiresAt.map { "Connected: reconnect by \(formatDate($0))" } ?? "Connected"
+            line = status.expiresAt.map { "Connected: reconnect by \(formatDate($0))" } ?? "Connected; no grant deadline reported"
             detail = nil
             tone = .connected
             showsReconnect = false
