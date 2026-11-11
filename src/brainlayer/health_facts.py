@@ -539,9 +539,6 @@ def collect_facts(
         lambda: embedding_activity(got["hotlane_cpu"], got["hotlane_budget"], config.db_path, now)
     )
     progress_at, activity = observed_activity if observed_activity is not UNOBSERVED else (None, None)
-    if stalled_since is not UNOBSERVED and stalled_since is not None and progress_at is not None:
-        stalled_since = max(stalled_since, progress_at)
-        embedding_state["since"] = _iso(stalled_since)
     activity = (
         activity.format(count=got["unvectored"])
         if activity and got["unvectored"] is not UNOBSERVED and got["unvectored"] > 0
@@ -588,6 +585,7 @@ def collect_facts(
         embedding_stalled_since=stalled_since,
         embedding_activity=activity,
         embedding_progress_recent=progress_at is not None,
+        embedding_paused_by_load=bool(activity and got["hotlane_cpu"].get("backlog_state") == "high load"),
         disk_free_bytes=free,
         disk_peak_bytes=peak,
         disk_floor_bytes=floor,

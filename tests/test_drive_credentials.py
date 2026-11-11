@@ -100,7 +100,6 @@ def test_valid_upcoming_expiry_is_advisory_and_recovers_only_consent_alert(
     data["refresh_expires_at"] = expires.isoformat()
     token.write_text(json.dumps(data))
     before = token.read_bytes()
-    # A real job's failure is preserved even if its text resembles the advisory.
     failed_job = "Drive access expires at fixture: Reconnect in BrainBar"
     initial = {"backup-daily": failed_job}
     if prior_consent_alert is not None:
@@ -906,6 +905,87 @@ def test_token_response_observer_never_fails_the_refresh_on_an_unreadable_body()
 
     assert observed(method="POST", url="https://oauth2.googleapis.com/token") is response
     assert observed.token_response is None
+
+
+@pytest.mark.parametrize("reported", ["private-invalid-lifetime", [], {}, 1e300, float("nan"), float("inf"), True])
+def test_bad_lifetime_metadata_does_not_break_or_reclassify_real_refresh(tmp_path, caplog, reported):
+    status, stored, deadline = _refresh_with_known_grant(tmp_path, {"refresh_token_expires_in": reported})
+    assert stored["access_token"] == "new"
+    assert stored["refresh_expires_at"] == deadline
+    assert status["state"] == "valid" and status["expires_at"] == deadline
+    assert "private-invalid-lifetime" not in caplog.text
+
+
+@pytest.mark.parametrize("response", [{}, {"refresh_token_expires_in": None}])
+def test_refresh_without_reported_lifetime_preserves_google_deadline(tmp_path, response):
+    status, stored, deadline = _refresh_with_known_grant(tmp_path, response)
+    assert stored["access_token"] == "new"
+    assert stored["refresh_expires_at"] == deadline
+    assert status["state"] == "valid" and status["expires_at"] == deadline
+
+
+def test_explicit_refresh_lifetime_still_replaces_the_known_deadline(tmp_path):
+    status, stored, deadline = _refresh_with_known_grant(tmp_path, {"refresh_token_expires_in": 3600})
+    assert stored["access_token"] == "new"
+    assert stored["refresh_expires_at"] != deadline
+    assert status["state"] == "expiring" and status["days_left"] == 3600 / 86400
+
+
+def _refresh_with_known_grant(tmp_path, extra):
+    from brainlayer import drive_credentials
+
+    token, client = tmp_path / "token.json", tmp_path / "client.json"
+    _token(token)
+    _client(client)
+    now = datetime.now(UTC)
+    deadline = (now + timedelta(days=5)).isoformat()
+    data = json.loads(token.read_text())
+    data.update(expiry=(now - timedelta(hours=1)).isoformat(), refresh_expires_at=deadline)
+    token.write_text(json.dumps(data))
+    response = {"access_token": "new", "expires_in": 86400, "token_type": "Bearer", **extra}
+
+    def endpoint(**kwargs):
+        assert kwargs["url"] == "https://example.invalid/token"
+        return SimpleNamespace(status=200, data=json.dumps(response).encode())
+
+    status = drive_credentials.credential_status(
+        token_path=token,
+        client_path=client,
+        request_factory=lambda: endpoint,
+        alert_reporter=lambda *_: None,
+        now=now,
+    )
+    return status, json.loads(token.read_text()), deadline
+
+
+@pytest.mark.parametrize("reported", ["private-invalid-lifetime", 1e300])
+def test_bad_lifetime_metadata_does_not_discard_successful_consent(tmp_path, reported):
+    from brainlayer import drive_credentials
+
+    token, client = tmp_path / "token.json", tmp_path / "client.json"
+    _client(client)
+
+    class Flow:
+        oauth2session = SimpleNamespace(token={"refresh_token_expires_in": reported})
+
+        @classmethod
+        def from_client_secrets_file(cls, path, *, scopes):
+            return cls()
+
+        def run_local_server(self, **kwargs):
+            return SimpleNamespace(token="authorized", refresh_token="refresh", expiry=None)
+
+    result = drive_credentials.authorize(
+        token_path=token,
+        client_path=client,
+        flow_class=Flow,
+        alert_reporter=lambda *_: None,
+    )
+    assert result["status"] == "ok"
+    data = json.loads(token.read_text())
+    assert data["access_token"] == "authorized" and data["refresh_token"] == "refresh"
+    assert data["refresh_expires_at"] is None
+    assert token.stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize("known_deadline", [False, True])
