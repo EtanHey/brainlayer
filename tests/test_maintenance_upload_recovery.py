@@ -58,6 +58,7 @@ assert result['verified'] and result['uploaded']
 
 @pytest.fixture
 def upload_lane(runner, tmp_path, monkeypatch):
+    monkeypatch.setenv("UPLOAD_TEST_LOCAL_DATE", NOW.date().isoformat())
     monkeypatch.setenv("BRAINLAYER_DB", str(tmp_path / "fixture.db"))
     monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
     monkeypatch.setenv("BRAINLAYER_BACKUP_STAGING_DIR", str(tmp_path))

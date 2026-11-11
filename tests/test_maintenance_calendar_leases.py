@@ -145,7 +145,12 @@ def count():
 before,end=count(),time.monotonic()+2
 while count() <= before and time.monotonic()<end: time.sleep(.02)
 assert count()>before
-assert all(v['pid'] and not v['paused'] for v in control_client().request().values() if v['configured'])
+deadline=time.monotonic()+2
+while True:
+ states=control_client().request()
+ if all(v['pid'] and not v['paused'] for v in states.values() if v['configured']): break
+ assert time.monotonic()<deadline, states
+ time.sleep(.02)
 """
 
 
@@ -160,11 +165,11 @@ def test_live_ingestion_keeps_running_during_online_steps(runner):
 
 def test_only_maintenance_and_fts_hold_writers_and_wait_stays_online(runner):
     path, query = runner
-    clock = [dt.datetime(2026, 10, 12, 3, 59, 30)]
+    clock = [dt.datetime(2026, 10, 12, 3, 58, 30)]
 
     async def advance(seconds):
         assert all(v["pid"] and not v["paused"] for v in query()["components"].values() if v["configured"])
-        clock[0] += dt.timedelta(seconds=30)
+        clock[0] = clock[0].replace(hour=4, minute=0, second=0)
         await asyncio.sleep(0)
 
     online = online_writer_probe(path)

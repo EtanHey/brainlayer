@@ -299,6 +299,9 @@ from pathlib import Path
 import pytest
 from tests.test_backup_upload_resilience import lane, _DriveResponse
 with pytest.MonkeyPatch.context() as patch:
+    import datetime as dt
+    from tests.calendar_clock import pin_wall_clock
+    pin_wall_clock(patch, dt.datetime.fromisoformat(sys.argv[2]))
     state = lane.__wrapped__(Path(sys.argv[1]), patch)
     state.outcomes.extend([_DriveResponse(308, headers={"Range": "bytes=0-2"}),
                            _DriveResponse(200, payload={"id": "resumed"})])
@@ -308,6 +311,7 @@ with pytest.MonkeyPatch.context() as patch:
     assert state.puts[-1][1] == "bytes 3-5/6"
 """,
             str(lane.root),
+            backup.dt.datetime.now(backup.dt.UTC).isoformat(),
         ],
         capture_output=True,
         text=True,

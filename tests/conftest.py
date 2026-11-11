@@ -872,3 +872,87 @@ def _install_runtime_write_guards() -> None:
 
         guarded_os_open._brainlayer_write_guard = True
         os.open = guarded_os_open
+
+
+# These files exercise calendar/backup admission, receipt age, or local backup dates.
+_CALENDAR_CLOCK_FILES = {
+    "test_backup_busy_contract.py",
+    "test_backup_daily.py",
+    "test_backup_daily_cli_args.py",
+    "test_backup_local_removal.py",
+    "test_backup_lock_admission.py",
+    "test_backup_machine_identity.py",
+    "test_backup_peak_streaming.py",
+    "test_backup_priority.py",
+    "test_backup_raw_snapshot.py",
+    "test_backup_receipt_unreadable.py",
+    "test_backup_resumable_http.py",
+    "test_backup_retention_invariant.py",
+    "test_backup_retention_scope.py",
+    "test_backup_same_date.py",
+    "test_backup_supervised_timer.py",
+    "test_backup_upload_resilience.py",
+    "test_backup_upload_throughput.py",
+    "test_backup_vacuum_identity.py",
+    "test_backup_zstd.py",
+    "test_calendar_recovery_priority.py",
+    "test_cli_index_calendar.py",
+    "test_cli_jobs.py",
+    "test_consolidated_backup_jobs.py",
+    "test_crash_sweep_dependencies.py",
+    "test_disk_space.py",
+    "test_drive_credentials.py",
+    "test_health_facts.py",
+    "test_index_admission.py",
+    "test_index_admission_real_store.py",
+    "test_index_calendar_custody.py",
+    "test_index_calendar_deferrals.py",
+    "test_issue_1377_vacuum_deadline_proof.py",
+    "test_job_alerts.py",
+    "test_jsonl_backup.py",
+    "test_jsonl_backup_vanished.py",
+    "test_maintenance_calendar.py",
+    "test_maintenance_calendar_completion.py",
+    "test_maintenance_calendar_leases.py",
+    "test_maintenance_calendar_rotation.py",
+    "test_maintenance_exit_codes.py",
+    "test_maintenance_hold_watchdog.py",
+    "test_maintenance_replaced_alert.py",
+    "test_maintenance_retry.py",
+    "test_maintenance_routine.py",
+    "test_maintenance_upload_recovery.py",
+    "test_maintenance_vacuum_optional.py",
+    "test_observability_backup.py",
+    "test_observability_surface.py",
+    "test_retirement_callable_aliases.py",
+    "test_run_tests_script.py",
+    "test_snapshot_budget.py",
+    "test_snapshot_elapsed_deadline.py",
+    "test_suite_hygiene.py",
+    "test_transcript_backup_recovery.py",
+    "test_wal_fallback.py",
+    "test_weekly_local_gate.py",
+    "test_weekly_local_gate_r2.py",
+}
+
+
+@pytest.fixture(autouse=True)
+def deterministic_calendar_wall_clock(request, monkeypatch):
+    if request.path.name not in _CALENDAR_CLOCK_FILES:
+        yield
+        return
+    import datetime as dt
+    import time
+
+    from tests.calendar_clock import pin_wall_clock
+
+    previous_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    pin_wall_clock(monkeypatch, dt.datetime(2026, 10, 18, 12, tzinfo=dt.UTC))
+    yield
+    if previous_tz is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = previous_tz
+    time.tzset()
