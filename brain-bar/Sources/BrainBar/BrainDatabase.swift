@@ -5752,6 +5752,7 @@ final class BrainDatabase: @unchecked Sendable {
         return facts
     }
 
+    /// Test-only raw handle; production reads go through withSQLiteHandle.
     var dbHandle: OpaquePointer? { db }
 
     struct EnrichmentStatsSummary: Equatable, Sendable {
