@@ -388,3 +388,15 @@ extension BrainBarStatusSnapshotTests {
         XCTAssertFalse(verdict.needsAttention)
     }
 }
+
+extension BrainBarStatusSnapshotTests {
+    func testSleepHistorySubtractsOnlyOverlapAndPreservesAwakeOutage() {
+        let history = BrainBarSleepHistory()
+        let start = Self.now
+        history.sleeping(at: start.addingTimeInterval(10))
+        history.woke(at: start.addingTimeInterval(820))
+        XCTAssertEqual(history.elapsed(since: start, now: start.addingTimeInterval(843)), 33)
+        XCTAssertEqual(history.elapsed(since: start, now: start.addingTimeInterval(2700)), 1890)
+        XCTAssertEqual(history.elapsed(since: start.addingTimeInterval(830), now: start.addingTimeInterval(843)), 13)
+    }
+}

@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import subprocess
 import sys
 import threading
 import time
@@ -468,6 +467,7 @@ def collect_facts(
     """
     from .backup_daily import _backup_log_path
     from .drive_credentials import resolve_paths
+    from .health_check import _default_command_runner
     from .pause import pause_applies_to_label, pause_sentinel_state
 
     prior = prior if isinstance(prior, Mapping) else {}
@@ -480,8 +480,15 @@ def collect_facts(
         receipts = read_receipts(config.backup_log_path or _backup_log_path(None, db_path=config.db_path))
         return backup_facts(receipts), reclaim_capability(receipts, staging)
 
+    wall_lag = (datetime.now(UTC) - now).total_seconds()
+    awake_sample = time.monotonic() - wall_lag
     got = _run_bounded(
         {
+            "boot": lambda: (
+                _default_command_runner(["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"])
+                if sys.platform == "darwin" and abs(wall_lag) < 600
+                else None
+            ),
             "backup": backup_job,
             "transcripts": lambda: transcript_facts(read_receipts(config.jsonl_backup_log_path)),
             "drive_token": lambda: read_drive_token(config.drive_token_path or resolve_paths()[0]),
@@ -577,15 +584,9 @@ def collect_facts(
         if backup is not UNOBSERVED
         else dict.fromkeys(("backup_local_verified_at", "backup_offsite_verified_at", "integrity"), UNOBSERVED)
     )
-    awake_clock = boot_session = None
-    if sys.platform == "darwin" and abs((datetime.now(UTC) - now).total_seconds()) < 10:
-        try:
-            boot_session = subprocess.check_output(
-                ["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"], text=True, timeout=1
-            ).strip()
-            awake_clock = time.monotonic()
-        except (OSError, subprocess.SubprocessError):
-            pass  # No confirmed sleep evidence; retain the existing conservative policy.
+    boot = got["boot"]
+    boot_session = boot.stdout.strip() if getattr(boot, "returncode", None) == 0 else None
+    awake_clock = awake_sample if boot_session else None
     facts = Facts(
         now=now,
         awake_clock_s=awake_clock,

@@ -182,6 +182,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         )
         let notifications = NSWorkspace.shared.notificationCenter
         notifications.publisher(for: NSWorkspace.willSleepNotification)
+            .handleEvents(receiveOutput: { _ in BrainBarSleepHistory.shared.sleeping(at: Date()) })
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated {
@@ -190,11 +191,12 @@ final class BrainBarSettingsViewModel: ObservableObject {
                 }
             }.store(in: &sleepSubscriptions)
         notifications.publisher(for: NSWorkspace.didWakeNotification)
+            .handleEvents(receiveOutput: { _ in BrainBarSleepHistory.shared.woke(at: Date()) })
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    self.wakeCatchUp.woke(uptime: self.awakeUptime)
+                    self.wakeCatchUp.woke(uptime: self.awakeUptime, grace: max(180, self.observabilityCadence.interval + 60))
                     self.observabilityUnreadableSince = nil
                     self.republishStatus()
                     self.refreshObservabilityStatus()
@@ -464,9 +466,13 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     /// B5: derive once, with one captured time, and publish; surfaces only read `publishedStatus`.
     func republishStatus() {
-        let snapshot = wakeCatchUp.isPending(uptime: awakeUptime)
+        let candidate = deriveStatus(at: now())
+        let confirmedFailure = candidate.healthVerdict?.checks.contains {
+            $0.state == .red && !["ingest", "stores", "embedding"].contains($0.name)
+        } == true
+        let snapshot = wakeCatchUp.isPending(uptime: awakeUptime) && !confirmedFailure
             ? (publishedStatus.verdict.dot == .red ? publishedStatus : .checking)
-            : deriveStatus(at: now())
+            : candidate
         if snapshot != publishedStatus {
             publishedStatus = snapshot
         }

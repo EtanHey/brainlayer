@@ -121,7 +121,7 @@ enum WatcherHealthStatus: Sendable, Equatable {
     }
 
     private static func isStale(_ health: WatcherHealthFile, now: Date) -> Bool {
-        now.timeIntervalSince(health.updatedAt) > staleHeartbeatSeconds
+        BrainBarSleepHistory.shared.elapsed(since: health.updatedAt, now: now) > staleHeartbeatSeconds
     }
 
     private static func fromHeartbeat(_ health: WatcherHealthFile, now: Date) -> Self {

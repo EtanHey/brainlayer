@@ -100,7 +100,7 @@ struct BrainBarHealthVerdict: Codable, Equatable, Sendable {
     var renderedDot: BrainBarRenderedDot {
         switch dot { case .green: .green; case .amber, .unknown: .amber; case .red: .red }
     }
-    func isFresh(now: Date) -> Bool { (0...900).contains(now.timeIntervalSince(evaluatedAt)) }
+    func isFresh(now: Date) -> Bool { (0...900).contains(BrainBarSleepHistory.shared.elapsed(since: evaluatedAt, now: now)) }
     var staleRenderedDot: BrainBarRenderedDot { dot == .red ? .red : .amber }
     func fallbackNotice(now: Date, calendar: Calendar = .current) -> String {
         let age = now.timeIntervalSince(evaluatedAt)
@@ -179,6 +179,34 @@ final class BrainBarUIStatusPublisher: @unchecked Sendable {
 struct BrainBarWakeCatchUp {
     private var deadline: Double? = nil
     mutating func sleeping() { deadline = .infinity }
-    mutating func woke(uptime: Double) { deadline = uptime + 180 }
+    mutating func woke(uptime: Double, grace: Double = 180) { deadline = uptime + grace }
     func isPending(uptime: Double) -> Bool { deadline.map { uptime < $0 } ?? false }
+}
+
+/// Wall timestamps remain traceable; only the age used for liveness excludes known suspension.
+final class BrainBarSleepHistory: @unchecked Sendable {
+    static let shared = BrainBarSleepHistory()
+    private let lock = NSLock()
+    private var intervals: [(Date, Date)] = []
+    private var sleepingAt: Date?
+
+    func sleeping(at date: Date) {
+        lock.lock(); defer { lock.unlock() }
+        if sleepingAt == nil { sleepingAt = date }
+    }
+
+    func woke(at date: Date) {
+        lock.lock(); defer { lock.unlock() }
+        if let start = sleepingAt, date >= start { intervals.append((start, date)) }
+        sleepingAt = nil
+    }
+
+    func elapsed(since date: Date, now: Date) -> TimeInterval {
+        lock.lock(); defer { lock.unlock() }
+        let ranges = intervals + (sleepingAt.map { [($0, now)] } ?? [])
+        let suspended = ranges.reduce(0.0) { total, range in
+            total + max(0, min(now, range.1).timeIntervalSince(max(date, range.0)))
+        }
+        return now.timeIntervalSince(date) - suspended
+    }
 }

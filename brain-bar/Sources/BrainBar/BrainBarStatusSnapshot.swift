@@ -184,7 +184,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         case nil, .running?:
             break
         case let .degraded(_, heartbeatAt)?:
-            let stale = now.timeIntervalSince(heartbeatAt) > WatcherHealthStatus.staleHeartbeatSeconds
+            let stale = BrainBarSleepHistory.shared.elapsed(since: heartbeatAt, now: now) > WatcherHealthStatus.staleHeartbeatSeconds
             let text = inputs.watcher?.reasonText(now: now) ?? "Watcher needs attention"
             // Keep the watcher's structured faults visible independently of the kill evidence.
             let critical = inputs.watcherFile.map { $0.dbProbeFailed || $0.alertReasons.contains("coverage_drop") } ?? false
@@ -203,7 +203,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                               text: "Kill check unavailable: " + problem, jobs: [.watch], noticeHealth: .unknown))
         }
         if observations?[.watch]?.loadState == .running, desired(.watch),
-           let heartbeat = inputs.watcherHeartbeatAt, now.timeIntervalSince(heartbeat) > 15 * 60 {
+           let heartbeat = inputs.watcherHeartbeatAt, BrainBarSleepHistory.shared.elapsed(since: heartbeat, now: now) > 15 * 60 {
             builder.add(.init(id: "watcher.capture", component: .watcher, severity: .attention,
                               text: "Watcher isn't capturing; last heartbeat at " + absoluteDate(heartbeat, calendar: inputs.calendar),
                               jobs: [.watch]))

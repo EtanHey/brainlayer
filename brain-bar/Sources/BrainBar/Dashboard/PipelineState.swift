@@ -93,7 +93,7 @@ enum SnapshotFreshnessState: Sendable, Equatable {
         now: Date,
         snapshotFreshnessThreshold: TimeInterval
     ) -> SnapshotFreshnessState {
-        let ageSeconds = lastSuccessAt.map { max(0, Int(now.timeIntervalSince($0))) }
+        let ageSeconds = lastSuccessAt.map { max(0, Int(BrainBarSleepHistory.shared.elapsed(since: $0, now: now))) }
         if let lastFetchError {
             return .error(message: lastFetchError, lastSuccessAgeSeconds: ageSeconds)
         }
@@ -103,7 +103,7 @@ enum SnapshotFreshnessState: Sendable, Equatable {
         guard let lastSuccessAt else {
             return .loading
         }
-        let age = max(0, now.timeIntervalSince(lastSuccessAt))
+        let age = max(0, BrainBarSleepHistory.shared.elapsed(since: lastSuccessAt, now: now))
         if age > snapshotFreshnessThreshold {
             return .stale(ageSeconds: Int(age))
         }
