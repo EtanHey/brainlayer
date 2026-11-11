@@ -40,6 +40,19 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.97] - 2026-11-11
+
+### Hardening (no false lines)
+
+- fix(calendar): alert unfinished backups and retry transient status errors (#1757)
+- test: make calendar and backup suites independent of the wall clock (#1765)
+- fix(brainbar): show failed Today reads and align rendered status reasons (#1756)
+- fix(drive): take the grant's lifetime from Google, not a guess (#1745)
+- fix(drive): retain grants through incomplete lifetime metadata (#1752)
+- fix(health): a small draining embedding queue is not something to look at (#1748)
+- fix(drive): verify grant status and expose unknown lifetime (#1755)
+- fix(calendar): preserve deferred backup alert policy (#1767)
+
 ## [1.5.96] - 2026-11-10
 
 ### Hardening
