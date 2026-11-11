@@ -100,17 +100,17 @@ struct BrainBarHealthVerdict: Codable, Equatable, Sendable {
     var renderedDot: BrainBarRenderedDot {
         switch dot { case .green: .green; case .amber, .unknown: .amber; case .red: .red }
     }
-    func isFresh(now: Date) -> Bool { (0...900).contains(BrainBarSleepHistory.shared.elapsed(since: evaluatedAt, now: now)) }
+    func isFresh(now: Date, sleepHistory: BrainBarSleepHistory = .shared) -> Bool { (0...900).contains(sleepHistory.elapsed(since: evaluatedAt, now: now)) }
     var staleRenderedDot: BrainBarRenderedDot { dot == .red ? .red : .amber }
-    func fallbackNotice(now: Date, calendar: Calendar = .current) -> String {
-        let age = now.timeIntervalSince(evaluatedAt)
+    func fallbackNotice(now: Date, calendar: Calendar = .current, sleepHistory: BrainBarSleepHistory = .shared) -> String {
+        let age = sleepHistory.elapsed(since: evaluatedAt, now: now)
         if age < 0 { return "Health check result is dated in the future" }
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "HH:mm"
-        return "Health check stale since \(formatter.string(from: evaluatedAt))"
+        return "Health check stale since \(formatter.string(from: now.addingTimeInterval(-age)))"
     }
 }
 
@@ -175,36 +175,48 @@ final class BrainBarUIStatusPublisher: @unchecked Sendable {
     func flush() { queue.sync {} }
 }
 
-/// Deadlines use mach uptime through DispatchTime, which stops during system sleep.
+/// Catch-up always ends after bounded awake time, even if didWake never arrives.
 struct BrainBarWakeCatchUp {
     private var deadline: Double? = nil
-    mutating func sleeping() { deadline = .infinity }
+    mutating func sleeping(uptime: Double = Double(DispatchTime.now().uptimeNanoseconds) / 1e9) { deadline = uptime + 180 }
     mutating func woke(uptime: Double, grace: Double = 180) { deadline = uptime + grace }
     func isPending(uptime: Double) -> Bool { deadline.map { uptime < $0 } ?? false }
 }
 
-/// Wall timestamps remain traceable; only the age used for liveness excludes known suspension.
+/// A lost wake notification is repaired by the next awake sample. Keep one day of liveness history.
 final class BrainBarSleepHistory: @unchecked Sendable {
     static let shared = BrainBarSleepHistory()
     private let lock = NSLock()
+    private let uptime: @Sendable () -> Double
     private var intervals: [(Date, Date)] = []
-    private var sleepingAt: Date?
-
+    private var sleepingAt: (date: Date, uptime: Double)?
+    init(uptime: @escaping @Sendable () -> Double = { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }) {
+        self.uptime = uptime
+    }
     func sleeping(at date: Date) {
         lock.lock(); defer { lock.unlock() }
-        if sleepingAt == nil { sleepingAt = date }
+        if sleepingAt == nil { sleepingAt = (date, uptime()) }
     }
-
     func woke(at date: Date) {
         lock.lock(); defer { lock.unlock() }
-        if let start = sleepingAt, date >= start { intervals.append((start, date)) }
-        sleepingAt = nil
+        close(at: date)
     }
-
+    private func close(at date: Date) {
+        if let start = sleepingAt {
+            let suspended = max(0, date.timeIntervalSince(start.date) - max(0, uptime() - start.uptime))
+            if suspended > 0 { intervals.append((start.date, start.date.addingTimeInterval(suspended))) }
+        }
+        sleepingAt = nil
+        intervals.removeAll { $0.1 < date.addingTimeInterval(-86400) }
+    }
     func elapsed(since date: Date, now: Date) -> TimeInterval {
         lock.lock(); defer { lock.unlock() }
-        let ranges = intervals + (sleepingAt.map { [($0, now)] } ?? [])
-        let suspended = ranges.reduce(0.0) { total, range in
+        if let start = sleepingAt {
+            let awake = max(0, uptime() - start.uptime)
+            if now.timeIntervalSince(start.date) - awake > 5 || awake >= 180 { close(at: now) }
+        }
+        intervals.removeAll { $0.1 < now.addingTimeInterval(-86400) }
+        let suspended = intervals.reduce(0.0) { total, range in
             total + max(0, min(now, range.1).timeIntervalSince(max(date, range.0)))
         }
         return now.timeIntervalSince(date) - suspended

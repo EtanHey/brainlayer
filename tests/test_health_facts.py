@@ -646,3 +646,28 @@ def test_load_gate_requires_fresh_evidence_even_without_completed_batch(tmp_path
     if text:
         assert "paused by machine load" in text
         assert "time unavailable" in text
+
+
+def test_r2_collector_pairs_tick_with_boot_and_awake_clock(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import brainlayer.health_check as hc
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW + timedelta(seconds=5)
+
+    calls = []
+    monkeypatch.setattr(hf, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(hf, "datetime", Clock)
+    monkeypatch.setattr(hf.time, "monotonic", lambda: 1000.0)
+    monkeypatch.setattr(
+        hc,
+        "_default_command_runner",
+        lambda args: calls.append(args) or SimpleNamespace(returncode=0, stdout="test-boot\n"),
+    )
+    facts, _ = _collect(_config(tmp_path))
+    assert calls == [["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"]]
+    assert facts.boot_session == "test-boot"
+    assert facts.awake_clock_s == 995.0

@@ -73,7 +73,7 @@ enum WatcherHealthStatus: Sendable, Equatable {
 
     static let logHint = "~/Library/Logs/brainlayer/watch.err.log"
 
-    static func derive(launchd: WatcherLaunchdEvidence, file: WatcherHealthFileRead?, now: Date) -> Self {
+    static func derive(launchd: WatcherLaunchdEvidence, file: WatcherHealthFileRead?, now: Date, sleepHistory: BrainBarSleepHistory = .shared) -> Self {
         switch launchd {
         case let .ownerUnknown(detail):
             return .unknown(reason: detail)
@@ -82,7 +82,7 @@ enum WatcherHealthStatus: Sendable, Equatable {
             // launchd records no stop time. A heartbeat proves the watcher was alive AT that time,
             // so it only bounds the stop from above: report it as a fact, never as a duration.
             let since: String = if case let .readable(health) = file {
-                "stop time unknown; last heartbeat \(age(health.updatedAt, now: now))"
+                "stop time unknown; last heartbeat \(age(health.updatedAt, now: now, sleepHistory: sleepHistory))"
             } else {
                 "stop time unknown — no readable heartbeat"
             }
@@ -98,17 +98,17 @@ enum WatcherHealthStatus: Sendable, Equatable {
             case let .unreadable(path, reason):
                 return .unknown(reason: "Watcher is running, but its health file at \(path) is unreadable: \(reason).")
             case let .readable(health):
-                return fromHeartbeat(health, now: now)
+                return fromHeartbeat(health, now: now, sleepHistory: sleepHistory)
             }
         case let .unavailable(detail):
             // The heartbeat is the canonical liveness surface: a fresh one stands on its own.
-            if case let .readable(health) = file, !isStale(health, now: now) {
-                return fromHeartbeat(health, now: now)
+            if case let .readable(health) = file, !isStale(health, now: now, sleepHistory: sleepHistory) {
+                return fromHeartbeat(health, now: now, sleepHistory: sleepHistory)
             }
             let heartbeat: String
             switch file {
             case let .readable(health):
-                heartbeat = "the last heartbeat was \(DashboardMetricFormatter.relativeEventString(lastEventAt: health.updatedAt, now: now).lowercased())"
+                heartbeat = "the last heartbeat was \(age(health.updatedAt, now: now, sleepHistory: sleepHistory))"
             case let .missing(path):
                 heartbeat = "the health file is missing at \(path)"
             case let .unreadable(path, reason):
@@ -120,12 +120,12 @@ enum WatcherHealthStatus: Sendable, Equatable {
         }
     }
 
-    private static func isStale(_ health: WatcherHealthFile, now: Date) -> Bool {
-        BrainBarSleepHistory.shared.elapsed(since: health.updatedAt, now: now) > staleHeartbeatSeconds
+    private static func isStale(_ health: WatcherHealthFile, now: Date, sleepHistory: BrainBarSleepHistory) -> Bool {
+        sleepHistory.elapsed(since: health.updatedAt, now: now) > staleHeartbeatSeconds
     }
 
-    private static func fromHeartbeat(_ health: WatcherHealthFile, now: Date) -> Self {
-        if isStale(health, now: now) {
+    private static func fromHeartbeat(_ health: WatcherHealthFile, now: Date, sleepHistory: BrainBarSleepHistory = .shared) -> Self {
+        if isStale(health, now: now, sleepHistory: sleepHistory) {
             // Alerts in a stale file describe the past; the only current fact is the silence.
             return .degraded(issues: [WatcherHealthIssue(
                 what: "Watcher heartbeat stopped updating",
@@ -221,7 +221,7 @@ enum WatcherHealthStatus: Sendable, Equatable {
     }
 
     /// One line, the same on every surface: what · since when · what to do.
-    func reasonText(now: Date) -> String? {
+    func reasonText(now: Date, sleepHistory: BrainBarSleepHistory = .shared) -> String? {
         switch self {
         case .running:
             return nil
@@ -230,16 +230,17 @@ enum WatcherHealthStatus: Sendable, Equatable {
         case let .degraded(issues, heartbeatAt):
             guard let first = issues.first else { return nil }
             let when = first.since.map { since in
-                first.sinceBoundNote.map { "since at least \(Self.age(since, now: now)) (\($0))" }
-                    ?? "since \(Self.age(since, now: now))"
-            } ?? "as of \(Self.age(heartbeatAt, now: now))"
+                first.sinceBoundNote.map { "since at least \(Self.age(since, now: now, sleepHistory: sleepHistory)) (\($0))" }
+                    ?? "since \(Self.age(since, now: now, sleepHistory: sleepHistory))"
+            } ?? "as of \(Self.age(heartbeatAt, now: now, sleepHistory: sleepHistory))"
             let more = issues.count > 1 ? " (+\(issues.count - 1) more)" : ""
             return "\(first.what) · \(when) · \(first.action)\(more)"
         }
     }
 
-    private static func age(_ date: Date, now: Date) -> String {
-        let relative = DashboardMetricFormatter.relativeEventString(lastEventAt: date, now: now)
+    private static func age(_ date: Date, now: Date, sleepHistory: BrainBarSleepHistory) -> String {
+        let corrected = now.addingTimeInterval(-sleepHistory.elapsed(since: date, now: now))
+        let relative = DashboardMetricFormatter.relativeEventString(lastEventAt: corrected, now: now)
         return relative == "Just now" ? "just now" : relative
     }
 }

@@ -40,7 +40,11 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private var observabilityUnreadableSince: Date?
     private var wakeCatchUp = BrainBarWakeCatchUp()
     private var sleepSubscriptions = Set<AnyCancellable>()
-    private var awakeUptime: Double { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000 }
+    private let awakeClock: @Sendable () -> Double
+    private let sleepHistory: BrainBarSleepHistory
+    private let statusDeadlineScheduler: @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void
+    private var wakeGeneration = 0
+    private var awakeUptime: Double { awakeClock() }
 
     private let healthBadgeURL: URL?
     private let jobAlertsURL: URL?
@@ -59,7 +63,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
                 loadState: config.launchdJobs[.watch]?.loadState
             ),
             file: watcherHealth,
-            now: now()
+            now: now(), sleepHistory: sleepHistory
         )
     }
     /// Each backup's schedule (installed LaunchAgent), last run (its own log), next run and latest
@@ -134,8 +138,16 @@ final class BrainBarSettingsViewModel: ObservableObject {
         },
         healthBadgeURL: URL? = nil,
         jobAlertsURL: URL? = nil,
-        statusSamplingPeriod: TimeInterval = 30
+        statusSamplingPeriod: TimeInterval = 30,
+        awakeClock: @escaping @Sendable () -> Double = { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 },
+        sleepHistory: BrainBarSleepHistory = .shared,
+        statusDeadlineScheduler: @escaping @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void = { delay, action in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
+        }
     ) {
+        self.awakeClock = awakeClock
+        self.sleepHistory = sleepHistory
+        self.statusDeadlineScheduler = statusDeadlineScheduler
         self.healthBadgeURL = healthBadgeURL
         self.jobAlertsURL = jobAlertsURL
         self.statusSamplingPeriod = statusSamplingPeriod
@@ -182,23 +194,20 @@ final class BrainBarSettingsViewModel: ObservableObject {
         )
         let notifications = NSWorkspace.shared.notificationCenter
         notifications.publisher(for: NSWorkspace.willSleepNotification)
-            .handleEvents(receiveOutput: { _ in BrainBarSleepHistory.shared.sleeping(at: Date()) })
+            .handleEvents(receiveOutput: { _ in sleepHistory.sleeping(at: Date()) })
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.wakeCatchUp.sleeping()
-                    self?.republishStatus()
+                    self?.systemWillSleep()
                 }
             }.store(in: &sleepSubscriptions)
         notifications.publisher(for: NSWorkspace.didWakeNotification)
-            .handleEvents(receiveOutput: { _ in BrainBarSleepHistory.shared.woke(at: Date()) })
+            .handleEvents(receiveOutput: { _ in sleepHistory.woke(at: Date()) })
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    self.wakeCatchUp.woke(uptime: self.awakeUptime, grace: max(180, self.observabilityCadence.interval + 60))
-                    self.observabilityUnreadableSince = nil
-                    self.republishStatus()
+                    self.systemDidWake()
                     self.refreshObservabilityStatus()
                     self.refreshLaunchdStatus()
                 }
@@ -464,9 +473,36 @@ final class BrainBarSettingsViewModel: ObservableObject {
         republishStatus()
     }
 
-    /// B5: derive once, with one captured time, and publish; surfaces only read `publishedStatus`.
+    func systemWillSleep() {
+        sleepHistory.sleeping(at: now())
+        wakeCatchUp.sleeping(uptime: awakeUptime)
+        scheduleWakeExpiry(after: 180)
+        republishStatus()
+    }
+
+    func systemDidWake() {
+        sleepHistory.woke(at: now())
+        let grace = max(180, observabilityCadence.interval + 60)
+        wakeCatchUp.woke(uptime: awakeUptime, grace: grace)
+        observabilityUnreadableSince = nil
+        scheduleWakeExpiry(after: grace)
+        republishStatus()
+    }
+
+    private func scheduleWakeExpiry(after delay: TimeInterval) {
+        wakeGeneration += 1
+        let generation = wakeGeneration
+        statusDeadlineScheduler(delay) { [weak self] in
+            guard let self, self.wakeGeneration == generation else { return }
+            self.republishStatus()
+        }
+    }
+
+    /// Derive once, with one captured time; surfaces only read the published snapshot.
     func republishStatus() {
-        let candidate = deriveStatus(at: now())
+        let time = now()
+        _ = sleepHistory.elapsed(since: time, now: time)
+        let candidate = deriveStatus(at: time)
         let confirmedFailure = candidate.healthVerdict?.checks.contains {
             $0.state == .red && !["ingest", "stores", "embedding"].contains($0.name)
         } == true
@@ -490,13 +526,13 @@ final class BrainBarSettingsViewModel: ObservableObject {
         let file: WatcherHealthFile? = if case let .readable(value) = watcherHealth { value } else { nil }
         let watcher = WatcherHealthStatus.derive(
             launchd: WatcherLaunchdEvidence(setting: config.launchdJobs[.watch], loadState: config.launchdJobs[.watch]?.loadState),
-            file: watcherHealth, now: time)
+            file: watcherHealth, now: time, sleepHistory: sleepHistory)
         let drive = driveAuthSource.map {
             DriveAuthPresentation.derive(status: $0.status, isReconnecting: $0.isReconnecting, lastOutcome: $0.lastOutcome,
                                          now: time, formatDate: BrainBarDriveAuthFormat.date)
         }
         return BrainBarStatusSnapshot.derive(BrainBarStatusInputs(
-            now: time, badge: healthBadge, vectorCheck: vectorCollector?.vectorCheck, jobAlerts: liveJobAlerts, jobAlertsState: liveJobAlertsState,
+            now: time, sleepHistory: sleepHistory, badge: healthBadge, vectorCheck: vectorCollector?.vectorCheck, jobAlerts: liveJobAlerts, jobAlertsState: liveJobAlertsState,
             watcher: watcher, watcherHeartbeatAt: file?.updatedAt, watcherFile: file, settings: config.launchdJobs,
             observations: hasCompletedLaunchdSample ? launchdObservations : nil,
             backups: backups, backupsNotice: hasCompletedObservabilityRead ? backupTruth.statusNotice : nil,
