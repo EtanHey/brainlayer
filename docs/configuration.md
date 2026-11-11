@@ -135,7 +135,7 @@ BrainLayer reads from these locations by default:
 |--------|----------|
 | Claude Code conversations | `~/.claude/projects/` |
 | Deduplicated system prompts | `~/.local/share/brainlayer/prompts/` |
-| Daemon socket | `/tmp/brainlayer.sock` |
+| Daemon socket | `/tmp/brainbar.sock` |
 | Historical enrichment lock | `/tmp/brainlayer-enrichment.lock` (legacy safety/cleanup only) |
 
 ### T3 projection selection
