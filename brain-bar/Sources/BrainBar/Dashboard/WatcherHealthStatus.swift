@@ -440,3 +440,43 @@ enum WatcherHealthReader {
         return formatter.date(from: raw)
     }
 }
+
+/// A lost wake notification is repaired by the next awake sample. Keep one day of liveness history.
+final class BrainBarSleepHistory: @unchecked Sendable {
+    static let shared = BrainBarSleepHistory()
+    private let lock = NSLock()
+    private let uptime: @Sendable () -> Double
+    private var intervals: [(Date, Date)] = []
+    private var sleepingAt: (date: Date, uptime: Double)?
+    init(uptime: @escaping @Sendable () -> Double = { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }) {
+        self.uptime = uptime
+    }
+    func sleeping(at date: Date) {
+        lock.lock(); defer { lock.unlock() }
+        if sleepingAt == nil { sleepingAt = (date, uptime()) }
+    }
+    func woke(at date: Date) {
+        lock.lock(); defer { lock.unlock() }
+        close(at: date)
+    }
+    private func close(at date: Date) {
+        if let start = sleepingAt {
+            let suspended = max(0, date.timeIntervalSince(start.date) - max(0, uptime() - start.uptime))
+            if suspended > 0 { intervals.append((start.date, start.date.addingTimeInterval(suspended))) }
+        }
+        sleepingAt = nil
+        intervals.removeAll { $0.1 < date.addingTimeInterval(-86400) }
+    }
+    func elapsed(since date: Date, now: Date) -> TimeInterval {
+        lock.lock(); defer { lock.unlock() }
+        if let start = sleepingAt {
+            let awake = max(0, uptime() - start.uptime)
+            if now.timeIntervalSince(start.date) - awake > 5 || awake >= 180 { close(at: now) }
+        }
+        intervals.removeAll { $0.1 < now.addingTimeInterval(-86400) }
+        let suspended = intervals.reduce(0.0) { total, range in
+            total + max(0, min(now, range.1).timeIntervalSince(max(date, range.0)))
+        }
+        return now.timeIntervalSince(date) - suspended
+    }
+}
