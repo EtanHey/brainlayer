@@ -94,9 +94,8 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
                 let headline = BrainBarStatusPopoverController.statusLineTitle(for: verdict)
                 XCTAssertEqual(headline == "All good", dot == .green && notes.isEmpty)
                 XCTAssertEqual(headline, verdict.dashboardStatus.headline)
-                // Compact headline (2026-11-08): a non-green dot counts its rows; with none, the dot's words.
-                if dot == .amber { XCTAssertEqual(headline, notes.isEmpty ? "Check soon" : "1 thing needs you") }
-                if dot == .red { XCTAssertEqual(headline, notes.isEmpty ? "Needs attention" : "1 thing needs you") }
+                if dot == .amber { XCTAssertEqual(headline, "Check soon") }
+                if dot == .red { XCTAssertEqual(headline, "Needs attention") }
             }
         }
         let rows = (1...5).map { BrainBarStatusPopoverController.VerdictRow(text: "Problem \($0)") }

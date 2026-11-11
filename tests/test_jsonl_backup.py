@@ -91,6 +91,7 @@ def test_cleanup_removes_only_old_owned_temp_files_when_lock_is_free(tmp_path, c
     other = tmp_path / "unrelated.tmp"
     for path in (old, fresh, other):
         path.write_bytes(b"fixture")
+        os.utime(path, (time.time(), time.time()))
     os.utime(old, (time.time() - 9 * 86400, time.time() - 9 * 86400))
     jsonl_backup._cleanup_stale_staging_temps(tmp_path, older_than_days=7)
     assert not old.exists()

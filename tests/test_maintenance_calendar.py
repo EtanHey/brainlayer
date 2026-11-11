@@ -1098,7 +1098,7 @@ def stuck():
  while True: time.sleep(.05)
 async def wedged(*args,**kwargs):
  child=asyncio.create_task(execute(*args,**kwargs))
- while not marker.exists():
+ while not marker.exists() or not marker.read_text():
   if child.done(): await child; raise RuntimeError('child stopped before wedge')
   await asyncio.sleep(.01)
  print(marker.read_text(),flush=True)
