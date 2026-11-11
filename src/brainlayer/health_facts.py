@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -575,8 +577,19 @@ def collect_facts(
         if backup is not UNOBSERVED
         else dict.fromkeys(("backup_local_verified_at", "backup_offsite_verified_at", "integrity"), UNOBSERVED)
     )
+    awake_clock = boot_session = None
+    if sys.platform == "darwin" and abs((datetime.now(UTC) - now).total_seconds()) < 10:
+        try:
+            boot_session = subprocess.check_output(
+                ["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"], text=True, timeout=1
+            ).strip()
+            awake_clock = time.monotonic()
+        except (OSError, subprocess.SubprocessError):
+            pass  # No confirmed sleep evidence; retain the existing conservative policy.
     facts = Facts(
         now=now,
+        awake_clock_s=awake_clock,
+        boot_session=boot_session,
         **backup_kwargs,
         transcripts_verified_at=transcripts[0] if transcripts is not UNOBSERVED else UNOBSERVED,
         drive_auth=drive_auth,

@@ -38,6 +38,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published private(set) var publishedStatus = BrainBarStatusSnapshot.checking
     /// L3: when the app sampler first found observability.json unreadable in the current episode.
     private var observabilityUnreadableSince: Date?
+    private var wakeCatchUp = BrainBarWakeCatchUp()
+    private var sleepSubscriptions = Set<AnyCancellable>()
+    private var awakeUptime: Double { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000 }
+
     private let healthBadgeURL: URL?
     private let jobAlertsURL: URL?
     private let badgeReadHistory = BadgeReadHistory()
@@ -176,6 +180,27 @@ final class BrainBarSettingsViewModel: ObservableObject {
                 ? initialLaunchdStates
                 : initialLaunchdObservations.mapValues(\.loadState)
         )
+        let notifications = NSWorkspace.shared.notificationCenter
+        notifications.publisher(for: NSWorkspace.willSleepNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.wakeCatchUp.sleeping()
+                    self?.republishStatus()
+                }
+            }.store(in: &sleepSubscriptions)
+        notifications.publisher(for: NSWorkspace.didWakeNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.wakeCatchUp.woke(uptime: self.awakeUptime)
+                    self.observabilityUnreadableSince = nil
+                    self.republishStatus()
+                    self.refreshObservabilityStatus()
+                    self.refreshLaunchdStatus()
+                }
+            }.store(in: &sleepSubscriptions)
         refreshObservabilityStatus()
         if refreshStatusOnLoad {
             refreshLaunchdStatus()
@@ -439,7 +464,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     /// B5: derive once, with one captured time, and publish; surfaces only read `publishedStatus`.
     func republishStatus() {
-        let snapshot = deriveStatus(at: now())
+        let snapshot = wakeCatchUp.isPending(uptime: awakeUptime)
+            ? (publishedStatus.verdict.dot == .red ? publishedStatus : .checking)
+            : deriveStatus(at: now())
         if snapshot != publishedStatus {
             publishedStatus = snapshot
         }

@@ -22,7 +22,7 @@ skipped job while a verified backup exists is a note, never a dot. So:
   access loss stays red until Drive access is observed ``ok``.
 - Wake grace: after a monitoring gap, a backup that just crossed red gets one catch-up window,
   whose deadline is persisted and never renewed by a later gap. Heartbeat and stall clocks
-  likewise get at most one wake window per clock value, then return to their true age.
+  exclude confirmed same-boot suspension time; without that evidence they retain the bounded grace policy.
 """
 
 from __future__ import annotations
@@ -102,6 +102,8 @@ class Facts:
     """
 
     now: datetime
+    awake_clock_s: float | None = None
+    boot_session: str | None = None
     backup_local_verified_at: Any = UNOBSERVED
     backup_snapshot_local_removed: bool = False
     backup_offsite_verified_at: Any = UNOBSERVED
@@ -297,9 +299,11 @@ def _graced_age(
     if deadline is not None:
         # Keep expired windows too: another gap in this episode cannot grant a new one.
         keep = {"grace_clock": _iso(start), "grace_started_at": _iso(grace_at), "grace_until": _iso(deadline)}
-    true_age = max(0.0, (now - start).total_seconds())
+    sleep_offset = float(prior.get("sleep_offset_s", 0)) if prior.get("clock") == _iso(start) else 0.0
+    keep["sleep_offset_s"] = sleep_offset
+    true_age = max(0.0, (now - start).total_seconds() - sleep_offset)
     effective = max(start, grace_at) if grace_at is not None and deadline is not None and now <= deadline else start
-    age = max(0.0, (now - effective).total_seconds())
+    age = min(true_age, max(0.0, (now - effective).total_seconds()))
     state = _age_state(age, amber, red)
     graced = _RANK[state] < _RANK[_age_state(true_age, amber, red)]
     note = f"{what} {_hours(true_age) if true_age >= HOURS else f'{true_age / 60:.0f} min'}"
@@ -499,7 +503,27 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
     prior_checks = prior.get("checks") if isinstance(prior.get("checks"), Mapping) else {}
     ticked = _parse(prior.get("ticked_at"))
     resumed_at = _parse(prior.get("resumed_at"))
-    if ticked is not None and (now - ticked).total_seconds() > t.sleep_gap_s:
+    confirmed_clock = False
+    previous_awake = prior.get("awake_clock_s")
+    if (
+        ticked is not None
+        and facts.awake_clock_s is not None
+        and previous_awake is not None
+        and facts.boot_session is not None
+        and facts.boot_session == prior.get("boot_session")
+        and facts.awake_clock_s >= previous_awake
+    ):
+        confirmed_clock = True
+        resumed_at = None
+        suspended = (now - ticked).total_seconds() - (facts.awake_clock_s - previous_awake)
+        if suspended > 5:
+            prior_checks = {name: dict(value) for name, value in prior_checks.items()}
+            for name in ("ingest", "stores", "embedding"):
+                if name in prior_checks:
+                    old = prior_checks[name]
+                    old["sleep_offset_s"] = float(old.get("sleep_offset_s", 0)) + suspended
+
+    if not confirmed_clock and ticked is not None and (now - ticked).total_seconds() > t.sleep_gap_s:
         resumed_at = now  # The monitor was not running (sleep, shutdown, supervisor down).
     if resumed_at is not None and (now - resumed_at).total_seconds() > t.wake_grace_s:
         resumed_at = None
@@ -586,7 +610,13 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
         dot=dot,
         checks=tuple(checks),
         notes=tuple(facts.notes),
-        state={"ticked_at": _iso(now), "resumed_at": _iso(resumed_at), "checks": state_checks},
+        state={
+            "ticked_at": _iso(now),
+            "awake_clock_s": facts.awake_clock_s,
+            "boot_session": facts.boot_session,
+            "resumed_at": _iso(resumed_at),
+            "checks": state_checks,
+        },
     )
 
 

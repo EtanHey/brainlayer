@@ -368,3 +368,23 @@ extension ObservabilityDocument {
              stores: stores, emitters: emitters, authorUnknown: authorUnknown, backups: backups)
     }
 }
+
+extension BrainBarStatusSnapshotTests {
+    func testWakeCatchUpExpiresWhileAwakeAndRestartsForDarkWake() {
+        var gate = BrainBarWakeCatchUp()
+        XCTAssertFalse(gate.isPending(uptime: 100))
+        gate.sleeping()
+        XCTAssertTrue(gate.isPending(uptime: 100))
+        gate.woke(uptime: 100)
+        XCTAssertTrue(gate.isPending(uptime: 123))
+        XCTAssertFalse(gate.isPending(uptime: 280))
+        gate.sleeping()
+        gate.woke(uptime: 283)
+        XCTAssertTrue(gate.isPending(uptime: 286))
+        XCTAssertFalse(gate.isPending(uptime: 463))
+        let verdict = BrainBarStatusSnapshot.checking.verdict
+        XCTAssertEqual(verdict.dashboardStatus.headline, "Checking…")
+        XCTAssertEqual(verdict.currentRowCount, 0)
+        XCTAssertFalse(verdict.needsAttention)
+    }
+}

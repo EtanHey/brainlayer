@@ -924,3 +924,32 @@ def test_f3_graced_stale_ingest_resets_recovery():
         run(next_good.state, now=NOW + 3 * H + 2 * M, watcher_updated_at=NOW + 3 * H + 2 * M).check("ingest").state
         == hv.GREEN
     )
+
+
+def test_confirmed_sleep_does_not_age_heartbeat_but_awake_stall_does():
+    first = run(watcher_updated_at=NOW, boot_session="test-boot", awake_clock_s=1000)
+    woke = run(first.state, now=NOW + 14 * M, watcher_updated_at=NOW, boot_session="test-boot", awake_clock_s=1030)
+    assert woke.check("ingest").state == hv.GREEN
+    stalled = run(woke.state, now=NOW + 45 * M, watcher_updated_at=NOW, boot_session="test-boot", awake_clock_s=2890)
+    assert stalled.check("ingest").state == hv.RED
+
+
+def test_darkwakes_do_not_accumulate_sleep_as_heartbeat_age():
+    verdict = run(watcher_updated_at=NOW, boot_session="test-boot", awake_clock_s=1000)
+    for tick in range(1, 25):
+        verdict = run(
+            verdict.state,
+            now=NOW + tick * 10 * M,
+            watcher_updated_at=NOW,
+            boot_session="test-boot",
+            awake_clock_s=1000 + tick * 3,
+        )
+        assert verdict.check("ingest").state == hv.GREEN
+
+
+def test_awake_monitor_gap_and_reboot_do_not_count_as_confirmed_sleep():
+    first = run(watcher_updated_at=NOW, boot_session="a", awake_clock_s=100)
+    awake = run(first.state, now=NOW + 31 * M, watcher_updated_at=NOW, boot_session="a", awake_clock_s=1960)
+    assert awake.check("ingest").state == hv.RED
+    reboot = run(first.state, now=NOW + 14 * M, watcher_updated_at=NOW, boot_session="b", awake_clock_s=110)
+    assert reboot.check("ingest").state == hv.AMBER

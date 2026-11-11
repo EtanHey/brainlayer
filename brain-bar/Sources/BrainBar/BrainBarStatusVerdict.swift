@@ -174,3 +174,11 @@ final class BrainBarUIStatusPublisher: @unchecked Sendable {
     /// Drain on shutdown so the final receipt cannot outlive its runtime directory.
     func flush() { queue.sync {} }
 }
+
+/// Deadlines use mach uptime through DispatchTime, which stops during system sleep.
+struct BrainBarWakeCatchUp {
+    private var deadline: Double? = nil
+    mutating func sleeping() { deadline = .infinity }
+    mutating func woke(uptime: Double) { deadline = uptime + 180 }
+    func isPending(uptime: Double) -> Bool { deadline.map { uptime < $0 } ?? false }
+}
