@@ -979,6 +979,40 @@ def test_r2_backup_crossing_red_during_confirmed_sleep_keeps_catch_up():
     assert expired.check("backup_local").state == hv.RED
 
 
+@pytest.mark.parametrize(
+    "age, activity, progress, expected",
+    [
+        (10 * M, "Embedding progressing: 1 queued", True, hv.GREEN),
+        (2 * H, "Embedding progressing: 3500 queued", True, hv.AMBER),
+        (8 * H, "Embedding paused by machine load: 3500 queued", False, hv.AMBER),
+        (8 * H, None, False, hv.RED),
+    ],
+)
+def test_embedding_activity_never_creates_attention(age, activity, progress, expected):
+    verdict = run(
+        embedding_stalled_since=NOW - age,
+        embedding_activity=activity,
+        embedding_progress_recent=progress,
+        embedding_paused_by_load=bool(activity and "paused" in activity),
+    )
+    check = verdict.check("embedding")
+    assert check.state == expected
+    alerts = [item for item in hv.badge_alerts(verdict) if item["code"] == "outcome_embedding"]
+    if expected == hv.GREEN:
+        assert not alerts
+    else:
+        assert len(alerts) == 1
+        if activity:
+            assert activity in check.note
+
+
+def test_load_pause_severity_does_not_depend_on_display_copy():
+    check = run(
+        embedding_stalled_since=NOW - 8 * H, embedding_activity="New display copy", embedding_paused_by_load=True
+    ).check("embedding")
+    assert check.state == hv.AMBER
+
+
 def test_drive_attention_has_one_actionable_item():
     verdict = run(
         drive_auth="consent_needed",
