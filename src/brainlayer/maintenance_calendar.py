@@ -1054,15 +1054,29 @@ async def _admit_calendar(steps, directory, date, transcript_recovery, guard_tim
 
 
 async def _supervisor_status(read, directory, stop, sleep_fn, *, step=None):
-    # Replaying a grant after an ambiguous timeout can duplicate a mutation.
+    # Retry only status reads. Replaying a grant after an ambiguous timeout can duplicate a mutation.
     for attempt, delay in enumerate((2, 4, 8, 16, 30, 30, 0), 1):
         if stop.is_set():
             break
         try:
             return await _blocking(read)
-        except TimeoutError:
+        except (
+            TimeoutError,
+            ConnectionRefusedError,
+            ConnectionResetError,
+            BrokenPipeError,
+            FileNotFoundError,
+            ValueError,
+        ) as exc:
             detail = dict(step=step) if step is not None else dict(phase="runner-start")
-            await _blocking(record, directory, event="supervisor-status-timeout", attempt=attempt, **detail)
+            await _blocking(
+                record,
+                directory,
+                event="supervisor-status-timeout" if isinstance(exc, TimeoutError) else "supervisor-status-unavailable",
+                error=type(exc).__name__,
+                attempt=attempt,
+                **detail,
+            )
             while delay > 0 and not stop.is_set():
                 interval = min(0.1, delay)
                 await sleep_fn(interval)
@@ -1131,6 +1145,8 @@ async def run_calendar(
     kind = "recovery" if transcript_recovery or failed_recovery else "nightly" if planned else "manual"
     manual_failed = 0
     runner_started_at = None
+    # Recovery owes only its selected steps; a nightly owes its plan even if startup fails.
+    expected_steps = () if transcript_recovery or failed_recovery else (steps.candidates if planned else steps)
     loop = asyncio.get_running_loop()
     try:
         await _blocking(custody.recover, min(1, shutdown_timeout / 2))
@@ -1141,6 +1157,7 @@ async def run_calendar(
             )
             if reply["status"] != "ready":
                 return 0
+            expected_steps = steps
             date = dt.date.fromisoformat(reply["scheduled_date"])
         state_path = directory / "state.json"
         state = await _blocking(
@@ -1164,6 +1181,7 @@ async def run_calendar(
             marker = dt.date.fromisoformat(state["last_weekly"]) if state.get("last_weekly") else None
             steps = steps.select(marker)
         steps = tuple(steps)
+        expected_steps = steps
         weekly_substitution = planned and any(step.name == "maintenance-weekly" for step in steps)
         index_overran_window = False
         await _blocking(logs.mkdir, parents=True, exist_ok=True)
@@ -1362,6 +1380,18 @@ async def run_calendar(
         raise
     finally:
         try:
+            # Alert I/O must finish while the guard heartbeat is still running.
+            if any(step.name == "backup-daily" for step in expected_steps) and results.get("backup-daily") != "ok":
+                try:
+                    await _blocking(
+                        report,
+                        "backup-daily",
+                        "BrainLayer backup-daily did not complete; see calendar results and logs",
+                    )
+                except OSError as exc:
+                    await _blocking(
+                        record, directory, event="alert-error", step="backup-daily", error=type(exc).__name__
+                    )
             stop.set()
             heartbeat_stop.set()  # All finish workers have exited; bounded guard shutdown can begin.
             if heartbeat:

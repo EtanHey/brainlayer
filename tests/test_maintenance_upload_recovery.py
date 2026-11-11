@@ -159,6 +159,7 @@ def test_upload_admission_refuses_without_starting_child(upload_lane, monkeypatc
     else:
         assert run(upload_lane, now) == 0
     assert not any(r["event"] == "spawn" for r in runner.rows())
+    assert "backup-daily" not in job_alerts.active_alerts(runner.alerts)
     if reason == "no-snapshot":
         assert any(r.get("reason") == "no-pending-local-snapshot" for r in runner.rows())
 
@@ -167,6 +168,7 @@ def test_failed_child_consumes_attempt_and_retains_snapshot(upload_lane, monkeyp
     runner, _, snapshot, _ = upload_lane
     monkeypatch.setenv("FAIL_UPLOAD", "1")
     assert run(upload_lane) == 1
+    assert "backup-daily" in job_alerts.active_alerts(runner.alerts)
     assert snapshot.exists()
     assert runner.rows()[-1]["failed"] == 1
     assert list(json.loads((runner.directory / "upload-recovery.json").read_text()).values()) == [
