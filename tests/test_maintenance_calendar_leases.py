@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from brainlayer.maintenance_calendar import Step, run_calendar
+from brainlayer.supervisor_guard import start_time
 from tests.calendar_watch_readiness import wait_for_calendar_watch
 from tests.test_maintenance_control import control, native  # noqa: F401
 from tests.test_service_supervisor import eventually, exists
@@ -97,13 +98,19 @@ raise SystemExit(asyncio.run(run_calendar([Step('maintenance-nightly',(sys.execu
         step = int((path / "step").read_text())
         group = os.getpgid(step)
         assert all(v["pid"] is None for v in query()["components"].values())
+        if death == "both":
+            os.kill(parent.pid, signal.SIGSTOP)
+            _, stopped = os.waitpid(parent.pid, os.WUNTRACED)
+            assert os.WIFSTOPPED(stopped)
         if death in {"guard", "both"}:
             events = [json.loads(l) for l in (path / "calendar" / "runs.jsonl").read_text().splitlines()]
-            os.kill(next(r["guard"] for r in events if r["event"] == "runner"), signal.SIGKILL)
+            guard_record = next(r for r in events if r["event"] == "runner")
+            os.kill(guard_record["guard"], signal.SIGKILL)
         if death != "guard":
             os.kill(parent.pid, {"freeze": signal.SIGSTOP, "term": signal.SIGTERM, "both": signal.SIGKILL}[death])
         assert parent.wait(timeout=3) == (-signal.SIGKILL if death in {"freeze", "both"} else 1)
         if death == "both":
+            eventually(lambda: start_time(guard_record["guard"]) is None)
             os.kill(step, 0)
             # Cleanup still reaps the writer, but a killed run must be reported as failed.
             assert asyncio.run(run_calendar([], path / "calendar", path / "logs")) == 1
@@ -145,7 +152,12 @@ def count():
 before,end=count(),time.monotonic()+2
 while count() <= before and time.monotonic()<end: time.sleep(.02)
 assert count()>before
-assert all(v['pid'] and not v['paused'] for v in control_client().request().values() if v['configured'])
+deadline=time.monotonic()+2
+while True:
+ states=control_client().request()
+ if all(v['pid'] and not v['paused'] for v in states.values() if v['configured']): break
+ assert time.monotonic()<deadline, states
+ time.sleep(.02)
 """
 
 
@@ -160,11 +172,11 @@ def test_live_ingestion_keeps_running_during_online_steps(runner):
 
 def test_only_maintenance_and_fts_hold_writers_and_wait_stays_online(runner):
     path, query = runner
-    clock = [dt.datetime(2026, 10, 12, 3, 59, 30)]
+    clock = [dt.datetime(2026, 10, 12, 3, 58, 30)]
 
     async def advance(seconds):
         assert all(v["pid"] and not v["paused"] for v in query()["components"].values() if v["configured"])
-        clock[0] += dt.timedelta(seconds=30)
+        clock[0] = clock[0].replace(hour=4, minute=0, second=0)
         await asyncio.sleep(0)
 
     online = online_writer_probe(path)

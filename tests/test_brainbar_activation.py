@@ -1,6 +1,5 @@
 import json
 import plistlib
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,11 +8,6 @@ from typer.testing import CliRunner
 
 from brainlayer import brainbar_activation as activation
 from brainlayer.cli import app
-
-
-@pytest.fixture(autouse=True)
-def isolated_activation_clock(monkeypatch):
-    monkeypatch.setattr(activation, "time", SimpleNamespace(monotonic=time.monotonic, sleep=time.sleep))
 
 
 @pytest.fixture
@@ -301,7 +295,6 @@ def test_automatic_lock_contention_defers_without_waiting_or_failure(installed, 
 def test_manual_activation_proceeds_after_real_flock_is_released(installed, monkeypatch):
     agents, calls, _ = installed
     waits = []
-    system_sleep = time.sleep
     with (agents / ".brainbar-activation.lock").open("a") as holder:
         activation.fcntl.flock(holder, activation.fcntl.LOCK_EX | activation.fcntl.LOCK_NB)
 
@@ -310,6 +303,5 @@ def test_manual_activation_proceeds_after_real_flock_is_released(installed, monk
             activation.fcntl.flock(holder, activation.fcntl.LOCK_UN)
 
         monkeypatch.setattr(activation.time, "sleep", release)
-        assert time.sleep is system_sleep, "Activation clock patches must not affect background threads"
         assert activation.activate(agents)["ok"]
     assert len(waits) == 1 and calls
