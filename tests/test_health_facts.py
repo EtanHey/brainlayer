@@ -587,20 +587,24 @@ def test_disk_timeout_reuses_measurement_only_within_thirty_minutes(tmp_path, mo
     [
         ("running", 16, 480, "amber"),
         ("high load", 0, 2, "amber"),
-        ("high load", 0, 480, "red"),
+        ("high load", 0, 480, "amber"),
         ("waiting", 0, 480, "red"),
     ],
 )
+@pytest.mark.parametrize("count,age_hours", [(1, 0.1), (3500, 2), (3500, 8)])
 def test_embedding_completed_batches_and_load_pause_are_not_net_stalls(
-    tmp_path, mode, encoded, batch_minutes, expected
+    tmp_path, mode, encoded, batch_minutes, expected, count, age_hours
 ):
     config = _config(tmp_path)
     with sqlite3.connect(config.db_path) as conn:
-        conn.execute("INSERT INTO chunks VALUES ('pending', 'text', NULL, NULL, NULL, ?)", (NOW.isoformat(),))
+        conn.executemany(
+            "INSERT INTO chunks VALUES (?, 'text', NULL, NULL, NULL, ?)",
+            [(f"pending-{i}", NOW.isoformat()) for i in range(count)],
+        )
     prior = {
         "embedding": {
-            "count": 1,
-            "since": (NOW - timedelta(hours=8)).isoformat(),
+            "count": count,
+            "since": (NOW - timedelta(hours=age_hours)).isoformat(),
             "window_start": (NOW - timedelta(days=1)).isoformat(),
         }
     }
@@ -617,18 +621,26 @@ def test_embedding_completed_batches_and_load_pause_are_not_net_stalls(
     (tmp_path / "hotlane-budget.json").write_text(json.dumps({"backlog_max_load": 10}))
     facts, _ = _collect(config, prior)
     check = evaluate(facts).check("embedding")
+    assert facts.embedding_stalled_since == NOW - timedelta(hours=age_hours)
+    if age_hours < 1:
+        expected = "green"
+    elif age_hours == 2:
+        expected = "amber"
     if expected == "red":
         from dataclasses import replace
 
         baseline = evaluate(replace(facts, embedding_activity=None)).check("embedding")
         assert check.state == baseline.state == "red"
         assert "not shrunk" in check.note
+    elif expected == "green":
+        assert check.state == "green"
     else:
         assert check.state == "amber"
-        assert "not shrunk" not in check.note
-        assert "1 queued" in check.note
-        assert "last batch" in check.note
-        assert ("paused by machine load" if mode == "high load" else "progressing") in check.note
+        assert "not shrunk" in check.note
+        if facts.embedding_activity:
+            assert f"{count} queued" in check.note
+            assert "last batch" in check.note
+            assert ("paused by machine load" if mode == "high load" else "progressing") in check.note
 
 
 @pytest.mark.parametrize("stale", [False, True])
