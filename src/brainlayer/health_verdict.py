@@ -116,6 +116,7 @@ class Facts:
     embedding_stalled_since: Any = UNOBSERVED
     embedding_activity: str | None = None
     embedding_progress_recent: bool = False
+    embedding_paused_by_load: bool = False
     disk_free_bytes: Any = UNOBSERVED
     disk_peak_bytes: Any = UNOBSERVED
     disk_floor_bytes: Any = UNOBSERVED
@@ -424,11 +425,11 @@ def _raw_checks(
         "backlog has not shrunk for",
         t.wake_grace_s,
     )
-    if facts.embedding_activity:
-        if facts.embedding_progress_recent:
-            raw["embedding"] = _Raw(AMBER, facts.embedding_activity)
-        else:
-            raw["embedding"].note += f"; {facts.embedding_activity}"
+    embedding = raw["embedding"]
+    if facts.embedding_activity and embedding.state in (AMBER, RED):
+        if embedding.state == RED and (facts.embedding_progress_recent or facts.embedding_paused_by_load):
+            embedding.state = AMBER
+        embedding.note += f"; {facts.embedding_activity}"
     pending = _stall_age(
         facts.oldest_pending_store_at,
         p("stores"),
@@ -606,7 +607,16 @@ def badge_alerts(verdict: Verdict) -> list[dict[str, str]]:
         for check in verdict.checks
         if check.state != GREEN
     ]
-    active.extend({"code": note.code, "severity": "warning", "message": note.message} for note in verdict.notes)
+    consent = next((note for note in verdict.notes if note.code == "job_alert_drive-consent"), None)
+    if consent:
+        for item in active:
+            if item["code"] == OUTCOME_CODE_PREFIX + "drive_auth":
+                item["message"] = consent.message
+    active.extend(
+        {"code": note.code, "severity": "warning", "message": note.message}
+        for note in verdict.notes
+        if not (note is consent and any(item["code"] == OUTCOME_CODE_PREFIX + "drive_auth" for item in active))
+    )
     return active
 
 
