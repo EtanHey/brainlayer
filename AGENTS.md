@@ -476,3 +476,6 @@ brainlayer search "how did I implement authentication"
   never report it.
 - **Pre-merge live-check against a DB copy** is required before any change that touches stored data.
   *(Etan's addition at ratification, 2026-08-02.)*
+
+## Local JSONL retention
+- Local archive deletion defaults on: at least 14 days old, exact verified Drive receipt (name/size/SHA-256/object ID), never newest; `BRAINLAYER_JSONL_BACKUP_RETENTION=0` disables it. Scratch-only proof: `formal/jsonl-retention/check.sh` and `tests/test_jsonl_local_retention.py`. Drive policy stays opt-in, latest 30.

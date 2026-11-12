@@ -582,3 +582,17 @@ A later dated run can create a replacement without changing backup filenames.
 
 Weekly maintenance rechecks local proof immediately before quiesce and VACUUM. Upload runs after
 weekly maintenance and retains its independent remote verification contract.
+
+### Local JSONL archive retention
+
+Local JSONL archive deletion defaults on. `BRAINLAYER_JSONL_BACKUP_RETENTION=0`
+disables all local deletion. `BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION_DAYS`
+defaults to 14 and must be at least 14. The newest local archive is always kept.
+Age is measured from the local archive's modification time; future timestamps
+are retained. Each deletion requires a durable `drive_archives` receipt in
+`jsonl-backup-state.json`: `verified=true`, exact name, byte size, SHA-256 and
+Drive object ID. Legacy state and Drive listings alone never authorize deletion.
+Each unlink has a durable log intent with name, age and verified receipt ID;
+crash recovery simply retries the sweep. The staging lock serializes sweeps and
+uploads. Optional Drive retention remains opt-in and keeps the latest 30;
+it invalidates local-deletion receipts before trashing remote objects.

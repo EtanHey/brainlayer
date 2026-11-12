@@ -474,8 +474,8 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
     delete_calls = [*prune_calls, *archive_unlinks]
     if not prune_calls:
         errors.append("the Drive retention deletion call disappeared instead of retaining its safety contract")
-    if not archive_unlinks:
-        errors.append("the local staging deletion call disappeared instead of retaining its safety contract")
+    if not _calls(run_backup, "prune_local_archives"):
+        errors.append("local receipt-backed retention sweep is missing")
     if verified_gate is None or any(call not in safe_calls for call in delete_calls):
         errors.append("backup deletion calls must remain inside verified-upload control flow")
     deletion_statement_indexes = (
