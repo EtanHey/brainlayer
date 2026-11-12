@@ -330,6 +330,13 @@ def embedding_activity(cpu: Any, budget: Any, db: Path, now: datetime) -> tuple[
         if paused
         else "Embedding progressing but incoming work is keeping the queue full"
     )
+    if paused:
+        due = _aware(cpu.get("backlog_next_forced_batch_at"))
+        label += (
+            f"; next forced batch {due.astimezone().strftime('%H:%M:%S')} (local time)"
+            if due is not None
+            else "; next forced batch time unavailable"
+        )
     return recent or (
         now - timedelta(seconds=600) if progressing else None
     ), f"{label}: {{count}} queued, last batch {clock}"
