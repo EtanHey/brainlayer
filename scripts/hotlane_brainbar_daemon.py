@@ -491,10 +491,9 @@ def _positive_seconds(name: str, default: float) -> float:
 
 
 def _backlog_pending_count(db_path: Path) -> int | None:
-    import sqlite3
-
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
+        store = VectorStore(db_path, readonly=True)
+        conn = store.conn
         try:
             return conn.execute("""
                 SELECT count(*) FROM chunks c
@@ -504,8 +503,8 @@ def _backlog_pending_count(db_path: Path) -> int | None:
                   AND coalesce(c.archived,0)=0 AND coalesce(c.status,'active')='active'
             """).fetchone()[0]
         finally:
-            conn.close()
-    except sqlite3.Error:
+            store.close()
+    except (apsw.Error, OSError):
         LOGGER.exception("cannot measure backlog progress; retaining normal forced batches")
         return None
 
