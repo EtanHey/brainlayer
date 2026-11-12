@@ -12,6 +12,9 @@ objects may disappear or change while local bytes survive. Revoke, Prune,
 Restore and Crash model the durable pending-revocation window. Tick and
 ClockJump advance the observed wall clock through boundary ages 0/14/28/31.
 Both mtime and verified-at ages must pass. Re-verification resets receipt age.
+Reconcile backfills a missing receipt from the live listing on a later run;
+ghost checkedAt holds when the copy was really checked, and the age invariant
+reads it, so a receipt that records an earlier verified_at is caught.
 
 Invariants: NeverDeleteWithoutVerifiedCopy (live matching bytes at deletion),
 NeverDeleteYoungerThan14Days (both observed ages), NeverDeleteNewest,
@@ -35,17 +38,20 @@ They prevent a backdated file from bypassing a recent receipt, not clock fraud.
 A trusted elapsed clock/remote hold would be a different requirement. These
 limits are explicitly reported for the round-2 reviewer.
 
-Five rule mutations must fail TLC: drop live check, drop content MD5 check,
-drop newest protection, drop age guards, restore revoked receipts blindly.
+Six rule mutations must fail TLC: drop live check, drop content MD5 check,
+drop newest protection, drop age guards, backdate a reconciled receipt's
+verified_at, restore revoked receipts blindly.
 The first four plus dropped verified are also rejected by in-memory mutations
 of the REAL retention function with the seeded randomized scratch oracle.
-Real run_backup tests exercise revoke/restore and the interrupted-prune note.
+Real run_backup tests exercise revoke/restore and the interrupted-prune note;
+tests/test_jsonl_receipt_reconcile.py runs a backdated reconcile mutation.
 
 | Model action | Production code (src/brainlayer/jsonl_backup.py) |
 |---|---|
 | New | run_backup bundle creation (1784); _local_archive_paths (428) discovers new newest |
 | Upload | upload_file_to_drive_raw call (1908) |
 | Verify | _drive_archive_receipt (415), then durable _atomic_write_json (1940) |
+| Reconcile | reconcile_drive_receipts, called in run_backup between the live listing and the sweep |
 | Delete | prune_local_archives (445), gates (463-483), unlink (498) |
 | RemoteDelete / RemoteReplace | external actors; _list_surviving_archives (352) observes their effect |
 | Revoke / Prune / Restore | retained_state pending marker, revoke, prune and survivor restore (1959-1980) |

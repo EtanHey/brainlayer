@@ -622,7 +622,16 @@ a confirmation event; completed sweeps report `local_retention_deleted`.
 
 Drive pruning revokes receipts durably before trashing and restores survivors
 afterward. An interrupted revoke is logged and raises a `jsonl-retention` job
-note requiring reconciliation; receipts are never reconstructed from a listing.
+note requiring reconciliation; while it is pending no receipt is built from a listing.
 A wall-clock jump can advance both age measurements, and an external actor can
 remove a final Drive copy after local deletion. The formal model documents and
 demonstrates these limits; receipt age is not a trusted elapsed-time clock.
+
+Archives staged before receipts existed have none, so the sweep could never retire them.
+Each run with a live Drive inventory reconciles them: a local archive with no receipt gets
+one only when the listing holds exactly one untrashed object of the same name, size and
+`md5Checksum` as the local file. The receipt records `source: "reconciled"` and
+`verified_at` set to the run's time, never earlier, so its 14-day clock starts at
+reconciliation and it cannot delete anything in the run that writes it. An existing
+receipt, including a legacy one, is never replaced. Runs report the names written in
+`local_retention_reconciled`.

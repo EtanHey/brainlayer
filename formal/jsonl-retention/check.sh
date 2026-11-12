@@ -7,17 +7,17 @@ mkdir -p "$out/tmp"
 cp "$here/Retention.tla" "$out/Retention.tla"
 cd "$out"
 java -Djava.io.tmpdir="$out/tmp" -Xmx512m -cp "$jar" tlc2.TLC -workers 1 -config "$here/current.cfg" -metadir current-states Retention > current.log 2>&1
-for bug in live md5 newest age restore external; do
+for bug in live md5 newest age backdate restore external; do
     if java -Djava.io.tmpdir="$out/tmp" -Xmx512m -cp "$jar" tlc2.TLC -workers 1 -config "$here/$bug.cfg" -metadir "$bug-states" Retention > "$bug.log" 2>&1; then
         echo "FAIL: $bug mutation survived"; exit 1
     fi
     case "$bug" in
         live|md5) expected=NeverDeleteWithoutVerifiedCopy ;;
         newest) expected=NeverDeleteNewest ;;
-        age) expected=NeverDeleteYoungerThan14Days ;;
+        age|backdate) expected=NeverDeleteYoungerThan14Days ;;
         restore) expected=RestoreOnlySurvivors ;;
         external) expected=AlwaysAtLeastOneCopy ;;
     esac
     grep -F "Invariant $expected is violated" "$bug.log"
 done
-echo 'PASS: current invariants; five rule mutations and external-loss limit rejected'
+echo 'PASS: current invariants; six rule mutations and external-loss limit rejected'
