@@ -173,6 +173,77 @@ final class BrainBarHealthVerdictTests: XCTestCase {
         }
     }
 
+    /// Producer output for an amber stores check and a blind monitor (seam PR-1 typed fields).
+    private static let typedChecks: [[String: Any]] = [
+        ["name": "stores", "state": "amber", "age_s": 1200.0, "threshold_s": 2700, "since": "2026-11-02T02:55:00Z",
+         "note": "oldest pending store has waited 20 min; canary failed 1x in a row (red at 3)",
+         "unknown_ticks": 0, "blind": false, "clock": "2026-11-02T02:40:00Z", "context_codes": ["drain_unloaded"],
+         "good_ticks": 0, "good_ticks_needed": 2, "paused_by_maintenance": true,
+         "pause_ends_at": "2026-11-02T04:00:00Z", "fails": 1, "cause": "both"],
+        ["name": "backup_local", "state": "amber", "age_s": 216000.0, "threshold_s": 194400, "since": NSNull(),
+         "note": "newest verified snapshot 60.0 h old", "unknown_ticks": 0, "blind": false,
+         "clock": "2026-11-01T15:00:00Z", "context_codes": [], "catch_up_until": "2026-11-02T05:00:00Z"],
+        ["name": "monitor", "state": "unknown", "age_s": NSNull(), "threshold_s": NSNull(),
+         "since": "2026-11-02T03:00:00Z", "note": "could not look: slow_check", "unknown_ticks": 1, "blind": true,
+         "clock": NSNull(), "context_codes": [], "blind_codes": ["slow_check"]],
+    ]
+
+    func testNewerAppDecodesTypedCheckFields() throws {
+        let health = try XCTUnwrap(badge("amber") { document in
+            var verdict = document["verdict"] as! [String: Any]
+            verdict["checks"] = Self.typedChecks
+            document["verdict"] = verdict
+        }.healthVerdict, "Typed fields must not make the verdict unreadable")
+        let stores = health.checks[0], backup = health.checks[1], monitor = health.checks[2]
+        XCTAssertEqual(stores.cause, "both")
+        XCTAssertEqual(stores.fails, 1)
+        XCTAssertEqual(stores.goodTicks, 0)
+        XCTAssertEqual(stores.goodTicksNeeded, 2)
+        XCTAssertEqual(stores.pausedByMaintenance, true)
+        XCTAssertEqual(stores.pauseEndsAt, "2026-11-02T04:00:00Z")
+        XCTAssertEqual(stores.clock, "2026-11-02T02:40:00Z")
+        XCTAssertEqual(stores.contextCodes, ["drain_unloaded"])
+        XCTAssertEqual(stores.blind, false)
+        XCTAssertEqual(stores.unknownTicks, 0)
+        XCTAssertEqual(backup.catchUpUntil, "2026-11-02T05:00:00Z")
+        XCTAssertNil(backup.cause, "A key a check does not carry stays nil")
+        XCTAssertEqual(monitor.blind, true)
+        XCTAssertEqual(monitor.unknownTicks, 1)
+        XCTAssertNil(monitor.clock)
+        XCTAssertEqual(monitor.blindCodes, ["slow_check"])
+    }
+
+    func testNewerAppReadsOlderFileWithoutTypedFields() throws {
+        let check = try XCTUnwrap(badge("amber").healthVerdict?.checks.first)
+        XCTAssertEqual(check.state, .amber)
+        XCTAssertEqual(check.note, "Fixture backup age")
+        XCTAssertNil(check.unknownTicks)
+        XCTAssertNil(check.blind)
+        XCTAssertNil(check.clock)
+        XCTAssertNil(check.catchUpUntil)
+        XCTAssertNil(check.contextCodes)
+    }
+
+    func testOlderAppCheckShapeIgnoresTypedFields() throws {
+        /// BrainBarHealthVerdict.Check as shipped in 1.5.98: six keys, synthesized Codable.
+        struct LegacyCheck: Decodable, Equatable {
+            let name: String
+            let state: BrainBarHealthVerdict.State
+            var ageS: Double? = nil
+            var thresholdS: Double? = nil
+            var since: String? = nil
+            let note: String
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let data = try JSONSerialization.data(withJSONObject: Self.typedChecks)
+        let legacy = try decoder.decode([LegacyCheck].self, from: data)
+        XCTAssertEqual(legacy.map(\.name), ["stores", "backup_local", "monitor"])
+        XCTAssertEqual(legacy[0].state, .amber)
+        XCTAssertEqual(legacy[0].thresholdS, 2700)
+        XCTAssertEqual(legacy[2].state, .unknown)
+    }
+
     func testReceiptWritesOnlyOnContentChangeOrHeartbeatOffMainThread() throws {
         let writes = HealthReceiptWrites()
         let publisher = BrainBarUIStatusPublisher { receipt, _ in

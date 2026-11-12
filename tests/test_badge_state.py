@@ -477,9 +477,28 @@ def test_completed_health_check_publishes_badge_contract(tmp_path: Path) -> None
     assert set(document["verdict"]) == {"dot", "checks", "notes", "evaluated_at"}
     assert document["verdict"]["dot"] == "green" and document["verdict"]["notes"] == []
     assert [c["name"] for c in document["verdict"]["checks"]] == list(CHECK_ORDER)
-    assert all(
-        set(c) == {"name", "state", "age_s", "threshold_s", "since", "note"} for c in document["verdict"]["checks"]
-    )
+    base = {
+        "name",
+        "state",
+        "age_s",
+        "threshold_s",
+        "since",
+        "note",
+        "unknown_ticks",
+        "blind",
+        "clock",
+        "context_codes",
+    }
+    extra = {
+        **dict.fromkeys(("backup_local", "backup_offsite", "transcripts"), {"catch_up_until"}),
+        "ingest": {"good_ticks", "good_ticks_needed", "paused_by_maintenance", "pause_ends_at"},
+        "stores": {"good_ticks", "good_ticks_needed", "paused_by_maintenance", "pause_ends_at", "fails", "cause"},
+        "search": {"good_ticks", "good_ticks_needed", "fails"},
+        "monitor": {"blind_codes"},
+    }
+    assert {c["name"]: set(c) for c in document["verdict"]["checks"]} == {
+        name: base | extra.get(name, set()) for name in CHECK_ORDER
+    }
 
 
 def test_failed_badge_publish_removes_prior_calm_document(tmp_path: Path, monkeypatch) -> None:
