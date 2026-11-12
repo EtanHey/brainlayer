@@ -16,10 +16,13 @@ OLD_BYTES = b"old archive bytes"
 
 
 class _FakeDrive:
-    """Answers files().list().execute() with a fixed folder listing and records the request."""
+    """Answers files().list().execute() page by page and records each request.
 
-    def __init__(self, items):
-        self.items = items
+    A page that is an exception is raised when requested, like a listing that fails mid-pagination.
+    """
+
+    def __init__(self, items, pages=None):
+        self.pages = pages if pages is not None else [items]
         self.requests = []
 
     def files(self):
@@ -30,7 +33,14 @@ class _FakeDrive:
         return self
 
     def execute(self):
-        return {"files": self.items}
+        index = int(self.requests[-1].get("pageToken") or 0)
+        page = self.pages[index]
+        if isinstance(page, Exception):
+            raise page
+        response = {"files": page}
+        if index + 1 < len(self.pages):
+            response["nextPageToken"] = str(index + 1)
+        return response
 
 
 def _remote(**overrides):
@@ -45,7 +55,7 @@ def _remote(**overrides):
     return item
 
 
-def _scratch(tmp_path, monkeypatch, items, state=None):
+def _scratch(tmp_path, monkeypatch, items, state=None, pages=None):
     monkeypatch.delenv("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION", raising=False)
     monkeypatch.delenv("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION_DAYS", raising=False)
     staging = tmp_path / "jsonl-backups"
@@ -60,7 +70,7 @@ def _scratch(tmp_path, monkeypatch, items, state=None):
     # A legacy file entry claims archive-backed coverage, so run_backup lists Drive.
     state = state if state is not None else {"files": {"legacy.jsonl": {"archive_id": "legacy-id"}}}
     state_path.write_text(json.dumps(state))
-    drive = _FakeDrive(items)
+    drive = _FakeDrive(items, pages)
     monkeypatch.setattr(b.backup_daily, "get_drive_credentials", lambda: None)
     monkeypatch.setattr(b.backup_daily, "build_drive_service", lambda: drive)
     monkeypatch.setattr(b.backup_daily, "ensure_drive_folder_chain", lambda *a: "folder")
@@ -170,6 +180,37 @@ def test_no_reconciliation_while_a_drive_prune_revocation_is_pending(tmp_path, m
 
     assert result["local_retention_reconciled"] == []
     assert old.name not in _receipts(state_path)
+
+
+def test_match_on_a_later_listing_page_yields_receipt(tmp_path, monkeypatch):
+    other = _remote(id="drive-other", name="claude-jsonl-2025-12-01.tar.gz")
+    old, _newest, state_path, drive, args = _scratch(tmp_path, monkeypatch, None, pages=[[other], [_remote()]])
+    result = b.run_backup(now=NOW, **args)
+
+    assert [request.get("pageToken") for request in drive.requests] == [None, "1"]
+    assert result["local_retention_reconciled"] == [old.name]
+    assert _receipts(state_path)[old.name]["archive_id"] == "drive-old"
+
+
+def test_duplicate_name_on_a_later_listing_page_yields_no_receipt(tmp_path, monkeypatch):
+    pages = [[_remote()], [_remote(id="drive-dup")]]
+    old, _newest, state_path, _drive, args = _scratch(tmp_path, monkeypatch, None, pages=pages)
+
+    assert b.run_backup(now=NOW, **args)["local_retention_reconciled"] == []
+    assert old.name not in _receipts(state_path)
+
+
+def test_listing_that_fails_mid_pagination_never_reconciles(tmp_path, monkeypatch):
+    """Page 1 holds a unique exact match; page 2 raises. A partial inventory writes nothing."""
+    pages = [[_remote()], OSError("page 2 failed")]
+    old, newest, state_path, _drive, args = _scratch(tmp_path, monkeypatch, None, pages=pages)
+    result = b.run_backup(now=NOW, **args)
+
+    assert "Drive inventory unavailable: page 2 failed" in result["local_retention_error"]
+    assert result["local_retention_reconciled"] == []
+    assert result["local_retention_deleted"] == []
+    assert old.name not in _receipts(state_path)
+    assert old.exists() and newest.exists()
 
 
 def test_backdated_reconcile_mutation_deletes_in_the_writing_run(tmp_path, monkeypatch):

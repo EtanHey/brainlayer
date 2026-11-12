@@ -1797,6 +1797,8 @@ def run_backup(
                 surviving_archives = _list_surviving_archives(service, folder_parts, drive_objects)
             except Exception as exc:
                 surviving_archives = {}
+                # A listing that failed mid-pagination already filled drive_objects in part.
+                drive_objects.clear()
                 retention_receipt["local_retention_error"] = f"Drive inventory unavailable: {exc}"
                 _retention_warning(log_path, retention_receipt["local_retention_error"])
         else:
