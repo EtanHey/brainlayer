@@ -40,6 +40,16 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.98] - 2026-11-12
+
+### Hardening (no false lines, no sleep false alarms)
+
+- fix: exclude Mac sleep from BrainBar freshness alarms (#1766)
+- test: cover EntityCache timer owner lifetime (#1771)
+- test(calendar): tolerate process scheduling latency in release gates (#1772)
+- docs: correct operational facts and dated test counts (#1769)
+- fix(observability): index Today aggregate reads (#1770)
+
 ## [1.5.97] - 2026-11-11
 
 ### Hardening (no false lines)
