@@ -99,3 +99,27 @@ def test_gate_preserves_calendar_fd_with_cwd_and_policy(tmp_path, monkeypatch, c
         if process and process.poll() is None:
             process.kill()
             process.wait(timeout=3)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Darwin producer I/O policy requires macOS")
+def test_observability_reader_is_nice_but_not_io_throttled():
+    import plistlib
+    import subprocess
+    from pathlib import Path
+
+    from brainlayer import supervisor_child
+
+    path = Path(__file__).resolve().parents[1] / "scripts/launchd/com.brainlayer.observability.plist"
+    policy = plistlib.loads(path.read_bytes())
+    code = (
+        "import runpy,sys,json,os,ctypes;"
+        "runpy.run_path(sys.argv[1])['apply_policy'](json.loads(sys.argv[2]));"
+        "print(json.dumps([os.getpriority(0,0),os.getpriority(4,0),"
+        "ctypes.CDLL(None).getiopolicy_np(0,0)]))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code, supervisor_child.__file__, json.dumps(policy)],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [10, 0, 0]
