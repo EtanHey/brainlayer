@@ -483,6 +483,33 @@ def _backlog_yield_reason(db_path: Path, max_load: float) -> str:
     return "high load" if load > max_load else ""
 
 
+def _positive_seconds(name: str, default: float) -> float:
+    value = float(os.environ.get(name, str(default)))
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be finite and positive")
+    return value
+
+
+def _backlog_pending_count(db_path: Path) -> int | None:
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
+        try:
+            return conn.execute("""
+                SELECT count(*) FROM chunks c
+                LEFT JOIN chunk_vectors_rowids r ON r.id=c.id
+                WHERE r.id IS NULL AND c.archived_at IS NULL
+                  AND c.superseded_by IS NULL AND c.aggregated_into IS NULL
+                  AND coalesce(c.archived,0)=0 AND coalesce(c.status,'active')='active'
+            """).fetchone()[0]
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        LOGGER.exception("cannot measure backlog progress; retaining normal forced batches")
+        return None
+
+
 class PendingCandidateScanState:
     def __init__(self) -> None:
         self.active = False
@@ -1485,14 +1512,18 @@ def run(
     queue_dir = queue_dir or _default_queue_dir()
     last_backlog = time_fn() - backlog_interval
     backlog_yield_since = None
-    max_backlog_wait = float(
-        os.environ.get(
-            "BRAINLAYER_HOTLANE_BACKLOG_FLOOR_SECONDS",
-            os.environ.get("BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS", "600"),
-        )
+    floor_setting = (
+        "BRAINLAYER_HOTLANE_BACKLOG_FLOOR_SECONDS"
+        if "BRAINLAYER_HOTLANE_BACKLOG_FLOOR_SECONDS" in os.environ
+        else "BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS"
     )
-    if not math.isfinite(max_backlog_wait) or max_backlog_wait <= 0:
-        raise ValueError("BRAINLAYER_HOTLANE_BACKLOG_FLOOR_SECONDS must be finite and positive")
+    backlog_floor_seconds = min(300.0, _positive_seconds(floor_setting, 300))
+    backlog_stall_seconds = _positive_seconds("BRAINLAYER_HOTLANE_BACKLOG_STALL_SECONDS", 1800)
+    backlog_budget_seconds = _positive_seconds("BRAINLAYER_HOTLANE_BACKLOG_BUDGET_SECONDS", 90)
+    last_backlog_duty = last_backlog + backlog_interval
+    progress_count = None
+    progress_since = None
+    adaptive_drain = False
     _warn_retired_enrichment(enrich_limit, enrich_since_hours, None)
     if enrich_limit > 0:
         LOGGER.warning("Ignoring retired hotlane enrichment interval=%s", enrich_interval)
@@ -1517,10 +1548,13 @@ def run(
             cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
             cycle_recent_limit = recent_limit
             reason = _backlog_yield_reason(db_path, backlog_max_load) if backlog_batch else ""
+            forced_turn = False
             if reason == "high load":
                 if backlog_yield_since is None:
                     backlog_yield_since = now
-                if now - backlog_yield_since >= max_backlog_wait:
+                if min(backlog_yield_since + backlog_floor_seconds, last_backlog_duty + 300) <= now:
+                    # Reserve the existing backlog lane; never lift store-queue backpressure.
+                    forced_turn = True
                     reason = ""
                     cycle_backlog_batch = backlog_batch
                     backlog_yield_since = now
@@ -1528,7 +1562,7 @@ def run(
                 backlog_yield_since = None
             if cpu_sampler is not None:
                 cpu_sampler.set_backlog_floor(
-                    max_backlog_wait - (now - backlog_yield_since)
+                    max(0, min(backlog_yield_since + backlog_floor_seconds, last_backlog_duty + 300) - now)
                     if reason == "high load" and backlog_yield_since is not None
                     else None
                 )
@@ -1543,7 +1577,7 @@ def run(
                 queue_backpressure_active = True
                 if cycle_backlog_batch <= 0:
                     if cpu_sampler is not None:
-                        cpu_sampler.observe("store queue")
+                        cpu_sampler.observe(reason or "store queue")
                     cycles += 1
                     # Backpressure is not idleness: hold the configured cadence so the
                     # reserved backlog slice resumes on time.
@@ -1562,42 +1596,67 @@ def run(
                 backlog_slice_logged = False
             if cycle_backlog_batch > 0:
                 last_backlog = now
-            cycle_start = cpu_sampler.begin_cycle() if cpu_sampler is not None else None
-            if cycle_fn is run_cycle:
-                result = _run_split_cycle(
-                    db_path=db_path,
-                    vector_store_cls=vector_store_cls,
-                    embed_fn=embed_fn,
-                    recent_limit=cycle_recent_limit,
-                    backlog_batch=cycle_backlog_batch,
-                    embed_batch_fn=embed_batch_fn,
-                    enrich_limit=0,
-                    enrich_since_hours=enrich_since_hours,
-                    candidate_rows_fn=hot_candidate_scanner,
-                )
-            else:
-                store = vector_store_cls(db_path)
-                try:
-                    result = cycle_fn(
-                        store=store,
+                last_backlog_duty = now
+            if forced_turn:
+                count = _backlog_pending_count(db_path)
+                if count is not None:
+                    if progress_count is None or count < progress_count:
+                        progress_since = now
+                    if count == 0:
+                        adaptive_drain = False
+                    elif progress_since is not None and now - progress_since >= backlog_stall_seconds:
+                        adaptive_drain = True
+                    progress_count = count
+            burst_deadline = now + backlog_budget_seconds
+            batch_duration = 0.0
+            first_batch = True
+            while first_batch or (forced_turn and adaptive_drain):
+                if not first_batch:
+                    if STOP or (db_path.parent / "hotlane.pause").exists():
+                        break
+                    if time_fn() + batch_duration > burst_deadline or result.backlog_encoded == 0:
+                        break
+                    cycle_recent_limit = 0
+                first_batch = False
+                batch_started = time_fn() if forced_turn and adaptive_drain else now
+                cycle_start = cpu_sampler.begin_cycle() if cpu_sampler is not None else None
+                if cycle_fn is run_cycle:
+                    result = _run_split_cycle(
+                        db_path=db_path,
+                        vector_store_cls=vector_store_cls,
                         embed_fn=embed_fn,
                         recent_limit=cycle_recent_limit,
                         backlog_batch=cycle_backlog_batch,
                         embed_batch_fn=embed_batch_fn,
                         enrich_limit=0,
                         enrich_since_hours=enrich_since_hours,
+                        candidate_rows_fn=hot_candidate_scanner,
                     )
-                finally:
-                    store.close()
-            # A queued backlog means the system has work even when THIS cycle embedded
-            # nothing (the hot slice is deliberately suppressed to yield to the drain),
-            # so it must not be treated as idle -- backing off there would slow recovery.
-            did_work = bool(result.embedded) or queue_has_backlog
-            if cpu_sampler is not None:
-                state = reason or ("running" if result.backlog_encoded else "waiting")
-                cpu_sampler.observe(state, result.backlog_encoded, cycle_start=cycle_start)
-            if result.embedded:
-                LOGGER.info("embedded=%d", result.embedded)
+                else:
+                    store = vector_store_cls(db_path)
+                    try:
+                        result = cycle_fn(
+                            store=store,
+                            embed_fn=embed_fn,
+                            recent_limit=cycle_recent_limit,
+                            backlog_batch=cycle_backlog_batch,
+                            embed_batch_fn=embed_batch_fn,
+                            enrich_limit=0,
+                            enrich_since_hours=enrich_since_hours,
+                        )
+                    finally:
+                        store.close()
+                # A queued backlog means the system has work even when THIS cycle embedded
+                # nothing (the hot slice is deliberately suppressed to yield to the drain),
+                # so it must not be treated as idle -- backing off there would slow recovery.
+                did_work = bool(result.embedded) or queue_has_backlog
+                if cpu_sampler is not None:
+                    state = reason or ("running" if result.backlog_encoded else "waiting")
+                    cpu_sampler.observe(state, result.backlog_encoded, cycle_start=cycle_start)
+                if result.embedded:
+                    LOGGER.info("embedded=%d", result.embedded)
+                if forced_turn and adaptive_drain:
+                    batch_duration = max(0.001, time_fn() - batch_started)
         except Exception as exc:
             LOGGER.exception("hotlane adapter cycle failed")
             if cpu_sampler is not None:
