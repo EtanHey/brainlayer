@@ -119,7 +119,9 @@ def test_observability_reader_is_nice_but_not_io_throttled():
     )
     result = subprocess.run(
         [sys.executable, "-c", code, supervisor_child.__file__, json.dumps(policy)],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == [10, 0, 0]
