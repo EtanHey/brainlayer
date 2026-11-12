@@ -168,3 +168,73 @@ def test_invalid_timer_names_actual_setting(tmp_path, monkeypatch, setting):
     monkeypatch.setenv(setting, "-1")
     with pytest.raises(ValueError, match=setting):
         h._positive_seconds(setting, 300)
+
+
+def test_count_exception_keeps_forced_batch(tmp_path, monkeypatch, caplog):
+    h = importlib.import_module("scripts.hotlane_brainbar_daemon")
+    monkeypatch.setattr(h.os, "getloadavg", lambda: (100, 0, 0))
+
+    def broken_store(*args, **kwargs):
+        raise RuntimeError("count setup failed")
+
+    monkeypatch.setattr(h, "VectorStore", broken_store)
+    batches = []
+    h.run(
+        db_path=tmp_path / "fixture.db",
+        interval=1,
+        recent_limit=0,
+        backlog_interval=10,
+        backlog_batch=16,
+        enrich_interval=0,
+        enrich_limit=0,
+        enrich_since_hours=0,
+        model_factory=lambda: SimpleNamespace(embed_query=lambda _: []),
+        vector_store_cls=lambda _: SimpleNamespace(close=lambda: None),
+        cycle_fn=lambda **kw: batches.append(kw["backlog_batch"]) or h.CycleResult(),
+        queue_depth_fn=lambda _: 1,
+        high_priority_queue_depth_fn=lambda _: 1,
+        time_fn=iter([0, 300]).__next__,
+        sleep_fn=lambda _: None,
+        max_cycles=1,
+    )
+    assert batches == [16]
+    assert "cannot measure backlog progress" in caplog.text
+
+
+@pytest.mark.parametrize("queue_growth", [False, True])
+def test_small_dip_above_window_minimum_does_not_reset_stall(tmp_path, monkeypatch, queue_growth):
+    h = importlib.import_module("scripts.hotlane_brainbar_daemon")
+    monkeypatch.setattr(h.os, "getloadavg", lambda: (100, 0, 0))
+    monkeypatch.setenv("BRAINLAYER_HOTLANE_BACKLOG_COUNT_INTERVAL_SECONDS", "300")
+    monkeypatch.setenv("BRAINLAYER_HOTLANE_BACKLOG_STALL_SECONDS", "900")
+    counts = iter([100, 110, 105, 106])
+    monkeypatch.setattr(h, "_backlog_pending_count", lambda _: next(counts))
+    clock, batches = [0], []
+
+    def cycle(**kw):
+        batches.append(clock[0])
+        clock[0] += 15
+        return h.CycleResult(embedded=16, backlog_encoded=16)
+
+    def sleep(_):
+        clock[0] = (clock[0] // 300 + 1) * 300
+
+    h.run(
+        db_path=tmp_path / "fixture.db",
+        interval=1,
+        recent_limit=0,
+        backlog_interval=10,
+        backlog_batch=16,
+        enrich_interval=0,
+        enrich_limit=0,
+        enrich_since_hours=0,
+        model_factory=lambda: SimpleNamespace(embed_query=lambda _: []),
+        vector_store_cls=lambda _: SimpleNamespace(close=lambda: None),
+        cycle_fn=cycle,
+        queue_depth_fn=lambda _: 1,
+        high_priority_queue_depth_fn=lambda _: 2 if queue_growth and clock[0] >= 1215 else 1,
+        time_fn=lambda: clock[0],
+        sleep_fn=sleep,
+        max_cycles=5,
+    )
+    assert len([t for t in batches if t >= 1200]) == (1 if queue_growth else 8)

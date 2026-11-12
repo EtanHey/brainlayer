@@ -504,7 +504,7 @@ def _backlog_pending_count(db_path: Path) -> int | None:
             """).fetchone()[0]
         finally:
             store.close()
-    except (apsw.Error, OSError):
+    except Exception:
         LOGGER.exception("cannot measure backlog progress; retaining normal forced batches")
         return None
 
@@ -1517,9 +1517,11 @@ def run(
         else "BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS"
     )
     backlog_floor_seconds = min(300.0, _positive_seconds(floor_setting, 300))
-    backlog_stall_seconds = _positive_seconds("BRAINLAYER_HOTLANE_BACKLOG_STALL_SECONDS", 1800)
-    backlog_budget_seconds = _positive_seconds("BRAINLAYER_HOTLANE_BACKLOG_BUDGET_SECONDS", 90)
+    backlog_stall_seconds = _positive_seconds("BRAINLAYER_HOTLANE_BACKLOG_STALL_SECONDS", 900)
+    backlog_budget_seconds = _positive_seconds("BRAINLAYER_HOTLANE_BACKLOG_BUDGET_SECONDS", 120)
     last_backlog_duty = last_backlog + backlog_interval
+    count_interval = _positive_seconds("BRAINLAYER_HOTLANE_BACKLOG_COUNT_INTERVAL_SECONDS", 900)
+    next_count_at = 0.0
     progress_count = None
     progress_since = None
     adaptive_drain = False
@@ -1543,7 +1545,8 @@ def run(
         try:
             now = time_fn()
             queue_has_backlog = queue_depth_fn(queue_dir) > 0
-            queue_has_high_priority_backlog = queue_has_backlog and high_priority_queue_depth_fn(queue_dir) > 0
+            priority_queue_depth = high_priority_queue_depth_fn(queue_dir) if queue_has_backlog else 0
+            queue_has_high_priority_backlog = priority_queue_depth > 0
             cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
             cycle_recent_limit = recent_limit
             reason = _backlog_yield_reason(db_path, backlog_max_load) if backlog_batch else ""
@@ -1596,16 +1599,17 @@ def run(
             if cycle_backlog_batch > 0:
                 last_backlog = now
                 last_backlog_duty = now
-            if forced_turn:
+            if forced_turn and now >= next_count_at:
+                next_count_at = now + count_interval
                 count = _backlog_pending_count(db_path)
                 if count is not None:
                     if progress_count is None or count < progress_count:
                         progress_since = now
+                        progress_count = count
                     if count == 0:
                         adaptive_drain = False
                     elif progress_since is not None and now - progress_since >= backlog_stall_seconds:
                         adaptive_drain = True
-                    progress_count = count
             burst_deadline = now + backlog_budget_seconds
             batch_duration = 0.0
             first_batch = True
@@ -1615,6 +1619,12 @@ def run(
                         break
                     if time_fn() + batch_duration > burst_deadline or result.backlog_encoded == 0:
                         break
+                    queue_has_backlog = queue_depth_fn(queue_dir) > 0
+                    current_priority_depth = high_priority_queue_depth_fn(queue_dir) if queue_has_backlog else 0
+                    if current_priority_depth > priority_queue_depth:
+                        LOGGER.info("durable store queue grew during burst; yielding extra backlog batches")
+                        break
+                    priority_queue_depth = current_priority_depth
                     cycle_recent_limit = 0
                 first_batch = False
                 batch_started = time_fn() if forced_turn and adaptive_drain else now

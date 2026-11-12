@@ -82,14 +82,17 @@ than 300 seconds since the last backlog turn, regardless of load. Longer floor o
 clamped to 300; shorter overrides run more often. `BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS`
 remains the fallback setting when FLOOR_SECONDS is unset.
 
-At forced turns the daemon measures active unvectored chunks through the rowid index, read-only.
-After `BRAINLAYER_HOTLANE_BACKLOG_STALL_SECONDS` (default 1800) without net shrink, forced turns
-run consecutive normal batches for `BRAINLAYER_HOTLANE_BACKLOG_BUDGET_SECONDS` (default 90).
+At forced turns, at most once per `BRAINLAYER_HOTLANE_BACKLOG_COUNT_INTERVAL_SECONDS`
+(default 900), the daemon measures active unvectored chunks through the rowid index, read-only.
+After `BRAINLAYER_HOTLANE_BACKLOG_STALL_SECONDS` (default 900) without falling below the window minimum, forced turns
+run consecutive normal batches for `BRAINLAYER_HOTLANE_BACKLOG_BUDGET_SECONDS` (default 120).
 This mode persists until the queue empties. Each batch keeps the same nice/thread settings;
-extra batches suppress hot work and preserve store-queue backpressure. The daemon checks the
+extra batches suppress hot work and preserve store-queue backpressure. Queue depths are rechecked
+between batches; growth of the durable high-priority queue yields the remaining burst. The daemon checks the
 pause marker between batches, stops on no progress, and admits another batch only while its
 last measured duration fits the remaining budget. An in-flight batch can overrun if it slows down.
-A failed count is logged and cannot activate adaptive draining.
+Any exception while counting is logged; the normal forced batch still runs.
+A daemon restart resets the in-memory window minimum and stall clock.
 A `hotlane.pause` file beside the resolved database also pauses backlog embedding; removing it resumes work.
 The pause marker overrides minimum duty completely.
 Hot embedding continues during these pauses unless store-queue backpressure suppresses it.
