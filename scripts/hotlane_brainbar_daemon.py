@@ -441,7 +441,7 @@ def _performance_cores() -> int:
 
 
 def _backlog_max_load() -> float:
-    value = float(os.environ.get("BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD", "") or _performance_cores())
+    value = float(os.environ.get("BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD", "") or 2 * _performance_cores())
     if not math.isfinite(value) or value < 0:
         raise ValueError("BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD must be finite and nonnegative")
     return value
@@ -1484,10 +1484,15 @@ def run(
     queue_dir_was_explicit = queue_dir is not None
     queue_dir = queue_dir or _default_queue_dir()
     last_backlog = time_fn() - backlog_interval
-    last_backlog_duty = last_backlog + backlog_interval
-    max_backlog_wait = float(os.environ.get("BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS", "300"))
+    backlog_yield_since = None
+    max_backlog_wait = float(
+        os.environ.get(
+            "BRAINLAYER_HOTLANE_BACKLOG_FLOOR_SECONDS",
+            os.environ.get("BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS", "600"),
+        )
+    )
     if not math.isfinite(max_backlog_wait) or max_backlog_wait <= 0:
-        raise ValueError("BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS must be finite and positive")
+        raise ValueError("BRAINLAYER_HOTLANE_BACKLOG_FLOOR_SECONDS must be finite and positive")
     _warn_retired_enrichment(enrich_limit, enrich_since_hours, None)
     if enrich_limit > 0:
         LOGGER.warning("Ignoring retired hotlane enrichment interval=%s", enrich_interval)
@@ -1512,10 +1517,21 @@ def run(
             cycle_backlog_batch = backlog_batch if backlog_batch > 0 and now - last_backlog >= backlog_interval else 0
             cycle_recent_limit = recent_limit
             reason = _backlog_yield_reason(db_path, backlog_max_load) if backlog_batch else ""
-            if reason == "high load" and now - last_backlog_duty >= max_backlog_wait:
-                # Reserve the existing backlog lane; never lift store-queue backpressure.
-                reason = ""
-                cycle_backlog_batch = backlog_batch
+            if reason == "high load":
+                if backlog_yield_since is None:
+                    backlog_yield_since = now
+                if now - backlog_yield_since >= max_backlog_wait:
+                    reason = ""
+                    cycle_backlog_batch = backlog_batch
+                    backlog_yield_since = now
+            else:
+                backlog_yield_since = None
+            if cpu_sampler is not None:
+                cpu_sampler.set_backlog_floor(
+                    max_backlog_wait - (now - backlog_yield_since)
+                    if reason == "high load" and backlog_yield_since is not None
+                    else None
+                )
             if reason != backlog_yield_reason:
                 LOGGER.info("backlog embedding %s", f"yielding: {reason}" if reason else "resumed")
                 backlog_yield_reason = reason
@@ -1546,7 +1562,6 @@ def run(
                 backlog_slice_logged = False
             if cycle_backlog_batch > 0:
                 last_backlog = now
-                last_backlog_duty = now
             cycle_start = cpu_sampler.begin_cycle() if cpu_sampler is not None else None
             if cycle_fn is run_cycle:
                 result = _run_split_cycle(
