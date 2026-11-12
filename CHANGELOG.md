@@ -40,6 +40,14 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.99] - 2026-11-12
+
+### Hardening (Today card measurable, embedding backlog drains on a busy Mac)
+
+- fix(backup): retain local JSONL archives until verified and 14 days old (#1776)
+- fix(hotlane): guarantee backlog progress under sustained machine load (#1774)
+- fix(observability): keep deadline-bound reader off throttled I/O (#1775)
+
 ## [1.5.98] - 2026-11-12
 
 ### Hardening (no false lines, no sleep false alarms)
