@@ -9,14 +9,14 @@ from brainlayer import jsonl_backup as backup
 
 
 def test_default_local_retention_enabled(monkeypatch):
-    monkeypatch.delenv("BRAINLAYER_JSONL_BACKUP_RETENTION", raising=False)
+    monkeypatch.delenv("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION", raising=False)
     assert backup._local_retention_enabled()
 
 
 def test_random_retention_and_crashes(tmp_path, monkeypatch):
     rng = random.Random(1597)
     now = 2000000000
-    monkeypatch.delenv("BRAINLAYER_JSONL_BACKUP_RETENTION", raising=False)
+    monkeypatch.delenv("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION", raising=False)
     for case in range(120):
         root = tmp_path / str(case)
         root.mkdir()
@@ -34,13 +34,23 @@ def test_random_retention_and_crashes(tmp_path, monkeypatch):
                 sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                 verified=verified,
                 archive_id=f"id-{i}",
+                archive_md5=hashlib.md5(path.read_bytes()).hexdigest(),
+                verified_at=now - age,
             )
             hash_matches = rng.choice([True, False])
             if not hash_matches:
                 receipts[path.name]["sha256"] = "wrong"
-            originals[path] = (age, verified and size == 5 and hash_matches)
+            md5_matches = rng.choice([True, False])
+            if not md5_matches:
+                receipts[path.name]["archive_md5"] = "wrong"
+            originals[path] = (age, verified and size == 5 and hash_matches and md5_matches)
         state = root / "state.json"
         state.write_text(json.dumps({"drive_archives": receipts}))
+        live = {r["archive_id"]: r["archive_md5"] for r in receipts.values()}
+        for path in originals:
+            if rng.choice([True, False]):
+                live.pop(receipts[path.name]["archive_id"])
+                originals[path] = (originals[path][0], False)
         newest = max(originals, key=lambda p: (p.stat().st_mtime, p.name))
         original_unlink = backup.Path.unlink
         cut = rng.randrange(4)
@@ -58,11 +68,13 @@ def test_random_retention_and_crashes(tmp_path, monkeypatch):
         with monkeypatch.context() as patch:
             patch.setattr(backup.Path, "unlink", crash_unlink)
             try:
-                backup.prune_local_archives(root, state_path=state, log_path=root / "log", now=now)
+                backup.prune_local_archives(
+                    root, state_path=state, log_path=root / "log", now=now, surviving_archives=live
+                )
             except OSError:
                 pass
-        backup.prune_local_archives(root, state_path=state, log_path=root / "log", now=now)
-        assert newest.exists()
+        backup.prune_local_archives(root, state_path=state, log_path=root / "log", now=now, surviving_archives=live)
+        assert newest.exists(), "deleted newest"
         for path, (age, verified) in originals.items():
             if not path.exists():
                 assert verified, "deleted without verified exact copy"
@@ -73,16 +85,18 @@ def test_random_retention_and_crashes(tmp_path, monkeypatch):
 
 
 def test_disable_and_invalid_days_fail_closed(tmp_path, monkeypatch):
-    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_RETENTION", "0")
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION", "0")
     assert not backup._local_retention_enabled()
-    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_RETENTION", "1")
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION", "1")
     monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION_DAYS", "-1")
     with pytest.raises(ValueError):
-        backup.prune_local_archives(tmp_path, state_path=tmp_path / "state", log_path=tmp_path / "log", now=0)
+        backup.prune_local_archives(
+            tmp_path, state_path=tmp_path / "state", log_path=tmp_path / "log", now=0, surviving_archives={}
+        )
 
 
 def test_disabled_sweep_preserves_eligible_archive(tmp_path, monkeypatch):
-    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_RETENTION", "0")
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION", "0")
     old = tmp_path / "claude-jsonl-2026-01-01.tar.gz"
     old.write_bytes(b"old")
     os.utime(old, (0, 0))
@@ -103,7 +117,12 @@ def test_disabled_sweep_preserves_eligible_archive(tmp_path, monkeypatch):
             }
         )
     )
-    assert backup.prune_local_archives(tmp_path, state_path=state, log_path=tmp_path / "log", now=2000000000) == []
+    assert (
+        backup.prune_local_archives(
+            tmp_path, state_path=state, log_path=tmp_path / "log", now=2000000000, surviving_archives={}
+        )
+        == []
+    )
     assert old.exists()
 
 

@@ -585,14 +585,28 @@ weekly maintenance and retains its independent remote verification contract.
 
 ### Local JSONL archive retention
 
-Local JSONL archive deletion defaults on. `BRAINLAYER_JSONL_BACKUP_RETENTION=0`
-disables all local deletion. `BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION_DAYS`
-defaults to 14 and must be at least 14. The newest local archive is always kept.
-Age is measured from the local archive's modification time; future timestamps
-are retained. Each deletion requires a durable `drive_archives` receipt in
-`jsonl-backup-state.json`: `verified=true`, exact name, byte size, SHA-256 and
-Drive object ID. Legacy state and Drive listings alone never authorize deletion.
-Each unlink has a durable log intent with name, age and verified receipt ID;
-crash recovery simply retries the sweep. The staging lock serializes sweeps and
-uploads. Optional Drive retention remains opt-in and keeps the latest 30;
-it invalidates local-deletion receipts before trashing remote objects.
+`BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION` defaults to `1`; `0` or `false`
+disables local deletion. The separate `BRAINLAYER_JSONL_BACKUP_RETENTION`
+controls ONLY optional Drive trash pruning (default off, latest 30 unchanged).
+An existing Drive `=0` does not disable local retention. No env file is rewritten.
+
+`BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION_DAYS` defaults to 14 (minimum 14).
+Both archive mtime and the receipt's `verified_at` must be at least that old.
+Invalid values and sweep failures log a warning and enter `local_retention_error`
+in the run result; backup continues. `upload=False` never sweeps.
+
+The sweep includes the configured staging directory and direct `release-*`
+siblings under `jsonl-backups`, keeping the newest archive overall. Deletion
+requires a durable verified exact-name/size/SHA-256/Drive-ID receipt, matching
+local MD5, and that ID with matching MD5 in this run's live Drive inventory.
+The receipt is verified only when Drive's uploaded `md5Checksum` equals the
+local archive MD5. Missing checksum, legacy receipts, missing live objects or
+listing failure authorize no deletion. Each unlink has a durable intent and
+a confirmation event; completed sweeps report `local_retention_deleted`.
+
+Drive pruning revokes receipts durably before trashing and restores survivors
+afterward. An interrupted revoke is logged and raises a `jsonl-retention` job
+note requiring reconciliation; receipts are never reconstructed from a listing.
+A wall-clock jump can advance both age measurements, and an external actor can
+remove a final Drive copy after local deletion. The formal model documents and
+demonstrates these limits; receipt age is not a trusted elapsed-time clock.

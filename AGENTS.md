@@ -478,4 +478,4 @@ brainlayer search "how did I implement authentication"
   *(Etan's addition at ratification, 2026-08-02.)*
 
 ## Local JSONL retention
-- Local archive deletion defaults on: at least 14 days old, exact verified Drive receipt (name/size/SHA-256/object ID), never newest; `BRAINLAYER_JSONL_BACKUP_RETENTION=0` disables it. Scratch-only proof: `formal/jsonl-retention/check.sh` and `tests/test_jsonl_local_retention.py`. Drive policy stays opt-in, latest 30.
+- Local deletion defaults on via `BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION`; `0`/`false` disables it. Require both mtime and verified-at ages >=14 days, exact verified receipt plus local/Drive MD5 match and live Drive presence; never newest across release siblings. Drive-only `BRAINLAYER_JSONL_BACKUP_RETENTION` remains opt-in, latest 30. Scratch proof: `formal/jsonl-retention/check.sh`, `tests/test_jsonl_local_retention.py`, `tests/test_jsonl_retention_r2.py`.

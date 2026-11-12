@@ -126,6 +126,7 @@ jobs:
             .build.noindex/backup-verdict/*/*.log
             .build.noindex/backup-verdict/*/*.trace.txt
             .build.noindex/backup-verdict/*/results.json
+            .build.noindex/tlc/jsonl-retention
           # .build.noindex is a dot-directory; upload-artifact@v4 skips hidden paths by default, which
           # would upload nothing and leave a flake undiagnosable (Macroscope, #1601).
           include-hidden-files: true
