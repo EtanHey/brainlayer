@@ -51,6 +51,8 @@ jobs:
               - '.github/workflows/ci.yml'
             backup_verdict_tla:
               - 'formal/backup-verdict/**'
+              - 'formal/jsonl-retention/**'
+              - 'src/brainlayer/jsonl_backup.py'
               - 'src/brainlayer/health_verdict.py'
               - 'src/brainlayer/backup_daily.py'
               - 'src/brainlayer/maintenance.py'
@@ -109,6 +111,11 @@ jobs:
           TLC_WORKERS: "2"
         run: python3 formal/backup-verdict/check.py --require-sync
 
+      - name: Model-check local JSONL retention and both rule mutations
+        env:
+          TLC_JAR: ${{ runner.temp }}/tla2tools.jar
+        run: sh formal/jsonl-retention/check.sh
+
       # A failing case must be diagnosable: keep each case's TLC log, trace and results.json.
       - name: Upload TLC logs on failure
         if: failure()
@@ -119,6 +126,7 @@ jobs:
             .build.noindex/backup-verdict/*/*.log
             .build.noindex/backup-verdict/*/*.trace.txt
             .build.noindex/backup-verdict/*/results.json
+            .build.noindex/tlc/jsonl-retention
           # .build.noindex is a dot-directory; upload-artifact@v4 skips hidden paths by default, which
           # would upload nothing and leave a flake undiagnosable (Macroscope, #1601).
           include-hidden-files: true

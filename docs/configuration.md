@@ -582,3 +582,31 @@ A later dated run can create a replacement without changing backup filenames.
 
 Weekly maintenance rechecks local proof immediately before quiesce and VACUUM. Upload runs after
 weekly maintenance and retains its independent remote verification contract.
+
+### Local JSONL archive retention
+
+`BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION` defaults to `1`; `0` or `false`
+disables local deletion. The separate `BRAINLAYER_JSONL_BACKUP_RETENTION`
+controls ONLY optional Drive trash pruning (default off, latest 30 unchanged).
+An existing Drive `=0` does not disable local retention. No env file is rewritten.
+
+`BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION_DAYS` defaults to 14 (minimum 14).
+Both archive mtime and the receipt's `verified_at` must be at least that old.
+Invalid values and sweep failures log a warning and enter `local_retention_error`
+in the run result; backup continues. `upload=False` never sweeps.
+
+The sweep includes the configured staging directory and direct `release-*`
+siblings under `jsonl-backups`, keeping the newest archive overall. Deletion
+requires a durable verified exact-name/size/SHA-256/Drive-ID receipt, matching
+local MD5, and that ID with matching MD5 in this run's live Drive inventory.
+The receipt is verified only when Drive's uploaded `md5Checksum` equals the
+local archive MD5. Missing checksum, legacy receipts, missing live objects or
+listing failure authorize no deletion. Each unlink has a durable intent and
+a confirmation event; completed sweeps report `local_retention_deleted`.
+
+Drive pruning revokes receipts durably before trashing and restores survivors
+afterward. An interrupted revoke is logged and raises a `jsonl-retention` job
+note requiring reconciliation; receipts are never reconstructed from a listing.
+A wall-clock jump can advance both age measurements, and an external actor can
+remove a final Drive copy after local deletion. The formal model documents and
+demonstrates these limits; receipt age is not a trusted elapsed-time clock.

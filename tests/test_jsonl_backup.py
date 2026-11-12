@@ -385,7 +385,7 @@ def test_jsonl_retention_opt_in_trashes_drive_objects_and_never_hard_deletes(tmp
         }
     ]
     assert service._files.deleted == []
-    assert result["local_archive_removed"] is True
+    assert result["local_archive_removed"] is False
 
 
 def test_jsonl_backup_source_has_no_drive_hard_delete_call():
@@ -1067,6 +1067,7 @@ def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summa
         "forever_uploaded_file_count",
         "gzip_test",
         "local_archive_removed",
+        "local_retention_deleted",
         "md5Checksum",
         "retention",
         "retention_deleted",
@@ -3013,7 +3014,7 @@ def test_jsonl_forever_upload_uses_separate_folder_and_rolling_prune_only(tmp_pa
     assert jsonl_backup.DEFAULT_FOREVER_FOLDER_PARTS + ["source-0"] in folder_calls
     assert pruned_folder_parts == [jsonl_backup.DEFAULT_FOLDER_PARTS]
     assert jsonl_backup.DEFAULT_FOREVER_FOLDER_PARTS not in pruned_folder_parts
-    assert not uploaded[0][0].exists()
+    assert uploaded[0][0].exists()
 
 
 def test_jsonl_forever_hashes_the_staged_copy_before_upload(tmp_path, monkeypatch):
@@ -3159,7 +3160,7 @@ def test_jsonl_backup_persists_daily_state_when_forever_upload_fails(tmp_path, m
     state = json.loads(state_path.read_text())
     assert source_file.as_posix() in state["files"]
     assert pruned_folder_parts == [jsonl_backup.DEFAULT_FOLDER_PARTS]
-    assert not (tmp_path / "staging" / "claude-jsonl-2026-06-30.tar.gz").exists()
+    assert (tmp_path / "staging" / "claude-jsonl-2026-06-30.tar.gz").exists()
 
 
 def test_run_jsonl_backup_second_run_noops_when_state_covers_files(tmp_path, monkeypatch):

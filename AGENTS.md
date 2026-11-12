@@ -476,3 +476,6 @@ brainlayer search "how did I implement authentication"
   never report it.
 - **Pre-merge live-check against a DB copy** is required before any change that touches stored data.
   *(Etan's addition at ratification, 2026-08-02.)*
+
+## Local JSONL retention
+- Local deletion defaults on via `BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION`; `0`/`false` disables it. Require both mtime and verified-at ages >=14 days, exact verified receipt plus local/Drive MD5 match and live Drive presence; never newest across release siblings. Drive-only `BRAINLAYER_JSONL_BACKUP_RETENTION` remains opt-in, latest 30. Scratch proof: `formal/jsonl-retention/check.sh`, `tests/test_jsonl_local_retention.py`, `tests/test_jsonl_retention_r2.py`.
