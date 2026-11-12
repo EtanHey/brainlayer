@@ -75,12 +75,14 @@ checks its own `BRAINLAYER_LAUNCHD_*_ENABLED` gate before exec.
 
 On macOS the hotlane sets its own CPU nice value to 20, without changing disk I/O policy.
 `BRAINLAYER_HOTLANE_THREADS` caps torch and BLAS threads (default 1 on Apple M1, 2 otherwise).
-`BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD` sets the one-minute load ceiling (default performance-core count).
-`BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS` (default 300) guarantees a reserved backlog batch
-at least every five minutes under high load. This uses the existing backlog lane and never lifts hot-slice backpressure.
+`BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD` sets the one-minute load ceiling (default twice the performance-core count).
+`BRAINLAYER_HOTLANE_BACKLOG_FLOOR_SECONDS` (default 600) permits one reserved backlog batch
+after each continuous ten minutes yielding to high load. Recovery or a deliberate pause resets that clock.
+The older `BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS` is a fallback when FLOOR_SECONDS is unset. This uses the existing backlog lane and never lifts hot-slice backpressure.
 A `hotlane.pause` file beside the resolved database also pauses backlog embedding; removing it resumes work.
 The pause marker overrides minimum duty completely.
 Hot embedding continues during these pauses unless store-queue backpressure suppresses it.
+Fresh CPU evidence reports the next forced-batch time in the machine-load health note.
 Startup records the applied settings in `hotlane-budget.json`
 beside that database and in the log.
 
