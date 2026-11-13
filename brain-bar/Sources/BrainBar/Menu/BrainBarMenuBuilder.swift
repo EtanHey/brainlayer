@@ -20,7 +20,8 @@ enum BrainBarMenuAction: Equatable, Sendable {
 
 /// Turns one `BrainBarMenuPresentation` into the items of a real `NSMenu`: standard items for the standing block (real
 /// key equivalents, a real Option alternate), a real separator for every separator row and every divider, and a hosted
-/// row for each row a standard item cannot draw. It renders the value and nothing else.
+/// row for each row a standard item cannot draw. It renders the value and nothing else. The menu holds it weakly (as
+/// its delegate and its items' target): whoever shows the menu keeps the builder.
 @MainActor final class BrainBarMenuBuilder: NSObject, NSMenuDelegate {
     typealias P = BrainBarMenuPresentation
     let actions: BrainBarMenuActions
@@ -65,6 +66,8 @@ enum BrainBarMenuAction: Equatable, Sendable {
     func highlight(_ item: NSMenuItem?, byKeyboard: Bool) {
         for (id, state) in focus { state.keyboardFocused = byKeyboard && item.map(ObjectIdentifier.init) == id }
     }
+
+    func focusState(of item: NSMenuItem) -> BrainBarMenuRowFocus? { focus[ObjectIdentifier(item)] }
 
     @objc private func performItem(_ sender: NSMenuItem) {
         if let action = sender.representedObject as? BrainBarMenuAction { actions.perform(action) }
