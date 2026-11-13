@@ -90,6 +90,7 @@ final class BrainBarMenuPresentationTests: XCTestCase {
     /// Fix 2 (Claude B2): disk amber is S21 today, S31 with `blind` false, Can't tell only with `blind` true.
     func testDiskAmberCountsUnlessBlind() {
         var measured = Self.check("disk", .amber)
+        measured.blind = nil  // a producer without #1779's field
         let today = Self.present(Self.capture(Self.s1Now, [measured]))
         XCTAssertEqual([today.form.rawValue, "\(today.count)"], ["needs", "1"])
         XCTAssertEqual(today.rows[2].strings, ["Your Mac may not have enough spare room for backups."])
@@ -161,8 +162,10 @@ final class BrainBarMenuPresentationTests: XCTestCase {
         var stalled = Self.captures["S32"]!
         stalled.offsiteRecovering = .init(progress: 0.4, eta: nil, startedAt: Self.date("2026-11-12T11:28:00+02:00"),
                                           updatedAt: Self.date("2026-11-12T11:30:00+02:00"), cadenceS: 30)
-        XCTAssertEqual(Self.present(stalled).rows[2].strings.first,
-                       "Your newest backup in Google Drive is from Nov 9 at 03:44. A backup that started at 11:28 has stopped making progress.")
+        // Part 1f "S03 (PR-2)": a stalled recovering stops calming; the row is S06 with its first sentence replaced.
+        XCTAssertEqual(Self.present(stalled).rows[2].strings.prefix(2),
+                       ["A backup that started at 11:28 has stopped making progress.", "Your newest backup is from Nov 9 at 03:44."])
+        XCTAssertFalse(Self.texts(Self.present(stalled)).contains { $0.contains("% done") })
         var verified = Self.captures["S13-missing"]!
         verified.verdict = Self.verdict("2026-11-12T12:48:00+02:00", [Self.check("backup_offsite", age: 3600), Self.check("drive_auth", .red)])
         verified.backupDailyFailures = 1
