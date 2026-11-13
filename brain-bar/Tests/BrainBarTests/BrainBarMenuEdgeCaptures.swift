@@ -44,7 +44,8 @@ extension BrainBarMenuInvariantTests {
                     out.append(with([:]) { $0.verdict = nil; $0.lastKnownBackupAt = m })  // S4
                     out.append(with(["backup_offsite": (.green, age), "transcripts": (.green, max(0, age - 60))]))  // S01
                     out.append(with(["backup_offsite": (.amber, 27_660)]) { $0.upload = .init(startedAt: m, live: true) })  // S03
-                    for eta in [midnight.addingTimeInterval(-0.0001), midnight.addingTimeInterval(0.0001)] {  // S03 with an estimate
+                    let atMidnight = [-0.001, -0.0001, 0, 0.0001].map { midnight.addingTimeInterval($0) } + [Date(timeIntervalSinceReferenceDate: midnight.timeIntervalSinceReferenceDate.nextUp)]
+                    for eta in atMidnight {  // S03 with an estimate
                         out.append(with(["backup_offsite": (.amber, 27_660)]) {
                             $0.offsiteRecovering = .init(progress: 0.4, eta: eta, startedAt: m, updatedAt: now, cadenceS: 30)
                         })

@@ -240,6 +240,33 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                        [unconfirmed + " Last backup yesterday at 12:48."])
     }
 
+    /// Round 2 of #1790 (Codex W66-B1): each "is it today" decision, by the text kept, exactly at its midnight, one representable
+    /// step after, and a millisecond before: the estimate said as a clock time (R27), the upload's start said by clock or by day
+    /// (R23), and "today" or "yesterday" in `at`. No text is asserted inside the last half millisecond before a midnight, where
+    /// the formatter rounds up to 00:00 while the calendar keeps the earlier day: a known defect on main, fixed in P2d.
+    func testEachTodayDecisionAtItsMidnight() {
+        let iso = ISO8601DateFormatter(), zone = TimeZone(secondsFromGMT: 7200)!, now = iso.date(from: "2026-11-12T12:00:00+02:00")!
+        func around(_ midnight: String) -> [Date] {
+            let m = iso.date(from: midnight)!
+            return [m, Date(timeIntervalSinceReferenceDate: m.timeIntervalSinceReferenceDate.nextUp), m.addingTimeInterval(-0.001)]
+        }
+        func detail(_ edit: (inout Capture) -> Void) -> [String] {
+            var c = Self.capture(["backup_offsite": .amber], base: 0, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
+            (c.now, c.timeZone) = (now, zone)
+            c.verdict = BrainBarHealthVerdict(dot: .green, checks: c.verdict!.checks, notes: [], evaluatedAt: now)
+            edit(&c)
+            return BrainBarMenuPresenter.present(c).rows.first { $0.kind == .headlineDetail }?.strings ?? []
+        }
+        let start = iso.date(from: "2026-11-12T11:28:00+02:00")!, unconfirmed = "Saving, search, backups and upkeep aren’t confirmed yet. Last backup "
+        XCTAssertEqual(around("2026-11-13T00:00:00+02:00").map { eta in detail { $0.offsiteRecovering = .init(progress: 0.4, eta: eta, startedAt: start, updatedAt: now, cadenceS: 30) } },
+                       [["To Google Drive. Started at 11:28. 40% done."], ["To Google Drive. Started at 11:28. 40% done."],
+                        ["To Google Drive. Started at 11:28. 40% done, about 23:59."]])
+        XCTAssertEqual(around("2026-11-12T00:00:00+02:00").map { s in detail { $0.upload = .init(startedAt: s, live: true) } },
+                       [["To Google Drive. Started at 00:00."], ["To Google Drive. Started at 00:00."], ["To Google Drive. Started yesterday at 23:59."]])
+        XCTAssertEqual(around("2026-11-12T00:00:00+02:00").map { m in detail { $0.verdict = nil; $0.lastKnownBackupAt = m } },
+                       [[unconfirmed + "today at 00:00."], [unconfirmed + "today at 00:00."], [unconfirmed + "yesterday at 23:59."]])
+    }
+
     /// Registry entries no enumerated capture or case shows, each with its reason.
     static let unreached: Set<String> = [
         "action.storage",  // the Open Storage Settings action exists for P3's disk rows; no row takes it yet
