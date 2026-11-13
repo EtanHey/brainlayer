@@ -96,3 +96,19 @@ def test_a_lossy_rewrite_lands_the_newest_record_and_loses_the_edited_one(tmp_pa
     for k in ticks:
         assert replay._db_has(db, replay._text("claude", k)[0]), k  # the appended turn is ingested
         assert not replay._db_has(db, replay._text("claude", 0, f"L{k:03d}")[0]), k  # the in-place edit never is
+
+
+def test_a_replay_run_leaves_no_file_descriptor_open(tmp_path):
+    """95 runs in one process exhausted select()'s 1024 fds in CI when each run left its stores open."""
+    import gc
+    import os
+
+    def open_fds():
+        gc.collect()
+        return len(os.listdir("/dev/fd"))
+
+    replay.run_real("gemini", replay.load_trace("coverage"), tmp_path / "warm")  # imports, caches, logging
+    before = open_fds()
+    for i in range(3):  # coverage opens both flush callbacks (the probed DB and "elsewhere")
+        replay.run_real("gemini", replay.load_trace("coverage"), tmp_path / f"w{i}")
+    assert open_fds() <= before

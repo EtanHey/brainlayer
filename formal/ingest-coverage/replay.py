@@ -486,6 +486,8 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
         return out
     finally:
         watcher_module.datetime, watcher_module.time, bridge_module.time = originals
+        real_flush.close()  # each callback holds an open VectorStore; 95 runs would exhaust select()'s fds
+        elsewhere.close()
 
 
 def _edit_middle_record(path: Path, provider: str, lines: list, tick: int, when: datetime) -> tuple[str, int]:
