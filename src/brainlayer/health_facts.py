@@ -159,15 +159,36 @@ def drive_auth_fact(
     return max(known, key=lambda event: event[0])[1] if known else "ok"
 
 
-def watcher_fact(path: Path) -> datetime | None:
+WATCHER_STALL_REASONS = ("coverage_drop", "offset_lag", "file_ingestion_failure")
+WATCHER_DB_PROBE_GRACE_S = 300.0
+
+
+def watcher_stall_codes(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    """Stall signals the watcher published: its debounced alerts, a DB probe failing for
+    ``WATCHER_DB_PROBE_GRACE_S`` (one failed probe is a momentary lock), and missing roots."""
+    reasons = payload.get("alert_reasons", [])
+    if not isinstance(reasons, list):
+        raise ValueError("watcher-health.json alert_reasons is not a list")
+    codes = [r for r in WATCHER_STALL_REASONS if r in reasons]
+    probe_for = payload.get("db_probe_failed_for_s")
+    if payload.get("db_probe_failed") is True and isinstance(probe_for, (int, float)):
+        if probe_for >= WATCHER_DB_PROBE_GRACE_S:
+            codes.append("db_probe_failed")
+    roots = payload.get("roots_missing") or []
+    codes += [f"root_missing:{r}" for r in roots if isinstance(r, str)]
+    return tuple(codes)
+
+
+def watcher_health_fact(path: Path) -> tuple[datetime | None, tuple[str, ...]]:
+    """(heartbeat, stall codes) from one read of watcher-health.json; missing = (None, ())."""
     try:
         payload = json.loads(path.expanduser().read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return None
+        return None, ()
     updated = _aware(payload.get("updated_at")) if isinstance(payload, dict) else None
     if updated is None:
         raise ValueError("watcher-health.json has no updated_at")
-    return updated
+    return updated, watcher_stall_codes(payload)
 
 
 def first_pending_store(pending_path: Path) -> datetime | None:
@@ -508,7 +529,7 @@ def collect_facts(
             "backup": backup_job,
             "transcripts": lambda: transcript_facts(read_receipts(config.jsonl_backup_log_path)),
             "drive_token": lambda: read_drive_token(config.drive_token_path or resolve_paths()[0]),
-            "watcher": lambda: watcher_fact(config.watcher_health_path),
+            "watcher": lambda: watcher_health_fact(config.watcher_health_path),
             "pause": lambda: pause_sentinel_state(config.pause_sentinel_path, now),
             "drain": lambda: json.loads(config.drain_health_path.expanduser().read_text(encoding="utf-8")),
             "replay": lambda: first_pending_store(config.pending_stores_path),
@@ -600,6 +621,7 @@ def collect_facts(
     boot = got["boot"]
     boot_session = boot.stdout.strip() if getattr(boot, "returncode", None) == 0 else None
     awake_clock = awake_sample if boot_session else None
+    heartbeat, stall_codes = got["watcher"] if got["watcher"] is not UNOBSERVED else (UNOBSERVED, UNOBSERVED)
     facts = Facts(
         now=now,
         awake_clock_s=awake_clock,
@@ -607,7 +629,8 @@ def collect_facts(
         **backup_kwargs,
         transcripts_verified_at=transcripts[0] if transcripts is not UNOBSERVED else UNOBSERVED,
         drive_auth=drive_auth,
-        watcher_updated_at=got["watcher"],
+        watcher_updated_at=heartbeat,
+        watcher_stall_codes=stall_codes,
         ingest_paused=paused(config.watch_label),
         stores_paused=drain_paused,
         pause_ends_at=_aware(pause_payload.get("expires_at")) if pause_active else None,

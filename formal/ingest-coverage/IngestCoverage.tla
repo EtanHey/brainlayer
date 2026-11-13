@@ -6,27 +6,31 @@
    The status side follows the real code, not an idealised one:
    - watcher.py poll_once writes watcher-health.json (updated_at, poll_count) in
      its finally block on every completed poll, whatever the poll ingested;
-   - health_facts.watcher_fact reads only updated_at; a missing file is None and
+   - health_facts.watcher_health_fact reads updated_at; a missing file is None and
      an unreadable one is UNOBSERVED, and both reach the verdict as None;
    - health_verdict._raw_checks/_graced_age/evaluate turn that one clock into the
      ingest state (age > amber / > red, unknown ticks, hysteresis, suspension
      credit on a confirmed clock, one wake-grace window per clock otherwise).
-   The watcher's coverage watchdog, offset lag, DB probe and file failures are
-   written into watcher-health.json but no verdict input reads them, so under
-   Rule = "real" they cannot move the check. Rule = "proposed" is the follow-up
-   fix (README "Finding"): it is NOT in the code. *)
+   - the same read also returns the watcher's stall codes (health_facts.
+     watcher_stall_codes): file_ingestion_failure at once; coverage_drop and
+     root_missing once their episode has lasted alert_after_s (one tick); the
+     verdict turns them amber, and red after AlertRed ticks in a row.
+   Rule = "heartbeat" is the code before that fix (#1780's finding): the alert
+   codes never reach the verdict. *)
 EXTENDS Integers, Sequences
 
 CONSTANTS AmberT, RedT, UnknownAmber, Recovery, SleepGap, WakeGrace, AlertRed,
           Cap, N, Rule, Mut, Clock, Faults, Script
 
 VARIABLES t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
-          v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun, faultEver, wokeInStall, obs
+          v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun, faultEver, wokeInStall, obs,
+          covPrev, rootPrev, covLinger
 
 NoScript == <<>>   \* cfg files cannot spell <<>>: they say Script <- NoScript
 
 vars == <<t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
-          v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun, faultEver, wokeInStall, obs>>
+          v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun, faultEver, wokeInStall, obs,
+          covPrev, rootPrev, covLinger>>
 
 (* The eight shapes, with shape 8 split in two. "stuck" is a live process whose
    poll loop no longer completes, so poll_count and updated_at freeze together
@@ -35,20 +39,18 @@ vars == <<t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
    and every rewritten record is re-ingested, which the replay checks record by
    record. "rewrite_lossy" is one it cannot see: a same-length edit of a record
    past the first 4 KiB and before the last 256 bytes. The watcher resumes at its
-   offset and the edited record is never ingested. *)
+   offset and the edited record is never ingested.
+   "drift" (records in a shape no parser takes) publishes no watcher signal;
+   finding-real-drift shows it stays green. *)
 Shapes == {"dead", "stuck", "lag", "coverage", "dbfail",
-           "blind_stale", "blind_unreadable", "rootgone", "rewrite", "rewrite_lossy"}
-NoProgress == {"dead", "stuck", "lag", "coverage", "dbfail", "rootgone", "rewrite_lossy"}
+           "blind_stale", "blind_unreadable", "rootgone", "rewrite", "rewrite_lossy", "drift"}
+NoProgress == {"dead", "stuck", "lag", "coverage", "dbfail", "rootgone", "rewrite_lossy", "drift"}
 \* Ground truth: records these faults consume and never index (independent of Mut).
-Dropping == {"coverage", "rewrite_lossy"}
+Dropping == {"coverage", "rewrite_lossy", "drift"}
 \* Mutation rewrite_progress: count every rewrite as progress, lossy or not.
 ProgressLabel(f) == IF Mut = "rewrite_progress" THEN f \notin NoProgress \ {"rewrite_lossy"}
                     ELSE f \notin NoProgress
 Blind == {"blind_stale", "blind_unreadable"}
-\* Signals the watcher already publishes (alert_reasons, db_probe_failed) plus the
-\* missing-root signal the proposed fix adds. no_coverage drops coverage and DB.
-AlertShapes == IF Mut = "no_coverage" THEN {"lag", "rootgone"}
-               ELSE {"lag", "coverage", "dbfail", "rootgone"}
 
 Rank(s) == CASE s = "green" -> 0 [] s = "unknown" -> 1 [] s = "amber" -> 2 [] s = "red" -> 3
 NonGreen(s) == s \in {"amber", "red"}   \* the dot ignores "unknown" (evaluate: worst)
@@ -62,7 +64,7 @@ InitFresh  == /\ hbA = -1 /\ hbW = -1 /\ pA = -1 /\ pW = -1 /\ v = "unknown"
 Init == /\ t = 0 /\ fault = "none" /\ asleep = FALSE /\ slept = 0
         /\ resumed = -1 /\ grace = -1 /\ unk = 0 /\ good = 0 /\ alertT = 0 /\ fileAlert = FALSE
         /\ backlog = FALSE /\ dropped = FALSE /\ stall = 0 /\ blindRun = 0 /\ faultEver = FALSE /\ wokeInStall = FALSE
-        /\ obs = "fresh"
+        /\ obs = "fresh" /\ covPrev = FALSE /\ rootPrev = FALSE /\ covLinger = FALSE
         /\ IF Script = <<>> THEN InitSteady \/ InitFresh ELSE InitSteady
 
 (* Lid closed: no watcher poll, no agent writes, no health tick. Wall time runs. *)
@@ -74,7 +76,7 @@ Sleep == /\ asleep' = TRUE
          /\ obs' = "asleep"
          /\ t' = IF Script = <<>> THEN t ELSE t + 1
          /\ UNCHANGED <<fault, hbA, pA, v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun,
-                        faultEver, wokeInStall>>
+                        faultEver, wokeInStall, covPrev, rootPrev, covLinger>>
 
 (* One awake health tick. f: the fault this tick; w: the agent appends;
    o: on the first tick after a wake, whether the monitor reads before the
@@ -86,7 +88,7 @@ Tick(f, w, o) ==
       early  == writes /\ ~(woke /\ o = "monitorFirst")
       rA == IF early THEN 0 ELSE Inc(hbA)              \* heartbeat age at the read
       rW == IF early THEN 0 ELSE Wall(Inc(hbW))
-      seen == f # "blind_unreadable" /\ rA >= 0        \* watcher_fact returned a time
+      seen == f # "blind_unreadable" /\ rA >= 0        \* watcher_health_fact returned a time
       reset == Mut = "sleep_resets" /\ woke            \* mutation: a wake forgives the clock
       \* clock = max(watcher, persisted): a newer heartbeat if seen, else the persisted one
       cA == IF reset THEN 0 ELSE IF seen THEN rA ELSE Inc(pA)
@@ -108,9 +110,20 @@ Tick(f, w, o) ==
       graced == known /\ Rank(AgeState(age)) < Rank(AgeState(trueAge))
       backlogNow == backlog \/ w \/ f = "rewrite_lossy"   \* the edit is itself agent content
       progress == ProgressLabel(f)
-      alertWritten == f \in AlertShapes /\ backlogNow     \* what this poll would publish
+      \* What this poll publishes. An unreadable transcript is a file_ingestion_failure at
+      \* once. Retained failed flushes (dbfail) or writes that never reach the probed DB
+      \* (coverage) are coverage_drop, and a vanished root is root_missing, once the
+      \* condition held at the previous poll too (alert_after_s = one tick of awake time).
+      \* A coverage window stays open while it writes nothing, so the alert is still in
+      \* the first poll after the fault (covLinger).
+      covC == Mut # "no_coverage" /\ f \in {"coverage", "dbfail"} /\ backlogNow
+      rootC == f = "rootgone"
+      alertWritten == \/ f = "lag" /\ backlogNow
+                      \/ covC /\ covPrev
+                      \/ rootC /\ rootPrev
+                      \/ covLinger /\ f # "coverage"
       \* the file keeps the last payload written: a dead watcher leaves its last alert
-      alertNow == Rule = "proposed" /\ seen /\ (IF early THEN alertWritten ELSE fileAlert)
+      alertNow == Rule = "real" /\ seen /\ (IF early THEN alertWritten ELSE fileAlert)
       aT == IF alertNow THEN Min(alertT + 1, Cap) ELSE 0
       alertState == IF aT = 0 THEN "green" ELSE IF aT > AlertRed THEN "red" ELSE "amber"
       raw0 == CASE Mut = "stale_green" /\ seen -> "green"           \* age ignored
@@ -153,6 +166,9 @@ Tick(f, w, o) ==
      /\ blindRun' = IF f \in Blind /\ ~newClock THEN Min(blindRun + 1, Cap) ELSE 0
      /\ faultEver' = (faultEver \/ f # "none")
      /\ wokeInStall' = (stalledNow /\ (wokeInStall \/ (woke /\ stall > 0)))
+     /\ covPrev' = IF polls THEN covC ELSE covPrev
+     /\ rootPrev' = IF polls THEN rootC ELSE rootPrev
+     /\ covLinger' = IF polls THEN (f = "coverage" /\ covC /\ covPrev) ELSE covLinger
      /\ obs' = IF f = "blind_unreadable" THEN "unreadable"
                ELSE IF rA < 0 THEN "missing" ELSE IF early THEN "fresh" ELSE "old"
 

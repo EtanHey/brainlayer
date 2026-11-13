@@ -32,7 +32,7 @@ BOUNDS = {
     "Cap": 8,
 }  # ordering-preserving: Amber < Red < WakeGrace, SleepGap = 3 ticks
 HEARTBEAT = ("none", "dead", "stuck", "blind_stale", "blind_unreadable", "rewrite")
-ALL = ("none", "dead", "stuck", "lag", "coverage", "dbfail", "blind_stale", "blind_unreadable", "rootgone", "rewrite")
+EIGHT = ("none", "dead", "stuck", "lag", "coverage", "dbfail", "blind_stale", "blind_unreadable", "rootgone", "rewrite")
 THREE = ("IngestFailureLeavesGreen", "SleepIsNotFailure", "StallAcrossWakeStillCounts", "StallClockIsTruthful")
 
 
@@ -54,10 +54,19 @@ def case(
 
 
 CASES = [
+    *[
+        case(
+            f"real-{s}",
+            "guarantee",
+            f"Today's code: a {s} stall leaves green within 2 ticks and stays non-green until progress",
+            faults=("none", s),
+        )
+        for s in EIGHT[1:]
+    ],
     case(
-        "real-heartbeat-shapes",
+        "real-heartbeat-mix",
         "guarantee",
-        "Today's code: dead, stuck, blind (stale or unreadable) leave green within 2 ticks; a detected rewrite re-ingests",
+        "Any mix of the heartbeat shapes (dead, stuck, blind, detected rewrite) still leaves green within 2 ticks",
     ),
     case(
         "real-unconfirmed-clock",
@@ -67,39 +76,55 @@ CASES = [
         n=7,
         inv=("IngestFailureLeavesGreen", "StallAcrossWakeStillCounts", "StallClockIsTruthful"),
     ),
-    case(
-        "real-bound-tight",
-        "bound",
-        "N = 2 is tight: with N = 1 TLC finds a green tick",
-        n=1,
-        inv=("IngestFailureLeavesGreen",),
-        expect="IngestFailureLeavesGreen",
-    ),
     *[
         case(
-            f"finding-real-{s}",
-            "finding",
-            f"FINDING: today's verdict never reads the {s} signal, so a {s} stall stays green forever",
+            f"real-unconfirmed-{s}",
+            "guarantee",
+            f"Without a boot-session clock a {s} stall still leaves green within 2 ticks (the alert has no clock)",
+            clock="unconfirmed",
             faults=("none", s),
-            inv=("IngestFailureLeavesGreen",),
-            expect="IngestFailureLeavesGreen",
+            inv=("IngestFailureLeavesGreen", "StallAcrossWakeStillCounts", "StallClockIsTruthful"),
         )
         for s in ("lag", "coverage", "dbfail", "rootgone")
     ],
     case(
-        "finding-real-rewrite-lossy",
-        "finding",
-        "FINDING: a same-length edit past the 4 KiB head digest is invisible to the #732 fingerprint; "
-        "the edited records are never ingested and the check stays green",
-        faults=("none", "rewrite_lossy"),
+        "real-bound-tight",
+        "bound",
+        "N = 2 is tight for the heartbeat shapes: with N = 1 TLC finds a green tick",
+        n=1,
         inv=("IngestFailureLeavesGreen",),
         expect="IngestFailureLeavesGreen",
     ),
     case(
-        "finding-proposed-rewrite-lossy",
+        "real-bound-tight-alert",
+        "bound",
+        "N = 2 is tight for the debounced alerts: with N = 1 a coverage stall is still green on its 2nd tick",
+        n=1,
+        faults=("none", "coverage"),
+        inv=("IngestFailureLeavesGreen",),
+        expect="IngestFailureLeavesGreen",
+    ),
+    case(
+        "finding-real-flapping",
         "finding",
-        "The proposed alert rule does NOT fix the lossy rewrite: the watcher never knows; it needs a stronger fingerprint",
-        rule="proposed",
+        "FINDING (open): a watcher that dies, polls once with failing writes, and dies again reads green while stalled",
+        faults=("none", "dead", "coverage"),
+        inv=("IngestFailureLeavesGreen",),
+        expect="IngestFailureLeavesGreen",
+    ),
+    case(
+        "finding-real-drift",
+        "finding",
+        "FINDING (open): records in a shape no parser takes publish no watcher signal and stay green",
+        faults=("none", "drift"),
+        inv=("IngestFailureLeavesGreen",),
+        expect="IngestFailureLeavesGreen",
+    ),
+    case(
+        "finding-real-rewrite-lossy",
+        "finding",
+        "FINDING (open): a same-length edit past the 4 KiB head digest is invisible to the #732 fingerprint; "
+        "the edited records are never ingested and the stall codes cannot see it either, so it stays green",
         faults=("none", "rewrite_lossy"),
         inv=("IngestFailureLeavesGreen",),
         expect="IngestFailureLeavesGreen",
@@ -114,14 +139,18 @@ CASES = [
         inv=("SleepIsNotFailure",),
         expect="SleepIsNotFailure",
     ),
-    case(
-        "proposed-all-shapes",
-        "guarantee",
-        "The follow-up fix (not in code): verdict also reads the watcher's alerts and missing roots; "
-        "all shapes but the lossy rewrite hold",
-        rule="proposed",
-        faults=ALL,
-    ),
+    *[
+        case(
+            f"before-fix-{s}",
+            "history",
+            f"#1780's finding: a verdict that reads only the heartbeat keeps a {s} stall green forever",
+            rule="heartbeat",
+            faults=("none", s),
+            inv=("IngestFailureLeavesGreen",),
+            expect="IngestFailureLeavesGreen",
+        )
+        for s in ("lag", "coverage", "dbfail", "rootgone")
+    ],
     case(
         "mut-stale-green",
         "mutation",
@@ -142,8 +171,7 @@ CASES = [
     case(
         "mut-no-coverage",
         "mutation",
-        "Drop the coverage check from the proposed rule",
-        rule="proposed",
+        "Drop coverage_drop from the stall codes",
         mut="no_coverage",
         faults=("none", "coverage"),
         inv=("IngestFailureLeavesGreen",),

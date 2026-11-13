@@ -7,7 +7,7 @@ Two halves:
   are stale (check.py runs it).
 - ``run_real`` drives the real code with one trace: a real ``JSONLWatcher`` over the real
   ``default_watch_roots`` of a scratch home, the real ``create_flush_callback`` into a scratch DB,
-  the real ``watcher_fact`` and ``evaluate``. Each wired agent writes small JSONL in its own
+  the real ``watcher_health_fact`` and ``evaluate``. Each wired agent writes small JSONL in its own
   format. Per tick it compares the ingest state, what the monitor saw, and whether the newest
   record reached the DB. ``tests/test_ingest_coverage_replay.py`` runs it for every agent.
 
@@ -34,7 +34,8 @@ ROOT = HERE.parent.parent
 TRACES = HERE / "traces"
 TICK_S = 300
 AGENTS = ("claude", "codex", "cursor", "cursor-agent-transcripts", "gemini")
-# Production thresholds in ticks: amber 600 s, red 1800 s, sleep gap 900 s, wake grace 7200 s.
+# Production thresholds in ticks: amber 600 s, red 1800 s, sleep gap 900 s, wake grace 7200 s,
+# alert red after ingest_alert_red_ticks = 6.
 MODEL = {
     "AmberT": 2,
     "RedT": 6,
@@ -42,7 +43,7 @@ MODEL = {
     "Recovery": 2,
     "SleepGap": 3,
     "WakeGrace": 24,
-    "AlertRed": 2,
+    "AlertRed": 6,
     "Cap": 40,
     "N": 2,
 }
@@ -57,8 +58,10 @@ SHAPES = (
     "rootgone",
     "rewrite",
     "rewrite_lossy",
+    "drift",
 )
-DROPPING = frozenset({"coverage", "rewrite_lossy"})  # faults whose records are consumed and never indexed
+# faults whose records are consumed and never indexed
+DROPPING = frozenset({"coverage", "rewrite_lossy", "drift"})
 PAD_RECORDS = 64
 
 
@@ -186,6 +189,33 @@ def load_trace(name: str) -> dict[str, Any]:
 # --- real side ----------------------------------------------------------------------------------
 
 
+class SimTime:
+    """``brainlayer.watcher.time`` / ``watcher_bridge.time`` during a replay.
+
+    ``monotonic()`` is awake seconds (macOS monotonic stops while asleep); ``time()`` is wall time
+    plus ``lead``. Once the watcher's first window is open it gets lead = 1 s, so each later window
+    boundary falls after that poll's own DB rows, as in production, where a poll's inserts precede
+    the window reset that follows them.
+    """
+
+    awake = 0.0
+    wall = 0.0
+
+    def __init__(self, lead: float = 0.0):
+        import time as real
+
+        self._real, self._lead = real, lead
+
+    def monotonic(self) -> float:
+        return SimTime.awake
+
+    def time(self) -> float:
+        return SimTime.wall + self._lead
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
 class SimClock(datetime):
     """``brainlayer.watcher.datetime`` during a replay: ``now()`` is the simulated tick time."""
 
@@ -265,7 +295,8 @@ def _db_has(db: Path, marker: str) -> bool:
 def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str, Any]]:
     """Drive the real watcher + verdict through ``trace``; one observation per event."""
     import brainlayer.watcher as watcher_module
-    from brainlayer.health_facts import watcher_fact
+    import brainlayer.watcher_bridge as bridge_module
+    from brainlayer.health_facts import watcher_health_fact
     from brainlayer.health_verdict import UNOBSERVED, Facts, Thresholds, evaluate
     from brainlayer.watcher import JSONLWatcher, default_watch_roots
     from brainlayer.watcher_bridge import create_flush_callback
@@ -277,19 +308,25 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
     moved = root.with_name(root.name + "-moved")
     transcript = root / _RELATIVE[provider]
     transcript.parent.mkdir(parents=True, exist_ok=True)
-    state = {"dbfail": False}
+    state = {"fault": "none"}
     real_flush = create_flush_callback(db_path=db, arbitrated=False)
+    # coverage: writes succeed but land where the watcher's DB probe does not look (a writer
+    # pointed elsewhere, a drain that never reaches the DB)
+    elsewhere = create_flush_callback(db_path=work / "elsewhere" / "brainlayer.db", arbitrated=False)
 
     def on_flush(items):
-        if state["dbfail"]:
+        if state["fault"] == "dbfail":
             raise sqlite3.OperationalError("database is locked (replay: DB writes fail)")
-        return real_flush(items)
+        return (elsewhere if state["fault"] == "coverage" else real_flush)(items)
 
-    original_datetime = watcher_module.datetime
+    originals = (watcher_module.datetime, watcher_module.time, bridge_module.time)
     watcher_module.datetime = SimClock
+    watcher_module.time, bridge_module.time = SimTime(), SimTime()
+    (work / "elsewhere").mkdir(parents=True, exist_ok=True)
     try:
         start = datetime(2026, 11, 13, 9, 0, tzinfo=UTC)
         SimClock.current = start
+        SimTime.awake, SimTime.wall = 1000.0, start.timestamp()
         lines = [*_header(provider, start)]
         marker0, text0 = _text(provider, 0)
         lines.append(agent_record(provider, text0, start))
@@ -309,20 +346,24 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
             registry_flush_interval_s=0,
             health_path=health,
         )
+        watcher.coverage_watchdog.now_fn = watcher_module.time.monotonic
+        watcher_module.time._lead = 1.0  # after the first window opened (see SimTime)
         confirmed = trace["clock"] == "confirmed"
         wall, awake = start, 0.0
 
-        def facts_now(updated):
+        def facts_now(seen):
+            updated, codes = seen if seen is not UNOBSERVED else (UNOBSERVED, UNOBSERVED)
             return Facts(
                 now=wall,
                 watcher_updated_at=updated,
+                watcher_stall_codes=codes,
                 awake_clock_s=awake if confirmed else None,
                 boot_session="replay-boot" if confirmed else None,
             )
 
         def read():
             try:
-                value = watcher_fact(health)
+                value = watcher_health_fact(health)
             except Exception:
                 return UNOBSERVED
             return value
@@ -341,11 +382,13 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
         for k, event in enumerate(trace["events"], 1):
             wall += timedelta(seconds=TICK_S)
             SimClock.current = wall
+            SimTime.wall = wall.timestamp()
             if event["s"] == "sleep":
                 asleep = True
                 out.append({"v": current, "obs": "asleep", "backlog": backlog()})
                 continue
             awake += TICK_S
+            SimTime.awake += TICK_S
             f = event["f"]
             if fault != f:  # leave the old fault, enter the new one
                 if fault == "lag":
@@ -361,7 +404,7 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
                 if f == "blind_stale":
                     health.parent.chmod(0o555)
                 fault = f
-            state["dbfail"] = f == "dbfail"
+            state["fault"] = f
             path = watcher_path(transcript, root, moved)
             marker, text = _text(provider, k)
             if f == "rewrite":  # rewritten in place, longer than before, under the stored offset
@@ -381,38 +424,38 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
                 if f == "rewrite_lossy":  # same-length edit of a middle record, before the appended turn
                     edited, _ = _edit_middle_record(path, provider, lines, k, start)
                     pending[edited] = f
-                record = agent_record(provider, text, wall, drift=f == "coverage")
+                record = agent_record(provider, text, wall, drift=f == "drift")
                 with open(path, "a", encoding="utf-8") as handle:
                     handle.write(json.dumps(record) + "\n")
                 lines.append(record)
-                pending[marker] = "coverage" if f == "coverage" else "none"
+                pending[marker] = f if f in ("coverage", "drift") else "none"
             polls = f not in ("dead", "stuck")
             monitor_first = asleep and event["o"] == "monitorFirst"
             if polls and not monitor_first:
                 watcher.poll_once()
             if f == "blind_unreadable":  # this tick's read fails; the file itself is left intact
-                updated = UNOBSERVED
+                seen = UNOBSERVED
             else:
-                updated = read()
+                seen = read()
             if polls and monitor_first:
                 watcher.poll_once()
             asleep = False
-            verdict = evaluate(facts_now(updated), prior, Thresholds())
+            verdict = evaluate(facts_now(seen), prior, Thresholds())
             prior, current = verdict.state, verdict.check("ingest").state
-            if updated is UNOBSERVED:
-                seen = "unreadable"
-            elif updated is None:
-                seen = "missing"
+            if seen is UNOBSERVED:
+                obs = "unreadable"
+            elif seen[0] is None:
+                obs = "missing"
             else:
-                seen = "fresh" if updated == wall else "old"
-            out.append({"v": current, "obs": seen, "backlog": backlog()})
+                obs = "fresh" if seen[0] == wall else "old"
+            out.append({"v": current, "obs": obs, "backlog": backlog()})
         if fault == "lag":
             _chmod(watcher_path(transcript, root, moved), 0o644)
         if fault == "blind_stale":
             health.parent.chmod(0o755)
         return out
     finally:
-        watcher_module.datetime = original_datetime
+        watcher_module.datetime, watcher_module.time, bridge_module.time = originals
 
 
 def _edit_middle_record(path: Path, provider: str, lines: list, tick: int, when: datetime) -> tuple[str, int]:

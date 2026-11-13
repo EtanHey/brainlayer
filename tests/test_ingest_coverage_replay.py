@@ -1,7 +1,7 @@
 """The TLA+ ingest-coverage model, tick by tick, against the real watcher and verdict.
 
 formal/ingest-coverage/replay.py drives a real JSONLWatcher over a scratch home's real watch
-roots, the real flush callback into a scratch DB, and the real watcher_fact + evaluate, with
+roots, the real flush callback into a scratch DB, and the real watcher_health_fact + evaluate, with
 JSONL in each wired agent's own format. Each tick must match the committed TLC trace: the
 ingest state, what the monitor saw, and whether the newest record reached the DB.
 """
@@ -44,12 +44,24 @@ def test_every_scenario_has_a_committed_trace_for_the_current_script():
         assert trace["model"] == replay.MODEL
 
 
-def test_the_findings_are_real_today():
-    """A lag, coverage, DB, missing-root or undetected-rewrite stall stays green for the whole fault (README "Finding")."""
-    for shape in ("lag", "coverage", "dbfail", "rootgone", "rewrite_lossy"):
+OPEN = ("drift", "rewrite_lossy")  # no watcher signal sees these (README "Open findings")
+
+
+def test_every_alert_or_heartbeat_shape_leaves_green_within_two_ticks_and_stays_until_progress():
+    """IngestFailureLeavesGreen on the traces the real code matched: stall > 2 ticks => amber or red."""
+    for shape in replay.SHAPES:
+        if shape in OPEN:
+            continue
         ticks = replay.load_trace(shape)["ticks"]
-        stalled = [t for e, t in zip(replay.SCENARIOS[shape]["events"], ticks) if e["f"] == shape]
-        assert stalled and all(t["backlog"] and t["v"] == "green" for t in stalled), shape
+        assert all(t["v"] in ("amber", "red") for t in ticks if t["stall"] > 2), shape
+
+
+@pytest.mark.parametrize("shape", OPEN)
+def test_drift_and_an_undetected_rewrite_are_still_open(shape):
+    """Records no parser takes, or an edit the #732 fingerprint cannot see: green for the whole fault."""
+    events, ticks = replay.SCENARIOS[shape]["events"], replay.load_trace(shape)["ticks"]
+    stalled = [t for e, t in zip(events, ticks) if e["f"] == shape]
+    assert stalled and all(t["backlog"] and t["v"] == "green" for t in stalled)
 
 
 def test_the_replay_catches_a_wrong_model_tick(tmp_path):

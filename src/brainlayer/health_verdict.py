@@ -70,6 +70,7 @@ class Thresholds:
     embedding_red_s: float = 6 * HOURS
     canary_red_failures: int = 3
     unknown_amber_ticks: int = 3
+    ingest_alert_red_ticks: int = 6
     recovery_good_ticks: int = 2
     sleep_gap_s: float = 15 * 60
     wake_grace_s: float = 2 * HOURS
@@ -113,6 +114,7 @@ class Facts:
     drive_auth: Any = UNOBSERVED  # "ok" | "refresh_failed" | "consent_needed"
     integrity: Any = UNOBSERVED  # "ok" | "corrupt" (confirmed results only)
     watcher_updated_at: Any = UNOBSERVED
+    watcher_stall_codes: Any = UNOBSERVED  # stall signals in the same watcher-health.json read
     ingest_paused: bool = False
     stores_paused: bool = False
     pause_ends_at: datetime | None = None  # the pause sentinel's expires_at while a pause is active
@@ -444,6 +446,20 @@ def _raw_checks(
         r.evidence = r.evidence and watcher is not None  # an observed heartbeat, fresh by its real age
         if watcher is None:
             r.note = f"watcher heartbeat not observed; {r.note}"
+        codes = (
+            facts.watcher_stall_codes if watcher is not None and isinstance(facts.watcher_stall_codes, tuple) else ()
+        )
+        if facts.stores_paused:
+            codes = tuple(c for c in codes if c != "coverage_drop")  # the paused drain writes nothing
+        if codes:
+            alert_ticks = int(p("ingest").get("alert_ticks") or 0) + 1
+            r.keep["alert_ticks"] = alert_ticks
+            alert = RED if alert_ticks > t.ingest_alert_red_ticks else AMBER
+            if _RANK[alert] > _RANK[r.state]:
+                r.state, r.amber_s = alert, None
+            r.note = "; ".join(
+                x for x in (r.note, f"watcher reports {', '.join(codes)} ({alert_ticks} checks in a row)") if x
+            )
         if facts.ingest_paused and r.state == RED:
             r.state, r.note = AMBER, r.note + " (watcher paused by maintenance)"
         raw["ingest"] = r
