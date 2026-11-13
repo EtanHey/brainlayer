@@ -1744,12 +1744,12 @@
     "checks": {
      "backup_local": {
       "state": "amber",
-      "ageS": 165600,
+      "ageS": 166380,
       "thresholdS": 194400
      },
      "backup_offsite": {
       "state": "amber",
-      "ageS": 165600,
+      "ageS": 166380,
       "thresholdS": 280800,
       "note_for_test": "46.0 h; newest copy Nov 9 03:44, over 24 h so the date form"
      },

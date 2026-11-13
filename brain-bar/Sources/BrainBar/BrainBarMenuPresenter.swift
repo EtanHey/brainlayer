@@ -44,7 +44,7 @@ enum BrainBarMenuPresenter {
             let detail = "Saving, search, backups and upkeep aren’t confirmed yet."
                 + (c.lastKnownBackupAt.map { " Last backup \(at($0, c))." } ?? "")
             return .init(form: .calm, headline: afterSleep ? "Checking after sleep…" : "Checking on your memory…", count: 0, icon: .resting,
-                         rows: [P.Row(kind: .headline, strings: [afterSleep ? "Checking after sleep…" : "Checking on your memory…"], sign: .wait),
+                         rows: [P.Row(kind: .headline, strings: [afterSleep ? "Checking after sleep…" : "Checking on your memory…"], mark: .wait),
                                 P.Row(kind: .headlineDetail, strings: [detail])] + bottom)
         }
         return assemble(c, lines, safeDetail: c.verdict.flatMap { allGoodDetail(c, $0) })
@@ -203,7 +203,7 @@ enum BrainBarMenuPresenter {
         let headline: String
         if !needs.isEmpty {
             headline = needs.count == 1 ? "1 thing needs you" : "\(needs.count) things need you"
-            rows = [P.Row(kind: .headline, strings: [headline], sign: .marked), P.Row(kind: .separator)]
+            rows = [P.Row(kind: .headline, strings: [headline], mark: .marked), P.Row(kind: .separator)]
             for (i, line) in needs.enumerated() {
                 rows.append(P.Row(kind: .needsYou, strings: line.strings + (line.action == .copyReport ? line.handoff : []),
                                   action: line.action.map { P.Action(kind: $0, label: label($0)) }, dividerBefore: i > 0))
@@ -214,7 +214,7 @@ enum BrainBarMenuPresenter {
                 rows.append(P.Row(kind: .everythingElse, strings: ["Everything else is fine."]))
             }
         } else {
-            let sign: P.Sign
+            let sign: P.Mark
             var folded: Line?
             let nouns: [Thing: String] = [.remembering: "new conversations", .finding: "search", .safe: "backups", .upkeep: "upkeep"]
             switch behind.count {
@@ -235,7 +235,7 @@ enum BrainBarMenuPresenter {
                     : things.isEmpty ? "All good" : "Still checking a few things"
                 sign = things.isEmpty ? .ok : .wait
             }
-            rows = [P.Row(kind: .headline, strings: [headline], sign: sign)]
+            rows = [P.Row(kind: .headline, strings: [headline], mark: sign)]
             if let folded, folded.strings.first?.dropLast() != headline[...] {
                 rows.append(P.Row(kind: .headlineDetail, strings: folded.strings, progressPercent: folded.progress))
             }
@@ -265,6 +265,7 @@ enum BrainBarMenuPresenter {
         case .reconnectDrive: "Reconnect Google Drive"
         case .connectDrive: "Connect Google Drive"
         case .copyReport: "Copy report for an agent"
+        case .openStorageSettings: "Open Storage Settings"
         }
     }
 
