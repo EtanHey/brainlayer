@@ -5,7 +5,7 @@ import Foundation
 ///
 /// P1 derives the six calm cases (S1, S2 today and after the seam, S4, S7, S8); P2 the Needs-you rows of the eleven
 /// needs cases (S13 with M1 and D13, S06, S07, S19, S32, F07, U03) with merges M2 and M5. Everything else takes ruling
-/// R17's generic rows: a thing that needs him reads "Something BrainBar checks is failing.", a thing that cannot be
+/// R17's generic rows: a thing that needs him reads "Something BrainBar checks needs attention." (R24), a thing that cannot be
 /// told reads "Checking…". P3 to P5 replace them family by family. `finalGuard` runs last, on every path.
 enum BrainBarMenuPresenter {
     typealias P = BrainBarMenuPresentation
@@ -137,9 +137,8 @@ enum BrainBarMenuPresenter {
     private static func calmAmber(_ name: String, _ c: Capture, _ v: BrainBarHealthVerdict) -> Line? {
         switch name {
         case "backup_offsite" where worst(v, "backup_local") == .green:
-            guard let (_, onSchedule) = runningUpload(c) else { return nil }
-            // P2b: a bare clock time reads as today, so a start on another day is not said.
-            let started = startedToday(c).map { [Say.s03Started(hhmm($0, c))] } ?? []
+            guard let (_, onSchedule) = runningUpload(c), let start = uploadStart(c) else { return nil }
+            let started = [start.today ? Say.s03Started(hhmm(start.date, c)) : Say.s03StartedOn(at(start.date, c))]
             let done = onSchedule?.progress.map { p in onSchedule?.eta.map { Say.s03ProgressEta(String(percent(p)), hhmm($0, c)) } ?? Say.s03Progress(String(percent(p))) }
             let text = ([Say.s03.text] + started + (done.map { [$0] } ?? [])).joined(separator: " ")
             return Line(thing: .safe, level: .behind, strings: [text], headline: Say.s03Headline.text, progress: onSchedule?.progress.map(percent))
@@ -161,13 +160,14 @@ enum BrainBarMenuPresenter {
             return sane && quiet >= 0 && quiet <= 2 * r.cadenceS && r.eta.map { c.now <= $0 && sayable($0) } != false ? r : nil
         }
         let upload = c.upload.flatMap { $0.live ? $0.startedAt : nil }
-        guard let started = c.offsiteRecovering == nil ? upload : onSchedule?.startedAt, started <= c.now else { return nil }
+        guard let started = c.offsiteRecovering == nil ? upload : onSchedule?.startedAt, started <= c.now, sayable(started) else { return nil }
         return (started, onSchedule)
     }
 
-    /// The running upload's start when it is on today's date in the capture's zone: a bare `{HH:mm}` reads as today (P2b).
-    static func startedToday(_ c: Capture) -> Date? {
-        runningUpload(c).flatMap { calendar(c).isDate($0.started, inSameDayAs: c.now) ? $0.started : nil }
+    /// The running upload's start, and whether it is on today's date in the capture's zone: a bare `{HH:mm}` reads as today,
+    /// so a start on another day takes the day words every other past time uses (P2b, ruling R23).
+    static func uploadStart(_ c: Capture) -> (today: Bool, date: Date)? {
+        runningUpload(c).map { (calendar(c).isDate($0.started, inSameDayAs: c.now), $0.started) }
     }
 
     // MARK: P2: the Needs-you rows of the eleven needs cases
@@ -198,9 +198,11 @@ enum BrainBarMenuPresenter {
             let faults = [local, offsite].filter { $0.state != .green }
             if local.state == .red, local.ageS == nil, offsite.ageS == nil {  // S07, only with no copy on record anywhere (R21)
                 (db, dbNames) = (worded(.safe, [Say.noRecord.text], .custody, priority: 1), ["backup_local"])
-            } else if !reds.isEmpty, let upload = runningUpload(c), let started = startedToday(c) {  // S32, R8, R9; a start today (P2b)
+            } else if !reds.isEmpty, let upload = runningUpload(c), let start = uploadStart(c) {  // S32, R8, R9, R23
                 let age = c.backupsMeasured ? copyAge(offsite.ageS, c, v).map { Say.r15($0) + " " } : nil
-                let progress = upload.onSchedule?.progress.map { Say.s32Progress(hhmm(started, c), String(percent($0))) } ?? Say.s32(hhmm(started, c))
+                let p = upload.onSchedule?.progress.map { String(percent($0)) }
+                let progress = start.today ? p.map { Say.s32Progress(hhmm(start.date, c), $0) } ?? Say.s32(hhmm(start.date, c))
+                    : p.map { Say.s32ProgressOn(at(start.date, c), $0) } ?? Say.s32On(at(start.date, c))
                 db = worded(.safe, [(age ?? "") + progress], local.state == .red ? .custody : .confirmed, priority: 2)
                 db?.handoff = [Say.ifNotFinished.text, Say.giveReport.text]
                 dbNames = reds.map(\.name)

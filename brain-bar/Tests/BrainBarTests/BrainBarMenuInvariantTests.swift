@@ -79,10 +79,10 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             c.lagEpisodeStart = now.addingTimeInterval(input.base == 4 ? -1860 : -480)
         }
         if input.base == 3 { c.watcher = .init(alertReasons: ["file_ingestion_failure"]) }
-        // P2b: on the live-upload base, profile 3 also carries an on-schedule `recovering` with progress and no ETA (S03's and
+        // P2b: on the two live-upload bases, profile 3 also carries an on-schedule `recovering` with progress and no ETA (S03's and
         // S32's progress sentences).
-        if input.base == 1, input.profile == 3 {
-            c.offsiteRecovering = .init(progress: 0.4, eta: nil, startedAt: now.addingTimeInterval(-1920), updatedAt: now, cadenceS: 30)
+        if [1, 5].contains(input.base), input.profile == 3 {
+            c.offsiteRecovering = .init(progress: 0.4, eta: nil, startedAt: now.addingTimeInterval(input.base == 1 ? -1920 : -93_600), updatedAt: now, cadenceS: 30)
         }
         return c
     }
@@ -228,7 +228,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                         rows: [P.Row(kind: .headline, strings: ["All good"], mark: .ok), P.Row(kind: .headlineDetail, strings: ["Backed up."])])
         let oneNeeds = P(form: .needs, headline: "1 thing needs you", count: 1, icon: .marked,
                          rows: [P.Row(kind: .headline, strings: ["1 thing needs you"], mark: .marked), P.Row(kind: .separator),
-                                P.Row(kind: .needsYou, strings: ["Something BrainBar checks is failing."], mark: .alertCircle)])
+                                P.Row(kind: .needsYou, strings: ["Something BrainBar checks needs attention."], mark: .alertCircle)])
         let red = base { $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks + [Self.check("disk", .red)!], notes: [], evaluatedAt: Self.now) }
         let unmeasured = base { $0.backupsMeasured = false }
         let searchAmber = base { $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks.filter { $0.name != "search" }
@@ -264,7 +264,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         let meaningRow = P.Row(kind: .needsYou, strings: ["Search by meaning isn’t catching up",
                                                           "BrainBar hasn’t seen the memories waiting for it go down. " + Self.exactWords] + handoff,
                                action: report, mark: .alertCircle)
-        let generic = P.Row(kind: .needsYou, strings: ["Something BrainBar checks is failing."] + handoff, action: report, mark: .alertCircle)
+        let generic = P.Row(kind: .needsYou, strings: ["Something BrainBar checks needs attention."] + handoff, action: report, mark: .alertCircle)
         // Round 1 of #1787: the still-saved sentence needs a watcher file that proves saving (Codex P2-F2), and the I8 claims.
         func upkeepWith(_ w: Capture.Watcher) -> Capture { base { $0.maintenanceNightFailures = 3; $0.watcher = w } }
         let localNoRecord = base { $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks.filter { $0.name != "backup_local" }
@@ -505,18 +505,25 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             return c.upload.flatMap { $0.live && $0.startedAt <= c.now ? $0.startedAt : nil }
         }
         var progress: String? { running == nil ? nil : c.offsiteRecovering?.progress.flatMap { (0...1).contains($0) ? String(Int(($0 * 100).rounded())) : nil } }
-        func clock(_ date: Date) -> String {
+        func clock(_ date: Date, _ format: String = "HH:mm") -> String {
             let f = DateFormatter()
             f.locale = Locale(identifier: "en_US_POSIX")
             f.timeZone = c.timeZone
-            f.dateFormat = "HH:mm"
+            f.dateFormat = format
             return f.string(from: date)
         }
-        /// A bare clock time reads as a time today, so it is true only for a start on today's date (P2b's ruling).
-        func startedToday(_ value: String) -> Bool {
+        var calendar: Calendar {
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = c.timeZone
-            return running.map { calendar.isDate($0, inSameDayAs: c.now) && clock($0) == value } == true
+            return calendar
+        }
+        /// A bare clock time reads as a time today, so it is true only for a start on today's date (P2b, ruling R23).
+        func startedToday(_ value: String) -> Bool { running.map { calendar.isDate($0, inSameDayAs: c.now) && clock($0) == value } == true }
+        /// R23: a start on another day says its day: "yesterday at 23:40" under a day ago on yesterday's date, else "Nov 9 at 23:40".
+        func startedOn(_ value: String) -> Bool {
+            guard let s = running, !calendar.isDate(s, inSameDayAs: c.now), let yesterday = calendar.date(byAdding: .day, value: -1, to: c.now) else { return false }
+            let day = c.now.timeIntervalSince(s) < 86_400 && calendar.isDate(s, inSameDayAs: yesterday) ? "yesterday" : clock(s, "MMM d")
+            return value == day + " at " + clock(s)
         }
         /// "N hours old" under a day at now (N the rounded hours, 1 to 23), or "from {day} at {HH:mm}" a day or more old, for
         /// the newest copy among `names`.
@@ -551,6 +558,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         "S03.headline": { f, _ in f.running != nil },
         "S03": { f, _ in f.running != nil },
         "S03.started": { f, v in f.startedToday(v[0]) },
+        "S03.startedOn": { f, v in f.startedOn(v[0]) },
         "S03.progress": { f, v in f.progress == v[0] },
         "S03.progressEta": { f, v in f.progress == v[0] && f.c.offsiteRecovering?.eta.map { f.clock($0) == v[1] } == true },
         "C3": { f, v in v.allSatisfy { ($0 == "new conversations" && f.catchingUp) || ($0 == "backups" && f.running != nil) } },
@@ -571,6 +579,8 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         "R14": { f, _ in f.every("backup_offsite") { $0.ageS == nil } && f.c.backupsMeasured },
         "S32": { f, v in f.startedToday(v[0]) },
         "S32.progress": { f, v in f.startedToday(v[0]) && f.progress == v[1] },
+        "S32.on": { f, v in f.startedOn(v[0]) },
+        "S32.progressOn": { f, v in f.startedOn(v[0]) && f.progress == v[1] },
         "S06": { f, v in Int(v[0]) == f.c.backupDailyFailures },
         "S06.newest": { f, v in f.c.backupsMeasured && f.age(["backup_local", "backup_offsite"], v[0]) },
         "S06.confirmed": { f, v in f.age(["backup_local", "backup_offsite"], v[0]) },

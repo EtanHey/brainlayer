@@ -84,6 +84,10 @@ extension BrainBarMenuPresenter {
             let offsite = c.verdict?.checks.filter { $0.name == "backup_offsite" } ?? []
             return !offsite.isEmpty && offsite.allSatisfy { $0.ageS == nil }
         }
+        /// R23: the running upload's start, said as a bare clock time today, and with its day words on another day.
+        private static func started(_ c: Capture, today: Bool, _ value: String) -> Bool {
+            uploadStart(c).map { $0.today == today && (today ? hhmm($0.date, c) : at($0.date, c)) == value } == true
+        }
         private static func countIs(_ p: P, _ value: String) -> Bool { String(p.rows.filter { $0.kind == .needsYou }.count) == value }
 
         // MARK: the calm form (A2)
@@ -100,7 +104,8 @@ extension BrainBarMenuPresenter {
         static let r02 = S("R02", .claim, "Catching up on new conversations.", .remembering) { c, _, _ in catchingUp(c) }
         static let s03Headline = S("S03.headline", .claim, "Backing up now") { c, _, _ in runningUpload(c) != nil }
         static let s03 = S("S03", .claim, "To Google Drive.", .safe) { c, _, _ in runningUpload(c) != nil }
-        static let s03Started = S("S03.started", .claim, "Started at {HH:mm}.") { c, _, v in startedToday(c).map { hhmm($0, c) } == v[0] }
+        static let s03Started = S("S03.started", .claim, "Started at {HH:mm}.") { c, _, v in started(c, today: true, v[0]) }
+        static let s03StartedOn = S("S03.startedOn", .claim, "Started {at}.") { c, _, v in started(c, today: false, v[0]) }
         static let s03Progress = S("S03.progress", .claim, "{p}% done.") { c, _, v in progress(c, v[0]) }
         static let s03ProgressEta = S("S03.progressEta", .claim, "{p}% done, about {HH:mm}.") { c, _, v in
             progress(c, v[0]) && runningUpload(c)?.onSchedule?.eta.map { hhmm($0, c) } == v[1]
@@ -120,7 +125,8 @@ extension BrainBarMenuPresenter {
 
         static let countOne = S("A1.count.one", .claim, "1 thing needs you") { _, p, _ in countIs(p, "1") }
         static let countMany = S("A1.count.many", .claim, "{N} things need you") { _, p, v in v[0] != "1" && countIs(p, v[0]) }
-        static let generic = S("R17", .neutral, "Something BrainBar checks is failing.")
+        /// R24: true whenever its row is counted as Needs you (I4), for an amber check or one that cannot be read too.
+        static let generic = S("R17", .neutral, "Something BrainBar checks needs attention.")
         static let cantFix = S("U12", .neutral, "BrainBar can’t fix this itself.")
         static let giveReport = S("U12.give", .neutral, "Give the report to an agent.")
         static let ifNotFinished = S("D10", .neutral, "If this backup doesn’t finish, BrainBar can’t fix it itself.")
@@ -146,10 +152,16 @@ extension BrainBarMenuPresenter {
         }
         static let nothingInDrive = S("R14", .claim, "Nothing is backed up to Google Drive yet.") { c, _, _ in noDriveClock(c) && c.backupsMeasured }
         static let s32 = S("S32", .claim, "A backup to Google Drive started at {HH:mm} and is still running.", .safe) { c, _, v in
-            startedToday(c).map { hhmm($0, c) } == v[0]
+            started(c, today: true, v[0])
         }
         static let s32Progress = S("S32.progress", .claim, "A backup to Google Drive started at {HH:mm} and is {p}% done.", .safe) { c, _, v in
-            startedToday(c).map { hhmm($0, c) } == v[0] && progress(c, v[1])
+            started(c, today: true, v[0]) && progress(c, v[1])
+        }
+        static let s32On = S("S32.on", .claim, "A backup to Google Drive started {at} and is still running.", .safe) { c, _, v in
+            started(c, today: false, v[0])
+        }
+        static let s32ProgressOn = S("S32.progressOn", .claim, "A backup to Google Drive started {at} and is {p}% done.", .safe) { c, _, v in
+            started(c, today: false, v[0]) && progress(c, v[1])
         }
         static let s06 = S("S06", .claim, "The last {N} backups didn’t finish", .safe) { c, _, v in
             c.backupDailyFailures >= 2 && String(c.backupDailyFailures) == v[0]
@@ -179,10 +191,10 @@ extension BrainBarMenuPresenter {
         static let settingsKey = "⌘,", quitKey = "⌘Q"
 
         static let all: [S] = [
-            allGood, backedUp, checkingMemory, checkingSleep, notConfirmed, lastBackup, r02Headline, r02, s03Headline, s03, s03Started,
+            allGood, backedUp, checkingMemory, checkingSleep, notConfirmed, lastBackup, r02Headline, r02, s03Headline, s03, s03Started, s03StartedOn,
             s03Progress, s03ProgressEta, catchingTwo, catchingFew, f02, checking, cantConfirmBackups, stillChecking, stillCheckingFew,
             fineIs, fineAre, everythingElse, countOne, countMany, generic, cantFix, giveReport, ifNotFinished, u03, stillSaved, s19,
-            s19Memory, f07, f07Since, exactWords, noRecord, nothingInDrive, s32, s32Progress, s06, s06Newest, s06Confirmed, r15, s13,
+            s19Memory, f07, f07Since, exactWords, noRecord, nothingInDrive, s32, s32Progress, s32On, s32ProgressOn, s06, s06Newest, s06Confirmed, r15, s13,
             s13Missing, s13Detail, s13DetailMissing, d13, reconnect, connect, copyReport, storage, settings, quit, restart,
         ]
         static let exact = Dictionary(uniqueKeysWithValues: all.filter { !$0.template.contains("{") }.map { ($0.template, $0) })
