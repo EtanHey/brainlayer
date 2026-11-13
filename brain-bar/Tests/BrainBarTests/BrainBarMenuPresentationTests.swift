@@ -4,8 +4,8 @@ import XCTest
 @testable import BrainBar
 
 /// The table test against the lead's `presentation-cases.json` (phase 8). Each case's capture is decoded from its
-/// own `inputs`, literally. P1 owes the six calm cases whole; for the eleven needs cases it owes form, count and icon
-/// (P2 turns those into whole-value equality).
+/// own `inputs`, literally, and every case's whole presentation is compared: rows, marks, states, actions, dividers,
+/// spinners and progress included (P1 owed the six calm cases; P2 adds the eleven needs cases).
 final class BrainBarMenuPresentationTests: XCTestCase {
     typealias P = BrainBarMenuPresentation
 
@@ -18,19 +18,13 @@ final class BrainBarMenuPresentationTests: XCTestCase {
         XCTAssertEqual(digest.map { String(format: "%02x", $0) }.joined(), Self.casesSHA256)
     }
 
-    func testCalmCasesMatchWholeAndNeedsCasesMatchFormCountAndIcon() throws {
+    func testEveryCaseMatchesWhole() throws {
         let cases = try Self.loadCases()
         XCTAssertEqual(cases.count, 17)
         XCTAssertEqual(cases.filter { $0["form"] as? String == "calm" }.compactMap { $0["id"] as? String }, Self.calm)
         for c in cases {
             let id = c["id"] as! String
-            let got = BrainBarMenuPresenter.present(try Self.capture(c["inputs"] as! [String: Any]))
-            if Self.calm.contains(id) {
-                XCTAssertEqual(got, Self.expected(c), id)
-            } else {
-                XCTAssertEqual([got.form.rawValue, "\(got.count)", got.icon.rawValue],
-                               [c["form"] as! String, "\(c["count"] as! Int)", c["icon"] as! String], id)
-            }
+            XCTAssertEqual(BrainBarMenuPresenter.present(try Self.capture(c["inputs"] as! [String: Any])), Self.expected(c), id)
         }
     }
 
@@ -58,6 +52,12 @@ final class BrainBarMenuPresentationTests: XCTestCase {
             }
             row.state = (r["state"] as? String).map { P.RowState(rawValue: $0)! }
             row.progressPercent = (r["progress_bar"] as? [String: Any])?["value"] as? Int
+            row.spinner = r["spinner"] as? Bool ?? false
+            row.dividerBefore = r["divider_before"] as? Bool ?? false
+            if let action = r["action"] as? [String: Any] {
+                row.action = P.Action(kind: P.ActionKind(rawValue: action["kind"] as! String)!,
+                                      label: (action["strings"] as! [[String: Any]])[0]["text"] as! String)
+            }
             row.keyEquivalent = r["key_equivalent"] as? String
             row.optionAlternate = ((r["option_alternate"] as? [String: Any])?["strings"] as? [[String: Any]])?.first?["text"] as? String
             return row
@@ -115,6 +115,12 @@ final class BrainBarMenuPresentationTests: XCTestCase {
         }
         c.lagEpisodeStart = date(inputs["uiClock.offsetLagEpisodeStart"])
         c.maintenanceNightFailures = inputs["maintenance.night.consecutiveFailures"] as? Int ?? 0
+        // "invalid (wording only: not missing)" and the like: the state is the first word.
+        c.driveAuthModel = (inputs["DriveAuthModel.state"] as? String).map { DriveAuthStatus.State(rawValue: String($0.prefix { $0 != " " }))! }
+        c.backupDailyFailures = inputs["job.backupDaily.consecutiveFailures"] as? Int ?? 0
+        c.backupDailyNextRunAt = date(inputs["job.backupDaily.nextRunAt"])
+        c.jsonlBackupFailures = inputs["job.jsonlBackup.consecutiveFailures"] as? Int ?? 0
+        c.keywordCoverage = inputs["collector.signalCoverage.keyword"] as? Double
         return c
     }
 }
