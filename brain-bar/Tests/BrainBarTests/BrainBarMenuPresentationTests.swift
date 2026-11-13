@@ -66,6 +66,18 @@ final class BrainBarMenuPresentationTests: XCTestCase {
         c14.verdict = with(c14.verdict!, "backup_local", .red, age: 200_000)
         c14.backupDailyFailures = 2
         XCTAssertEqual(BrainBarMenuPresenter.present(c14), Self.expected(cases.first { $0["id"] as? String == "S11" }!))
+        // CodeRabbit round 2: a copy's age is counted to `now`, not to `evaluatedAt` (the verdict stays awake-fresh in sleep).
+        func driveDetail(_ c: BrainBarMenuCapture) -> String? {
+            BrainBarMenuPresenter.present(c).rows.first { $0.strings.first == "Google Drive is disconnected" }?.strings.last
+        }
+        var s3 = try capture("S3")
+        s3.now = s3.now.addingTimeInterval(86_400)
+        s3.backupDailyNextRunAt = s3.backupDailyNextRunAt?.addingTimeInterval(86_400)
+        XCTAssertEqual(driveDetail(s3), "Backups can’t upload until you reconnect it. Your newest backup in Google Drive is from Nov 9 at 03:44.")
+        var hours = try capture("S3")
+        hours.verdict = with(hours.verdict!, "backup_offsite", .green, age: 3600)
+        hours.now = hours.now.addingTimeInterval(7200)
+        XCTAssertEqual(driveDetail(hours), "Backups can’t upload until you reconnect it. Your newest backup in Google Drive is 3 hours old.")
     }
 
     // MARK: expected output, read from the cases file

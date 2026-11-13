@@ -54,7 +54,10 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                 ? Check(name: $0.name, state: $0.state, thresholdS: $0.thresholdS, note: "", unknownTicks: 0, blind: false) : $0
         }
         var c = Capture(now: now, timeZone: TimeZone(secondsFromGMT: 7200)!)
-        c.verdict = freshness == .missing ? nil : BrainBarHealthVerdict(dot: dot, checks: checks, notes: [], evaluatedAt: now)
+        // Profiles 2 and 3: the verdict was evaluated a day before `now` and is still awake-fresh (it stayed fresh through a
+        // sleep), so a copy age counted from `evaluatedAt` instead of `now` would understate (CodeRabbit, round 2).
+        c.verdict = freshness == .missing ? nil : BrainBarHealthVerdict(dot: dot, checks: checks, notes: [],
+                                                                         evaluatedAt: [2, 3].contains(input.profile) ? now.addingTimeInterval(-86_400) : now)
         c.verdictAwakeAgeS = [.fresh0: 0, .fresh900: 900, .staleNegative: -1, .stale901: 901, .missing: 0][freshness]!
         c.isChecking = checking
         c.wakeCatchUpPending = wake
@@ -214,6 +217,13 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                                                notes: [], evaluatedAt: Self.now)
             $0.driveAuthModel = .missing
         }
+        let staleDrive = base {
+            $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks.filter { $0.name != "drive_auth" } + [Self.check("drive_auth", .red)!],
+                                               notes: [], evaluatedAt: Self.now.addingTimeInterval(-86_400))
+        }
+        let driveAged = P.Row(kind: .needsYou, strings: ["Google Drive is disconnected",
+                                                         "Backups can’t upload until you reconnect it. Your newest backup in Google Drive is 8 hours old."],
+                              action: P.Action(kind: .reconnectDrive, label: "Reconnect Google Drive"), mark: .alertCircle)
         let connect = P.Row(kind: .needsYou, strings: ["Google Drive isn’t connected", "Backups can’t upload until you connect it. " + Self.nothingInDrive],
                             action: P.Action(kind: .connectDrive, label: "Connect Google Drive"), mark: .alertCircle)
         let cases: [(String, Capture, P)] = [
@@ -234,6 +244,9 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             ("I3: still saved while the database probe fails", upkeepWith(.init(dbProbeFailed: true)), needsForm([upkeepRow])),
             ("I8: S07’s title while the Drive copy has an age (R21)", localNoRecord, needsForm([s07])),
             ("I8: R14’s clause while the Drive copy has an age", driveMissing, needsForm([connect])),
+            // CodeRabbit round 2 (Codex R2-F2): the reassurance is proven against the rows after the S07 correction.
+            ("I3 after I8: Everything else is fine. beside a false S07 title", localNoRecord, needsForm([s07, fine])),
+            ("I8: an hours-old Drive copy counted from evaluatedAt, a day before now", staleDrive, needsForm([driveAged])),
             ("I7: calm over upkeep failing, verdict stale", base { $0.maintenanceNightFailures = 3; $0.verdictAwakeAgeS = 901 }, allGood),
             ("I7: calm over a watcher alert, no verdict", base { $0.verdict = nil; $0.watcher = .init(alertReasons: ["file_ingestion_failure"]) }, allGood),
         ]
@@ -447,6 +460,11 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                     if !(every("backup_local") { $0.state == .red && $0.ageS == nil } && every("backup_offsite") { $0.ageS == nil }) {
                         out.append("I8 no verified backup claimed while a copy has a record: \(sentence)")
                     }
+                } else if sentence.hasSuffix(" hour old.") || sentence.hasSuffix(" hours old.") {  // I8: an age counted to now
+                    let named = sentence.contains("in Google Drive") ? ["backup_offsite"] : ["backup_local", "backup_offsite"]
+                    let ages = (v?.checks ?? []).filter { named.contains($0.name) }.compactMap(\.ageS).filter { $0.isFinite && $0 >= 0 }
+                    let atNow = ages.min().map { $0 + c.now.timeIntervalSince(v!.evaluatedAt) }
+                    if !(atNow.map { $0 >= 0 && $0 < 86_400 } ?? false) { out.append("I8 a copy age in hours that is not under a day at now: \(sentence)") }
                 } else if sentence == nothingInDrive {  // I8
                     if !(every("backup_offsite") { $0.ageS == nil } && c.backupsMeasured) { out.append("I8 nothing in Drive claimed while unproven") }
                 } else if text.contains("still"), !text.hasPrefix("still checking"), !text.contains("is still running") {

@@ -391,16 +391,27 @@ enum BrainBarMenuPresenter {
                 : needsRows + p.rows.filter { $0.kind == .factLine }
             p = needsForm(carried, statuses: p.rows.filter { $0.kind == .statusLine }, everythingElse: p.rows.contains { $0.kind == .everythingElse })
         }
-        // I3 and I8, by sentence: a reassurance, or a claim about the copies, stays wherever it sits only when what it says is
-        // proven; an unproven S07 title gives way to R17's.
+        // I8, by sentence: a claim about the copies stays only when it holds; an unproven S07 title gives way to R17's, any
+        // other unproven claim is dropped. Then I3 proves every reassurance against the rows as corrected.
+        func bySentence(_ keep: (String) -> String?) {
+            p.rows = p.rows.map { row in
+                var row = row
+                row.strings = row.strings.compactMap { string in
+                    let kept = sentences(string).compactMap(keep)
+                    return kept.isEmpty ? nil : kept.joined(separator: " ")
+                }
+                return row
+            }
+        }
+        bySentence { sentence in
+            guard let holds = claimHolds(sentence, c), !holds else { return sentence }
+            return [noRecord, noRecordTT].contains(sentence) ? needs(.system).strings[0] : nil
+        }
         let drawn = p
         p.rows = p.rows.compactMap { row in
             var row = row
             row.strings = row.strings.compactMap { string in
-                let kept = sentences(string).compactMap { sentence -> String? in
-                    if let holds = claimHolds(sentence, c) { return holds ? sentence : sentence == nothingInDrive ? nil : needs(.system).strings[0] }
-                    return proven(sentence, drawn, c) != false ? sentence : nil
-                }
+                let kept = sentences(string).filter { proven($0, drawn, c) != false }
                 return kept.isEmpty ? nil : kept.joined(separator: " ")
             }
             if row.kind == .needsYou, row.strings.isEmpty { row.strings = needs(.system).strings + handoff }
@@ -421,10 +432,18 @@ enum BrainBarMenuPresenter {
     private static let nothingInDrive = "Nothing is backed up to Google Drive yet."  // R14
 
     /// Whether a claim about the copies holds for this capture; nil when the sentence is not such a claim. S07's needs the
-    /// local copy red with no clock and no Drive clock either (R21); R14's needs no Drive clock and backups measured.
+    /// local copy red with no clock and no Drive clock either (R21); R14's needs no Drive clock and backups measured; an
+    /// "{N} hours old" age needs the copy it names (Drive's, or the newest database copy) under a day old at `now`.
     private static func claimHolds(_ sentence: String, _ c: Capture) -> Bool? {
-        guard [noRecord, noRecordTT, nothingInDrive].contains(sentence) else { return nil }
         let checks = c.verdict?.checks ?? []
+        if sentence.hasSuffix(" hour old.") || sentence.hasSuffix(" hours old.") {
+            let named = sentence.contains("in Google Drive") ? ["backup_offsite"] : ["backup_local", "backup_offsite"]
+            let elapsed = checks.filter { named.contains($0.name) && valid($0.ageS) }.compactMap { k in
+                c.verdict.map { c.now.timeIntervalSince($0.evaluatedAt.addingTimeInterval(-k.ageS!)) }
+            }
+            return elapsed.min().map { $0 >= 0 && $0 < 86_400 } == true
+        }
+        guard [noRecord, noRecordTT, nothingInDrive].contains(sentence) else { return nil }
         func every(_ name: String, _ ok: (BrainBarHealthVerdict.Check) -> Bool) -> Bool {
             checks.contains { $0.name == name } && checks.filter { $0.name == name }.allSatisfy(ok)
         }
@@ -535,15 +554,18 @@ enum BrainBarMenuPresenter {
 
     private static func valid(_ age: Double?) -> Bool { age.map { $0.isFinite && $0 >= 0 } == true }
 
-    /// `{copy age}` from a backup check's wall-clock `ageS`: "21 hours old" under a day, else "from Nov 9 at 03:44"
-    /// (`evaluatedAt − ageS`). Nil for no, a negative or non-finite age, or a time after now.
+    /// `{copy age}` at `now`: the copy's time is `evaluatedAt − ageS` (wall-clock for backups, U10), and its age is counted
+    /// from that time to `now`, never from `evaluatedAt` (a verdict can stay awake-fresh across hours of sleep): "21 hours
+    /// old" under a day, else "from Nov 9 at 03:44". Nil for no, a negative or non-finite age, or a time after now.
     private static func copyAge(_ age: Double?, _ c: Capture, _ v: BrainBarHealthVerdict) -> String? {
-        guard let age, valid(age), v.evaluatedAt.addingTimeInterval(-age) <= c.now else { return nil }
-        guard age >= 86_400 else {
-            let hours = min(23, max(1, Int((age / 3600).rounded())))
+        guard let age, valid(age) else { return nil }
+        let copied = v.evaluatedAt.addingTimeInterval(-age), elapsed = c.now.timeIntervalSince(copied)
+        guard elapsed.isFinite, elapsed >= 0 else { return nil }
+        guard elapsed >= 86_400 else {
+            let hours = min(23, max(1, Int((elapsed / 3600).rounded())))
             return hours == 1 ? "1 hour old" : "\(hours) hours old"
         }
-        return "from \(at(v.evaluatedAt.addingTimeInterval(-age), c))"
+        return "from \(at(copied, c))"
     }
 
     /// `{over d}`: a strict lower bound from an awake-adjusted age, rounded down ("in over an hour"); nil under a minute.
