@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -505,7 +506,14 @@ def test_completed_health_check_publishes_badge_contract(tmp_path: Path) -> None
     }
     extra = {
         **dict.fromkeys(("backup_local", "backup_offsite", "transcripts"), {"catch_up_until"}),
-        "ingest": {"good_ticks", "good_ticks_needed", "paused_by_maintenance", "pause_ends_at", "unindexed_agents"},
+        "ingest": {
+            "good_ticks",
+            "good_ticks_needed",
+            "paused_by_maintenance",
+            "pause_ends_at",
+            "unindexed_agents",
+            "census_incomplete",
+        },
         "stores": {"good_ticks", "good_ticks_needed", "paused_by_maintenance", "pause_ends_at", "fails", "cause"},
         "search": {"good_ticks", "good_ticks_needed", "fails"},
         "monitor": {"blind_codes"},
@@ -699,8 +707,54 @@ def test_a_census_without_process_start_times_is_not_measured_end_to_end(tmp_pat
         agent_etime=None,
     )
 
-    assert result.unindexed_agents is None
+    assert (result.unindexed_agents, result.agent_census_incomplete) == ([], ["gemini"])
     assert [(i.code, i.severity) for i in result.issues] == [("agent_census_incomplete", "warning")]
     ingest = next(c for c in json.loads(output.read_text())["verdict"]["checks"] if c["name"] == "ingest")
-    assert ingest["state"] == "green" and ingest["unindexed_agents"] is None
+    assert ingest["state"] == "green" and ingest["unindexed_agents"] == []
+    assert ingest["census_incomplete"] == ["gemini"]
     assert ingest["context_codes"] == ["agent_census_incomplete"]
+
+
+def test_a_partial_census_holds_each_unmeasured_agent_and_replaces_only_measured_ones(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from brainlayer import agent_census
+
+    home = tmp_path / "agent-home"
+    chat = home / ".gemini" / "tmp" / "3a50" / "chats" / "session-2026-11-13T09-00-ab12.json"
+    storage = home / ".local" / "share" / "opencode" / "storage"
+    for path in (chat, storage / "session" / "ses_1.json"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n")
+    output = tmp_path / "contract" / "badge-state.json"
+    hotlane = "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4"
+    gemini, opencode = "4242 node /opt/homebrew/bin/gemini", "4343 /usr/local/bin/opencode"
+    gemini_entry, opencode_entry = f"gemini: {home / '.gemini' / 'tmp'}", f"opencode: {storage}"
+
+    def tick(*agents: str) -> tuple[HealthCheckResult, dict]:
+        ps = "\n".join((hotlane, *agents)) + "\n"
+        result = _run_minimal_health_check(tmp_path, output, ps_output=ps, agent_home=home)
+        ingest = next(c for c in json.loads(output.read_text())["verdict"]["checks"] if c["name"] == "ingest")
+        return result, ingest
+
+    result, ingest = tick(gemini, opencode)
+    assert set(ingest["unindexed_agents"]) == {gemini_entry, opencode_entry} and ingest["state"] == "amber"
+
+    # opencode's scan is now cut short by the entry cap before it reaches anything new
+    old = time.time() - 3 * 86400
+    os.utime(storage / "session" / "ses_1.json", (old, old))
+    for i in range(30):
+        (storage / "part" / f"p{i:02}.json").parent.mkdir(parents=True, exist_ok=True)
+        (storage / "part" / f"p{i:02}.json").write_text("{}\n")
+        os.utime(storage / "part" / f"p{i:02}.json", (old, old))
+    monkeypatch.setattr(agent_census, "MAX_ENTRIES", 20)
+
+    result, ingest = tick(gemini, opencode)
+    assert result.unindexed_agents == [gemini_entry]
+    assert ("agent_census_incomplete", "warning") in [(i.code, i.severity) for i in result.issues]
+    assert set(ingest["unindexed_agents"]) == {gemini_entry, opencode_entry}  # opencode was not measured: held
+    assert ingest["state"] == "amber" and "census incomplete for opencode" in ingest["note"]
+
+    result, ingest = tick(opencode)  # gemini stopped: a measured negative; opencode still cut short
+    assert ingest["unindexed_agents"] == [opencode_entry]
+    assert ingest["state"] == "amber"

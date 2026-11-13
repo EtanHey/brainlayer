@@ -271,7 +271,8 @@ class HealthCheckResult:
     slow_check_stage: str | None = None
     t3_health: dict[str, Any] | None = None
     jsonl_backup: JsonlBackupHealth | None = None
-    unindexed_agents: list[str] | None = None  # None: the process table was not read
+    unindexed_agents: list[str] | None = None  # found this check; None: the process table was not read
+    agent_census_incomplete: list[str] = field(default_factory=list)  # agents not measured this check
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1564,19 +1565,22 @@ def _run_health_check_locked(
         )
     else:
         home = config.agent_home or Path.home()
-        result.unindexed_agents = unindexed_agents(
+        census = unindexed_agents(
             ps_output,
             home=home,
             watch_roots=[root.resolved_path for root in default_watch_roots(home)],
             process_starts=ps_process_starts(command_runner),
         )
-        if result.unindexed_agents is None:
+        result.unindexed_agents, result.agent_census_incomplete = census.found, census.incomplete
+        if census.incomplete:
             add_issue(
                 "agent_census_incomplete",
                 "warning",
-                "known-agent census not measured this check (process start time unknown or transcript scan cut short)",
+                "known-agent census incomplete this check for "
+                + ", ".join(census.incomplete)
+                + " (process start time unknown or transcript scan cut short); their last measured state holds",
             )
-        elif result.unindexed_agents:
+        if result.unindexed_agents:
             add_issue(
                 "unindexed_agent_running",
                 "warning",

@@ -5,9 +5,11 @@ purpose, never auto-detected. This is the honest add-on: it names a running agen
 that wrote one of its transcripts, during its current run, outside every watched root. It cannot see an
 agent that is not on the list.
 
-Result: a list of ``"<agent>: <root>"`` (measured; empty means none found), or None when the census could
-not be measured (a process start time unknown, a scan cut short by a cap or a read error) and nothing was
-found. A positive finding is reported even if another scan was incomplete.
+Result, per agent: ``found`` lists ``"<agent>: <root>"`` for each agent measured positive this check;
+``incomplete`` names each agent that could not be measured (a running instance without a start time, or a
+scan cut short by a cap or a read error, with nothing found). Every other listed agent is a measured
+negative, including one that is not running. The verdict merges per agent, so an incomplete agent keeps
+whatever was last measured for it.
 """
 
 from __future__ import annotations
@@ -26,6 +28,16 @@ START_SLACK_S = 1.0  # ps reports elapsed time in whole seconds
 _INTERPRETER = re.compile(r"^(node|nodejs|bun|deno|python[0-9.]*)$")
 
 ProcessStarts = Callable[[Sequence[int]], "dict[int, float] | None"]
+
+
+@dataclass(frozen=True)
+class Census:
+    found: list[str]  # "<agent>: <root>", measured positive this check
+    incomplete: list[str]  # agent names that could not be measured this check
+
+    @property
+    def complete(self) -> bool:
+        return not self.incomplete
 
 
 @dataclass(frozen=True)
@@ -53,9 +65,64 @@ KNOWN_AGENTS: tuple[KnownAgent, ...] = (
 )
 
 
+# Options that take the next token as their value (it is never the script).
+_VALUE_OPTIONS = {
+    "python": {"-W", "-X", "-Q", "--check-hash-based-pycs"},
+    "node": {"-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions"},
+    "bun": {"-r", "--preload", "--cwd", "--config", "-c"},
+    "deno": {"-c", "--config", "-L", "--log-level", "--import-map"},
+}
+# Options whose value is inline code or a module: the process runs no script at all.
+_CODE_OPTIONS = {
+    "python": ("-c", "-m"),
+    "node": ("-e", "--eval", "-p", "--print"),
+    "bun": ("-e", "--eval", "-p", "--print"),
+    "deno": (),
+}
+_SUBCOMMANDS = {"bun": {"run"}, "deno": {"run"}}  # a subcommand that is followed by a script
+_NO_SCRIPT = {"bun": {"x", "exec", "eval", "repl", "install", "add", "test"}, "deno": {"eval", "repl", "test", "task"}}
+
+
+def _family(exe: str) -> str:
+    return "python" if exe.startswith("python") else "node" if exe in ("node", "nodejs") else exe
+
+
 def _entry_script(tokens: Sequence[str]) -> str | None:
-    """The first non-option argument after an interpreter: the script it runs."""
-    return next((token for token in tokens[1:] if not token.startswith("-")), None)
+    """The script an interpreter runs, reading its options; None for ``-c``/``-e``/``-m``/``eval`` and the like."""
+    family = _family(os.path.basename(tokens[0]))
+    rest, i = list(tokens[1:]), 0
+    while i < len(rest):
+        token = rest[i]
+        if token == "--":
+            return rest[i + 1] if i + 1 < len(rest) else None
+        if any(
+            token == code
+            or (code.startswith("--") and token.startswith(code + "="))
+            or (not code.startswith("--") and token.startswith(code))
+            for code in _CODE_OPTIONS.get(family, ())
+        ):
+            return None  # inline code, e.g. ``python3 -c gemini`` or ``node -egemini``: not a script
+        if family == "python" and token.startswith("-") and not token.startswith("--") and len(token) > 1:
+            # A cluster such as -uc: -c or -m anywhere ends the options with code; -W/-X take a value.
+            for j, char in enumerate(token[1:], 1):
+                if char in "cm":
+                    return None
+                if char in "WXQ":
+                    i += 1 if j < len(token) - 1 else 2
+                    break
+            else:
+                i += 1
+            continue
+        if token.startswith("-"):
+            i += 2 if token in _VALUE_OPTIONS.get(family, ()) else 1
+            continue
+        if token in _NO_SCRIPT.get(family, ()):
+            return None
+        if token in _SUBCOMMANDS.get(family, ()):
+            i += 1
+            continue
+        return token
+    return None
 
 
 def _is_agent(tokens: Sequence[str], agent: KnownAgent) -> bool:
@@ -134,15 +201,15 @@ def unindexed_agents(
     watch_roots: Iterable[Path],
     process_starts: ProcessStarts | None = None,
     agents: Sequence[KnownAgent] = KNOWN_AGENTS,
-) -> list[str] | None:
-    """Each running known agent that wrote a transcript during its current run under a root nobody watches."""
+) -> Census:
+    """Per agent: wrote a transcript during its current run under a root nobody watches, did not, or unknown."""
     running = running_agents(ps_output, agents)
     if not running:
-        return []
+        return Census([], [])
     watched = [Path(root).expanduser() for root in watch_roots]
     pids = sorted(pid for found in running.values() for pid in found)
     starts = process_starts(pids) if process_starts is not None else None
-    found, complete = [], True
+    found, incomplete = [], []
     for agent in agents:
         if agent.name not in running:
             continue
@@ -155,16 +222,20 @@ def unindexed_agents(
         if not unwatched:
             continue
         if not known:
-            complete = False  # running, but no start time to tie a write to this run
+            incomplete.append(agent.name)  # running, but no start time to tie a write to this run
             continue
         since = min(known) - START_SLACK_S  # any write newer than a live instance's start
+        complete = True
         for root, pattern in unwatched:
             hit, scanned = _scan(root, pattern, since)
-            complete = complete and scanned
             if hit:
                 found.append(f"{agent.name}: {root}")
                 break
-    return found if found or complete else None
+            complete = complete and scanned
+        else:
+            if not complete:
+                incomplete.append(agent.name)
+    return Census(found, incomplete)
 
 
 def ps_process_starts(run: Callable[[list[str]], object], now: Callable[[], float] = time.time) -> ProcessStarts:

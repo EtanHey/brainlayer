@@ -36,6 +36,10 @@ def _chat(home: Path, age_s: float = 60) -> Path:
     return _write(home / ".gemini" / "tmp" / "3a50" / "chats" / "session-2026-11-13T09-00-ab12.json", age_s)
 
 
+def _r(census) -> tuple[list[str], list[str]]:
+    return census.found, census.incomplete
+
+
 def _census(home: Path, ps: str, started_age_s: float = 600):
     return unindexed_agents(ps, home=home, watch_roots=_roots(home), process_starts=_started(started_age_s))
 
@@ -46,7 +50,7 @@ def _census(home: Path, ps: str, started_age_s: float = 600):
 def test_grep_gemini_alone_is_not_a_running_gemini(tmp_path):
     _chat(tmp_path)
     ps = "123 /usr/bin/grep gemini\n"
-    assert unindexed_agents(ps, home=tmp_path, watch_roots=_roots(tmp_path)) == []
+    assert _r(unindexed_agents(ps, home=tmp_path, watch_roots=_roots(tmp_path))) == ([], [])
 
 
 def test_brainlayer_and_other_commands_naming_an_agent_never_count(tmp_path):
@@ -58,7 +62,35 @@ def test_brainlayer_and_other_commands_naming_an_agent_never_count(tmp_path):
         "4 /Applications/Codex.app/Contents/MacOS/Codex\n"
         "5 /bin/zsh -c gemini --help\n"
     )
-    assert unindexed_agents(ps, home=tmp_path, watch_roots=_roots(tmp_path)) == []
+    assert _r(unindexed_agents(ps, home=tmp_path, watch_roots=_roots(tmp_path))) == ([], [])
+
+
+def test_inline_code_and_modules_are_never_an_entry_script(tmp_path):
+    _chat(tmp_path)
+    ps = (
+        "1 /usr/bin/python3 -c gemini\n"
+        "2 /usr/bin/python3 -uc gemini\n"
+        "3 /usr/bin/python3 -m gemini\n"
+        "4 /usr/local/bin/node -e gemini\n"
+        "5 node --eval=gemini\n"
+        "6 node -p gemini\n"
+        "7 /opt/homebrew/bin/bun -e gemini\n"
+        "8 bun x gemini\n"
+        "9 /opt/homebrew/bin/deno eval gemini\n"
+    )
+    assert agent_census.running_agents(ps) == {}
+    assert _r(unindexed_agents(ps, home=tmp_path, watch_roots=_roots(tmp_path))) == ([], [])
+
+
+def test_a_real_script_after_interpreter_options_is_matched():
+    ps = (
+        "20 node -r tsx/cjs /opt/homebrew/bin/gemini\n"
+        "21 /usr/bin/python3 -W ignore -X dev /srv/agents/gemini\n"
+        "22 bun run /home/example/.bun/bin/gemini\n"
+        "23 deno run --allow-read /srv/agents/gemini\n"
+        "24 node -- /usr/lib/node_modules/@google/gemini-cli/dist/index.js\n"
+    )
+    assert agent_census.running_agents(ps) == {"gemini": [20, 21, 22, 23, 24]}
 
 
 def test_an_agent_binary_or_its_interpreter_entry_script_is_matched():
@@ -76,26 +108,26 @@ def test_an_agent_binary_or_its_interpreter_entry_script_is_matched():
 
 def test_a_gemini_chat_written_during_the_current_run_is_reported(tmp_path):
     _chat(tmp_path, age_s=60)
-    assert _census(tmp_path, GEMINI, started_age_s=600) == [f"gemini: {tmp_path / '.gemini' / 'tmp'}"]
+    assert _r(_census(tmp_path, GEMINI, started_age_s=600)) == ([f"gemini: {tmp_path / '.gemini' / 'tmp'}"], [])
 
 
 def test_a_chat_from_a_stopped_earlier_session_does_not_count(tmp_path):
     _chat(tmp_path, age_s=3600)  # written an hour ago by a session that ended
     _write(tmp_path / ".gemini" / "sessions" / "now.jsonl", age_s=30)  # today's run writes only to the watched root
-    assert _census(tmp_path, GEMINI, started_age_s=600) == []
+    assert _r(_census(tmp_path, GEMINI, started_age_s=600)) == ([], [])
 
 
 def test_an_unrelated_recent_file_under_the_root_is_not_a_transcript(tmp_path):
     _write(tmp_path / ".gemini" / "tmp" / "3a50" / "notes.txt", age_s=30)
     _write(tmp_path / ".gemini" / "tmp" / "3a50" / "chats" / "logs.json", age_s=30)
-    assert _census(tmp_path, GEMINI, started_age_s=600) == []
+    assert _r(_census(tmp_path, GEMINI, started_age_s=600)) == ([], [])
 
 
 def test_an_agent_writing_under_a_watched_root_is_not_reported(tmp_path):
     _write(tmp_path / ".claude" / "projects" / "-Users-example-proj" / "s.jsonl")
     _write(tmp_path / ".codex" / "sessions" / "2026" / "11" / "13" / "rollout-x.jsonl")
     ps = "1 /home/example/.local/bin/claude\n2 /opt/homebrew/bin/codex exec\n"
-    assert _census(tmp_path, ps) == []
+    assert _r(_census(tmp_path, ps)) == ([], [])
 
 
 def test_parse_etime_reads_every_ps_shape():
@@ -115,13 +147,13 @@ def test_a_scan_cut_short_by_the_entry_cap_is_not_measured(tmp_path, monkeypatch
     for i in range(30):
         _write(tmp_path / ".gemini" / "tmp" / f"h{i:02}" / "other.txt")
     monkeypatch.setattr(agent_census, "MAX_ENTRIES", 10)
-    assert _census(tmp_path, GEMINI) is None
+    assert _r(_census(tmp_path, GEMINI)) == ([], ["gemini"])
 
 
 def test_a_transcript_below_the_depth_cap_is_not_measured(tmp_path, monkeypatch):
     _write(tmp_path / ".gemini" / "tmp" / "a" / "b" / "c" / "chats" / "session-1.json")
     monkeypatch.setattr(agent_census, "MAX_DEPTH", 2)
-    assert _census(tmp_path, GEMINI) is None
+    assert _r(_census(tmp_path, GEMINI)) == ([], ["gemini"])
 
 
 def test_an_unreadable_directory_is_not_measured(tmp_path):
@@ -129,14 +161,15 @@ def test_an_unreadable_directory_is_not_measured(tmp_path):
     _write(locked / "chats" / "session-1.json")
     locked.chmod(0o000)
     try:
-        assert _census(tmp_path, GEMINI) is None
+        assert _r(_census(tmp_path, GEMINI)) == ([], ["gemini"])
     finally:
         locked.chmod(0o755)
 
 
 def test_a_running_agent_without_a_start_time_is_not_measured(tmp_path):
     _chat(tmp_path)
-    assert unindexed_agents(GEMINI, home=tmp_path, watch_roots=_roots(tmp_path), process_starts=lambda p: None) is None
+    census = unindexed_agents(GEMINI, home=tmp_path, watch_roots=_roots(tmp_path), process_starts=lambda p: None)
+    assert _r(census) == ([], ["gemini"])
 
 
 def test_ps_process_starts_parses_ps_and_refuses_a_failed_call():

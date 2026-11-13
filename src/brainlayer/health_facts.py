@@ -619,6 +619,7 @@ def collect_facts(
         watcher_updated_at=got["watcher"],
         ingest_paused=paused(config.watch_label),
         unindexed_agents=tuple(result.unindexed_agents) if result.unindexed_agents is not None else UNOBSERVED,
+        census_incomplete=tuple(result.agent_census_incomplete),
         stores_paused=drain_paused,
         pause_ends_at=_aware(pause_payload.get("expires_at")) if pause_active else None,
         oldest_pending_store_at=pending,

@@ -1,14 +1,14 @@
 {
   "pinned_at": "feat/ingest-census on main 9f31efb2",
-  "sync_note": "Re-pinned health_verdict.py, health_facts.py and health_check.py for the known-agent census (r2: held while unmeasured): a non-empty census floors ingest at amber (an extra non-green cause the model does not need, since it only adds non-green ticks); an empty or unobserved census leaves evaluate() unchanged, and the replay (no census) still matches every tick. Re-read the mapped lines, update the model or add a switch, rerun check.py and the replay test, and only then move a pin.",
+  "sync_note": "Re-pinned health_verdict.py, health_facts.py and health_check.py for the known-agent census (r2: held while unmeasured; r3: merged per agent): a non-empty census floors ingest at amber (an extra non-green cause the model does not need, since it only adds non-green ticks); an empty or unobserved census leaves evaluate() unchanged, and the replay (no census) still matches every tick. Re-read the mapped lines, update the model or add a switch, rerun check.py and the replay test, and only then move a pin.",
   "sources": [
     {
       "path": "src/brainlayer/health_verdict.py",
-      "sha256": "e8702d23d154f1b3ef6d76dbbd37384cea80625296154bf85f25b2cc0c91d1da"
+      "sha256": "905cbc21d2ab62df4bf2ae00889ccfa2ccc0a43cddcf72edd1ab27a8279e413f"
     },
     {
       "path": "src/brainlayer/health_facts.py",
-      "sha256": "9ddb580b436e05258709aa4e371d1b5749fec983dcfa9ab4cff471ce2352ba72"
+      "sha256": "19a30ff9f15037ef298501f7635d05058c0287228eaaa649de2cd918fcef286c"
     },
     {
       "path": "src/brainlayer/watcher.py",
@@ -20,7 +20,7 @@
     },
     {
       "path": "src/brainlayer/health_check.py",
-      "sha256": "5912f19e83ee7fcb5b4d53e301ae242ff8edb895a350db19bf853fa5c95bdd5c"
+      "sha256": "fcd489b6ce7f36e540931703c9f3d528daf8a8eef5e560bdb5e2e3202784bfcb"
     }
   ],
   "actions": {
@@ -30,12 +30,12 @@
     "Tick.cA (clock = max(watcher, persisted))": "health_verdict.py:428-431",
     "Tick.age / graced / g": "health_verdict.py:291 _graced_age (suspension credit, one wake-grace window per clock value)",
     "Tick.raw": "health_verdict.py:233 _age_state (> amber, > red)",
-    "Tick.vNext / goodNext / unk1": "health_verdict.py:556 evaluate: unknown ticks :606, evidence hold, red-holds-on-amber and recovery :622 (_HYSTERESIS :192)",
-    "Tick.res0 (resumed_at)": "health_verdict.py:556 evaluate: confirmed clock pair vs sleep_gap_s, expiry after wake_grace_s",
-    "NonGreen (dot ignores unknown)": "health_verdict.py:687; badge_state.py:127 badge_on = verdict.dot == RED (the dot is the verdict)",
-    "watcher_stalled is context only": "health_check.py:1863 emits it; health_facts.py:47 CHECK_FOR_CODE maps it to ingest context, never state",
+    "Tick.vNext / goodNext / unk1": "health_verdict.py:565 evaluate: unknown ticks :615, evidence hold, red-holds-on-amber and recovery :631 (_HYSTERESIS :192)",
+    "Tick.res0 (resumed_at)": "health_verdict.py:565 evaluate: confirmed clock pair vs sleep_gap_s, expiry after wake_grace_s",
+    "NonGreen (dot ignores unknown)": "health_verdict.py:696; badge_state.py:127 badge_on = verdict.dot == RED (the dot is the verdict)",
+    "watcher_stalled is context only": "health_check.py:1867 emits it; health_facts.py:47 CHECK_FOR_CODE maps it to ingest context, never state",
     "Faults roots": "watcher.py:357 default_watch_roots (claude, codex, cursor, cursor-agent-transcripts, gemini)",
-    "Census amber floor (not modelled; only adds non-green)": "health_verdict.py:451-467 a measured non-empty census, or the last measured one while unmeasured, floors ingest at amber; health_check.py census after the ps snapshot; agent_census.py"
+    "Census amber floor (not modelled; only adds non-green)": "health_verdict.py:453-476 per-agent merge: measured agents replace their entry, unmeasured ones (census_incomplete) keep it; a non-empty result floors ingest at amber; health_check.py census after the ps snapshot; agent_census.py"
   },
   "bounds": {
     "exhaustive cases": "AmberT 2 < RedT 4 < WakeGrace 5 ticks, SleepGap 3, UnknownAmber 3, Recovery 2, Cap 8 (ordering-preserving, not production)",
