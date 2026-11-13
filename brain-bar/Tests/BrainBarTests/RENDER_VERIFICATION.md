@@ -78,3 +78,5 @@ All render code is `#if DEBUG` only and never ships in a release build.
 - **New breakpoint** → add a case to `Breakpoint` in the test with its size.
 - **New state** (e.g. degraded, idle, backlogged) → add a fixture variant in
   `BrainBarDashboardFixture` and a test case; the determinism rules above still apply.
+
+<!-- Throwaway hosted CI proof: this documentation-only change must skip the exhaustive menu suite. -->
