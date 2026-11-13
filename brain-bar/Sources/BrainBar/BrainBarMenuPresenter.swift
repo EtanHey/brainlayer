@@ -139,11 +139,15 @@ enum BrainBarMenuPresenter {
         case "backup_offsite" where worst(v, "backup_local") == .green:
             guard let (_, onSchedule) = runningUpload(c), let start = uploadStart(c) else { return nil }
             let started = [start.today ? Say.s03Started(hhmm(start.date, c)) : Say.s03StartedOn(at(start.date, c))]
-            let done = onSchedule?.progress.map { p in onSchedule?.eta.map { Say.s03ProgressEta(String(percent(p)), hhmm($0, c)) } ?? Say.s03Progress(String(percent(p))) }
+            // R27: the estimate is said as a clock time only when it falls today.
+            let eta = onSchedule?.eta.flatMap { calendar(c).isDate($0, inSameDayAs: c.now) ? $0 : nil }
+            let done = onSchedule?.progress.map { p in eta.map { Say.s03ProgressEta(String(percent(p)), hhmm($0, c)) } ?? Say.s03Progress(String(percent(p))) }
             let text = ([Say.s03.text] + started + (done.map { [$0] } ?? [])).joined(separator: " ")
             return Line(thing: .safe, level: .behind, strings: [text], headline: Say.s03Headline.text, progress: onSchedule?.progress.map(percent))
         case "search":
-            let since = v.checks.first { $0.name == "search" }?.since.flatMap(parse)
+            // A name carried more than once is never read for its fields (round 1 of #1788, N11): its row stays generic.
+            let searches = v.checks.filter { $0.name == "search" }
+            let since = searches.count == 1 ? searches[0].since.flatMap(parse) : nil
             guard let since, (0...900).contains(c.now.timeIntervalSince(since)) else { return nil }
             return Line(thing: .finding, level: .cantTell, strings: [Say.f02.text])
         default:
@@ -196,7 +200,7 @@ enum BrainBarMenuPresenter {
         var db: Line? = nil, dbNames: [String] = [], s02 = false
         if let local, let offsite {
             let faults = [local, offsite].filter { $0.state != .green }
-            if local.state == .red, local.ageS == nil, offsite.ageS == nil {  // S07, only with no copy on record anywhere (R21)
+            if local.state == .red, local.ageS == nil, Say.noDriveClock(c) {  // S07, only with no copy of any kind on record (R21, R25)
                 (db, dbNames) = (worded(.safe, [Say.noRecord.text], .custody, priority: 1), ["backup_local"])
             } else if !reds.isEmpty, let upload = runningUpload(c), let start = uploadStart(c) {  // S32, R8, R9, R23
                 let age = c.backupsMeasured ? copyAge(offsite.ageS, c, v).map { Say.r15($0) + " " } : nil
@@ -227,7 +231,7 @@ enum BrainBarMenuPresenter {
         var detail = missing ? Say.s13DetailMissing.text : Say.s13Detail.text
         if absorbs, c.backupsMeasured, let age = copyAge(offsite?.ageS, c, v) {
             detail += " " + Say.r15(age)
-        } else if absorbs, c.backupsMeasured, missing, offsite?.state == .red, offsite?.ageS == nil {
+        } else if absorbs, c.backupsMeasured, missing, offsite?.state == .red, Say.noDriveClock(c) {  // R14, R25
             detail += " " + Say.nothingInDrive.text
         }
         let transcriptsFailing = one("transcripts").map { [.amber, .red].contains($0.state) && $0.ageS != nil } == true && c.jsonlBackupFailures >= 2
@@ -236,7 +240,7 @@ enum BrainBarMenuPresenter {
         s13.action = missing ? .connectDrive : .reconnectDrive
         // D13, R22: a failing transcript backup cannot upload either while Drive is red; a fact line directly under the
         // Drive row, not counted.
-        if transcriptsFailing { s13.fact = [Say.d13.text] }
+        if transcriptsFailing { s13.fact = [missing ? Say.d13Missing.text : Say.d13.text] }  // R26
         lines.append(s13)
         consumed.formUnion(["drive_auth"] + dbNames + reds.map(\.name) + (transcriptsFailing ? ["transcripts"] : []))
         return (lines, consumed)
@@ -279,19 +283,20 @@ enum BrainBarMenuPresenter {
         let nouns = Say.behindNoun
         let headline: String
         let mark: P.Mark
+        let folded = behind.count == 1 && behind[0].headline != nil ? behind[0] : nil
         switch behind.count {
-        case 1: (headline, mark) = (behind[0].headline ?? Say.catchingFew.text, .busy)
-        case 2: (headline, mark) = (Say.catchingTwo(nouns[behind[0].thing] ?? "", nouns[behind[1].thing] ?? ""), .busy)
+        case 1 where folded != nil: (headline, mark) = (folded?.headline ?? "", .busy)
+        case 2: (headline, mark) = (Say.catchingTwo(Say.joined(behind.compactMap { nouns[$0.thing] })), .busy)
         case 3...: (headline, mark) = (Say.catchingFew.text, .busy)
         default:
-            let things = cantTell.map(\.thing)
+            // A lone Behind line with no headline of its own is listed under a Can't-tell headline, never "a few things" (N3).
+            let things = (cantTell + behind).map(\.thing)
             headline = things.contains(.safe) ? Say.cantConfirmBackups.text
                 : things.count == 1 ? nouns[things[0]].map { Say.stillChecking($0) } ?? Say.stillCheckingFew.text
                 : things.isEmpty ? Say.allGood.text : Say.stillCheckingFew.text
             mark = things.isEmpty ? .ok : .wait
         }
         var rows = [P.Row(kind: .headline, strings: [headline], mark: mark)]
-        let folded = behind.count == 1 ? behind[0] : nil
         if let folded, folded.strings.first?.dropLast() != headline[...] {  // R02 repeats its headline: no line (R16)
             rows.append(P.Row(kind: .headlineDetail, strings: folded.strings, state: .behind, progressPercent: folded.progress))
         }
@@ -352,7 +357,8 @@ enum BrainBarMenuPresenter {
 
     static func allGoodDate(_ c: Capture) -> Date? {
         guard let v = c.verdict else { return nil }
-        let ages = ["backup_offsite", "transcripts"].compactMap { name in v.checks.first { $0.name == name }?.ageS }
+        // U10: the older copy, across every check of the two names (a duplicate carries another copy; round 1, Claude B3).
+        let ages = v.checks.filter { ["backup_offsite", "transcripts"].contains($0.name) }.compactMap(\.ageS)
         guard let age = ages.max(), ages.allSatisfy({ $0.isFinite && $0 >= 0 }) else { return nil }
         let date = v.evaluatedAt.addingTimeInterval(-age)
         return date <= c.now && sayable(date) ? date : nil
@@ -374,7 +380,10 @@ enum BrainBarMenuPresenter {
             var row = row
             row.strings = row.strings.map(words).filter { !$0.isEmpty }
             row.action = row.action.map { action($0.kind) }
-            row.optionAlternate = row.optionAlternate.map(words).flatMap { entry(for: $0) == nil ? nil : $0 }
+            // B5 (round 1): the standing items keep their one permitted key and Option alternate; no other row has either.
+            let standing = row.kind == .standardItem ? row.strings : []
+            row.keyEquivalent = standing == [Say.settings.text] ? Say.settingsKey : standing == [Say.quit.text] ? Say.quitKey : nil
+            row.optionAlternate = standing == [Say.quit.text] && row.optionAlternate != nil ? Say.restart.text : nil
             if row.kind == .separator || !row.strings.isEmpty { return row }
             return row.kind == .needsYou ? P.Row(kind: .needsYou, strings: needs(.system).strings + handoff, action: copyReport) : nil
         }
