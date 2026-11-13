@@ -2,11 +2,26 @@
   "pinned_at": "main 9f31efb2",
   "sync_note": "Initial pins. Re-read the mapped lines, update the model or add a switch, rerun check.py and the replay test, and only then move a pin.",
   "sources": [
-    {"path": "src/brainlayer/health_verdict.py", "sha256": "13d36c93c22dad4e5e2da58ead90fb4539647808b8155922d080e2fd0a2a5e05"},
-    {"path": "src/brainlayer/health_facts.py", "sha256": "47010e2f2fdbf87e7e724a5c34489aa20b2b77d7971f9b3007c8d8bacb1b6674"},
-    {"path": "src/brainlayer/watcher.py", "sha256": "28ce27082eb8a8b0fdb1849a654afe0a3def83fc4658d15432378341086d40ee"},
-    {"path": "src/brainlayer/badge_state.py", "sha256": "ff23469986ff393737886b547fc10308d109f2aeb6e852898798fdfabe17bfd3"},
-    {"path": "src/brainlayer/health_check.py", "sha256": "0b34f6c33402bbb59456c8aa428b9676d6b0b31ee26026c9f02d99049acb6d7b"}
+    {
+      "path": "src/brainlayer/health_verdict.py",
+      "sha256": "13d36c93c22dad4e5e2da58ead90fb4539647808b8155922d080e2fd0a2a5e05"
+    },
+    {
+      "path": "src/brainlayer/health_facts.py",
+      "sha256": "47010e2f2fdbf87e7e724a5c34489aa20b2b77d7971f9b3007c8d8bacb1b6674"
+    },
+    {
+      "path": "src/brainlayer/watcher.py",
+      "sha256": "28ce27082eb8a8b0fdb1849a654afe0a3def83fc4658d15432378341086d40ee"
+    },
+    {
+      "path": "src/brainlayer/badge_state.py",
+      "sha256": "ff23469986ff393737886b547fc10308d109f2aeb6e852898798fdfabe17bfd3"
+    },
+    {
+      "path": "src/brainlayer/health_check.py",
+      "sha256": "0b34f6c33402bbb59456c8aa428b9676d6b0b31ee26026c9f02d99049acb6d7b"
+    }
   ],
   "actions": {
     "Tick.polls / writes": "watcher.py:2535 poll_once; :2789 _write_health_snapshot in its finally block; :2294 updated_at and poll_count in one payload; a failed write is swallowed (:2315-2321 except OSError)",
@@ -19,7 +34,8 @@
     "Tick.res0 (resumed_at)": "health_verdict.py:538 evaluate: confirmed clock pair vs sleep_gap_s, expiry after wake_grace_s",
     "NonGreen (dot ignores unknown)": "health_verdict.py:669; badge_state.py:127 badge_on = verdict.dot == RED (the dot is the verdict)",
     "watcher_stalled is context only": "health_check.py:1841 emits it; health_facts.py:47 CHECK_FOR_CODE maps it to ingest context, never state",
-    "Faults roots": "watcher.py:357 default_watch_roots (claude, codex, cursor, cursor-agent-transcripts, gemini)"
+    "Faults roots": "watcher.py:357 default_watch_roots (claude, codex, cursor, cursor-agent-transcripts, gemini)",
+    "Tick rewrite / rewrite_lossy (Dropping, StallClockIsTruthful)": "watcher.py:1212 JSONLTailer._verify_anchor and :1233 _verify_resumed_offset compare the 256 bytes before the offset and a blake2b digest of the first 4 KiB: a rewrite changing either re-reads from 0 (every record re-ingested; replay checks each); a same-length edit between them is not seen and its records are dropped"
   },
   "bounds": {
     "exhaustive cases": "AmberT 2 < RedT 4 < WakeGrace 5 ticks, SleepGap 3, UnknownAmber 3, Recovery 2, Cap 8 (ordering-preserving, not production)",

@@ -45,8 +45,8 @@ def test_every_scenario_has_a_committed_trace_for_the_current_script():
 
 
 def test_the_findings_are_real_today():
-    """A lag, coverage, DB or missing-root stall keeps ingest green for the whole fault (README "Finding")."""
-    for shape in ("lag", "coverage", "dbfail", "rootgone"):
+    """A lag, coverage, DB, missing-root or undetected-rewrite stall stays green for the whole fault (README "Finding")."""
+    for shape in ("lag", "coverage", "dbfail", "rootgone", "rewrite_lossy"):
         ticks = replay.load_trace(shape)["ticks"]
         stalled = [t for e, t in zip(replay.SCENARIOS[shape]["events"], ticks) if e["f"] == shape]
         assert stalled and all(t["backlog"] and t["v"] == "green" for t in stalled), shape
@@ -64,3 +64,23 @@ def test_the_replay_catches_a_verdict_that_ignores_heartbeat_age(tmp_path, monke
     monkeypatch.setattr(health_verdict, "_age_state", lambda age, amber, red: health_verdict.GREEN)
     trace = replay.load_trace("dead")
     assert replay.mismatches(trace, replay.run_real("claude", trace, tmp_path / "work"))
+
+
+def test_the_replay_catches_a_watcher_that_stops_detecting_rewrites(tmp_path, monkeypatch):
+    import brainlayer.watcher as watcher
+
+    monkeypatch.setattr(watcher.JSONLTailer, "_verify_anchor", lambda self, handle: None)
+    trace = replay.load_trace("rewrite")
+    assert replay.mismatches(trace, replay.run_real("claude", trace, tmp_path / "work"))
+
+
+def test_a_lossy_rewrite_lands_the_newest_record_and_loses_the_edited_one(tmp_path):
+    """Why the replay checks every record: a newest-only check reports no backlog here (#1780 review r1)."""
+    trace = replay.load_trace("rewrite_lossy")
+    replay.run_real("claude", trace, tmp_path / "work")
+    db = tmp_path / "work" / "db" / "brainlayer.db"
+    ticks = [k for k, e in enumerate(trace["events"], 1) if e["f"] == "rewrite_lossy"]
+    assert ticks
+    for k in ticks:
+        assert replay._db_has(db, replay._text("claude", k)[0]), k  # the appended turn is ingested
+        assert not replay._db_has(db, replay._text("claude", 0, f"L{k:03d}")[0]), k  # the in-place edit never is

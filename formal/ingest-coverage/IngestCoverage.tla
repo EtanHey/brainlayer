@@ -21,18 +21,29 @@ CONSTANTS AmberT, RedT, UnknownAmber, Recovery, SleepGap, WakeGrace, AlertRed,
           Cap, N, Rule, Mut, Clock, Faults, Script
 
 VARIABLES t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
-          v, unk, good, alertT, fileAlert, backlog, stall, blindRun, faultEver, wokeInStall, obs
+          v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun, faultEver, wokeInStall, obs
 
 NoScript == <<>>   \* cfg files cannot spell <<>>: they say Script <- NoScript
 
 vars == <<t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
-          v, unk, good, alertT, fileAlert, backlog, stall, blindRun, faultEver, wokeInStall, obs>>
+          v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun, faultEver, wokeInStall, obs>>
 
-(* The eight shapes. "stuck" is a live process whose poll loop no longer
-   completes, so poll_count and updated_at freeze together (same payload). *)
+(* The eight shapes, with shape 8 split in two. "stuck" is a live process whose
+   poll loop no longer completes, so poll_count and updated_at freeze together
+   (same payload). "rewrite" is a rewrite the #732 resume fingerprint sees (head
+   digest or the bytes before the offset changed): the watcher re-reads from 0
+   and every rewritten record is re-ingested, which the replay checks record by
+   record. "rewrite_lossy" is one it cannot see: a same-length edit of a record
+   past the first 4 KiB and before the last 256 bytes. The watcher resumes at its
+   offset and the edited record is never ingested. *)
 Shapes == {"dead", "stuck", "lag", "coverage", "dbfail",
-           "blind_stale", "blind_unreadable", "rootgone", "rewrite"}
-NoProgress == {"dead", "stuck", "lag", "coverage", "dbfail", "rootgone"}
+           "blind_stale", "blind_unreadable", "rootgone", "rewrite", "rewrite_lossy"}
+NoProgress == {"dead", "stuck", "lag", "coverage", "dbfail", "rootgone", "rewrite_lossy"}
+\* Ground truth: records these faults consume and never index (independent of Mut).
+Dropping == {"coverage", "rewrite_lossy"}
+\* Mutation rewrite_progress: count every rewrite as progress, lossy or not.
+ProgressLabel(f) == IF Mut = "rewrite_progress" THEN f \notin NoProgress \ {"rewrite_lossy"}
+                    ELSE f \notin NoProgress
 Blind == {"blind_stale", "blind_unreadable"}
 \* Signals the watcher already publishes (alert_reasons, db_probe_failed) plus the
 \* missing-root signal the proposed fix adds. no_coverage drops coverage and DB.
@@ -50,7 +61,7 @@ InitSteady == /\ hbA = 0 /\ hbW = 0 /\ pA = 0 /\ pW = 0 /\ v = "green"
 InitFresh  == /\ hbA = -1 /\ hbW = -1 /\ pA = -1 /\ pW = -1 /\ v = "unknown"
 Init == /\ t = 0 /\ fault = "none" /\ asleep = FALSE /\ slept = 0
         /\ resumed = -1 /\ grace = -1 /\ unk = 0 /\ good = 0 /\ alertT = 0 /\ fileAlert = FALSE
-        /\ backlog = FALSE /\ stall = 0 /\ blindRun = 0 /\ faultEver = FALSE /\ wokeInStall = FALSE
+        /\ backlog = FALSE /\ dropped = FALSE /\ stall = 0 /\ blindRun = 0 /\ faultEver = FALSE /\ wokeInStall = FALSE
         /\ obs = "fresh"
         /\ IF Script = <<>> THEN InitSteady \/ InitFresh ELSE InitSteady
 
@@ -62,7 +73,7 @@ Sleep == /\ asleep' = TRUE
          /\ grace' = IF grace >= 0 THEN Min(grace + 1, WakeGrace + 1) ELSE -1
          /\ obs' = "asleep"
          /\ t' = IF Script = <<>> THEN t ELSE t + 1
-         /\ UNCHANGED <<fault, hbA, pA, v, unk, good, alertT, fileAlert, backlog, stall, blindRun,
+         /\ UNCHANGED <<fault, hbA, pA, v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun,
                         faultEver, wokeInStall>>
 
 (* One awake health tick. f: the fault this tick; w: the agent appends;
@@ -95,8 +106,8 @@ Tick(f, w, o) ==
       trueAge == IF Clock = "confirmed" THEN cA ELSE cW   \* confirmed: suspension credited
       age == IF g >= 0 /\ g <= WakeGrace THEN Min(trueAge, g) ELSE trueAge
       graced == known /\ Rank(AgeState(age)) < Rank(AgeState(trueAge))
-      backlogNow == backlog \/ w
-      progress == f \notin NoProgress
+      backlogNow == backlog \/ w \/ f = "rewrite_lossy"   \* the edit is itself agent content
+      progress == ProgressLabel(f)
       alertWritten == f \in AlertShapes /\ backlogNow     \* what this poll would publish
       \* the file keeps the last payload written: a dead watcher leaves its last alert
       alertNow == Rule = "proposed" /\ seen /\ (IF early THEN alertWritten ELSE fileAlert)
@@ -137,6 +148,7 @@ Tick(f, w, o) ==
      /\ alertT' = aT
      /\ fileAlert' = IF writes THEN alertWritten ELSE fileAlert
      /\ backlog' = (backlogNow /\ ~progress)
+     /\ dropped' = (backlogNow /\ f \in Dropping)
      /\ stall' = IF stalledNow THEN Min(stall + 1, Cap) ELSE 0
      /\ blindRun' = IF f \in Blind /\ ~newClock THEN Min(blindRun + 1, Cap) ELSE 0
      /\ faultEver' = (faultEver \/ f # "none")
@@ -160,6 +172,9 @@ TypeOK == /\ fault \in Faults \cup {"none"} /\ v \in {"green", "amber", "red", "
    amber or red. stall resets only on progress (blindRun only when the monitor
    reads a heartbeat newer than the one it had), so this also says it stays non-green until that happens. *)
 IngestFailureLeavesGreen == (stall > N \/ blindRun > N) => NonGreen(v)
+(* The stall clock never ignores agent content that is waiting or was dropped
+   this tick: the bookkeeping IngestFailureLeavesGreen rests on. *)
+StallClockIsTruthful == (backlog \/ dropped) => stall > 0
 (* No fault in the whole behaviour: lid closes alone never leave green. *)
 SleepIsNotFailure == ~faultEver => ~NonGreen(v)
 (* A stall that was already running when the lid closed still counts after wake. *)

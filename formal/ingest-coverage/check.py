@@ -33,7 +33,7 @@ BOUNDS = {
 }  # ordering-preserving: Amber < Red < WakeGrace, SleepGap = 3 ticks
 HEARTBEAT = ("none", "dead", "stuck", "blind_stale", "blind_unreadable", "rewrite")
 ALL = ("none", "dead", "stuck", "lag", "coverage", "dbfail", "blind_stale", "blind_unreadable", "rootgone", "rewrite")
-THREE = ("IngestFailureLeavesGreen", "SleepIsNotFailure", "StallAcrossWakeStillCounts")
+THREE = ("IngestFailureLeavesGreen", "SleepIsNotFailure", "StallAcrossWakeStillCounts", "StallClockIsTruthful")
 
 
 def case(
@@ -57,7 +57,7 @@ CASES = [
     case(
         "real-heartbeat-shapes",
         "guarantee",
-        "Today's code: dead, stuck, blind (stale or unreadable) and a rewritten file leave green within 2 ticks",
+        "Today's code: dead, stuck, blind (stale or unreadable) leave green within 2 ticks; a detected rewrite re-ingests",
     ),
     case(
         "real-unconfirmed-clock",
@@ -65,7 +65,7 @@ CASES = [
         "Without a boot-session clock, wake grace delays the bound to 7 ticks; a stall still never stays green",
         clock="unconfirmed",
         n=7,
-        inv=("IngestFailureLeavesGreen", "StallAcrossWakeStillCounts"),
+        inv=("IngestFailureLeavesGreen", "StallAcrossWakeStillCounts", "StallClockIsTruthful"),
     ),
     case(
         "real-bound-tight",
@@ -87,6 +87,24 @@ CASES = [
         for s in ("lag", "coverage", "dbfail", "rootgone")
     ],
     case(
+        "finding-real-rewrite-lossy",
+        "finding",
+        "FINDING: a same-length edit past the 4 KiB head digest is invisible to the #732 fingerprint; "
+        "the edited records are never ingested and the check stays green",
+        faults=("none", "rewrite_lossy"),
+        inv=("IngestFailureLeavesGreen",),
+        expect="IngestFailureLeavesGreen",
+    ),
+    case(
+        "finding-proposed-rewrite-lossy",
+        "finding",
+        "The proposed alert rule does NOT fix the lossy rewrite: the watcher never knows; it needs a stronger fingerprint",
+        rule="proposed",
+        faults=("none", "rewrite_lossy"),
+        inv=("IngestFailureLeavesGreen",),
+        expect="IngestFailureLeavesGreen",
+    ),
+    case(
         "finding-unconfirmed-short-sleep",
         "finding",
         "FINDING (minor): unconfirmed clock, a 10-15 min lid close, monitor reads before the first poll: amber",
@@ -99,7 +117,8 @@ CASES = [
     case(
         "proposed-all-shapes",
         "guarantee",
-        "The follow-up fix (not in code): verdict also reads the watcher's alerts and missing roots; all 8 hold",
+        "The follow-up fix (not in code): verdict also reads the watcher's alerts and missing roots; "
+        "all shapes but the lossy rewrite hold",
         rule="proposed",
         faults=ALL,
     ),
@@ -138,6 +157,15 @@ CASES = [
         faults=("none", "dead"),
         inv=("StallAcrossWakeStillCounts",),
         expect="StallAcrossWakeStillCounts",
+    ),
+    case(
+        "mut-rewrite-progress",
+        "mutation",
+        "Count every rewrite as progress, lossy or not",
+        mut="rewrite_progress",
+        faults=("none", "rewrite_lossy"),
+        inv=("StallClockIsTruthful",),
+        expect="StallClockIsTruthful",
     ),
 ]
 

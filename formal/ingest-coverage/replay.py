@@ -46,7 +46,20 @@ MODEL = {
     "Cap": 40,
     "N": 2,
 }
-SHAPES = ("dead", "stuck", "lag", "coverage", "dbfail", "blind_stale", "blind_unreadable", "rootgone", "rewrite")
+SHAPES = (
+    "dead",
+    "stuck",
+    "lag",
+    "coverage",
+    "dbfail",
+    "blind_stale",
+    "blind_unreadable",
+    "rootgone",
+    "rewrite",
+    "rewrite_lossy",
+)
+DROPPING = frozenset({"coverage", "rewrite_lossy"})  # faults whose records are consumed and never indexed
+PAD_RECORDS = 64
 
 
 def _awake(f="none", o="watcherFirst"):
@@ -280,7 +293,12 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
         lines = [*_header(provider, start)]
         marker0, text0 = _text(provider, 0)
         lines.append(agent_record(provider, text0, start))
+        if trace["scenario"] == "rewrite_lossy":  # long enough that a middle record is past the 4 KiB head digest
+            lines += [agent_record(provider, _text(provider, 0, f"p{i:03d}")[1], start) for i in range(PAD_RECORDS)]
         transcript.write_text("".join(json.dumps(x) + "\n" for x in lines))
+        # Every marker the agent wrote in an indexable form. A marker written under a fault that drops
+        # records (format drift, an edit the fingerprint cannot see) counts only while that fault lasts.
+        pending: dict[str, str] = {marker0: "none"}
         watcher = JSONLWatcher(
             watch_roots=default_watch_roots(home),
             registry_path=work / "offsets.json",
@@ -312,14 +330,20 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
         watcher.poll_once()  # Init: a heartbeat at t0 and one verdict tick on it (the model's InitSteady)
         verdict = evaluate(facts_now(read()), None, Thresholds())
         prior, current = verdict.state, verdict.check("ingest").state
-        latest, fault, asleep = marker0, "none", False
+        fault, asleep = "none", False
+
+        def backlog() -> bool:
+            for marker in [m for m, f in pending.items() if _db_has(db, m)]:
+                del pending[marker]
+            return any(f not in DROPPING or f == fault for f in pending.values())
+
         out = []
         for k, event in enumerate(trace["events"], 1):
             wall += timedelta(seconds=TICK_S)
             SimClock.current = wall
             if event["s"] == "sleep":
                 asleep = True
-                out.append({"v": current, "obs": "asleep", "backlog": not _db_has(db, latest)})
+                out.append({"v": current, "obs": "asleep", "backlog": backlog()})
                 continue
             awake += TICK_S
             f = event["f"]
@@ -342,20 +366,26 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
             marker, text = _text(provider, k)
             if f == "rewrite":  # rewritten in place, longer than before, under the stored offset
                 body = [*_header(provider, wall)]
-                for i in range(len(lines)):
-                    body.append(agent_record(provider, _text(provider, k, f"r{i}")[1], wall))
+                for i in range(len(lines) - len(body)):
+                    variant, rewritten = _text(provider, k, f"r{i}")
+                    body.append(agent_record(provider, rewritten, wall))
+                    pending[variant] = "none"  # every rewritten record must be re-ingested
                 body.append(agent_record(provider, text, wall))
                 with open(path, "r+", encoding="utf-8") as handle:
                     handle.seek(0)
                     handle.write("".join(json.dumps(x) + "\n" for x in body))
                     handle.truncate()
                 lines = body
+                pending[marker] = "none"
             elif event["w"]:
+                if f == "rewrite_lossy":  # same-length edit of a middle record, before the appended turn
+                    edited, _ = _edit_middle_record(path, provider, lines, k, start)
+                    pending[edited] = f
                 record = agent_record(provider, text, wall, drift=f == "coverage")
                 with open(path, "a", encoding="utf-8") as handle:
                     handle.write(json.dumps(record) + "\n")
                 lines.append(record)
-            latest = marker
+                pending[marker] = "coverage" if f == "coverage" else "none"
             polls = f not in ("dead", "stuck")
             monitor_first = asleep and event["o"] == "monitorFirst"
             if polls and not monitor_first:
@@ -375,7 +405,7 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
                 seen = "missing"
             else:
                 seen = "fresh" if updated == wall else "old"
-            out.append({"v": current, "obs": seen, "backlog": not _db_has(db, latest)})
+            out.append({"v": current, "obs": seen, "backlog": backlog()})
         if fault == "lag":
             _chmod(watcher_path(transcript, root, moved), 0o644)
         if fault == "blind_stale":
@@ -383,6 +413,29 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
         return out
     finally:
         watcher_module.datetime = original_datetime
+
+
+def _edit_middle_record(path: Path, provider: str, lines: list, tick: int, when: datetime) -> tuple[str, int]:
+    """Rewrite one padding record in place with a same-length record carrying a new marker.
+
+    The file's first 4 KiB and the bytes just before the watcher's offset are untouched, which is
+    exactly what the #732 resume fingerprint compares.
+    """
+    index = len(_header(provider, when)) + 1 + PAD_RECORDS * 5 // 8 + tick % 8
+    old = json.dumps(lines[index]) + "\n"
+    marker, text = _text(provider, 0, f"L{tick:03d}")
+    new_record = agent_record(provider, text, when)
+    new = json.dumps(new_record) + "\n"
+    if len(new.encode()) != len(old.encode()):
+        raise AssertionError("lossy rewrite must keep the record length")
+    offset = sum(len((json.dumps(x) + "\n").encode()) for x in lines[:index])
+    if offset < 4096:
+        raise AssertionError("lossy rewrite must sit past the 4 KiB head digest")
+    with open(path, "r+b") as handle:
+        handle.seek(offset)
+        handle.write(new.encode())
+    lines[index] = new_record
+    return marker, offset
 
 
 def watcher_path(transcript: Path, root: Path, moved: Path) -> Path:
