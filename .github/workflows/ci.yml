@@ -16,7 +16,8 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      brain_bar: ${{ steps.filter.outputs.brain_bar }}
+      brain_bar: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.brain_bar }}
+      menu_function: ${{ steps.filter.outputs.menu_function }}
       launchd: ${{ steps.filter.outputs.launchd }}
       backup_verdict_tla: ${{ steps.filter.outputs.backup_verdict_tla }}
       ingest_coverage_tla: ${{ steps.filter.outputs.ingest_coverage_tla }}
@@ -45,6 +46,17 @@ jobs:
             brain_bar:
               - 'brain-bar/**'
               - 'scripts/launchd/**'
+              - '.github/workflows/ci.yml'
+            menu_function:
+              - 'brain-bar/Sources/BrainBar/BrainBarMenu*.swift'
+              - 'brain-bar/Sources/BrainBar/BrainBarStatusVerdict.swift'
+              - 'brain-bar/Sources/BrainBar/BrainBarDriveAuth.swift'
+              - 'brain-bar/Tests/BrainBarTests/BrainBarMenu*.swift'
+              - 'brain-bar/Tests/BrainBarTests/Fixtures/**'
+              - 'brain-bar/Package.swift'
+              - 'brain-bar/Package.resolved'
+              - 'brain-bar/Tests/BrainBarTests/Scripts/run_swift_tests.py'
+              - '.github/workflows/ci.yml'
             launchd:
               - 'scripts/launchd/**'
               - 'src/brainlayer/pause.py'
@@ -240,9 +252,19 @@ jobs:
         if: needs.changes.outputs.brain_bar == 'true'
         env:
           SWIFT_BACKTRACE: enable=yes,interactive=no
+          MENU_FUNCTION: ${{ needs.changes.outputs.menu_function }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           python3 -c 'import os,time; from pathlib import Path; Path(os.environ["RUNNER_TEMP"], "brainbar-test-start").write_text(str(time.time()))'
-          cd brain-bar && python3 Tests/BrainBarTests/Scripts/run_swift_tests.py
+          # Only the exact output false permits a skip; dispatch and unknown outputs run the net.
+          args=()
+          if [[ "$EVENT_NAME" != "workflow_dispatch" && "$MENU_FUNCTION" == "false" ]]; then
+            echo "menu function unchanged: skipping BrainBarMenuInvariantTests"
+            args=(--skip BrainBarMenuInvariantTests)
+          else
+            echo "menu function changed: running the full suite"
+          fi
+          cd brain-bar && python3 Tests/BrainBarTests/Scripts/run_swift_tests.py "${args[@]}"
 
       - name: Preserve native test crash reports
         if: failure() && steps.brainbar-tests.outcome == 'failure'

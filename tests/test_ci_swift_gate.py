@@ -270,3 +270,99 @@ def test_swift_required_gate_has_a_bounded_job_timeout():
     value = job.get("timeout-minutes")
     assert value == 25
     assert 10 <= value <= 30, "Swift job must retain a finite hang-protection budget"
+
+
+def test_menu_function_filter_covers_dependencies_and_future_menu_sources():
+    from fnmatch import fnmatchcase
+
+    changes = _load_workflow()["jobs"]["changes"]
+    assert changes["outputs"]["menu_function"] == "${{ steps.filter.outputs.menu_function }}"
+    filters = yaml.safe_load(next(s for s in changes["steps"] if s.get("id") == "filter")["with"]["filters"])
+    required = [
+        *REPO_ROOT.glob("brain-bar/Sources/BrainBar/BrainBarMenu*.swift"),
+        *REPO_ROOT.glob("brain-bar/Tests/BrainBarTests/BrainBarMenu*.swift"),
+    ]
+    paths = [str(p.relative_to(REPO_ROOT)) for p in required] + [
+        "brain-bar/Sources/BrainBar/BrainBarMenuFuture.swift",
+        "brain-bar/Sources/BrainBar/BrainBarStatusVerdict.swift",
+        "brain-bar/Sources/BrainBar/BrainBarDriveAuth.swift",
+        "brain-bar/Tests/BrainBarTests/Fixtures/presentation-cases.json",
+        "brain-bar/Tests/BrainBarTests/Fixtures/future-case.json",
+        "brain-bar/Package.swift",
+        "brain-bar/Package.resolved",
+        "brain-bar/Tests/BrainBarTests/Scripts/run_swift_tests.py",
+        ".github/workflows/ci.yml",
+    ]
+    for path in paths:
+        assert any(fnmatchcase(path, pattern) for pattern in filters["menu_function"]), path
+    assert ".github/workflows/ci.yml" in filters["brain_bar"]
+    assert "base" not in next(s for s in changes["steps"] if s.get("id") == "filter")["with"]
+    assert (
+        changes["outputs"]["brain_bar"]
+        == "${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.brain_bar }}"
+    )
+
+
+@pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch"])
+@pytest.mark.parametrize("output", [None, "", "false", "true", "FALSE", "unexpected"])
+def test_menu_suite_skip_is_fail_safe(event, output, tmp_path):
+    import re
+    import subprocess
+
+    step = next(s for s in _load_workflow()["jobs"]["swift"]["steps"] if s.get("id") == "brainbar-tests")
+    assert step["env"]["MENU_FUNCTION"] == "${{ needs.changes.outputs.menu_function }}"
+    assert step["env"]["EVENT_NAME"] == "${{ github.event_name }}"
+    # Parse the shell condition rather than GitHub equality, which ignores case.
+    parsed = re.search(
+        r'if \[\[ "\$EVENT_NAME" (!=|==) "([^"]*)" (&&|\|\|) '
+        r'"\$MENU_FUNCTION" (!=|==) "([^"]*)" \]\]; then',
+        step["run"],
+    )
+    assert parsed, step["run"]
+    op1, rhs1, join, op2, rhs2 = parsed.groups()
+    left = (event == rhs1) if op1 == "==" else (event != rhs1)
+    right = ((output or "") == rhs2) if op2 == "==" else ((output or "") != rhs2)
+    skip = (left and right) if join == "&&" else (left or right)
+    assert skip == (event != "workflow_dispatch" and output == "false")
+    # Execute the actual shell with a recording Python stand-in: never invoke Swift or a build.
+    executable = tmp_path / "python3"
+    executable.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    executable.chmod(0o755)
+    (tmp_path / "brain-bar").mkdir()
+    result = subprocess.run(
+        ["/bin/bash", "-e", "-c", step["run"]],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": str(tmp_path), "MENU_FUNCTION": output or "", "EVENT_NAME": event},
+    )
+    assert result.returncode == 0, result.stderr
+    assert ("--skip\nBrainBarMenuInvariantTests\n" in result.stdout) == skip
+    reason = (
+        "menu function unchanged: skipping BrainBarMenuInvariantTests"
+        if skip
+        else "menu function changed: running the full suite"
+    )
+    assert reason in result.stdout
+    invocation = ["Tests/BrainBarTests/Scripts/run_swift_tests.py"]
+    if skip:
+        invocation += ["--skip", "BrainBarMenuInvariantTests"]
+    assert result.stdout.split(reason + "\n", 1)[1].splitlines() == invocation
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [[], ["--skip", "BrainBarMenuInvariantTests"], ["--filter", "FixtureTest", "--skip", "BrainBarMenuInvariantTests"]],
+)
+def test_swift_wrapper_forwards_skip_and_preserves_default(monkeypatch, arguments):
+    path = REPO_ROOT / "brain-bar/Tests/BrainBarTests/Scripts/run_swift_tests.py"
+    spec = importlib.util.spec_from_file_location("swift_skip_gate", path)
+    wrapper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wrapper)
+    calls = []
+    monkeypatch.setattr(
+        wrapper.subprocess, "run", lambda command, **kwargs: calls.append(command) or SimpleNamespace(returncode=0)
+    )
+    monkeypatch.setattr(wrapper.sys, "argv", [str(path), *arguments])
+    assert wrapper.main() == 0
+    assert calls == [["swift", "test", "--scratch-path", str(REPO_ROOT / ".build.noindex/swift"), *arguments]]
