@@ -1,0 +1,1189 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Persistent memory for AI agents — search, think, recall across every conversation">
+      
+      
+      
+        <link rel="canonical" href="https://etanhey.github.io/brainlayer/codex-zst-ingest/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
+    
+    
+      
+        <title>Compressed Codex recovery - BrainLayer</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#compressed-codex-recovery" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="BrainLayer" class="md-header__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BrainLayer
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Compressed Codex recovery
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="BrainLayer" class="md-nav__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../assets/logo.svg" alt="logo">
+
+    </a>
+    BrainLayer
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../enrichment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retired Enrichment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kg-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    KG Specification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data-locations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Locations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../enrichment-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retired Enrichment Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../local-models-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0000-template/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Template
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001-sqlite-vec-over-dedicated-vector-db/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: sqlite-vec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002-reciprocal-rank-fusion-for-hybrid-search/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: RRF Hybrid Search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#commands-for-the-approved-per-machine-manifest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commands for the approved per-machine manifest
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#first-activation-cost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        First-activation cost
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resume-proofs-and-complete-receipts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resume proofs and complete receipts
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="compressed-codex-recovery">Compressed Codex recovery</h1>
+<p>Compression is a physical representation of the same logical <code>.jsonl</code> FILE. Source paths,
+chunk keys and decoded offsets retain that identity. The first native <code>session_meta</code> id is
+metadata only: forks can share it and still have different tails. Never deduplicate files by it.</p>
+<p>Archive discovery stays <strong>off</strong> unless <code>BRAINLAYER_CODEX_ZST_ADMISSION=bounded</code> is explicitly set.
+The bounded watcher defaults to two archive files and 1 MiB of consumed decoded input per poll
+(<code>BRAINLAYER_CODEX_ZST_FILES_PER_CYCLE</code>, <code>BRAINLAYER_CODEX_ZST_BYTES_PER_CYCLE</code>). It observes the
+existing durable queue's backlog threshold (25 files), and retains active decoders across polls.
+An unchanged completed archive is not decoded again. A cold logical path with a positive saved
+offset is held without decoding; that is not a completeness claim. Active plain/compressed
+transitions preserve decoded progress. Turning discovery on is production backfill.</p>
+<p>Use <strong>manifest mode</strong> for recovery. It does not discover other files, needs no discovery opt-in,
+and verifies <code>physical_path</code>, <code>logical_path</code>, <code>size</code>, <code>mtime_ns</code> and <code>inode</code> before reading and
+after validation. Missing expected stats fail closed. Native ids never skip files. Explicit
+manifest replay re-evaluates offset-only files from byte zero without resetting/deleting their
+saved offsets. Manifest mode leaves offsets.json byte-identical; queue events carry decoded source_end_offset. Source archives remain unchanged; no expanded source files are written to disk.</p>
+<p>The same classification/chunking/scrubbing/provenance path produces dry-run queue candidates
+and real queue events. <code>would_insert</code> counts candidates <strong>before database content deduplication</strong>,
+not promised new database rows. Real admission skips already-committed per-file chunk ids and exact-content matches
+using the drain's normalized hash, project/content-type scope and active-row rules,
+observes queue backpressure before each publication, and never opens another database writer.
+A partial publication, error, or budget stop is reported and does not checkpoint a file complete.
+Receipts contain paths/counts/status only; they distinguish <code>queued</code> from <code>committed</code>.
+<code>live_chunks_at_start</code> is the observed durable row count under this logical <code>source_file</code>, not a
+promise that queued events have committed. It is cumulative across bounded windows; compare
+it with the pre-replay source count for a net insertion count. <code>duplicate_content</code> counts
+candidates resolved under an existing different id/source, with at most five distinct
+<code>duplicate_matches</code> (<code>chunk_id</code> and <code>source_file</code> only). <code>filtered</code> counts classifier/scrub
+pipeline drops. Dry runs report these DB-dependent counts as zero and still report
+<code>would_insert</code>; they make no dedup measurement. Drain between publication windows, then
+repeat until an accepted receipt has <code>queued=0</code> to reconcile durable counts. A row with
+only existing content matches has <code>state</code> and <code>reason</code> <code>indexed_elsewhere_dedup</code>, in class
+<code>accepted</code>. Resolved candidates are never re-queued and do not bump seen counters.
+With <code>--manifest-machine</code>, valid M1/M4 rows for the other machine receive
+<code>filtered/skipped_other_machine</code>; missing or unknown machine values receive
+<code>error/invalid_machine</code>. Neither consumes a selected-machine resume ordinal.
+Every selected row has exactly one <code>class</code>: <code>readable</code> (validated dry-run candidates),
+<code>accepted</code> (queued or already committed), <code>filtered</code>, <code>empty</code>, <code>error</code>, or <code>deferred</code>,
+and a nonempty <code>reason</code>. <code>state</code> retains publication detail, including partial queueing.
+JSON failures report <code>truncated_final_record</code> or <code>malformed_record@&lt;decoded offset&gt;</code>;
+decoder failures retain their zstd error. Unresolved provenance is <code>deferred</code>.
+A malformed manifest row gets its own error receipt; later rows are still evaluated.</p>
+<h2 id="commands-for-the-approved-per-machine-manifest">Commands for the approved per-machine manifest</h2>
+<p>Transfer the stat-complete, approved manifest to <code>docs.local/codex-recovery/manifest.jsonl</code>
+on each machine. These are examples for the first bounded window, <strong>not commands to run during
+installation</strong>. Replace <code>M4</code> with <code>M1</code> on the other Mac; use the matching machine's installed CLI.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>brainlayer<span class="w"> </span>ingest-codex<span class="w"> </span>--from-manifest<span class="w"> </span>docs.local/codex-recovery/manifest.jsonl<span class="w"> </span>--manifest-machine<span class="w"> </span>M4<span class="w"> </span>--manifest-start<span class="w"> </span><span class="m">0</span><span class="w"> </span>--max-files<span class="w"> </span><span class="m">2</span><span class="w"> </span>--max-decoded-bytes<span class="w"> </span><span class="m">16777216</span><span class="w"> </span>--dry-run
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>brainlayer<span class="w"> </span>ingest-codex<span class="w"> </span>--from-manifest<span class="w"> </span>docs.local/codex-recovery/manifest.jsonl<span class="w"> </span>--manifest-machine<span class="w"> </span>M4<span class="w"> </span>--manifest-start<span class="w"> </span><span class="m">0</span><span class="w"> </span>--max-files<span class="w"> </span><span class="m">2</span><span class="w"> </span>--max-decoded-bytes<span class="w"> </span><span class="m">16777216</span><span class="w"> </span>--receipts-out<span class="w"> </span>docs.local/codex-recovery/window-M4-001.jsonl
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>brainlayer<span class="w"> </span>ingest-codex<span class="w"> </span>--from-manifest<span class="w"> </span>docs.local/codex-recovery/manifest.jsonl<span class="w"> </span>--manifest-machine<span class="w"> </span>M1<span class="w"> </span>--manifest-start<span class="w"> </span><span class="m">0</span><span class="w"> </span>--max-files<span class="w"> </span><span class="m">2</span><span class="w"> </span>--max-decoded-bytes<span class="w"> </span><span class="m">16777216</span><span class="w"> </span>--dry-run
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>brainlayer<span class="w"> </span>ingest-codex<span class="w"> </span>--from-manifest<span class="w"> </span>docs.local/codex-recovery/manifest.jsonl<span class="w"> </span>--manifest-machine<span class="w"> </span>M1<span class="w"> </span>--manifest-start<span class="w"> </span><span class="m">0</span><span class="w"> </span>--max-files<span class="w"> </span><span class="m">2</span><span class="w"> </span>--max-decoded-bytes<span class="w"> </span><span class="m">16777216</span><span class="w"> </span>--receipts-out<span class="w"> </span>docs.local/codex-recovery/window-M1-001.jsonl
+</code></pre></div>
+<p><code>--manifest-start</code> is zero-based within the selected machine. Advance the window only after
+reconciling its receipts with the existing drain; retry a partial window before advancing.
+Exit 2 means some rows were refused/held, including rows beyond the requested window. Increase
+a byte budget only after reviewing the dry run; a budget stop is never proof a source is empty.</p>
+<p><code>--max-decoded-bytes</code> is a global budget over DECODED input, including replay from byte zero.
+It must exceed the decoded size of each selected file (with headroom to observe decoder EOF),
+not merely its compressed size. Successful full dry runs report each row's <code>decoded_bytes_total</code>;
+it is null when the budget or an error prevents measuring EOF. The example 16 MiB is a small
+initial window, not a budget known to fit M1 files. Increase it under the same custody before
+claiming those files readable. There is no per-file resume in manifest mode. Repeated real windows
+replay a growing prefix while the queue caps each publication window: O(n²) cumulative decode
+work for n equally sized queue windows. Drain/reconcile between windows; never infer completion
+from a positive checkpoint. <code>watch-backfill</code> exits 2 for every unfinished archive, including
+checkpoint-held and never-admitted paths, and prints their breakdown.</p>
+<p>The decoder uses <code>BRAINLAYER_INGEST_ZSTD_PATH</code> when set, falling back to
+<code>BRAINLAYER_BACKUP_ZSTD_PATH</code> and the normal executable resolver.</p>
+<h2 id="first-activation-cost">First-activation cost</h2>
+<p>With discovery off: zero archive decodes/queue admissions. With it bounded: directory metadata
+walk still sees the corpus, but at most two archives consume 1 MiB per poll in aggregate,
+including decoded transition prefixes. CLI/pipe read-ahead is separate bounded buffering.
+Manifest mode only stats/decodes its listed window: the commands above touch at most two sources
+and consume at most 16 MiB, stopping at observed queue depth 25 (concurrent producers can race).
+Queue content growth is bounded by the admitted text plus event metadata, not the compressed
+source size. The existing drain owns database/WAL growth; no reserve/maintenance gate is bypassed.</p>
+<p>The frozen recovery baseline has 456 files: M4 362 / 29,639,924 compressed bytes; M1 94 /
+1,365,905,278 compressed bytes. These are archive-read costs, not decoded sizes or database-growth
+estimates. Streaming adds no expanded-source disk cost. Cumulative decoded/DB cost remains unknown
+until per-file dry-run receipts; keep queue windows bounded while all 456 are reconciled. The approved
+manifest v2 supplies expected inodes for all 456 files; missing or changed stats still fail closed.</p>
+<h2 id="resume-proofs-and-complete-receipts">Resume proofs and complete receipts</h2>
+<p>Bounded watcher admission persists <code>archive</code> only at confirmed decoded offsets. Marked
+archives resume after restarts; historical represented checkpoints without this marker remain
+held and appear as <code>held_archives</code> in watcher health / <code>represented_cold</code> in backfill output.
+Backfill exits 0 when only represented-cold archives remain, and 2 for unadmitted, incomplete
+or failed work. This is completion of admitted work, not acceptance of represented archives.</p>
+<p>Plain/compressed transitions preserve #1656's fingerprint: the decoded offset, a hash of
+up to the first 4 KiB, and the last 256 decoded bytes before the offset. The compressed
+reader computes it during bounded decoded-prefix replay. A missing fingerprint or mismatch
+replays from decoded byte zero; archive mtime alone never admits a checkpoint. Known stored
+chunks from acknowledged archive bytes are checked read-only with the existing writer's
+duplicate function before publication, so reconciliation is not another sighting. Plain
+files otherwise retain #1656's existing cold-resume behavior. This is a sampled fingerprint;
+it does not establish a full consumed-prefix digest or detect every middle-only rewrite.
+Header identity and cwd are recovered during replay. Quarantined final bytes participate
+in the same head/tail fingerprint as plain quarantine. Completion records the confirmed
+decoded offset and exact physical size/mtime_ns/inode; unchanged completed archives skip
+decoding across restarts. Stat changes invalidate completion and terminal-file reuse.</p>
+<p>Every non-dry manifest run requires a fresh <code>--receipts-out &lt;path&gt;</code> (the Python API requires
+<code>receipts_out</code> too). Existing paths are refused before replay; use a new path for each window.
+For example, append <code>--receipts-out docs.local/codex-recovery/window-001.jsonl</code> to the replay
+command above. Dry runs can optionally name a receipt path. Each ledger row is flushed and
+fsynced before its stdout summary. It contains <code>all_duplicate_matches</code>: every candidate ID,
+matched chunk ID, matched source_file and resolution mechanism (<code>exact_hash</code>, <code>writer_alias</code>, <code>writer_sha256</code> or <code>writer_simhash</code>),
+while stdout keeps five examples. Writer aliases preserve its prior merge decisions even when
+the merged canonical's normalized hash changed. For an archived same-file own ID, the reader uses the writer's read-only <code>find_duplicate</code>
+helper before deciding whether reactivation is needed; its exact or simhash hit is resolved
+and recorded without re-queueing. Other candidates retain exact-hash or writer-alias resolution.
+<code>live_chunks_at_start</code> and <code>live_chunk_ids_at_start</code> are the live durable rows observed for this logical source at
+row start; <code>queued_chunk_ids</code> names newly queued candidates, whose persistence is decided by
+the existing single writer. Same-file archived watcher rows without a live duplicate are delivered for reactivation;
+superseded/aggregated own IDs remain resolved. A clean decoder EOF with a partial final JSON
+record keeps all complete records and reports <code>quarantined_tail</code> plus <code>decoded_bytes_total</code>.
+The ledger records the discarded-tail outcome without retaining its private text.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+  <div class="ecosystem-links">
+    <a href="https://brainlayer.etanheyman.com">BrainLayer</a>
+    <span class="sep">/</span>
+    <a href="https://voicelayer.etanheyman.com">VoiceLayer</a>
+    <span class="sep">/</span>
+    <a href="https://cmuxlayer.etanheyman.com">cmuxLayer</a>
+    <span class="sep">/</span>
+    <a href="https://github.com/EtanHey">Golems</a>
+  </div>
+  
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  <script>
+    // Inject back-to-site link into the header, after the title
+    (function() {
+      var title = document.querySelector('.md-header__title');
+      if (!title) return;
+      var link = document.createElement('a');
+      link.href = 'https://brainlayer.etanheyman.com';
+      link.className = 'header-back';
+      link.innerHTML = '&larr; Site';
+      title.after(link);
+    })();
+  </script>
+
+  </body>
+</html>

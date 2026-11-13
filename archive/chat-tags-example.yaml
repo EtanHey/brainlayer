@@ -1,0 +1,14 @@
+# Example: ~/.config/brainlayer/chat-tags.yaml
+# Run `brainlayer list-chats -o chats.csv` first to see your contacts.
+# Add tags for relationship context (family, friends, co-workers, etc.)
+
+tags:
+  - contact: "Mom"
+    tag: family
+  - contact: "Dad"
+    tag: family
+  - contact: "Friend A"
+    tag: friends
+  # Use jid if contact name is ambiguous (e.g. phone number)
+  # - jid: "972501234567@s.whatsapp.net"
+  #   tag: family
