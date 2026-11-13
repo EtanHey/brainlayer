@@ -10,7 +10,7 @@ final class BrainBarMenuPresentationTests: XCTestCase {
     typealias P = BrainBarMenuPresentation
 
     /// The plan's `phase-8-native-build/presentation-cases.json`, byte for byte.
-    static let casesSHA256 = "65e4e76375265706bd23e73e6869d5c387d2d0f221ccfb8218bab7d1286882a6"
+    static let casesSHA256 = BrainBarMenuCases.sha256
     static let calm = ["S1", "S2-today", "S2-after-seam", "S4", "S7", "S8"]
 
     func testCasesFileIsTheLeadsUnchangedCopy() throws {
@@ -135,52 +135,9 @@ final class BrainBarMenuPresentationTests: XCTestCase {
         return doc["cases"] as! [[String: Any]]
     }
 
-    // MARK: the capture, decoded from a case's `inputs` (named as the truth table names them)
+    // MARK: the capture, decoded from a case's `inputs`: one helper, shared with the render harness
 
-    /// A time as the file writes it; some carry a remark after the timestamp, as in "…+02:00 (synthetic; …)".
-    static func date(_ value: Any?) -> Date? {
-        (value as? String).flatMap { ISO8601DateFormatter().date(from: String($0.prefix { $0 != " " })) }
-    }
+    static func date(_ value: Any?) -> Date? { BrainBarMenuCases.date(value) }
 
-    static func capture(_ inputs: [String: Any]) throws -> BrainBarMenuCapture {
-        // S8's `now` is null (first launch): any time does.
-        let now = date(inputs["now"]) ?? date("2026-11-12T12:48:00+02:00")!
-        var c = BrainBarMenuCapture(now: now, timeZone: TimeZone(secondsFromGMT: 7200)!)
-        let verdict = inputs["verdict"] as? [String: Any]
-        let checks = inputs["checks"] as? [String: [String: Any]] ?? [:]
-        if verdict?["decodable"] as? Bool == true {
-            // The file's convention: any of the 11 checks not given is green, with blind false and unknown_ticks 0.
-            let built = BrainBarMenuPresenter.known.map { name -> BrainBarHealthVerdict.Check in
-                let k = checks[name] ?? [:]
-                return .init(name: name, state: .init(rawValue: k["state"] as? String ?? "green")!, ageS: k["ageS"] as? Double,
-                             thresholdS: k["thresholdS"] as? Double, since: k["since"] as? String, note: "", unknownTicks: 0, blind: false)
-            }
-            XCTAssertEqual(verdict?["fresh"] as? Bool, true)
-            c.verdict = BrainBarHealthVerdict(dot: .green, checks: built, notes: [], evaluatedAt: try XCTUnwrap(date(verdict?["evaluatedAt"])))
-        }
-        c.isChecking = inputs["app.isChecking"] as? Bool ?? false
-        c.wakeCatchUpPending = inputs["app.wakeCatchUpPending"] as? Bool ?? false
-        c.backupsMeasured = (inputs["backupsObservation.state"] as? String ?? "measured") == "measured"
-        c.lastKnownBackupAt = date(inputs["backupsObservation.lastMeasured.newestVerifiedCopyAt"])
-        if let w = inputs["watcherFile"] as? [String: Any] {
-            c.watcher = .init(readable: w["readable"] as! Bool, fresh: w["fresh"] as! Bool,
-                              alertReasons: w["alertReasons"] as! [String], dbProbeFailed: w["dbProbeFailed"] as! Bool)
-        }
-        if inputs["localSnapshot.uploadState"] as? String == "in_progress" {
-            c.upload = .init(startedAt: try XCTUnwrap(date(inputs["uploadProcessStartedAt"])), live: inputs["uploadProcessLive"] as! Bool)
-        }
-        if let r = checks["backup_offsite"]?["recovering"] as? [String: Any] {
-            c.offsiteRecovering = .init(progress: r["progress"] as? Double, eta: date(r["eta"]), startedAt: date(r["started_at"])!,
-                                        updatedAt: date(r["updated_at"])!, cadenceS: r["cadence_s"] as! Double)
-        }
-        c.lagEpisodeStart = date(inputs["uiClock.offsetLagEpisodeStart"])
-        c.maintenanceNightFailures = inputs["maintenance.night.consecutiveFailures"] as? Int ?? 0
-        // "invalid (wording only: not missing)" and the like: the state is the first word.
-        c.driveAuthModel = (inputs["DriveAuthModel.state"] as? String).map { DriveAuthStatus.State(rawValue: String($0.prefix { $0 != " " }))! }
-        c.backupDailyFailures = inputs["job.backupDaily.consecutiveFailures"] as? Int ?? 0
-        c.backupDailyNextRunAt = date(inputs["job.backupDaily.nextRunAt"])
-        c.jsonlBackupFailures = inputs["job.jsonlBackup.consecutiveFailures"] as? Int ?? 0
-        c.keywordCoverage = inputs["collector.signalCoverage.keyword"] as? Double
-        return c
-    }
+    static func capture(_ inputs: [String: Any]) throws -> BrainBarMenuCapture { try BrainBarMenuCases.capture(inputs) }
 }
