@@ -331,6 +331,13 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             // Round 1 of #1788 (Codex B1, Claude N8): an option alternate and a key equivalent hold only their one permitted value.
             ("B5: a false option alternate", base(), standing { $0.optionAlternate = "Backing up now" }),
             ("B5: a stray key equivalent", base(), standing { $0.keyEquivalent = "⌘Z" }),
+            // P2c, CodeRabbit on #1788: the Quit row with an unregistered string still comes back as Quit with ⌘Q, and a needs
+            // form is headed by the count sentence, never by another registered one.
+            ("B5 after the sentence passes: an unregistered string on the Quit row", base(), standing { $0.strings.append("Unregistered text.") }),
+            ("I4: a needs form headed Checking…", red, P(form: .needs, headline: "Checking…", count: 1, icon: .marked,
+                                                       rows: [P.Row(kind: .headline, strings: ["Checking…"], mark: .marked), P.Row(kind: .separator), generic])),
+            ("I4: a needs form whose headline row says Checking…", red, P(form: .needs, headline: "1 thing needs you", count: 1, icon: .marked,
+                                                                         rows: [P.Row(kind: .headline, strings: ["Checking…"], mark: .marked), P.Row(kind: .separator), generic])),
         ]
         for (name, c, bad) in cases {
             XCTAssertFalse(Self.violations(c, bad).isEmpty, "\(name): the crafted presentation should break it")
@@ -376,58 +383,122 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             .contains("Conversation backups can’t upload either until Drive is connected."))
     }
 
-    /// Round 1 of #1788 (C9): the two keys agree. For every conditioned entry, over every enumerated input on a reduced cross
-    /// (singles, on every base, profile and upkeep value: six settings of dot, verdict age, measured and the flags that cover
-    /// every value of each; pairs: two) plus the 17 cases, and over candidate values (every value shown anywhere and its
-    /// perturbations), the registry's condition and the oracle's give the same answer wherever the filled sentence is one the
-    /// matcher accepts (no other sentence reaches a condition). The test compares their answers; it shares neither's code.
+    /// Round 1 of #1788 (C9), widened in P2c: the two keys agree. For every conditioned entry, over every enumerated input on a
+    /// reduced cross (singles, on every base, profile and upkeep value: eight settings of dot, verdict age, measured and the two
+    /// flags, which take every value of each, the flags independently; pairs: two) plus the 17 cases, and over candidate values
+    /// (every value shown anywhere and its perturbations), the registry's condition and the oracle's give the same answer
+    /// wherever the filled sentence is one the matcher accepts (no other sentence reaches a condition). Each comparison runs on
+    /// the presentation the function produced and on a hand-built one (R2-B2): the same rows under the headline "All good",
+    /// with the sentence in a row of its own, as the falsification loop places it. Per id, it says what it covered (R2-N1).
+    /// The test compares their answers; it shares neither's code.
     func testTheRegistryAndTheOracleAgree() throws {
         let start = Date()
-        let cross: [(State, Freshness, Bool, Bool)] = [(.green, .fresh0, true, false), (.green, .fresh0, true, true), (.red, .fresh0, false, false),
-                                                       (.amber, .fresh900, true, false), (.green, .stale901, true, true), (.green, .missing, false, false)]
+        let cross: [(State, Freshness, Bool, Bool, Bool)] = [
+            (.green, .fresh0, true, false, false), (.green, .fresh0, true, true, false), (.green, .fresh0, true, false, true),
+            (.red, .fresh0, false, false, false), (.amber, .fresh900, true, true, true), (.green, .stale901, true, true, false),
+            (.green, .staleNegative, true, false, true), (.green, .missing, false, false, false),
+        ]
         var captures: [Capture] = []
         for input in Self.inputs() {
-            for (dot, freshness, measured, flag) in input.settings.count == 2 ? Array(cross.prefix(3).suffix(2)) : cross {
-                captures.append(Self.capture(input, dot: dot, checking: flag, wake: flag, freshness: freshness, measured: measured))
+            for (dot, freshness, measured, checking, wake) in input.settings.count == 2 ? [cross[0], cross[3]] : cross {
+                captures.append(Self.capture(input, dot: dot, checking: checking, wake: wake, freshness: freshness, measured: measured))
             }
         }
         captures += try BrainBarMenuPresentationTests.loadCases().map { try BrainBarMenuPresentationTests.capture($0["inputs"] as! [String: Any]) }
-        let presented = captures.map(BrainBarMenuPresenter.present)
         let entries = BrainBarMenuPresenter.Say.all.filter { $0.kind != .neutral }
-        var pool: [String: Set<[String]>] = [:]
-        for p in presented {
-            for sentence in ([p.headline] + p.rows.flatMap(\.strings)).flatMap(Self.sentences) {
-                if let (entry, values) = BrainBarMenuPresenter.entry(for: sentence), entry.kind != .neutral { pool[entry.id, default: []].insert(values) }
+        // Each capture's presentation and the values it shows, made on every core.
+        let made = Made(captures.count)
+        DispatchQueue.concurrentPerform(iterations: captures.count) { i in
+            let c = captures[i], p = BrainBarMenuPresenter.present(c)
+            let shown = ([p.headline] + p.rows.flatMap(\.strings)).flatMap(Self.sentences).compactMap { sentence in
+                BrainBarMenuPresenter.entry(for: sentence, c).flatMap { $0.0.kind == .neutral ? nil : ($0.0.id, $0.1) }
             }
+            made.set(i, p, shown)
         }
-        // Each entry's candidates: every value shown, perturbed slot by slot, kept where the matcher accepts the sentence.
-        let candidates: [(BrainBarMenuPresenter.Sentence, [[String]])] = entries.map { entry in
+        let presented = made.presented.map { $0! }
+        var pool: [String: Set<[String]>] = [:]
+        for (id, values) in made.shown.joined() { pool[id, default: []].insert(values) }
+        // Each entry's candidates: every value shown, perturbed slot by slot, kept where the matcher accepts the sentence. The
+        // matcher reads the capture's clock and zone, so they are kept per pair of those (the sample shares one; each case has its own).
+        let grids: [(BrainBarMenuPresenter.Sentence, Set<[String]>)] = entries.map { entry in
             let slots = entry.template.components(separatedBy: "{").dropFirst().map { String($0.prefix { $0 != "}" }) }
             var tuples: Set<[String]> = slots.isEmpty ? [[]] : []
             for shown in pool[entry.id] ?? [Array(repeating: "", count: slots.count)] {
                 var grid: [[String]] = [[]]
                 for (slot, value) in zip(slots, shown) { grid = grid.flatMap { prefix in Self.perturbed(slot, value).map { prefix + [$0] } } }
-                tuples.formUnion(grid.filter { entry.match(entry.fill($0)) == $0 })
+                tuples.formUnion(grid)
             }
-            return (entry, Array(tuples))
+            return (entry, tuples)
         }
-        let tally = Tally()
+        func context(_ c: Capture) -> String { "\(c.now.timeIntervalSinceReferenceDate)|\(c.timeZone.identifier)" }
+        var accepted: [String: [(BrainBarMenuPresenter.Sentence, [(values: [String], sentence: String)])]] = [:]
+        for c in captures where accepted[context(c)] == nil {
+            accepted[context(c)] = grids.map { entry, tuples in
+                (entry, tuples.filter { entry.match(entry.fill($0), c) == $0 }.sorted { $0.lexicographicallyPrecedes($1) }.map { ($0, entry.fill($0)) })
+            }
+        }
+        let candidates = accepted[context(captures[0])]!, perContext = captures.map { accepted[context($0)]! }
+        print("BrainBarMenuInvariantTests: the differential test's captures, presentations and candidates made in \(String(format: "%.1f", Date().timeIntervalSince(start))) s")
+        // Per entry: comparisons, then the registry's true and false answers, then the oracle's.
+        let tally = Tally(), coverage = Coverage(candidates.count)
         DispatchQueue.concurrentPerform(iterations: captures.count) { i in
-            let f = Facts(c: captures[i], p: presented[i])
-            var compared = 0, disagree: [String] = []
-            for (entry, tuples) in candidates {
-                for values in tuples {
+            let c = captures[i]
+            // The hand-built presentation, its last row rewritten in place for each sentence.
+            var built = presented[i]
+            built.headline = "All good"
+            if built.rows.first?.kind == .headline { built.rows[0].strings = ["All good"] }
+            built.rows.append(P.Row(kind: .standardItem, strings: [""]))
+            let placed = built.rows.count - 1
+            var compared = 0, disagree: [String] = [], counts = Array(repeating: [0, 0, 0, 0, 0], count: candidates.count)
+            let produced = Facts(c: c, p: presented[i])
+            for (e, (entry, tuples)) in perContext[i].enumerated() {
+                let holds = entry.holds!, oracle = Self.oracle[entry.id]!
+                func compare(_ f: Facts, _ values: [String], _ shape: String) {
+                    let (r, o) = (holds(c, f.p, values), oracle(f, values))
                     compared += 1
-                    let registry = entry.holds!(captures[i], presented[i], values), oracle = Self.oracle[entry.id]!(f, values)
-                    if registry != oracle { disagree.append("\(entry.id) \(values) registry \(registry) oracle \(oracle) | capture \(i)") }
+                    counts[e][0] += 1
+                    counts[e][r ? 1 : 2] += 1
+                    counts[e][o ? 3 : 4] += 1
+                    if r != o { disagree.append("\(entry.id) \(values) registry \(r) oracle \(o) | capture \(i), \(shape)") }
+                }
+                for (values, sentence) in tuples {
+                    built.rows[placed].strings[0] = sentence
+                    compare(produced, values, "produced")
+                    compare(produced.with(built), values, "hand-built")
                 }
             }
             tally.add((compared, disagree, [:]))
+            coverage.add(counts)
         }
-        print("BrainBarMenuInvariantTests: \(tally.outputs) comparisons over \(captures.count) captures and \(candidates.map(\.1.count).reduce(0, +)) candidate values in \(String(format: "%.1f", Date().timeIntervalSince(start))) s")
+        print("BrainBarMenuInvariantTests: \(tally.outputs) comparisons over \(captures.count) captures and \(candidates.map(\.1.count).reduce(0, +)) candidate values (the sample's) in \(String(format: "%.1f", Date().timeIntervalSince(start))) s")
         XCTAssertGreaterThan(tally.outputs, 1_000_000)
+        // R2-N1: every conditioned id made comparisons and saw both answers from each side, except those listed with a reason;
+        // an id with no usable candidate value fails here by name.
+        let thin = candidates.indices.filter { e in coverage.counts[e][0] == 0 || coverage.counts[e][1...].contains(0) }.map { candidates[$0].0.id }
+        print("BrainBarMenuInvariantTests: \(candidates.count - thin.count) of \(candidates.count) conditioned ids compared with both answers from each side")
+        for (e, (entry, _)) in candidates.enumerated() { print("  coverage \(entry.id): \(coverage.counts[e])") }
+        XCTAssertEqual(Set(thin), Self.neverTrue)
         let byId = Dictionary(grouping: tally.violations) { String($0.prefix { $0 != " " }) }.mapValues(\.count)
         XCTAssertEqual(Array(tally.violations.sorted().prefix(20)), [], "\(tally.violations.count) disagreements \(byId)")
+    }
+
+    /// Conditioned ids that cannot be true on any capture, so the differential test sees only one answer for them.
+    static let neverTrue: Set<String> = [
+        "C.few",  // three Behind things; only two Behind rows exist before P4 (R02, S03)
+    ]
+
+    final class Made: @unchecked Sendable {
+        let lock = NSLock()
+        var presented: [P?], shown: [[(String, [String])]]
+        init(_ n: Int) { (presented, shown) = (Array(repeating: nil, count: n), Array(repeating: [], count: n)) }
+        func set(_ i: Int, _ p: P, _ s: [(String, [String])]) { lock.withLock { (presented[i], shown[i]) = (p, s) } }
+    }
+
+    final class Coverage: @unchecked Sendable {
+        let lock = NSLock()
+        var counts: [[Int]]
+        init(_ n: Int) { counts = Array(repeating: [0, 0, 0, 0, 0], count: n) }
+        func add(_ more: [[Int]]) { lock.withLock { for e in counts.indices { for k in 0..<5 { counts[e][k] += more[e][k] } } } }
     }
 
     /// A slot's value and its neighbours: the count minus and plus one, zero and one; the other day words and the next day; a
@@ -472,8 +543,18 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             "Last backup Nov 32 at 04:00.", "Last backup Nov 09 at 04:00.", "Catching up on backups and new conversations",
             "Catching up on backups and backups", "BrainBar hasn’t seen the memories waiting for it go down in over 1 hours.",
             "BrainBar hasn’t seen the memories waiting for it go down in over 60 minutes.", "101% done.", "040% done.",
+            // P2c (round 2 of #1788, R2-B1): a day that does not exist, a doubled space, an hour count above the clamp; and more
+            // of each kind: day words the formatter would not use at this now, a time today after now (every {at} is past).
+            "Last backup Feb 31 at 04:00.", "Last backup Nov  9 at 04:00.",
+            "BrainBar hasn’t seen the memories waiting for it go down in over 277777778 hours.",
+            "BrainBar hasn’t seen the memories waiting for it go down in over 300000000 hours.",
+            "Last backup Feb 30 at 04:00.", "Last backup Apr 31 at 04:00.", "Last backup Jun 31 at 04:00.", "Last backup  Nov 9 at 04:00.",
+            "Last backup Nov 9  at 04:00.", "Last backup yesterday at 11:00.", "Last backup today at 13:00.", "Started yesterday at 11:00.",
+            "Started Feb 30 at 23:40.", "Your newest backup is from Feb 31 at 04:00.", "Your newest backup in Google Drive is from Nov  9 at 03:44.",
+            "The newest backup BrainBar can confirm is from Sep 31 at 03:44.", "Backed up to Google Drive Nov 31 at 04:00.",
         ]
-        XCTAssertEqual(refused.filter { BrainBarMenuPresenter.entry(for: $0) != nil }, [])
+        let c = Self.capture([:], base: 0, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)  // 12:48, UTC+2
+        XCTAssertEqual(refused.filter { BrainBarMenuPresenter.entry(for: $0, c) != nil }, [])
         let accepted = [
             "Saving, search and upkeep are fine.", "Search is fine.", "Saving and backups are fine.", "Your newest backup in Google Drive is 1 hour old.",
             "Your newest backup is 23 hours old.", "The newest backup BrainBar can confirm is from Nov 9 at 03:44.", "Started at 23:59.",
@@ -481,7 +562,35 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             "Last backup today at 04:00.", "Catching up on new conversations and backups", "100% done.", "0% done, about 13:05.",
             "BrainBar hasn’t seen the memories waiting for it go down in over 2 minutes.", "BrainBar hasn’t seen the memories waiting for it go down.",
         ]
-        XCTAssertEqual(accepted.filter { BrainBarMenuPresenter.entry(for: $0) == nil }, [])
+        XCTAssertEqual(accepted.filter { BrainBarMenuPresenter.entry(for: $0, c) == nil }, [])
+        // The round trip (P2c): Feb 29 of a leap year, a month and day a year ago, the clamp's own largest hour count; odd numbers
+        // read back without trapping and are refused.
+        XCTAssertEqual(["Last backup Feb 29 at 04:00.", "Your newest backup is from Nov 12 at 04:00.", "Last backup yesterday at 23:59.",
+                        "BrainBar hasn’t seen the memories waiting for it go down in over 277777777 hours."].filter { BrainBarMenuPresenter.entry(for: $0, c) == nil }, [])
+        XCTAssertEqual(["Started at 99999:00.", "Started at -1:00.", "Started at 12::30.", "Last backup Nov 99999999999 at 04:00.", "Last backup Nov -1 at 04:00.",
+                        "Your newest backup is 1e300 hours old.", "Your newest backup is nan hours old.", "40.0% done.", "1e1% done.",
+                        "BrainBar hasn’t seen the memories waiting for it go down in over inf hours.", "BrainBar hasn’t seen the memories waiting for it go down in over a hour.",
+                        "Saving and Search are fine.", "Search, saving are fine."].filter { BrainBarMenuPresenter.entry(for: $0, c) != nil }, [])
+        // In the capture's zone: 02:30 does not exist in Berlin on 29 Mar 2026, so no time today says it; a year before, it did.
+        var berlin = c
+        (berlin.now, berlin.timeZone) = (ISO8601DateFormatter().date(from: "2026-03-29T12:00:00+02:00")!, TimeZone(identifier: "Europe/Berlin")!)
+        XCTAssertNil(BrainBarMenuPresenter.entry(for: "Last backup today at 02:30.", berlin))
+        XCTAssertNotNil(BrainBarMenuPresenter.entry(for: "Last backup today at 03:30.", berlin))
+        XCTAssertNotNil(BrainBarMenuPresenter.entry(for: "Last backup Mar 29 at 02:30.", berlin))
+        // Nor narrower than the formatters: every word they make for moments over the past 400 days and ages up to 3e12 s is accepted.
+        for zoned in [c, berlin] {
+            var made: [String] = []
+            for minutes in stride(from: 0, through: 400 * 1440, by: 37) {
+                let d = zoned.now.addingTimeInterval(-Double(minutes) * 60)
+                made.append("Last backup \(BrainBarMenuPresenter.at(d, zoned)).")
+                if let age = BrainBarMenuPresenter.copyAge(since: d, zoned) { made.append("Your newest backup is \(age).") }
+                if minutes < 1440 { made.append("Started at \(BrainBarMenuPresenter.hhmm(zoned.now.addingTimeInterval(Double(minutes) * 60 - 43_200), zoned)).") }
+            }
+            for age in [61.0, 119, 120, 121, 3599, 3600, 3601, 7199, 7200, 7201, 86_399, 1e6, 1e12 - 1, 1e12, 3e12] {
+                made.append("BrainBar hasn’t seen the memories waiting for it go down \(BrainBarMenuPresenter.over(age)!).")
+            }
+            XCTAssertEqual(made.filter { BrainBarMenuPresenter.entry(for: $0, zoned) == nil }, [])
+        }
     }
 
     /// R24: a failed database probe makes only `coverage_drop` unprovable; R09 and X10 still count (review round 1, N4).
@@ -614,9 +723,19 @@ final class BrainBarMenuInvariantTests: XCTestCase {
 
     /// What an oracle condition may read: the capture and the value, never the presenter's own helpers or conditions.
     struct Facts: Sendable {
-        let c: Capture, p: P
+        let c: Capture
+        private(set) var p: P
+        /// Read once per capture, because the differential test asks each many times (P2c): the checks by name, and the running
+        /// upload's start with its clock time and day words. The methods below read these; what they mean is unchanged.
+        private let byName: [String: [Check]], start: Date?, startWords: (today: Bool, clock: String, day: String)?
+        init(c: Capture, p: P) {
+            (self.c, self.p, byName, start) = (c, p, Dictionary(grouping: c.verdict?.checks ?? [], by: \.name), Self.running(c))
+            startWords = start.map { (BrainBarMenuInvariantTests.calendar(c.timeZone).isDate($0, inSameDayAs: c.now), Self.clock($0, c), Self.dayWords($0, c)) }
+        }
+        /// The same capture under another presentation.
+        func with(_ p: P) -> Facts { var f = self; f.p = p; return f }
         var fresh: Bool { c.verdict != nil && (0...900).contains(c.verdictAwakeAgeS) }
-        func named(_ name: String) -> [Check] { c.verdict?.checks.filter { $0.name == name } ?? [] }
+        func named(_ name: String) -> [Check] { byName[name] ?? [] }
         /// Every check of this name satisfies `ok`, and there is at least one.
         func every(_ name: String, _ ok: (Check) -> Bool) -> Bool { !named(name).isEmpty && named(name).allSatisfy(ok) }
         func red(_ name: String) -> Bool { named(name).contains { $0.state == .red } }
@@ -657,10 +776,12 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                 && c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } != true && every("ingest") { $0.state == .green }
         }
         /// A time the words can name (Foundation's own range; NaN is in no range).
-        func nameable(_ d: Date) -> Bool { d >= .distantPast && d <= .distantFuture }
+        func nameable(_ d: Date) -> Bool { Self.nameable(d) }
+        static func nameable(_ d: Date) -> Bool { d >= .distantPast && d <= .distantFuture }
         /// U13: a `recovering` on schedule (heard from within two cadences, not overdue) is the running upload; without
         /// one, a live upload process is. Its start, never after now.
-        var running: Date? {
+        var running: Date? { start }
+        static func running(_ c: Capture) -> Date? {
             if let r = c.offsiteRecovering {
                 let quiet = c.now.timeIntervalSince(r.updatedAt)
                 return r.cadenceS > 0 && r.cadenceS.isFinite && quiet >= 0 && quiet <= 2 * r.cadenceS && (r.eta.map { c.now <= $0 && nameable($0) } ?? true)
@@ -669,24 +790,23 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             return c.upload.flatMap { $0.live && $0.startedAt <= c.now && nameable($0.startedAt) ? $0.startedAt : nil }
         }
         var progress: String? { running == nil ? nil : c.offsiteRecovering?.progress.flatMap { (0...1).contains($0) ? String(Int(($0 * 100).rounded())) : nil } }
-        func clock(_ date: Date, _ format: String = "HH:mm") -> String { BrainBarMenuInvariantTests.formatted(date, format, c.timeZone) }
+        func clock(_ date: Date, _ format: String = "HH:mm") -> String { Self.clock(date, c, format) }
+        static func clock(_ date: Date, _ c: Capture, _ format: String = "HH:mm") -> String { BrainBarMenuInvariantTests.formatted(date, format, c.timeZone) }
+        func dayWords(_ d: Date) -> String { Self.dayWords(d, c) }
         /// Part 0's `{at}`, written here from the truth table: "today at 04:00" or "yesterday at 23:10" under a day ago, else
         /// "Nov 9 at 03:44".
-        func dayWords(_ d: Date) -> String {
-            let recent = c.now.timeIntervalSince(d) < 86_400
+        static func dayWords(_ d: Date, _ c: Capture) -> String {
+            let recent = c.now.timeIntervalSince(d) < 86_400, calendar = BrainBarMenuInvariantTests.calendar(c.timeZone)
+            func clock(_ d: Date, _ format: String = "HH:mm") -> String { Self.clock(d, c, format) }
             if recent, calendar.isDate(d, inSameDayAs: c.now) { return "today at " + clock(d) }
             if recent, let y = calendar.date(byAdding: .day, value: -1, to: c.now), calendar.isDate(d, inSameDayAs: y) { return "yesterday at " + clock(d) }
             return clock(d, "MMM d") + " at " + clock(d)
         }
-        var calendar: Calendar {
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = c.timeZone
-            return calendar
-        }
+        var calendar: Calendar { BrainBarMenuInvariantTests.calendar(c.timeZone) }
         /// A bare clock time reads as a time today, so it is true only for a start on today's date (P2b, ruling R23).
-        func startedToday(_ value: String) -> Bool { running.map { calendar.isDate($0, inSameDayAs: c.now) && clock($0) == value } == true }
+        func startedToday(_ value: String) -> Bool { startWords.map { $0.today && $0.clock == value } == true }
         /// R23: a start on another day says its day.
-        func startedOn(_ value: String) -> Bool { running.map { !calendar.isDate($0, inSameDayAs: c.now) && dayWords($0) == value } == true }
+        func startedOn(_ value: String) -> Bool { startWords.map { !$0.today && $0.day == value } == true }
         /// `{copy age}` of the newest copy among `names`, whole: "1 hour old", "N hours old" (N the rounded hours, 2 to 23)
         /// under a day at now, else "from {day words}".
         func age(_ names: [String], _ text: String) -> Bool {
@@ -764,6 +884,17 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         "D13.missing": { f, _ in f.red("drive_auth") && f.c.driveAuthModel == .missing },
     ]
 
+    /// The oracle's own Gregorian calendar, one per zone on each thread.
+    static func calendar(_ zone: TimeZone) -> Calendar {
+        final class Made { let calendar: Calendar; init(_ calendar: Calendar) { self.calendar = calendar } }
+        let key = "oracle.calendar|" + zone.identifier
+        if let made = Thread.current.threadDictionary[key] as? Made { return made.calendar }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        Thread.current.threadDictionary[key] = Made(calendar)
+        return calendar
+    }
+
     /// The oracle's own formatters, one per format and zone on each thread.
     static func formatted(_ date: Date, _ format: String, _ zone: TimeZone) -> String {
         let key = "oracle|" + format + "|" + zone.identifier
@@ -792,7 +923,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         // reassurance only where the oracle's own condition holds.
         let texts = [p.headline] + p.rows.flatMap(\.strings)
         for sentence in (texts + p.rows.compactMap(\.action?.label) + p.rows.compactMap(\.optionAlternate)).flatMap(sentences) {
-            guard let (entry, values) = BrainBarMenuPresenter.entry(for: sentence) else { out.append("CW an unregistered sentence: \(sentence)"); continue }
+            guard let (entry, values) = BrainBarMenuPresenter.entry(for: sentence, c) else { out.append("CW an unregistered sentence: \(sentence)"); continue }
             shown[entry.id] = values
             guard entry.kind != .neutral else { continue }
             guard let holds = oracle[entry.id] else { out.append("KEYS \(entry.id) has no oracle condition"); continue }
@@ -809,6 +940,11 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         if p.count != f.needsRows { out.append("I4 count \(p.count) but \(f.needsRows) Needs-you rows") }
         if (p.icon == .marked) != (p.form == .needs) { out.append("I4 icon \(p.icon) with form \(p.form)") }
         if (p.form == .needs) != (p.count >= 1) { out.append("I4 form \(p.form) with count \(p.count)") }
+        // I4 (P2c): a needs form is headed, in its headline and its headline row, by the count sentence for its Needs-you rows.
+        let count = f.needsRows == 1 ? "1 thing needs you" : "\(f.needsRows) things need you"
+        if p.form == .needs, p.headline != count || p.rows.filter({ $0.kind == .headline }).map(\.strings) != [[count]] {
+            out.append("I4 a needs form headed \(p.headline), not \(count)")
+        }
         // I7 (R20): a Needs-you fact the app reads without the producer counts, whatever the verdict or the flags.
         if let w = c.watcher, w.readable, w.fresh {
             let alert = w.alertReasons.contains { !["offset_lag", "quarantined_record"].contains($0) && !($0 == "coverage_drop" && w.dbProbeFailed) }

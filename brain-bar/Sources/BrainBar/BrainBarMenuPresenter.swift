@@ -380,16 +380,12 @@ enum BrainBarMenuPresenter {
             var row = row
             row.strings = row.strings.map(words).filter { !$0.isEmpty }
             row.action = row.action.map { action($0.kind) }
-            // B5 (round 1): the standing items keep their one permitted key and Option alternate; no other row has either.
-            let standing = row.kind == .standardItem ? row.strings : []
-            row.keyEquivalent = standing == [Say.settings.text] ? Say.settingsKey : standing == [Say.quit.text] ? Say.quitKey : nil
-            row.optionAlternate = standing == [Say.quit.text] && row.optionAlternate != nil ? Say.restart.text : nil
             if row.kind == .separator || !row.strings.isEmpty { return row }
             return row.kind == .needsYou ? P.Row(kind: .needsYou, strings: needs(.system).strings + handoff, action: copyReport) : nil
         }
         /// A sentence is registered and, when it is of one of `kinds`, its condition holds on `drawn`.
         func holds(_ sentence: String, on drawn: P, _ kinds: Set<Sentence.Kind> = [.claim, .reassurance]) -> Bool {
-            guard let (entry, values) = entry(for: sentence) else { return false }
+            guard let (entry, values) = entry(for: sentence, c) else { return false }
             return !kinds.contains(entry.kind) || entry.holds?(c, drawn, values) != false
         }
         // I2 and every calm headline ("All good", a Behind headline, "Checking after sleep…"): one that is unregistered or
@@ -408,8 +404,11 @@ enum BrainBarMenuPresenter {
         if needsRows.isEmpty, red || appFact || p.form == .needs || p.count != 0 || p.icon == .marked {
             needsRows = [P.Row(kind: .needsYou, strings: needs(.system).strings + handoff, action: copyReport)]
         }
+        // A needs form is headed, in its headline and its headline row, by the count sentence for the rows it returns, never by
+        // another registered sentence (P2c, CodeRabbit on #1788).
+        let count = needsRows.count == 1 ? Say.countOne.text : Say.countMany(String(needsRows.count))
         if !needsRows.isEmpty, p.form != .needs || p.count != needsRows.count || p.icon != .marked || p.rows.filter({ $0.kind == .needsYou }) != needsRows
-            || !holds(p.headline, on: p) {
+            || p.headline != count || p.rows.filter({ $0.kind == .headline }).map(\.strings) != [[count]] {
             let carried = p.rows.contains { $0.kind == .needsYou } ? p.rows.filter { [.needsYou, .factLine].contains($0.kind) }
                 : needsRows + p.rows.filter { $0.kind == .factLine }
             p = needsForm(carried, statuses: p.rows.filter { $0.kind == .statusLine }, everythingElse: p.rows.contains { $0.kind == .everythingElse })
@@ -432,15 +431,24 @@ enum BrainBarMenuPresenter {
         bySentence { holds($0, on: drawn, [.claim]) ? $0 : $1 ? Say.generic.text : nil }
         let corrected = p
         bySentence { sentence, _ in holds(sentence, on: corrected, [.reassurance]) ? sentence : nil }
+        // B5 (round 1), last since P2c (CodeRabbit on #1788): once both passes have dropped what they drop, the standing items
+        // keep their one permitted key and Option alternate, and no other row has either.
+        p.rows = p.rows.map { row in
+            var row = row
+            let standing = row.kind == .standardItem ? row.strings : []
+            row.keyEquivalent = standing == [Say.settings.text] ? Say.settingsKey : standing == [Say.quit.text] ? Say.quitKey : nil
+            row.optionAlternate = standing == [Say.quit.text] && row.optionAlternate != nil ? Say.restart.text : nil
+            return row
+        }
         return p
     }
 
     /// The things "Everything else is fine." speaks for: every thing no drawn row speaks for, and all four beside a row
     /// whose first sentence speaks for no one thing (R17's generic rows).
-    static func uncovered(_ p: P) -> Set<Thing> {
+    static func uncovered(_ p: P, _ c: Capture) -> Set<Thing> {
         var left = Set(four)
         for row in p.rows where [.needsYou, .statusLine, .factLine, .headlineDetail].contains(row.kind) {
-            guard let first = row.strings.first.flatMap({ sentences($0).first }), let thing = entry(for: first)?.0.thing else { return Set(four) }
+            guard let first = row.strings.first.flatMap({ sentences($0).first }), let thing = entry(for: first, c)?.0.thing else { return Set(four) }
             left.remove(thing)
         }
         return left
