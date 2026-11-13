@@ -33,7 +33,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 TRACES = HERE / "traces"
 TICK_S = 300
-AGENTS = ("claude", "codex", "cursor", "cursor-agent-transcripts", "gemini")
+AGENTS = ("claude", "codex", "cursor", "cursor-agent-transcripts", "gemini")  # gemini = Antigravity (agy)
 # Production thresholds in ticks: amber 600 s, red 1800 s, sleep gap 900 s, wake grace 7200 s,
 # alert red after ingest_alert_red_ticks = 6.
 MODEL = {
@@ -242,7 +242,7 @@ _RELATIVE = {
     "codex": "2026/11/13/rollout-2026-11-13T00-00-00-0199replay.jsonl",
     "cursor": "replay-session.jsonl",
     "cursor-agent-transcripts": "example-proj/agent-transcripts/replay-1.jsonl",
-    "gemini": "replay-session.jsonl",
+    "gemini": "0115a286-0000-4000-8000-00000000a001/.system_generated/logs/transcript_full.jsonl",
 }
 
 
@@ -267,7 +267,16 @@ def agent_record(provider: str, text: str, when: datetime, *, drift: bool = Fals
         }
     if provider == "cursor-agent-transcripts":
         return {"role": "user", "message": {"content": [{"type": "text", "text": text}]}}
-    return {"role": "user", "content": text, "timestamp": ts}  # cursor sessions, gemini sessions
+    if provider == "gemini":  # Antigravity (agy), the current Gemini agent
+        return {
+            "step_index": 0,
+            "source": "USER_EXPLICIT",
+            "type": "USER_INPUT",
+            "status": "DONE",
+            "created_at": ts,
+            "content": f"<USER_REQUEST>\n{text}\n</USER_REQUEST>",
+        }
+    return {"role": "user", "content": text, "timestamp": ts}  # cursor sessions
 
 
 def _header(provider: str, when: datetime) -> list[dict[str, Any]]:
@@ -344,6 +353,12 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
         if trace["scenario"] == "rewrite_lossy":  # long enough that a middle record is past the 4 KiB head digest
             lines += [agent_record(provider, _text(provider, 0, f"p{i:03d}")[1], start) for i in range(PAD_RECORDS)]
         transcript.write_text("".join(json.dumps(x) + "\n" for x in lines))
+        if provider == "gemini":  # agy summarises each conversation; the row carries its agent attribution
+            store = root.parent / "conversation_summaries.db"
+            with sqlite3.connect(store) as conn:
+                conn.execute("CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, agent_name TEXT)")
+                conn.execute("INSERT INTO conversation_summaries VALUES (?, '')", (transcript.parents[2].name,))
+            conn.close()
         # Every marker the agent wrote in an indexable form. A marker written under a fault that drops
         # records (format drift, an edit the fingerprint cannot see) counts only while that fault lasts.
         pending: dict[str, str] = {marker0: "none"}

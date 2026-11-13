@@ -219,6 +219,9 @@ def _watch_max_record_bytes() -> int:
 
 
 _RECURSIVE_JSONL_GLOB = "**/*.jsonl"
+# Antigravity (agy), the current Gemini agent, exports each conversation's steps under its brain dir.
+# transcript.jsonl beside it is the same steps with long fields truncated, so only the full one is read.
+AGY_TRANSCRIPT_GLOB = "*/.system_generated/logs/transcript_full.jsonl"
 
 
 class _JSONLPatternMatcher:
@@ -365,7 +368,7 @@ def default_watch_roots(home: Path | None = None) -> list[WatchRoot]:
             root / ".cursor" / "projects",
             "**/agent-transcripts/**/*.jsonl",
         ),
-        WatchRoot("gemini", root / ".gemini" / "sessions"),
+        WatchRoot("gemini", root / ".gemini" / "antigravity-cli" / "brain", AGY_TRANSCRIPT_GLOB),
     ]
 
 
@@ -470,9 +473,47 @@ def scan_codex_turn_context(filepath: str, end_offset: int, inode: int) -> Codex
     return context
 
 
+_AGY_STEP_ROLES = {"USER_INPUT": "user", "PLANNER_RESPONSE": "assistant"}
+_AGY_REQUEST_OPEN, _AGY_REQUEST_CLOSE = "<USER_REQUEST>", "</USER_REQUEST>"
+# The blocks agy appends after the request (measured on 500 real transcripts: every one has both).
+_AGY_TRAILING_BLOCKS = ("<ADDITIONAL_METADATA>", "<USER_SETTINGS_CHANGE>")
+
+
+def _agy_step_text(entry: dict[str, Any], role: str) -> str:
+    """An agy step's own words: the user turn without the metadata and settings agy wraps around it."""
+    content = entry.get("content")
+    if not isinstance(content, str):
+        return ""
+    stripped = content.strip()
+    if role == "user" and stripped.startswith(_AGY_REQUEST_OPEN):
+        # agy's shape is `<USER_REQUEST>request</USER_REQUEST>` then its own blocks. The request ends at
+        # the first closing tag followed (after whitespace) by one of those blocks or by the end, so a
+        # literal closing tag inside the request, or inside a later block, is never the boundary.
+        end = stripped.find(_AGY_REQUEST_CLOSE, len(_AGY_REQUEST_OPEN))
+        while end >= 0:
+            after = stripped[end + len(_AGY_REQUEST_CLOSE) :].lstrip()
+            if not after or after.startswith(_AGY_TRAILING_BLOCKS):
+                return stripped[len(_AGY_REQUEST_OPEN) : end].strip()
+            end = stripped.find(_AGY_REQUEST_CLOSE, end + 1)
+    return stripped
+
+
 def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, Any] | None:
     if not isinstance(entry, dict):
         return None
+
+    # agy steps: tool steps (GENERIC) and ERROR_MESSAGE are not anyone's words and are not indexed.
+    agy_role = _AGY_STEP_ROLES.get(entry.get("type")) if provider == "gemini" and "step_index" in entry else None
+    if agy_role:
+        text = _agy_step_text(entry, agy_role)
+        if not text:
+            return None
+        return {
+            "type": agy_role,
+            "message": {"role": agy_role, "content": [{"type": "text", "text": text}]},
+            "timestamp": entry.get("created_at") or datetime.now(timezone.utc).isoformat(),
+            "_provider": provider,
+        }
 
     entry_type = entry.get("type")
     if entry_type in {"user", "assistant"} and isinstance(entry.get("message"), dict):

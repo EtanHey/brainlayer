@@ -14,8 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+from .agy_attribution import agy_conversation, read_conversation_agent
 from .content_class import normalize_content_class
-from .ingest_denylist import is_denylisted, memory_reader_attribution
+from .ingest_denylist import MEMORY_READER_ATTRIBUTIONS, is_denylisted, memory_reader_attribution
 from .t3_provenance import T3_APP_SESSION, CompactCodexHeader, is_t3_app_initiated_codex_session
 
 SearchPolicy = Literal["KEEP", "ISOLATE", "OUT"]
@@ -107,6 +108,12 @@ def _under_cursor_agent_transcripts(path: Path) -> bool:
     return "agent-transcripts" in parts[cursor_index + 1 :]
 
 
+def _under_agy_brain(path: Path) -> bool:
+    """Under `.gemini/antigravity-cli/brain/<conversation>/`, where Antigravity (agy), the current Gemini
+    agent, exports transcripts."""
+    return agy_conversation(path) is not None
+
+
 def _project_segment(path: Path) -> str | None:
     parts = path.parts
     for index, part in enumerate(parts[:-1]):
@@ -180,8 +187,13 @@ def classify_provenance(
     t3_projection_version: int | None = None,
     t3_session_identity_cache: dict | None = None,
     t3_session_header: tuple[dict, int] | CompactCodexHeader | None = None,
+    agy_agent: str | None = None,
 ) -> ProvenanceDecision:
-    """Classify a source path into an auditable provenance search policy."""
+    """Classify a source path into an auditable provenance search policy.
+
+    `agy_agent` is the agent an AgyAttributionGate resolved for an agy conversation; without it the
+    summary row is read here, and an unreadable or absent row leaves the source class unresolved.
+    """
     del content_class
     path = _abspath(source_file)
 
@@ -212,6 +224,18 @@ def classify_provenance(
 
     if _under_cursor_agent_transcripts(path):
         return ProvenanceDecision("cursor-gather", "KEEP", "Cursor coding-agent transcript root", "cli-agent")
+
+    if _under_agy_brain(path):
+        agent = agy_agent
+        if agent is None:
+            read_ok, agent = read_conversation_agent(path)
+            if not read_ok or agent is None:
+                return ProvenanceDecision("gemini-session", "KEEP", "agy attribution unresolved", None)
+        if agent in MEMORY_READER_ATTRIBUTIONS:
+            return ProvenanceDecision("recon-agent", "OUT", f"agy memory-reader agent {agent}", "brain-worker")
+        if agent:
+            return ProvenanceDecision("gemini-subagent", "KEEP", f"agy agent {agent}", "subagent")
+        return ProvenanceDecision("gemini-session", "KEEP", "Antigravity (agy) conversation", "cli-agent")
 
     if _under_provider_sessions(path, ".gemini"):
         return ProvenanceDecision("gemini-session", "KEEP", "Gemini session root stays searchable", "cli-agent")
@@ -247,6 +271,7 @@ def derive_source_class(
         "codex-session": "cli-agent",
         "cursor-gather": "cli-agent",
         "gemini-session": "cli-agent",
+        "gemini-subagent": "subagent",
         "direct-session": "cli-agent",
     }
     if provenance_class in provenance_map:
