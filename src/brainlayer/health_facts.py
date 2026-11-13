@@ -445,6 +445,15 @@ def classify_issues(result: HealthCheckResult) -> tuple[tuple[str, ...], tuple[N
     return tuple(blind), tuple(notes), {name: "; ".join(dict.fromkeys(msgs)) for name, msgs in context.items()}
 
 
+def codes_by_check(result: HealthCheckResult) -> dict[str, tuple[str, ...]]:
+    """The ``CHECK_FOR_CODE`` codes that fed each check's context, codes only."""
+    codes: dict[str, list[str]] = {}
+    for issue in result.issues:
+        if issue.code not in BLIND_CODES and (check := CHECK_FOR_CODE.get(issue.code)):
+            codes.setdefault(check, []).append(issue.code)
+    return {name: tuple(dict.fromkeys(found)) for name, found in codes.items()}
+
+
 def search_canary_fact(result: HealthCheckResult, now: datetime) -> Any:
     """The canary health_check already ran. A failure excused by a valid snapshot episode is unobserved."""
     from .badge_state import _expected_episode
@@ -600,6 +609,8 @@ def collect_facts(
         drive_auth=drive_auth,
         watcher_updated_at=got["watcher"],
         ingest_paused=paused(config.watch_label),
+        stores_paused=drain_paused,
+        pause_ends_at=_aware(pause_payload.get("expires_at")) if pause_active else None,
         oldest_pending_store_at=pending,
         store_canary_ok=canary,
         search_canary_ok=search_canary_fact(result, now),
@@ -613,6 +624,7 @@ def collect_facts(
         blind_codes=blind,
         notes=notes,
         check_notes=context,
+        check_codes=codes_by_check(result),
     )
     state = {"store_canary_seen": canary_seen, "embedding": embedding_state, "drain_paused_seen_at": _iso(pause_seen)}
     state["disk_measurement"] = disk_state

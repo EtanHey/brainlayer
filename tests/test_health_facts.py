@@ -708,3 +708,29 @@ def test_reported_deadline_and_receipts_determine_offline_auth():
     assert drive_auth_fact(token, NOW, [(NOW - timedelta(hours=2), "consent_needed")]) == "ok"
     assert drive_auth_fact(token, NOW, [(NOW, "refresh_failed")]) == "refresh_failed"
     assert drive_auth_fact(token, NOW, [(NOW, "ok")]) == "ok"
+
+
+def test_pause_end_and_check_codes_reach_facts_and_the_badge_fields(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    ends = NOW + timedelta(hours=1)
+    config.pause_sentinel_path.write_text(json.dumps({"labels": [config.drain_label], "expires_at": ends.isoformat()}))
+    result = HealthCheckResult(
+        checked_at=NOW.isoformat(),
+        ok=False,
+        canary_ok=True,
+        canary_status="results",
+        issues=[
+            HealthIssue("process_snapshot_failed", "critical", "ps failed"),
+            HealthIssue("drain_unloaded", "critical", "drain not loaded"),
+            HealthIssue("hotlane_dead", "critical", "hotlane not running"),
+        ],
+    )
+    facts, _ = _collect(config, result=result)
+    assert (facts.stores_paused, facts.ingest_paused, facts.pause_ends_at) == (True, False, ends)
+    assert facts.check_codes == {"stores": ("drain_unloaded",), "embedding": ("hotlane_dead",)}
+    stores = evaluate(facts).check("stores").to_dict()
+    assert stores["paused_by_maintenance"] is True and stores["pause_ends_at"] == "2026-11-02T07:00:00Z"
+    assert stores["context_codes"] == ["drain_unloaded"]
+    assert evaluate(facts).check("monitor").to_dict()["blind_codes"] == ["process_snapshot_failed"]
+    config.pause_sentinel_path.unlink()
+    assert _collect(config)[0].pause_ends_at is None

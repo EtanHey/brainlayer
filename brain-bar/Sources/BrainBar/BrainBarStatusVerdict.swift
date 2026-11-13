@@ -91,6 +91,20 @@ struct BrainBarHealthVerdict: Codable, Equatable, Sendable {
         var thresholdS: Double? = nil
         var since: String? = nil
         let note: String
+        // Seam PR-1 typed fields: optional, so a 1.5.98 file without them still decodes.
+        var unknownTicks: Int? = nil
+        var blind: Bool? = nil
+        var clock: String? = nil
+        var contextCodes: [String]? = nil
+        var catchUpUntil: String? = nil
+        var goodTicks: Int? = nil
+        var goodTicksNeeded: Int? = nil
+        var pausedByMaintenance: Bool? = nil
+        var pauseEndsAt: String? = nil
+        var fails: Int? = nil
+        /// queue, round_trip, both, blind or none. A String so a future value cannot break the decode.
+        var cause: String? = nil
+        var blindCodes: [String]? = nil
         var text: String { "\(Self.labels[name] ?? name): \(note.isEmpty ? state.rawValue : note)" }
         static let labels = [
             "backup_local": "Database snapshot (verified)", "backup_offsite": "Offsite (Drive) database backup",

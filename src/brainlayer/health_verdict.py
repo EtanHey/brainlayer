@@ -114,6 +114,8 @@ class Facts:
     integrity: Any = UNOBSERVED  # "ok" | "corrupt" (confirmed results only)
     watcher_updated_at: Any = UNOBSERVED
     ingest_paused: bool = False
+    stores_paused: bool = False
+    pause_ends_at: datetime | None = None  # the pause sentinel's expires_at while a pause is active
     oldest_pending_store_at: Any = UNOBSERVED
     store_canary_ok: Any = UNOBSERVED  # True only for a persisted, retrieved round trip
     search_canary_ok: Any = UNOBSERVED
@@ -127,6 +129,7 @@ class Facts:
     blind_codes: tuple[str, ...] = ()
     notes: tuple[Note, ...] = ()
     check_notes: Mapping[str, str] = field(default_factory=dict)
+    check_codes: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -137,9 +140,12 @@ class Check:
     threshold_s: float | None
     since: str | None
     note: str  # bare sentence; consumers add CHECK_LABELS[name]
+    # Read-only display fields (seam PR-1). A key is present only on the checks it applies to.
+    typed: Mapping[str, Any] = field(default_factory=dict, hash=False)
 
     def to_dict(self) -> dict[str, Any]:
-        return {k: getattr(self, k) for k in ("name", "state", "age_s", "threshold_s", "since", "note")}
+        base = {k: getattr(self, k) for k in ("name", "state", "age_s", "threshold_s", "since", "note")}
+        return {**base, **self.typed}
 
 
 @dataclass(frozen=True)
@@ -184,6 +190,7 @@ CHECK_LABELS = {
 }
 _HYSTERESIS = frozenset({"ingest", "stores", "search"})
 _WAKE_GRACE = frozenset({"backup_local", "backup_offsite", "transcripts"})
+_PAUSED_FACT = {"ingest": "ingest_paused", "stores": "stores_paused"}
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -219,6 +226,7 @@ class _Raw:
     keep: dict[str, Any] = field(default_factory=dict)  # extra persisted fields (counters, latches)
     evidence: bool = True  # False: nothing new was observed, so this tick cannot show recovery
     graced: bool = False  # the state is milder than the real age only because the monitor was not running
+    typed: dict[str, Any] = field(default_factory=dict)  # display-only fields; never read by the policy
 
 
 def _age_state(age: float, amber: float, red: float) -> str:
@@ -470,6 +478,18 @@ def _raw_checks(
     parts = [pending] + ([canary] if canary.state != UNKNOWN else [])
     known = [r for r in parts if r.state != UNKNOWN] or parts
     worst = max(known, key=lambda r: _RANK[r.state])
+    deciders = [r for r in known if _RANK[r.state] == _RANK[worst.state]]
+    cause = (
+        "blind"
+        if worst.state == UNKNOWN
+        else "none"
+        if worst.state == GREEN
+        else "both"
+        if len(deciders) == 2
+        else "queue"
+        if deciders[0] is pending
+        else "round_trip"
+    )
     # A canary failure is owed a successful round trip: an empty queue never repays it.
     owed = bool(prior_stores.get("canary_owed")) or canary.keep["fails"] > 0
     canary_ok = facts.store_canary_ok is True
@@ -484,6 +504,7 @@ def _raw_checks(
         {**pending.keep, **canary.keep, "canary_owed": owed},
         evidence=evidence,
         graced=pending.graced,
+        typed={"cause": cause},
     )
     raw["search"] = _counter(facts.search_canary_ok, p("search"), t.canary_red_failures)
 
@@ -613,7 +634,6 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
             since = _iso(since_at)
         else:
             since = before.get("since") if state == prior_state and before.get("since") else _iso(now)
-        checks.append(Check(name, state, r.age_s, r.threshold_s, since, note))
         state_checks[name] = {
             "state": state,
             "since": since,
@@ -624,6 +644,26 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
         }
         if deadline is not None:
             state_checks[name]["catch_up_until"] = _iso(deadline)
+        typed: dict[str, Any] = {
+            "unknown_ticks": unknown_ticks,
+            "blind": r.state == UNKNOWN,
+            "clock": state_checks[name]["clock"],
+            "context_codes": sorted(set(facts.check_codes.get(name, ()))),
+        }
+        if name in _WAKE_GRACE:
+            typed["catch_up_until"] = state_checks[name].get("catch_up_until")
+        if name in _HYSTERESIS:
+            typed.update(good_ticks=good_ticks, good_ticks_needed=t.recovery_good_ticks)
+        if name in ("search", "stores"):
+            typed["fails"] = int(r.keep.get("fails") or 0)
+        if name in _PAUSED_FACT:
+            paused = bool(getattr(facts, _PAUSED_FACT[name]))
+            typed.update(
+                paused_by_maintenance=paused, pause_ends_at=_iso(_aware(facts.pause_ends_at)) if paused else None
+            )
+        if name == "monitor":
+            typed["blind_codes"] = sorted(set(facts.blind_codes))
+        checks.append(Check(name, state, r.age_s, r.threshold_s, since, note, {**typed, **r.typed}))
         if name == "stores" and state == GREEN:
             state_checks[name]["canary_owed"] = False  # recovery completed on a successful round trip
     worst = max((check.state for check in checks), key=lambda s: _RANK[s] if s != UNKNOWN else 0)
