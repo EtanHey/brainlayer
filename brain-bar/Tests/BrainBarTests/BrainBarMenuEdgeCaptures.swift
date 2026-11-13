@@ -23,9 +23,11 @@ extension BrainBarMenuInvariantTests {
         var out: [Capture] = []
         for (text, zone) in edges {
             for m in [iso.date(from: text)!, iso.date(from: text)!.addingTimeInterval(0.0009)] {
-                let day = m.timeIntervalSinceReferenceDate + 86_400
-                let nows = [day.nextDown, day, day.nextUp, day - 0.0004, day + 0.0004, day - 59.9995].map(at)
-                    + [0, 60, 3600, 7200, 2 * 86_400, 3653 * 86_400].map { m.addingTimeInterval($0) }
+                let day: TimeInterval = m.timeIntervalSinceReferenceDate + 86_400.0
+                // Typed explicitly: Xcode 26.3's checker does not infer these integer literals as TimeInterval (CI, round 2 of #1790).
+                let boundary: [TimeInterval] = [day.nextDown, day, day.nextUp, day - 0.0004, day + 0.0004, day - 59.9995]
+                let later: [TimeInterval] = [0.0, 60.0, 3600.0, 7200.0, 2.0 * 86_400.0, 3653.0 * 86_400.0]
+                let nows: [Date] = boundary.map(at) + later.map { m.addingTimeInterval($0) }
                 for now in nows {
                     var plain = capture(Input(settings: [:], base: 0, upkeep: 0), dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
                     (plain.now, plain.timeZone) = (now, zone)
@@ -33,7 +35,7 @@ extension BrainBarMenuInvariantTests {
                     func with(_ named: [String: (State, Double?)], _ edit: (inout Capture) -> Void = { _ in }) -> Capture {
                         var c = plain
                         c.verdict = BrainBarHealthVerdict(dot: .green, checks: plain.verdict!.checks.map { k in
-                            named[k.name].map { Check(name: k.name, state: $0.0, ageS: $0.1, thresholdS: k.thresholdS ?? 280_800, note: "") } ?? k
+                            named[k.name].map { Check(name: k.name, state: $0.0, ageS: $0.1, thresholdS: k.thresholdS ?? 280_800.0, note: "") } ?? k
                         }, notes: [], evaluatedAt: now)
                         edit(&c)
                         return c
@@ -43,17 +45,17 @@ extension BrainBarMenuInvariantTests {
                     let midnight = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))!
                     out.append(with([:]) { $0.verdict = nil; $0.lastKnownBackupAt = m })  // S4
                     // S01, the conversation copy the older one: a moment `spoken` has only as the all-good copy (mutation R1-2b).
-                    out.append(with(["backup_offsite": (.green, max(0, age - 60)), "transcripts": (.green, age)]))
-                    out.append(with(["backup_offsite": (.amber, 27_660)]) { $0.upload = .init(startedAt: m, live: true) })  // S03
-                    let atMidnight = [-0.001, -0.0001, 0, 0.0001].map { midnight.addingTimeInterval($0) } + [Date(timeIntervalSinceReferenceDate: midnight.timeIntervalSinceReferenceDate.nextUp)]
+                    out.append(with(["backup_offsite": (.green, max(0.0, age - 60.0)), "transcripts": (.green, age)]))
+                    out.append(with(["backup_offsite": (.amber, 27_660.0)]) { $0.upload = .init(startedAt: m, live: true) })  // S03
+                    let atMidnight = ([-0.001, -0.0001, 0.0, 0.0001] as [TimeInterval]).map { midnight.addingTimeInterval($0) } + [Date(timeIntervalSinceReferenceDate: midnight.timeIntervalSinceReferenceDate.nextUp)]
                     for eta in atMidnight {  // S03 with an estimate
-                        out.append(with(["backup_offsite": (.amber, 27_660)]) {
-                            $0.offsiteRecovering = .init(progress: 0.4, eta: eta, startedAt: m, updatedAt: now, cadenceS: 30)
+                        out.append(with(["backup_offsite": (.amber, 27_660.0)]) {
+                            $0.offsiteRecovering = .init(progress: 0.4, eta: eta, startedAt: m, updatedAt: now, cadenceS: 30.0)
                         })
                     }
-                    out.append(with(["backup_local": (.red, nil), "backup_offsite": (.amber, 27_660)]) { $0.upload = .init(startedAt: m, live: true) })  // S32
+                    out.append(with(["backup_local": (.red, nil), "backup_offsite": (.amber, 27_660.0)]) { $0.upload = .init(startedAt: m, live: true) })  // S32
                     out.append(with(["drive_auth": (.red, nil), "backup_offsite": (.red, age)]))  // R15 in the Drive row
-                    out.append(with(["backup_local": (.red, age), "backup_offsite": (.green, age + 3600)]) { $0.backupDailyFailures = 2 })  // S06
+                    out.append(with(["backup_local": (.red, age), "backup_offsite": (.green, age + 3600.0)]) { $0.backupDailyFailures = 2 })  // S06
                 }
             }
         }

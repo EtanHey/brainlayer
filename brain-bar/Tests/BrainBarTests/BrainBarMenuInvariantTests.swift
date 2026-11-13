@@ -224,7 +224,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
 
     /// Round 1 of #1790 (Codex W65-B1, W65-B2): a last backup under a day old at a time edge keeps its sentence, as on main.
     func testALastBackupOnATimeEdgeKeepsItsSentence() {
-        func detail(_ now: String, _ zone: TimeZone, _ backup: String, _ offsets: (Double, Double) = (0, 0)) -> [String]? {
+        func detail(_ now: String, _ zone: TimeZone, _ backup: String, _ offsets: (Double, Double) = (0.0, 0.0)) -> [String]? {
             let iso = ISO8601DateFormatter()
             var c = Capture(now: iso.date(from: now)!.addingTimeInterval(offsets.0), timeZone: zone)
             c.lastKnownBackupAt = iso.date(from: backup)!.addingTimeInterval(offsets.1)
@@ -236,7 +236,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                        [unconfirmed + " Last backup yesterday at 01:50."])
         // B2: 86,399.9999 s before now, in the last millisecond of its minute. (At :59.9999, as the review wrote it, the formatter
         // rounds to the millisecond and says 12:49, which 99b5b04e kept; :59.9994 says 12:48, and 99b5b04e dropped it.)
-        XCTAssertEqual(detail("2026-11-12T12:48:00+02:00", TimeZone(secondsFromGMT: 7200)!, "2026-11-12T12:48:00+02:00", (59.9993, -86_400 + 59.9994)),
+        XCTAssertEqual(detail("2026-11-12T12:48:00+02:00", TimeZone(secondsFromGMT: 7200)!, "2026-11-12T12:48:00+02:00", (59.9993, -86_400.0 + 59.9994)),
                        [unconfirmed + " Last backup yesterday at 12:48."])
     }
 
@@ -258,7 +258,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             return BrainBarMenuPresenter.present(c).rows.first { $0.kind == .headlineDetail }?.strings ?? []
         }
         let start = iso.date(from: "2026-11-12T11:28:00+02:00")!, unconfirmed = "Saving, search, backups and upkeep aren’t confirmed yet. Last backup "
-        XCTAssertEqual(around("2026-11-13T00:00:00+02:00").map { eta in detail { $0.offsiteRecovering = .init(progress: 0.4, eta: eta, startedAt: start, updatedAt: now, cadenceS: 30) } },
+        XCTAssertEqual(around("2026-11-13T00:00:00+02:00").map { eta in detail { $0.offsiteRecovering = .init(progress: 0.4, eta: eta, startedAt: start, updatedAt: now, cadenceS: 30.0) } },
                        [["To Google Drive. Started at 11:28. 40% done."], ["To Google Drive. Started at 11:28. 40% done."],
                         ["To Google Drive. Started at 11:28. 40% done, about 23:59."]])
         XCTAssertEqual(around("2026-11-12T00:00:00+02:00").map { s in detail { $0.upload = .init(startedAt: s, live: true) } },
@@ -495,7 +495,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         var pool: [String: Set<[String]>] = [:]
         for (id, values) in made.shown.joined() { pool[id, default: []].insert(values) }
         // Each entry's candidates: every value shown, perturbed slot by slot, kept where the matcher accepts the sentence. The
-        // matcher reads the capture's clock and zone, so they are kept per pair of those (the sample shares one; each case has its own).
+        // matcher reads the capture's clock, zone and own moments, so they are kept per set of those (`context` below).
         let grids: [(BrainBarMenuPresenter.Sentence, Set<[String]>)] = entries.map { entry in
             let slots = entry.template.components(separatedBy: "{").dropFirst().map { String($0.prefix { $0 != "}" }) }
             var tuples: Set<[String]> = slots.isEmpty ? [[]] : []
@@ -506,7 +506,10 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             }
             return (entry, tuples)
         }
-        func context(_ c: Capture) -> String { "\(c.now.timeIntervalSinceReferenceDate)|\(c.timeZone.identifier)" }
+        // Everything the matcher reads: the clock, the zone, and since round 1 of #1790 the capture's own moments (CodeRabbit on #1790).
+        func context(_ c: Capture) -> String {
+            "\(c.now.timeIntervalSinceReferenceDate)|\(c.timeZone.identifier)|" + BrainBarMenuPresenter.Say.spoken(c).map { "\($0.timeIntervalSinceReferenceDate)" }.joined(separator: ",")
+        }
         var accepted: [String: [(BrainBarMenuPresenter.Sentence, [(values: [String], sentence: String)])]] = [:]
         for c in captures where accepted[context(c)] == nil {
             accepted[context(c)] = grids.map { entry, tuples in
@@ -546,6 +549,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             tally.add((compared, disagree, [:]))
             coverage.add(counts)
         }
+        print("BrainBarMenuInvariantTests: candidates filtered for \(accepted.count) sets of clock, zone and own moments")
         print("BrainBarMenuInvariantTests: \(tally.outputs) comparisons over \(captures.count) captures and \(candidates.map(\.1.count).reduce(0, +)) candidate values (the sample's) in \(String(format: "%.1f", Date().timeIntervalSince(start))) s")
         XCTAssertGreaterThan(tally.outputs, 1_000_000)
         // R2-N1: every conditioned id made comparisons and saw false from each side; and true from each side, except those listed
@@ -660,22 +664,22 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         // Nor narrower than the formatters: every word they make for moments over the past 400 days and ages up to 3e12 s is accepted.
         // A moment and now inside their minutes (local CodeRabbit): 12:48:40 yesterday is under a day before 12:48:30 today.
         var seconds = c
-        seconds.now = c.now.addingTimeInterval(30)
-        XCTAssertEqual(BrainBarMenuPresenter.at(seconds.now.addingTimeInterval(-86_390), seconds), "yesterday at 12:48")
-        seconds.lastKnownBackupAt = seconds.now.addingTimeInterval(-86_390)
+        seconds.now = c.now.addingTimeInterval(30.0)
+        XCTAssertEqual(BrainBarMenuPresenter.at(seconds.now.addingTimeInterval(-86_390.0), seconds), "yesterday at 12:48")
+        seconds.lastKnownBackupAt = seconds.now.addingTimeInterval(-86_390.0)
         XCTAssertNotNil(BrainBarMenuPresenter.entry(for: "Last backup yesterday at 12:48.", seconds))
         for zoned in [c, berlin, seconds] {
             var refused: [String] = []
             for minutes in stride(from: 0, through: 400 * 1440, by: 37) {
                 var own = zoned
-                let d = zoned.now.addingTimeInterval(-Double(minutes) * 60 - Double(minutes % 60))
+                let d = zoned.now.addingTimeInterval(-Double(minutes) * 60.0 - Double(minutes % 60))
                 own.lastKnownBackupAt = d  // the words of a moment the capture holds (round 1 of #1790)
                 var made = ["Last backup \(BrainBarMenuPresenter.at(d, own))."]
                 if let age = BrainBarMenuPresenter.copyAge(since: d, own) { made.append("Your newest backup is \(age).") }
-                if minutes < 1440 { made.append("Started at \(BrainBarMenuPresenter.hhmm(zoned.now.addingTimeInterval(Double(minutes) * 60 - 43_200), own)).") }
+                if minutes < 1440 { made.append("Started at \(BrainBarMenuPresenter.hhmm(zoned.now.addingTimeInterval(Double(minutes) * 60.0 - 43_200.0), own)).") }
                 refused += made.filter { BrainBarMenuPresenter.entry(for: $0, own) == nil }
             }
-            for age in [61.0, 119, 120, 121, 3599, 3600, 3601, 7199, 7200, 7201, 86_399, 1e6, 1e12 - 1, 1e12, 3e12] {
+            for age in [61.0, 119.0, 120.0, 121.0, 3599.0, 3600.0, 3601.0, 7199.0, 7200.0, 7201.0, 86_399.0, 1e6, 1e12 - 1.0, 1e12, 3e12] as [TimeInterval] {
                 let said = "BrainBar hasn’t seen the memories waiting for it go down \(BrainBarMenuPresenter.over(age)!)."
                 if BrainBarMenuPresenter.entry(for: said, zoned) == nil { refused.append(said) }
             }
@@ -886,7 +890,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         /// Part 0's `{at}`, written here from the truth table: "today at 04:00" or "yesterday at 23:10" under a day ago, else
         /// "Nov 9 at 03:44".
         static func dayWords(_ d: Date, _ c: Capture) -> String {
-            let recent = c.now.timeIntervalSince(d) < 86_400, calendar = BrainBarMenuInvariantTests.calendar(c.timeZone)
+            let recent = c.now.timeIntervalSince(d) < 86_400.0, calendar = BrainBarMenuInvariantTests.calendar(c.timeZone)
             func clock(_ d: Date, _ format: String = "HH:mm") -> String { Self.clock(d, c, format) }
             if recent, calendar.isDate(d, inSameDayAs: c.now) { return "today at " + clock(d) }
             if recent, let y = calendar.date(byAdding: .day, value: -1, to: c.now), calendar.isDate(d, inSameDayAs: y) { return "yesterday at " + clock(d) }
