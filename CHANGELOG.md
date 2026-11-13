@@ -40,6 +40,45 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.0] - 2026-11-13
+
+### Receipts for old JSONL archives; typed status fields for the new BrainBar UI
+
+- feat(verdict): typed check fields for the BrainBar UI (seam PR-1) (#1779)
+- fix(backup): reconcile receipts for JSONL archives staged before #1776 (#1778)
+- feat(formal): prove when the ingest check leaves green (TLA+ + real-code replay) — 5 shapes fail today (#1780)
+
+## [1.5.99] - 2026-11-12
+
+### Hardening (Today card measurable, embedding backlog drains on a busy Mac)
+
+- fix(backup): retain local JSONL archives until verified and 14 days old (#1776)
+- fix(hotlane): guarantee backlog progress under sustained machine load (#1774)
+- fix(observability): keep deadline-bound reader off throttled I/O (#1775)
+
+## [1.5.98] - 2026-11-12
+
+### Hardening (no false lines, no sleep false alarms)
+
+- fix: exclude Mac sleep from BrainBar freshness alarms (#1766)
+- test: cover EntityCache timer owner lifetime (#1771)
+- test(calendar): tolerate process scheduling latency in release gates (#1772)
+- docs: correct operational facts and dated test counts (#1769)
+- fix(observability): index Today aggregate reads (#1770)
+
+## [1.5.97] - 2026-11-11
+
+### Hardening (no false lines)
+
+- fix(calendar): alert unfinished backups and retry transient status errors (#1757)
+- test: make calendar and backup suites independent of the wall clock (#1765)
+- fix(brainbar): show failed Today reads and align rendered status reasons (#1756)
+- fix(drive): take the grant's lifetime from Google, not a guess (#1745)
+- fix(drive): retain grants through incomplete lifetime metadata (#1752)
+- fix(health): a small draining embedding queue is not something to look at (#1748)
+- fix(drive): verify grant status and expose unknown lifetime (#1755)
+- fix(calendar): preserve deferred backup alert policy (#1767)
+
 ## [1.5.96] - 2026-11-10
 
 ### Hardening

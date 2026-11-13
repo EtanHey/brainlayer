@@ -369,6 +369,7 @@ def pipe_ops(states: list[dict[str, str]], focus: str) -> list[dict]:
             if e in DAEMON_ACTIVITY:
                 facts["embedding_activity"] = ["str", DAEMON_ACTIVITY[e]]
                 facts["embedding_progress_recent"] = ["bool", e == "progress"]
+                facts["embedding_paused_by_load"] = ["bool", e == "paused"]
         elif focus == "stores":
             q, k = obs["queue"], obs["canary"]
             facts["oldest_pending_store_at"] = (
@@ -419,6 +420,8 @@ def run_pipe(src: Path, payload: dict, hv: types.ModuleType | None = None) -> li
     for op in payload["ops"]:
         now = BASE + dt.timedelta(hours=op["hour"])
         facts = {name: value(fact) for name, fact in op["facts"].items()}
+        if "embedding_paused_by_load" not in hv.Facts.__dataclass_fields__:
+            facts.pop("embedding_paused_by_load", None)  # Historical source replay predates this fact.
         verdict = hv.evaluate(hv.Facts(now=now, **facts), prior, t)
         prior = verdict.state
         out.append({"hour": op["hour"], "model": op["model"], "src": verdict.check(focus).state})

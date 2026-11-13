@@ -302,14 +302,27 @@ def test_legacy_shell_path_reopens_after_journaled_return(tmp_path, phase, busy)
     assert journal.exists()
 
 
-@pytest.mark.parametrize("action,gate", [("consolidate", 0), ("consolidation-rollback", 0), ("consolidate", 1)])
-def test_shell_dispatch_uses_keg_interpreter_only_after_signatures(tmp_path, action, gate):
+@pytest.mark.parametrize(
+    "action,gate,ensure_error",
+    [
+        ("consolidate", 0, ""),
+        ("consolidation-rollback", 0, ""),
+        ("consolidate", 1, ""),
+        ("consolidate", 0, "missing DB"),
+        ("consolidate", 0, "build error"),
+    ],
+)
+def test_shell_dispatch_uses_keg_interpreter_only_after_signatures(tmp_path, action, gate, ensure_error):
     import shutil
 
     keg = tmp_path / "Cellar/brainlayer/9.9.9"
     scripts = keg / "libexec/venv/lib/python3.13/site-packages/brainlayer/launchd"
     scripts.mkdir(parents=True)
     shutil.copy(ROOT / "scripts/launchd/install.sh", scripts)
+    shutil.copy(ROOT / "scripts/launchd/brainlayer-env-run.sh", scripts)
+    env_file = tmp_path / "home/.config/brainlayer/brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("BRAINLAYER_DB=/fixture/custom.db\n")
     (keg / "bin").mkdir()
     (keg / "libexec/venv/bin").mkdir()
     opt = tmp_path / "opt/brainlayer"
@@ -317,7 +330,7 @@ def test_shell_dispatch_uses_keg_interpreter_only_after_signatures(tmp_path, act
     opt.symlink_to(keg)
     python = keg / "libexec/venv/bin/python"
     python.write_text(
-        f'#!{sys.executable}\nimport json,os,sys\nfrom pathlib import Path\nPath(os.environ["DISPATCH"]).write_text(json.dumps(sys.argv[1:]))\n'
+        f'#!{sys.executable}\nimport json,os,sys\nfrom pathlib import Path\np=Path(os.environ["DISPATCH"])\nwith p.open("a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\nif "--ensure-indexes" in sys.argv and os.environ.get("ENSURE_ERROR"): print(os.environ["ENSURE_ERROR"], file=sys.stderr); sys.exit(9)\n'
     )
     binary = keg / "bin/brainlayer"
     binary.write_text("#!/bin/sh\nexit 0\n")
@@ -329,15 +342,28 @@ def test_shell_dispatch_uses_keg_interpreter_only_after_signatures(tmp_path, act
     result = subprocess.run(
         ["/bin/bash", str(scripts / "install.sh"), action],
         env=os.environ
-        | {"HOME": str(tmp_path / "home"), "DISPATCH": str(dispatch), "BRAINLAYER_LAUNCHD_DOMAIN": DOMAIN},
+        | {
+            "HOME": str(tmp_path / "home"),
+            "DISPATCH": str(dispatch),
+            "BRAINLAYER_LAUNCHD_DOMAIN": DOMAIN,
+            "ENSURE_ERROR": ensure_error,
+        },
         capture_output=True,
         text=True,
     )
     assert result.returncode == gate, result.stderr
+    if ensure_error:
+        assert ensure_error in result.stderr
+        assert "WARN: observability ensure failed (rc=9" in result.stderr
     if gate:
         assert not dispatch.exists()
     else:
-        args = json.loads(dispatch.read_text())
+        calls = [json.loads(line) for line in dispatch.read_text().splitlines()]
+        args = calls[-1]
+        if action == "consolidate":
+            assert calls[-2] == ["-m", "brainlayer", "observability", "--ensure-indexes"]
+        else:
+            assert "--ensure-indexes" not in str(calls)
         assert args[:3] == ["-m", "brainlayer.launchd_install", action]
         assert args[args.index("--domain") + 1] == DOMAIN
         if action == "consolidate":

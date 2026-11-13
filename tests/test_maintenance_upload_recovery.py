@@ -23,6 +23,8 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 from brainlayer import backup_daily as b
+if 'UPLOAD_TEST_LOCAL_DATE' in os.environ:
+    b.local_backup_date = lambda: b.dt.date.fromisoformat(os.environ['UPLOAD_TEST_LOCAL_DATE'])
 assert os.environ['BRAINLAYER_BACKUP_PHASE'] == 'upload'
 def forbidden(*a, **k):
     raise AssertionError('snapshot creation forbidden')
@@ -56,6 +58,7 @@ assert result['verified'] and result['uploaded']
 
 @pytest.fixture
 def upload_lane(runner, tmp_path, monkeypatch):
+    monkeypatch.setenv("UPLOAD_TEST_LOCAL_DATE", NOW.date().isoformat())
     monkeypatch.setenv("BRAINLAYER_DB", str(tmp_path / "fixture.db"))
     monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
     monkeypatch.setenv("BRAINLAYER_BACKUP_STAGING_DIR", str(tmp_path))
@@ -113,8 +116,10 @@ def run(lane, now=NOW):
     )
 
 
+@pytest.mark.parametrize("local_date", ["2026-11-10", "2026-11-11"])
 @pytest.mark.parametrize("previous", ["failed", "skipped"])
-def test_pending_upload_is_retried_and_verified(upload_lane, previous):
+def test_pending_upload_is_retried_and_verified(upload_lane, previous, local_date, monkeypatch):
+    monkeypatch.setenv("UPLOAD_TEST_LOCAL_DATE", local_date)
     runner, _, snapshot, log = upload_lane
     calendar.record(
         runner.directory, event="runner", kind="nightly", scheduled_date="2026-11-09", steps=["backup-daily"]
@@ -124,8 +129,11 @@ def test_pending_upload_is_retried_and_verified(upload_lane, previous):
     job_alerts.report("backup-daily", "last upload failed", path=runner.alerts, notify=lambda *_: None)
     assert run(upload_lane) == 0
     receipts = [json.loads(line) for line in log.read_text().splitlines()]
-    assert receipts[-1]["uploaded"] is True and receipts[-1]["verified"] is True
-    assert receipts[-1]["snapshot"] == str(snapshot)
+    latest = {r["snapshot"]: r for r in receipts if "snapshot" in r}
+    assert latest[str(snapshot)]["uploaded"] is True and latest[str(snapshot)]["verified"] is True
+    sweeps = [r for r in receipts if r.get("event") == "local_sweep"]
+    assert bool(sweeps) == (local_date > "2026-11-10")
+    assert snapshot.exists()
     assert "backup-daily" not in job_alerts.active_alerts(runner.alerts)
     assert runner.rows()[-1]["failed"] == 0
     assert runner.rows()[-1]["scheduled_date"] == "2026-11-09"

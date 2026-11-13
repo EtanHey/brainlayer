@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -29,7 +30,6 @@ RECEIPT_TAIL_BYTES = 4 * 1024 * 1024
 STORE_ROUNDTRIP_MAX_AGE_S = 36 * 3600
 STORE_ROUNDTRIP_FILE = "store-roundtrip.json"
 EMBEDDING_WINDOW_HOURS = 24
-DRIVE_CONSENT_DAYS = 7  # Same testing-app consent lifetime drive_credentials.credential_status uses.
 
 # "Couldn't look" codes: the monitor's own blind spots, never an outcome.
 BLIND_CODES = frozenset(
@@ -58,7 +58,16 @@ CHECK_FOR_CODE = {
         ),
         "embedding",
     ),
-    **dict.fromkeys(("watcher_stalled", "watch_unloaded", "t3_ingest_unhealthy"), "ingest"),
+    **dict.fromkeys(
+        (
+            "watcher_stalled",
+            "watch_unloaded",
+            "t3_ingest_unhealthy",
+            "unindexed_agent_running",
+            "agent_census_incomplete",
+        ),
+        "ingest",
+    ),
     **dict.fromkeys(
         (
             "queue_backed_up",
@@ -152,7 +161,8 @@ def drive_auth_fact(
     if token is None or not token.get("refresh_token"):
         return "consent_needed"
     consented = _aware(token.get("consented_at"))
-    if consented is not None and now >= consented + timedelta(days=DRIVE_CONSENT_DAYS):
+    expires = _aware(token.get("refresh_expires_at"))
+    if expires is not None and now >= expires:
         return "consent_needed"
     known = [event for event in events if event is not None and (consented is None or event[0] > consented)]
     return max(known, key=lambda event: event[0])[1] if known else "ok"
@@ -329,6 +339,13 @@ def embedding_activity(cpu: Any, budget: Any, db: Path, now: datetime) -> tuple[
         if paused
         else "Embedding progressing but incoming work is keeping the queue full"
     )
+    if paused:
+        due = _aware(cpu.get("backlog_next_forced_batch_at"))
+        label += (
+            f"; next forced batch {due.astimezone().strftime('%H:%M:%S')} (local time)"
+            if due is not None
+            else "; next forced batch time unavailable"
+        )
     return recent or (
         now - timedelta(seconds=600) if progressing else None
     ), f"{label}: {{count}} queued, last batch {clock}"
@@ -437,6 +454,15 @@ def classify_issues(result: HealthCheckResult) -> tuple[tuple[str, ...], tuple[N
     return tuple(blind), tuple(notes), {name: "; ".join(dict.fromkeys(msgs)) for name, msgs in context.items()}
 
 
+def codes_by_check(result: HealthCheckResult) -> dict[str, tuple[str, ...]]:
+    """The ``CHECK_FOR_CODE`` codes that fed each check's context, codes only."""
+    codes: dict[str, list[str]] = {}
+    for issue in result.issues:
+        if issue.code not in BLIND_CODES and (check := CHECK_FOR_CODE.get(issue.code)):
+            codes.setdefault(check, []).append(issue.code)
+    return {name: tuple(dict.fromkeys(found)) for name, found in codes.items()}
+
+
 def search_canary_fact(result: HealthCheckResult, now: datetime) -> Any:
     """The canary health_check already ran. A failure excused by a valid snapshot episode is unobserved."""
     from .badge_state import _expected_episode
@@ -466,6 +492,7 @@ def collect_facts(
     """
     from .backup_daily import _backup_log_path
     from .drive_credentials import resolve_paths
+    from .health_check import _default_command_runner
     from .pause import pause_applies_to_label, pause_sentinel_state
 
     prior = prior if isinstance(prior, Mapping) else {}
@@ -478,8 +505,15 @@ def collect_facts(
         receipts = read_receipts(config.backup_log_path or _backup_log_path(None, db_path=config.db_path))
         return backup_facts(receipts), reclaim_capability(receipts, staging)
 
+    wall_lag = (datetime.now(UTC) - now).total_seconds()
+    awake_sample = time.monotonic() - wall_lag
     got = _run_bounded(
         {
+            "boot": lambda: (
+                _default_command_runner(["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"])
+                if sys.platform == "darwin" and abs(wall_lag) < 600
+                else None
+            ),
             "backup": backup_job,
             "transcripts": lambda: transcript_facts(read_receipts(config.jsonl_backup_log_path)),
             "drive_token": lambda: read_drive_token(config.drive_token_path or resolve_paths()[0]),
@@ -539,9 +573,6 @@ def collect_facts(
         lambda: embedding_activity(got["hotlane_cpu"], got["hotlane_budget"], config.db_path, now)
     )
     progress_at, activity = observed_activity if observed_activity is not UNOBSERVED else (None, None)
-    if stalled_since is not UNOBSERVED and stalled_since is not None and progress_at is not None:
-        stalled_since = max(stalled_since, progress_at)
-        embedding_state["since"] = _iso(stalled_since)
     activity = (
         activity.format(count=got["unvectored"])
         if activity and got["unvectored"] is not UNOBSERVED and got["unvectored"] > 0
@@ -575,25 +606,36 @@ def collect_facts(
         if backup is not UNOBSERVED
         else dict.fromkeys(("backup_local_verified_at", "backup_offsite_verified_at", "integrity"), UNOBSERVED)
     )
+    boot = got["boot"]
+    boot_session = boot.stdout.strip() if getattr(boot, "returncode", None) == 0 else None
+    awake_clock = awake_sample if boot_session else None
     facts = Facts(
         now=now,
+        awake_clock_s=awake_clock,
+        boot_session=boot_session,
         **backup_kwargs,
         transcripts_verified_at=transcripts[0] if transcripts is not UNOBSERVED else UNOBSERVED,
         drive_auth=drive_auth,
         watcher_updated_at=got["watcher"],
         ingest_paused=paused(config.watch_label),
+        unindexed_agents=tuple(result.unindexed_agents) if result.unindexed_agents is not None else UNOBSERVED,
+        census_incomplete=tuple(result.agent_census_incomplete),
+        stores_paused=drain_paused,
+        pause_ends_at=_aware(pause_payload.get("expires_at")) if pause_active else None,
         oldest_pending_store_at=pending,
         store_canary_ok=canary,
         search_canary_ok=search_canary_fact(result, now),
         embedding_stalled_since=stalled_since,
         embedding_activity=activity,
         embedding_progress_recent=progress_at is not None,
+        embedding_paused_by_load=bool(activity and got["hotlane_cpu"].get("backlog_state") == "high load"),
         disk_free_bytes=free,
         disk_peak_bytes=peak,
         disk_floor_bytes=floor,
         blind_codes=blind,
         notes=notes,
         check_notes=context,
+        check_codes=codes_by_check(result),
     )
     state = {"store_canary_seen": canary_seen, "embedding": embedding_state, "drain_paused_seen_at": _iso(pause_seen)}
     state["disk_measurement"] = disk_state

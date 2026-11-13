@@ -144,17 +144,49 @@ def _expiry(data: dict[str, Any]) -> dt.datetime | None:
 
 
 def _consent_deadline(data: dict[str, Any]) -> dt.datetime | None:
-    """Testing-mode consent requires an explicit timezone; never infer the host's."""
-    consented = data.get("consented_at")
-    if not consented or os.environ.get("BRAINLAYER_DRIVE_OAUTH_TESTING") != "1":
+    """Only a deadline reported by Google's token endpoint is authoritative."""
+    raw = data.get("refresh_expires_at")
+    if raw is None or raw == "permanent":
         return None
     try:
-        consent_time = dt.datetime.fromisoformat(str(consented).replace("Z", "+00:00"))
-        if consent_time.tzinfo is None:
-            raise ValueError("consent time has no timezone")
-        return consent_time.astimezone(dt.UTC) + dt.timedelta(days=7)
+        deadline = dt.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if deadline.tzinfo is None:
+            raise ValueError("deadline has no timezone")
+        return deadline.astimezone(dt.UTC)
     except ValueError:
         raise DriveCredentialError("BrainLayer Drive consent metadata is invalid") from None
+
+
+def _grant_metadata(response: dict[str, Any], now: dt.datetime) -> str | None:
+    seconds = response.get("refresh_token_expires_in")
+    if seconds is None:
+        return "permanent"
+    try:
+        if isinstance(seconds, bool):
+            raise ValueError("boolean lifetime")
+        return (now.astimezone(dt.UTC) + dt.timedelta(seconds=float(seconds))).isoformat()
+    except (TypeError, ValueError, OverflowError):
+        LOGGER.warning("Ignoring invalid refresh-token lifetime metadata")
+        return None
+
+
+class _TokenResponseRequest:
+    """Observe successful token responses without changing google-auth's retry behavior."""
+
+    def __init__(self, request: Any):
+        self.request = request
+        self.token_response = None
+
+    def __call__(self, *args: Any, **kwargs: Any):
+        response = self.request(*args, **kwargs)
+        try:
+            if response.status == 200:
+                payload = json.loads(response.data)
+                if isinstance(payload, dict) and payload.get("access_token"):
+                    self.token_response = payload
+        except (AttributeError, TypeError, ValueError):
+            pass  # Observation only: an unreadable body must never fail google-auth's own refresh.
+        return response
 
 
 def load_credentials(
@@ -166,6 +198,7 @@ def load_credentials(
     request_factory: Any = None,
     migrate: bool = True,
     persist_refresh: bool = True,
+    force_refresh: bool = False,
     now: dt.datetime | None = None,
     alert_reporter: Any = job_alerts.report,
 ):
@@ -183,6 +216,7 @@ def load_credentials(
         if migrate:
             _migrate_if_missing(token, legacy)
         token_data = _read_object(token, private=True)
+        original_token_data = token_data.copy()
         expires = _consent_deadline(token_data)
         if expires is not None:
             remaining = expires - (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
@@ -209,9 +243,10 @@ def load_credentials(
         except (KeyError, TypeError, ValueError, DriveCredentialError):
             raise DriveCredentialError("Google OAuth client or BrainLayer token is invalid") from None
         refresh_before = dt.datetime.now(dt.UTC).replace(tzinfo=None) + dt.timedelta(hours=2)
-        if creds.expired or not creds.valid or (creds.expiry and creds.expiry < refresh_before):
+        if force_refresh or creds.expired or not creds.valid or (creds.expiry and creds.expiry < refresh_before):
             try:
-                creds.refresh(request_factory())
+                observed = _TokenResponseRequest(request_factory())
+                creds.refresh(observed)
             except Exception as exc:
                 from google.auth.exceptions import TransportError
 
@@ -233,18 +268,33 @@ def load_credentials(
                         "Drive token refresh temporarily unavailable: Google's token endpoint failed retryably"
                     ) from None
                 raise DriveCredentialError("Drive token refresh failed; run brainlayer backup auth") from None
+            if (
+                observed.token_response is not None
+                and observed.token_response.get("refresh_token_expires_in") is not None
+            ):
+                lifetime = _grant_metadata(observed.token_response, now or dt.datetime.now(dt.UTC))
+                if lifetime is not None:
+                    token_data["refresh_expires_at"] = lifetime
             if persist_refresh:
-                token_data["access_token"] = creds.token
-                token_data["expiry"] = creds.expiry.isoformat() if creds.expiry else None
-                _atomic_write(token, token_data)
+                previous_expiry = _expiry(token_data)
+                expiry_changed = (
+                    creds.expiry != previous_expiry
+                    if creds.expiry is None or previous_expiry is None
+                    else abs((creds.expiry - previous_expiry).total_seconds()) > 60
+                )
+                if creds.token != token_data.get("access_token") or expiry_changed:
+                    token_data["access_token"] = creds.token
+                    token_data["expiry"] = creds.expiry.isoformat() if creds.expiry else None
+                if token_data != original_token_data:
+                    _atomic_write(token, token_data)
+        creds.brainlayer_refresh_expires_at = token_data.get("refresh_expires_at")
         # Upcoming expiry is credential_status's advisory, not a failed job.
-        # Clear a prior consent episode only after credentials load successfully.
         _report_consent(alert_reporter, None)
         return creds
 
 
 def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[str, Any]:
-    """Check the owned token only; do not migrate or write a refreshed token."""
+    """Probe the owned grant without migration; persist only changed refresh facts."""
     from google.auth.exceptions import TransportError
 
     token, _, _ = _paths(kwargs.get("token_path"), kwargs.get("client_path"), None)
@@ -265,7 +315,10 @@ def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[
             reason = f"Drive access expired at {expires.isoformat()}: Reconnect in BrainBar"
             _report_consent(kwargs.get("alert_reporter", job_alerts.report), reason)
             return {"state": "invalid", "reason": reason, **timing}
-        load_credentials(**kwargs, migrate=False, persist_refresh=False, now=now)
+        creds = load_credentials(**kwargs, migrate=False, persist_refresh=True, force_refresh=True, now=now)
+        expires = _consent_deadline({"refresh_expires_at": creds.brainlayer_refresh_expires_at})
+        days_left = max(0.0, (expires - current).total_seconds() / 86400) if expires else None
+        timing = {"expires_at": expires.isoformat() if expires else None, "days_left": days_left}
     except (TransportError, DriveRefreshUnavailableError) as exc:
         reason = "status checked offline; last known state"
         if isinstance(exc, DriveRefreshUnavailableError):
@@ -273,8 +326,7 @@ def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[
         if days_left is not None and days_left <= 2:
             # Text --status prints only the reason, so name the local consent deadline (never a server time).
             reason = f"{reason}: Drive access expires at {expires.isoformat()}: Reconnect in BrainBar"
-            return {"state": "expiring", "reason": reason, **timing}
-        return {"state": "valid", "reason": reason, **timing}
+        return {"state": "unknown", "reason": reason, **timing}
     except DriveCredentialError as exc:
         return {"state": "invalid", "reason": str(exc), "expires_at": None, "days_left": None}
     if days_left is not None and days_left <= 2:
@@ -325,6 +377,7 @@ def authorize(
             "scope": " ".join(DRIVE_SCOPES),
             "consented_at": (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC).isoformat(),
         }
+        payload["refresh_expires_at"] = _grant_metadata(flow.oauth2session.token, now or dt.datetime.now(dt.UTC))
         with _token_lock(token):
             _atomic_write(token, payload)
         _report_consent(alert_reporter, None)

@@ -39,7 +39,7 @@ digest-pinned (sha256 `936a2620…0e88`, the same jar as the local one).
 | Module | Models | Properties |
 |---|---|---|
 | `BackupVerdict.tla` | backup-daily receipts (snapshot, upload, removal after a verified upload, abandoned, superseded, revoked, local-only re-verify), `backup_facts()`, `_verified_age`, `evaluate()` for `backup_local` and `backup_offsite` with wake grace, monitoring gaps, unreadable-log ticks, and the weekly VACUUM gate | `NoFalseGreen`, `RedHoldsUntilEvidence`, `TruthfulSnapshotLabel`, `VacuumNeedsFreshSnapshot`, and `NoFalseGreenStrict` (a documented design limit) |
-| `PipeVerdict.tla` | `evaluate()` for `drive_auth` (latch), and for `ingest`, `embedding` and `stores` (pending queue + latched round-trip canary), all three through `_stall_age` → `_graced_age` with wake grace (renewable today, one window per episode under S1a-6), plus hysteresis, and #1686's daemon evidence for `embedding` (`Daemon`: recent progress reads amber and drops the stall clock; a load pause only adds a note) | `RedHoldsUntilEvidence` (section 3d's "what clears red"), `RedToGreenNeedsConsecutive`, `RedClearsToGreenOnlyOnEvidence` (the docstring's weaker reading) |
+| `PipeVerdict.tla` | `evaluate()` for `drive_auth` (latch), and for `ingest`, `embedding` and `stores` (pending queue + latched round-trip canary), all three through `_stall_age` → `_graced_age` with wake grace (renewable today, one window per episode under S1a-6), plus hysteresis, and #1686's daemon evidence for `embedding` (`Daemon`: stall age controls severity; recent progress or a load pause can soften red to amber, retaining the stall clock and grace. Historical modes retain #1686 behavior) | `RedHoldsUntilEvidence` (section 3d's "what clears red"), `RedToGreenNeedsConsecutive`, `RedClearsToGreenOnlyOnEvidence` (the docstring's weaker reading) |
 | `DotTable.tla` | the dot over all 11 checks (five behaviour classes), `badge_alerts()`, and the job-alert lifecycle (`maintenance.main` → `job_alerts.report`) | `NoStuckAlert` (a job alert never lights the dot; dot red ⇔ some check red; all green ⇒ dot green), `MonitorNeverRed`, `AlertClears` (liveness: a clean run clears its alert) |
 
 The properties in one sentence each:
@@ -110,3 +110,10 @@ See [SKILL.md](SKILL.md).
 [COUNTEREXAMPLES.md](COUNTEREXAMPLES.md) tells every trace in the code's words.
 [STATE-DIAGRAM.md](STATE-DIAGRAM.md) draws them, with tonight's bugs in red.
 [RESULTS.md](RESULTS.md) is the measured run.
+
+R11 activity policy: a progressing non-stalled embedding queue stays green.
+Stall age and thresholds still decide attention; fresh progress or a machine-load
+pause may soften red to amber while retaining its clock/grace. The two stall/red
+invariants permit only that explicit amber exception, never green. Historical
+`Daemon = "progress"/"pause"` cases retain the earlier policy; current
+embedding and conformance configs use `Daemon = "activity"`.

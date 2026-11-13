@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from .agent_census import ps_process_starts, unindexed_agents
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
     PROGRESS_STALLED_CODE,
@@ -198,6 +199,7 @@ class HealthCheckConfig:
     missing_embedding_instruction_limit: int = 100_000
     heal: bool = False
     socket_timeout_seconds: float = 5.0
+    agent_home: Path | None = None  # None: Path.home(); where the known-agent census looks
     max_stalled_ticks: int = 2
     heal_min_consecutive_failures: int = field(
         default_factory=lambda: _env_int(
@@ -269,6 +271,8 @@ class HealthCheckResult:
     slow_check_stage: str | None = None
     t3_health: dict[str, Any] | None = None
     jsonl_backup: JsonlBackupHealth | None = None
+    unindexed_agents: list[str] | None = None  # found this check; None: the process table was not read
+    agent_census_incomplete: list[str] = field(default_factory=list)  # agents not measured this check
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1560,6 +1564,28 @@ def _run_health_check_locked(
             "could not read the process table; daemon liveness and writer ownership were not evaluated",
         )
     else:
+        home = config.agent_home or Path.home()
+        census = unindexed_agents(
+            ps_output,
+            home=home,
+            watch_roots=[root.resolved_path for root in default_watch_roots(home)],
+            process_starts=ps_process_starts(command_runner),
+        )
+        result.unindexed_agents, result.agent_census_incomplete = census.found, census.incomplete
+        if census.incomplete:
+            add_issue(
+                "agent_census_incomplete",
+                "warning",
+                "known-agent census incomplete this check for "
+                + ", ".join(census.incomplete)
+                + " (process start time unknown or transcript scan cut short); their last measured state holds",
+            )
+        if result.unindexed_agents:
+            add_issue(
+                "unindexed_agent_running",
+                "warning",
+                "an agent BrainLayer does not index is running: " + "; ".join(result.unindexed_agents),
+            )
         lock_holder = _read_writer_lock_holder(config.db_path, ps_output)
         result.lock_holder = lock_holder
         hotlane_processes = parse_hotlane_processes(ps_output)

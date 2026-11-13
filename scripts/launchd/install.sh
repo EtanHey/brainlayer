@@ -426,6 +426,12 @@ case "$BRAINLAYER_INSTALL_ACTION" in
             exec "$consolidation_python" -m brainlayer.launchd_install consolidation-rollback --home "$HOME" \
                 --domain "${BRAINLAYER_LAUNCHD_DOMAIN:-gui/$UID}"
         fi
+        BRAINLAYER_ENV_FILE="$BRAINLAYER_ENV_FILE" BRAINLAYER_SKIP_DISABLE_GATES=1 \
+            /bin/bash "$SCRIPT_DIR/brainlayer-env-run.sh" "$consolidation_python" \
+            -m brainlayer observability --ensure-indexes || {
+                ensure_status=$?
+                echo "WARN: observability ensure failed (rc=$ensure_status; see error above); continuing consolidate; producer retains its bounded unmeasurable fallback" >&2
+            }
         exec "$consolidation_python" -m brainlayer.launchd_install consolidate --home "$HOME" \
             --domain "${BRAINLAYER_LAUNCHD_DOMAIN:-gui/$UID}" --templates "$SCRIPT_DIR" \
             --env-file "$BRAINLAYER_ENV_FILE" --python "$consolidation_python" --keg "$BRAINLAYER_CURRENT_KEG"

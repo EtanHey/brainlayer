@@ -130,8 +130,8 @@ final class BrainBarCompactMenuTests: XCTestCase {
         // Nothing hidden: every row is one line, visible or under "+N more", and the counts stay true.
         XCTAssertEqual(compact.entries.map(\.text).sorted(), rows.map(\.text).sorted())
         XCTAssertEqual(compact.visible.count + compact.overflow.count, rows.count)
-        XCTAssertEqual(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict), "9 things need you")
-        XCTAssertEqual(snapshot.verdict.dashboardStatus.headline, "9 things need you")
+        XCTAssertEqual(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict), "Check soon")
+        XCTAssertEqual(snapshot.verdict.dashboardStatus.headline, "Check soon")
     }
 
     func testLongListStaysBoundedAtAnyLength() {
@@ -162,7 +162,7 @@ final class BrainBarCompactMenuTests: XCTestCase {
         controller.menuNeedsUpdate(menu)
         menu.update()
 
-        XCTAssertEqual(menu.items.first?.title, "9 things need you")
+        XCTAssertEqual(menu.items.first?.title, "Check soon")
         XCTAssertNotNil(menu.items.first?.image, "the headline carries the status dot")
         let overflow = try XCTUnwrap(menu.items.first { $0.title == "+6 more" })
         XCTAssertTrue(overflow.isEnabled)
