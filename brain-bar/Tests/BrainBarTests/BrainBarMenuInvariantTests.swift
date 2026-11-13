@@ -404,6 +404,9 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                 captures.append(Self.capture(input, dot: dot, checking: checking, wake: wake, freshness: freshness, measured: measured))
             }
         }
+        // R2-N1: the sample takes all four pairs of the two flags and every verdict age, the stale negative one included.
+        XCTAssertEqual(Set(captures.map { [$0.isChecking, $0.wakeCatchUpPending] }).count, 4)
+        XCTAssertEqual(Set(captures.map { $0.verdict == nil ? "missing" : "\($0.verdictAwakeAgeS)" }), ["0.0", "900.0", "-1.0", "901.0", "missing"])
         captures += try BrainBarMenuPresentationTests.loadCases().map { try BrainBarMenuPresentationTests.capture($0["inputs"] as! [String: Any]) }
         let entries = BrainBarMenuPresenter.Say.all.filter { $0.kind != .neutral }
         // Each capture's presentation and the values it shows, made on every core.
