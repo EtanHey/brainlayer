@@ -57,7 +57,9 @@ enum BrainBarMenuPresenter {
     /// The only entry point. It is total over its capture type: no input traps, and the guard runs last on every path.
     static func present(_ c: Capture) -> P { finalGuard(c, derived(c)) }
 
-    private static func derived(_ c: Capture) -> P {
+    /// What the presenter says before its guard. Internal only as the seam for the property test (round 1 of #1790): every
+    /// sentence it says is registered for `c`, which `present`'s output alone cannot show, as the guard drops one that is not.
+    static func derived(_ c: Capture) -> P {
         if let v = c.verdict, (0...900).contains(c.verdictAwakeAgeS) {
             let lines = derive(c, v)
             if !c.isChecking, !c.wakeCatchUpPending { return assemble(c, lines, allGood: allGoodDetail(c, v)) }

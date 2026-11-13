@@ -121,12 +121,14 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                     var calm: P?
                     for (checking, wake) in [(false, false), (true, false), (false, true), (true, true)] {
                         let c = capture(input, dot: dot, checking: checking, wake: wake, freshness: freshness, measured: measured)
-                        let p = BrainBarMenuPresenter.present(c)
+                        // `present` is `finalGuard(c, derived(c))`; split here so P can read what the presenter says before the guard.
+                        let said = BrainBarMenuPresenter.derived(c), p = BrainBarMenuPresenter.finalGuard(c, said)
                         outputs += 1
                         if p.rows.contains(where: { $0.strings.contains { $0.hasPrefix("Backups can’t upload") && $0.contains(" Your newest backup in Google Drive is ") } }) {
                             seen["R15 in the Drive row"] = []
                         }
                         var (found, shown) = Self.audit(c, p)
+                        found += Self.unregistered(c, said: said, returned: p)
                         seen.merge(shown) { old, _ in old }
                         if let calm, [.fresh0, .fresh900].contains(freshness), calm.form == .needs,
                            p.form != .needs || Self.facts(p) != Self.facts(calm) {
@@ -192,6 +194,50 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         let first = Array(tally.violations.sorted().prefix(25))
         let byInvariant = Dictionary(grouping: tally.violations) { String($0.prefix(2)) }.mapValues(\.count).sorted { $0.key < $1.key }
         XCTAssertEqual(first, [], "\(tally.violations.count) violations \(byInvariant):\n" + first.joined(separator: "\n"))
+    }
+
+    /// P (round 1 of #1790): every sentence the presenter says for `c` is registered for `c`. The guard silently drops one
+    /// that is not, so its output alone cannot show this; only sentences it did not return need matching here, as the
+    /// closed world already matches every one it returned.
+    static func unregistered(_ c: Capture, said: P, returned p: P) -> [String] {
+        func all(_ p: P) -> [String] { ([p.headline] + p.rows.flatMap(\.strings) + p.rows.compactMap(\.action?.label) + p.rows.compactMap(\.optionAlternate)).flatMap(sentences) }
+        guard said != p else { return [] }  // the guard changed nothing, and the closed world matches all it returned
+        let kept = Set(all(p))
+        return all(said).filter { !kept.contains($0) && BrainBarMenuPresenter.entry(for: $0, c) == nil }.map { "P the presenter says an unregistered sentence: \($0)" }
+    }
+
+    /// P on the edge captures (`edgeCaptures`), with every invariant; and each moment-valued sentence is said there.
+    func testEverySentenceThePresenterSaysIsRegisteredOnTimeEdges() {
+        let captures = Self.edgeCaptures()
+        var violations: [String] = [], seen: Set<String> = []
+        for c in captures {
+            let said = BrainBarMenuPresenter.derived(c), p = BrainBarMenuPresenter.present(c)
+            let (found, shown) = Self.audit(c, p)
+            violations += (found + Self.unregistered(c, said: said, returned: p)).map { "\($0) | now \(c.now.timeIntervalSinceReferenceDate) \(c.timeZone.identifier)" }
+            seen.formUnion(shown.keys)
+        }
+        print("BrainBarMenuInvariantTests: \(captures.count) edge captures checked")
+        XCTAssertGreaterThan(captures.count, 1_500)
+        XCTAssertEqual(Array(violations.prefix(10)), [], "\(violations.count) violations")
+        XCTAssertEqual(Set(["S4", "S01", "S03.started", "S03.startedOn", "S03.progressEta", "S32", "S32.on", "R15", "S06.newest"]).subtracting(seen), [])
+    }
+
+    /// Round 1 of #1790 (Codex W65-B1, W65-B2): a last backup under a day old at a time edge keeps its sentence, as on main.
+    func testALastBackupOnATimeEdgeKeepsItsSentence() {
+        func detail(_ now: String, _ zone: TimeZone, _ backup: String, _ offsets: (Double, Double) = (0, 0)) -> [String]? {
+            let iso = ISO8601DateFormatter()
+            var c = Capture(now: iso.date(from: now)!.addingTimeInterval(offsets.0), timeZone: zone)
+            c.lastKnownBackupAt = iso.date(from: backup)!.addingTimeInterval(offsets.1)
+            return BrainBarMenuPresenter.present(c).rows.first { $0.kind == .headlineDetail }?.strings
+        }
+        let unconfirmed = "Saving, search, backups and upkeep aren’t confirmed yet."
+        // B1: the second 01:50 of 1 Nov 2026 in New York (after the clocks go back), 23 h 55 min before now.
+        XCTAssertEqual(detail("2026-11-02T01:45:00-05:00", TimeZone(identifier: "America/New_York")!, "2026-11-01T01:50:00-05:00"),
+                       [unconfirmed + " Last backup yesterday at 01:50."])
+        // B2: 86,399.9999 s before now, in the last millisecond of its minute. (At :59.9999, as the review wrote it, the formatter
+        // rounds to the millisecond and says 12:49, which 99b5b04e kept; :59.9994 says 12:48, and 99b5b04e dropped it.)
+        XCTAssertEqual(detail("2026-11-12T12:48:00+02:00", TimeZone(secondsFromGMT: 7200)!, "2026-11-12T12:48:00+02:00", (59.9993, -86_400 + 59.9994)),
+                       [unconfirmed + " Last backup yesterday at 12:48."])
     }
 
     /// Registry entries no enumerated capture or case shows, each with its reason.
@@ -475,12 +521,16 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         }
         print("BrainBarMenuInvariantTests: \(tally.outputs) comparisons over \(captures.count) captures and \(candidates.map(\.1.count).reduce(0, +)) candidate values (the sample's) in \(String(format: "%.1f", Date().timeIntervalSince(start))) s")
         XCTAssertGreaterThan(tally.outputs, 1_000_000)
-        // R2-N1: every conditioned id made comparisons and saw both answers from each side, except those listed with a reason;
-        // an id with no usable candidate value fails here by name.
-        let thin = candidates.indices.filter { e in coverage.counts[e][0] == 0 || coverage.counts[e][1...].contains(0) }.map { candidates[$0].0.id }
-        print("BrainBarMenuInvariantTests: \(candidates.count - thin.count) of \(candidates.count) conditioned ids compared with both answers from each side")
+        // R2-N1: every conditioned id made comparisons and saw false from each side; and true from each side, except those listed
+        // as never true (round 1 of #1790, W65-N1: they are excused only from true). An id with no usable candidate fails by name.
+        let thin = candidates.indices.filter { e in
+            let k = coverage.counts[e], neverTrue = Self.neverTrue.contains(candidates[e].0.id)
+            return k[0] == 0 || k[2] == 0 || k[4] == 0 || (neverTrue ? k[1] + k[3] > 0 : k[1] == 0 || k[3] == 0)
+        }.map { candidates[$0].0.id }
+        print("BrainBarMenuInvariantTests: \(candidates.count - thin.count) of \(candidates.count) conditioned ids compared and saw false from each side, and true from each side except \(Self.neverTrue.sorted())")
         for (e, (entry, _)) in candidates.enumerated() { print("  coverage \(entry.id): \(coverage.counts[e])") }
-        XCTAssertEqual(Set(thin), Self.neverTrue)
+        XCTAssertEqual(thin, [])
+        XCTAssertEqual(Self.neverTrue.subtracting(candidates.map(\.0.id)), [])
         let byId = Dictionary(grouping: tally.violations) { String($0.prefix { $0 != " " }) }.mapValues(\.count)
         XCTAssertEqual(Array(tally.violations.sorted().prefix(20)), [], "\(tally.violations.count) disagreements \(byId)")
     }
@@ -585,19 +635,24 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         var seconds = c
         seconds.now = c.now.addingTimeInterval(30)
         XCTAssertEqual(BrainBarMenuPresenter.at(seconds.now.addingTimeInterval(-86_390), seconds), "yesterday at 12:48")
+        seconds.lastKnownBackupAt = seconds.now.addingTimeInterval(-86_390)
         XCTAssertNotNil(BrainBarMenuPresenter.entry(for: "Last backup yesterday at 12:48.", seconds))
         for zoned in [c, berlin, seconds] {
-            var made: [String] = []
+            var refused: [String] = []
             for minutes in stride(from: 0, through: 400 * 1440, by: 37) {
+                var own = zoned
                 let d = zoned.now.addingTimeInterval(-Double(minutes) * 60 - Double(minutes % 60))
-                made.append("Last backup \(BrainBarMenuPresenter.at(d, zoned)).")
-                if let age = BrainBarMenuPresenter.copyAge(since: d, zoned) { made.append("Your newest backup is \(age).") }
-                if minutes < 1440 { made.append("Started at \(BrainBarMenuPresenter.hhmm(zoned.now.addingTimeInterval(Double(minutes) * 60 - 43_200), zoned)).") }
+                own.lastKnownBackupAt = d  // the words of a moment the capture holds (round 1 of #1790)
+                var made = ["Last backup \(BrainBarMenuPresenter.at(d, own))."]
+                if let age = BrainBarMenuPresenter.copyAge(since: d, own) { made.append("Your newest backup is \(age).") }
+                if minutes < 1440 { made.append("Started at \(BrainBarMenuPresenter.hhmm(zoned.now.addingTimeInterval(Double(minutes) * 60 - 43_200), own)).") }
+                refused += made.filter { BrainBarMenuPresenter.entry(for: $0, own) == nil }
             }
             for age in [61.0, 119, 120, 121, 3599, 3600, 3601, 7199, 7200, 7201, 86_399, 1e6, 1e12 - 1, 1e12, 3e12] {
-                made.append("BrainBar hasn’t seen the memories waiting for it go down \(BrainBarMenuPresenter.over(age)!).")
+                let said = "BrainBar hasn’t seen the memories waiting for it go down \(BrainBarMenuPresenter.over(age)!)."
+                if BrainBarMenuPresenter.entry(for: said, zoned) == nil { refused.append(said) }
             }
-            XCTAssertEqual(made.filter { BrainBarMenuPresenter.entry(for: $0, zoned) == nil }, [])
+            XCTAssertEqual(refused, [])
         }
     }
 

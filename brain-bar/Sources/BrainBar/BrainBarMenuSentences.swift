@@ -245,11 +245,13 @@ extension BrainBarMenuPresenter {
             switch slot {
             case "N2", "N3": return Int(value).map { $0 >= (slot == "N2" ? 2 : 3) && String($0) == value } == true
             case "p": return Double(value).map { (0...1).contains($0 / 100) && String(percent($0 / 100)) == value } == true
-            case "HH:mm": return clock(value).flatMap { on(c.now, $0, c) }.map { hhmm($0, c) == value } == true
-            case "at": return moments(value, c).contains { at($0, c) == value }
+            // A moment's words: first the formatter's own words for a moment the capture holds (`spoken`), which the presenter's
+            // words match by construction (round 1 of #1790); then a reading back, for values not the capture's own.
+            case "HH:mm": return spoken(c).contains { hhmm($0, c) == value } || clock(value).flatMap { on(c.now, $0, c) }.map { hhmm($0, c) == value } == true
+            case "at": return spoken(c).contains { at($0, c) == value } || moments(value, c).contains { at($0, c) == value }
             case "age":
                 let hours = value.split(separator: " ").first.flatMap { Double($0) }.map { [c.now.addingTimeInterval(-$0 * 3600)] } ?? []
-                return (hours + (value.hasPrefix("from ") ? moments(String(value.dropFirst(5)), c) : [])).contains { copyAge(since: $0, c) == value }
+                return (spoken(c) + hours + (value.hasPrefix("from ") ? moments(String(value.dropFirst(5)), c) : [])).contains { copyAge(since: $0, c) == value }
             case "over":
                 // A stall's age: just over the count of units the words name. The empty form is the formatter's for no age over a minute.
                 let words = value.split(separator: " "), unit = words.last.map { $0.hasPrefix("hour") ? 3600.0 : $0.hasPrefix("minute") ? 60 : 0 } ?? 0
@@ -261,6 +263,15 @@ extension BrainBarMenuPresenter {
                 return said == value && (slot == "two" ? named.count == 2 : slot == "fines" ? named.count >= 2 : named.count == 1)
             default: return false
             }
+        }
+
+        /// Every moment the presenter says as `{at}`, `{HH:mm}` or `{age}`: the last known backup, the all-good copy, the running
+        /// upload's start and estimate, and every copy a database backup check dates. The property test fails if the derivation
+        /// ever says a moment that is not here.
+        static func spoken(_ c: Capture) -> [Date] {
+            let copies = (c.verdict?.checks ?? []).filter { ["backup_local", "backup_offsite"].contains($0.name) && valid($0.ageS) }
+                .map { c.verdict!.evaluatedAt.addingTimeInterval(-$0.ageS!) }
+            return [c.lastKnownBackupAt, allGoodDate(c), uploadStart(c)?.date, runningUpload(c)?.onSchedule?.eta].compactMap { $0 } + copies
         }
 
         /// "HH:mm" read leniently as an hour and a minute.
@@ -278,8 +289,8 @@ extension BrainBarMenuPresenter {
 
         /// The moments `{at}` words can name, all at or before now (every `{at}` is a past event): "today" or "yesterday" at a
         /// clock time, or a month and day at one in any of the last nine years (no year is said; Feb 29 needs a leap year).
-        /// Each at the first and the last millisecond of its minute: the words name the minute, and which day words `at` uses
-        /// depends on the seconds too (12:48:40 yesterday is under a day before 12:48:30; local CodeRabbit, before the PR).
+        /// Words name a minute and no year, so reading them back is lossy at the edges (a repeated minute's second pass, a moment
+        /// just inside a day, one over nine years old): only values that are not the capture's own depend on it.
         static func moments(_ value: String, _ c: Capture) -> [Date] {
             let halves = value.components(separatedBy: " at "), cal = calendar(c)
             guard halves.count == 2, let time = clock(halves[1]), sayable(c.now) else { return [] }
@@ -291,7 +302,7 @@ extension BrainBarMenuPresenter {
                 let year = cal.component(.year, from: c.now)
                 dates = (0...8).map { cal.date(from: DateComponents(year: year - $0, month: month + 1, day: d, hour: time.hour, minute: time.minute)) }
             }
-            return dates.compactMap { $0 }.flatMap { [$0, $0.addingTimeInterval(59.999)] }.filter { $0 <= c.now && sayable($0) }
+            return dates.compactMap { $0 }.filter { $0 <= c.now && sayable($0) }
         }
     }
 
