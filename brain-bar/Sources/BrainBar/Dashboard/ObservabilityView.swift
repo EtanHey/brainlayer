@@ -143,7 +143,7 @@ enum BadgeStateReader {
             }
             let document = try decoder.decode(BadgeStateDocument.self, from: data)
             func legacyPresentation() -> BadgeStatePresentation {
-                let age = now.timeIntervalSince(document.generatedAt)
+                let age = BrainBarSleepHistory.shared.elapsed(since: document.generatedAt, now: now)
                 guard age >= 0 else {
                     return .failVisible("Badge state timestamp is in the future.")
                 }
@@ -553,7 +553,7 @@ enum ObservabilityPresentation {
         cadence: ObservabilityCadence,
         locale: Locale = .current
     ) -> ObservabilitySnapshot {
-        let age = max(0, now.timeIntervalSince(document.generatedAt))
+        let age = max(0, BrainBarSleepHistory.shared.elapsed(since: document.generatedAt, now: now))
         let stale = age > cadence.interval * 2
         let chunks = card(
             "Chunks", "What BrainLayer indexed",
@@ -1192,7 +1192,7 @@ struct BrainBarVectorCheck: Equatable, Sendable {
 
     func isFresh(now: Date) -> Bool {
         guard count != nil, let checkedAt, error == nil else { return false }
-        return (0...600).contains(now.timeIntervalSince(checkedAt))
+        return (0...600).contains(BrainBarSleepHistory.shared.elapsed(since: checkedAt, now: now))
     }
 
     func summary(now: Date) -> String {

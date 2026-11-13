@@ -1189,10 +1189,20 @@ class TestJSONLWatcher:
         assert watcher.provider_for_file(str(cursor_session)) == "cursor"
         assert watcher.provider_for_file(str(cursor_agent_transcript)) == "cursor-agent-transcripts"
 
-    def test_default_roots_include_codex_and_gemini_sessions(self, tmp_path, monkeypatch):
+    def test_default_roots_include_codex_and_agy_transcripts(self, tmp_path, monkeypatch):
         monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
         codex_session = tmp_path / ".codex" / "sessions" / "2026" / "07" / "worker.jsonl"
-        gemini_session = tmp_path / ".gemini" / "sessions" / "worker.jsonl"
+        # gemini = Antigravity (agy); the legacy Gemini CLI ~/.gemini/sessions root is not watched
+        gemini_session = (
+            tmp_path
+            / ".gemini"
+            / "antigravity-cli"
+            / "brain"
+            / "0115a286-0000-4000-8000-0000000000a1"
+            / ".system_generated"
+            / "logs"
+            / "transcript_full.jsonl"
+        )
         for path in (codex_session, gemini_session):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('{"role":"user","content":"worker line"}\n')

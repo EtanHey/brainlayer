@@ -474,8 +474,42 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
     delete_calls = [*prune_calls, *archive_unlinks]
     if not prune_calls:
         errors.append("the Drive retention deletion call disappeared instead of retaining its safety contract")
-    if not archive_unlinks:
-        errors.append("the local staging deletion call disappeared instead of retaining its safety contract")
+    if not _calls(run_backup, "prune_local_archives"):
+        errors.append("local receipt-backed retention sweep is missing")
+    sweep = _function(tree, "prune_local_archives")
+    loops = [n for n in ast.walk(sweep) if isinstance(n, ast.For)] if sweep else []
+    loop = next((n for n in loops if ast.unparse(n.target) == "path"), None)
+    required_guards = {
+        "path == newest",
+        "age < days * 86400",
+        'receipt.get("verified") is not True',
+        'now - receipt["verified_at"] < days * 86400',
+        'surviving_archives.get(receipt.get("archive_id")) != receipt["archive_md5"]',
+        '_md5_file(path) != receipt["archive_md5"]',
+        'receipt.get("sha256") != _sha256_file(path)',
+        'receipt.get("name") != path.name',
+        'receipt.get("size") != path.stat().st_size',
+    }
+    guards = set()
+    if loop:
+        for statement in loop.body:
+            if isinstance(statement, ast.Expr) and _calls(statement, "unlink"):
+                break
+            if (
+                isinstance(statement, ast.If)
+                and len(statement.body) == 1
+                and isinstance(statement.body[0], ast.Continue)
+            ):
+                guards.update(ast.dump(n) for n in ast.walk(statement.test))
+    if (
+        not {ast.dump(ast.parse(expr, mode="eval").body) for expr in required_guards} <= guards
+        or not sweep
+        or not _calls(sweep, "_load_state")
+        or not _calls(sweep, "unlink")
+    ):
+        errors.append(
+            "local unlink must follow durable receipt, identity, both ages, md5, live Drive and newest rejection gates"
+        )
     if verified_gate is None or any(call not in safe_calls for call in delete_calls):
         errors.append("backup deletion calls must remain inside verified-upload control flow")
     deletion_statement_indexes = (

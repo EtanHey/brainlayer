@@ -2942,6 +2942,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "726262acac34f424fcb85e0ba8e0479aee90e9b3ed2f7a24ce5158c8d623bd4b": {
+      "non_cloud_purpose": "Google Drive OAuth refresh transport wrapper: delegates the existing token request to google-auth and observes only successful token lifetime metadata; no LLM enrichment or model sender.",
+      "site": {
+        "call_sha256": "2213b9887b382f66abb386fb650420b32d7bde8aa216b190ab4a1d0a877b2eda",
+        "kind": "generic_send",
+        "owner": "<module>._TokenResponseRequest.__call__",
+        "path": "src/brainlayer/drive_credentials.py",
+        "target": "self.request"
+      }
+    },
     "728edf293557e1d1928eb944369f59950afcf2b9f1d1d26e0f64f1ecaf49ca44": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls requests.Session().send.",
       "site": {
@@ -3618,6 +3628,16 @@
         "owner": "<module>._forward_to_helper",
         "path": "src/brainlayer/mcp/search_handler.py",
         "target": "client.sendall"
+      }
+    },
+    "8ceb345bdb6860f00b5cccbde1f9c4e73fe30276d1b563bf2a79b7b025907390": {
+      "non_cloud_purpose": "Explicit installer-only local SQLite file connection (mode=rw) to build observability indexes with disk guard and pre/post WAL checkpoints; no network or model sender.",
+      "site": {
+        "call_sha256": "0ae0c6c65beed1cadac08ebcee0432f76329df7c061ba0211a41131d53357cc0",
+        "kind": "generic_send",
+        "owner": "<module>.ensure_observability_indexes",
+        "path": "src/brainlayer/observability_indexes.py",
+        "target": "sqlite3.connect"
       }
     },
     "8d62779434448bc0c806048055edb1bef58cf0812ca6a420de57b456c2d27d72": {
@@ -5696,6 +5716,16 @@
         "owner": "<module>.taxonomy_git_sha",
         "path": "src/brainlayer/tag_normalization.py",
         "target": "subprocess.run"
+      }
+    },
+    "da827ec5cb9c7128bae6450222cfd74f92e970da4c1bb7f1365087b519c3675a": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/agy_attribution.py <module>.read_conversation_agent reads agy's local conversation_summaries.db read-only (mode=ro) for agent attribution",
+      "site": {
+        "call_sha256": "a0a60388e01c42a6e54856ee6ae985a8826abc8d7debbe6a7700b065cb201071",
+        "kind": "generic_send",
+        "owner": "<module>.read_conversation_agent",
+        "path": "src/brainlayer/agy_attribution.py",
+        "target": "sqlite3.connect"
       }
     },
     "da8a2b3ed55829c503b889ae4f07d6d57af82eb08d29f8fe620fc8b940bd49b3": {

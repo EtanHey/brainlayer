@@ -22,7 +22,9 @@ skipped job while a verified backup exists is a note, never a dot. So:
   access loss stays red until Drive access is observed ``ok``.
 - Wake grace: after a monitoring gap, a backup that just crossed red gets one catch-up window,
   whose deadline is persisted and never renewed by a later gap. Heartbeat and stall clocks
-  likewise get at most one wake window per clock value, then return to their true age.
+  subtract confirmed suspension overlapping their own timestamp windows. Clock pairs establish
+  total suspension within a tick interval, so only guaranteed overlap is credited. Without
+  same-boot clock evidence, pipes retain the older bounded monitoring-gap grace.
 """
 
 from __future__ import annotations
@@ -102,6 +104,8 @@ class Facts:
     """
 
     now: datetime
+    awake_clock_s: float | None = None
+    boot_session: str | None = None
     backup_local_verified_at: Any = UNOBSERVED
     backup_snapshot_local_removed: bool = False
     backup_offsite_verified_at: Any = UNOBSERVED
@@ -110,18 +114,24 @@ class Facts:
     integrity: Any = UNOBSERVED  # "ok" | "corrupt" (confirmed results only)
     watcher_updated_at: Any = UNOBSERVED
     ingest_paused: bool = False
+    unindexed_agents: Any = UNOBSERVED  # ("<agent>: <root>", ...) found by the known-agent census this check
+    census_incomplete: tuple[str, ...] = ()  # agents the census could not measure this check
+    stores_paused: bool = False
+    pause_ends_at: datetime | None = None  # the pause sentinel's expires_at while a pause is active
     oldest_pending_store_at: Any = UNOBSERVED
     store_canary_ok: Any = UNOBSERVED  # True only for a persisted, retrieved round trip
     search_canary_ok: Any = UNOBSERVED
     embedding_stalled_since: Any = UNOBSERVED
     embedding_activity: str | None = None
     embedding_progress_recent: bool = False
+    embedding_paused_by_load: bool = False
     disk_free_bytes: Any = UNOBSERVED
     disk_peak_bytes: Any = UNOBSERVED
     disk_floor_bytes: Any = UNOBSERVED
     blind_codes: tuple[str, ...] = ()
     notes: tuple[Note, ...] = ()
     check_notes: Mapping[str, str] = field(default_factory=dict)
+    check_codes: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -132,9 +142,12 @@ class Check:
     threshold_s: float | None
     since: str | None
     note: str  # bare sentence; consumers add CHECK_LABELS[name]
+    # Read-only display fields (seam PR-1). A key is present only on the checks it applies to.
+    typed: Mapping[str, Any] = field(default_factory=dict, hash=False)
 
     def to_dict(self) -> dict[str, Any]:
-        return {k: getattr(self, k) for k in ("name", "state", "age_s", "threshold_s", "since", "note")}
+        base = {k: getattr(self, k) for k in ("name", "state", "age_s", "threshold_s", "since", "note")}
+        return {**base, **self.typed}
 
 
 @dataclass(frozen=True)
@@ -179,6 +192,7 @@ CHECK_LABELS = {
 }
 _HYSTERESIS = frozenset({"ingest", "stores", "search"})
 _WAKE_GRACE = frozenset({"backup_local", "backup_offsite", "transcripts"})
+_PAUSED_FACT = {"ingest": "ingest_paused", "stores": "stores_paused"}
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -214,6 +228,7 @@ class _Raw:
     keep: dict[str, Any] = field(default_factory=dict)  # extra persisted fields (counters, latches)
     evidence: bool = True  # False: nothing new was observed, so this tick cannot show recovery
     graced: bool = False  # the state is milder than the real age only because the monitor was not running
+    typed: dict[str, Any] = field(default_factory=dict)  # display-only fields; never read by the policy
 
 
 def _age_state(age: float, amber: float, red: float) -> str:
@@ -297,9 +312,16 @@ def _graced_age(
     if deadline is not None:
         # Keep expired windows too: another gap in this episode cannot grant a new one.
         keep = {"grace_clock": _iso(start), "grace_started_at": _iso(grace_at), "grace_until": _iso(deadline)}
-    true_age = max(0.0, (now - start).total_seconds())
+    sleep_offset = 0.0
+    for window in prior.get("suspensions", ()):
+        left, right = _parse(window["from"]), _parse(window["to"])
+        # The pair locates total suspension inside [left, right], not its exact edges.
+        # Credit only overlap guaranteed to fall within this heartbeat/stall's own age.
+        outside = max(0.0, (start - left).total_seconds()) + max(0.0, (right - now).total_seconds())
+        sleep_offset += max(0.0, window["seconds"] - outside)
+    true_age = max(0.0, (now - start).total_seconds() - sleep_offset)
     effective = max(start, grace_at) if grace_at is not None and deadline is not None and now <= deadline else start
-    age = max(0.0, (now - effective).total_seconds())
+    age = min(true_age, max(0.0, (now - effective).total_seconds()))
     state = _age_state(age, amber, red)
     graced = _RANK[state] < _RANK[_age_state(true_age, amber, red)]
     note = f"{what} {_hours(true_age) if true_age >= HOURS else f'{true_age / 60:.0f} min'}"
@@ -350,10 +372,24 @@ def _drive_auth(drive: Any, prior: Mapping[str, Any]) -> _Raw:
 
 
 def _raw_checks(
-    facts: Facts, prior: Mapping[str, Mapping[str, Any]], t: Thresholds, resumed_at: datetime | None
+    facts: Facts,
+    prior: Mapping[str, Mapping[str, Any]],
+    t: Thresholds,
+    resumed_at: datetime | None,
+    suspensions: list[dict[str, Any]],
+    confirmed_clock: bool,
 ) -> dict[str, _Raw]:
     now = facts.now
-    p = lambda name: prior.get(name, {})  # noqa: E731
+
+    def p(name):
+        saved = dict(prior.get(name, {}))
+        saved["suspensions"] = suspensions
+        if confirmed_clock:
+            # Pipe grace keys are separate from backup catch_up_until, which survives.
+            for key in ("grace_clock", "grace_started_at", "grace_until"):
+                saved.pop(key, None)
+        return saved
+
     raw = {
         "backup_local": _verified_age(
             facts.backup_local_verified_at,
@@ -413,6 +449,31 @@ def _raw_checks(
         if facts.ingest_paused and r.state == RED:
             r.state, r.note = AMBER, r.note + " (watcher paused by maintenance)"
         raw["ingest"] = r
+    # Known-agent census: only a measured census replaces the last one; an unmeasured tick holds it.
+    prior_census = p("ingest").get("census")
+    prior_census = list(prior_census) if isinstance(prior_census, list) else None
+    unmeasured = facts.unindexed_agents is UNOBSERVED
+    partial = not unmeasured and bool(facts.census_incomplete)
+    if unmeasured:
+        census = prior_census
+    else:
+        # Per agent: a measured agent replaces its prior entry; an unmeasured one keeps it.
+        held = [e for e in prior_census or () if e.split(":", 1)[0] in facts.census_incomplete]
+        census = list(dict.fromkeys([*held, *facts.unindexed_agents]))
+    ingest = raw["ingest"]
+    if census:
+        if ingest.state in (GREEN, UNKNOWN):
+            ingest.state = AMBER
+        found = "an agent BrainLayer does not index is running: " + "; ".join(census)
+        if unmeasured:
+            found += " (census not measured this check; holds until a measured census clears it)"
+        elif partial:
+            found += f" (census incomplete for {', '.join(facts.census_incomplete)}; their last measured state holds)"
+        ingest.note = f"{ingest.note}; {found}" if ingest.note else found
+    if census is not None:
+        ingest.keep["census"] = census
+    ingest.typed["unindexed_agents"] = census
+    ingest.typed["census_incomplete"] = None if unmeasured else list(facts.census_incomplete)
 
     raw["embedding"] = _stall_age(
         facts.embedding_stalled_since,
@@ -424,11 +485,11 @@ def _raw_checks(
         "backlog has not shrunk for",
         t.wake_grace_s,
     )
-    if facts.embedding_activity:
-        if facts.embedding_progress_recent:
-            raw["embedding"] = _Raw(AMBER, facts.embedding_activity)
-        else:
-            raw["embedding"].note += f"; {facts.embedding_activity}"
+    embedding = raw["embedding"]
+    if facts.embedding_activity and embedding.state in (AMBER, RED):
+        if embedding.state == RED and (facts.embedding_progress_recent or facts.embedding_paused_by_load):
+            embedding.state = AMBER
+        embedding.note += f"; {facts.embedding_activity}"
     pending = _stall_age(
         facts.oldest_pending_store_at,
         p("stores"),
@@ -444,6 +505,18 @@ def _raw_checks(
     parts = [pending] + ([canary] if canary.state != UNKNOWN else [])
     known = [r for r in parts if r.state != UNKNOWN] or parts
     worst = max(known, key=lambda r: _RANK[r.state])
+    deciders = [r for r in known if _RANK[r.state] == _RANK[worst.state]]
+    cause = (
+        "blind"
+        if worst.state == UNKNOWN
+        else "none"
+        if worst.state == GREEN
+        else "both"
+        if len(deciders) == 2
+        else "queue"
+        if deciders[0] is pending
+        else "round_trip"
+    )
     # A canary failure is owed a successful round trip: an empty queue never repays it.
     owed = bool(prior_stores.get("canary_owed")) or canary.keep["fails"] > 0
     canary_ok = facts.store_canary_ok is True
@@ -458,6 +531,7 @@ def _raw_checks(
         {**pending.keep, **canary.keep, "canary_owed": owed},
         evidence=evidence,
         graced=pending.graced,
+        typed={"cause": cause},
     )
     raw["search"] = _counter(facts.search_canary_ok, p("search"), t.canary_red_failures)
 
@@ -499,11 +573,31 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
     prior_checks = prior.get("checks") if isinstance(prior.get("checks"), Mapping) else {}
     ticked = _parse(prior.get("ticked_at"))
     resumed_at = _parse(prior.get("resumed_at"))
-    if ticked is not None and (now - ticked).total_seconds() > t.sleep_gap_s:
-        resumed_at = now  # The monitor was not running (sleep, shutdown, supervisor down).
+    confirmed_clock = False
+    suspensions = [
+        w
+        for w in prior.get("suspensions", ())
+        if _parse(w.get("to")) is not None and (now - _parse(w["to"])).total_seconds() < 86400
+    ]
+    previous_awake = prior.get("awake_clock_s")
+    if (
+        ticked is not None
+        and facts.awake_clock_s is not None
+        and previous_awake is not None
+        and facts.boot_session is not None
+        and facts.boot_session == prior.get("boot_session")
+        and facts.awake_clock_s >= previous_awake
+    ):
+        confirmed_clock = True
+        suspended = (now - ticked).total_seconds() - (facts.awake_clock_s - previous_awake)
+        if suspended > 5:
+            suspensions.append({"from": _iso(ticked), "to": _iso(now), "seconds": suspended})
+            resumed_at = now
+    elif ticked is not None and (now - ticked).total_seconds() > t.sleep_gap_s:
+        resumed_at = now
     if resumed_at is not None and (now - resumed_at).total_seconds() > t.wake_grace_s:
         resumed_at = None
-    raw = _raw_checks(facts, prior_checks, t, resumed_at)
+    raw = _raw_checks(facts, prior_checks, t, None if confirmed_clock else resumed_at, suspensions, confirmed_clock)
 
     checks: list[Check] = []
     state_checks: dict[str, Any] = {}
@@ -567,7 +661,6 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
             since = _iso(since_at)
         else:
             since = before.get("since") if state == prior_state and before.get("since") else _iso(now)
-        checks.append(Check(name, state, r.age_s, r.threshold_s, since, note))
         state_checks[name] = {
             "state": state,
             "since": since,
@@ -578,6 +671,26 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
         }
         if deadline is not None:
             state_checks[name]["catch_up_until"] = _iso(deadline)
+        typed: dict[str, Any] = {
+            "unknown_ticks": unknown_ticks,
+            "blind": r.state == UNKNOWN,
+            "clock": state_checks[name]["clock"],
+            "context_codes": sorted(set(facts.check_codes.get(name, ()))),
+        }
+        if name in _WAKE_GRACE:
+            typed["catch_up_until"] = state_checks[name].get("catch_up_until")
+        if name in _HYSTERESIS:
+            typed.update(good_ticks=good_ticks, good_ticks_needed=t.recovery_good_ticks)
+        if name in ("search", "stores"):
+            typed["fails"] = int(r.keep.get("fails") or 0)
+        if name in _PAUSED_FACT:
+            paused = bool(getattr(facts, _PAUSED_FACT[name]))
+            typed.update(
+                paused_by_maintenance=paused, pause_ends_at=_iso(_aware(facts.pause_ends_at)) if paused else None
+            )
+        if name == "monitor":
+            typed["blind_codes"] = sorted(set(facts.blind_codes))
+        checks.append(Check(name, state, r.age_s, r.threshold_s, since, note, {**typed, **r.typed}))
         if name == "stores" and state == GREEN:
             state_checks[name]["canary_owed"] = False  # recovery completed on a successful round trip
     worst = max((check.state for check in checks), key=lambda s: _RANK[s] if s != UNKNOWN else 0)
@@ -586,7 +699,14 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
         dot=dot,
         checks=tuple(checks),
         notes=tuple(facts.notes),
-        state={"ticked_at": _iso(now), "resumed_at": _iso(resumed_at), "checks": state_checks},
+        state={
+            "ticked_at": _iso(now),
+            "suspensions": suspensions,
+            "awake_clock_s": facts.awake_clock_s,
+            "boot_session": facts.boot_session,
+            "resumed_at": _iso(resumed_at),
+            "checks": state_checks,
+        },
     )
 
 
@@ -606,7 +726,16 @@ def badge_alerts(verdict: Verdict) -> list[dict[str, str]]:
         for check in verdict.checks
         if check.state != GREEN
     ]
-    active.extend({"code": note.code, "severity": "warning", "message": note.message} for note in verdict.notes)
+    consent = next((note for note in verdict.notes if note.code == "job_alert_drive-consent"), None)
+    if consent:
+        for item in active:
+            if item["code"] == OUTCOME_CODE_PREFIX + "drive_auth":
+                item["message"] = consent.message
+    active.extend(
+        {"code": note.code, "severity": "warning", "message": note.message}
+        for note in verdict.notes
+        if not (note is consent and any(item["code"] == OUTCOME_CODE_PREFIX + "drive_auth" for item in active))
+    )
     return active
 
 

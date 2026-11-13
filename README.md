@@ -157,7 +157,7 @@ graph LR
     C --> D["SQLite + sqlite-vec<br/>single .db file"]
     B --> KG["Knowledge Graph<br/>entities + relations"]
     KG --> D
-    E["JSONL conversations"] --> W["Real-time Watcher<br/>~1s latency"]
+    E["JSONL conversations"] --> W["Real-time Watcher<br/>≥30s poll interval"]
     W --> D
     I["BrainBar UI<br/>NSStatusItem + NSPopover"] -->|UDS /tmp/brainbar.sock| BB["BrainBarDaemon<br/>MCP + brain bus"]
     BB -->|MCP socket protocol| B
@@ -170,7 +170,7 @@ Memory indexing, search, and the local knowledge graph run on-device. Axiom tele
 | **Storage** | SQLite + [sqlite-vec](https://github.com/asg017/sqlite-vec), WAL mode, single `.db` file |
 | **Embeddings** | `bge-large-en-v1.5` (1024 dims, CPU/MPS) |
 | **Search** | Vector similarity + FTS5, merged with Reciprocal Rank Fusion |
-| **Watcher** | Real-time JSONL indexing (~1s), 4-layer content filters, offset-persistent |
+| **Watcher** | Real-time JSONL indexing (≥30s poll interval), 4-layer content filters, offset-persistent |
 | **Knowledge Graph** | Entities, relations, co-occurrence extraction, person lookup |
 
 ## Why BrainLayer?
@@ -180,7 +180,7 @@ Memory indexing, search, and the local knowledge graph run on-device. Axiom tele
 | **MCP tools** | 16 | 1 | 1 | 0 |
 | **Local-first** | SQLite | Cloud-first | Cloud-only | Docker+PG |
 | **Zero infra** | `pip install` | API key | API key | Docker |
-| **Real-time indexing** | ~1s | No | No | No |
+| **Real-time indexing** | ≥30s poll interval | No | No | No |
 | **Knowledge lifecycle** | Supersede/archive | Auto-dedup | No | No |
 | **Open source** | Apache 2.0 | Apache 2.0 | Source-available | Apache 2.0 |
 
@@ -262,7 +262,7 @@ Enrichment work listed here is retired; history: [CHANGELOG](CHANGELOG.md).
 | Source | Indexer |
 |--------|---------|
 | Claude Code | `brainlayer index [DIR]` (JSONL, defaults to `~/.claude/projects/`) |
-| Claude Code (real-time) | `brainlayer watch` LaunchAgent (~1s, 4-layer filters) |
+| Claude Code (real-time) | `brainlayer watch` LaunchAgent (≥30s poll interval, 4-layer filters) |
 | Codex CLI | `brainlayer ingest-codex` |
 | T3 threads | `brainlayer ingest-t3` |
 | YouTube | `python scripts/index_youtube.py` |
@@ -295,7 +295,7 @@ brainlayer setup              # Create ~/.config/brainlayer/brainlayer.env
 brainlayer setup --launchd    # Create config and install launchd agents
 brainlayer init               # Interactive setup wizard
 brainlayer index              # Batch index conversations
-brainlayer watch              # Real-time watcher (persistent, ~1s)
+brainlayer watch              # Real-time watcher (persistent, ≥30s poll interval)
 brainlayer search "query"     # Semantic + keyword search
 brainlayer stats              # Database statistics
 brainlayer brain-export       # Brain graph JSON for visualization
