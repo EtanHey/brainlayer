@@ -512,13 +512,12 @@ enum BrainBarMenuPresenter {
     /// `{copy age}` from a backup check's wall-clock `ageS`: "21 hours old" under a day, else "from Nov 9 at 03:44"
     /// (`evaluatedAt − ageS`). Nil for no, a negative or non-finite age, or a time after now.
     private static func copyAge(_ age: Double?, _ c: Capture, _ v: BrainBarHealthVerdict) -> String? {
-        guard let age, valid(age) else { return nil }
+        guard let age, valid(age), v.evaluatedAt.addingTimeInterval(-age) <= c.now else { return nil }
         guard age >= 86_400 else {
             let hours = min(23, max(1, Int((age / 3600).rounded())))
             return hours == 1 ? "1 hour old" : "\(hours) hours old"
         }
-        let date = v.evaluatedAt.addingTimeInterval(-age)
-        return date <= c.now ? "from \(at(date, c))" : nil
+        return "from \(at(v.evaluatedAt.addingTimeInterval(-age), c))"
     }
 
     /// `{over d}`: a strict lower bound from an awake-adjusted age, rounded down ("in over an hour"); nil under a minute.

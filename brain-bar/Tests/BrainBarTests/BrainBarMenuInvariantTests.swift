@@ -285,6 +285,10 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             c.verdict = BrainBarHealthVerdict(dot: .green, checks: c.verdict!.checks, notes: [], evaluatedAt: d)
             c.backupDailyNextRunAt = d
             captures.append(c)
+            // A copy dated after now is never given an age (local review, CodeRabbit, before the PR opened).
+            if !(d.addingTimeInterval(-27660) <= Self.now) {
+                XCTAssertFalse(BrainBarMenuPresenter.present(c).rows.flatMap(\.strings).contains { $0.contains(" old.") }, "\(d)")
+            }
         }
         for d in dates {
             var c = Self.capture(["backup_offsite": .amber, "search": .amber], base: 1, dot: .green, checking: false, wake: false,
