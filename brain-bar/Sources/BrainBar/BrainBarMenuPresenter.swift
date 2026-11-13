@@ -13,8 +13,7 @@ enum BrainBarMenuPresenter {
     typealias State = BrainBarHealthVerdict.State
 
     private enum Thing: Int, CaseIterable { case remembering, finding, safe, upkeep, system }
-    /// `fact`: Fine, with a fact (D13's line): drawn, never counted.
-    private enum Level { case fact, cantTell, behind, needs }
+    private enum Level { case cantTell, behind, needs }
     /// U11: custody-critical, then confirmed, then escalated.
     private enum Rank: Int { case custody, confirmed, escalated }
 
@@ -33,6 +32,8 @@ enum BrainBarMenuPresenter {
         var priority = 9
         var action = P.ActionKind.copyReport
         var handoff = BrainBarMenuPresenter.handoff
+        /// D13's line, drawn directly under this row (R22) and never counted.
+        var fact: [String]? = nil
     }
 
     private static let checksOf: [Thing: [String]] = [
@@ -190,8 +191,8 @@ enum BrainBarMenuPresenter {
         var db: Line? = nil, dbNames: [String] = [], s02 = false
         if let local, let offsite {
             let faults = [local, offsite].filter { $0.state != .green }
-            if local.state == .red, local.ageS == nil {  // S07
-                (db, dbNames) = (worded(.safe, ["No verified backup on record"], .custody, priority: 1), ["backup_local"])
+            if local.state == .red, local.ageS == nil, offsite.ageS == nil {  // S07, only with no copy on record anywhere (R21)
+                (db, dbNames) = (worded(.safe, [noRecord], .custody, priority: 1), ["backup_local"])
             } else if !reds.isEmpty, let upload = runningUpload(c) {  // S32, R8, R9
                 let age = c.backupsMeasured ? copyAge(offsite.ageS, c, v).map { "Your newest backup in Google Drive is \($0). " } : nil
                 let progress = upload.onSchedule?.progress.map { "is \(percent($0))% done" } ?? "is still running"
@@ -199,7 +200,7 @@ enum BrainBarMenuPresenter {
                             local.state == .red ? .custody : .confirmed, priority: 2)
                 db?.handoff = ["If this backup doesn’t finish, BrainBar can’t fix it itself.", "Give the report to an agent."]
                 dbNames = reds.map(\.name)
-            } else if c.backupDailyFailures >= 2, !faults.isEmpty, c.upload?.live != true, c.offsiteRecovering == nil,
+            } else if c.backupDailyFailures >= 2, !faults.isEmpty, c.upload == nil, c.offsiteRecovering == nil,
                       faults.allSatisfy({ ($0.state == .red && valid($0.ageS)) || ($0.state == .amber && within($0)) }) {  // S06
                 let newest = [local, offsite].compactMap(\.ageS).filter { valid($0) }.min().flatMap { copyAge($0, c, v) }.map {
                     c.backupsMeasured ? "Your newest backup is \($0)." : "The newest backup BrainBar can confirm is \($0)."
@@ -221,18 +222,17 @@ enum BrainBarMenuPresenter {
         if absorbs, c.backupsMeasured, let age = copyAge(offsite?.ageS, c, v) {
             detail += " Your newest backup in Google Drive is \(age)."
         } else if absorbs, c.backupsMeasured, missing, offsite?.state == .red, offsite?.ageS == nil {
-            detail += " Nothing is backed up to Google Drive yet."
+            detail += " " + nothingInDrive
         }
+        let transcriptsFailing = one("transcripts").map { [.amber, .red].contains($0.state) && $0.ageS != nil } == true && c.jsonlBackupFailures >= 2
         var s13 = worded(.safe, [missing ? "Google Drive isn’t connected" : "Google Drive is disconnected", detail],
                          db?.rank == .custody || local?.state == .red ? .custody : .confirmed, priority: 4)
         s13.action = missing ? .connectDrive : .reconnectDrive
+        // D13, R22: a failing transcript backup cannot upload either while Drive is red; a fact line directly under the
+        // Drive row, not counted.
+        if transcriptsFailing { s13.fact = ["Conversation backups can’t upload either until Drive is reconnected."] }
         lines.append(s13)
-        consumed.formUnion(["drive_auth"] + dbNames + reds.map(\.name))
-        // D13: a failing transcript backup cannot upload either while Drive is red; a fact line, not counted.
-        if let t = one("transcripts"), [.amber, .red].contains(t.state), t.ageS != nil, c.jsonlBackupFailures >= 2 {
-            lines.append(Line(thing: .safe, level: .fact, strings: ["Conversation backups can’t upload either until Drive is reconnected."]))
-            consumed.insert("transcripts")
-        }
+        consumed.formUnion(["drive_auth"] + dbNames + reds.map(\.name) + (transcriptsFailing ? ["transcripts"] : []))
         return (lines, consumed)
     }
 
@@ -261,14 +261,14 @@ enum BrainBarMenuPresenter {
             needs.append(line)
         }
         if !needs.isEmpty {
-            let rows = ordered(needs) { ($0.rank.rawValue, $0.thing.rawValue, $0.priority) }.map {
-                P.Row(kind: .needsYou, strings: $0.strings + ($0.action == .copyReport ? $0.handoff : []), action: action($0.action))
+            let rows = ordered(needs) { ($0.rank.rawValue, $0.thing.rawValue, $0.priority) }.flatMap { line in
+                [P.Row(kind: .needsYou, strings: line.strings + (line.action == .copyReport ? line.handoff : []), action: action(line.action))]
+                    + (line.fact.map { [P.Row(kind: .factLine, strings: $0)] } ?? [])
             }
             // "Everything else is fine." stands for the things no row speaks for, never beside a custody-critical or generic row.
             let everythingElse = !fine.isEmpty && !needs.contains { $0.rank == .custody } && input.allSatisfy(\.worded)
                 && Set(fine).isSubset(of: provenFine(c))
-            return needsForm(rows, statuses: input.filter { $0.level == .fact }.map { P.Row(kind: .factLine, strings: $0.strings) }
-                             + (behind + cantTell).map { status($0, mark: nil) }, everythingElse: everythingElse)
+            return needsForm(rows, statuses: (behind + cantTell).map { status($0, mark: nil) }, everythingElse: everythingElse)
         }
         let nouns: [Thing: String] = [.remembering: "new conversations", .finding: "search", .safe: "backups", .upkeep: "upkeep"]
         let headline: String
@@ -314,14 +314,16 @@ enum BrainBarMenuPresenter {
     }
 
     private static func needsForm(_ needsRows: [P.Row], statuses: [P.Row], everythingElse: Bool = false) -> P {
-        let headline = needsRows.count == 1 ? "1 thing needs you" : "\(needsRows.count) things need you"
+        let count = needsRows.filter { $0.kind == .needsYou }.count
+        let headline = count == 1 ? "1 thing needs you" : "\(count) things need you"
         var rows = [P.Row(kind: .headline, strings: [headline], mark: .marked), P.Row(kind: .separator)]
-        for (i, row) in needsRows.enumerated() {
-            rows.append(P.Row(kind: .needsYou, strings: row.strings, action: row.action, mark: .alertCircle, dividerBefore: i > 0))
+        for row in needsRows {  // a fact line rides directly under its Needs-you row (R22)
+            let first = !rows.contains { $0.kind == .needsYou }
+            rows.append(row.kind == .needsYou ? P.Row(kind: .needsYou, strings: row.strings, action: row.action, mark: .alertCircle, dividerBefore: !first) : row)
         }
         rows += statuses.map { var row = $0; row.mark = nil; return row }
         if everythingElse { rows.append(P.Row(kind: .everythingElse, strings: ["Everything else is fine."], mark: .checkmark)) }
-        return .init(form: .needs, headline: headline, count: needsRows.count, icon: .marked, rows: rows + bottom)
+        return .init(form: .needs, headline: headline, count: count, icon: .marked, rows: rows + bottom)
     }
 
     /// X01, X02, and in P1 every path without a readable, fresh verdict and no red: nothing is confirmed.
@@ -385,15 +387,20 @@ enum BrainBarMenuPresenter {
             needsRows = [P.Row(kind: .needsYou, strings: needs(.system).strings + handoff, action: copyReport)]
         }
         if !needsRows.isEmpty, p.form != .needs || p.count != needsRows.count || p.icon != .marked || p.rows.filter({ $0.kind == .needsYou }) != needsRows {
-            p = needsForm(needsRows, statuses: p.rows.filter { [.factLine, .statusLine].contains($0.kind) },
-                          everythingElse: p.rows.contains { $0.kind == .everythingElse })
+            let carried = p.rows.contains { $0.kind == .needsYou } ? p.rows.filter { [.needsYou, .factLine].contains($0.kind) }
+                : needsRows + p.rows.filter { $0.kind == .factLine }
+            p = needsForm(carried, statuses: p.rows.filter { $0.kind == .statusLine }, everythingElse: p.rows.contains { $0.kind == .everythingElse })
         }
-        // I3, by sentence: a reassuring sentence stays, wherever it sits, only when everything it covers is proven.
+        // I3 and I8, by sentence: a reassurance, or a claim about the copies, stays wherever it sits only when what it says is
+        // proven; an unproven S07 title gives way to R17's.
         let drawn = p
         p.rows = p.rows.compactMap { row in
             var row = row
             row.strings = row.strings.compactMap { string in
-                let kept = sentences(string).filter { proven($0, drawn, c) != false }
+                let kept = sentences(string).compactMap { sentence -> String? in
+                    if let holds = claimHolds(sentence, c) { return holds ? sentence : sentence == nothingInDrive ? nil : needs(.system).strings[0] }
+                    return proven(sentence, drawn, c) != false ? sentence : nil
+                }
                 return kept.isEmpty ? nil : kept.joined(separator: " ")
             }
             if row.kind == .needsYou, row.strings.isEmpty { row.strings = needs(.system).strings + handoff }
@@ -406,6 +413,25 @@ enum BrainBarMenuPresenter {
 
     private static let stillSaved = "Your memory is still being saved and backed up, as of the last checks."  // U03
     private static let exactWords = "Agents can still find every memory by exact words."  // F07
+
+    // MARK: I8's claims about the copies, each with the condition that makes it true
+
+    private static let noRecord = "No verified backup on record"  // S07, A1's words
+    private static let noRecordTT = "BrainBar has no record of a verified backup of your memory."  // S07, the truth table's
+    private static let nothingInDrive = "Nothing is backed up to Google Drive yet."  // R14
+
+    /// Whether a claim about the copies holds for this capture; nil when the sentence is not such a claim. S07's needs the
+    /// local copy red with no clock and no Drive clock either (R21); R14's needs no Drive clock and backups measured.
+    private static func claimHolds(_ sentence: String, _ c: Capture) -> Bool? {
+        guard [noRecord, noRecordTT, nothingInDrive].contains(sentence) else { return nil }
+        let checks = c.verdict?.checks ?? []
+        func every(_ name: String, _ ok: (BrainBarHealthVerdict.Check) -> Bool) -> Bool {
+            checks.contains { $0.name == name } && checks.filter { $0.name == name }.allSatisfy(ok)
+        }
+        let noDriveClock = every("backup_offsite") { $0.ageS == nil }
+        return sentence == nothingInDrive ? noDriveClock && c.backupsMeasured
+            : noDriveClock && every("backup_local") { $0.state == .red && $0.ageS == nil }
+    }
 
     /// Whether a reassuring sentence is proven for this capture; nil when the sentence is not a reassurance. "All good" and
     /// the Drive line under it are I2's.
