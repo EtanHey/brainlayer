@@ -75,12 +75,28 @@ checks its own `BRAINLAYER_LAUNCHD_*_ENABLED` gate before exec.
 
 On macOS the hotlane sets its own CPU nice value to 20, without changing disk I/O policy.
 `BRAINLAYER_HOTLANE_THREADS` caps torch and BLAS threads (default 1 on Apple M1, 2 otherwise).
-`BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD` sets the one-minute load ceiling (default performance-core count).
-`BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS` (default 300) guarantees a reserved backlog batch
-at least every five minutes under high load. This uses the existing backlog lane and never lifts hot-slice backpressure.
+`BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD` sets the one-minute load ceiling (default twice the performance-core count).
+`BRAINLAYER_HOTLANE_BACKLOG_FLOOR_SECONDS` (default 300) requests a backlog batch after
+continuous high load. A load dip resets that timer. The existing escape also remains: no more
+than 300 seconds since the last backlog turn, regardless of load. Longer floor overrides are
+clamped to 300; shorter overrides run more often. `BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS`
+remains the fallback setting when FLOOR_SECONDS is unset.
+
+At forced turns, at most once per `BRAINLAYER_HOTLANE_BACKLOG_COUNT_INTERVAL_SECONDS`
+(default 900), the daemon measures active unvectored chunks through the rowid index, read-only.
+After `BRAINLAYER_HOTLANE_BACKLOG_STALL_SECONDS` (default 900) without falling below the window minimum, forced turns
+run consecutive normal batches for `BRAINLAYER_HOTLANE_BACKLOG_BUDGET_SECONDS` (default 120).
+This mode persists until the queue empties. Each batch keeps the same nice/thread settings;
+extra batches suppress hot work and preserve store-queue backpressure. Queue depths are rechecked
+between batches; growth of the durable high-priority queue yields the remaining burst. The daemon checks the
+pause marker between batches, stops on no progress, and admits another batch only while its
+last measured duration fits the remaining budget. An in-flight batch can overrun if it slows down.
+Any exception while counting is logged; the normal forced batch still runs.
+A daemon restart resets the in-memory window minimum and stall clock.
 A `hotlane.pause` file beside the resolved database also pauses backlog embedding; removing it resumes work.
 The pause marker overrides minimum duty completely.
 Hot embedding continues during these pauses unless store-queue backpressure suppresses it.
+Fresh CPU evidence reports the next forced-batch time in the machine-load health note.
 Startup records the applied settings in `hotlane-budget.json`
 beside that database and in the log.
 
@@ -135,7 +151,7 @@ BrainLayer reads from these locations by default:
 |--------|----------|
 | Claude Code conversations | `~/.claude/projects/` |
 | Deduplicated system prompts | `~/.local/share/brainlayer/prompts/` |
-| Daemon socket | `/tmp/brainlayer.sock` |
+| Daemon socket | `/tmp/brainbar.sock` |
 | Historical enrichment lock | `/tmp/brainlayer-enrichment.lock` (legacy safety/cleanup only) |
 
 ### T3 projection selection
@@ -523,15 +539,15 @@ During the entire command, SQLite diagnostics log only error codes/classes, incl
 file handlers; the process's normal SQLite callback is restored after stores close.
 Failures retain value-free causal error categories and cleanup notes.
 
-### Google Drive OAuth client mode
+### Google Drive authorization lifetime
 
-`BRAINLAYER_DRIVE_OAUTH_TESTING=1` enables the local seven-day consent deadline
-for OAuth clients whose Google publishing status is Testing. Leave it unset for
-Production clients (the default): `consented_at` remains metadata, status has no
-local `expires_at`, and only actual credential failures require reconnecting.
-Google rejecting a refresh with `invalid_grant` still raises a consent alert in
-either mode. Set this variable in the environment of the BrainLayer process
-checking or loading Drive credentials.
+Google's token response determines the grant lifetime. Authorization and successful
+refreshes store `refresh_expires_at`: an explicit UTC deadline when Google returns
+`refresh_token_expires_in`, or `"permanent"` when it omits that field.
+Older tokens without this metadata have an unknown lifetime until their next refresh;
+`consented_at` is metadata and never implies a deadline. Status warns within two days
+of a reported deadline. An expired reported deadline or an actual `invalid_grant`
+requires reconnecting in BrainBar.
 
 ### Daily Drive upload recovery
 
@@ -582,3 +598,40 @@ A later dated run can create a replacement without changing backup filenames.
 
 Weekly maintenance rechecks local proof immediately before quiesce and VACUUM. Upload runs after
 weekly maintenance and retains its independent remote verification contract.
+
+### Local JSONL archive retention
+
+`BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION` defaults to `1`; `0` or `false`
+disables local deletion. The separate `BRAINLAYER_JSONL_BACKUP_RETENTION`
+controls ONLY optional Drive trash pruning (default off, latest 30 unchanged).
+An existing Drive `=0` does not disable local retention. No env file is rewritten.
+
+`BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION_DAYS` defaults to 14 (minimum 14).
+Both archive mtime and the receipt's `verified_at` must be at least that old.
+Invalid values and sweep failures log a warning and enter `local_retention_error`
+in the run result; backup continues. `upload=False` never sweeps.
+
+The sweep includes the configured staging directory and direct `release-*`
+siblings under `jsonl-backups`, keeping the newest archive overall. Deletion
+requires a durable verified exact-name/size/SHA-256/Drive-ID receipt, matching
+local MD5, and that ID with matching MD5 in this run's live Drive inventory.
+The receipt is verified only when Drive's uploaded `md5Checksum` equals the
+local archive MD5. Missing checksum, legacy receipts, missing live objects or
+listing failure authorize no deletion. Each unlink has a durable intent and
+a confirmation event; completed sweeps report `local_retention_deleted`.
+
+Drive pruning revokes receipts durably before trashing and restores survivors
+afterward. An interrupted revoke is logged and raises a `jsonl-retention` job
+note requiring reconciliation; while it is pending no receipt is built from a listing.
+A wall-clock jump can advance both age measurements, and an external actor can
+remove a final Drive copy after local deletion. The formal model documents and
+demonstrates these limits; receipt age is not a trusted elapsed-time clock.
+
+Archives staged before receipts existed have none, so the sweep could never retire them.
+Each run with a live Drive inventory reconciles them: a local archive with no receipt gets
+one only when the listing holds exactly one untrashed object of the same name, size and
+`md5Checksum` as the local file. The receipt records `source: "reconciled"` and
+`verified_at` set to the run's time, never earlier, so its 14-day clock starts at
+reconciliation and it cannot delete anything in the run that writes it. An existing
+receipt, including a legacy one, is never replaced. Runs report the names written in
+`local_retention_reconciled`.

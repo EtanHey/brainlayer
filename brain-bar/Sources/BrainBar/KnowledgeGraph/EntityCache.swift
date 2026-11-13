@@ -1,30 +1,31 @@
-// EntityCache.swift — In-memory entity name cache for sub-millisecond detection.
-//
-// Loaded at startup from kg_entities, refreshed on a 60-second timer.
-// Uses Dictionary<String, String> (lowercased name → entity ID) for O(1) lookup.
-// Greedy longest-match for multi-word entity names.
-
 import Foundation
 import SQLite3
 
 final class EntityCache: @unchecked Sendable {
     struct DetectedEntity {
         let id: String
-        let name: String  // original-case name from DB
+        let name: String
     }
 
-    /// lowercased name → (entity ID, original name)
     private var entityMap: [String: (id: String, name: String)] = [:]
-    /// Sorted longest-first for greedy multi-word matching
     private var sortedNames: [String] = []
     private let queue = DispatchQueue(label: "com.brainbar.entitycache", attributes: .concurrent)
 
     private var refreshTimer: DispatchSourceTimer?
 
-    /// Load active entity names from the database. Archived/quarantined rows
-    /// stop participating in MCP query entity detection after the next refresh.
-    func load(from db: OpaquePointer?) {
-        guard let db else { return }
+    func load(from database: BrainDatabase) {
+        guard let newMap = try? database.withSQLiteHandle(Self.readNames) else { return }
+        var names = Array(newMap.keys)
+        names.sort { $0.count > $1.count }
+
+        queue.async(flags: .barrier) {
+            self.entityMap = newMap
+            self.sortedNames = names
+        }
+        NSLog("[BrainBar] EntityCache loaded: %d entities", newMap.count)
+    }
+
+    private static func readNames(_ db: OpaquePointer) -> [String: (String, String)]? {
         let columns = Self.tableColumns(db)
         var filters = columns.contains("status") ? ["COALESCE(status, 'active') = 'active'"] : []
         filters.append(columns.contains("user_verified")
@@ -33,7 +34,7 @@ final class EntityCache: @unchecked Sendable {
         let sql = "SELECT id, name FROM kg_entities WHERE " + filters.joined(separator: " AND ")
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK
-        else { return }
+        else { return nil }
         defer { sqlite3_finalize(stmt) }
 
         var newMap: [String: (String, String)] = [:]
@@ -43,20 +44,12 @@ final class EntityCache: @unchecked Sendable {
             let id = String(cString: idPtr)
             let name = String(cString: namePtr)
             let key = name.lowercased()
-            // Keep the first occurrence (avoids overwriting with duplicate lowercase entries)
             if newMap[key] == nil {
                 newMap[key] = (id, name)
             }
         }
 
-        var names = Array(newMap.keys)
-        names.sort { $0.count > $1.count }  // longest-first for greedy matching
-
-        queue.async(flags: .barrier) {
-            self.entityMap = newMap
-            self.sortedNames = names
-        }
-        NSLog("[BrainBar] EntityCache loaded: %d entities", newMap.count)
+        return newMap
     }
 
     private static func tableColumns(_ db: OpaquePointer) -> Set<String> {
@@ -71,17 +64,20 @@ final class EntityCache: @unchecked Sendable {
         return columns
     }
 
-    /// Start a 60-second periodic refresh timer.
-    func startRefreshTimer(db: OpaquePointer?) {
-        // Cancel any existing timer before creating a new one
+    func startRefreshTimer(db: BrainDatabase) {
         refreshTimer?.cancel()
         refreshTimer = nil
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 60, repeating: 60)
-        timer.setEventHandler { [weak self] in
+        let handler: @Sendable () -> Void = { [weak self, weak db] in
+            guard let db else { return }
             self?.load(from: db)
         }
+        timer.setEventHandler(handler: handler)
+#if DEBUG
+        refreshHandlerForTesting = handler
+#endif
         timer.resume()
         refreshTimer = timer
     }
@@ -92,6 +88,12 @@ final class EntityCache: @unchecked Sendable {
     }
 
 #if DEBUG
+    private var refreshHandlerForTesting: (@Sendable () -> Void)?
+
+    func fireRefreshTimerForTesting() {
+        refreshHandlerForTesting?()
+    }
+
     func enqueueWorkForTesting(_ work: @escaping @Sendable () -> Void) {
         queue.async(execute: work)
     }
@@ -111,14 +113,12 @@ final class EntityCache: @unchecked Sendable {
         var matched = Set<String>()
 
         queue.sync {
-            // Multi-word entities first (greedy, longest match)
             for key in sortedNames where key.contains(" ") && queryLower.contains(key) {
                 if let entry = entityMap[key], !matched.contains(key) {
                     results.append(DetectedEntity(id: entry.id, name: entry.name))
                     matched.insert(key)
                 }
             }
-            // Single-word entities
             for word in words {
                 if let entry = entityMap[word], !matched.contains(word) {
                     results.append(DetectedEntity(id: entry.id, name: entry.name))

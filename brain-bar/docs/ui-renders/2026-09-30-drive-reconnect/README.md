@@ -10,7 +10,7 @@ BRAINBAR_DB_PATH=<scratch>/brainlayer.db BRAINBAR_RENDER_ONLY=<scratch>/out .bui
 | State (`brainlayer backup auth --status --json`) | Backups page | Backups badge (#1029 review B1) | Button |
 |---|---|---|---|
 | `valid` | [Connected: renews by <date>](backups-connected-default.png) | green **Healthy** | none |
-| `expiring` (under 24 h left, day 6 of the 7-day Testing-mode consent) | "Drive access expires in 6 h. Reconnect", amber, at [760](backups-expiring-compact.png), [960](backups-expiring-default.png) and [1280](backups-expiring-wide.png) | amber **Drive access expiring**, with the same line | Reconnect Google Drive |
+| `expiring` (under 24 h left before the reported deadline) | "Drive access expires in 6 h. Reconnect", amber, at [760](backups-expiring-compact.png), [960](backups-expiring-default.png) and [1280](backups-expiring-wide.png) | amber **Drive access expiring**, with the same line | Reconnect Google Drive |
 | `missing` | ["Google Drive is not connected. Backups can't upload."](backups-missing-default.png) plus the CLI's reason | red **Needs attention**, with the same line | Reconnect Google Drive |
 | `invalid`, after a cancelled reconnect | ["Drive access expired or was revoked…"](backups-invalid-cancelled-default.png) plus "Reconnect was cancelled: <reason>" | red **Needs attention**, with the same line | still shown |
 | reconnect running | ["Waiting for Google consent in your browser…"](backups-reconnecting-default.png) | red **Needs attention** until consent completes | disabled, with a spinner |

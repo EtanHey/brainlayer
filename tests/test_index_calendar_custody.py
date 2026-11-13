@@ -155,9 +155,17 @@ def test_stalled_calendar_alarms_while_writer_is_still_held(calendar_fixture, mo
     monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(db.parent / "pidfiles"))
     monkeypatch.setattr(cli, "_calendar_index_budget_s", lambda: 0.05)
     original = watchdog_module.IndexWatchdog
+    encoder_started = [None]
+
+    def encoder_clock():
+        if not entered.is_set():
+            return 0.0
+        if encoder_started[0] is None:
+            encoder_started[0] = real_monotonic()
+        return real_monotonic() - encoder_started[0]
 
     def watched(**kw):
-        kw.update(wall_monotonic=real_monotonic, poll_interval_s=0.01)
+        kw.update(wall_monotonic=encoder_clock, poll_interval_s=0.01)
         if "yield_grace_s" in kw:
             kw["yield_grace_s"] = 0.05
         return original(**kw)

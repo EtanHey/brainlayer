@@ -91,6 +91,19 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testFailedStoresReadPreservesDeadlineAndHandlesEmptyReason() throws {
+        for reason in ["database query deadline exceeded (20s budget)", "  "] {
+            let presentation = try makePresentation(
+                result: BrainBarOnePageTestFixture.unmeasuredResult(reason: reason),
+                now: BrainBarOnePageTestFixture.now)
+            XCTAssertNil(presentation.indexedToday)
+            XCTAssertEqual(presentation.indexedTodayUnavailableText,
+                reason == "  " ? "Indexed today unavailable: stores measurement unavailable"
+                    : "Indexed today could not be read: \(reason)")
+        }
+    }
+
+    @MainActor
     func testGeneratedAtTrustMatrixNeverRendersUntrustworthyValues() throws {
         let now = Date(timeIntervalSince1970: 1_789_419_780) // 2026-09-15 00:03:00 Asia/Jerusalem
         let missing = try BrainBarOnePageTestFixture.invalidGeneratedAtResult(.missing)
@@ -524,6 +537,10 @@ enum BrainBarOnePageTestFixture {
         ))
     }
 
+    static func unmeasuredResult(reason: String) throws -> ObservabilityReadResult {
+        .readable(try document(byHour: nil, measured: false, storesReason: reason))
+    }
+
     static func staleUnmeasuredResult() throws -> ObservabilityReadResult {
         .readable(try document(byHour: nil, generatedAt: now.addingTimeInterval(-900), measured: false))
     }
@@ -569,7 +586,8 @@ enum BrainBarOnePageTestFixture {
         byHour: [ObservabilityDocument.HourBucket]?,
         generatedAt: Date = now,
         backupsVerified: Bool = true,
-        measured: Bool = true
+        measured: Bool = true,
+        storesReason: String = "no sample"
     ) throws -> ObservabilityDocument {
         let url = try XCTUnwrap(Bundle.module.url(
             forResource: "observability-main-58849a70",
@@ -586,7 +604,7 @@ enum BrainBarOnePageTestFixture {
             windowHours: base.windowHours,
             stores: .init(
                 state: measured ? "measured" : "unmeasurable",
-                reason: measured ? "" : "no sample",
+                reason: measured ? "" : storesReason,
                 inputs: [],
                 totalChunks: measured ? 797_727 : nil,
                 inWindow: measured ? .init(count: 18, byHour: byHour) : nil

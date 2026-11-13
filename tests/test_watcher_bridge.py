@@ -667,7 +667,6 @@ class TestFullPipeline:
             / "agent-transcripts"
             / "agent-session"
             / "agent-session.jsonl",
-            "gemini": tmp_path / ".gemini" / "sessions" / "worker.jsonl",
             "claude-direct": tmp_path / ".claude" / "projects" / "proj" / "direct-session.jsonl",
             "claude-subagent": tmp_path
             / ".claude"
