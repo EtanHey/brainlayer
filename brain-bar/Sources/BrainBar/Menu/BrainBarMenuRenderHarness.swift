@@ -19,6 +19,7 @@ import SwiftUI
 
     static func render(in directory: URL) throws -> [String] {
         let cases = try BrainBarMenuCases.load(BrainBarMenuCases.sourceURL())
+        BrainBarMenuMark.captureClock = Date(timeIntervalSinceReferenceDate: 0)  // the busy arrows at a fixed phase
         let metrics = measured()
         print("[brainbar-render] menu metrics: row \(metrics.row) separator \(metrics.separator) padding \(metrics.padding)")
         var written: [String] = []

@@ -133,6 +133,7 @@ struct BrainBarMenuRowView: View {
         HStack(spacing: 0) {
             Button { perform(action.kind) } label: { Text(Self.keepingNumbersWithUnits(action.label)) }
                 .buttonStyle(BrainBarMenuActionButtonStyle(accessibility: accessibility))
+                .accessibilityLabel(Text(verbatim: Self.accessibilityName(of: action)))
         }
         // The system focus ring, concentric with the button (radius 13 + 1 pt gap = the ring's inner 14). Drawn with
         // circular corners just under half its height: `Capsule` and continuous corners flatten a stroked pill.
@@ -144,6 +145,9 @@ struct BrainBarMenuRowView: View {
 
     /// R28a, for line breaking only: a number stays with the word after it ("21 hours", "40% done") and a month with its
     /// day. The value's text, the accessibility text and the contract bytes are unchanged.
+    /// The button is named by the value's own label, never by the line-breaking text drawn on it.
+    static func accessibilityName(of action: P.Action) -> String { action.label }
+
     static func keepingNumbersWithUnits(_ string: String) -> String {
         string.replacing(#/(\d%?) /#) { "\($0.1)\u{00A0}" }.replacing(#/\b([A-Z][a-z]{2}) (\d)/#) { "\($0.1)\u{00A0}\($0.2)" }
     }
@@ -170,6 +174,9 @@ struct BrainBarMenuMark: View {
         }
     }
 
+    /// A fixed phase for the off-screen render harness, so two runs draw the same still; nil everywhere else.
+    @MainActor static var captureClock: Date?
+
     private func disc(_ color: NSColor, _ glyph: Image, turning: Bool = false) -> some View {
         Circle().fill(Color(nsColor: color))
             .overlay(Circle().strokeBorder(Color.primary.opacity(0.55), lineWidth: accessibility.increaseContrast ? 1 : 0))
@@ -177,7 +184,7 @@ struct BrainBarMenuMark: View {
                 // One even turn every 2 s, linear: constant motion, slow enough to read as work going on, not alarm.
                 TimelineView(.animation(paused: !turning)) { context in
                     glyph.font(.system(size: size * 0.48, weight: .bold)).foregroundStyle(.white)
-                        .rotationEffect(.degrees(turning ? context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) * 180 : 0))
+                        .rotationEffect(.degrees(turning ? (Self.captureClock ?? context.date).timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) * 180 : 0))
                 }
             }
             .frame(width: size, height: size)

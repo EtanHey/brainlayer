@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Vision
 import XCTest
 @testable import BrainBar
@@ -45,6 +46,9 @@ import XCTest
             if let host = item.view as? BrainBarMenuRowHost {  // one element per row; a row with a button is a group
                 XCTAssertTrue(host.isAccessibilityElement())
                 XCTAssertEqual(host.accessibilityRole(), action == nil ? .staticText : .group)
+                if action != nil {  // the button is named by the value's label, not the drawn (line-breaking) text
+                    XCTAssertEqual((host.hosting as? NSHostingView<BrainBarMenuRowView>)?.rootView.row.action.map(BrainBarMenuRowView.accessibilityName), item.title)
+                }
                 return .hosted(words: host.accessibilityLabel() ?? "", action: action)
             }
             return .standard(title: item.title, key: item.keyEquivalent, modifiers: item.keyEquivalentModifierMask.rawValue,
@@ -95,6 +99,18 @@ import XCTest
     }
 
     /// Pixels drawn (alpha over a quarter) inside a rect given in points.
+    /// Opaque near-white pixels inside a rect given in points: a disc's glyph is drawn white on the disc's colour.
+    private static func white(_ rep: NSBitmapImageRep, x: ClosedRange<CGFloat>) -> Int {
+        var count = 0
+        for px in Int(x.lowerBound * 2)..<Int(x.upperBound * 2) {
+            for py in 0..<rep.pixelsHigh {
+                guard let c = rep.colorAt(x: px, y: py)?.usingColorSpace(.deviceRGB), c.alphaComponent > 0.9 else { continue }
+                if min(c.redComponent, c.greenComponent, c.blueComponent) > 0.85 { count += 1 }
+            }
+        }
+        return count
+    }
+
     private static func ink(_ rep: NSBitmapImageRep, x: ClosedRange<CGFloat>) -> Int {
         var count = 0
         for px in Int(x.lowerBound * 2)..<Int(x.upperBound * 2) { for py in 0..<rep.pixelsHigh where (rep.colorAt(x: px, y: py)?.alphaComponent ?? 0) > 0.25 { count += 1 } }
@@ -164,6 +180,42 @@ import XCTest
         XCTAssertEqual(items.map { $0.representedObject as? BrainBarMenuAction },
                        [.row(.copyReport), nil, nil, nil, .row(.copyReport), .row(.copyReport)], "no action inferred over an explicit one")
         XCTAssertEqual(items[3].keyEquivalent, ",", "the hosted standing row keeps its key equivalent")
+    }
+
+    /// Codex round 2 (R2-B1): a mark carries its symbol, not just colour. A disc's glyph is white on the disc, so a disc
+    /// without it has no white at all; a bare mark (the checkmark, the state ellipsis) is the glyph itself.
+    func testEveryMarkDrawsItsSymbol() throws {
+        let metrics = BrainBarMenuRenderHarness.measured()
+        var seen = Set<String>()
+        for (id, presentation, _) in try cases() {
+            let builder = BrainBarMenuBuilder(accessibility: .init(increaseContrast: true))
+            let rows = presentation.rows.filter { $0.kind != .separator && !($0.kind == .standardItem && $0.strings.count == 1 && $0.action == nil) }
+            for (row, item) in zip(rows, builder.build(presentation).items.filter { $0.view != nil }) {
+                let rep = try Self.render(BrainBarMenuRenderHarness.rowView(item, metrics: metrics))
+                if let mark = row.mark, mark != .checkmark {
+                    XCTAssertGreaterThan(Self.white(rep, x: 16...42), 12, "\(id): the \(mark) mark draws its symbol")
+                    seen.insert(mark.rawValue)
+                } else if row.mark == .checkmark || (row.mark == nil && !row.spinner && row.state == .cantTell && row.kind != .headlineDetail) {
+                    XCTAssertGreaterThan(Self.ink(rep, x: 16...42), 20, "\(id): the bare mark is drawn")
+                    seen.insert(row.mark?.rawValue ?? "ellipsis")
+                }
+            }
+        }
+        XCTAssertEqual(seen, ["ok", "busy", "wait", "marked", "alert-circle", "checkmark", "ellipsis"])
+    }
+
+    /// Codex round 2 (R2-B2): the line-breaking transform keeps every character; it only turns a space into U+00A0.
+    func testLineBreakingKeepsEveryCharacter() throws {
+        let edges = ["40% done", "11:28 now", "Nov 9 at 03:44", "3 things need you", "is 21", "21 22", "no number here", "",
+                     "To Google Drive. Started at 11:28. 40% done, about 12:48."]
+        let strings = try cases().flatMap { $0.presentation.rows.flatMap { $0.strings + [$0.action?.label].compactMap { $0 } } }
+        for input in strings + edges {
+            let output = BrainBarMenuRowView.keepingNumbersWithUnits(input).replacingOccurrences(of: "\u{00A0}", with: " ")
+            XCTAssertEqual(Array(output.unicodeScalars), Array(input.unicodeScalars), input)
+        }
+        XCTAssertEqual(BrainBarMenuRowView.keepingNumbersWithUnits("is 21 hours old."), "is 21\u{00A0}hours old.")
+        XCTAssertEqual(BrainBarMenuRowView.keepingNumbersWithUnits("40% done"), "40%\u{00A0}done")
+        XCTAssertEqual(BrainBarMenuRowView.accessibilityName(of: .init(kind: .copyReport, label: "Open 2 folders")), "Open 2 folders")
     }
 
     /// Nothing is wired: every item only records what it asks for.
