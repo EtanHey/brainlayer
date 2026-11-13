@@ -58,7 +58,16 @@ CHECK_FOR_CODE = {
         ),
         "embedding",
     ),
-    **dict.fromkeys(("watcher_stalled", "watch_unloaded", "t3_ingest_unhealthy", "unindexed_agent_running"), "ingest"),
+    **dict.fromkeys(
+        (
+            "watcher_stalled",
+            "watch_unloaded",
+            "t3_ingest_unhealthy",
+            "unindexed_agent_running",
+            "agent_census_incomplete",
+        ),
+        "ingest",
+    ),
     **dict.fromkeys(
         (
             "queue_backed_up",

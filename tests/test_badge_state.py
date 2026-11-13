@@ -51,6 +51,7 @@ def _run_minimal_health_check(
     evidence: bool = True,
     ps_output: str = "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4",
     agent_home: Path | None = None,
+    agent_etime: str | None = "10:00",
 ) -> HealthCheckResult:
     """``evidence`` writes fresh outcome receipts, so only the condition under test can move the dot.
 
@@ -121,9 +122,19 @@ def _run_minimal_health_check(
         socket_request_fn=lambda *_args: (
             canary_response or {"result": {"content": [{"type": "text", "text": "1 of 1 shown"}]}}
         ),
-        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="state = running", stderr=""),
+        command_runner=lambda args: _fake_command(args, agent_etime),
         now_fn=now_fn,
     )
+
+
+def _fake_command(args: list[str], agent_etime: str | None) -> SimpleNamespace:
+    """launchctl answers "running"; the census's ``ps -o pid=,etime=`` answers ``agent_etime`` (None: ps fails)."""
+    if args[:3] == ["ps", "-o", "pid=,etime="]:
+        if agent_etime is None:
+            return SimpleNamespace(returncode=2, stdout="", stderr="ps: failed")
+        stdout = "".join(f"{pid} {agent_etime}\n" for pid in args[-1].split(","))
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+    return SimpleNamespace(returncode=0, stdout="state = running", stderr="")
 
 
 def _blind_alert(document: dict) -> dict:
@@ -671,3 +682,25 @@ def test_a_running_agent_brainlayer_does_not_index_turns_ingest_amber_end_to_end
     assert ingest["unindexed_agents"] == result.unindexed_agents
     assert ingest["context_codes"] == ["unindexed_agent_running"]
     assert "an agent BrainLayer does not index is running: gemini" in ingest["note"]
+
+
+def test_a_census_without_process_start_times_is_not_measured_end_to_end(tmp_path: Path) -> None:
+    home = tmp_path / "agent-home"
+    chat = home / ".gemini" / "tmp" / "3a50" / "chats" / "session-2026-11-13T09-00-ab12.json"
+    chat.parent.mkdir(parents=True)
+    chat.write_text("{}\n")
+    output = tmp_path / "contract" / "badge-state.json"
+    hotlane = "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4"
+    result = _run_minimal_health_check(
+        tmp_path,
+        output,
+        ps_output=f"{hotlane}\n4242 node /opt/homebrew/bin/gemini\n",
+        agent_home=home,
+        agent_etime=None,
+    )
+
+    assert result.unindexed_agents is None
+    assert [(i.code, i.severity) for i in result.issues] == [("agent_census_incomplete", "warning")]
+    ingest = next(c for c in json.loads(output.read_text())["verdict"]["checks"] if c["name"] == "ingest")
+    assert ingest["state"] == "green" and ingest["unindexed_agents"] is None
+    assert ingest["context_codes"] == ["agent_census_incomplete"]

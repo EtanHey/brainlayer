@@ -2,72 +2,129 @@
 
 The ingest guarantee (formal/ingest-coverage) holds only for wired roots, and new sources are wired on
 purpose, never auto-detected. This is the honest add-on: it names a running agent from the list below
-whose transcripts land outside every watched root. It cannot see an agent that is not on the list.
+that wrote one of its transcripts, during its current run, outside every watched root. It cannot see an
+agent that is not on the list.
+
+Result: a list of ``"<agent>: <root>"`` (measured; empty means none found), or None when the census could
+not be measured (a process start time unknown, a scan cut short by a cap or a read error) and nothing was
+found. A positive finding is reported even if another scan was incomplete.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 
-RECENT_WRITE_S = 24 * 3600
-MAX_ENTRIES = 2000
-MAX_DEPTH = 4
+MAX_ENTRIES = 5000
+MAX_DEPTH = 6
+START_SLACK_S = 1.0  # ps reports elapsed time in whole seconds
+_INTERPRETER = re.compile(r"^(node|nodejs|bun|deno|python[0-9.]*)$")
+
+ProcessStarts = Callable[[Sequence[int]], "dict[int, float] | None"]
 
 
 @dataclass(frozen=True)
 class KnownAgent:
     name: str
-    process_names: tuple[str, ...]  # argv[0] basename, or argv[1] for an interpreter-run CLI
-    roots: tuple[str, ...]  # home-relative directories the agent writes its transcripts under
+    executables: tuple[str, ...]  # argv[0] basename of the agent's own binary
+    entry_scripts: tuple[str, ...]  # script an interpreter runs: a basename, or a path fragment containing "/"
+    transcripts: tuple[tuple[str, str], ...]  # (home-relative root, fnmatch pattern for the path under it)
 
 
 KNOWN_AGENTS: tuple[KnownAgent, ...] = (
-    KnownAgent("claude", ("claude",), (".claude/projects",)),
-    KnownAgent("codex", ("codex",), (".codex/sessions",)),
-    KnownAgent("cursor-agent", ("cursor-agent",), (".cursor/projects",)),
+    KnownAgent("claude", ("claude",), ("claude", "@anthropic-ai/claude-code/"), ((".claude/projects", "*.jsonl"),)),
+    KnownAgent("codex", ("codex",), ("codex", "@openai/codex/"), ((".codex/sessions", "*rollout-*.jsonl"),)),
+    KnownAgent(
+        "cursor-agent", ("cursor-agent",), ("cursor-agent",), ((".cursor/projects", "*/agent-transcripts/*.jsonl"),)
+    ),
     # Gemini CLI saves chats as tmp/<project-hash>/chats/session-*.json, not under sessions/.
-    KnownAgent("gemini", ("gemini",), (".gemini/tmp", ".gemini/sessions")),
-    KnownAgent("opencode", ("opencode",), (".local/share/opencode/storage",)),
+    KnownAgent(
+        "gemini",
+        ("gemini",),
+        ("gemini", "@google/gemini-cli/"),
+        ((".gemini/tmp", "*/chats/session-*.json"), (".gemini/sessions", "*.jsonl")),
+    ),
+    KnownAgent("opencode", ("opencode",), ("opencode", "opencode-ai/"), ((".local/share/opencode/storage", "*.json"),)),
 )
 
 
-def running_agents(ps_output: str, agents: Sequence[KnownAgent] = KNOWN_AGENTS) -> list[KnownAgent]:
-    """Agents whose process name is argv[0] or argv[1] of some ``ps axo pid=,command=`` line."""
-    seen: set[str] = set()
+def _entry_script(tokens: Sequence[str]) -> str | None:
+    """The first non-option argument after an interpreter: the script it runs."""
+    return next((token for token in tokens[1:] if not token.startswith("-")), None)
+
+
+def _is_agent(tokens: Sequence[str], agent: KnownAgent) -> bool:
+    exe = os.path.basename(tokens[0])
+    if exe in agent.executables:
+        return True
+    if not _INTERPRETER.match(exe):
+        return False
+    script = _entry_script(tokens)
+    if script is None:
+        return False
+    return any(
+        (fragment in script) if "/" in fragment else os.path.basename(script) == fragment
+        for fragment in agent.entry_scripts
+    )
+
+
+def running_agents(ps_output: str, agents: Sequence[KnownAgent] = KNOWN_AGENTS) -> dict[str, list[int]]:
+    """PIDs per agent from a ``ps axo pid=,command=`` snapshot, matched on the executable or entry script only."""
+    found: dict[str, list[int]] = {}
     for line in ps_output.splitlines():
         parts = line.split()
-        names = {os.path.basename(token) for token in parts[1:3]}
-        seen.update(agent.name for agent in agents if names.intersection(agent.process_names))
-    return [agent for agent in agents if agent.name in seen]
+        if len(parts) < 2 or not parts[0].isdigit():
+            continue
+        for agent in agents:
+            if _is_agent(parts[1:], agent):
+                found.setdefault(agent.name, []).append(int(parts[0]))
+    return found
+
+
+def parse_etime(value: str) -> int | None:
+    """``ps`` elapsed time ``[[dd-]hh:]mm:ss`` in seconds."""
+    days, _, clock = value.strip().rpartition("-")
+    fields = clock.split(":")
+    if not 2 <= len(fields) <= 3 or not all(f.isdigit() for f in fields) or (days and not days.isdigit()):
+        return None
+    seconds = 0
+    for field in fields:
+        seconds = seconds * 60 + int(field)
+    return seconds + int(days or 0) * 86400
 
 
 def _watched(path: Path, watch_roots: Iterable[Path]) -> bool:
     return any(path == root or root in path.parents for root in watch_roots)
 
 
-def _recent_write(root: Path, now: float, max_age_s: float) -> bool:
-    """A file under ``root`` (depth <= MAX_DEPTH, at most MAX_ENTRIES looked at) modified within ``max_age_s``."""
-    stack, looked = [(root, 0)], 0
-    while stack and looked < MAX_ENTRIES:
+def _scan(root: Path, pattern: str, since: float) -> tuple[bool, bool]:
+    """(found, complete): a file under ``root`` matching ``pattern`` modified at or after ``since``."""
+    stack, looked, complete = [(root, 0)], 0, True
+    while stack:
         directory, depth = stack.pop()
         try:
             with os.scandir(directory) as entries:
                 for entry in entries:
                     looked += 1
                     if looked > MAX_ENTRIES:
-                        break
+                        return False, False
                     if entry.is_dir(follow_symlinks=False):
-                        if depth < MAX_DEPTH:
+                        if depth + 1 >= MAX_DEPTH:
+                            complete = False
+                        else:
                             stack.append((Path(entry.path), depth + 1))
-                    elif entry.is_file(follow_symlinks=False) and now - entry.stat().st_mtime <= max_age_s:
-                        return True
+                    elif entry.is_file(follow_symlinks=False):
+                        relative = Path(entry.path).relative_to(root).as_posix()
+                        if fnmatch(relative, pattern) and entry.stat().st_mtime >= since:
+                            return True, True
         except OSError:
-            continue
-    return False
+            complete = False
+    return False, complete
 
 
 def unindexed_agents(
@@ -75,17 +132,54 @@ def unindexed_agents(
     *,
     home: Path,
     watch_roots: Iterable[Path],
-    now: float | None = None,
+    process_starts: ProcessStarts | None = None,
     agents: Sequence[KnownAgent] = KNOWN_AGENTS,
-    max_age_s: float = RECENT_WRITE_S,
-) -> list[str]:
-    """``"<agent>: <root>"`` for each running known agent writing recently under a root nobody watches."""
-    now = time.time() if now is None else now
+) -> list[str] | None:
+    """Each running known agent that wrote a transcript during its current run under a root nobody watches."""
+    running = running_agents(ps_output, agents)
+    if not running:
+        return []
     watched = [Path(root).expanduser() for root in watch_roots]
-    found = []
-    for agent in running_agents(ps_output, agents):
-        for relative in agent.roots:
-            root = home / relative
-            if root.is_dir() and not _watched(root, watched) and _recent_write(root, now, max_age_s):
+    pids = sorted(pid for found in running.values() for pid in found)
+    starts = process_starts(pids) if process_starts is not None else None
+    found, complete = [], True
+    for agent in agents:
+        if agent.name not in running:
+            continue
+        known = [starts[pid] for pid in running[agent.name] if starts and pid in starts]
+        unwatched = [
+            (home / rel, pattern)
+            for rel, pattern in agent.transcripts
+            if (home / rel).is_dir() and not _watched(home / rel, watched)
+        ]
+        if not unwatched:
+            continue
+        if not known:
+            complete = False  # running, but no start time to tie a write to this run
+            continue
+        since = min(known) - START_SLACK_S  # any write newer than a live instance's start
+        for root, pattern in unwatched:
+            hit, scanned = _scan(root, pattern, since)
+            complete = complete and scanned
+            if hit:
                 found.append(f"{agent.name}: {root}")
-    return found
+                break
+    return found if found or complete else None
+
+
+def ps_process_starts(run: Callable[[list[str]], object], now: Callable[[], float] = time.time) -> ProcessStarts:
+    """Start times (epoch seconds) from ``ps -o pid=,etime= -p <pids>``; None when ps cannot answer."""
+
+    def starts(pids: Sequence[int]) -> dict[int, float] | None:
+        result = run(["ps", "-o", "pid=,etime=", "-p", ",".join(str(pid) for pid in pids)])
+        if getattr(result, "returncode", 1) not in (0, 1):  # 1: some PIDs already gone
+            return None
+        at, out = now(), {}
+        for line in str(getattr(result, "stdout", "") or "").splitlines():
+            parts = line.split()
+            elapsed = parse_etime(parts[1]) if len(parts) == 2 and parts[0].isdigit() else None
+            if elapsed is not None:
+                out[int(parts[0])] = at - elapsed
+        return out
+
+    return starts

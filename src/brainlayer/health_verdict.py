@@ -448,15 +448,23 @@ def _raw_checks(
         if facts.ingest_paused and r.state == RED:
             r.state, r.note = AMBER, r.note + " (watcher paused by maintenance)"
         raw["ingest"] = r
-    if facts.unindexed_agents and facts.unindexed_agents is not UNOBSERVED:
-        census = raw["ingest"]
-        if census.state in (GREEN, UNKNOWN):
-            census.state = AMBER
-        found = "an agent BrainLayer does not index is running: " + "; ".join(facts.unindexed_agents)
-        census.note = f"{census.note}; {found}" if census.note else found
-    raw["ingest"].typed["unindexed_agents"] = (
-        None if facts.unindexed_agents is UNOBSERVED else list(facts.unindexed_agents)
+    # Known-agent census: only a measured census replaces the last one; an unmeasured tick holds it.
+    prior_census = p("ingest").get("census")
+    unmeasured = facts.unindexed_agents is UNOBSERVED
+    census = (
+        (list(prior_census) if isinstance(prior_census, list) else None) if unmeasured else list(facts.unindexed_agents)
     )
+    ingest = raw["ingest"]
+    if census:
+        if ingest.state in (GREEN, UNKNOWN):
+            ingest.state = AMBER
+        found = "an agent BrainLayer does not index is running: " + "; ".join(census)
+        if unmeasured:
+            found += " (census not measured this check; holds until a measured census clears it)"
+        ingest.note = f"{ingest.note}; {found}" if ingest.note else found
+    if census is not None:
+        ingest.keep["census"] = census
+    ingest.typed["unindexed_agents"] = census
 
     raw["embedding"] = _stall_age(
         facts.embedding_stalled_since,

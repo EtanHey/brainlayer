@@ -159,21 +159,29 @@ flipping one model tick is caught. Both are tests.
 
 ## Known-agent census (the add-on for unwired agents)
 
-`agent_census.KNOWN_AGENTS` lists claude, codex, cursor-agent, gemini and opencode, each with its
-process name and transcript roots. On every health check, `health_check` reuses the `ps`
-snapshot it already takes. When a listed agent is running (matched on the argv[0] or argv[1]
-basename) and has written a file in the last 24 h under a root that no `default_watch_roots`
-entry covers, three things happen:
+`agent_census.KNOWN_AGENTS` lists claude, codex, cursor-agent, gemini and opencode. Each entry has
+its own executable, the entry script an interpreter would run, and its transcript roots with a
+filename pattern. Each health check reuses the `ps axo pid=,command=` snapshot.
 
-- an `unindexed_agent_running` warning issue;
-- the `ingest` check is floored at **amber** with the note "an agent BrainLayer does not index is
-  running: <agent>: <root>";
-- a typed `unindexed_agents` list appears on the check, with the code in `context_codes` (seam F21).
+- **Matching.** An agent is running only when argv[0] is its binary, or argv[0] is node, bun,
+  deno or python and the first non-option argument is the agent's entry script. An argument
+  never counts: `grep gemini`, `brainlayer … gemini` and `--agent gemini` do not match.
+- **Tied to the current run.** Start times come from `ps -o pid=,etime=` for the matched PIDs
+  only. Only a file matching the agent's transcript pattern and modified after a live
+  instance's start counts. For Gemini that pattern is `tmp/*/chats/session-*.json`.
+- **When it fires.** If such a file sits under a root that no `default_watch_roots` entry
+  covers, three things happen: an `unindexed_agent_running` warning issue, the `ingest` check
+  floored at **amber** with "an agent BrainLayer does not index is running: <agent>: <root>", and a
+  typed `unindexed_agents` list (code in `context_codes`, seam F21).
+- **Not measured is never "none".** A start time that `ps` cannot give, a scan cut short by the
+  5,000-entry or depth-6 cap, or a directory read error makes the census *not measured*. That
+  raises `agent_census_incomplete` as ingest context, unless something was found anyway.
+- **Unmeasured holds.** The verdict persists the last measured census on the ingest check. An
+  unmeasured tick (`ps` failed, or the scan was incomplete) keeps it, so an amber is never
+  cleared by a census that was not taken. Only a measured empty census starts the normal recovery.
 
-The root probe is bounded at depth 4 and 2,000 entries. An empty census changes nothing. A census
-that was not taken (the `ps` read failed) is `UNOBSERVED` and changes nothing; the monitor
-check already reports `process_snapshot_failed`. The model does not include the census, because
-it can only add non-green ticks.
+An empty census changes nothing. The model does not include the census, because it can only add
+non-green ticks.
 
 ## Keeping it in step
 

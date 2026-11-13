@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from .agent_census import unindexed_agents
+from .agent_census import ps_process_starts, unindexed_agents
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
     PROGRESS_STALLED_CODE,
@@ -1565,9 +1565,18 @@ def _run_health_check_locked(
     else:
         home = config.agent_home or Path.home()
         result.unindexed_agents = unindexed_agents(
-            ps_output, home=home, watch_roots=[root.resolved_path for root in default_watch_roots(home)]
+            ps_output,
+            home=home,
+            watch_roots=[root.resolved_path for root in default_watch_roots(home)],
+            process_starts=ps_process_starts(command_runner),
         )
-        if result.unindexed_agents:
+        if result.unindexed_agents is None:
+            add_issue(
+                "agent_census_incomplete",
+                "warning",
+                "known-agent census not measured this check (process start time unknown or transcript scan cut short)",
+            )
+        elif result.unindexed_agents:
             add_issue(
                 "unindexed_agent_running",
                 "warning",
