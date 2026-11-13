@@ -1220,10 +1220,17 @@ def dashboard() -> None:
         app.run()
 
     except ImportError as e:
-        rprint(f"[red]Dashboard dependencies missing: {e}[/]")
-        rprint("[yellow]Install with: pip install -e .[dev][/]")
+        # The wheel and sdist exclude src/brainlayer/dashboard on purpose
+        # (tests/test_engine_package_boundary.py), so an installed BrainLayer never has it.
+        rprint(f"[red]Dashboard unavailable: {e}[/]")
+        rprint(
+            "[yellow]The dashboard ships only in a source checkout: in a BrainLayer clone, "
+            "run `pip install -e .`, then `brainlayer dashboard`.[/]"
+        )
+        raise typer.Exit(1) from e
     except Exception as e:
         rprint(f"[red]Dashboard error: {e}[/]")
+        raise typer.Exit(1) from e
 
 
 @app.command()
