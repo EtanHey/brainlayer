@@ -6,7 +6,10 @@ clusters by how you write (formality, emoji, punctuation, phrasing).
 """
 
 from importlib.util import find_spec
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 from .unified_timeline import UnifiedMessage
 

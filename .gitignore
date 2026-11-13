@@ -52,6 +52,11 @@ data/
 .tmp-*
 grill*/
 docs.local/
+# Per-PR bot-review scratch and agent briefs belong in docs.local/, never the repo root
+/BUGBOT_*.md
+/bugbot-review-notes.md
+/SLICE-*-BRIEF.md
+/progress.txt
 
 # Internal planning docs (contain cross-repo references)
 docs/plan/
