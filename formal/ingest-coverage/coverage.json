@@ -1,14 +1,14 @@
 {
-  "pinned_at": "main 7141c5ad + gemini-wire",
-  "sync_note": "gemini-wire r3: watcher.py drops the legacy ~/.gemini/sessions root (Gemini CLI, legacy, deprecated), so gemini is Antigravity (agy) alone; the agy wrapper parse changed. No verdict or health-snapshot logic changed and the model is unchanged. Line refs re-measured. The replay's gemini agent is agy (append-only JSONL), so every shape applies to it, including the open rewrite_lossy finding. A root dropped from config is simply not watched; roots_missing only tracks roots the process saw.",
+  "pinned_at": "main 75e3fe0a (#1781) + gemini-wire r3",
+  "sync_note": "gemini-wire r3: watcher.py drops the legacy ~/.gemini/sessions root (Gemini CLI, legacy, deprecated), so gemini is Antigravity (agy) alone; the agy wrapper parse changed. No verdict or health-snapshot logic changed and the model is unchanged. Line refs re-measured. The replay's gemini agent is agy (append-only JSONL), so every shape applies to it, including the open rewrite_lossy finding. A root dropped from config is simply not watched; roots_missing only tracks roots the process saw. Merged with #1781's census pins (health_verdict/health_facts/health_check unchanged here).",
   "sources": [
     {
       "path": "src/brainlayer/health_verdict.py",
-      "sha256": "13d36c93c22dad4e5e2da58ead90fb4539647808b8155922d080e2fd0a2a5e05"
+      "sha256": "905cbc21d2ab62df4bf2ae00889ccfa2ccc0a43cddcf72edd1ab27a8279e413f"
     },
     {
       "path": "src/brainlayer/health_facts.py",
-      "sha256": "47010e2f2fdbf87e7e724a5c34489aa20b2b77d7971f9b3007c8d8bacb1b6674"
+      "sha256": "19a30ff9f15037ef298501f7635d05058c0287228eaaa649de2cd918fcef286c"
     },
     {
       "path": "src/brainlayer/watcher.py",
@@ -20,22 +20,23 @@
     },
     {
       "path": "src/brainlayer/health_check.py",
-      "sha256": "0b34f6c33402bbb59456c8aa428b9676d6b0b31ee26026c9f02d99049acb6d7b"
+      "sha256": "fcd489b6ce7f36e540931703c9f3d528daf8a8eef5e560bdb5e2e3202784bfcb"
     }
   ],
   "actions": {
     "Tick.polls / writes": "watcher.py:2569 poll_once; :2823 _write_health_snapshot in its finally block; :2328 updated_at and poll_count in one payload; a failed write is swallowed (:2349-2355 except OSError)",
     "Tick.progress (lag, coverage, dbfail, rootgone)": "watcher.py:555 CoverageWatchdog and :2278-2384 _write_health_snapshot publish alert_reasons, db_probe_failed, max_offset_lag_bytes; watcher.py:1482 _do_flush retains a failed batch; no verdict input reads any of them",
-    "Tick.seen": "health_facts.py:162 watcher_fact (missing = None, malformed raises); :396 _run_bounded turns a raise or timeout into UNOBSERVED; :511 the only ingest input",
-    "Tick.cA (clock = max(watcher, persisted))": "health_verdict.py:427-430",
-    "Tick.age / graced / g": "health_verdict.py:290 _graced_age (suspension credit, one wake-grace window per clock value)",
-    "Tick.raw": "health_verdict.py:232 _age_state (> amber, > red)",
-    "Tick.vNext / goodNext / unk1": "health_verdict.py:538 evaluate: unknown ticks :588, evidence hold, red-holds-on-amber and recovery :604 (_HYSTERESIS :191)",
-    "Tick.res0 (resumed_at)": "health_verdict.py:538 evaluate: confirmed clock pair vs sleep_gap_s, expiry after wake_grace_s",
-    "NonGreen (dot ignores unknown)": "health_verdict.py:669; badge_state.py:127 badge_on = verdict.dot == RED (the dot is the verdict)",
-    "watcher_stalled is context only": "health_check.py:1841 emits it; health_facts.py:47 CHECK_FOR_CODE maps it to ingest context, never state",
+    "Tick.seen": "health_facts.py:171 watcher_fact (missing = None, malformed raises); :405 _run_bounded turns a raise or timeout into UNOBSERVED; :520 the only ingest input",
+    "Tick.cA (clock = max(watcher, persisted))": "health_verdict.py:429-432",
+    "Tick.age / graced / g": "health_verdict.py:292 _graced_age (suspension credit, one wake-grace window per clock value)",
+    "Tick.raw": "health_verdict.py:234 _age_state (> amber, > red)",
+    "Tick.vNext / goodNext / unk1": "health_verdict.py:565 evaluate: unknown ticks :615, evidence hold, red-holds-on-amber and recovery :631 (_HYSTERESIS :193)",
+    "Tick.res0 (resumed_at)": "health_verdict.py:565 evaluate: confirmed clock pair vs sleep_gap_s, expiry after wake_grace_s",
+    "NonGreen (dot ignores unknown)": "health_verdict.py:696; badge_state.py:127 badge_on = verdict.dot == RED (the dot is the verdict)",
+    "watcher_stalled is context only": "health_check.py:1867 emits it; health_facts.py:47 CHECK_FOR_CODE maps it to ingest context, never state",
     "Faults roots": "watcher.py:360 default_watch_roots (claude, codex, cursor, cursor-agent-transcripts, gemini = Antigravity (agy) ~/.gemini/antigravity-cli/brain)",
-    "Tick rewrite / rewrite_lossy (Dropping, StallClockIsTruthful)": "watcher.py:1246 JSONLTailer._verify_anchor and :1267 _verify_resumed_offset compare the 256 bytes before the offset and a blake2b digest of the first 4 KiB: a rewrite changing either re-reads from 0 (every record re-ingested; replay checks each); a same-length edit between them is not seen and its records are dropped"
+    "Tick rewrite / rewrite_lossy (Dropping, StallClockIsTruthful)": "watcher.py:1246 JSONLTailer._verify_anchor and :1267 _verify_resumed_offset compare the 256 bytes before the offset and a blake2b digest of the first 4 KiB: a rewrite changing either re-reads from 0 (every record re-ingested; replay checks each); a same-length edit between them is not seen and its records are dropped",
+    "Census amber floor (not modelled; only adds non-green)": "health_verdict.py:453-476 per-agent merge: measured agents replace their entry, unmeasured ones (census_incomplete) keep it; a non-empty result floors ingest at amber; health_check.py census after the ps snapshot; agent_census.py"
   },
   "bounds": {
     "exhaustive cases": "AmberT 2 < RedT 4 < WakeGrace 5 ticks, SleepGap 3, UnknownAmber 3, Recovery 2, Cap 8 (ordering-preserving, not production)",
