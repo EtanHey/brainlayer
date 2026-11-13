@@ -147,8 +147,8 @@ flipping one model tick is caught. Both are tests.
 
 - **Agents BrainLayer is not wired to**, including future labs' agents. Sources are wired on
   purpose ("nothing is auto-detected"), so the guarantee is per wired root. The known-agent census
-  (separate stacked PR) catches running agents from a fixed list whose transcripts land outside
-  the watched roots. It cannot catch an agent that is not on the list. Today, for example, Gemini
+  (`src/brainlayer/agent_census.py`, below) catches running agents from a fixed list whose
+  transcripts land outside the watched roots. It cannot catch an agent that is not on the list. Today, for example, Gemini
   CLI writes `~/.gemini/tmp/<hash>/chats/session-*.json`, which is not
   `~/.gemini/sessions/**/*.jsonl`.
 - **Wrong parsing or content**: a record ingested as the wrong text, or a rewrite whose head
@@ -156,6 +156,24 @@ flipping one model tick is caught. Both are tests.
 - **The Swift icon drawing.** That is BrainBar's app tests, not this.
 - **Maintenance pause** (red softened to amber, still non-green) and the `t3_ingest_unhealthy` path are
   not modelled.
+
+## Known-agent census (the add-on for unwired agents)
+
+`agent_census.KNOWN_AGENTS` lists claude, codex, cursor-agent, gemini and opencode, each with its
+process name and transcript roots. On every health check, `health_check` reuses the `ps`
+snapshot it already takes. When a listed agent is running (matched on the argv[0] or argv[1]
+basename) and has written a file in the last 24 h under a root that no `default_watch_roots`
+entry covers, three things happen:
+
+- an `unindexed_agent_running` warning issue;
+- the `ingest` check is floored at **amber** with the note "an agent BrainLayer does not index is
+  running: <agent>: <root>";
+- a typed `unindexed_agents` list appears on the check, with the code in `context_codes` (seam F21).
+
+The root probe is bounded at depth 4 and 2,000 entries. An empty census changes nothing. A census
+that was not taken (the `ps` read failed) is `UNOBSERVED` and changes nothing; the monitor
+check already reports `process_snapshot_failed`. The model does not include the census, because
+it can only add non-green ticks.
 
 ## Keeping it in step
 

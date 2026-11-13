@@ -114,6 +114,7 @@ class Facts:
     integrity: Any = UNOBSERVED  # "ok" | "corrupt" (confirmed results only)
     watcher_updated_at: Any = UNOBSERVED
     ingest_paused: bool = False
+    unindexed_agents: Any = UNOBSERVED  # ("<agent>: <root>", ...) from the known-agent census
     stores_paused: bool = False
     pause_ends_at: datetime | None = None  # the pause sentinel's expires_at while a pause is active
     oldest_pending_store_at: Any = UNOBSERVED
@@ -447,6 +448,15 @@ def _raw_checks(
         if facts.ingest_paused and r.state == RED:
             r.state, r.note = AMBER, r.note + " (watcher paused by maintenance)"
         raw["ingest"] = r
+    if facts.unindexed_agents and facts.unindexed_agents is not UNOBSERVED:
+        census = raw["ingest"]
+        if census.state in (GREEN, UNKNOWN):
+            census.state = AMBER
+        found = "an agent BrainLayer does not index is running: " + "; ".join(facts.unindexed_agents)
+        census.note = f"{census.note}; {found}" if census.note else found
+    raw["ingest"].typed["unindexed_agents"] = (
+        None if facts.unindexed_agents is UNOBSERVED else list(facts.unindexed_agents)
+    )
 
     raw["embedding"] = _stall_age(
         facts.embedding_stalled_since,

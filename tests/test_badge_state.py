@@ -49,6 +49,8 @@ def _run_minimal_health_check(
     now_fn=lambda: datetime.now(UTC),
     evidence_at: datetime | None = None,
     evidence: bool = True,
+    ps_output: str = "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4",
+    agent_home: Path | None = None,
 ) -> HealthCheckResult:
     """``evidence`` writes fresh outcome receipts, so only the condition under test can move the dot.
 
@@ -112,9 +114,10 @@ def _run_minimal_health_check(
             drain_health_path=tmp_path / "drain-health.json",
             t3_health_path=tmp_path / "t3-health.json",
             jsonl_backup_log_path=tmp_path / "backup.log",
+            agent_home=agent_home or tmp_path / "agent-home",
             **{"watcher_health_path": tmp_path / "watcher-health.json", **overrides},
         ),
-        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4",
+        ps_output_fn=lambda: ps_output,
         socket_request_fn=lambda *_args: (
             canary_response or {"result": {"content": [{"type": "text", "text": "1 of 1 shown"}]}}
         ),
@@ -491,7 +494,7 @@ def test_completed_health_check_publishes_badge_contract(tmp_path: Path) -> None
     }
     extra = {
         **dict.fromkeys(("backup_local", "backup_offsite", "transcripts"), {"catch_up_until"}),
-        "ingest": {"good_ticks", "good_ticks_needed", "paused_by_maintenance", "pause_ends_at"},
+        "ingest": {"good_ticks", "good_ticks_needed", "paused_by_maintenance", "pause_ends_at", "unindexed_agents"},
         "stores": {"good_ticks", "good_ticks_needed", "paused_by_maintenance", "pause_ends_at", "fails", "cause"},
         "search": {"good_ticks", "good_ticks_needed", "fails"},
         "monitor": {"blind_codes"},
@@ -646,3 +649,25 @@ def test_collector_failure_is_unknown_and_holds_a_prior_red(tmp_path: Path) -> N
     drive = next(c for c in held["verdict"]["checks"] if c["name"] == "drive_auth")
     assert drive["state"] == "red" and "not checked" in drive["note"] and "holds" in drive["note"]
     assert held["alerts"]["badge_on"] is True
+
+
+def test_a_running_agent_brainlayer_does_not_index_turns_ingest_amber_end_to_end(tmp_path: Path) -> None:
+    home = tmp_path / "agent-home"
+    chat = home / ".gemini" / "tmp" / "3a50" / "chats" / "session-2026-11-13T09-00-ab12.json"
+    chat.parent.mkdir(parents=True)
+    chat.write_text("{}\n")
+    output = tmp_path / "contract" / "badge-state.json"
+    hotlane = "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4"
+    result = _run_minimal_health_check(
+        tmp_path, output, ps_output=f"{hotlane}\n4242 node /opt/homebrew/bin/gemini\n", agent_home=home
+    )
+
+    assert result.unindexed_agents == [f"gemini: {home / '.gemini' / 'tmp'}"]
+    assert [(i.code, i.severity) for i in result.issues] == [("unindexed_agent_running", "warning")]
+    document = json.loads(output.read_text(encoding="utf-8"))
+    ingest = next(c for c in document["verdict"]["checks"] if c["name"] == "ingest")
+    assert document["verdict"]["dot"] == "amber" and document["alerts"]["badge_on"] is False
+    assert ingest["state"] == "amber"
+    assert ingest["unindexed_agents"] == result.unindexed_agents
+    assert ingest["context_codes"] == ["unindexed_agent_running"]
+    assert "an agent BrainLayer does not index is running: gemini" in ingest["note"]

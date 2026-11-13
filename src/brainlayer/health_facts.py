@@ -58,7 +58,7 @@ CHECK_FOR_CODE = {
         ),
         "embedding",
     ),
-    **dict.fromkeys(("watcher_stalled", "watch_unloaded", "t3_ingest_unhealthy"), "ingest"),
+    **dict.fromkeys(("watcher_stalled", "watch_unloaded", "t3_ingest_unhealthy", "unindexed_agent_running"), "ingest"),
     **dict.fromkeys(
         (
             "queue_backed_up",
@@ -609,6 +609,7 @@ def collect_facts(
         drive_auth=drive_auth,
         watcher_updated_at=got["watcher"],
         ingest_paused=paused(config.watch_label),
+        unindexed_agents=tuple(result.unindexed_agents) if result.unindexed_agents is not None else UNOBSERVED,
         stores_paused=drain_paused,
         pause_ends_at=_aware(pause_payload.get("expires_at")) if pause_active else None,
         oldest_pending_store_at=pending,

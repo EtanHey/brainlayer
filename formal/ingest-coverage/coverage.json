@@ -1,25 +1,41 @@
 {
-  "pinned_at": "main 9f31efb2",
-  "sync_note": "Initial pins. Re-read the mapped lines, update the model or add a switch, rerun check.py and the replay test, and only then move a pin.",
+  "pinned_at": "feat/ingest-census on main 9f31efb2",
+  "sync_note": "Re-pinned health_verdict.py, health_facts.py and health_check.py for the known-agent census: a non-empty census floors ingest at amber (an extra non-green cause the model does not need, since it only adds non-green ticks); an empty or unobserved census leaves evaluate() unchanged, and the replay (no census) still matches every tick. Re-read the mapped lines, update the model or add a switch, rerun check.py and the replay test, and only then move a pin.",
   "sources": [
-    {"path": "src/brainlayer/health_verdict.py", "sha256": "13d36c93c22dad4e5e2da58ead90fb4539647808b8155922d080e2fd0a2a5e05"},
-    {"path": "src/brainlayer/health_facts.py", "sha256": "47010e2f2fdbf87e7e724a5c34489aa20b2b77d7971f9b3007c8d8bacb1b6674"},
-    {"path": "src/brainlayer/watcher.py", "sha256": "28ce27082eb8a8b0fdb1849a654afe0a3def83fc4658d15432378341086d40ee"},
-    {"path": "src/brainlayer/badge_state.py", "sha256": "ff23469986ff393737886b547fc10308d109f2aeb6e852898798fdfabe17bfd3"},
-    {"path": "src/brainlayer/health_check.py", "sha256": "0b34f6c33402bbb59456c8aa428b9676d6b0b31ee26026c9f02d99049acb6d7b"}
+    {
+      "path": "src/brainlayer/health_verdict.py",
+      "sha256": "b5cfa40f2664246b55f4941cbf45d38a9d917a0505237bd5c864333db5291208"
+    },
+    {
+      "path": "src/brainlayer/health_facts.py",
+      "sha256": "4013003cc4330776194ed36762b978dafed61f87a832475d5289def3b584b0db"
+    },
+    {
+      "path": "src/brainlayer/watcher.py",
+      "sha256": "28ce27082eb8a8b0fdb1849a654afe0a3def83fc4658d15432378341086d40ee"
+    },
+    {
+      "path": "src/brainlayer/badge_state.py",
+      "sha256": "ff23469986ff393737886b547fc10308d109f2aeb6e852898798fdfabe17bfd3"
+    },
+    {
+      "path": "src/brainlayer/health_check.py",
+      "sha256": "3bfadadb0f58922119e705b6b8918d7c51094cc469887b94c1da0e68b62a0f33"
+    }
   ],
   "actions": {
     "Tick.polls / writes": "watcher.py:2535 poll_once; :2789 _write_health_snapshot in its finally block; :2294 updated_at and poll_count in one payload; a failed write is swallowed (:2315-2321 except OSError)",
     "Tick.progress (lag, coverage, dbfail, rootgone)": "watcher.py:521 CoverageWatchdog and :2244-2350 _write_health_snapshot publish alert_reasons, db_probe_failed, max_offset_lag_bytes; watcher.py:1448 _do_flush retains a failed batch; no verdict input reads any of them",
     "Tick.seen": "health_facts.py:162 watcher_fact (missing = None, malformed raises); :396 _run_bounded turns a raise or timeout into UNOBSERVED; :511 the only ingest input",
-    "Tick.cA (clock = max(watcher, persisted))": "health_verdict.py:427-430",
-    "Tick.age / graced / g": "health_verdict.py:290 _graced_age (suspension credit, one wake-grace window per clock value)",
-    "Tick.raw": "health_verdict.py:232 _age_state (> amber, > red)",
-    "Tick.vNext / goodNext / unk1": "health_verdict.py:538 evaluate: unknown ticks :588, evidence hold, red-holds-on-amber and recovery :604 (_HYSTERESIS :191)",
-    "Tick.res0 (resumed_at)": "health_verdict.py:538 evaluate: confirmed clock pair vs sleep_gap_s, expiry after wake_grace_s",
-    "NonGreen (dot ignores unknown)": "health_verdict.py:669; badge_state.py:127 badge_on = verdict.dot == RED (the dot is the verdict)",
-    "watcher_stalled is context only": "health_check.py:1841 emits it; health_facts.py:47 CHECK_FOR_CODE maps it to ingest context, never state",
-    "Faults roots": "watcher.py:357 default_watch_roots (claude, codex, cursor, cursor-agent-transcripts, gemini)"
+    "Tick.cA (clock = max(watcher, persisted))": "health_verdict.py:428-431",
+    "Tick.age / graced / g": "health_verdict.py:291 _graced_age (suspension credit, one wake-grace window per clock value)",
+    "Tick.raw": "health_verdict.py:233 _age_state (> amber, > red)",
+    "Tick.vNext / goodNext / unk1": "health_verdict.py:548 evaluate: unknown ticks :598, evidence hold, red-holds-on-amber and recovery :614 (_HYSTERESIS :192)",
+    "Tick.res0 (resumed_at)": "health_verdict.py:548 evaluate: confirmed clock pair vs sleep_gap_s, expiry after wake_grace_s",
+    "NonGreen (dot ignores unknown)": "health_verdict.py:679; badge_state.py:127 badge_on = verdict.dot == RED (the dot is the verdict)",
+    "watcher_stalled is context only": "health_check.py:1854 emits it; health_facts.py:47 CHECK_FOR_CODE maps it to ingest context, never state",
+    "Faults roots": "watcher.py:357 default_watch_roots (claude, codex, cursor, cursor-agent-transcripts, gemini)",
+    "Census amber floor (not modelled; only adds non-green)": "health_verdict.py:451-459 a non-empty Facts.unindexed_agents floors ingest at amber; health_check.py census after the ps snapshot; agent_census.py"
   },
   "bounds": {
     "exhaustive cases": "AmberT 2 < RedT 4 < WakeGrace 5 ticks, SleepGap 3, UnknownAmber 3, Recovery 2, Cap 8 (ordering-preserving, not production)",
