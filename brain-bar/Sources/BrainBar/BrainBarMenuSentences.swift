@@ -29,7 +29,8 @@ extension BrainBarMenuPresenter {
         }
 
         var text: String { template }
-        func callAsFunction(_ values: String...) -> String { zip(values, parts.dropFirst()).reduce(parts[0]) { $0 + $1.0 + $1.1 } }
+        func callAsFunction(_ values: String...) -> String { fill(values) }
+        func fill(_ values: [String]) -> String { zip(values, parts.dropFirst()).reduce(parts[0]) { $0 + $1.0 + $1.1 } }
 
         /// The placeholder values when `sentence` is this entry with each slot filled by a word its formatter can make.
         func match(_ sentence: String) -> [String]? {
@@ -94,7 +95,7 @@ extension BrainBarMenuPresenter {
         static let checkingMemory = S("X01", .neutral, "Checking on your memory…")
         static let checkingSleep = S("X02", .claim, "Checking after sleep…") { c, _, _ in c.wakeCatchUpPending }
         static let notConfirmed = S("X01.detail", .neutral, "Saving, search, backups and upkeep aren’t confirmed yet.")
-        static let lastBackup = S("S4", .claim, "Last backup {at}.") { c, _, v in c.lastKnownBackupAt.map { $0 <= c.now && at($0, c) == v[0] } == true }
+        static let lastBackup = S("S4", .claim, "Last backup {at}.") { c, _, v in c.lastKnownBackupAt.map { $0 <= c.now && sayable($0) && at($0, c) == v[0] } == true }
         static let r02Headline = S("R02.headline", .claim, "Catching up on new conversations") { c, _, _ in catchingUp(c) }
         static let r02 = S("R02", .claim, "Catching up on new conversations.", .remembering) { c, _, _ in catchingUp(c) }
         static let s03Headline = S("S03.headline", .claim, "Backing up now") { c, _, _ in runningUpload(c) != nil }
@@ -263,6 +264,10 @@ extension BrainBarMenuPresenter {
         return formatter("MMM d 'at' HH:mm", c).string(from: date)
     }
 
+    /// A time the words can name: Foundation formats a time outside `distantPast…distantFuture` (or not finite) as a
+    /// date that does not exist ("Sep 20 at 02:00" for −∞), so no sentence names one (P2b, found by writing S4's condition).
+    static func sayable(_ date: Date) -> Bool { (Date.distantPast...Date.distantFuture).contains(date) }
+
     static func percent(_ progress: Double) -> Int { Int((progress * 100).rounded()) }
 
     static func valid(_ age: Double?) -> Bool { age.map { $0.isFinite && $0 >= 0 } == true }
@@ -273,7 +278,7 @@ extension BrainBarMenuPresenter {
     static func copyAge(_ age: Double?, _ c: Capture, _ v: BrainBarHealthVerdict) -> String? {
         guard let age, valid(age) else { return nil }
         let copied = v.evaluatedAt.addingTimeInterval(-age), elapsed = c.now.timeIntervalSince(copied)
-        guard elapsed.isFinite, elapsed >= 0 else { return nil }
+        guard sayable(copied), elapsed.isFinite, elapsed >= 0 else { return nil }
         guard elapsed >= 86_400 else {
             let hours = min(23, max(1, Int((elapsed / 3600).rounded())))
             return hours == 1 ? "1 hour old" : "\(hours) hours old"

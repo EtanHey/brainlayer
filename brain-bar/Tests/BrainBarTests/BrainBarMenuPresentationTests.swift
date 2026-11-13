@@ -80,6 +80,20 @@ final class BrainBarMenuPresentationTests: XCTestCase {
         XCTAssertEqual(driveDetail(hours), "Backups can’t upload until you reconnect it. Your newest backup in Google Drive is 3 hours old.")
     }
 
+    /// P2b: a bare `{HH:mm}` reads as a time today, so an upload that started on another day does not say its start: S03's
+    /// line keeps "To Google Drive." and S32, which has no wording without it, falls to R17's row.
+    func testAnUploadStartOnAnotherDayIsNotSaid() throws {
+        let cases = try Self.loadCases()
+        func capture(_ id: String) throws -> BrainBarMenuCapture { try Self.capture(cases.first { $0["id"] as? String == id }!["inputs"] as! [String: Any]) }
+        var s2 = try capture("S2-today")
+        s2.upload?.startedAt.addTimeInterval(-86_400)
+        XCTAssertEqual(BrainBarMenuPresenter.present(s2).rows.first { $0.kind == .headlineDetail }?.strings, ["To Google Drive."])
+        var s32 = try capture("S32")
+        s32.upload?.startedAt.addTimeInterval(-86_400)
+        XCTAssertEqual(BrainBarMenuPresenter.present(s32).rows.first { $0.kind == .needsYou }?.strings,
+                       ["Something BrainBar checks is failing.", "BrainBar can’t fix this itself.", "Give the report to an agent."])
+    }
+
     // MARK: expected output, read from the cases file
 
     static func expected(_ c: [String: Any]) -> P {

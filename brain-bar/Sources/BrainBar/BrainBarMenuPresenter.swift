@@ -158,7 +158,7 @@ enum BrainBarMenuPresenter {
         let onSchedule = c.offsiteRecovering.flatMap { r -> Capture.Recovering? in
             let quiet = c.now.timeIntervalSince(r.updatedAt)
             let sane = r.cadenceS.isFinite && r.cadenceS > 0 && r.startedAt <= c.now && r.progress.map { (0...1).contains($0) } != false
-            return sane && quiet >= 0 && quiet <= 2 * r.cadenceS && r.eta.map { c.now <= $0 } != false ? r : nil
+            return sane && quiet >= 0 && quiet <= 2 * r.cadenceS && r.eta.map { c.now <= $0 && sayable($0) } != false ? r : nil
         }
         let upload = c.upload.flatMap { $0.live ? $0.startedAt : nil }
         guard let started = c.offsiteRecovering == nil ? upload : onSchedule?.startedAt, started <= c.now else { return nil }
@@ -331,7 +331,7 @@ enum BrainBarMenuPresenter {
     private static func checkingState(_ c: Capture) -> P {
         let launching = c.isChecking && c.verdict == nil
         let headline = c.wakeCatchUpPending && !launching ? Say.checkingSleep.text : Say.checkingMemory.text
-        let last = c.lastKnownBackupAt.flatMap { $0 <= c.now ? " " + Say.lastBackup(at($0, c)) : nil } ?? ""
+        let last = c.lastKnownBackupAt.flatMap { $0 <= c.now && sayable($0) ? " " + Say.lastBackup(at($0, c)) : nil } ?? ""
         return .init(form: .calm, headline: headline, count: 0, icon: .resting,
                      rows: [P.Row(kind: .headline, strings: [headline], mark: .wait),
                             P.Row(kind: .headlineDetail, strings: [Say.notConfirmed.text + last],
@@ -353,7 +353,7 @@ enum BrainBarMenuPresenter {
         let ages = ["backup_offsite", "transcripts"].compactMap { name in v.checks.first { $0.name == name }?.ageS }
         guard let age = ages.max(), ages.allSatisfy({ $0.isFinite && $0 >= 0 }) else { return nil }
         let date = v.evaluatedAt.addingTimeInterval(-age)
-        return date <= c.now ? date : nil
+        return date <= c.now && sayable(date) ? date : nil
     }
 
     // MARK: the final guard (invariants I1 to I8), the last step of every path
