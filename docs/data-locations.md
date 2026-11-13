@@ -10,7 +10,7 @@
 
 | What | Path | Size | Notes |
 |------|------|------|-------|
-| **Main database** | `~/.local/share/brainlayer/brainlayer.db` | ~8 GB | 297K+ chunks, sqlite-vec + FTS5 |
+| **Main database** | `~/.local/share/brainlayer/brainlayer.db` | Varies | sqlite-vec + FTS5; inspect the local database for current size and chunk count |
 | **Current sessions** | `~/.claude/projects/{encoded-path}/*.jsonl` | ~805 files | Claude Code session transcripts |
 | **Archived sessions** | `~/.claude-archive/{project-id}/archive-{timestamp}/` | 1.2 GB | Moved by session-archiver |
 
@@ -21,9 +21,9 @@ BrainLayer resolves the database path in this order (see `src/brainlayer/paths.p
 1. **`BRAINLAYER_DB` env var** — explicit override
 2. **`~/.local/share/brainlayer/brainlayer.db`** — canonical path
 
-## Session Archiver
+## Historical Session Archiver
 
-**Service:** `com.brainlayer.session-archiver` (launchd, runs daily at 4am)
+**Historical service:** `com.brainlayer.session-archiver` (daily at 4am). No session-archiver LaunchAgent is shipped in the current repository; the workflow below describes the historical setup.
 
 ### How it works:
 

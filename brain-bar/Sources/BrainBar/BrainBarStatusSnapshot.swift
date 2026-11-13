@@ -42,6 +42,7 @@ struct BrainBarStatusInputs: Sendable {
     }
 
     var now: Date
+    var sleepHistory: BrainBarSleepHistory = .shared
     var calendar: Calendar = .current
     var badge: BadgeStatePresentation? = nil
     var vectorCheck: BrainBarVectorCheck? = nil
@@ -184,8 +185,8 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         case nil, .running?:
             break
         case let .degraded(_, heartbeatAt)?:
-            let stale = now.timeIntervalSince(heartbeatAt) > WatcherHealthStatus.staleHeartbeatSeconds
-            let text = inputs.watcher?.reasonText(now: now) ?? "Watcher needs attention"
+            let stale = inputs.sleepHistory.elapsed(since: heartbeatAt, now: now) > WatcherHealthStatus.staleHeartbeatSeconds
+            let text = inputs.watcher?.reasonText(now: now, sleepHistory: inputs.sleepHistory) ?? "Watcher needs attention"
             // Keep the watcher's structured faults visible independently of the kill evidence.
             let critical = inputs.watcherFile.map { $0.dbProbeFailed || $0.alertReasons.contains("coverage_drop") } ?? false
             builder.add(.init(id: stale ? "watcher.heartbeat" : critical ? "watcher.ingest" : "watcher.alerts", component: .watcher,
@@ -203,7 +204,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                               text: "Kill check unavailable: " + problem, jobs: [.watch], noticeHealth: .unknown))
         }
         if observations?[.watch]?.loadState == .running, desired(.watch),
-           let heartbeat = inputs.watcherHeartbeatAt, now.timeIntervalSince(heartbeat) > 15 * 60 {
+           let heartbeat = inputs.watcherHeartbeatAt, inputs.sleepHistory.elapsed(since: heartbeat, now: now) > 15 * 60 {
             builder.add(.init(id: "watcher.capture", component: .watcher, severity: .attention,
                               text: "Watcher isn't capturing; last heartbeat at " + absoluteDate(heartbeat, calendar: inputs.calendar),
                               jobs: [.watch]))
@@ -559,7 +560,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
         let otherIssues = builder.issues.filter { !backupNotices.contains($0) }
         var issues = backupNotices + otherIssues
         if let verdict = inputs.badge?.healthVerdict {
-            let fresh = verdict.isFresh(now: now)
+            let fresh = verdict.isFresh(now: now, sleepHistory: inputs.sleepHistory)
             issues = issues.map { issue in var detail = issue; detail.severity = .notice; return detail }
             let checks = verdict.checks.filter { $0.state != .green && (fresh || verdict.dot == .red) }.map { check in
                 let component: BrainBarStatusIssue.Component = switch check.name {
@@ -590,7 +591,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
             }
             if !fresh {
                 rows.insert(.init(id: "verdict.stale", component: .health, severity: .notice,
-                                  text: verdict.fallbackNotice(now: now, calendar: inputs.calendar)), at: 0)
+                                  text: verdict.fallbackNotice(now: now, calendar: inputs.calendar, sleepHistory: inputs.sleepHistory)), at: 0)
             }
             return Self(issues: coherentProblems(rows + issues, inputs: inputs), isChecking: false,
                         healthVerdict: fresh ? verdict : nil, staleHealthVerdict: fresh ? nil : verdict)

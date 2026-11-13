@@ -630,7 +630,7 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
                         agentActivity: agentActivity, now: now, calendar: calendar, locale: locale,
                         observabilityCadence: observabilityCadence, backupNow: backupNow)
         if statusVerdict.dotOverride != nil {
-            presentation.attentionItems = statusVerdict.attention + statusVerdict.notices
+            presentation.attentionItems = statusVerdict.currentRows
         }
         presentation.backupLines = backupRunLines(presentation.backupLines, verdict: statusVerdict)
         return presentation
@@ -713,8 +713,15 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         } else {
             totalIndexedChunks = stats.chunkCount
             indexedToday = nil
-            if case .readable = observability {
-                indexedTodayUnavailableText = "not measured yet today"
+            if case let .readable(document) = observability {
+                let reason = document.stores.reason.trimmingCharacters(in: .whitespacesAndNewlines)
+                if reason == "no sample" {
+                    indexedTodayUnavailableText = "not measured yet today"
+                } else if reason.isEmpty {
+                    indexedTodayUnavailableText = "Indexed today unavailable: stores measurement unavailable"
+                } else {
+                    indexedTodayUnavailableText = "Indexed today could not be read: \(reason)"
+                }
             } else if case let .unreadable(reason) = observability {
                 indexedTodayUnavailableText = "Indexed today unavailable: \(reason)"
             } else {
@@ -767,7 +774,7 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         if generatedAt > now {
             return .untrustworthy("observability generated_at is in the future")
         }
-        if now.timeIntervalSince(generatedAt) > cadence.interval * 2 {
+        if BrainBarSleepHistory.shared.elapsed(since: generatedAt, now: now) > cadence.interval * 2 {
             return .untrustworthy("observability as of \(shortTime(generatedAt, calendar: calendar, locale: locale))")
         }
         if let sameDayBoundary, generatedAt < sameDayBoundary {

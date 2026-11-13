@@ -1,10 +1,3 @@
-// StoreCallerModelTests.swift — #655 Part B: brain_store records the caller's
-// self-reported model, on every write path, and never invents one.
-//
-// Everything here drives the served surface: the brain_store wire arguments, the
-// durable pending-stores.jsonl file and the chunks row. Model strings are
-// synthetic fixtures, not real model IDs.
-
 import Foundation
 import SQLite3
 import XCTest
@@ -25,7 +18,8 @@ final class StoreCallerModelTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: tempDir)
+        DeferredStoreTelemetry.waitForWritesForTesting()
+        try FileManager.default.removeItem(at: tempDir)
     }
 
     private var queuePath: URL { tempDir.appendingPathComponent("pending-stores.jsonl") }
@@ -189,7 +183,6 @@ final class StoreCallerModelTests: XCTestCase {
         assertNoProvenance(try metadata(ofChunk: try XCTUnwrap(result["chunk_id"] as? String)))
     }
 
-    /// Untrustworthy strings are dropped, and the memory is still stored.
     func testUntrustworthyCallerModelIsDroppedButMemoryIsStored() throws {
         // Created first so it is resumed after the database closes, as in the reliability tests.
         let drain = heldDrainQueue()
@@ -217,7 +210,6 @@ final class StoreCallerModelTests: XCTestCase {
         }
     }
 
-    /// Wrong type or over the advertised maxLength is a bad request: REJECTED, nothing stored.
     func testMalformedOrOversizedCallerModelIsRejectedAndStoresNothing() throws {
         // Created first so it is resumed after the database closes, as in the reliability tests.
         let drain = heldDrainQueue()
@@ -360,11 +352,9 @@ final class StoreCallerModelTests: XCTestCase {
 
     func testQueuedRecordsReplayWithValidatedModelOnly() throws {
         try writeQueueLines([
-            // Written before caller_model existed: replays exactly as before.
             ["content": "legacy line", "tags": [], "importance": 5, "source": "mcp", "chunk_id": "cm-legacy"],
             ["content": "valid model line", "tags": [], "importance": 5, "source": "mcp",
              "chunk_id": "cm-valid", "caller_model": modelA],
-            // Malformed model values: the model is dropped, the memory is not stranded.
             ["content": "numeric model line", "tags": [], "importance": 5, "source": "mcp",
              "chunk_id": "cm-number", "caller_model": 42],
             ["content": "null model line", "tags": [], "importance": 5, "source": "mcp",
@@ -389,7 +379,6 @@ final class StoreCallerModelTests: XCTestCase {
             assertNoProvenance(try metadata(ofChunk: chunkID))
         }
 
-        // Replay is idempotent: a second flush finds nothing and changes nothing.
         XCTAssertTrue(db.flushPendingStores().isEmpty)
         XCTAssertEqual(try chunkCount(), 6)
         assertProvenance(try metadata(ofChunk: "cm-valid"), model: modelA)
