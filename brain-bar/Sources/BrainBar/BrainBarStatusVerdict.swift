@@ -20,8 +20,7 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
 
     var needsAttention: Bool { !attention.isEmpty }
 
-    /// The Dashboard headline: a count only for dot issues; notices are neutral; "All good" only
-    /// when everything was measured and nothing is pending.
+    /// Only attention rows count as things that need you. Notices remain neutral.
     var dashboardStatus: BrainBarOnePageStatus {
         if let dotOverride {
             let headline = overrideHeadline(dotOverride)
@@ -29,9 +28,9 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
             return .init(headline: headline, reason: details.isEmpty ? nil
                 : details.joined(separator: "; "), tone: dotOverride == .green ? .green : .amber)
         }
-        if let first = attention.first {
-            return .init(headline: attention.count == 1 ? "1 thing needs you" : "\(attention.count) things need you",
-                         reason: ([first] + notices).joined(separator: "; "), tone: .amber)
+        if !attention.isEmpty {
+            return .init(headline: attentionRowCount == 1 ? "1 thing needs you" : "\(attentionRowCount) things need you",
+                         reason: currentRows.joined(separator: "; "), tone: .amber)
         }
         if !notices.isEmpty || !oldNotices.isEmpty {
             return .init(headline: "Status notice", reason: (notices + oldNotices).joined(separator: "; "), tone: .neutral)
@@ -41,12 +40,20 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
     }
 
     /// Every distinct current row; historical rows never count (compact headline, 2026-11-08).
-    var currentRowCount: Int { Set(attention + notices).count }
+    var currentRows: [String] {
+        var seen = Set<String>()
+        return (attention + notices).filter { seen.insert($0).inserted }
+    }
 
-    /// The menu and Dashboard headline under a verdict dot: a true count of the rows below it.
-    /// Without any row it falls back to the dot's own words.
+    var currentRowCount: Int { currentRows.count }
+    var attentionRowCount: Int { Set(attention).count }
+    var currentItems: [BrainBarUIStatusItem] {
+        currentRows.map { .init(text: $0, kind: attention.contains($0) ? .attention : .notice) }
+    }
+
+    /// A non-green dot without attention rows uses the dot's own words.
     func overrideHeadline(_ dot: BrainBarRenderedDot) -> String {
-        let count = currentRowCount
+        let count = attentionRowCount
         switch dot {
         case .green: return safeHeadline
         case .red, .amber:
@@ -56,7 +63,7 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
     }
 
     var safeHeadline: String {
-        let count = Set(attention + notices).count
+        let count = currentRowCount
         return count == 0 ? "All good" : "Memory safe · \(count) \(count == 1 ? "thing" : "things") to look at"
     }
 
@@ -84,6 +91,20 @@ struct BrainBarHealthVerdict: Codable, Equatable, Sendable {
         var thresholdS: Double? = nil
         var since: String? = nil
         let note: String
+        // Seam PR-1 typed fields: optional, so a 1.5.98 file without them still decodes.
+        var unknownTicks: Int? = nil
+        var blind: Bool? = nil
+        var clock: String? = nil
+        var contextCodes: [String]? = nil
+        var catchUpUntil: String? = nil
+        var goodTicks: Int? = nil
+        var goodTicksNeeded: Int? = nil
+        var pausedByMaintenance: Bool? = nil
+        var pauseEndsAt: String? = nil
+        var fails: Int? = nil
+        /// queue, round_trip, both, blind or none. A String so a future value cannot break the decode.
+        var cause: String? = nil
+        var blindCodes: [String]? = nil
         var text: String { "\(Self.labels[name] ?? name): \(note.isEmpty ? state.rawValue : note)" }
         static let labels = [
             "backup_local": "Database snapshot (verified)", "backup_offsite": "Offsite (Drive) database backup",
@@ -100,18 +121,24 @@ struct BrainBarHealthVerdict: Codable, Equatable, Sendable {
     var renderedDot: BrainBarRenderedDot {
         switch dot { case .green: .green; case .amber, .unknown: .amber; case .red: .red }
     }
-    func isFresh(now: Date) -> Bool { (0...900).contains(now.timeIntervalSince(evaluatedAt)) }
+    func isFresh(now: Date, sleepHistory: BrainBarSleepHistory = .shared) -> Bool { (0...900).contains(sleepHistory.elapsed(since: evaluatedAt, now: now)) }
     var staleRenderedDot: BrainBarRenderedDot { dot == .red ? .red : .amber }
-    func fallbackNotice(now: Date, calendar: Calendar = .current) -> String {
-        let age = now.timeIntervalSince(evaluatedAt)
+    func fallbackNotice(now: Date, calendar: Calendar = .current, sleepHistory: BrainBarSleepHistory = .shared) -> String {
+        let age = sleepHistory.elapsed(since: evaluatedAt, now: now)
         if age < 0 { return "Health check result is dated in the future" }
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "HH:mm"
-        return "Health check stale since \(formatter.string(from: evaluatedAt))"
+        return "Health check stale since \(formatter.string(from: now.addingTimeInterval(-age)))"
     }
+}
+
+struct BrainBarUIStatusItem: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Sendable { case attention, notice }
+    let text: String
+    let kind: Kind
 }
 
 struct BrainBarUIStatusReceipt: Codable, Equatable, Sendable {
@@ -122,10 +149,11 @@ struct BrainBarUIStatusReceipt: Codable, Equatable, Sendable {
     let reasons: [String]
     let appVersion: String
     let gitCommit: String
+    var items: [BrainBarUIStatusItem] = []
 
     func hasSameContent(as other: Self) -> Bool {
         dot == other.dot && source == other.source && verdictEvaluatedAt == other.verdictEvaluatedAt
-            && reasons == other.reasons && appVersion == other.appVersion && gitCommit == other.gitCommit
+            && reasons == other.reasons && items == other.items && appVersion == other.appVersion && gitCommit == other.gitCommit
     }
 
     static func url(dbPath: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
@@ -139,6 +167,8 @@ struct BrainBarUIStatusReceipt: Codable, Equatable, Sendable {
             "rendered_at": iso.string(from: renderedAt), "dot": dot.rawValue, "source": source,
             "verdict_evaluated_at": verdictEvaluatedAt.map { iso.string(from: $0) } as Any? ?? NSNull(),
             "reasons": reasons, "app_version": appVersion, "git_commit": gitCommit,
+            "items": items.map { ["text": $0.text, "kind": $0.kind.rawValue] },
+            "attention_count": items.filter { $0.kind == .attention }.count,
         ]
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]).write(to: url, options: .atomic)
@@ -173,4 +203,12 @@ final class BrainBarUIStatusPublisher: @unchecked Sendable {
 
     /// Drain on shutdown so the final receipt cannot outlive its runtime directory.
     func flush() { queue.sync {} }
+}
+
+/// Catch-up always ends after bounded awake time, even if didWake never arrives.
+struct BrainBarWakeCatchUp {
+    private var deadline: Double? = nil
+    mutating func sleeping(uptime: Double = Double(DispatchTime.now().uptimeNanoseconds) / 1e9) { deadline = uptime + 180 }
+    mutating func woke(uptime: Double, grace: Double = 180) { deadline = uptime + grace }
+    func isPending(uptime: Double) -> Bool { deadline.map { uptime < $0 } ?? false }
 }

@@ -77,7 +77,7 @@ def test_fresh_evidence_fills_every_fact(tmp_path: Path) -> None:
         (
             "drive_auth",
             "drive_token_path",
-            '{"refresh_token": "r", "consented_at": "2026-10-20T00:00:00+00:00"}',
+            '{"refresh_token": "r", "refresh_expires_at": "2026-10-20T00:00:00+00:00"}',
             "consent_needed",
         ),
         ("store_canary_ok", "store_roundtrip_path", None, UNOBSERVED),
@@ -587,20 +587,24 @@ def test_disk_timeout_reuses_measurement_only_within_thirty_minutes(tmp_path, mo
     [
         ("running", 16, 480, "amber"),
         ("high load", 0, 2, "amber"),
-        ("high load", 0, 480, "red"),
+        ("high load", 0, 480, "amber"),
         ("waiting", 0, 480, "red"),
     ],
 )
+@pytest.mark.parametrize("count,age_hours", [(1, 0.1), (3500, 2), (3500, 8)])
 def test_embedding_completed_batches_and_load_pause_are_not_net_stalls(
-    tmp_path, mode, encoded, batch_minutes, expected
+    tmp_path, mode, encoded, batch_minutes, expected, count, age_hours
 ):
     config = _config(tmp_path)
     with sqlite3.connect(config.db_path) as conn:
-        conn.execute("INSERT INTO chunks VALUES ('pending', 'text', NULL, NULL, NULL, ?)", (NOW.isoformat(),))
+        conn.executemany(
+            "INSERT INTO chunks VALUES (?, 'text', NULL, NULL, NULL, ?)",
+            [(f"pending-{i}", NOW.isoformat()) for i in range(count)],
+        )
     prior = {
         "embedding": {
-            "count": 1,
-            "since": (NOW - timedelta(hours=8)).isoformat(),
+            "count": count,
+            "since": (NOW - timedelta(hours=age_hours)).isoformat(),
             "window_start": (NOW - timedelta(days=1)).isoformat(),
         }
     }
@@ -617,18 +621,26 @@ def test_embedding_completed_batches_and_load_pause_are_not_net_stalls(
     (tmp_path / "hotlane-budget.json").write_text(json.dumps({"backlog_max_load": 10}))
     facts, _ = _collect(config, prior)
     check = evaluate(facts).check("embedding")
+    assert facts.embedding_stalled_since == NOW - timedelta(hours=age_hours)
+    if age_hours < 1:
+        expected = "green"
+    elif age_hours == 2:
+        expected = "amber"
     if expected == "red":
         from dataclasses import replace
 
         baseline = evaluate(replace(facts, embedding_activity=None)).check("embedding")
         assert check.state == baseline.state == "red"
         assert "not shrunk" in check.note
+    elif expected == "green":
+        assert check.state == "green"
     else:
         assert check.state == "amber"
-        assert "not shrunk" not in check.note
-        assert "1 queued" in check.note
-        assert "last batch" in check.note
-        assert ("paused by machine load" if mode == "high load" else "progressing") in check.note
+        assert "not shrunk" in check.note
+        if facts.embedding_activity:
+            assert f"{count} queued" in check.note
+            assert "last batch" in check.note
+            assert ("paused by machine load" if mode == "high load" else "progressing") in check.note
 
 
 @pytest.mark.parametrize("stale", [False, True])
@@ -646,3 +658,79 @@ def test_load_gate_requires_fresh_evidence_even_without_completed_batch(tmp_path
     if text:
         assert "paused by machine load" in text
         assert "time unavailable" in text
+
+
+def test_r2_collector_pairs_tick_with_boot_and_awake_clock(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import brainlayer.health_check as hc
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW + timedelta(seconds=5)
+
+    calls = []
+    monkeypatch.setattr(hf, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(hf, "datetime", Clock)
+    monkeypatch.setattr(hf.time, "monotonic", lambda: 1000.0)
+    monkeypatch.setattr(
+        hc,
+        "_default_command_runner",
+        lambda args: calls.append(args) or SimpleNamespace(returncode=0, stdout="test-boot\n"),
+    )
+    facts, _ = _collect(_config(tmp_path))
+    assert calls == [["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"]]
+    assert facts.boot_session == "test-boot"
+    assert facts.awake_clock_s == 995.0
+
+
+@pytest.mark.parametrize("deadline", [None, "permanent", "2026-11-30T00:00:00+00:00"])
+def test_old_consent_does_not_expire_without_reported_deadline(deadline):
+    from brainlayer.health_facts import drive_auth_fact
+
+    token = {"refresh_token": "fixture", "consented_at": "2000-01-01T00:00:00+00:00"}
+    if deadline is not None:
+        token["refresh_expires_at"] = deadline
+    assert drive_auth_fact(token, NOW, []) == "ok"
+
+
+def test_reported_deadline_and_receipts_determine_offline_auth():
+    from brainlayer.health_facts import drive_auth_fact
+
+    token = {
+        "refresh_token": "fixture",
+        "consented_at": (NOW - timedelta(hours=1)).isoformat(),
+        "refresh_expires_at": NOW.isoformat(),
+    }
+    assert drive_auth_fact(token, NOW, []) == "consent_needed"
+    token["refresh_expires_at"] = "permanent"
+    assert drive_auth_fact(token, NOW, [(NOW - timedelta(hours=2), "consent_needed")]) == "ok"
+    assert drive_auth_fact(token, NOW, [(NOW, "refresh_failed")]) == "refresh_failed"
+    assert drive_auth_fact(token, NOW, [(NOW, "ok")]) == "ok"
+
+
+def test_pause_end_and_check_codes_reach_facts_and_the_badge_fields(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    ends = NOW + timedelta(hours=1)
+    config.pause_sentinel_path.write_text(json.dumps({"labels": [config.drain_label], "expires_at": ends.isoformat()}))
+    result = HealthCheckResult(
+        checked_at=NOW.isoformat(),
+        ok=False,
+        canary_ok=True,
+        canary_status="results",
+        issues=[
+            HealthIssue("process_snapshot_failed", "critical", "ps failed"),
+            HealthIssue("drain_unloaded", "critical", "drain not loaded"),
+            HealthIssue("hotlane_dead", "critical", "hotlane not running"),
+        ],
+    )
+    facts, _ = _collect(config, result=result)
+    assert (facts.stores_paused, facts.ingest_paused, facts.pause_ends_at) == (True, False, ends)
+    assert facts.check_codes == {"stores": ("drain_unloaded",), "embedding": ("hotlane_dead",)}
+    stores = evaluate(facts).check("stores").to_dict()
+    assert stores["paused_by_maintenance"] is True and stores["pause_ends_at"] == "2026-11-02T07:00:00Z"
+    assert stores["context_codes"] == ["drain_unloaded"]
+    assert evaluate(facts).check("monitor").to_dict()["blind_codes"] == ["process_snapshot_failed"]
+    config.pause_sentinel_path.unlink()
+    assert _collect(config)[0].pause_ends_at is None

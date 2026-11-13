@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 class HotlaneCpuSampler:
@@ -17,6 +17,7 @@ class HotlaneCpuSampler:
         self.samples = deque()
         self.backlog_cycles = deque()
         self.last_publish = float("-inf")
+        self.next_forced_batch_at = None
         self.state = None
         self.last_batch_at = None
         self.lock = threading.Lock()
@@ -36,6 +37,14 @@ class HotlaneCpuSampler:
     def _sample(self):
         while not self.stop.wait(10):
             self.observe()
+
+    def set_backlog_floor(self, seconds):
+        with self.lock:
+            self.next_forced_batch_at = (
+                (datetime.now(timezone.utc) + timedelta(seconds=max(0, seconds))).isoformat()
+                if seconds is not None
+                else None
+            )
 
     def begin_cycle(self):
         return self.clock(), self.cpu_clock()
@@ -80,6 +89,7 @@ class HotlaneCpuSampler:
             backlog_wall_seconds=sum(cycle[1] for cycle in self.backlog_cycles),
             backlog_cpu_seconds=sum(cycle[2] for cycle in self.backlog_cycles),
             backlog_state=state,
+            backlog_next_forced_batch_at=self.next_forced_batch_at,
             backlog_last_batch_at=self.last_batch_at,
         )
         try:

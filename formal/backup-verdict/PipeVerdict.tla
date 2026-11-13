@@ -44,7 +44,8 @@ CONSTANTS
                        \* episode (keyed by its clock value), never renewed by a later gap;
                        \* FALSE = today's renewable grace (resumed_at resets on every gap)
     QueueStalls,       \* may the pending-store queue stall (FALSE isolates the canary)
-    Daemon,            \* #1686: hotlane daemon evidence a tick may see for embedding.
+    Daemon,            \* "activity": stall age sets severity; fresh activity only softens red.
+                       \* Historical #1686 modes retained for counterexamples:
                        \* "none": not read (pre-#1686). "progress" (#1686): a batch written
                        \* this hour reads AMBER ("progressing ... keeping the queue full"),
                        \* a load pause with no batch only adds a note. "pause": scratch
@@ -247,13 +248,17 @@ StoresRaw(q, k) ==
     IN [raw |-> worst, ev |-> ev, fails |-> f1, owed |-> ow, clk |-> p.clk, graced |-> p.graced,
         rec |-> p.rec]
 
-(* embedding: backlog stall start from the anchored window, via _stall_age.*)
-(* #1686: recent progress replaces the stall result with _Raw(AMBER, ...): *)
-(* evidence, never graced, and no clock or keep, so evaluate() persists no *)
-(* clock and no grace record for that tick. A pause only appends a note.   *)
+(* Current policy preserves stall clock/grace and cannot create an alert. *)
+(* Historical progress/pause modes retain #1686 for regression cases.     *)
 Override(o) == o = "progress" \/ (o = "paused" /\ Daemon = "pause")
 EmbRaw(o) ==
-    IF Override(o)
+    IF Daemon = "activity"
+    THEN LET base == StallAge("embedding", o,
+                      IF o \in {"stalled", "paused"} \/ (o = "progress" /\ backlog)
+                      THEN stallSince ELSE NoTime, embClk)
+         IN IF base.raw = "red" /\ o \in {"progress", "paused"}
+            THEN [base EXCEPT !.raw = "amber"] ELSE base
+    ELSE IF Override(o)
     THEN [raw |-> "amber", ev |-> TRUE, clk |-> NoTime, graced |-> FALSE, rec |-> NoRec]
     ELSE StallAge("embedding", o, IF o \in {"stalled", "paused"} THEN stallSince ELSE NoTime, embClk)
 
@@ -305,6 +310,8 @@ Tick ==
                  LET k == clk[c]
                      base == IF ovr[c].clk = k THEN ovr[c] ELSE [clk |-> k, first |-> NoTime]
                      overNonRed == k # NoTime /\ now - k > Red(c) /\ h[c].state # "red"
+                         /\ ~(c = "embedding" /\ Daemon = "activity" /\ h[c].state = "amber"
+                               /\ o.emb \in {"progress", "paused"})
                  IN IF overNonRed /\ base.first = NoTime
                     THEN [base EXCEPT !.first = IF ResumedNow = NoTime THEN -2 ELSE ResumedNow]
                     ELSE base]
@@ -345,6 +352,10 @@ Next == World \/ Advance \/ Tick
 Spec == Init /\ [][Next]_vars
 
 -----------------------------------------------------------------------------
+SmallProgressQueueQuiet ==
+    Daemon = "activity" /\ Focus = "embedding" /\ lastObs.emb = "progress"
+      /\ (embClk = NoTime \/ lastTick - embClk <= EmbedAmber) => st["embedding"] = "green"
+
 TypeOK == \A c \in Checks : st[c] \in {"none", "green", "amber", "red", "unknown"}
 
 (* A red check leaves red only after the evidence §3d names: an observed    *)
@@ -352,19 +363,26 @@ TypeOK == \A c \in Checks : st[c] \in {"none", "green", "amber", "red", "unknown
 (* observed the pipe healthy (a fresh heartbeat; a canary success that is   *)
 (* the latest attempt, or an empty queue with no failure outstanding); for  *)
 (* embedding, an observed clear backlog that vectors actually cleared.      *)
+(* Activity policy additionally permits red -> amber while fresh progress *)
+(* or a machine-load pause explains the stall; this never grants green.   *)
 RedHoldsUntilEvidence ==
     \A c \in Checks : prevSt[c] = "red" /\ st[c] # "red" =>
-        IF c \in Hyst THEN streak[c] >= GoodTicks ELSE streak[c] >= 1
+        IF c = "embedding" /\ Daemon = "activity" /\ st[c] = "amber"
+           /\ lastObs.emb \in {"progress", "paused"} THEN TRUE
+        ELSE IF c \in Hyst THEN streak[c] >= GoodTicks ELSE streak[c] >= 1
 
 (* A stall whose true (un-graced) age is past red is non-red only inside    *)
 (* one wake-grace window: the window of the first resume seen while it was *)
 (* over red, never one granted by a later gap (plan 3d wake-grace ruling). *)
 (* first = -2 records "over red and non-red with no resume at all".         *)
+(* Activity may soften embedding red to amber outside grace, never green. *)
 PersistedClk(c) == CASE c = "ingest" -> ingClk [] c = "embedding" -> embClk [] OTHER -> pendClk
 NoFalseGreenStall ==
     \A c \in Stall :
         LET k == PersistedClk(c) IN
-        (k # NoTime /\ lastTick - k > Red(c) /\ st[c] \in {"green", "amber"}) =>
+        (k # NoTime /\ lastTick - k > Red(c) /\ st[c] \in {"green", "amber"}
+         /\ ~(c = "embedding" /\ Daemon = "activity" /\ st[c] = "amber"
+               /\ lastObs.emb \in {"progress", "paused"})) =>
             /\ ovr[c].clk = k /\ ovr[c].first >= 0
             /\ lastTick <= ovr[c].first + Grace
 

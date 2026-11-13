@@ -77,9 +77,7 @@ ICLOUD_MIN_BYTES_PER_SECOND = 20 * 1024 * 1024
 ICLOUD_DIR_ENV = "BRAINLAYER_JSONL_BACKUP_ICLOUD_DIR"
 ICLOUD_TIMEOUT_ENV = "BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS"
 BRAINLAYER_JSONL_BACKUP_RETENTION_ENV = "BRAINLAYER_JSONL_BACKUP_RETENTION"
-# Retention is a destructive operation even when the source-side coverage check passes. Keep
-# it off until archive-level history coverage is proven; the explicit environment override is
-# the only opt-in for a deliberately bounded run.
+# Remote pruning remains opt-in; local receipt-backed retention has its own default.
 RETENTION_ENABLED = False
 JSONL_RETENTION = backup_daily.DriveRetentionPolicy(
     keep_latest=30,
@@ -214,8 +212,16 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        with temp_path.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temp_path, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -343,7 +349,9 @@ def _select_backup_candidates(
     return changed, active, covered, vanished
 
 
-def _list_surviving_archives(service: Any, folder_parts: list[str]) -> dict[str, str | None]:
+def _list_surviving_archives(
+    service: Any, folder_parts: list[str], by_name: dict[str, list[dict[str, Any]]] | None = None
+) -> dict[str, str | None]:
     """Surviving archive objects in the backup folder, keyed by Drive object ID.
 
     Keyed by ID, never by name: Drive permits duplicate names in one folder, so a
@@ -351,6 +359,9 @@ def _list_surviving_archives(service: Any, folder_parts: list[str]) -> dict[str,
     prove a survival that never happened. The value is the object's md5Checksum
     when Drive reports one, so out-of-band modification of a surviving object is
     detectable too.
+
+    ``by_name``, when given, is filled from the same listing with every object's
+    id, size, md5Checksum and trashed flag under its name, for receipt reconciliation.
     """
     folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)
     surviving: dict[str, str | None] = {}
@@ -361,7 +372,7 @@ def _list_surviving_archives(service: Any, folder_parts: list[str]) -> dict[str,
             .list(
                 q=f"'{folder_id}' in parents and trashed = false",
                 spaces="drive",
-                fields="nextPageToken,files(id,name,md5Checksum)",
+                fields="nextPageToken,files(id,name,md5Checksum,size,trashed)",
                 pageSize=1000,
                 pageToken=page_token,
                 supportsAllDrives=True,
@@ -372,6 +383,10 @@ def _list_surviving_archives(service: Any, folder_parts: list[str]) -> dict[str,
             file_id = item.get("id")
             if isinstance(file_id, str) and file_id:
                 surviving[file_id] = item.get("md5Checksum")
+                if by_name is not None and isinstance(item.get("name"), str):
+                    by_name.setdefault(item["name"], []).append(
+                        {key: item.get(key) for key in ("id", "size", "md5Checksum", "trashed")}
+                    )
         page_token = response.get("nextPageToken")
         if not page_token:
             break
@@ -395,6 +410,159 @@ def _retention_enabled() -> bool:
         "1",
         "true",
     }
+
+
+def _local_retention_enabled() -> bool:
+    return os.environ.get("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION", "1").strip().lower() in {"1", "true"}
+
+
+def _md5_file(path: Path) -> str:
+    with path.open("rb") as handle:
+        return hashlib.file_digest(handle, "md5").hexdigest()
+
+
+def _drive_archive_receipt(path: Path, uploaded: dict[str, Any], *, now: float) -> dict[str, Any]:
+    md5 = _md5_file(path)
+    return {
+        "name": path.name,
+        "size": path.stat().st_size,
+        "sha256": _sha256_file(path),
+        "archive_md5": md5,
+        "verified": uploaded.get("md5Checksum") == md5,
+        "verified_at": now,
+        "archive_id": uploaded.get("id"),
+    }
+
+
+def reconcile_drive_receipts(
+    staging_dir: Path, *, state: dict[str, Any], now: float, drive_objects: dict[str, list[dict[str, Any]]]
+) -> list[str]:
+    """Give each receipt-less local archive a receipt when Drive holds exactly one live identical copy.
+
+    Archives made before #1776 have no receipt, so the sweep can never retire them. A receipt is
+    written only for a single same-named, untrashed Drive object whose size and md5Checksum match
+    the local bytes. ``verified_at`` is never earlier than now: the 14-day clock starts here, so a
+    reconciled receipt cannot authorize deletion in the run that writes it. Existing receipts,
+    verified or not, are never replaced.
+    """
+    receipts = state.setdefault("drive_archives", {})
+    if not isinstance(receipts, dict):
+        return []
+    verified_at = max(now, time.time())
+    reconciled = []
+    for path in sorted(_local_archive_paths(staging_dir)):
+        if path.name in receipts:
+            continue
+        matches = drive_objects.get(path.name, [])
+        if len(matches) != 1:
+            continue
+        remote = matches[0]
+        size = path.stat().st_size
+        try:
+            remote_size = int(remote.get("size"))
+        except (TypeError, ValueError):
+            continue
+        if remote.get("trashed") is not False or remote_size != size or not remote.get("id"):
+            continue
+        md5 = _md5_file(path)
+        if not remote.get("md5Checksum") or remote["md5Checksum"] != md5:
+            continue
+        receipts[path.name] = {
+            "name": path.name,
+            "size": size,
+            "sha256": _sha256_file(path),
+            "archive_md5": md5,
+            "verified": True,
+            "verified_at": verified_at,
+            "archive_id": remote["id"],
+            "source": "reconciled",
+        }
+        reconciled.append(path.name)
+    return reconciled
+
+
+def _local_archive_paths(staging_dir: Path) -> list[Path]:
+    roots = {staging_dir}
+    parent = staging_dir if staging_dir.name == "jsonl-backups" else staging_dir.parent
+    if parent.name == "jsonl-backups":
+        roots.add(parent)
+        roots.update(p for p in parent.iterdir() if p.name.startswith("release-") and p.is_dir() and not p.is_symlink())
+    return [p for root in roots for p in root.glob("claude-jsonl-*.tar.gz") if p.is_file() and not p.is_symlink()]
+
+
+def _retention_warning(log_path: Path, error: str) -> None:
+    print(f"JSONL local retention disabled for this run: {error}", file=sys.stderr, flush=True)
+    try:
+        _append_json_log(log_path, {"event": "local_retention_error", "error": error})
+    except Exception:
+        pass  # Logging failure must not stop the backup either.
+
+
+def prune_local_archives(
+    staging_dir: Path, *, state_path: Path, log_path: Path, now: float, surviving_archives: dict[str, str | None]
+) -> list[str]:
+    """Caller holds the staging lock; only durable exact-archive receipts authorize unlink."""
+    if not _local_retention_enabled():
+        return []
+    days = int(os.environ.get("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION_DAYS", "14"))
+    if days < 14:
+        raise ValueError("local JSONL retention must be at least 14 days")
+    receipts = _load_state(state_path).get("drive_archives", {})
+    archives = _local_archive_paths(staging_dir)
+    if not archives:
+        return []
+    newest = max(archives, key=lambda p: (p.stat().st_mtime, p.as_posix()))
+    deleted = []
+    for path in archives:
+        age = now - path.stat().st_mtime
+        receipt = receipts.get(path.name, {}) if isinstance(receipts, dict) else {}
+        if path == newest or age < days * 86400:
+            continue
+        if not isinstance(receipt, dict) or receipt.get("verified") is not True:
+            continue
+        if (
+            not isinstance(receipt.get("verified_at"), (int, float))
+            or not math.isfinite(receipt["verified_at"])
+            or now - receipt["verified_at"] < days * 86400
+        ):
+            continue
+        if (
+            not receipt.get("archive_md5")
+            or surviving_archives.get(receipt.get("archive_id")) != receipt["archive_md5"]
+            or _md5_file(path) != receipt["archive_md5"]
+        ):
+            continue
+        if (
+            receipt.get("name") != path.name
+            or receipt.get("size") != path.stat().st_size
+            or not receipt.get("archive_id")
+            or receipt.get("sha256") != _sha256_file(path)
+        ):
+            continue
+        # A durable intent makes every unlink auditable even if the process dies immediately after it.
+        _append_json_log(
+            log_path,
+            {
+                "event": "local_retention_delete",
+                "name": path.name,
+                "age_days": age / 86400,
+                "verified_receipt_id": receipt["archive_id"],
+            },
+        )
+        with log_path.open("a") as handle:
+            os.fsync(handle.fileno())
+        path.unlink()
+        deleted.append(path.name)
+        _append_json_log(
+            log_path,
+            {
+                "event": "local_retention_deleted",
+                "name": path.name,
+                "age_days": age / 86400,
+                "verified_receipt_id": receipt["archive_id"],
+            },
+        )
+    return deleted
 
 
 def _prune_drive_backups_to_trash(
@@ -1474,7 +1642,12 @@ def _update_state_for_uploaded(
         elif isinstance(existing_icloud_directory, str) and existing_icloud_directory:
             entry["icloud_required"] = True
         files[candidate.path.as_posix()] = entry
-    updated = {"files": files, "updated_at": dt.datetime.now(dt.UTC).isoformat()}
+    updated = {
+        "files": files,
+        "drive_archives": dict(state.get("drive_archives") or {}),
+        "local_retention_revoke_pending": state.get("local_retention_revoke_pending", False),
+        "updated_at": dt.datetime.now(dt.UTC).isoformat(),
+    }
 
     archives = dict(state.get("icloud_archives") or {})
     if icloud_archive_name is not None and icloud_receipt is not None:
@@ -1604,6 +1777,7 @@ def run_backup(
     credentials = None
     service = None
     surviving_archives: dict[str, str | None] | None = None
+    drive_objects: dict[str, list[dict[str, Any]]] = {}
     if upload:
         # 2026-09-09 retention incident / PR #815: 22 uploaded+verified daily bundles
         # later disappeared under retention while unchanged files still read as covered.
@@ -1614,12 +1788,52 @@ def run_backup(
         # archive-backed coverage there is nothing to verify, so a run that would be a
         # clean no-op does not touch Drive. Once entries DO claim coverage the listing is
         # unavoidable -- survival cannot be proven without asking.
-        if any(isinstance(e, dict) and e.get("archive_id") for e in (state.get("files") or {}).values()):
-            credentials = backup_daily.get_drive_credentials()
-            service = backup_daily.build_drive_service()
-            surviving_archives = _list_surviving_archives(service, folder_parts)
+        if state.get("drive_archives") or any(
+            isinstance(e, dict) and e.get("archive_id") for e in (state.get("files") or {}).values()
+        ):
+            try:
+                credentials = backup_daily.get_drive_credentials()
+                service = backup_daily.build_drive_service()
+                surviving_archives = _list_surviving_archives(service, folder_parts, drive_objects)
+            except Exception as exc:
+                surviving_archives = {}
+                # A listing that failed mid-pagination already filled drive_objects in part.
+                drive_objects.clear()
+                retention_receipt["local_retention_error"] = f"Drive inventory unavailable: {exc}"
+                _retention_warning(log_path, retention_receipt["local_retention_error"])
         else:
             surviving_archives = {}
+    retention_receipt["local_retention_deleted"] = []
+    retention_receipt["local_retention_reconciled"] = []
+    if state.get("local_retention_revoke_pending"):
+        retention_receipt["local_retention_error"] = (
+            "Receipt loss after interrupted Drive pruning; local retention receipts need reconciliation"
+        )
+        _retention_warning(log_path, retention_receipt["local_retention_error"])
+    if upload and drive_objects and "local_retention_error" not in retention_receipt:
+        try:
+            reconciled = reconcile_drive_receipts(
+                Path(staging_dir).expanduser(), state=state, now=now, drive_objects=drive_objects
+            )
+            if reconciled:
+                _atomic_write_json(state_path, state)
+                _append_json_log(log_path, {"event": "local_retention_reconciled", "names": reconciled})
+            retention_receipt["local_retention_reconciled"] = reconciled
+        except Exception as exc:
+            retention_receipt["local_retention_error"] = f"receipt reconciliation failed: {exc}"
+            _retention_warning(log_path, retention_receipt["local_retention_error"])
+    if upload and "local_retention_error" not in retention_receipt:
+        try:
+            retention_receipt["local_retention_deleted"] = prune_local_archives(
+                Path(staging_dir).expanduser(),
+                state_path=state_path,
+                log_path=log_path,
+                now=now,
+                surviving_archives=(surviving_archives or {}),
+            )
+        except Exception as exc:
+            retention_receipt["local_retention_error"] = str(exc)
+            _retention_warning(log_path, str(exc))
     changed, active, covered, vanished = _select_backup_candidates(
         candidates,
         state=selection_state,
@@ -1788,6 +2002,9 @@ def run_backup(
                 "md5Checksum": uploaded.get("md5Checksum"),
             }
         )
+        state.setdefault("drive_archives", {})[archive_path.name] = _drive_archive_receipt(
+            archive_path, uploaded, now=time.time()
+        )
         # The same incident was two individually reasonable deletions composed together:
         # successful upload removed local staging, then Drive retention removed the remote
         # bundle. Persist the exact Drive object and archived-source digests before either
@@ -1811,6 +2028,12 @@ def run_backup(
         try:
             # Do not move this ahead of the provenance write or loosen `_state_matches` to
             # mtime/size. That exact shape left 22 successful nights with no surviving bundle.
+            retained_state = _load_state(state_path)
+            authorized = retained_state.get("drive_archives", {})
+            if retention_enabled:
+                retained_state["drive_archives"] = {}
+                retained_state["local_retention_revoke_pending"] = True
+                _atomic_write_json(state_path, retained_state)
             deleted = (
                 _prune_drive_backups_to_trash(
                     service,
@@ -1820,6 +2043,12 @@ def run_backup(
                 if retention_enabled
                 else []
             )
+            if retention_enabled:
+                retained_state["drive_archives"] = {
+                    name: receipt for name, receipt in authorized.items() if name not in deleted
+                }
+                retained_state["local_retention_revoke_pending"] = False
+                _atomic_write_json(state_path, retained_state)
             result["retention_deleted"] = deleted
             if _forever_enabled():
                 forever_files = _upload_forever_files(
@@ -1832,15 +2061,20 @@ def run_backup(
                 )
                 result["forever_files"] = forever_files
                 result["forever_uploaded_file_count"] = len(forever_files)
-        finally:
-            # Local staging may disappear only inside verified-upload control flow. Together
-            # with the retention call above, this unlink is why survivor identity is a deletion
-            # invariant rather than an optional integrity check (2026-09-09 / PR #815).
+        except Exception:
             if retention_enabled:
-                archive_path.unlink(missing_ok=True)
-                result["local_archive_removed"] = True
-            else:
-                result["local_archive_removed"] = False
+                _retention_warning(log_path, "Drive prune interrupted; receipt reconciliation required")
+                from .job_alerts import report
+
+                report(
+                    "jsonl-retention",
+                    "Drive prune interrupted; receipt reconciliation required",
+                    path=state_path.parent / "job-alerts.json",
+                    notify=lambda _: None,
+                )
+            raise
+        finally:
+            result["local_archive_removed"] = False
     elif not result["verified"]:
         result["status"] = "failed"
         result["message"] = f"local bundle verification failed: {result.get('verification_error', 'unknown error')}"
@@ -1915,6 +2149,7 @@ def main() -> int:
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, previous_alarm_handler)
     print(json.dumps(result, sort_keys=True), flush=True)
+    report("jsonl-retention", result.get("local_retention_error"))
     code = 0 if result.get("verified", True) else 1
     report("jsonl-backup", None if code == 0 else "Transcript backup failed verification; check the backup log")
     return code

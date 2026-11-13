@@ -96,6 +96,9 @@ final class BrainBarDriveAuthTests: XCTestCase {
     // MARK: status contract (`--status --json`)
 
     func test_status_states_parse_from_the_cli_contract() {
+        let offline = DriveAuthStatus.parse(result(#"{"state":"unknown","reason":"status checked offline; last known state"}"#))
+        XCTAssertEqual(offline.state, .unknown)
+        XCTAssertEqual(offline.reason, "status checked offline; last known state")
         let valid = DriveAuthStatus.parse(result(#"{"state":"valid","reason":"","expires_at":"2026-10-05T09:00:00Z","days_left":4.9}"#))
         XCTAssertEqual(valid, .init(state: .valid, reason: nil, expiresAt: date("2026-10-05T09:00:00Z")))
         XCTAssertEqual(DriveAuthStatus.parse(result(#"{"state":"expiring","expires_at":"2026-09-30T17:30:00Z"}"#)).state, .expiring)
@@ -107,6 +110,11 @@ final class BrainBarDriveAuthTests: XCTestCase {
         XCTAssertEqual(DriveAuthStatus.parse(result("No such command 'auth'.", exit: 2)),
                        .init(state: .unknown, reason: "brainlayer backup auth --status failed (exit 2)", expiresAt: nil))
         XCTAssertEqual(DriveAuthStatus.parse(result(#"{"state":"sparkly"}"#)).reason, "unrecognised Drive state \"sparkly\"")
+    }
+
+    func test_missing_deadline_is_explicit() {
+        let valid = present(.init(state: .valid, reason: nil, expiresAt: nil))
+        XCTAssertEqual(valid.line, "Connected; no grant deadline reported")
     }
 
     func test_each_status_state_presents_what_to_do() {
@@ -130,6 +138,7 @@ final class BrainBarDriveAuthTests: XCTestCase {
         let invalid = present(.init(state: .invalid, reason: "invalid_grant", expiresAt: nil))
         XCTAssertEqual(invalid.line, "Drive access expired or was revoked. Backups can't upload.")
         XCTAssertTrue(invalid.showsReconnect && invalid.needsAttention)
+        XCTAssertEqual(invalid.tone, .attention)
 
         let unknown = present(.init(state: .unknown, reason: "brainlayer CLI not found", expiresAt: nil))
         XCTAssertEqual(unknown.line, "Drive status unknown — brainlayer CLI not found")
