@@ -11,10 +11,10 @@ enum BrainBarMenuPresenter {
     typealias Capture = BrainBarMenuCapture
     typealias State = BrainBarHealthVerdict.State
 
-    enum Thing: Int, CaseIterable { case remembering, finding, safe, upkeep, system }
-    enum Level { case cantTell, behind, needs }
+    private enum Thing: Int, CaseIterable { case remembering, finding, safe, upkeep, system }
+    private enum Level { case cantTell, behind, needs }
 
-    struct Line {
+    private struct Line {
         var thing: Thing
         var level: Level
         var strings: [String]
@@ -24,46 +24,66 @@ enum BrainBarMenuPresenter {
         var progress: Int? = nil
     }
 
-    static let checksOf: [Thing: [String]] = [
+    private static let checksOf: [Thing: [String]] = [
         .safe: ["backup_local", "backup_offsite", "transcripts", "drive_auth", "integrity", "disk"],
         .remembering: ["ingest", "stores"], .finding: ["search", "embedding"], .upkeep: [], .system: ["monitor"],
     ]
     static let known = Thing.allCases.flatMap { checksOf[$0]! }
-    static let four: [Thing] = [.remembering, .finding, .safe, .upkeep]
-    static let copies = ["backup_local", "backup_offsite", "transcripts"]
+    private static let four: [Thing] = [.remembering, .finding, .safe, .upkeep]
+    private static let copies = ["backup_local", "backup_offsite", "transcripts"]
 
-    static func thing(of name: String) -> Thing { Thing.allCases.first { checksOf[$0]!.contains(name) } ?? .system }
+    private static func thing(of name: String) -> Thing { Thing.allCases.first { checksOf[$0]!.contains(name) } ?? .system }
 
     /// R17's generic rows.
-    static func needs(_ thing: Thing) -> Line { Line(thing: thing, level: .needs, strings: ["Something BrainBar checks is failing."]) }
-    static func checking(_ thing: Thing) -> Line { Line(thing: thing, level: .cantTell, strings: ["Checking…"]) }
-    static let handoff = ["BrainBar can’t fix this itself.", "Give the report to an agent."]
+    private static func needs(_ thing: Thing) -> Line { Line(thing: thing, level: .needs, strings: ["Something BrainBar checks is failing."]) }
+    private static func checking(_ thing: Thing) -> Line { Line(thing: thing, level: .cantTell, strings: ["Checking…"]) }
+    private static let handoff = ["BrainBar can’t fix this itself.", "Give the report to an agent."]
 
+    /// The only entry point. It is total over its capture type: no input traps, and the guard runs last on every path.
     static func present(_ c: Capture) -> P { finalGuard(c, derived(c)) }
 
-    static func derived(_ c: Capture) -> P {
-        guard let v = c.verdict else { return checkingState(c) }
-        if (0...900).contains(c.verdictAwakeAgeS), !c.isChecking, !c.wakeCatchUpPending {
-            return assemble(c, derive(c, v), allGood: allGoodDetail(c, v))
+    private static func derived(_ c: Capture) -> P {
+        if let v = c.verdict, (0...900).contains(c.verdictAwakeAgeS) {
+            let lines = derive(c, v)
+            if !c.isChecking, !c.wakeCatchUpPending { return assemble(c, lines, allGood: allGoodDetail(c, v)) }
+            // R19: with a fresh verdict, checking never calms; every Needs-you row stays (X01: a decodable verdict ends it).
+            return lines.contains { $0.level == .needs } ? assemble(c, lines, allGood: nil) : checkingState(c)
         }
-        // X01 to X03 (P5 words them): Can't tell, except that a red always counts.
-        var reds: Set<Thing> = Set(v.checks.filter { $0.state == .red }.map { thing(of: $0.name) })
-        if v.dot == .red { reds.insert(.system) }
-        guard !reds.isEmpty else { return checkingState(c) }
-        let lines: [Line] = Thing.allCases.filter(reds.contains).map(needs) + four.filter { !reds.contains($0) }.map(checking)
-        return assemble(c, lines, allGood: nil)
+        // X03, X04 (P5 words them): the verdict's checks are Can't tell, except that its reds count (I1),
+        // and so do the rows the app reads without the producer (R20).
+        var reds: Set<Thing> = Set((c.verdict?.checks ?? []).filter { $0.state == .red }.map { thing(of: $0.name) })
+        if c.verdict?.dot == .red { reds.insert(.system) }
+        let lines: [Line] = Thing.allCases.filter(reds.contains).map(needs) + appFacts(c)
+        guard !lines.isEmpty else { return checkingState(c) }
+        return assemble(c, lines + four.filter { t in !lines.contains { $0.thing == t } }.map(checking), allGood: nil)
     }
 
     /// The worst state a check reports under this name, or nil when no check has the name.
-    static func worst(_ v: BrainBarHealthVerdict, _ name: String) -> State? {
+    private static func worst(_ v: BrainBarHealthVerdict, _ name: String) -> State? {
         let states = v.checks.filter { $0.name == name }.map(\.state)
         return [State.red, .amber, .unknown, .green].first(where: states.contains)
     }
 
+    /// R20: Needs-you rows whose facts the app reads without the producer, so they count whatever the verdict's state.
+    /// A failed database probe makes only `coverage_drop` unprovable (R24); other alerts still count (R09, X10).
+    private static func appFacts(_ c: Capture) -> [Line] {
+        var lines: [Line] = []
+        if c.maintenanceNightFailures >= 3 { lines.append(needs(.upkeep)) }  // U03
+        guard let w = c.watcher, w.readable, w.fresh else { return lines }
+        if w.alertReasons.contains("offset_lag"), lagPastLimit(c) { lines.append(needs(.remembering)) }  // R02 escalated
+        for reason in w.alertReasons where !["offset_lag", "quarantined_record"].contains(reason) {
+            if reason == "coverage_drop", w.dbProbeFailed { continue }
+            lines.append(needs(["coverage_drop", "file_ingestion_failure"].contains(reason) ? .remembering : .system))
+        }
+        return lines
+    }
+
+    private static func lagPastLimit(_ c: Capture) -> Bool { c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } == true }
+
     // MARK: Part 1 rows from one fresh verdict
 
-    static func derive(_ c: Capture, _ v: BrainBarHealthVerdict) -> [Line] {
-        var lines: [Line] = []
+    private static func derive(_ c: Capture, _ v: BrainBarHealthVerdict) -> [Line] {
+        var lines: [Line] = appFacts(c)
         for name in known where name != "monitor" {
             switch worst(v, name) {
             case .green?: break
@@ -82,18 +102,13 @@ enum BrainBarMenuPresenter {
             lines.append(checking(.safe))
         }
         if let w = c.watcher, w.readable, w.fresh, !w.dbProbeFailed {
-            if w.alertReasons.contains("offset_lag"), worst(v, "ingest") == .green {  // R02, until its clock passes 30 min
-                lines.append(c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } == true ? needs(.remembering)
-                    : Line(thing: .remembering, level: .behind, strings: ["Catching up on new conversations."],
-                           headline: "Catching up on new conversations", spinner: true))
-            }
-            for reason in w.alertReasons where !["offset_lag", "quarantined_record"].contains(reason) {
-                lines.append(needs(["coverage_drop", "file_ingestion_failure"].contains(reason) ? .remembering : .system))
+            if w.alertReasons.contains("offset_lag"), worst(v, "ingest") == .green, !lagPastLimit(c) {  // R02, under 30 min
+                lines.append(Line(thing: .remembering, level: .behind, strings: ["Catching up on new conversations."],
+                                  headline: "Catching up on new conversations", spinner: true))
             }
         } else {
             lines.append(checking(.remembering))
         }
-        if c.maintenanceNightFailures >= 3 { lines.append(needs(.upkeep)) }
         if v.dot == .red, !lines.contains(where: { $0.level == .needs }) { lines.append(needs(.system)) }
         if v.dot != .green, v.checks.allSatisfy({ $0.state == .green }) { lines += four.map(checking) }
         return lines
@@ -101,14 +116,15 @@ enum BrainBarMenuPresenter {
 
     /// The two amber rows that do not need him in P1: S03 (a backup to Drive is running) and F02 (search unconfirmed
     /// for under 15 minutes). Every other amber is a generic Needs-you row until its family is derived.
-    static func calmAmber(_ name: String, _ c: Capture, _ v: BrainBarHealthVerdict) -> Line? {
+    private static func calmAmber(_ name: String, _ c: Capture, _ v: BrainBarHealthVerdict) -> Line? {
         switch name {
         case "backup_offsite" where worst(v, "backup_local") == .green:
-            // U13: once `recovering` exists it is the evidence; before PR-2 the live upload is.
+            // U13: once `recovering` exists it is the evidence; before PR-2 the live upload is. A cadence that is not a
+            // finite positive number makes the recovering unusable (no range is built from it).
             let onSchedule = c.offsiteRecovering.flatMap { r -> BrainBarMenuCapture.Recovering? in
                 let quiet = c.now.timeIntervalSince(r.updatedAt)
-                let sane = r.startedAt <= c.now && r.progress.map { (0...1).contains($0) } != false
-                return sane && (0...2 * r.cadenceS).contains(quiet) && r.eta.map { c.now <= $0 } != false ? r : nil
+                let sane = r.cadenceS.isFinite && r.cadenceS > 0 && r.startedAt <= c.now && r.progress.map { (0...1).contains($0) } != false
+                return sane && quiet >= 0 && quiet <= 2 * r.cadenceS && r.eta.map { c.now <= $0 } != false ? r : nil
             }
             let upload = c.upload.flatMap { $0.live ? $0.startedAt : nil }
             guard let started = c.offsiteRecovering == nil ? upload : onSchedule?.startedAt, started <= c.now else { return nil }
@@ -126,7 +142,7 @@ enum BrainBarMenuPresenter {
 
     // MARK: Part 2: merge, count, order, headline
 
-    static func assemble(_ c: Capture, _ input: [Line], allGood: String?) -> P {
+    private static func assemble(_ c: Capture, _ input: [Line], allGood: String?) -> P {
         // R17 and M5: one row per thing and level; the first line of a thing at that level speaks.
         func at(_ level: Level) -> [Line] { Thing.allCases.compactMap { t in input.first { $0.thing == t && $0.level == level } } }
         let needs = at(.needs), behind = at(.behind), cantTell = at(.cantTell)
@@ -170,9 +186,9 @@ enum BrainBarMenuPresenter {
         return .init(form: .calm, headline: headline, count: 0, icon: .resting, rows: rows + bottom)
     }
 
-    static let copyReport = P.Action(kind: .copyReport, label: "Copy report for an agent")
+    private static let copyReport = P.Action(kind: .copyReport, label: "Copy report for an agent")
 
-    static func needsForm(_ needsRows: [P.Row], statuses: [P.Row]) -> P {
+    private static func needsForm(_ needsRows: [P.Row], statuses: [P.Row]) -> P {
         let headline = needsRows.count == 1 ? "1 thing needs you" : "\(needsRows.count) things need you"
         var rows = [P.Row(kind: .headline, strings: [headline], mark: .marked), P.Row(kind: .separator)]
         for (i, row) in needsRows.enumerated() {
@@ -183,7 +199,7 @@ enum BrainBarMenuPresenter {
     }
 
     /// X01, X02, and in P1 every path without a readable, fresh verdict and no red: nothing is confirmed.
-    static func checkingState(_ c: Capture) -> P {
+    private static func checkingState(_ c: Capture) -> P {
         let launching = c.isChecking && c.verdict == nil
         let headline = c.wakeCatchUpPending && !launching ? "Checking after sleep…" : "Checking on your memory…"
         let last = c.lastKnownBackupAt.flatMap { $0 <= c.now ? " Last backup \(at($0, c))." : nil } ?? ""
@@ -194,16 +210,16 @@ enum BrainBarMenuPresenter {
     }
 
     /// R4: one bottom block for both forms.
-    static let bottom = [
+    private static let bottom = [
         P.Row(kind: .separator),
         P.Row(kind: .standardItem, strings: ["Settings…"], keyEquivalent: "⌘,"),
         P.Row(kind: .standardItem, strings: ["Quit BrainBar"], keyEquivalent: "⌘Q", optionAlternate: "Restart BrainBar"),
     ]
 
     /// S01, the all-good line: the older of the offsite and transcript copies (U10), never a future time.
-    static func allGoodDetail(_ c: Capture, _ v: BrainBarHealthVerdict) -> String? {
+    private static func allGoodDetail(_ c: Capture, _ v: BrainBarHealthVerdict) -> String? {
         let ages = ["backup_offsite", "transcripts"].compactMap { name in v.checks.first { $0.name == name }?.ageS }
-        guard let age = ages.max(), ages.allSatisfy({ $0 >= 0 }) else { return nil }
+        guard let age = ages.max(), ages.allSatisfy({ $0.isFinite && $0 >= 0 }) else { return nil }
         let date = v.evaluatedAt.addingTimeInterval(-age)
         return date <= c.now ? "Backed up to Google Drive \(at(date, c))." : nil
     }
@@ -212,6 +228,7 @@ enum BrainBarMenuPresenter {
 
     /// Whatever was derived, the returned value satisfies the invariants; where it would not, the value is corrected
     /// conservatively (a reassurance removed, or the needs form with R17's row) rather than trusted.
+    /// Internal only as the seam for the guard's own test (BrainBarMenuInvariantTests); production calls `present`.
     static func finalGuard(_ c: Capture, _ derived: P) -> P {
         var p = derived
         // I5: no straight apostrophe, no empty string, no row without words (a Needs-you row takes R17's).
@@ -233,10 +250,15 @@ enum BrainBarMenuPresenter {
             p = checkingState(c)
         }
         if p.headline != "All good" { p.rows.removeAll { $0.strings.first?.hasPrefix("Backed up to Google Drive") == true } }
-        // I1 and I4: a red always needs him; form, count and icon follow the Needs-you rows drawn.
+        // I1, I7 and I4: a red, or a fact the app reads without the producer, always needs him; form, count and icon
+        // follow the Needs-you rows drawn.
         var needsRows = p.rows.filter { $0.kind == .needsYou }
         let red = c.verdict.map { $0.dot == .red || $0.checks.contains { $0.state == .red } } ?? false
-        if needsRows.isEmpty, red || p.form == .needs || p.count != 0 || p.icon == .marked {
+        let w = c.watcher.flatMap { $0.readable && $0.fresh ? $0 : nil }
+        let appFact = c.maintenanceNightFailures >= 3
+            || w?.alertReasons.contains { !["offset_lag", "quarantined_record"].contains($0) && !($0 == "coverage_drop" && w?.dbProbeFailed == true) } == true
+            || (w?.alertReasons.contains("offset_lag") == true && c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } == true)
+        if needsRows.isEmpty, red || appFact || p.form == .needs || p.count != 0 || p.icon == .marked {
             needsRows = [P.Row(kind: .needsYou, strings: needs(.system).strings + handoff, action: copyReport)]
         }
         if !needsRows.isEmpty, p.form != .needs || p.count != needsRows.count || p.icon != .marked || p.rows.filter({ $0.kind == .needsYou }) != needsRows {
@@ -246,20 +268,20 @@ enum BrainBarMenuPresenter {
     }
 
     /// The things a reassurance speaks for. P1 draws no "Everything else is fine.", so it must stand for all four.
-    static func covered(_ row: P.Row) -> Set<Thing> {
+    private static func covered(_ row: P.Row) -> Set<Thing> {
         let text = row.strings.joined(separator: " ").lowercased()
         let named = Set([(Thing.remembering, "saving"), (.finding, "search"), (.safe, "backups"), (.upkeep, "upkeep")]
             .filter { text.contains($0.1) }.map(\.0))
         return text.hasPrefix("everything else") || named.isEmpty ? Set(four) : named
     }
 
-    static func allGreen(_ v: BrainBarHealthVerdict, _ names: [String]) -> Bool {
+    private static func allGreen(_ v: BrainBarHealthVerdict, _ names: [String]) -> Bool {
         names.allSatisfy { name in v.checks.contains { $0.name == name } && v.checks.allSatisfy { $0.name != name || $0.state == .green } }
     }
 
     /// A thing is proven fine only under a fresh verdict, with no checking flag, the monitor green, and all of its own
     /// checks present and green (plus, for saving, a clean watcher file; for backups, a measured, sane observation).
-    static func provenFine(_ c: Capture) -> Set<Thing> {
+    private static func provenFine(_ c: Capture) -> Set<Thing> {
         guard let v = c.verdict, (0...900).contains(c.verdictAwakeAgeS), !c.isChecking, !c.wakeCatchUpPending,
               allGreen(v, ["monitor"]) else { return [] }
         var fine = Set(four.filter { allGreen(v, checksOf[$0]!) })
@@ -271,7 +293,7 @@ enum BrainBarMenuPresenter {
         return fine
     }
 
-    static func allGoodProven(_ c: Capture) -> Bool {
+    private static func allGoodProven(_ c: Capture) -> Bool {
         guard let v = c.verdict, v.dot == .green, allGreen(v, known), v.checks.allSatisfy({ known.contains($0.name) || $0.state == .green })
         else { return false }
         return c.backupsMeasured && provenFine(c) == Set(four)
@@ -279,7 +301,7 @@ enum BrainBarMenuPresenter {
 
     // MARK: words for times (truth table Part 0): Gregorian, in the capture's time zone
 
-    static func formatter(_ format: String, _ c: Capture) -> DateFormatter {
+    private static func formatter(_ format: String, _ c: Capture) -> DateFormatter {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.calendar = Calendar(identifier: .gregorian)
@@ -288,10 +310,10 @@ enum BrainBarMenuPresenter {
         return f
     }
 
-    static func hhmm(_ date: Date, _ c: Capture) -> String { formatter("HH:mm", c).string(from: date) }
+    private static func hhmm(_ date: Date, _ c: Capture) -> String { formatter("HH:mm", c).string(from: date) }
 
     /// `{at}`, a past event: "today at 04:00", "yesterday at 23:10" (both under 24 h), else "Nov 9 at 03:44".
-    static func at(_ date: Date, _ c: Capture) -> String {
+    private static func at(_ date: Date, _ c: Capture) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = c.timeZone
         if c.now.timeIntervalSince(date) < 86_400 {
@@ -303,7 +325,7 @@ enum BrainBarMenuPresenter {
         return formatter("MMM d 'at' HH:mm", c).string(from: date)
     }
 
-    static func percent(_ progress: Double) -> Int { Int((progress * 100).rounded()) }
+    private static func percent(_ progress: Double) -> Int { Int((progress * 100).rounded()) }
 
-    static func parse(_ iso: String) -> Date? { ISO8601DateFormatter().date(from: iso) }
+    private static func parse(_ iso: String) -> Date? { ISO8601DateFormatter().date(from: iso) }
 }
