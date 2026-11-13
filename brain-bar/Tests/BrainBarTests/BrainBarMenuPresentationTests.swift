@@ -51,7 +51,7 @@ final class BrainBarMenuPresentationTests: XCTestCase {
         func titles(_ c: BrainBarMenuCapture) -> [String] {
             BrainBarMenuPresenter.present(c).rows.filter { [.needsYou, .factLine].contains($0.kind) }.compactMap(\.strings.first)
         }
-        let generic = "Something BrainBar checks is failing."
+        let generic = "Something BrainBar checks needs attention."
         var s11b = try capture("S11b")
         s11b.verdict = with(s11b.verdict!, "backup_offsite", .green, age: 3600)
         XCTAssertEqual(titles(s11b), [generic])
@@ -78,6 +78,25 @@ final class BrainBarMenuPresentationTests: XCTestCase {
         hours.verdict = with(hours.verdict!, "backup_offsite", .green, age: 3600)
         hours.now = hours.now.addingTimeInterval(7200)
         XCTAssertEqual(driveDetail(hours), "Backups can’t upload until you reconnect it. Your newest backup in Google Drive is 3 hours old.")
+    }
+
+    /// P2b, ruling R23: a bare `{HH:mm}` reads as a time today, so an upload that started on another day says its day with the
+    /// words every other past time uses, in S03's line (calm) and inside S32's sentence. Same-day words do not change.
+    func testAnUploadStartOnAnotherDaySaysTheDay() throws {
+        let cases = try Self.loadCases()
+        func capture(_ id: String) throws -> BrainBarMenuCapture { try Self.capture(cases.first { $0["id"] as? String == id }!["inputs"] as! [String: Any]) }
+        func detail(_ c: BrainBarMenuCapture) -> [String]? { BrainBarMenuPresenter.present(c).rows.first { $0.kind == .headlineDetail }?.strings }
+        func title(_ c: BrainBarMenuCapture) -> String? { BrainBarMenuPresenter.present(c).rows.first { $0.kind == .needsYou }?.strings.first }
+        var s2 = try capture("S2-today")
+        XCTAssertEqual(detail(s2), ["To Google Drive. Started at 11:28."])
+        s2.upload?.startedAt = s2.now.addingTimeInterval(-44_400)  // 23:40 the night before (now is 12:00)
+        XCTAssertEqual(detail(s2), ["To Google Drive. Started yesterday at 23:40."])
+        let drive = "Your newest backup in Google Drive is from Nov 9 at 03:44. "
+        var s32 = try capture("S32")
+        s32.upload?.startedAt = s32.now.addingTimeInterval(-44_400)
+        XCTAssertEqual(title(s32), drive + "A backup to Google Drive started yesterday at 23:40 and is still running.")
+        s32.upload?.startedAt = s32.now.addingTimeInterval(-174_720)  // two days before, at 11:28
+        XCTAssertEqual(title(s32), drive + "A backup to Google Drive started Nov 10 at 11:28 and is still running.")
     }
 
     // MARK: expected output, read from the cases file
