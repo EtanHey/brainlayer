@@ -158,6 +158,7 @@ def test_stop_keeps_real_heartbeats_and_custody_until_finish_exits(runner, monke
 
     asyncio.run(exercise())
     assert executed == ["index"]
+    assert "backup-daily" in job_alerts.active_alerts(runner.alerts)
     rows = runner.rows()
     assert [(r["step"], r["status"]) for r in rows if r["event"] == "finished"] == [
         ("index", "failed"),

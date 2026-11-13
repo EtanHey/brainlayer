@@ -24,6 +24,7 @@ from typing import Any
 import apsw
 
 from .agent_provenance import classify_provenance, effective_visibility
+from .agy_attribution import STATE_FILE_NAME, AgyAttributionGate
 from .alarm import BrainLayerAlarm
 from .chunk_origin import detect_chunk_origin
 from .chunk_write import insert_canonical_chunk
@@ -331,6 +332,18 @@ def _extract_project_from_session_file(source_file: str) -> str | None:
     return None
 
 
+def _session_file_stem(source_file: str) -> str:
+    """The per-session name of a transcript: its stem, or its conversation dir for agy.
+
+    Every Antigravity (agy) transcript is `brain/<conversation>/.system_generated/logs/transcript_full.jsonl`,
+    so its stem names no session; the conversation dir does.
+    """
+    path = Path(source_file)
+    if len(path.parts) >= 4 and path.parts[-3] == ".system_generated" and path.parts[-2] == "logs":
+        return path.parts[-4]
+    return path.stem
+
+
 def _source_file_fingerprint(source_file: str) -> tuple[int, int] | None:
     """Return a version token for retrying an unresolved session file."""
     try:
@@ -401,6 +414,7 @@ def create_flush_callback(
     source_projects: dict[str, str] = {}
     resolved_source_identities: dict[str, tuple[int, int, int]] = {}
     unresolved_source_versions: dict[str, tuple[int, int] | None] = {}
+    agy_gate = AgyAttributionGate(Path(db_path or get_db_path()).expanduser().parent / STATE_FILE_NAME)
 
     def ensure_direct_liveness_schema() -> None:
         if liveness_schema_ready or store is None:
@@ -495,6 +509,10 @@ def create_flush_callback(
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
+            agy_index_now, agy_agent = agy_gate.resolve(source_file)
+            if not agy_index_now:
+                deferred_entries.append(entry)
+                continue
             if not t3_linkage_resolved:
                 source_only_provenance = classify_provenance(
                     source_file, t3_linked_session_ids=set(), t3_projection_version=1
@@ -509,6 +527,7 @@ def create_flush_callback(
                     t3_linked_session_ids=linked_t3_session_ids,
                     t3_session_identity_cache=t3_session_identity_cache,
                     t3_session_header=entry.get("_codex_header"),
+                    agy_agent=agy_agent,
                 )
             except BrainLayerAlarm:
                 deferred_entries.append(entry)
@@ -578,7 +597,7 @@ def create_flush_callback(
                 secret_scrub_result = metrics.run("scrub", scrub_secrets, clean_content)
                 clean_content = secret_scrub_result.text
                 content_hash = normalized_exact_hash(clean_content)[:16]
-                file_stem = Path(source_file).stem
+                file_stem = _session_file_stem(source_file)
                 chunk_id = _realtime_chunk_id(file_stem, project, content_hash)
 
                 # Layer 4: Post-chunk content filter
