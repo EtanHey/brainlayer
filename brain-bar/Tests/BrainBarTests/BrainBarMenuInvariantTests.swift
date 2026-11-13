@@ -176,6 +176,26 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         badWords.rows.append(P.Row(kind: .statusLine, strings: [""]))
         var strayDriveLine = falseFine
         strayDriveLine.rows[1] = P.Row(kind: .headlineDetail, strings: ["Backed up to Google Drive today at 04:00."])
+        // I3 by sentence (P2): reassurances inside Needs-you rows, beside them and in status lines.
+        func needsForm(_ rows: [P.Row]) -> P {
+            P(form: .needs, headline: "1 thing needs you", count: 1, icon: .marked,
+              rows: [P.Row(kind: .headline, strings: ["1 thing needs you"], mark: .marked), P.Row(kind: .separator)] + rows)
+        }
+        let handoff = ["BrainBar can’t fix this itself.", "Give the report to an agent."]
+        let report = P.Action(kind: .copyReport, label: "Copy report for an agent")
+        let drive = P.Row(kind: .needsYou, strings: ["Google Drive is disconnected", "Backups can’t upload until you reconnect it."],
+                          action: P.Action(kind: .reconnectDrive, label: "Reconnect Google Drive"), mark: .alertCircle)
+        let fine = P.Row(kind: .everythingElse, strings: ["Everything else is fine."], mark: .checkmark)
+        let driveAndSearchAmber = base { $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks.filter { !["search", "drive_auth"].contains($0.name) }
+                                                                           + [Self.check("search", .amber)!, Self.check("drive_auth", .red)!], notes: [], evaluatedAt: Self.now) }
+        let upkeepUnmeasured = base { $0.maintenanceNightFailures = 3; $0.backupsMeasured = false }
+        let embeddingRed = base { $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks.filter { $0.name != "embedding" }
+                                                                    + [Self.check("embedding", .red)!], notes: [], evaluatedAt: Self.now) }
+        let upkeepRow = P.Row(kind: .needsYou, strings: ["Nightly upkeep failed 3 nights in a row", Self.stillSaved] + handoff, action: report, mark: .alertCircle)
+        let meaningRow = P.Row(kind: .needsYou, strings: ["Search by meaning isn’t catching up",
+                                                          "BrainBar hasn’t seen the memories waiting for it go down. " + Self.exactWords] + handoff,
+                               action: report, mark: .alertCircle)
+        let generic = P.Row(kind: .needsYou, strings: ["Something BrainBar checks is failing."] + handoff, action: report, mark: .alertCircle)
         let cases: [(String, Capture, P)] = [
             ("I1: calm over a red check", red, allGood),
             ("I2: All good while backups are unmeasured", unmeasured, allGood),
@@ -183,6 +203,12 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             ("I3: search called fine while amber", searchAmber, falseFine),
             ("I4: count and icon disagree with the rows", red, miscounted),
             ("I5: empty strings and a straight apostrophe", red, badWords),
+            ("I3: Everything else is fine. beside the Drive row while search is amber", driveAndSearchAmber, needsForm([drive, fine])),
+            ("I3: U03’s still-saved sentence while backups are unmeasured", upkeepUnmeasured, needsForm([upkeepRow])),
+            ("I3: the exact-words sentence inside F07’s line with no coverage figure", embeddingRed, needsForm([meaningRow])),
+            ("I3: a reassurance sitting in a status line", driveAndSearchAmber,
+             needsForm([drive, P.Row(kind: .statusLine, strings: ["Search is fine."], state: .cantTell)])),
+            ("I3: Everything else is fine. beside a generic row stands for all four", red, needsForm([generic, fine])),
             ("I7: calm over upkeep failing, verdict stale", base { $0.maintenanceNightFailures = 3; $0.verdictAwakeAgeS = 901 }, allGood),
             ("I7: calm over a watcher alert, no verdict", base { $0.verdict = nil; $0.watcher = .init(alertReasons: ["file_ingestion_failure"]) }, allGood),
         ]
@@ -237,6 +263,28 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             aged.verdictAwakeAgeS = x
             aged.maintenanceNightFailures = x.isFinite ? Int(max(min(x, 9), -9)) : 0
             captures.append(aged)
+        }
+        for x in odd {  // P2: copy, stall and coverage numbers, and streaks, through every worded row's formatter
+            for (drive, base, failures) in [(Setting.red, 0, 1), (.green, 0, 2), (.green, 1, 0)] {
+                var c = Self.capture(["drive_auth": drive], base: base, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
+                c.verdict = BrainBarHealthVerdict(dot: .green, checks: c.verdict!.checks.map {
+                    ["backup_local", "backup_offsite", "embedding"].contains($0.name)
+                        ? Check(name: $0.name, state: $0.name == "backup_offsite" ? .red : .amber, ageS: x, thresholdS: x, note: "") : $0
+                }, notes: [], evaluatedAt: Self.now)
+                c.keywordCoverage = x
+                c.backupDailyFailures = failures
+                c.backupDailyNextRunAt = Self.now.addingTimeInterval(x.isFinite ? max(min(x, 1e9), -1e9) : 0)
+                captures.append(c)
+                c.backupDailyFailures = x.isFinite ? Int(max(min(x, 9), -9)) : .max
+                captures.append(c)
+            }
+        }
+        for d in dates {
+            var c = Self.capture(["drive_auth": .red, "backup_offsite": .red], base: 0, dot: .green, checking: false, wake: false,
+                                 freshness: .fresh0, measured: true)
+            c.verdict = BrainBarHealthVerdict(dot: .green, checks: c.verdict!.checks, notes: [], evaluatedAt: d)
+            c.backupDailyNextRunAt = d
+            captures.append(c)
         }
         for d in dates {
             var c = Self.capture(["backup_offsite": .amber, "search": .amber], base: 1, dot: .green, checking: false, wake: false,
