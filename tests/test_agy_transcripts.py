@@ -293,7 +293,9 @@ def test_a_failed_attribution_read_is_retried_not_cached(tmp_path, monkeypatch, 
     assert _rows(db, "turn lock1:") == []
 
 
-def test_the_hold_back_counts_from_first_sight_not_the_latest_write_and_survives_restart(tmp_path, monkeypatch, resources):
+def test_the_hold_back_counts_from_first_sight_not_the_latest_write_and_survives_restart(
+    tmp_path, monkeypatch, resources
+):
     import brainlayer.agy_attribution as agy_attribution
 
     db = tmp_path / "db" / "brainlayer.db"
@@ -456,7 +458,7 @@ def test_attribution_state_ages_out_old_entries(tmp_path, monkeypatch, resources
 
 
 def test_agy_scenario_leaves_no_file_descriptors_open(tmp_path):
-    before = len(os.listdir('/dev/fd'))
+    before = len(os.listdir("/dev/fd"))
     with ExitStack() as resources:
         test_an_agy_conversation_is_indexed_as_gemini_with_its_own_conversation_id(tmp_path, resources)
-    assert len(os.listdir('/dev/fd')) <= before
+    assert len(os.listdir("/dev/fd")) <= before
