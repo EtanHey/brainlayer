@@ -1670,8 +1670,9 @@ class JSONLWatcher:
         self._health_window_started_epoch = time.time()
         self._health_entries_seen = 0
         self._health_output_at_start = 0
-        # Roots that existed during this process, and when each one went missing (monotonic).
-        self._roots_seen: set[str] = set()
+        # Roots known to have existed: seen by this process, or holding offsets.json entries (prune
+        # keeps the offsets of an unavailable root), so a restart still sees a vanished root.
+        self._roots_seen: set[str] = self._roots_with_offsets()
         self._root_missing_since: dict[str, float] = {}
         self._db_probe_failed_since: float | None = None
         self.poll_count = 0
@@ -2245,8 +2246,18 @@ class JSONLWatcher:
         except sqlite3.Error:
             return None
 
+    def _roots_with_offsets(self) -> set[str]:
+        roots = {r.provider: Path(os.path.abspath(r.resolved_path)) for r in self.watch_roots}
+        found = set()
+        for filepath in self.registry._data:
+            candidate = Path(os.path.abspath(os.path.expanduser(filepath)))
+            found.update(p for p, root in roots.items() if p not in found and candidate.is_relative_to(root))
+            if len(found) == len(roots):
+                break
+        return found
+
     def _missing_roots(self, now: float) -> list[str]:
-        """Providers whose root existed during this process and has been gone for ``alert_after_s``."""
+        """Providers whose root is known to have existed and has been gone for ``alert_after_s``."""
         missing = []
         for root in self.watch_roots:
             if root.resolved_path.is_dir():

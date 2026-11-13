@@ -114,7 +114,10 @@ class Facts:
     drive_auth: Any = UNOBSERVED  # "ok" | "refresh_failed" | "consent_needed"
     integrity: Any = UNOBSERVED  # "ok" | "corrupt" (confirmed results only)
     watcher_updated_at: Any = UNOBSERVED
-    watcher_stall_codes: Any = UNOBSERVED  # stall signals in the same watcher-health.json read
+    # Stall codes from the same watcher-health.json read; collect_facts passes UNOBSERVED for an
+    # incomplete or malformed payload. () is the default so callers that predate the codes keep
+    # heartbeat-only behaviour.
+    watcher_stall_codes: Any = ()
     ingest_paused: bool = False
     stores_paused: bool = False
     pause_ends_at: datetime | None = None  # the pause sentinel's expires_at while a pause is active
@@ -371,6 +374,49 @@ def _drive_auth(drive: Any, prior: Mapping[str, Any]) -> _Raw:
     return _Raw(AMBER, "token refresh failed; retrying", keep={"lost": False})
 
 
+@dataclass
+class _Stall:
+    read: bool  # a valid stall reading arrived with an observed heartbeat this check
+    state: str | None
+    note: str
+    keep: dict[str, Any]
+
+
+def _ingest_stall(facts: Facts, before: Mapping[str, Any], watcher: datetime | None, t: Thresholds) -> _Stall:
+    """The watcher's stall codes as a severity, counted once per new snapshot.
+
+    Each newer snapshot (updated_at) carrying a code is one more alert check; a re-read frozen file
+    is not a new check and keeps the count. Codes UNOBSERVED (an incomplete or malformed payload,
+    or no read) are never a no-stall reading: the count holds and a blind streak runs, which
+    turns amber after ``unknown_amber_ticks`` like any unknown.
+    """
+    ticks = int(before.get("alert_ticks") or 0)
+    seen_at = _parse(before.get("alert_seen_at"))
+    blind = int(before.get("stall_blind_ticks") or 0)
+    codes = facts.watcher_stall_codes
+    read = watcher is not None and isinstance(codes, tuple)
+    if read:
+        blind = 0
+        if facts.stores_paused:
+            codes = tuple(c for c in codes if c != "coverage_drop")  # the paused drain writes nothing
+        if seen_at is None or watcher > seen_at:
+            ticks, seen_at = (ticks + 1 if codes else 0), watcher
+    elif not isinstance(codes, tuple):
+        blind += 1
+    keep: dict[str, Any] = {}
+    if ticks:
+        keep.update(alert_ticks=ticks, alert_seen_at=_iso(seen_at))
+    if blind:
+        keep["stall_blind_ticks"] = blind
+    if ticks:
+        what = ", ".join(codes) if read and codes else "a stall"
+        state = RED if ticks >= t.ingest_alert_red_ticks else AMBER
+        return _Stall(read, state, f"watcher reports {what} ({ticks} checks in a row)", keep)
+    if blind >= t.unknown_amber_ticks:
+        return _Stall(read, AMBER, f"watcher stall signals unreadable ({blind} checks in a row)", keep)
+    return _Stall(read, None, "", keep)
+
+
 def _raw_checks(
     facts: Facts,
     prior: Mapping[str, Mapping[str, Any]],
@@ -429,8 +475,9 @@ def _raw_checks(
     watcher = _aware(facts.watcher_updated_at)
     persisted = _parse(p("ingest").get("clock"))
     clock = max((x for x in (watcher, persisted) if x is not None), default=None)
+    stall = _ingest_stall(facts, p("ingest"), watcher, t)
     if clock is None:
-        raw["ingest"] = _Raw(UNKNOWN, "watcher heartbeat not observed", threshold_s=t.ingest_red_s, evidence=False)
+        r = _Raw(UNKNOWN, "watcher heartbeat not observed", threshold_s=t.ingest_red_s, evidence=False)
     else:
         r = _graced_age(
             clock,
@@ -443,26 +490,17 @@ def _raw_checks(
             True,
             t.wake_grace_s,
         )
-        r.evidence = r.evidence and watcher is not None  # an observed heartbeat, fresh by its real age
+        r.evidence = r.evidence and watcher is not None and stall.read  # observed heartbeat AND stall reading
         if watcher is None:
             r.note = f"watcher heartbeat not observed; {r.note}"
-        codes = (
-            facts.watcher_stall_codes if watcher is not None and isinstance(facts.watcher_stall_codes, tuple) else ()
-        )
-        if facts.stores_paused:
-            codes = tuple(c for c in codes if c != "coverage_drop")  # the paused drain writes nothing
-        if codes:
-            alert_ticks = int(p("ingest").get("alert_ticks") or 0) + 1
-            r.keep["alert_ticks"] = alert_ticks
-            alert = RED if alert_ticks > t.ingest_alert_red_ticks else AMBER
-            if _RANK[alert] > _RANK[r.state]:
-                r.state, r.amber_s = alert, None
-            r.note = "; ".join(
-                x for x in (r.note, f"watcher reports {', '.join(codes)} ({alert_ticks} checks in a row)") if x
-            )
+        if stall.state is not None:
+            if _RANK[stall.state] > _RANK[r.state]:
+                r.state, r.amber_s = stall.state, None
+            r.note = "; ".join(x for x in (r.note, stall.note) if x)
         if facts.ingest_paused and r.state == RED:
             r.state, r.note = AMBER, r.note + " (watcher paused by maintenance)"
-        raw["ingest"] = r
+    r.keep.update(stall.keep)
+    raw["ingest"] = r
 
     raw["embedding"] = _stall_age(
         facts.embedding_stalled_since,

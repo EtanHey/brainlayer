@@ -9,6 +9,7 @@ The policy that turns these facts into the dot lives in ``health_verdict``.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import sys
@@ -163,23 +164,36 @@ WATCHER_STALL_REASONS = ("coverage_drop", "offset_lag", "file_ingestion_failure"
 WATCHER_DB_PROBE_GRACE_S = 300.0
 
 
-def watcher_stall_codes(payload: Mapping[str, Any]) -> tuple[str, ...]:
-    """Stall signals the watcher published: its debounced alerts, a DB probe failing for
-    ``WATCHER_DB_PROBE_GRACE_S`` (one failed probe is a momentary lock), and missing roots."""
-    reasons = payload.get("alert_reasons", [])
-    if not isinstance(reasons, list):
-        raise ValueError("watcher-health.json alert_reasons is not a list")
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def watcher_stall_codes(payload: Mapping[str, Any]) -> Any:
+    """Stall signals the watcher published, or UNOBSERVED when any field behind them is absent or
+    malformed (an absent signal is not evidence that nothing is stalled).
+
+    Codes: its debounced alerts, a DB probe failing for ``WATCHER_DB_PROBE_GRACE_S`` (one failed
+    probe is a momentary lock), and missing roots.
+    """
+    reasons, probe, probe_for, roots = (
+        payload.get(k) for k in ("alert_reasons", "db_probe_failed", "db_probe_failed_for_s", "roots_missing")
+    )
+    if not (
+        isinstance(reasons, list)
+        and all(isinstance(r, str) for r in reasons)
+        and isinstance(probe, bool)
+        and _is_number(probe_for)
+        and isinstance(roots, list)
+        and all(isinstance(r, str) for r in roots)
+    ):
+        return UNOBSERVED
     codes = [r for r in WATCHER_STALL_REASONS if r in reasons]
-    probe_for = payload.get("db_probe_failed_for_s")
-    if payload.get("db_probe_failed") is True and isinstance(probe_for, (int, float)):
-        if probe_for >= WATCHER_DB_PROBE_GRACE_S:
-            codes.append("db_probe_failed")
-    roots = payload.get("roots_missing") or []
-    codes += [f"root_missing:{r}" for r in roots if isinstance(r, str)]
-    return tuple(codes)
+    if probe and probe_for >= WATCHER_DB_PROBE_GRACE_S:
+        codes.append("db_probe_failed")
+    return tuple(codes + [f"root_missing:{r}" for r in roots])
 
 
-def watcher_health_fact(path: Path) -> tuple[datetime | None, tuple[str, ...]]:
+def watcher_health_fact(path: Path) -> tuple[datetime | None, Any]:
     """(heartbeat, stall codes) from one read of watcher-health.json; missing = (None, ())."""
     try:
         payload = json.loads(path.expanduser().read_text(encoding="utf-8"))

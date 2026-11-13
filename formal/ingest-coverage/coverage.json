@@ -1,18 +1,18 @@
 {
-  "pinned_at": "fix/ingest on feat/ingest-proof 6ad0fb81",
-  "sync_note": "Initial pins at main 9f31efb2. INGEST-FIX (2026-11-13): watcher.py publishes roots_missing (a root seen this process, gone for alert_after_s) and db_probe_failed_for_s; health_facts.watcher_health_fact returns the heartbeat and watcher_stall_codes from one read; evaluate() raises ingest to amber while codes are present and red after ingest_alert_red_ticks. MODEL UPDATED: Rule real = the fix (covC/rootC need the previous poll too, lag is immediate, coverage lingers one poll), Rule heartbeat = #1780's code (before-fix-* cases), new fault drift (finding-real-drift, in Dropping); #1780 r2's rewrite_lossy stays an open finding under the fix (finding-real-rewrite-lossy). Re-read every mapped line below, regenerated configs and traces, replay 75/75 matched; then moved these pins.",
+  "pinned_at": "fix/ingest r2 on feat/ingest-proof 6ad0fb81",
+  "sync_note": "Initial pins at main 9f31efb2. INGEST-FIX (2026-11-13): watcher.py publishes roots_missing (a root seen this process, gone for alert_after_s) and db_probe_failed_for_s; health_facts.watcher_health_fact returns the heartbeat and watcher_stall_codes from one read; evaluate() raises ingest to amber while codes are present and red after ingest_alert_red_ticks. MODEL UPDATED: Rule real = the fix (covC/rootC need the previous poll too, lag is immediate, coverage lingers one poll), Rule heartbeat = #1780's code (before-fix-* cases), new fault drift (finding-real-drift, in Dropping); #1780 r2's rewrite_lossy stays an open finding under the fix (finding-real-rewrite-lossy). Re-read every mapped line below, regenerated configs and traces, replay 75/75 matched; then moved these pins. INGEST-FIX r2 (2026-11-13, Codex r1): roots seen = this process OR offsets.json entries under the root (prune keeps an unavailable root's offsets), so a restart still reports a vanished root (unit test; the model has no restart). Stall fields absent or malformed = codes UNOBSERVED: never a good check, the count holds, and a blind streak turns amber after unknown_amber_ticks (new fault partial, partialRun in IngestFailureLeavesGreen, mut-partial-clear). Red on the ingest_alert_red_ticks-th check (>=). An alert check counts only on a snapshot newer than the last counted one (fileNew; replay alert-across-sleep). Re-read every mapped line, regenerated configs and traces, replay 95/95; then moved these pins.",
   "sources": [
     {
       "path": "src/brainlayer/health_verdict.py",
-      "sha256": "eac6100ea95d53931ad6125fc037eab55925279f753b27b0edb788557ec1f7b8"
+      "sha256": "516510ec58771ad9b3d8abbd7e400efa20dc93b2b88a0bbbf275f62dcd9a1883"
     },
     {
       "path": "src/brainlayer/health_facts.py",
-      "sha256": "73a7d1bdd58bd409bb105dab14a09c1f9bc9f3b020f8436e29040af3a24f87ea"
+      "sha256": "1d41a134020f19924ec9ff2d80bde2b12511c4d61373c9c14e0b3b36e8ab043f"
     },
     {
       "path": "src/brainlayer/watcher.py",
-      "sha256": "8a1c4e2ace812e9ac8d01257b75e830f519c9ce3c14e22e760e92da4b1499036"
+      "sha256": "b9fcc35192a347c750bc4a2109e96c2ccd5222ad910666ada6070b5ba2f14844"
     },
     {
       "path": "src/brainlayer/badge_state.py",
@@ -24,21 +24,21 @@
     }
   ],
   "actions": {
-    "Tick.polls / writes": "watcher.py:2560 poll_once; :2814 _write_health_snapshot in its finally block; :2317 updated_at and poll_count in one payload; a failed write is swallowed (:2345 except OSError)",
-    "Tick.progress (lag, coverage, dbfail, rootgone, drift)": "watcher.py:1448 _do_flush retains a failed batch; :2793 an unreadable file is a file ingestion failure; a drift record is read but yields no chunk",
-    "Tick.alertWritten (lag)": "watcher.py:2793 _record_file_ingestion_failure; :2261 _write_health_snapshot adds file_ingestion_failure to alert_reasons on the same poll",
-    "Tick.alertWritten (covC /\\ covPrev, covLinger)": "watcher.py:521 CoverageWatchdog: coverage_drop after alert_after_s (300 s monotonic) of inserts/active < 0.25; failed retained inputs count as active; :2375 the window is held open while it writes nothing (covLinger)",
-    "Tick.alertWritten (rootC /\\ rootPrev)": "watcher.py:2248 _missing_roots: a root seen during this process and gone for alert_after_s",
-    "Tick.seen / alertNow": "health_facts.py:182 watcher_health_fact (missing = (None, ()), malformed raises); :166 watcher_stall_codes; :417 _run_bounded turns a raise or timeout into UNOBSERVED; :532 and :624 the ingest inputs",
-    "Tick.cA (clock = max(watcher, persisted))": "health_verdict.py:429-431",
-    "Tick.age / graced / g": "health_verdict.py:292 _graced_age (suspension credit, one wake-grace window per clock value)",
-    "Tick.raw": "health_verdict.py:234 _age_state (> amber, > red); :449-462 stall codes raise it to amber, red after ingest_alert_red_ticks (:73); coverage_drop ignored while the drain is paused",
-    "Tick.vNext / goodNext / unk1": "health_verdict.py:554 evaluate: unknown ticks :604, evidence hold, red-holds-on-amber and recovery :621 (_HYSTERESIS :193)",
-    "Tick.res0 (resumed_at)": "health_verdict.py:554 evaluate: confirmed clock pair vs sleep_gap_s (:585), expiry after wake_grace_s",
-    "NonGreen (dot ignores unknown)": "health_verdict.py:685; badge_state.py:127 badge_on = verdict.dot == RED (the dot is the verdict)",
-    "watcher_stalled is context only": "health_check.py:1841 emits it; health_facts.py:47 CHECK_FOR_CODE maps it to ingest context, never state",
+    "Tick.polls / writes": "watcher.py:2571 poll_once; :2825 _write_health_snapshot in its finally block; :2328 updated_at and poll_count in one payload; a failed write is swallowed (:2356 except OSError)",
+    "Tick.progress (lag, coverage, dbfail, rootgone, drift)": "watcher.py:1448 _do_flush retains a failed batch; :2804 an unreadable file is a file ingestion failure; a drift record is read but yields no chunk",
+    "Tick.alertWritten (lag)": "watcher.py:2804 _record_file_ingestion_failure; :2272 _write_health_snapshot adds file_ingestion_failure to alert_reasons on the same poll",
+    "Tick.alertWritten (covC /\\ covPrev, covLinger)": "watcher.py:521 CoverageWatchdog: coverage_drop after alert_after_s (300 s monotonic) of inserts/active < 0.25; failed retained inputs count as active; :2386 the window is held open while it writes nothing (covLinger)",
+    "Tick.alertWritten (rootC /\\ rootPrev)": "watcher.py:2259 _missing_roots: a root known to have existed (this process, or offsets.json entries under it, :2249 _roots_with_offsets) and gone for alert_after_s",
+    "Tick.cA (clock = max(watcher, persisted))": "health_verdict.py:475-477",
+    "Tick.age / graced / g": "health_verdict.py:295 _graced_age (suspension credit, one wake-grace window per clock value)",
+    "Tick.raw": "health_verdict.py:237 _age_state (> amber, > red); :385 _ingest_stall: aT counts only a newer snapshot (advanced), held while codes are UNOBSERVED; sB blind streak amber at unknown_amber_ticks; red at aT >= ingest_alert_red_ticks (:73); coverage_drop ignored while the drain is paused",
+    "Tick.vNext / goodNext / unk1": "health_verdict.py:592 evaluate: unknown ticks :642, evidence hold (no stall reading = no evidence), red-holds-on-amber and recovery :659 (_HYSTERESIS :196)",
+    "Tick.res0 (resumed_at)": "health_verdict.py:592 evaluate: confirmed clock pair vs sleep_gap_s (:623), expiry after wake_grace_s",
+    "NonGreen (dot ignores unknown)": "health_verdict.py:723; badge_state.py:127 badge_on = verdict.dot == RED (the dot is the verdict)",
+    "watcher_stalled is context only": "health_check.py:1841 emits it; health_facts.py:48 CHECK_FOR_CODE maps it to ingest context, never state",
     "Faults roots": "watcher.py:357 default_watch_roots (claude, codex, cursor, cursor-agent-transcripts, gemini)",
-    "Tick rewrite / rewrite_lossy (Dropping, StallClockIsTruthful)": "watcher.py:1212 JSONLTailer._verify_anchor and :1233 _verify_resumed_offset compare the 256 bytes before the offset and a blake2b digest of the first 4 KiB: a rewrite changing either re-reads from 0 (every record re-ingested; replay checks each); a same-length edit between them is not seen and its records are dropped; no stall code fires"
+    "Tick rewrite / rewrite_lossy (Dropping, StallClockIsTruthful)": "watcher.py:1212 JSONLTailer._verify_anchor and :1233 _verify_resumed_offset compare the 256 bytes before the offset and a blake2b digest of the first 4 KiB: a rewrite changing either re-reads from 0 (every record re-ingested; replay checks each); a same-length edit between them is not seen and its records are dropped; no stall code fires",
+    "Tick.seen / codesSeen / alertNow": "health_facts.py:196 watcher_health_fact (missing = (None, ()), malformed raises); :171 watcher_stall_codes returns UNOBSERVED when any stall field is absent or malformed (fault partial); :431 _run_bounded turns a raise or timeout into UNOBSERVED; :546 and :638 the ingest inputs"
   },
   "bounds": {
     "exhaustive cases": "AmberT 2 < RedT 4 < WakeGrace 5 ticks, SleepGap 3, UnknownAmber 3, Recovery 2, Cap 8 (ordering-preserving, not production)",

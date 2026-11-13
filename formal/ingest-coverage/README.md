@@ -3,7 +3,8 @@
 Status: **with the stall-code fix (INGEST-FIX, stacked on #1780) the property holds for each of the
 8 failure shapes on its own**: a dead or stuck watcher, lag (an unreadable transcript), coverage (writes
 that never reach the DB the watcher probes), DB write failure, a blind monitor (stale or unreadable
-health file), a missing or moved root, and a rewrite the #732 fingerprint sees. Sleep never leaves
+health file, or a payload whose stall fields are absent or malformed), a missing or moved root, and a
+rewrite the #732 fingerprint sees. Sleep never leaves
 green by itself. **Three open findings still fail it:** records in a shape no parser takes (`drift`),
 a same-length in-place edit the fingerprint cannot see (`rewrite_lossy`, #1780's 5th finding; it
 needs a full-content checksum, not an alert), and a heartbeat stall that hands straight over to a
@@ -16,7 +17,8 @@ but not indexing their Jason L's or their memories".
 
 **The property, `IngestFailureLeavesGreen`:** if a wired agent writes and ingest makes no progress
 for more than N health ticks, or the monitor cannot see a new watcher heartbeat for more than N
-ticks, then the `ingest` check is amber or red. It stays non-green until progress resumes. Also:
+ticks, or it reads a fresh heartbeat whose stall fields are unreadable for more than N ticks, then
+the `ingest` check is amber or red. It stays non-green until progress resumes. Also:
 `SleepIsNotFailure` (closing the lid never leaves green by itself) and
 `StallAcrossWakeStillCounts` (a stall that was running when the lid closed still counts after wake).
 
@@ -50,20 +52,26 @@ test runs in the `test` job.
 - `health_facts.watcher_health_fact` reads `updated_at` and, from the same read, the watcher's
   stall codes (`watcher_stall_codes`): `alert_reasons` ∋ `coverage_drop` / `offset_lag` /
   `file_ingestion_failure`, `db_probe_failed` once `db_probe_failed_for_s` ≥ 300 s (one failed probe
-  is a momentary lock), and `root_missing:<provider>` from `roots_missing`.
+  is a momentary lock), and `root_missing:<provider>` from `roots_missing`. If any of those fields
+  is absent or malformed the codes are UNOBSERVED (fault `partial`), never "no stall".
 - `health_verdict.evaluate` turns the heartbeat into the state. Amber after 10 min, red after
   30 min. Unknown turns amber on the 3rd tick in a row. Red holds through amber, and recovery
   needs 2 observed good ticks. On a confirmed clock, time asleep is credited. Otherwise there is
-  one wake-grace window per clock value. While stall codes are present the raw state is at least
-  amber, and red after `ingest_alert_red_ticks` (6) ticks in a row; `coverage_drop` is ignored while
-  maintenance pauses the drain.
+  one wake-grace window per clock value. Stall codes (`_ingest_stall`) are counted once per
+  snapshot: only a snapshot newer than the last one counted adds an alert check, so a frozen file
+  re-read after sleep or from a dead watcher keeps its count instead of escalating. One or more
+  checks: at least amber; the 6th (`ingest_alert_red_ticks`): red. UNOBSERVED codes are never a good
+  check: the count holds, and after `unknown_amber_ticks` (3) such checks in a row the state is at
+  least amber. `coverage_drop` is ignored while maintenance pauses the drain.
 - With a verdict, the dot is the verdict (`badge_state.py:127`). An `unknown` check counts as
   green in the dot.
 - What the watcher publishes, and when (`watcher.py`): an unreadable transcript is a
   `file_ingestion_failure` on the same poll. `coverage_drop` needs 300 s of monotonic (awake)
   time with inserts/active < 0.25; retained failed flushes count as active, and the window stays
   open while it writes nothing, so the alert outlives the fault by one poll (`covLinger`).
-  `roots_missing` lists a root seen during this process that has been gone for 300 s. The file a
+  `roots_missing` lists a root known to have existed (seen by this process, or holding entries in
+  offsets.json, which prune keeps for an unavailable root) that has been gone for 300 s. So a root
+  that vanished while the watcher was stopped is reported after a restart. The file a
   dead watcher leaves behind keeps its last alert (`fileAlert`).
 
 State: the fault this tick (none, or one of the 8 shapes, with shape 8 split into a detected and a lossy rewrite), awake or asleep, whether the agent
@@ -79,7 +87,7 @@ identity matters only in the replay, where each agent writes its own format.
 
 | Case | Kind | Expect | Got | Meaning |
 |---|---|---|---|---|
-| `real-<shape>` × 9 | guarantee | pass | pass | Each shape alone (dead, stuck, lag, coverage, dbfail, blind_stale, blind_unreadable, rootgone, rewrite) leaves green within N = 2 ticks (10 min) and stays non-green until progress. Lid closes never leave green. `StallClockIsTruthful` holds. |
+| `real-<shape>` × 10 | guarantee | pass | pass | Each shape alone (dead, stuck, lag, coverage, dbfail, blind_stale, blind_unreadable, partial, rootgone, rewrite) leaves green within N = 2 ticks (10 min) and stays non-green until progress. Lid closes never leave green. `StallClockIsTruthful` holds. |
 | `real-heartbeat-mix` | guarantee | pass | pass | Any mix of the heartbeat shapes holds with N = 2. |
 | `real-unconfirmed-clock` | guarantee | pass | pass | Heartbeat shapes without a boot-session clock: wake grace stretches the bound to N = 7. |
 | `real-unconfirmed-<alert>` × 4 | guarantee | pass | pass | lag, coverage, dbfail and rootgone hold with N = 2 without a boot-session clock (the alert path has no clock). |
@@ -94,6 +102,7 @@ identity matters only in the replay, where each agent writes its own format.
 | `mut-trust-alive` | mutation | violated | violated | Ignoring a frozen poll_count (trusting a live process) breaks it. |
 | `mut-no-coverage` | mutation | violated | violated | Dropping `coverage_drop` from the stall codes breaks it. |
 | `mut-sleep-resets` | mutation | violated | violated | Letting a wake forgive the heartbeat clock breaks `StallAcrossWakeStillCounts`. |
+| `mut-partial-clear` | mutation | violated | violated | Reading a payload without its stall fields as "no stall" breaks it. |
 | `mut-rewrite-progress` | mutation | violated | violated | Counting every rewrite as progress, lossy or not, breaks `StallClockIsTruthful`. |
 
 The exhaustive cases explore every interleaving of faults, writes, sleeps and wake order within
@@ -105,8 +114,10 @@ Before the fix, the `before-fix-coverage` counterexample is three states: the fa
 heartbeat stays fresh every tick, and `v` is still green at stall 3. The fixed traces
 (`traces/{lag,coverage,dbfail,rootgone}.json`, matched by the real code for all five agents) read:
 lag amber on the first fault tick; coverage, dbfail and rootgone amber on the 2nd (the watcher's
-300 s debounce); red once the alert has lasted more than 6 ticks; then red → recovering → green on
-the 2 good ticks after the fault. `tests/test_ingest_stall_alerts.py` pins the same rule through the
+300 s debounce); red on the 6th alert check; then red → recovering → green on the 2 good ticks after
+the fault. `alert-across-sleep` (Codex r1 #4): an alert from before a 30 min lid close, re-read
+before the first poll after wake, holds amber without escalating, then clears on the next new
+snapshot. `dbfail-then-partial` (Codex r1 #2): truncated payloads after a DB failure hold amber. `tests/test_ingest_stall_alerts.py` pins the same rule through the
 real `collect_facts` → `evaluate` path and the real watcher payload.
 
 Timing caveat: the model has one watcher poll per health tick. Production polls every 30 s, so a
@@ -139,11 +150,11 @@ the normal macOS path, it cannot happen.
 
 ## Replay against the real code
 
-`replay.py --generate` runs 16 scripted scenarios through TLC at production thresholds (300 s
+`replay.py --generate` runs 19 scripted scenarios through TLC at production thresholds (300 s
 ticks) and commits the model's per-tick behaviour as `traces/*.json`. The scenarios are each of
-the 11 fault kinds, sleep, sleep with monitor-first wake, a stall across a wake, and unconfirmed
+the 12 fault kinds, an alert across a sleep, a DB failure followed by truncated payloads, sleep, sleep with monitor-first wake, a stall across a wake, and unconfirmed
 short and long sleeps. `tests/test_ingest_coverage_replay.py` drives the real code with each trace
-for each of the 5 agents (80 runs):
+for each of the 5 agents (95 runs):
 
 - a real `JSONLWatcher` over the real `default_watch_roots` of a scratch home;
 - the real `create_flush_callback` into a scratch DB;
@@ -165,10 +176,11 @@ Faults are real where the OS allows it:
 - records in a shape no parser takes (drift);
 - writes that succeed into a second DB the watcher does not probe (coverage).
 
-Four are stand-ins at a boundary:
+Five are stand-ins at a boundary:
 - a dead or stuck watcher is "no completed poll";
 - a DB failure is raised from the flush callback;
 - an unreadable health file is one failed read;
+- a partial payload is the health file rewritten with only `updated_at` and `poll_count` before the read;
 - the watcher's and flush path's `time` module is `SimTime`: monotonic = awake seconds, wall = the
   tick time (plus 1 s for the watcher once its first window is open, so a window boundary follows
   its poll's own inserts, as it does in production). The watchdog's `now_fn` is the same clock.
@@ -187,8 +199,11 @@ The replay can fail, and each of these is a test:
   CLI writes `~/.gemini/tmp/<hash>/chats/session-*.json`, which is not
   `~/.gemini/sessions/**/*.jsonl`.
 - **Wrong parsing or content**: a record ingested as the wrong text.
-- **A root that vanished before the watcher started**: `roots_missing` only names roots this
-  process saw, so a restart forgets a root that is gone.
+- **A root deleted on purpose** (an uninstalled agent) keeps reporting `roots_missing` until its
+  offsets.json entries go: the watcher cannot tell removal from loss. A root that never had any
+  offsets and vanished before this process started is not reported.
+- **Restarts** are not modelled (in the model "dead" keeps the same process); the restart path of
+  `roots_missing` is a unit test on the real watcher.
 - **The Swift icon drawing.** That is BrainBar's app tests, not this.
 - **Maintenance pause** (red softened to amber, still non-green) and the `t3_ingest_unhealthy` path are
   not modelled.

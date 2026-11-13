@@ -14,7 +14,7 @@
    - the same read also returns the watcher's stall codes (health_facts.
      watcher_stall_codes): file_ingestion_failure at once; coverage_drop and
      root_missing once their episode has lasted alert_after_s (one tick); the
-     verdict turns them amber, and red after AlertRed ticks in a row.
+     verdict turns them amber, and red on the AlertRed-th new snapshot in a row.
    Rule = "heartbeat" is the code before that fix (#1780's finding): the alert
    codes never reach the verdict. *)
 EXTENDS Integers, Sequences
@@ -24,13 +24,13 @@ CONSTANTS AmberT, RedT, UnknownAmber, Recovery, SleepGap, WakeGrace, AlertRed,
 
 VARIABLES t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
           v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun, faultEver, wokeInStall, obs,
-          covPrev, rootPrev, covLinger
+          covPrev, rootPrev, covLinger, fileNew, sBlind, partialRun
 
 NoScript == <<>>   \* cfg files cannot spell <<>>: they say Script <- NoScript
 
 vars == <<t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
           v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun, faultEver, wokeInStall, obs,
-          covPrev, rootPrev, covLinger>>
+          covPrev, rootPrev, covLinger, fileNew, sBlind, partialRun>>
 
 (* The eight shapes, with shape 8 split in two. "stuck" is a live process whose
    poll loop no longer completes, so poll_count and updated_at freeze together
@@ -43,14 +43,15 @@ vars == <<t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
    "drift" (records in a shape no parser takes) publishes no watcher signal;
    finding-real-drift shows it stays green. *)
 Shapes == {"dead", "stuck", "lag", "coverage", "dbfail",
-           "blind_stale", "blind_unreadable", "rootgone", "rewrite", "rewrite_lossy", "drift"}
+           "blind_stale", "blind_unreadable", "rootgone", "rewrite", "rewrite_lossy", "drift", "partial"}
 NoProgress == {"dead", "stuck", "lag", "coverage", "dbfail", "rootgone", "rewrite_lossy", "drift"}
 \* Ground truth: records these faults consume and never index (independent of Mut).
 Dropping == {"coverage", "rewrite_lossy", "drift"}
 \* Mutation rewrite_progress: count every rewrite as progress, lossy or not.
 ProgressLabel(f) == IF Mut = "rewrite_progress" THEN f \notin NoProgress \ {"rewrite_lossy"}
                     ELSE f \notin NoProgress
-Blind == {"blind_stale", "blind_unreadable"}
+\* partial: the heartbeat reads but the stall fields are absent or malformed (codes UNOBSERVED)
+Blind == {"blind_stale", "blind_unreadable", "partial"}
 
 Rank(s) == CASE s = "green" -> 0 [] s = "unknown" -> 1 [] s = "amber" -> 2 [] s = "red" -> 3
 NonGreen(s) == s \in {"amber", "red"}   \* the dot ignores "unknown" (evaluate: worst)
@@ -65,6 +66,7 @@ Init == /\ t = 0 /\ fault = "none" /\ asleep = FALSE /\ slept = 0
         /\ resumed = -1 /\ grace = -1 /\ unk = 0 /\ good = 0 /\ alertT = 0 /\ fileAlert = FALSE
         /\ backlog = FALSE /\ dropped = FALSE /\ stall = 0 /\ blindRun = 0 /\ faultEver = FALSE /\ wokeInStall = FALSE
         /\ obs = "fresh" /\ covPrev = FALSE /\ rootPrev = FALSE /\ covLinger = FALSE
+        /\ fileNew = FALSE /\ sBlind = 0 /\ partialRun = 0
         /\ IF Script = <<>> THEN InitSteady \/ InitFresh ELSE InitSteady
 
 (* Lid closed: no watcher poll, no agent writes, no health tick. Wall time runs. *)
@@ -76,7 +78,7 @@ Sleep == /\ asleep' = TRUE
          /\ obs' = "asleep"
          /\ t' = IF Script = <<>> THEN t ELSE t + 1
          /\ UNCHANGED <<fault, hbA, pA, v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun,
-                        faultEver, wokeInStall, covPrev, rootPrev, covLinger>>
+                        faultEver, wokeInStall, covPrev, rootPrev, covLinger, fileNew, sBlind, partialRun>>
 
 (* One awake health tick. f: the fault this tick; w: the agent appends;
    o: on the first tick after a wake, whether the monitor reads before the
@@ -123,16 +125,32 @@ Tick(f, w, o) ==
                       \/ rootC /\ rootPrev
                       \/ covLinger /\ f # "coverage"
       \* the file keeps the last payload written: a dead watcher leaves its last alert
-      alertNow == Rule = "real" /\ seen /\ (IF early THEN alertWritten ELSE fileAlert)
-      aT == IF alertNow THEN Min(alertT + 1, Cap) ELSE 0
-      alertState == IF aT = 0 THEN "green" ELSE IF aT > AlertRed THEN "red" ELSE "amber"
+      \* An alert check counts only on a snapshot newer than the one last counted (a re-read
+      \* frozen file is not a new check); with no count running, any read counts.
+      \* mutation partial_clear: a payload without stall fields reads as "no stall"
+      codesSeen == seen /\ (f # "partial" \/ Mut = "partial_clear")
+      inFile == IF f = "partial" THEN FALSE ELSE IF early THEN alertWritten ELSE fileAlert
+      advanced == early \/ fileNew \/ alertT = 0
+      aT == CASE Rule # "real" -> 0
+              [] ~codesSeen -> alertT
+              [] advanced -> IF inFile THEN Min(alertT + 1, Cap) ELSE 0
+              [] OTHER -> alertT
+      \* a missing file is "observed, nothing there" (codes ()), not a blind stall reading
+      sB == CASE Rule # "real" -> 0
+              [] codesSeen -> 0
+              [] seen \/ f = "blind_unreadable" -> Min(sBlind + 1, Cap)
+              [] OTHER -> sBlind
+      alertState == CASE aT >= AlertRed -> "red"
+                      [] aT > 0 -> "amber"
+                      [] sB >= UnknownAmber -> "amber"
+                      [] OTHER -> "green"
       raw0 == CASE Mut = "stale_green" /\ seen -> "green"           \* age ignored
                 [] Mut = "trust_alive" /\ f # "dead" -> "green"     \* frozen poll_count ignored
                 [] OTHER -> IF known THEN AgeState(age) ELSE "unknown"
       raw == IF raw0 # "unknown" /\ Rank(alertState) > Rank(raw0) THEN alertState ELSE raw0
       evidence == CASE Mut = "trust_alive" /\ f # "dead" -> TRUE
                     [] Mut = "stale_green" /\ seen -> TRUE
-                    [] OTHER -> seen /\ ~graced
+                    [] OTHER -> seen /\ ~graced /\ (Rule # "real" \/ codesSeen)
       \* evaluate(): unknown ticks, holds without evidence, hysteresis
       unk1 == IF raw = "unknown" THEN Min(unk + 1, Cap) ELSE 0   \* every value >= UnknownAmber acts alike
       base == IF v \in {"green", "amber", "red"} THEN v ELSE "unknown"
@@ -164,11 +182,15 @@ Tick(f, w, o) ==
      /\ dropped' = (backlogNow /\ f \in Dropping)
      /\ stall' = IF stalledNow THEN Min(stall + 1, Cap) ELSE 0
      /\ blindRun' = IF f \in Blind /\ ~newClock THEN Min(blindRun + 1, Cap) ELSE 0
+     \* a fresh heartbeat whose stall fields cannot be read (no file at all is not partial)
+     /\ partialRun' = IF f = "partial" /\ seen THEN Min(partialRun + 1, Cap) ELSE 0
      /\ faultEver' = (faultEver \/ f # "none")
      /\ wokeInStall' = (stalledNow /\ (wokeInStall \/ (woke /\ stall > 0)))
      /\ covPrev' = IF polls THEN covC ELSE covPrev
      /\ rootPrev' = IF polls THEN rootC ELSE rootPrev
      /\ covLinger' = IF polls THEN (f = "coverage" /\ covC /\ covPrev) ELSE covLinger
+     /\ fileNew' = IF codesSeen THEN writes /\ ~early ELSE fileNew \/ writes
+     /\ sBlind' = sB
      /\ obs' = IF f = "blind_unreadable" THEN "unreadable"
                ELSE IF rA < 0 THEN "missing" ELSE IF early THEN "fresh" ELSE "old"
 
@@ -180,14 +202,15 @@ Scripted == /\ t < Len(Script)
 Next == IF Script = <<>> THEN Explore ELSE Scripted
 Spec == Init /\ [][Next]_vars
 
-TypeOK == /\ fault \in Faults \cup {"none"} /\ v \in {"green", "amber", "red", "unknown"}
+TypeOK == /\ partialRun \in 0..Cap /\ fault \in Faults \cup {"none"} /\ v \in {"green", "amber", "red", "unknown"}
           /\ stall \in 0..Cap /\ blindRun \in 0..Cap /\ hbA \in -1..Cap /\ pA \in -1..Cap
 
 (* A wired agent's content waits with no ingest progress for more than N awake
    ticks, or the monitor has been blind for more than N ticks => the check is
    amber or red. stall resets only on progress (blindRun only when the monitor
-   reads a heartbeat newer than the one it had), so this also says it stays non-green until that happens. *)
-IngestFailureLeavesGreen == (stall > N \/ blindRun > N) => NonGreen(v)
+   reads a heartbeat newer than the one it had; partialRun only when the stall
+   fields read again), so this also says it stays non-green until that happens. *)
+IngestFailureLeavesGreen == (stall > N \/ blindRun > N \/ partialRun > N) => NonGreen(v)
 (* The stall clock never ignores agent content that is waiting or was dropped
    this tick: the bookkeeping IngestFailureLeavesGreen rests on. *)
 StallClockIsTruthful == (backlog \/ dropped) => stall > 0

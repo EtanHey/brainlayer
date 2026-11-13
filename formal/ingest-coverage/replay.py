@@ -59,6 +59,7 @@ SHAPES = (
     "rewrite",
     "rewrite_lossy",
     "drift",
+    "partial",
 )
 # faults whose records are consumed and never indexed
 DROPPING = frozenset({"coverage", "rewrite_lossy", "drift"})
@@ -96,6 +97,16 @@ SCENARIOS: dict[str, dict[str, Any]] = {
     "unconfirmed-short-sleep": {
         "clock": "unconfirmed",
         "events": [_awake()] * 2 + _sleep(2) + [_awake(o="monitorFirst")] + [_awake()] * 3,
+    },
+    # Codex r1 #4: an alert published before sleep, cleared while asleep, read before the first poll
+    "alert-across-sleep": {
+        "clock": "confirmed",
+        "events": [_awake()] * 2 + [_awake("lag")] * 3 + _sleep(6) + [_awake(o="monitorFirst")] + [_awake()] * 3,
+    },
+    # Codex r1 #2: a real DB failure, then payloads truncated to their heartbeat
+    "dbfail-then-partial": {
+        "clock": "confirmed",
+        "events": [_awake()] * 2 + [_awake("dbfail")] * 4 + [_awake("partial")] * 6 + [_awake()] * 4,
     },
     "unconfirmed-long-sleep": {
         "clock": "unconfirmed",
@@ -433,6 +444,9 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
             monitor_first = asleep and event["o"] == "monitorFirst"
             if polls and not monitor_first:
                 watcher.poll_once()
+            if f == "partial" and health.exists():  # a payload with only its heartbeat fields
+                payload = json.loads(health.read_text())
+                health.write_text(json.dumps({k: payload[k] for k in ("updated_at", "poll_count")}))
             if f == "blind_unreadable":  # this tick's read fails; the file itself is left intact
                 seen = UNOBSERVED
             else:

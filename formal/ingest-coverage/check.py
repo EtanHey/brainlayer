@@ -31,8 +31,20 @@ BOUNDS = {
     "AlertRed": 2,
     "Cap": 8,
 }  # ordering-preserving: Amber < Red < WakeGrace, SleepGap = 3 ticks
-HEARTBEAT = ("none", "dead", "stuck", "blind_stale", "blind_unreadable", "rewrite")
-EIGHT = ("none", "dead", "stuck", "lag", "coverage", "dbfail", "blind_stale", "blind_unreadable", "rootgone", "rewrite")
+HEARTBEAT = ("none", "dead", "stuck", "blind_stale", "blind_unreadable", "partial", "rewrite")
+EIGHT = (
+    "none",
+    "dead",
+    "stuck",
+    "lag",
+    "coverage",
+    "dbfail",
+    "blind_stale",
+    "blind_unreadable",
+    "partial",
+    "rootgone",
+    "rewrite",
+)
 THREE = ("IngestFailureLeavesGreen", "SleepIsNotFailure", "StallAcrossWakeStillCounts", "StallClockIsTruthful")
 
 
@@ -185,6 +197,15 @@ CASES = [
         faults=("none", "dead"),
         inv=("StallAcrossWakeStillCounts",),
         expect="StallAcrossWakeStillCounts",
+    ),
+    case(
+        "mut-partial-clear",
+        "mutation",
+        "Read a payload without its stall fields as no stall (Codex r1 #2)",
+        mut="partial_clear",
+        faults=("none", "partial", "dbfail"),
+        inv=("IngestFailureLeavesGreen",),
+        expect="IngestFailureLeavesGreen",
     ),
     case(
         "mut-rewrite-progress",
