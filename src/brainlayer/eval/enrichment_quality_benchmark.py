@@ -536,12 +536,6 @@ Now output exactly one JSON object matching the required keys. Do not copy JSON 
 """
 
 
-def _apply_chat_template(tokenizer: Any, prompt: str) -> str:
-    apply_template = getattr(tokenizer, "apply_chat_template", None)
-    if apply_template is None:
-        return prompt
-
-
 def _normalize_enrichment_for_benchmark(enrichment: Mapping[str, Any]) -> dict[str, Any]:
     result = dict(enrichment)
     if isinstance(result.get("importance"), float) and math.isfinite(result["importance"]):
@@ -557,21 +551,6 @@ def _normalize_enrichment_for_benchmark(enrichment: Mapping[str, Any]) -> dict[s
     if "version_scope" not in result:
         result["version_scope"] = None
     return result
-    try:
-        rendered = apply_template(
-            [
-                {
-                    "role": "system",
-                    "content": "You are a strict JSON enrichment function. You output only valid JSON.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-        return rendered if isinstance(rendered, str) else prompt
-    except Exception:
-        return prompt
 
 
 def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:

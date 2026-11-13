@@ -6,9 +6,12 @@ This module contains no model transport or producer entry point.
 import logging
 import os
 import threading
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..tag_normalization import enrichment_tag_mode
+
+if TYPE_CHECKING:
+    from .sanitize import Sanitizer, SanitizeResult
 
 logger = logging.getLogger(__name__)
 
