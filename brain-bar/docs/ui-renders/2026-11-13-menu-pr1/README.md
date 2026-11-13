@@ -1,4 +1,4 @@
-# Contact sheets: native menu vs the mocks (menu PR 1, fix round 1, head f4658af2)
+# Contact sheets: native menu vs the mocks (menu PR 1, after review round 2, head 78be766a)
 
 > **Not a screenshot of an open menu.** Assembled off-screen from the real hosted rows and the real menu items at the heights `NSMenu.size` measures; the material is flat.
 > It cannot show motion (the turning busy arrows, the spinner), a disabled standard item's style, or AppKit's own title sizing and truncation beside a key equivalent.
@@ -31,7 +31,7 @@ Colour and marks
     and the spinner for "behind". A1's mock left that gutter empty. A headline's detail line is the one exception, because the
     headline's disc already carries its state.
 11. **The busy arrows turn (R28c)**: one even, linear turn every 2 s while shown (S2-today, S2-after-seam, S7), and still under
-    Reduce Motion. A still catches them at an arbitrary angle, and no picture can show the motion.
+    Reduce Motion. The harness draws them at a fixed phase (upright), and no picture can show the motion.
 12. **The button fill is the system accent colour**, blue by default. **Flag:** Etan said "the blue button". If it must stay blue
     under any accent setting, pinning it to `.systemBlue` is a one-word change.
 
