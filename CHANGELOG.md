@@ -40,6 +40,14 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.0] - 2026-11-13
+
+### Receipts for old JSONL archives; typed status fields for the new BrainBar UI
+
+- feat(verdict): typed check fields for the BrainBar UI (seam PR-1) (#1779)
+- fix(backup): reconcile receipts for JSONL archives staged before #1776 (#1778)
+- feat(formal): prove when the ingest check leaves green (TLA+ + real-code replay) — 5 shapes fail today (#1780)
+
 ## [1.5.99] - 2026-11-12
 
 ### Hardening (Today card measurable, embedding backlog drains on a busy Mac)
