@@ -54,12 +54,14 @@ KNOWN_AGENTS: tuple[KnownAgent, ...] = (
     KnownAgent(
         "cursor-agent", ("cursor-agent",), ("cursor-agent",), ((".cursor/projects", "*/agent-transcripts/*.jsonl"),)
     ),
-    # Gemini CLI saves chats as tmp/<project-hash>/chats/session-*.json, not under sessions/.
+    # Antigravity (agy), the current Gemini agent: the `agy` CLI, or T3's agy ACP server. It exports each
+    # conversation to brain/<conversation>/.system_generated/logs/transcript_full.jsonl. Gemini CLI is
+    # legacy and deprecated and is not listed.
     KnownAgent(
         "gemini",
-        ("gemini",),
-        ("gemini", "@google/gemini-cli/"),
-        ((".gemini/tmp", "*/chats/session-*.json"), (".gemini/sessions", "*.jsonl")),
+        ("agy", "agy_acp_server.par"),
+        (),
+        ((".gemini/antigravity-cli/brain", "*/.system_generated/logs/transcript_full.jsonl"),),
     ),
     KnownAgent("opencode", ("opencode",), ("opencode", "opencode-ai/"), ((".local/share/opencode/storage", "*.json"),)),
 )

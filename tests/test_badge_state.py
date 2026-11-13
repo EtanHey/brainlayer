@@ -670,7 +670,28 @@ def test_collector_failure_is_unknown_and_holds_a_prior_red(tmp_path: Path) -> N
     assert held["alerts"]["badge_on"] is True
 
 
-def test_a_running_agent_brainlayer_does_not_index_turns_ingest_amber_end_to_end(tmp_path: Path) -> None:
+def _census_with_legacy_gemini_cli(monkeypatch) -> None:
+    """Census over the listed agents, with gemini in the shape of the legacy, deprecated Gemini CLI.
+
+    KNOWN_AGENTS' gemini is Antigravity (agy), whose store is a watched root, so it cannot be the
+    unwatched running agent these end-to-end tests need; a node-launched agent writing to
+    ~/.gemini/tmp can.
+    """
+    import functools
+
+    from brainlayer import agent_census, health_check
+
+    legacy = agent_census.KnownAgent(
+        "gemini", ("gemini",), ("gemini", "@google/gemini-cli/"), ((".gemini/tmp", "*/chats/session-*.json"),)
+    )
+    agents = (*(a for a in agent_census.KNOWN_AGENTS if a.name != "gemini"), legacy)
+    monkeypatch.setattr(
+        health_check, "unindexed_agents", functools.partial(agent_census.unindexed_agents, agents=agents)
+    )
+
+
+def test_a_running_agent_brainlayer_does_not_index_turns_ingest_amber_end_to_end(tmp_path: Path, monkeypatch) -> None:
+    _census_with_legacy_gemini_cli(monkeypatch)
     home = tmp_path / "agent-home"
     chat = home / ".gemini" / "tmp" / "3a50" / "chats" / "session-2026-11-13T09-00-ab12.json"
     chat.parent.mkdir(parents=True)
@@ -692,7 +713,8 @@ def test_a_running_agent_brainlayer_does_not_index_turns_ingest_amber_end_to_end
     assert "an agent BrainLayer does not index is running: gemini" in ingest["note"]
 
 
-def test_a_census_without_process_start_times_is_not_measured_end_to_end(tmp_path: Path) -> None:
+def test_a_census_without_process_start_times_is_not_measured_end_to_end(tmp_path: Path, monkeypatch) -> None:
+    _census_with_legacy_gemini_cli(monkeypatch)
     home = tmp_path / "agent-home"
     chat = home / ".gemini" / "tmp" / "3a50" / "chats" / "session-2026-11-13T09-00-ab12.json"
     chat.parent.mkdir(parents=True)
@@ -718,6 +740,7 @@ def test_a_census_without_process_start_times_is_not_measured_end_to_end(tmp_pat
 def test_a_partial_census_holds_each_unmeasured_agent_and_replaces_only_measured_ones(
     tmp_path: Path, monkeypatch
 ) -> None:
+    _census_with_legacy_gemini_cli(monkeypatch)
     from brainlayer import agent_census
 
     home = tmp_path / "agent-home"
