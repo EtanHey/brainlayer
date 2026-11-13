@@ -3,16 +3,20 @@ import Foundation
 /// The one presentation function for the M menu and icon (phase-8 PRESENTATION-SPEC.md, truth table v3 Part 2).
 /// Pure and deterministic: the same capture always gives the same presentation. Nothing in production calls it.
 ///
-/// P1 of five derives the six calm cases (S1, S2 today and after the seam, S4, S7, S8). Everything else takes
-/// ruling R17's generic rows: a thing that needs him reads "Something BrainBar checks is failing.", a thing that
-/// cannot be told reads "Checking…". P2 to P5 replace them family by family. `finalGuard` runs last, on every path.
+/// P1 derives the six calm cases (S1, S2 today and after the seam, S4, S7, S8); P2 the Needs-you rows of the eleven
+/// needs cases (S13 with M1 and D13, S06, S07, S19, S32, F07, U03) with merges M2 and M5. Everything else takes ruling
+/// R17's generic rows: a thing that needs him reads "Something BrainBar checks is failing.", a thing that cannot be
+/// told reads "Checking…". P3 to P5 replace them family by family. `finalGuard` runs last, on every path.
 enum BrainBarMenuPresenter {
     typealias P = BrainBarMenuPresentation
     typealias Capture = BrainBarMenuCapture
     typealias State = BrainBarHealthVerdict.State
 
     private enum Thing: Int, CaseIterable { case remembering, finding, safe, upkeep, system }
-    private enum Level { case cantTell, behind, needs }
+    /// `fact`: Fine, with a fact (D13's line): drawn, never counted.
+    private enum Level { case fact, cantTell, behind, needs }
+    /// U11: custody-critical, then confirmed, then escalated.
+    private enum Rank: Int { case custody, confirmed, escalated }
 
     private struct Line {
         var thing: Thing
@@ -22,6 +26,13 @@ enum BrainBarMenuPresenter {
         var headline: String? = nil
         var spinner = false
         var progress: Int? = nil
+        /// False for R17's generic rows: they merge only with each other, and no "Everything else" stands beside them.
+        var worded = true
+        var rank = Rank.confirmed
+        /// M2 inside a class, by severity (truth table erratum, 13 Nov): S19 0, S07 1, S32 2, S06 3, S13 4; generic 9.
+        var priority = 9
+        var action = P.ActionKind.copyReport
+        var handoff = BrainBarMenuPresenter.handoff
     }
 
     private static let checksOf: [Thing: [String]] = [
@@ -35,8 +46,11 @@ enum BrainBarMenuPresenter {
     private static func thing(of name: String) -> Thing { Thing.allCases.first { checksOf[$0]!.contains(name) } ?? .system }
 
     /// R17's generic rows.
-    private static func needs(_ thing: Thing) -> Line { Line(thing: thing, level: .needs, strings: ["Something BrainBar checks is failing."]) }
-    private static func checking(_ thing: Thing) -> Line { Line(thing: thing, level: .cantTell, strings: ["Checking…"]) }
+    private static func needs(_ thing: Thing) -> Line { Line(thing: thing, level: .needs, strings: ["Something BrainBar checks is failing."], worded: false) }
+    private static func checking(_ thing: Thing) -> Line { Line(thing: thing, level: .cantTell, strings: ["Checking…"], worded: false) }
+    private static func worded(_ thing: Thing, _ strings: [String], _ rank: Rank, priority: Int = 9) -> Line {
+        Line(thing: thing, level: .needs, strings: strings, rank: rank, priority: priority)
+    }
     private static let handoff = ["BrainBar can’t fix this itself.", "Give the report to an agent."]
 
     /// The only entry point. It is total over its capture type: no input traps, and the guard runs last on every path.
@@ -68,7 +82,10 @@ enum BrainBarMenuPresenter {
     /// A failed database probe makes only `coverage_drop` unprovable (R24); other alerts still count (R09, X10).
     private static func appFacts(_ c: Capture) -> [Line] {
         var lines: [Line] = []
-        if c.maintenanceNightFailures >= 3 { lines.append(needs(.upkeep)) }  // U03
+        if c.maintenanceNightFailures >= 3 {  // U03; its second sentence only when saving and backups are proven fine
+            lines.append(worded(.upkeep, ["Nightly upkeep failed \(c.maintenanceNightFailures) nights in a row"]
+                + (provenFine(c).isSuperset(of: [.remembering, .safe]) ? [stillSaved] : []), .confirmed))
+        }
         guard let w = c.watcher, w.readable, w.fresh else { return lines }
         if w.alertReasons.contains("offset_lag"), lagPastLimit(c) { lines.append(needs(.remembering)) }  // R02 escalated
         for reason in w.alertReasons where !["offset_lag", "quarantined_record"].contains(reason) {
@@ -83,8 +100,9 @@ enum BrainBarMenuPresenter {
     // MARK: Part 1 rows from one fresh verdict
 
     private static func derive(_ c: Capture, _ v: BrainBarHealthVerdict) -> [Line] {
-        var lines: [Line] = appFacts(c)
-        for name in known where name != "monitor" {
+        let (wordedLines, consumed) = needsRows(c, v)
+        var lines: [Line] = appFacts(c) + wordedLines
+        for name in known where name != "monitor" && !consumed.contains(name) {
             switch worst(v, name) {
             case .green?: break
             case .red?: lines.append(needs(thing(of: name)))
@@ -119,15 +137,7 @@ enum BrainBarMenuPresenter {
     private static func calmAmber(_ name: String, _ c: Capture, _ v: BrainBarHealthVerdict) -> Line? {
         switch name {
         case "backup_offsite" where worst(v, "backup_local") == .green:
-            // U13: once `recovering` exists it is the evidence; before PR-2 the live upload is. A cadence that is not a
-            // finite positive number makes the recovering unusable (no range is built from it).
-            let onSchedule = c.offsiteRecovering.flatMap { r -> BrainBarMenuCapture.Recovering? in
-                let quiet = c.now.timeIntervalSince(r.updatedAt)
-                let sane = r.cadenceS.isFinite && r.cadenceS > 0 && r.startedAt <= c.now && r.progress.map { (0...1).contains($0) } != false
-                return sane && quiet >= 0 && quiet <= 2 * r.cadenceS && r.eta.map { c.now <= $0 } != false ? r : nil
-            }
-            let upload = c.upload.flatMap { $0.live ? $0.startedAt : nil }
-            guard let started = c.offsiteRecovering == nil ? upload : onSchedule?.startedAt, started <= c.now else { return nil }
+            guard let (started, onSchedule) = runningUpload(c) else { return nil }
             var text = "To Google Drive. Started at \(hhmm(started, c))."
             if let p = onSchedule?.progress { text += " \(percent(p))% done" + (onSchedule?.eta.map { ", about \(hhmm($0, c))." } ?? ".") }
             return Line(thing: .safe, level: .behind, strings: [text], headline: "Backing up now", progress: onSchedule?.progress.map(percent))
@@ -140,19 +150,125 @@ enum BrainBarMenuPresenter {
         }
     }
 
+    /// U13: once `recovering` exists it is the evidence of a running upload; before PR-2 the live upload is. A cadence that
+    /// is not a finite positive number makes the recovering unusable (no range is built from it).
+    private static func runningUpload(_ c: Capture) -> (started: Date, onSchedule: Capture.Recovering?)? {
+        let onSchedule = c.offsiteRecovering.flatMap { r -> Capture.Recovering? in
+            let quiet = c.now.timeIntervalSince(r.updatedAt)
+            let sane = r.cadenceS.isFinite && r.cadenceS > 0 && r.startedAt <= c.now && r.progress.map { (0...1).contains($0) } != false
+            return sane && quiet >= 0 && quiet <= 2 * r.cadenceS && r.eta.map { c.now <= $0 } != false ? r : nil
+        }
+        let upload = c.upload.flatMap { $0.live ? $0.startedAt : nil }
+        guard let started = c.offsiteRecovering == nil ? upload : onSchedule?.startedAt, started <= c.now else { return nil }
+        return (started, onSchedule)
+    }
+
+    // MARK: P2: the Needs-you rows of the eleven needs cases
+
+    /// The worded rows, with M1 and D13 applied, and the checks they speak for (those derive no generic row). A check name
+    /// carried more than once is never read for its fields: it keeps its generic row. Every other case keeps P1's rows.
+    private static func needsRows(_ c: Capture, _ v: BrainBarHealthVerdict) -> (lines: [Line], consumed: Set<String>) {
+        func one(_ name: String) -> BrainBarHealthVerdict.Check? {
+            let named = v.checks.filter { $0.name == name }
+            return named.count == 1 ? named[0] : nil
+        }
+        func within(_ k: BrainBarHealthVerdict.Check) -> Bool { valid(k.ageS) && k.thresholdS.map { k.ageS! <= $0 } == true }
+        var lines: [Line] = [], consumed: Set<String> = []
+        if one("integrity")?.state == .red {  // S19
+            lines.append(worded(.safe, ["The newest checked backup is damaged", "Your memory itself may be damaged too."], .custody, priority: 0))
+            consumed.insert("integrity")
+        }
+        if let e = one("embedding"), e.state == .red || (e.state == .amber && within(e)) {  // F07
+            let exact = c.keywordCoverage == 1 && searchProven(c) ? " " + exactWords : ""
+            lines.append(worded(.finding, ["Search by meaning isn’t catching up", "BrainBar hasn’t seen the memories waiting for it go down"
+                + (e.ageS.flatMap(over).map { " " + $0 } ?? "") + "." + exact], .confirmed))
+            consumed.insert("embedding")
+        }
+        // The database copies: S07, S32, S06 with failures, and S02 (drawn only through M1).
+        let local = one("backup_local"), offsite = one("backup_offsite")
+        let reds = [local, offsite].compactMap { $0 }.filter { $0.state == .red }
+        var db: Line? = nil, dbNames: [String] = [], s02 = false
+        if let local, let offsite {
+            let faults = [local, offsite].filter { $0.state != .green }
+            if local.state == .red, local.ageS == nil {  // S07
+                (db, dbNames) = (worded(.safe, ["No verified backup on record"], .custody, priority: 1), ["backup_local"])
+            } else if !reds.isEmpty, let upload = runningUpload(c) {  // S32, R8, R9
+                let age = c.backupsMeasured ? copyAge(offsite.ageS, c, v).map { "Your newest backup in Google Drive is \($0). " } : nil
+                let progress = upload.onSchedule?.progress.map { "is \(percent($0))% done" } ?? "is still running"
+                db = worded(.safe, [(age ?? "") + "A backup to Google Drive started at \(hhmm(upload.started, c)) and \(progress)."],
+                            local.state == .red ? .custody : .confirmed, priority: 2)
+                db?.handoff = ["If this backup doesn’t finish, BrainBar can’t fix it itself.", "Give the report to an agent."]
+                dbNames = reds.map(\.name)
+            } else if c.backupDailyFailures >= 2, !faults.isEmpty, c.upload?.live != true, c.offsiteRecovering == nil,
+                      faults.allSatisfy({ ($0.state == .red && valid($0.ageS)) || ($0.state == .amber && within($0)) }) {  // S06
+                let newest = [local, offsite].compactMap(\.ageS).filter { valid($0) }.min().flatMap { copyAge($0, c, v) }.map {
+                    c.backupsMeasured ? "Your newest backup is \($0)." : "The newest backup BrainBar can confirm is \($0)."
+                }
+                db = worded(.safe, ["The last \(c.backupDailyFailures) backups didn’t finish"] + (newest.map { [$0] } ?? []),
+                            local.state == .red ? .custody : reds.isEmpty ? .escalated : .confirmed, priority: 3)
+                dbNames = faults.map(\.name)
+            } else if faults.isEmpty, c.backupDailyFailures == 1, c.backupDailyNextRunAt.map({ $0 > c.now }) == true {
+                s02 = true
+            }
+        }
+        guard one("drive_auth")?.state == .red else {
+            if let db { lines.append(db) }
+            return (lines, consumed.union(dbNames))
+        }
+        // S13, and M1: it absorbs every database-backup row, takes its rank, and adds the Drive copy's age (R15, R14).
+        let missing = c.driveAuthModel == .missing, absorbs = db != nil || s02 || !reds.isEmpty
+        var detail = "Backups can’t upload until you \(missing ? "connect" : "reconnect") it."
+        if absorbs, c.backupsMeasured, let age = copyAge(offsite?.ageS, c, v) {
+            detail += " Your newest backup in Google Drive is \(age)."
+        } else if absorbs, c.backupsMeasured, missing, offsite?.state == .red, offsite?.ageS == nil {
+            detail += " Nothing is backed up to Google Drive yet."
+        }
+        var s13 = worded(.safe, [missing ? "Google Drive isn’t connected" : "Google Drive is disconnected", detail],
+                         db?.rank == .custody || local?.state == .red ? .custody : .confirmed, priority: 4)
+        s13.action = missing ? .connectDrive : .reconnectDrive
+        lines.append(s13)
+        consumed.formUnion(["drive_auth"] + dbNames + reds.map(\.name))
+        // D13: a failing transcript backup cannot upload either while Drive is red; a fact line, not counted.
+        if let t = one("transcripts"), [.amber, .red].contains(t.state), t.ageS != nil, c.jsonlBackupFailures >= 2 {
+            lines.append(Line(thing: .safe, level: .fact, strings: ["Conversation backups can’t upload either until Drive is reconnected."]))
+            consumed.insert("transcripts")
+        }
+        return (lines, consumed)
+    }
+
     // MARK: Part 2: merge, count, order, headline
 
     private static func assemble(_ c: Capture, _ input: [Line], allGood: String?) -> P {
         // R17 and M5: one row per thing and level; the first line of a thing at that level speaks.
         func at(_ level: Level) -> [Line] { Thing.allCases.compactMap { t in input.first { $0.thing == t && $0.level == level } } }
-        let needs = at(.needs), behind = at(.behind), cantTell = at(.cantTell)
+        let behind = at(.behind), cantTell = at(.cantTell)
         let fine = four.filter { t in !input.contains { $0.thing == t } }
         func status(_ line: Line, mark: P.Mark?) -> P.Row {
             P.Row(kind: .statusLine, strings: line.strings, mark: mark, state: line.level == .behind ? .behind : .cantTell, spinner: line.spinner)
         }
+        // M2, M3: worded Needs-you rows of one thing and one action merge, the highest class speaking, then severity; R17's
+        // generic rows merge only with each other. Step 6 orders by class, thing, severity. Swift's sort is not stable,
+        // so the input index is the last key.
+        func ordered(_ lines: [Line], _ key: (Line) -> (Int, Int, Int)) -> [Line] {
+            lines.enumerated().sorted {
+                let (a, b) = (key($0.element), key($1.element))
+                return (a.0, a.1, a.2, $0.offset) < (b.0, b.1, b.2, $1.offset)
+            }.map(\.element)
+        }
+        var needs: [Line] = []
+        for line in ordered(input.filter { $0.level == .needs }, { ($0.rank.rawValue, $0.priority, 0) })
+            where !needs.contains(where: { $0.thing == line.thing && $0.worded == line.worded && (!line.worded || $0.action == line.action) }) {
+            needs.append(line)
+        }
         if !needs.isEmpty {
-            let rows = needs.map { P.Row(kind: .needsYou, strings: $0.strings + handoff, action: copyReport) }
-            return needsForm(rows, statuses: (behind + cantTell).map { status($0, mark: nil) })
+            let rows = ordered(needs) { ($0.rank.rawValue, $0.thing.rawValue, $0.priority) }.map {
+                P.Row(kind: .needsYou, strings: $0.strings + ($0.action == .copyReport ? $0.handoff : []), action: action($0.action))
+            }
+            // "Everything else is fine." stands for the things no row speaks for, never beside a custody-critical or generic row.
+            let everythingElse = !fine.isEmpty && !needs.contains { $0.rank == .custody } && input.allSatisfy(\.worded)
+                && Set(fine).isSubset(of: provenFine(c))
+            return needsForm(rows, statuses: input.filter { $0.level == .fact }.map { P.Row(kind: .factLine, strings: $0.strings) }
+                             + (behind + cantTell).map { status($0, mark: nil) }, everythingElse: everythingElse)
         }
         let nouns: [Thing: String] = [.remembering: "new conversations", .finding: "search", .safe: "backups", .upkeep: "upkeep"]
         let headline: String
@@ -186,15 +302,25 @@ enum BrainBarMenuPresenter {
         return .init(form: .calm, headline: headline, count: 0, icon: .resting, rows: rows + bottom)
     }
 
-    private static let copyReport = P.Action(kind: .copyReport, label: "Copy report for an agent")
+    private static let copyReport = action(.copyReport)
 
-    private static func needsForm(_ needsRows: [P.Row], statuses: [P.Row]) -> P {
+    private static func action(_ kind: P.ActionKind) -> P.Action {
+        switch kind {
+        case .reconnectDrive: P.Action(kind: kind, label: "Reconnect Google Drive")
+        case .connectDrive: P.Action(kind: kind, label: "Connect Google Drive")
+        case .copyReport: P.Action(kind: kind, label: "Copy report for an agent")
+        case .openStorageSettings: P.Action(kind: kind, label: "Open Storage Settings")
+        }
+    }
+
+    private static func needsForm(_ needsRows: [P.Row], statuses: [P.Row], everythingElse: Bool = false) -> P {
         let headline = needsRows.count == 1 ? "1 thing needs you" : "\(needsRows.count) things need you"
         var rows = [P.Row(kind: .headline, strings: [headline], mark: .marked), P.Row(kind: .separator)]
         for (i, row) in needsRows.enumerated() {
             rows.append(P.Row(kind: .needsYou, strings: row.strings, action: row.action, mark: .alertCircle, dividerBefore: i > 0))
         }
         rows += statuses.map { var row = $0; row.mark = nil; return row }
+        if everythingElse { rows.append(P.Row(kind: .everythingElse, strings: ["Everything else is fine."], mark: .checkmark)) }
         return .init(form: .needs, headline: headline, count: needsRows.count, icon: .marked, rows: rows + bottom)
     }
 
@@ -242,9 +368,6 @@ enum BrainBarMenuPresenter {
             if row.kind == .separator || !row.strings.isEmpty { return row }
             return row.kind == .needsYou ? P.Row(kind: .needsYou, strings: needs(.system).strings + handoff, action: copyReport) : nil
         }
-        // I3: a reassurance stays only when every thing it covers is proven fine.
-        let fine = provenFine(c)
-        p.rows.removeAll { $0.kind == .everythingElse && !covered($0).isSubset(of: fine) }
         // I2: "All good" only when proven; otherwise nothing is confirmed.
         if p.headline == "All good" || p.rows.contains(where: { $0.strings.contains("All good") }), !allGoodProven(c) {
             p = checkingState(c)
@@ -262,17 +385,74 @@ enum BrainBarMenuPresenter {
             needsRows = [P.Row(kind: .needsYou, strings: needs(.system).strings + handoff, action: copyReport)]
         }
         if !needsRows.isEmpty, p.form != .needs || p.count != needsRows.count || p.icon != .marked || p.rows.filter({ $0.kind == .needsYou }) != needsRows {
-            p = needsForm(needsRows, statuses: p.rows.filter { $0.kind == .statusLine })
+            p = needsForm(needsRows, statuses: p.rows.filter { [.factLine, .statusLine].contains($0.kind) },
+                          everythingElse: p.rows.contains { $0.kind == .everythingElse })
+        }
+        // I3, by sentence: a reassuring sentence stays, wherever it sits, only when everything it covers is proven.
+        let drawn = p
+        p.rows = p.rows.compactMap { row in
+            var row = row
+            row.strings = row.strings.compactMap { string in
+                let kept = sentences(string).filter { proven($0, drawn, c) != false }
+                return kept.isEmpty ? nil : kept.joined(separator: " ")
+            }
+            if row.kind == .needsYou, row.strings.isEmpty { row.strings = needs(.system).strings + handoff }
+            return row.strings.isEmpty && row.kind != .separator ? nil : row
         }
         return p
     }
 
-    /// The things a reassurance speaks for. P1 draws no "Everything else is fine.", so it must stand for all four.
-    private static func covered(_ row: P.Row) -> Set<Thing> {
-        let text = row.strings.joined(separator: " ").lowercased()
-        let named = Set([(Thing.remembering, "saving"), (.finding, "search"), (.safe, "backups"), (.upkeep, "upkeep")]
-            .filter { text.contains($0.1) }.map(\.0))
-        return text.hasPrefix("everything else") || named.isEmpty ? Set(four) : named
+    // MARK: I3's reassurances, every one the function can emit, in one place
+
+    private static let stillSaved = "Your memory is still being saved and backed up, as of the last checks."  // U03
+    private static let exactWords = "Agents can still find every memory by exact words."  // F07
+
+    /// Whether a reassuring sentence is proven for this capture; nil when the sentence is not a reassurance. "All good" and
+    /// the Drive line under it are I2's.
+    private static func proven(_ sentence: String, _ p: P, _ c: Capture) -> Bool? {
+        switch sentence {
+        case stillSaved: return provenFine(c).isSuperset(of: [.remembering, .safe])
+        case exactWords: return c.keywordCoverage == 1 && searchProven(c)
+        case _ where sentence.hasSuffix(" fine."): return covered(sentence, p).isSubset(of: provenFine(c))
+        default: return nil
+        }
+    }
+
+    /// The things a "… fine." sentence speaks for: the things it names (all four if none); for "Everything else is fine.",
+    /// every thing no drawn row speaks for, and all four beside a row it cannot place (R17's generic rows).
+    private static func covered(_ sentence: String, _ p: P) -> Set<Thing> {
+        let text = sentence.lowercased()
+        guard text.hasPrefix("everything else") else {
+            let named = Set([(Thing.remembering, "saving"), (.finding, "search"), (.safe, "backups"), (.upkeep, "upkeep")]
+                .filter { text.contains($0.1) }.map(\.0))
+            return named.isEmpty ? Set(four) : named
+        }
+        var left = Set(four)
+        for row in p.rows where [.needsYou, .statusLine, .factLine, .headlineDetail].contains(row.kind) {
+            guard let first = row.strings.first, let thing = speaksFor.first(where: { first.hasPrefix($0.0) })?.1 else { return Set(four) }
+            left.remove(thing)
+        }
+        return left
+    }
+
+    /// The worded rows' first words and the thing each speaks for.
+    private static let speaksFor: [(String, Thing)] = [
+        ("Google Drive ", .safe), ("The last ", .safe), ("No verified backup", .safe), ("The newest checked backup", .safe),
+        ("Your newest backup in Google Drive", .safe), ("A backup to Google Drive", .safe), ("Conversation backups", .safe),
+        ("To Google Drive.", .safe), ("Search by meaning", .finding), ("Can’t confirm agents can search", .finding),
+        ("Catching up on new conversations", .remembering), ("Nightly upkeep", .upkeep),
+    ]
+
+    /// A string's sentences: "A. B." gives ["A.", "B."].
+    private static func sentences(_ string: String) -> [String] {
+        let parts = string.components(separatedBy: ". ")
+        return parts.indices.map { $0 < parts.count - 1 ? parts[$0] + "." : parts[$0] }
+    }
+
+    /// F07's exact-words sentence needs search itself proven, beyond the coverage figure (stricter than the truth table).
+    private static func searchProven(_ c: Capture) -> Bool {
+        guard let v = c.verdict, (0...900).contains(c.verdictAwakeAgeS), !c.isChecking, !c.wakeCatchUpPending else { return false }
+        return allGreen(v, ["monitor", "search"])
     }
 
     private static func allGreen(_ v: BrainBarHealthVerdict, _ names: [String]) -> Bool {
@@ -326,6 +506,29 @@ enum BrainBarMenuPresenter {
     }
 
     private static func percent(_ progress: Double) -> Int { Int((progress * 100).rounded()) }
+
+    private static func valid(_ age: Double?) -> Bool { age.map { $0.isFinite && $0 >= 0 } == true }
+
+    /// `{copy age}` from a backup check's wall-clock `ageS`: "21 hours old" under a day, else "from Nov 9 at 03:44"
+    /// (`evaluatedAt − ageS`). Nil for no, a negative or non-finite age, or a time after now.
+    private static func copyAge(_ age: Double?, _ c: Capture, _ v: BrainBarHealthVerdict) -> String? {
+        guard let age, valid(age) else { return nil }
+        guard age >= 86_400 else {
+            let hours = min(23, max(1, Int((age / 3600).rounded())))
+            return hours == 1 ? "1 hour old" : "\(hours) hours old"
+        }
+        let date = v.evaluatedAt.addingTimeInterval(-age)
+        return date <= c.now ? "from \(at(date, c))" : nil
+    }
+
+    /// `{over d}`: a strict lower bound from an awake-adjusted age, rounded down ("in over an hour"); nil under a minute.
+    private static func over(_ age: Double) -> String? {
+        guard age.isFinite, age > 60 else { return nil }
+        func below(_ unit: Double) -> Int { Int((min(age, 1e12) / unit).rounded(.up)) - 1 }
+        if below(3600) >= 2 { return "in over \(below(3600)) hours" }
+        if below(3600) == 1 { return "in over an hour" }
+        return below(60) == 1 ? "in over a minute" : "in over \(below(60)) minutes"
+    }
 
     private static func parse(_ iso: String) -> Date? { ISO8601DateFormatter().date(from: iso) }
 }

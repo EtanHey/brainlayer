@@ -10,8 +10,9 @@ import XCTest
 /// upload, a lagging watcher under its 30-minute limit, a watcher alert `file_ingestion_failure`, a lagging watcher
 /// past its limit) with nightly upkeep failures 0 and 3, and every pair of them on the plain base with upkeep 0; each
 /// crossed with the dot (green, amber, red; never unknown), `isChecking` and the wake flag (off, on), the verdict
-/// (fresh at awake age 0 and 900, stale at -1 and 901, missing) and backups measured or not.
-/// Not enumerated: watcher fields other than these alerts, ages and `since` values, recovering, notes, and triples.
+/// (fresh at awake age 0 and 900, stale at -1 and 901, missing) and backups measured or not. P2 crosses every input with
+/// four profiles of its capture fields (job streaks, the Drive model, keyword coverage): see `profile`.
+/// Not enumerated: watcher fields other than these alerts, other ages and `since` values, recovering, notes, and triples.
 final class BrainBarMenuInvariantTests: XCTestCase {
     typealias P = BrainBarMenuPresentation
     typealias Capture = BrainBarMenuCapture
@@ -35,12 +36,16 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         case .unknown: state = .unknown
         case .absent: return nil
         }
-        let age: Double? = name == "backup_offsite" ? 27660 : name == "transcripts" ? 31620 : nil
+        // Copies under their red line and an embedding stall under its threshold, so P2's S06, S32 and F07 can fire.
+        let (age, threshold): (Double?, Double?) = ["backup_offsite": (27660, 280800), "transcripts": (31620, 280800),
+                                                     "embedding": (3960, 21600)][name] ?? (nil, nil)
         let since = name == "search" && setting == .amber ? "2026-11-12T12:45:00+02:00" : nil
-        return Check(name: name, state: state, ageS: age, since: since, note: "", unknownTicks: 0, blind: false)
+        return Check(name: name, state: state, ageS: age, thresholdS: threshold, since: since, note: "", unknownTicks: 0, blind: false)
     }
 
-    struct Input { var settings: [String: Setting], base: Int, upkeep: Int }
+    struct Input { var settings: [String: Setting], base: Int, upkeep: Int
+        var profile = 0
+    }
 
     static func capture(_ input: Input, dot: State, checking: Bool, wake: Bool, freshness: Freshness, measured: Bool) -> Capture {
         let checks = names.compactMap { check($0, input.settings[$0] ?? ($0 == "new_check" ? .absent : .green)) }
@@ -51,6 +56,14 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         c.wakeCatchUpPending = wake
         c.backupsMeasured = measured
         c.maintenanceNightFailures = input.upkeep
+        // P2's fields: 0 none; 1 one database failure with a next run (S02), transcripts failing (D13), Drive never
+        // connected, exact-word coverage; 2 two database failures (S06), transcripts failing, Drive invalid, coverage;
+        // 3 one database failure with a next run, Drive invalid, no coverage figure.
+        c.backupDailyFailures = [0, 1, 2, 1][input.profile]
+        c.backupDailyNextRunAt = [1, 3].contains(input.profile) ? now.addingTimeInterval(52_200) : nil
+        c.jsonlBackupFailures = [0, 2, 2, 0][input.profile]
+        c.driveAuthModel = [nil, .missing, .invalid, .invalid][input.profile]
+        c.keywordCoverage = [nil, 1, 1, nil][input.profile]
         switch input.base {
         case 1: c.upload = .init(startedAt: now.addingTimeInterval(-1920), live: true)
         case 2, 4:
@@ -79,13 +92,14 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                 for sa in nonGreen { for sb in nonGreen { all.append(Input(settings: [a: sa, b: sb], base: 0, upkeep: 0)) } }
             }
         }
-        return all
+        return all.flatMap { input in (0...3).map { var i = input; i.profile = $0; return i } }
     }
 
     /// Each input's 120 captures, checked; I6 compares every flagged result with the same capture's flags-off result.
-    static func check(_ input: Input) -> (outputs: Int, violations: [String]) {
+    static func check(_ input: Input) -> (outputs: Int, violations: [String], seen: Set<String>) {
         var outputs = 0
         var violations: [String] = []
+        var seen = Set<String>()
         for dot in [State.green, .amber, .red] {
             for freshness in Freshness.allCases {
                 for measured in [true, false] {
@@ -94,9 +108,13 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                         let c = capture(input, dot: dot, checking: checking, wake: wake, freshness: freshness, measured: measured)
                         let p = BrainBarMenuPresenter.present(c)
                         outputs += 1
+                        for row in p.rows {
+                            if let first = row.strings.first, let title = speaksFor.first(where: { first.hasPrefix($0.prefix) }) { seen.insert(title.prefix) }
+                            seen.formUnion(row.strings.flatMap(sentences).filter { ["Everything else is fine.", stillSaved, exactWords].contains($0) })
+                        }
                         var found = Self.violations(c, p)
                         if let calm, [.fresh0, .fresh900].contains(freshness), calm.form == .needs,
-                           p.form != .needs || p.rows.filter({ $0.kind == .needsYou }) != calm.rows.filter({ $0.kind == .needsYou }) {
+                           p.form != .needs || Self.facts(p) != Self.facts(calm) {
                             found.append("I6 a checking flag made a fresh verdict calmer")
                         }
                         if calm == nil { calm = p }
@@ -105,13 +123,15 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                 }
             }
         }
-        return (outputs, violations)
+        return (outputs, violations, seen)
     }
 
     final class Tally: @unchecked Sendable {
         let lock = NSLock()
-        var outputs = 0, violations: [String] = []
-        func add(_ r: (outputs: Int, violations: [String])) { lock.withLock { outputs += r.outputs; violations += r.violations } }
+        var outputs = 0, violations: [String] = [], seen = Set<String>()
+        func add(_ r: (outputs: Int, violations: [String], seen: Set<String>)) {
+            lock.withLock { outputs += r.outputs; violations += r.violations; seen.formUnion(r.seen) }
+        }
     }
 
     /// The presenter is pure, so the inputs are checked on every core; the result does not depend on the order.
@@ -120,7 +140,9 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         DispatchQueue.concurrentPerform(iterations: inputs.count) { tally.add(Self.check(inputs[$0])) }
         print("BrainBarMenuInvariantTests: \(tally.outputs) outputs checked in \(String(format: "%.1f", Date().timeIntervalSince(start))) s")
         XCTAssertEqual(tally.outputs, inputs.count * 120)
-        XCTAssertGreaterThan(tally.outputs, 150_000)
+        XCTAssertGreaterThan(tally.outputs, 700_000)
+        // Not vacuous: every worded row and every reassuring sentence is reached somewhere in the enumeration.
+        XCTAssertEqual(Set(Self.speaksFor.map(\.prefix) + ["Everything else is fine.", Self.stillSaved, Self.exactWords]).subtracting(tally.seen), [])
         let first = Array(tally.violations.sorted().prefix(25))
         let byInvariant = Dictionary(grouping: tally.violations) { String($0.prefix(2)) }.mapValues(\.count).sorted { $0.key < $1.key }
         XCTAssertEqual(first, [], "\(tally.violations.count) violations \(byInvariant):\n" + first.joined(separator: "\n"))
@@ -241,6 +263,35 @@ final class BrainBarMenuInvariantTests: XCTestCase {
 
     // MARK: the invariants, written from the brief, not from the presenter
 
+    /// The reassuring sentences the presenter may emit beyond "All good" and "… fine." (each with its own proof below).
+    static let stillSaved = "Your memory is still being saved and backed up, as of the last checks."
+    static let exactWords = "Agents can still find every memory by exact words."
+
+    static func sentences(_ string: String) -> [String] {
+        let parts = string.components(separatedBy: ". ")
+        return parts.indices.map { $0 < parts.count - 1 ? parts[$0] + "." : parts[$0] }
+    }
+
+    /// I6 compares the Needs-you rows' facts: a flag may take a reassurance away (it proves nothing), never a row or a fact.
+    static func facts(_ p: P) -> [P.Row] {
+        p.rows.filter { $0.kind == .needsYou }.map { row in
+            var row = row
+            row.strings = row.strings.flatMap(sentences).filter { ![stillSaved, exactWords].contains($0) }
+            return row
+        }
+    }
+
+    /// The thing each worded row speaks for, read from the cases file's titles and status lines. A row not listed here
+    /// (R17's generic rows) speaks for no one thing, so "Everything else is fine." beside it covers all four.
+    static let speaksFor: [(prefix: String, word: String)] = [
+        ("Google Drive is disconnected", "backups"), ("Google Drive isn’t connected", "backups"), ("The last ", "backups"),
+        ("No verified backup on record", "backups"), ("The newest checked backup is damaged", "backups"),
+        ("Your newest backup in Google Drive", "backups"), ("A backup to Google Drive started", "backups"),
+        ("Conversation backups can’t upload", "backups"), ("To Google Drive. Started", "backups"),
+        ("Search by meaning isn’t catching up", "search"), ("Can’t confirm agents can search", "search"),
+        ("Catching up on new conversations", "saving"), ("Nightly upkeep failed", "upkeep"),
+    ]
+
     static func violations(_ c: Capture, _ p: P) -> [String] {
         var out: [String] = []
         let v = c.verdict
@@ -265,7 +316,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         } else if texts.contains(where: { $0.hasPrefix("Backed up to Google Drive") }) {
             out.append("I2 the all-good Drive line without All good")
         }
-        // I3: reassurance only when proven.
+        // I3, by sentence: every reassuring sentence, wherever it sits, only when everything it covers is proven.
         func provenFine(_ names: [String]) -> Bool {
             fresh && !c.isChecking && !c.wakeCatchUpPending && all("monitor", .green) && names.allSatisfy { all($0, .green) }
         }
@@ -273,15 +324,38 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             ("saving", ["ingest", "stores"]), ("search", ["search", "embedding"]),
             ("backups", ["backup_local", "backup_offsite", "transcripts", "drive_auth", "integrity", "disk"]), ("upkeep", []),
         ]
-        for row in p.rows where row.kind == .everythingElse {
-            let text = row.strings.joined(separator: " ").lowercased()
-            let covered = text.hasPrefix("everything else") ? things : things.filter { text.contains($0.word) }
-            if covered.isEmpty { out.append("I3 a reassurance that names nothing: \(text)") }
-            for thing in covered where !provenFine(thing.checks) { out.append("I3 \(thing.word) called fine without proof") }
-            if covered.contains(where: { $0.word == "backups" }), !c.backupsMeasured { out.append("I3 backups called fine while unmeasured") }
+        func requireFine(_ words: [String], _ said: String) {
+            for thing in things where words.contains(thing.word) && !provenFine(thing.checks) { out.append("I3 \(thing.word) called fine without proof: \(said)") }
+            if words.contains("backups"), !c.backupsMeasured { out.append("I3 backups called fine while unmeasured: \(said)") }
             // R10: `quarantined_record` is Fine.
-            if covered.contains(where: { $0.word == "saving" }), c.watcher?.alertReasons.allSatisfy({ $0 == "quarantined_record" }) != true {
-                out.append("I3 saving called fine beside a watcher alert")
+            if words.contains("saving"), c.watcher?.alertReasons.allSatisfy({ $0 == "quarantined_record" }) != true {
+                out.append("I3 saving called fine beside a watcher alert: \(said)")
+            }
+            if words.contains("upkeep"), c.maintenanceNightFailures >= 3 { out.append("I3 upkeep called fine while failing: \(said)") }
+        }
+        /// "Everything else": the four things minus those a drawn row speaks for; all four beside a row no title places.
+        func everythingElse() -> [String] {
+            var left = things.map(\.word)
+            for row in p.rows where [.needsYou, .statusLine, .factLine, .headlineDetail].contains(row.kind) {
+                guard let first = row.strings.first, let word = speaksFor.first(where: { first.hasPrefix($0.prefix) })?.word else { return things.map(\.word) }
+                left.removeAll { $0 == word }
+            }
+            return left
+        }
+        for row in p.rows {
+            for sentence in row.strings.flatMap(sentences) {
+                let text = sentence.lowercased()
+                if text.hasSuffix(" fine.") {
+                    let covered = text.hasPrefix("everything else") ? everythingElse() : things.map(\.word).filter { text.contains($0) }
+                    if covered.isEmpty, !text.hasPrefix("everything else") { out.append("I3 a reassurance that names nothing: \(text)") }
+                    requireFine(covered, sentence)
+                } else if sentence == stillSaved {
+                    requireFine(["saving", "backups"], sentence)
+                } else if sentence == exactWords {
+                    if c.keywordCoverage != 1 || !provenFine(["search"]) { out.append("I3 exact-word search called working without proof") }
+                } else if text.contains("still"), !text.hasPrefix("still checking"), !text.contains("is still running") {
+                    out.append("I3 an unlisted reassurance: \(sentence)")
+                }
             }
         }
         // I4: one rule.
