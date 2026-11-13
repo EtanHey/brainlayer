@@ -344,6 +344,8 @@ enum BrainBarRenderHarness {
             NSApplication.shared.setActivationPolicy(.prohibited)
             let outputDirectory = URL(fileURLWithPath: path, isDirectory: true)
             try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+            _ = try BrainBarMenuRenderHarness.render(in: outputDirectory)
+            if ProcessInfo.processInfo.environment["BRAINBAR_RENDER_SET"] == "menu" { Darwin.exit(EXIT_SUCCESS) }
             try verifyDirectionalStateCoverage()
             try verifyReadableChartMarkerContract()
             try renderUnifiedSettings(in: outputDirectory)
