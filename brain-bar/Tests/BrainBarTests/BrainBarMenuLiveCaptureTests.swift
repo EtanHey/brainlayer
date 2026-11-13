@@ -11,10 +11,10 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         "verdictAwakeAgeS": "mapped from caller sleepHistory.elapsed; unavailable -> infinity",
         "isChecking": "mapped from publishedStatus.isChecking",
         "wakeCatchUpPending": "mapped from caller wakeCatchUp.isPending(uptime: awakeUptime)",
-        "backupsMeasured": "mapped from backups observation measured section",
+        "backupsMeasured": "mapped from measured section only with no backupTruth.statusNotice",
         "lastKnownBackupAt": "not carried by the app yet",
         "watcher": "mapped from watcherHealth readable file; otherwise nil",
-        "watcher.readable": "mapped from WatcherHealthFileRead.readable",
+        "watcher.readable": "mapped from readable file case as constant true; missing/unreadable gives nil watcher",
         "watcher.fresh": "mapped from caller sleepHistory.elapsed since file.updatedAt, 0...300 seconds",
         "watcher.alertReasons": "mapped from WatcherHealthFile.alertReasons",
         "watcher.dbProbeFailed": "mapped from WatcherHealthFile.dbProbeFailed",
@@ -28,7 +28,7 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         "offsiteRecovering.updatedAt": "not carried by the app yet",
         "offsiteRecovering.cadenceS": "not carried by the app yet",
         "lagEpisodeStart": "not carried by the app yet",
-        "maintenanceNightFailures": "mapped from observations nightly/weekly calendarNightOutcome.consecutiveFailures",
+        "maintenanceNightFailures": "mapped from caller-known nightly/weekly streak; B2 unknown maps to 0 only until P2f",
         "driveAuthModel": "mapped from DriveAuthModel.status.state (wording only)",
         "backupDailyFailures": "mapped from observations.backupDaily.calendarConsecutiveFailures; nil -> 0",
         "backupDailyNextRunAt": "mapped from observations.backupDaily.nextRunAt",
@@ -42,24 +42,41 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         c.watcher = .init()
         c.upload = .init(startedAt: date, live: true)
         c.offsiteRecovering = .init(startedAt: date, updatedAt: date, cadenceS: 30.0)
-        var names = Set(Mirror(reflecting: c).children.compactMap(\.label))
-        for (prefix, value) in [("watcher", c.watcher! as Any), ("upload", c.upload! as Any),
-                                ("offsiteRecovering", c.offsiteRecovering! as Any)] {
-            names.formUnion(Mirror(reflecting: value).children.compactMap { $0.label.map { prefix + "." + $0 } })
+        var names: Set<String> = []
+        func walk(_ value: Any, _ prefix: String) {
+            for child in Mirror(reflecting: value).children {
+                let path = prefix + child.label!
+                names.insert(path)
+                let nested = String(reflecting: type(of: child.value)).contains(String(reflecting: C.self) + ".")
+                guard nested else { continue } // External value types (Date, verdict, etc.) keep their own contracts.
+                var value = child.value
+                if Mirror(reflecting: value).displayStyle == .optional {
+                    guard let wrapped = Mirror(reflecting: value).children.first else {
+                        XCTFail("Populate nested capture fixture at \(path)"); continue
+                    }
+                    value = wrapped.value
+                }
+                if Mirror(reflecting: value).displayStyle == .struct { walk(value, path + ".") }
+            }
         }
+        walk(c, "")
         return names
     }
 
     func testEveryFieldHasAnExplicitDecision() {
-        var table = Self.fields
-        if ProcessInfo.processInfo.environment["BRAINBAR_CAPTURE_OMIT_FIELD"] == "1" { table.removeValue(forKey: "now") }
-        XCTAssertEqual(Self.fieldNames(), Set(table.keys))
-        XCTAssertTrue(table.values.allSatisfy { $0.hasPrefix("mapped from ") || $0 == "not carried by the app yet" })
+        XCTAssertEqual(Self.fieldNames(), Set(Self.fields.keys))
+        XCTAssertTrue(Self.fields.values.allSatisfy { $0.hasPrefix("mapped from ") || $0 == "not carried by the app yet" })
+    }
+
+    func testAnIncompleteFieldTableIsRejected() {
+        var incomplete = Self.fields
+        incomplete.removeValue(forKey: "watcher.readable")
+        XCTAssertNotEqual(Self.fieldNames(), Set(incomplete.keys))
     }
 
     /// Build the same value types used by StatusSnapshotTests; no models that poll, run commands or show UI.
     static func adapt(_ source: C, status: BrainBarStatusSnapshot? = nil, awake: TimeInterval? = 0.0,
-                      watcherAge: TimeInterval? = 0.0, uploadStart: Date? = nil, uploadLive: Bool? = nil) -> C {
+                      watcherAge: TimeInterval? = 0.0, backupsNotice: String? = nil, upkeepKnown: Bool = true, uploadStart: Date? = nil, uploadLive: Bool? = nil) -> C {
         var backups = BrainBarStatusSnapshotTests.backups()
         if let upload = source.upload {
             backups.localSnapshot = .init(lastAt: nil, destination: nil, localVerified: true, uploaded: false,
@@ -85,8 +102,8 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
             status: status ?? .init(issues: [], isChecking: source.isChecking, healthVerdict: verdict),
             verdictAwakeAgeS: awake, wakeCatchUpPending: source.wakeCatchUpPending,
             driveAuth: source.driveAuthModel.map { .init(state: $0, reason: nil, expiresAt: nil) },
-            backups: source.backupsMeasured ? .measured(backups) : .unavailable("fixture"),
-            watcher: file, watcherAwakeAgeS: watcherAge, observations: observations,
+            backups: source.backupsMeasured ? .measured(backups) : .unavailable("fixture"), backupsNotice: backupsNotice,
+            watcher: file, watcherAwakeAgeS: watcherAge, observations: observations, maintenanceNightStreakKnown: upkeepKnown,
             stats: .init(chunkCount: 100, enrichedChunkCount: 0, pendingEnrichmentCount: 0,
                 enrichmentPercent: 0.0, enrichmentRatePerMinute: 0.0, databaseSizeBytes: 0,
                 recentActivityBuckets: [], recentEnrichmentBuckets: [], ftsEligibleChunkCount: 100,
@@ -142,8 +159,8 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         }
         let now = Date(timeIntervalSince1970: 1_800_000_000.0), zone = TimeZone(secondsFromGMT: 0)!
         let empty = BrainBarMenuLiveCapture.capture(status: .checking, verdictAwakeAgeS: nil,
-            wakeCatchUpPending: false, driveAuth: nil, backups: .notRead, watcher: nil,
-            watcherAwakeAgeS: nil, observations: nil, now: now, timeZone: zone)
+            wakeCatchUpPending: false, driveAuth: nil, backups: .notRead, backupsNotice: nil, watcher: nil,
+            watcherAwakeAgeS: nil, observations: nil, maintenanceNightStreakKnown: false, now: now, timeZone: zone)
         XCTAssertFalse(empty.backupsMeasured); XCTAssertNil(empty.watcher); XCTAssertNil(empty.upload)
         XCTAssertNil(empty.driveAuthModel); XCTAssertNil(empty.backupDailyNextRunAt)
         XCTAssertEqual(empty.verdictAwakeAgeS, .infinity)
@@ -161,8 +178,8 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
                 uploadState: state, uploadError: nil, uploadProcessLive: live,
                 uploadProcessStartedAt: start, localIntegrity: nil, localIntegrityPragma: nil)
             let c = BrainBarMenuLiveCapture.capture(status: .checking, verdictAwakeAgeS: nil,
-                wakeCatchUpPending: false, driveAuth: nil, backups: .measured(backups),
-                watcher: .missing(path: "fixture"), watcherAwakeAgeS: nil, observations: nil,
+                wakeCatchUpPending: false, driveAuth: nil, backups: .measured(backups), backupsNotice: nil,
+                watcher: .missing(path: "fixture"), watcherAwakeAgeS: nil, observations: nil, maintenanceNightStreakKnown: false,
                 now: now, timeZone: TimeZone(secondsFromGMT: 0)!)
             XCTAssertNil(c.upload, "A snapshot date or now must never stand in for a process start")
             XCTAssertNil(c.watcher)
@@ -198,6 +215,40 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
                    .init(kind: .standardItem, strings: ["Quit BrainBar"], keyEquivalent: "⌘Q", optionAlternate: "Restart BrainBar")]))
     }
 
+    static func checking(_ headline: String, fine: String) -> BrainBarMenuPresentation {
+        .init(form: .calm, headline: headline, count: 0, icon: .resting, rows: [
+            .init(kind: .headline, strings: [headline], mark: .wait), .init(kind: .separator),
+            .init(kind: .statusLine, strings: ["Checking…"], mark: .wait, state: .cantTell),
+            .init(kind: .everythingElse, strings: [fine], mark: .ok), .init(kind: .separator),
+            .init(kind: .standardItem, strings: ["Settings…"], keyEquivalent: "⌘,"),
+            .init(kind: .standardItem, strings: ["Quit BrainBar"], keyEquivalent: "⌘Q", optionAlternate: "Restart BrainBar")])
+    }
+
+    func testStaleOrFutureBackupsEnvelopeCannotReassure() throws {
+        let source = try BrainBarMenuCases.capture(BrainBarMenuPresentationTests.loadCases().first {
+            $0["id"] as? String == "S1"
+        }!["inputs"] as! [String: Any])
+        for notice in ["Backup status is old", "Backup status is from the future"] {
+            let c = Self.adapt(source, backupsNotice: notice)
+            XCTAssertFalse(c.backupsMeasured)
+            XCTAssertEqual(BrainBarMenuPresenter.present(c), Self.checking("Can’t confirm backups yet",
+                fine: "Saving, search and upkeep are fine."))
+        }
+    }
+
+    func testUnknownUpkeepIsNotProvenUntilP2f() throws {
+        let row = try BrainBarMenuPresentationTests.loadCases().first { $0["id"] as? String == "S1" }!
+        var source = try BrainBarMenuCases.capture(row["inputs"] as! [String: Any])
+        source.maintenanceNightFailures = 3 // An untrusted prior value must not be treated as a known streak.
+        let c = Self.adapt(source, upkeepKnown: false)
+        XCTAssertEqual(c.maintenanceNightFailures, 0) // Today's known-wrong bridge, not a measured zero.
+        XCTAssertEqual(BrainBarMenuPresenter.present(c), BrainBarMenuPresentationTests.expected(row))
+        XCTExpectFailure("B2: Capture has no unknown upkeep streak until P2f") {
+            XCTAssertEqual(BrainBarMenuPresenter.present(c), Self.checking("Still checking upkeep",
+                fine: "Saving, search and backups are fine."))
+        }
+    }
+
     func testSleepStaleMissingAndUnavailableClocks() throws {
         let row = try BrainBarMenuPresentationTests.loadCases().first { $0["id"] as? String == "S1" }!
         var source = try BrainBarMenuCases.capture(row["inputs"] as! [String: Any])
@@ -226,7 +277,8 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         for age in watcherAges {
             let c = Self.adapt(source, watcherAge: age)
             XCTAssertEqual(c.watcher?.fresh, false)
-            XCTAssertNotEqual(BrainBarMenuPresenter.present(c).headline, "All good")
+            XCTAssertEqual(BrainBarMenuPresenter.present(c), Self.checking("Still checking new conversations",
+                fine: "Search, backups and upkeep are fine."))
         }
     }
 }

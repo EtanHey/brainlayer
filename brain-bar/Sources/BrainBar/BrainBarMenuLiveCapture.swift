@@ -11,9 +11,11 @@ enum BrainBarMenuLiveCapture {
         wakeCatchUpPending: Bool,
         driveAuth: DriveAuthStatus?,
         backups: BrainBarStatusInputs.Backups,
+        backupsNotice: String?,
         watcher: WatcherHealthFileRead?,
         watcherAwakeAgeS: TimeInterval?,
         observations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]?,
+        maintenanceNightStreakKnown: Bool,
         stats: DashboardStats? = nil,
         now: Date, timeZone: TimeZone
     ) -> BrainBarMenuCapture {
@@ -25,7 +27,7 @@ enum BrainBarMenuLiveCapture {
         c.driveAuthModel = driveAuth?.state
         c.backupsMeasured = false
         if case let .measured(value) = backups {
-            c.backupsMeasured = value.state == "measured"
+            c.backupsMeasured = value.state == "measured" && backupsNotice == nil
             if let upload = value.localSnapshot, upload.uploadState == "in_progress",
                let start = upload.uploadProcessStartedAt, let live = upload.uploadProcessLive {
                 c.upload = .init(startedAt: start, live: live)
@@ -40,10 +42,16 @@ enum BrainBarMenuLiveCapture {
         c.backupDailyFailures = observations?[.backupDaily]?.calendarConsecutiveFailures ?? 0
         c.backupDailyNextRunAt = observations?[.backupDaily]?.nextRunAt
         c.jsonlBackupFailures = observations?[.jsonlBackup]?.calendarConsecutiveFailures ?? 0
-        c.maintenanceNightFailures = [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly]
-            .compactMap { observations?[$0]?.calendarNightOutcome }.first?.consecutiveFailures ?? 0
+        let nightFailures: Int? = maintenanceNightStreakKnown
+            ? [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly]
+                .compactMap { observations?[$0]?.calendarNightOutcome }.first?.consecutiveFailures : nil
+        c.maintenanceNightFailures = upkeepFailuresUntilP2f(nightFailures)
         c.keywordCoverage = stats.flatMap { $0.signalCoverageIsAvailable ? $0.ftsCoveragePercent / 100.0 : nil }
         // Not carried yet: lastKnownBackupAt, offsiteRecovering, lagEpisodeStart.
         return c
     }
+
+    // TODO(P2f): B2 — Capture cannot represent unknown upkeep; replace this bridge with the optional slot.
+    // Caller marks unknown before sampling, on history errors/damaged nights, or incomplete/truncated streaks.
+    private static func upkeepFailuresUntilP2f(_ measured: Int?) -> Int { measured ?? 0 }
 }
