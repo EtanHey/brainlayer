@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -49,6 +50,9 @@ def _run_minimal_health_check(
     now_fn=lambda: datetime.now(UTC),
     evidence_at: datetime | None = None,
     evidence: bool = True,
+    ps_output: str = "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4",
+    agent_home: Path | None = None,
+    agent_etime: str | None = "10:00",
 ) -> HealthCheckResult:
     """``evidence`` writes fresh outcome receipts, so only the condition under test can move the dot.
 
@@ -112,15 +116,26 @@ def _run_minimal_health_check(
             drain_health_path=tmp_path / "drain-health.json",
             t3_health_path=tmp_path / "t3-health.json",
             jsonl_backup_log_path=tmp_path / "backup.log",
+            agent_home=agent_home or tmp_path / "agent-home",
             **{"watcher_health_path": tmp_path / "watcher-health.json", **overrides},
         ),
-        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4",
+        ps_output_fn=lambda: ps_output,
         socket_request_fn=lambda *_args: (
             canary_response or {"result": {"content": [{"type": "text", "text": "1 of 1 shown"}]}}
         ),
-        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="state = running", stderr=""),
+        command_runner=lambda args: _fake_command(args, agent_etime),
         now_fn=now_fn,
     )
+
+
+def _fake_command(args: list[str], agent_etime: str | None) -> SimpleNamespace:
+    """launchctl answers "running"; the census's ``ps -o pid=,etime=`` answers ``agent_etime`` (None: ps fails)."""
+    if args[:3] == ["ps", "-o", "pid=,etime="]:
+        if agent_etime is None:
+            return SimpleNamespace(returncode=2, stdout="", stderr="ps: failed")
+        stdout = "".join(f"{pid} {agent_etime}\n" for pid in args[-1].split(","))
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+    return SimpleNamespace(returncode=0, stdout="state = running", stderr="")
 
 
 def _blind_alert(document: dict) -> dict:
@@ -491,7 +506,14 @@ def test_completed_health_check_publishes_badge_contract(tmp_path: Path) -> None
     }
     extra = {
         **dict.fromkeys(("backup_local", "backup_offsite", "transcripts"), {"catch_up_until"}),
-        "ingest": {"good_ticks", "good_ticks_needed", "paused_by_maintenance", "pause_ends_at"},
+        "ingest": {
+            "good_ticks",
+            "good_ticks_needed",
+            "paused_by_maintenance",
+            "pause_ends_at",
+            "unindexed_agents",
+            "census_incomplete",
+        },
         "stores": {"good_ticks", "good_ticks_needed", "paused_by_maintenance", "pause_ends_at", "fails", "cause"},
         "search": {"good_ticks", "good_ticks_needed", "fails"},
         "monitor": {"blind_codes"},
@@ -646,3 +668,93 @@ def test_collector_failure_is_unknown_and_holds_a_prior_red(tmp_path: Path) -> N
     drive = next(c for c in held["verdict"]["checks"] if c["name"] == "drive_auth")
     assert drive["state"] == "red" and "not checked" in drive["note"] and "holds" in drive["note"]
     assert held["alerts"]["badge_on"] is True
+
+
+def test_a_running_agent_brainlayer_does_not_index_turns_ingest_amber_end_to_end(tmp_path: Path) -> None:
+    home = tmp_path / "agent-home"
+    chat = home / ".gemini" / "tmp" / "3a50" / "chats" / "session-2026-11-13T09-00-ab12.json"
+    chat.parent.mkdir(parents=True)
+    chat.write_text("{}\n")
+    output = tmp_path / "contract" / "badge-state.json"
+    hotlane = "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4"
+    result = _run_minimal_health_check(
+        tmp_path, output, ps_output=f"{hotlane}\n4242 node /opt/homebrew/bin/gemini\n", agent_home=home
+    )
+
+    assert result.unindexed_agents == [f"gemini: {home / '.gemini' / 'tmp'}"]
+    assert [(i.code, i.severity) for i in result.issues] == [("unindexed_agent_running", "warning")]
+    document = json.loads(output.read_text(encoding="utf-8"))
+    ingest = next(c for c in document["verdict"]["checks"] if c["name"] == "ingest")
+    assert document["verdict"]["dot"] == "amber" and document["alerts"]["badge_on"] is False
+    assert ingest["state"] == "amber"
+    assert ingest["unindexed_agents"] == result.unindexed_agents
+    assert ingest["context_codes"] == ["unindexed_agent_running"]
+    assert "an agent BrainLayer does not index is running: gemini" in ingest["note"]
+
+
+def test_a_census_without_process_start_times_is_not_measured_end_to_end(tmp_path: Path) -> None:
+    home = tmp_path / "agent-home"
+    chat = home / ".gemini" / "tmp" / "3a50" / "chats" / "session-2026-11-13T09-00-ab12.json"
+    chat.parent.mkdir(parents=True)
+    chat.write_text("{}\n")
+    output = tmp_path / "contract" / "badge-state.json"
+    hotlane = "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4"
+    result = _run_minimal_health_check(
+        tmp_path,
+        output,
+        ps_output=f"{hotlane}\n4242 node /opt/homebrew/bin/gemini\n",
+        agent_home=home,
+        agent_etime=None,
+    )
+
+    assert (result.unindexed_agents, result.agent_census_incomplete) == ([], ["gemini"])
+    assert [(i.code, i.severity) for i in result.issues] == [("agent_census_incomplete", "warning")]
+    ingest = next(c for c in json.loads(output.read_text())["verdict"]["checks"] if c["name"] == "ingest")
+    assert ingest["state"] == "green" and ingest["unindexed_agents"] == []
+    assert ingest["census_incomplete"] == ["gemini"]
+    assert ingest["context_codes"] == ["agent_census_incomplete"]
+
+
+def test_a_partial_census_holds_each_unmeasured_agent_and_replaces_only_measured_ones(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from brainlayer import agent_census
+
+    home = tmp_path / "agent-home"
+    chat = home / ".gemini" / "tmp" / "3a50" / "chats" / "session-2026-11-13T09-00-ab12.json"
+    storage = home / ".local" / "share" / "opencode" / "storage"
+    for path in (chat, storage / "session" / "ses_1.json"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n")
+    output = tmp_path / "contract" / "badge-state.json"
+    hotlane = "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4"
+    gemini, opencode = "4242 node /opt/homebrew/bin/gemini", "4343 /usr/local/bin/opencode"
+    gemini_entry, opencode_entry = f"gemini: {home / '.gemini' / 'tmp'}", f"opencode: {storage}"
+
+    def tick(*agents: str) -> tuple[HealthCheckResult, dict]:
+        ps = "\n".join((hotlane, *agents)) + "\n"
+        result = _run_minimal_health_check(tmp_path, output, ps_output=ps, agent_home=home)
+        ingest = next(c for c in json.loads(output.read_text())["verdict"]["checks"] if c["name"] == "ingest")
+        return result, ingest
+
+    result, ingest = tick(gemini, opencode)
+    assert set(ingest["unindexed_agents"]) == {gemini_entry, opencode_entry} and ingest["state"] == "amber"
+
+    # opencode's scan is now cut short by the entry cap before it reaches anything new
+    old = time.time() - 3 * 86400
+    os.utime(storage / "session" / "ses_1.json", (old, old))
+    for i in range(30):
+        (storage / "part" / f"p{i:02}.json").parent.mkdir(parents=True, exist_ok=True)
+        (storage / "part" / f"p{i:02}.json").write_text("{}\n")
+        os.utime(storage / "part" / f"p{i:02}.json", (old, old))
+    monkeypatch.setattr(agent_census, "MAX_ENTRIES", 20)
+
+    result, ingest = tick(gemini, opencode)
+    assert result.unindexed_agents == [gemini_entry]
+    assert ("agent_census_incomplete", "warning") in [(i.code, i.severity) for i in result.issues]
+    assert set(ingest["unindexed_agents"]) == {gemini_entry, opencode_entry}  # opencode was not measured: held
+    assert ingest["state"] == "amber" and "census incomplete for opencode" in ingest["note"]
+
+    result, ingest = tick(opencode)  # gemini stopped: a measured negative; opencode still cut short
+    assert ingest["unindexed_agents"] == [opencode_entry]
+    assert ingest["state"] == "amber"

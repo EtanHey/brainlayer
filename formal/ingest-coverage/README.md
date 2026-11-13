@@ -170,8 +170,8 @@ The replay can fail, and each of these is a test:
 
 - **Agents BrainLayer is not wired to**, including future labs' agents. Sources are wired on
   purpose ("nothing is auto-detected"), so the guarantee is per wired root. The known-agent census
-  (separate stacked PR) catches running agents from a fixed list whose transcripts land outside
-  the watched roots. It cannot catch an agent that is not on the list. Today, for example, Gemini
+  (`src/brainlayer/agent_census.py`, below) catches running agents from a fixed list whose
+  transcripts land outside the watched roots. It cannot catch an agent that is not on the list. Today, for example, Gemini
   CLI writes `~/.gemini/tmp/<hash>/chats/session-*.json`, which is not
   `~/.gemini/sessions/**/*.jsonl`.
 - **Wrong parsing or content**: a record ingested as the wrong text. (The lossy in-place rewrite
@@ -179,6 +179,40 @@ The replay can fail, and each of these is a test:
 - **The Swift icon drawing.** That is BrainBar's app tests, not this.
 - **Maintenance pause** (red softened to amber, still non-green) and the `t3_ingest_unhealthy` path are
   not modelled.
+
+## Known-agent census (the add-on for unwired agents)
+
+`agent_census.KNOWN_AGENTS` lists claude, codex, cursor-agent, gemini and opencode. Each entry has
+its own executable, the entry script an interpreter would run, and its transcript roots with a
+filename pattern. Each health check reuses the `ps axo pid=,command=` snapshot.
+
+- **Matching.** An agent is running only when argv[0] is its binary, or argv[0] is node, bun,
+  deno or python and the *script* that interpreter runs is the agent's entry script. The
+  interpreter's options are interpreted, not skipped: inline code or a module (`python -c`/`-m`
+  including clusters like `-uc`, `node -e/--eval/-p`, `bun -e`, `bun x`, `deno eval`) means no
+  script at all, and option values (`-W`, `-X`, `-r`, `--require`, ...) are never the script. An
+  argument never counts: `grep gemini`, `python3 -c gemini`, `brainlayer … gemini` and
+  `--agent gemini` do not match.
+- **Tied to the current run.** Start times come from `ps -o pid=,etime=` for the matched PIDs
+  only. Only a file matching the agent's transcript pattern and modified after a live
+  instance's start counts. For Gemini that pattern is `tmp/*/chats/session-*.json`.
+- **When it fires.** If such a file sits under a root that no `default_watch_roots` entry
+  covers, three things happen: an `unindexed_agent_running` warning issue, the `ingest` check
+  floored at **amber** with "an agent BrainLayer does not index is running: <agent>: <root>", and a
+  typed `unindexed_agents` list (code in `context_codes`, seam F21).
+- **Per agent, not measured is never "none".** For each agent, a start time that `ps` cannot give,
+  or a scan cut short by the 5,000-entry or depth-6 cap or a directory read error (with nothing
+  found), makes *that agent* not measured. Any such agent marks the census incomplete:
+  `agent_census_incomplete` names it as ingest context, and the typed field `census_incomplete`
+  lists it. A finding for one agent never makes another agent's cut-short scan count as measured.
+- **Merged per agent; unmeasured holds.** The verdict persists the last census on the ingest check.
+  An agent measured this check replaces its entry: a finding is added, a measured negative (not
+  running, or no new transcript) removes it. An agent not measured keeps its last entry. If `ps`
+  failed, the whole census is unmeasured and everything holds. An amber is therefore cleared only by
+  a measured negative for each agent in it.
+
+An empty census changes nothing. The model does not include the census, because it can only add
+non-green ticks.
 
 ## Keeping it in step
 

@@ -114,6 +114,8 @@ class Facts:
     integrity: Any = UNOBSERVED  # "ok" | "corrupt" (confirmed results only)
     watcher_updated_at: Any = UNOBSERVED
     ingest_paused: bool = False
+    unindexed_agents: Any = UNOBSERVED  # ("<agent>: <root>", ...) found by the known-agent census this check
+    census_incomplete: tuple[str, ...] = ()  # agents the census could not measure this check
     stores_paused: bool = False
     pause_ends_at: datetime | None = None  # the pause sentinel's expires_at while a pause is active
     oldest_pending_store_at: Any = UNOBSERVED
@@ -447,6 +449,31 @@ def _raw_checks(
         if facts.ingest_paused and r.state == RED:
             r.state, r.note = AMBER, r.note + " (watcher paused by maintenance)"
         raw["ingest"] = r
+    # Known-agent census: only a measured census replaces the last one; an unmeasured tick holds it.
+    prior_census = p("ingest").get("census")
+    prior_census = list(prior_census) if isinstance(prior_census, list) else None
+    unmeasured = facts.unindexed_agents is UNOBSERVED
+    partial = not unmeasured and bool(facts.census_incomplete)
+    if unmeasured:
+        census = prior_census
+    else:
+        # Per agent: a measured agent replaces its prior entry; an unmeasured one keeps it.
+        held = [e for e in prior_census or () if e.split(":", 1)[0] in facts.census_incomplete]
+        census = list(dict.fromkeys([*held, *facts.unindexed_agents]))
+    ingest = raw["ingest"]
+    if census:
+        if ingest.state in (GREEN, UNKNOWN):
+            ingest.state = AMBER
+        found = "an agent BrainLayer does not index is running: " + "; ".join(census)
+        if unmeasured:
+            found += " (census not measured this check; holds until a measured census clears it)"
+        elif partial:
+            found += f" (census incomplete for {', '.join(facts.census_incomplete)}; their last measured state holds)"
+        ingest.note = f"{ingest.note}; {found}" if ingest.note else found
+    if census is not None:
+        ingest.keep["census"] = census
+    ingest.typed["unindexed_agents"] = census
+    ingest.typed["census_incomplete"] = None if unmeasured else list(facts.census_incomplete)
 
     raw["embedding"] = _stall_age(
         facts.embedding_stalled_since,
