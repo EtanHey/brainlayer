@@ -40,6 +40,27 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.1] - 2026-11-13
+
+### Ingest proof fix, Antigravity indexing, native BrainBar menu
+
+- feat(brainbar): menu presentation core, final guard and invariant test (P1 of 5) (#1785)
+- feat(brainbar): P2 — the needs rows of the eleven contract cases, with I3 widened by sentence (#1787)
+- feat(watcher): index Antigravity (agy), the current Gemini agent, under source gemini (#1786)
+- feat(brainbar): one closed registry of every menu sentence, each with its truth condition (P2b) (#1788)
+- test(activation): isolate clocks from background threads (#1754)
+- fix(cli): make `brainlayer dashboard` exit 1 when the dashboard is absent (#1759)
+- fix(plugin): keep queued observations when BrainBar rejects a store (#1762)
+- fix(lint): stop ignoring F821 and delete the split dead benchmark helper (#1758)
+- fix(kg): bind traverse() relation filter in placeholder order (#1761)
+- fix(scripts): make score_entity_health honor its --db and --contracts flags (#1763)
+- chore: remove 22 stale review-scratch files from the repo root (#1760)
+- Keep the last vector backlog count after restart (#1792)
+- ci: give the Swift job 25 minutes (its test step alone takes 11.5) (#1791)
+- Close AGY test resources (#1793)
+- feat(brainbar): the M menu drawn natively from the presentation value, captured off-screen in all 17 states (menu PR 1) (#1789)
+- fix(ingest): the ingest check reads the watcher's stall signals (closes #1780's 4 green shapes) (#1783)
+
 ## [1.6.0] - 2026-11-13
 
 ### Receipts for old JSONL archives; typed status fields for the new BrainBar UI
