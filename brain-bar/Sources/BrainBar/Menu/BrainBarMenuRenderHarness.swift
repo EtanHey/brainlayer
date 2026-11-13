@@ -82,12 +82,18 @@ import SwiftUI
             shape.stroke()
         }
         for (view, top) in rows {
-            let piece = try bitmap(view.bounds.size)
-            view.cacheDisplay(in: view.bounds, to: piece)
+            let piece = try rowBitmap(view)
             piece.draw(in: NSRect(x: 0, y: size.height - top - view.bounds.height, width: width, height: view.bounds.height),
                        from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: false, hints: nil)
         }
         return rep
+    }
+
+    /// One row drawn alone, at 2x (the tests read its pixels and its words from this).
+    static func rowBitmap(_ view: NSView) throws -> NSBitmapImageRep {
+        let piece = try bitmap(view.bounds.size)
+        view.cacheDisplay(in: view.bounds, to: piece)
+        return piece
     }
 
     private static func bitmap(_ size: NSSize) throws -> NSBitmapImageRep {

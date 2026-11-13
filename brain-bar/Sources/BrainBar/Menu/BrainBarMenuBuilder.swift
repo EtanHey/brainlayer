@@ -49,11 +49,19 @@ enum BrainBarMenuAction: Equatable, Sendable {
             if row.dividerBefore { menu.addItem(.separator()) }
             switch row.kind {
             case .separator: menu.addItem(.separator())
-            case .standardItem: standardItems(row).forEach(menu.addItem)
+            // A standing row a standard item can carry: one title, no action of its own. Anything richer is hosted, so
+            // nothing it carries is dropped and no action is inferred over an explicit one.
+            case .standardItem where row.strings.count == 1 && row.action == nil: standardItems(row).forEach(menu.addItem)
             default:
                 let previous = index > 0 ? (row.dividerBefore ? .separator : rows[index - 1].kind) : nil
                 let next = index + 1 < rows.count ? (rows[index + 1].dividerBefore ? .separator : rows[index + 1].kind) : nil
                 menu.addItem(hostedItem(row, previous: previous, next: next))
+                if let alternate = row.optionAlternate {
+                    let (key, modifiers) = Self.keyEquivalent(row.keyEquivalent ?? "")
+                    let alt = standardItem(alternate, key: key, modifiers: modifiers.union(.option), action: nil)
+                    alt.isAlternate = true
+                    menu.addItem(alt)
+                }
             }
         }
     }
@@ -79,7 +87,8 @@ enum BrainBarMenuAction: Equatable, Sendable {
         let view = BrainBarMenuRowView(row: row, previous: previous, next: next, accessibility: accessibility, focus: rowFocus) {
             [weak self] kind in self?.actions.perform(.row(kind))
         }
-        item.view = BrainBarMenuRowHost(view, words: row.strings + [row.action?.label].compactMap { $0 }, isAction: row.action != nil)
+        item.view = BrainBarMenuRowHost(view, words: row.strings, isAction: row.action != nil)
+        if let glyphs = row.keyEquivalent { (item.keyEquivalent, item.keyEquivalentModifierMask) = Self.keyEquivalent(glyphs) }
         // Rows that are not actions are disabled: the keyboard skips them and they never highlight.
         if let action = row.action {
             item.title = action.label  // not drawn (the view draws the row); lets type-select reach the action
@@ -123,7 +132,8 @@ enum BrainBarMenuAction: Equatable, Sendable {
 }
 
 /// The container a hosted row sits in: sized to its row, and one accessibility element that reads the row's words in
-/// order (a Needs-you row stays a group, so its button remains a separate control).
+/// order. A row with an action is a group, so its button stays a separate element named by its label; the marks and
+/// spinners inside are hidden from assistive technology.
 final class BrainBarMenuRowHost: NSView {
     let hosting: NSView
 
@@ -134,7 +144,7 @@ final class BrainBarMenuRowHost: NSView {
         hosting.frame = bounds
         hosting.autoresizingMask = [.width, .height]
         addSubview(hosting)
-        setAccessibilityElement(!isAction)
+        setAccessibilityElement(true)
         setAccessibilityRole(isAction ? .group : .staticText)
         setAccessibilityLabel(words.joined(separator: " "))
     }
