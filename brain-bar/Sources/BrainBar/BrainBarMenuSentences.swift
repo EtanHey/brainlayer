@@ -278,6 +278,8 @@ extension BrainBarMenuPresenter {
 
         /// The moments `{at}` words can name, all at or before now (every `{at}` is a past event): "today" or "yesterday" at a
         /// clock time, or a month and day at one in any of the last nine years (no year is said; Feb 29 needs a leap year).
+        /// Each at the first and the last millisecond of its minute: the words name the minute, and which day words `at` uses
+        /// depends on the seconds too (12:48:40 yesterday is under a day before 12:48:30; local CodeRabbit, before the PR).
         static func moments(_ value: String, _ c: Capture) -> [Date] {
             let halves = value.components(separatedBy: " at "), cal = calendar(c)
             guard halves.count == 2, let time = clock(halves[1]), sayable(c.now) else { return [] }
@@ -289,7 +291,7 @@ extension BrainBarMenuPresenter {
                 let year = cal.component(.year, from: c.now)
                 dates = (0...8).map { cal.date(from: DateComponents(year: year - $0, month: month + 1, day: d, hour: time.hour, minute: time.minute)) }
             }
-            return dates.compactMap { $0 }.filter { $0 <= c.now && sayable($0) }
+            return dates.compactMap { $0 }.flatMap { [$0, $0.addingTimeInterval(59.999)] }.filter { $0 <= c.now && sayable($0) }
         }
     }
 

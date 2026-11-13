@@ -581,10 +581,15 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         XCTAssertNotNil(BrainBarMenuPresenter.entry(for: "Last backup today at 03:30.", berlin))
         XCTAssertNotNil(BrainBarMenuPresenter.entry(for: "Last backup Mar 29 at 02:30.", berlin))
         // Nor narrower than the formatters: every word they make for moments over the past 400 days and ages up to 3e12 s is accepted.
-        for zoned in [c, berlin] {
+        // A moment and now inside their minutes (local CodeRabbit): 12:48:40 yesterday is under a day before 12:48:30 today.
+        var seconds = c
+        seconds.now = c.now.addingTimeInterval(30)
+        XCTAssertEqual(BrainBarMenuPresenter.at(seconds.now.addingTimeInterval(-86_390), seconds), "yesterday at 12:48")
+        XCTAssertNotNil(BrainBarMenuPresenter.entry(for: "Last backup yesterday at 12:48.", seconds))
+        for zoned in [c, berlin, seconds] {
             var made: [String] = []
             for minutes in stride(from: 0, through: 400 * 1440, by: 37) {
-                let d = zoned.now.addingTimeInterval(-Double(minutes) * 60)
+                let d = zoned.now.addingTimeInterval(-Double(minutes) * 60 - Double(minutes % 60))
                 made.append("Last backup \(BrainBarMenuPresenter.at(d, zoned)).")
                 if let age = BrainBarMenuPresenter.copyAge(since: d, zoned) { made.append("Your newest backup is \(age).") }
                 if minutes < 1440 { made.append("Started at \(BrainBarMenuPresenter.hhmm(zoned.now.addingTimeInterval(Double(minutes) * 60 - 43_200), zoned)).") }
