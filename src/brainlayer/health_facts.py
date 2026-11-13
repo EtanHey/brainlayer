@@ -173,18 +173,25 @@ def watcher_stall_codes(payload: Mapping[str, Any]) -> Any:
     malformed (an absent signal is not evidence that nothing is stalled).
 
     Codes: its debounced alerts, a DB probe failing for ``WATCHER_DB_PROBE_GRACE_S`` (one failed
-    probe is a momentary lock), and missing roots.
+    probe is a momentary lock), and missing roots. The probe duration must be a finite number >= 0,
+    and 0 while the probe is not failing; ``poll_count`` (the snapshot's identity) must be an int >= 0.
     """
-    reasons, probe, probe_for, roots = (
-        payload.get(k) for k in ("alert_reasons", "db_probe_failed", "db_probe_failed_for_s", "roots_missing")
+    reasons, probe, probe_for, roots, polls = (
+        payload.get(k)
+        for k in ("alert_reasons", "db_probe_failed", "db_probe_failed_for_s", "roots_missing", "poll_count")
     )
     if not (
         isinstance(reasons, list)
         and all(isinstance(r, str) for r in reasons)
         and isinstance(probe, bool)
         and _is_number(probe_for)
+        and probe_for >= 0
+        and (probe or probe_for == 0)
         and isinstance(roots, list)
         and all(isinstance(r, str) for r in roots)
+        and isinstance(polls, int)
+        and not isinstance(polls, bool)
+        and polls >= 0
     ):
         return UNOBSERVED
     codes = [r for r in WATCHER_STALL_REASONS if r in reasons]
@@ -193,16 +200,20 @@ def watcher_stall_codes(payload: Mapping[str, Any]) -> Any:
     return tuple(codes + [f"root_missing:{r}" for r in roots])
 
 
-def watcher_health_fact(path: Path) -> tuple[datetime | None, Any]:
-    """(heartbeat, stall codes) from one read of watcher-health.json; missing = (None, ())."""
+def watcher_health_fact(path: Path) -> tuple[datetime | None, Any, Any]:
+    """(heartbeat, stall codes, poll_count) from one read of watcher-health.json; missing = (None, (), None).
+
+    poll_count is None unless the stall codes are observed (they validate it).
+    """
     try:
         payload = json.loads(path.expanduser().read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return None, ()
+        return None, (), None
     updated = _aware(payload.get("updated_at")) if isinstance(payload, dict) else None
     if updated is None:
         raise ValueError("watcher-health.json has no updated_at")
-    return updated, watcher_stall_codes(payload)
+    codes = watcher_stall_codes(payload)
+    return updated, codes, None if codes is UNOBSERVED else payload["poll_count"]
 
 
 def first_pending_store(pending_path: Path) -> datetime | None:
@@ -635,7 +646,9 @@ def collect_facts(
     boot = got["boot"]
     boot_session = boot.stdout.strip() if getattr(boot, "returncode", None) == 0 else None
     awake_clock = awake_sample if boot_session else None
-    heartbeat, stall_codes = got["watcher"] if got["watcher"] is not UNOBSERVED else (UNOBSERVED, UNOBSERVED)
+    heartbeat, stall_codes, poll_count = (
+        got["watcher"] if got["watcher"] is not UNOBSERVED else (UNOBSERVED, UNOBSERVED, None)
+    )
     facts = Facts(
         now=now,
         awake_clock_s=awake_clock,
@@ -645,6 +658,7 @@ def collect_facts(
         drive_auth=drive_auth,
         watcher_updated_at=heartbeat,
         watcher_stall_codes=stall_codes,
+        watcher_poll_count=poll_count,
         ingest_paused=paused(config.watch_label),
         stores_paused=drain_paused,
         pause_ends_at=_aware(pause_payload.get("expires_at")) if pause_active else None,

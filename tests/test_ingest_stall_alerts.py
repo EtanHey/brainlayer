@@ -86,6 +86,10 @@ BROKEN = {
     "reasons as a string": {**FULL, "alert_reasons": "coverage_drop"},
     "roots missing is null": {**FULL, "roots_missing": None},
     "probe flag missing": {k: v for k, v in FULL.items() if k != "db_probe_failed"},
+    "negative duration": {**FULL, "db_probe_failed": True, "db_probe_failed_for_s": -1},
+    "duration while the probe is fine": {**FULL, "db_probe_failed_for_s": 30.0},
+    "negative poll_count": {**FULL, "poll_count": -1},
+    "poll_count as text": {**FULL, "poll_count": "3"},
 }
 
 
@@ -93,7 +97,8 @@ BROKEN = {
 def test_an_incomplete_payload_is_unobserved_and_never_clears_a_db_failure(tmp_path, broken):
     config = _config(tmp_path)
     config.watcher_health_path.write_text(json.dumps({"updated_at": NOW.isoformat(), **broken}))
-    heartbeat, codes = watcher_health_fact(config.watcher_health_path)
+    read = watcher_health_fact(config.watcher_health_path)
+    heartbeat, codes = read[0], read[1]
     assert heartbeat == NOW and codes is UNOBSERVED
     failing = {**FULL, "alert_reasons": ["coverage_drop"]}
     states = _states(config, [FULL, failing, failing] + [broken] * 6)
@@ -110,22 +115,77 @@ def test_a_re_read_snapshot_is_not_a_new_alert_check_even_across_sleep():
     """Codex r1 #4: an alert published before sleep, read again before the first poll after wake."""
     codes = ("file_ingestion_failure",)
     first = evaluate(
-        Facts(now=NOW, watcher_updated_at=NOW, watcher_stall_codes=codes, awake_clock_s=0.0, boot_session="b")
+        Facts(
+            now=NOW,
+            watcher_updated_at=NOW,
+            watcher_stall_codes=codes,
+            awake_clock_s=0.0,
+            boot_session="b",
+        )
     )
     state = first.state
     assert state["checks"]["ingest"]["alert_ticks"] == 1
     for k in range(1, 11):  # lid closed for 2 h, then the same frozen file re-read ten times
         at = NOW + timedelta(hours=2, minutes=5 * k)
         verdict = evaluate(
-            Facts(now=at, watcher_updated_at=NOW, watcher_stall_codes=codes, awake_clock_s=1.0, boot_session="b"),
+            Facts(
+                now=at,
+                watcher_updated_at=NOW,
+                watcher_stall_codes=codes,
+                awake_clock_s=1.0,
+                boot_session="b",
+            ),
             state,
         )
         state = verdict.state
         assert state["checks"]["ingest"]["alert_ticks"] == 1, k
     newer = evaluate(
-        Facts(now=at, watcher_updated_at=at, watcher_stall_codes=codes, awake_clock_s=2.0, boot_session="b"), state
+        Facts(
+            now=at,
+            watcher_updated_at=at,
+            watcher_stall_codes=codes,
+            awake_clock_s=2.0,
+            boot_session="b",
+        ),
+        state,
     )
     assert newer.state["checks"]["ingest"]["alert_ticks"] == 2
+
+
+def _snapshots(config, snapshots):
+    """One health tick per (updated_at, poll_count, alert reasons), ticking at that updated_at; None re-reads."""
+    ticks, last = [], NOW
+    for snap in snapshots:
+        if snap is None:
+            last += timedelta(minutes=5)
+            ticks.append((last, None))  # nothing new written: the same file is read again
+            continue
+        at, polls, reasons = snap
+        last = at
+        write = lambda at=at, polls=polls, reasons=reasons: _health(  # noqa: E731
+            config.watcher_health_path, at, poll_count=polls, alert_reasons=reasons
+        )
+        ticks.append((at, write))
+    runs = _verdict_ticks(config, ticks)
+    return [v.check("ingest").state for _, v in runs], [v.state["checks"]["ingest"].get("alert_ticks") for _, v in runs]
+
+
+def test_a_backwards_clock_correction_during_an_alert_still_escalates_on_the_6th_new_snapshot(tmp_path):
+    """Codex r2 #3: a snapshot is new when updated_at OR poll_count changed, not only when it increased."""
+    back = NOW - timedelta(hours=1)
+    times = [NOW, NOW + timedelta(minutes=5)] + [back + timedelta(minutes=5 * i) for i in range(4)]
+    states, _ = _snapshots(_config(tmp_path), [(at, n, ["coverage_drop"]) for n, at in enumerate(times, 1)])
+    assert states == ["amber"] * 5 + ["red"]
+
+
+def test_a_new_poll_count_under_the_same_updated_at_is_a_new_snapshot(tmp_path):
+    _, ticks = _snapshots(_config(tmp_path), [(NOW, 1, ["coverage_drop"]), (NOW, 2, ["coverage_drop"])])
+    assert ticks == [1, 2]
+
+
+def test_a_frozen_file_re_read_keeps_its_count(tmp_path):
+    _, ticks = _snapshots(_config(tmp_path), [(NOW, 1, ["coverage_drop"])] + [None] * 4)
+    assert ticks == [1] * 5
 
 
 def test_one_failed_db_probe_is_a_momentary_lock_not_a_stall(tmp_path):
@@ -151,6 +211,11 @@ class _Clock:
 
     def monotonic(self):
         return self.mono
+
+    def time(self):
+        return self._real.time() + self.wall_shift
+
+    wall_shift = 0.0
 
     def __getattr__(self, name):
         return getattr(self._real, name)
@@ -216,3 +281,43 @@ def test_the_watcher_publishes_how_long_the_db_probe_has_failed(tmp_path, monkey
         seen.append((payload["db_probe_failed"], payload["db_probe_failed_for_s"]))
         clock.mono += 300
     assert seen == [(True, 0.0), (True, 300.0), (False, 0.0)]
+
+
+FOURTEEN_DAYS = 14 * 24 * 3600
+
+
+def _offset(watcher, projects, age_s):
+    """A transcript under the root whose offset was last confirmed ``age_s`` ago."""
+    transcript = projects / "-proj" / "s.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+    watcher.registry.set(str(transcript), transcript.stat().st_size, transcript.stat().st_ino)
+    watcher.registry._data[str(transcript)]["mtime"] -= age_s
+    watcher.registry.flush()
+
+
+def test_a_root_deleted_on_purpose_after_14_quiet_days_never_alarms(tmp_path, monkeypatch):
+    """Lead decision (F1): offsets only make a root expected if confirmed within the last 14 days."""
+    watcher, clock, projects, health = _root_watcher(tmp_path, monkeypatch)
+    _offset(watcher, projects, age_s=FOURTEEN_DAYS + 3600)
+    projects.rename(projects.with_name("projects-moved"))
+    restarted, clock, _, health = _root_watcher(tmp_path, monkeypatch)
+    for _ in range(3):
+        restarted.poll_once()
+        assert json.loads(health.read_text())["roots_missing"] == []
+        clock.mono += 300
+
+
+def test_a_root_that_vanished_while_active_alarms_until_14_days_after_its_last_activity(tmp_path, monkeypatch):
+    watcher, clock, projects, health = _root_watcher(tmp_path, monkeypatch)
+    _offset(watcher, projects, age_s=13 * 24 * 3600)  # a quiet but recent provider
+    projects.rename(projects.with_name("projects-moved"))
+    restarted, clock, _, health = _root_watcher(tmp_path, monkeypatch)
+    restarted.poll_once()
+    clock.mono += 300
+    restarted.poll_once()
+    assert json.loads(health.read_text())["roots_missing"] == ["claude"]
+    clock.wall_shift = 24 * 3600 + 60  # its last activity is now older than 14 days
+    clock.mono += 30
+    restarted.poll_once()
+    assert json.loads(health.read_text())["roots_missing"] == []

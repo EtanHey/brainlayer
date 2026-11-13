@@ -53,12 +53,14 @@ test runs in the `test` job.
   stall codes (`watcher_stall_codes`): `alert_reasons` ∋ `coverage_drop` / `offset_lag` /
   `file_ingestion_failure`, `db_probe_failed` once `db_probe_failed_for_s` ≥ 300 s (one failed probe
   is a momentary lock), and `root_missing:<provider>` from `roots_missing`. If any of those fields
-  is absent or malformed the codes are UNOBSERVED (fault `partial`), never "no stall".
+  is absent, malformed or inconsistent (a negative probe duration, a duration while the probe is
+  fine, a non-int `poll_count`), the codes are UNOBSERVED (fault `partial`), never "no stall".
 - `health_verdict.evaluate` turns the heartbeat into the state. Amber after 10 min, red after
   30 min. Unknown turns amber on the 3rd tick in a row. Red holds through amber, and recovery
   needs 2 observed good ticks. On a confirmed clock, time asleep is credited. Otherwise there is
   one wake-grace window per clock value. Stall codes (`_ingest_stall`) are counted once per
-  snapshot: only a snapshot newer than the last one counted adds an alert check, so a frozen file
+  snapshot: only a new snapshot (`updated_at` or `poll_count` changed, so a backwards clock
+  correction still counts) adds an alert check, so a frozen file
   re-read after sleep or from a dead watcher keeps its count instead of escalating. One or more
   checks: at least amber; the 6th (`ingest_alert_red_ticks`): red. UNOBSERVED codes are never a good
   check: the count holds, and after `unknown_amber_ticks` (3) such checks in a row the state is at
@@ -69,9 +71,10 @@ test runs in the `test` job.
   `file_ingestion_failure` on the same poll. `coverage_drop` needs 300 s of monotonic (awake)
   time with inserts/active < 0.25; retained failed flushes count as active, and the window stays
   open while it writes nothing, so the alert outlives the fault by one poll (`covLinger`).
-  `roots_missing` lists a root known to have existed (seen by this process, or holding entries in
-  offsets.json, which prune keeps for an unavailable root) that has been gone for 300 s. So a root
-  that vanished while the watcher was stopped is reported after a restart. The file a
+  `roots_missing` lists a root that was active within the last 14 days (present at a poll, or its
+  newest offsets.json confirmation; prune keeps an unavailable root's offsets) and has been gone
+  for 300 s. So a root that vanished while the watcher was stopped is reported after a restart,
+  and a root deleted on purpose stops alarming once its last activity is 14 days old. The file a
   dead watcher leaves behind keeps its last alert (`fileAlert`).
 
 State: the fault this tick (none, or one of the 8 shapes, with shape 8 split into a detected and a lossy rewrite), awake or asleep, whether the agent
@@ -199,9 +202,9 @@ The replay can fail, and each of these is a test:
   CLI writes `~/.gemini/tmp/<hash>/chats/session-*.json`, which is not
   `~/.gemini/sessions/**/*.jsonl`.
 - **Wrong parsing or content**: a record ingested as the wrong text.
-- **A root deleted on purpose** (an uninstalled agent) keeps reporting `roots_missing` until its
-  offsets.json entries go: the watcher cannot tell removal from loss. A root that never had any
-  offsets and vanished before this process started is not reported.
+- **A provider folder deleted within 14 days of its last use alarms until 14 days pass**: the
+  watcher cannot tell removal from loss. A root with no offsets confirmed in the last 14 days that
+  vanished before this process started is not reported.
 - **Restarts** are not modelled (in the model "dead" keeps the same process); the restart path of
   `roots_missing` is a unit test on the real watcher.
 - **The Swift icon drawing.** That is BrainBar's app tests, not this.

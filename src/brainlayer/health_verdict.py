@@ -118,6 +118,7 @@ class Facts:
     # incomplete or malformed payload. () is the default so callers that predate the codes keep
     # heartbeat-only behaviour.
     watcher_stall_codes: Any = ()
+    watcher_poll_count: int | None = None  # with updated_at, the identity of the snapshot read
     ingest_paused: bool = False
     stores_paused: bool = False
     pause_ends_at: datetime | None = None  # the pause sentinel's expires_at while a pause is active
@@ -385,13 +386,14 @@ class _Stall:
 def _ingest_stall(facts: Facts, before: Mapping[str, Any], watcher: datetime | None, t: Thresholds) -> _Stall:
     """The watcher's stall codes as a severity, counted once per new snapshot.
 
-    Each newer snapshot (updated_at) carrying a code is one more alert check; a re-read frozen file
-    is not a new check and keeps the count. Codes UNOBSERVED (an incomplete or malformed payload,
+    Each new snapshot carrying a code is one more alert check. A snapshot is new when its
+    updated_at or poll_count changed (changed, not increased: a backwards clock correction still
+    counts); a re-read frozen file is not a new check and keeps the count. Codes UNOBSERVED (an incomplete or malformed payload,
     or no read) are never a no-stall reading: the count holds and a blind streak runs, which
     turns amber after ``unknown_amber_ticks`` like any unknown.
     """
     ticks = int(before.get("alert_ticks") or 0)
-    seen_at = _parse(before.get("alert_seen_at"))
+    seen = before.get("alert_seen")
     blind = int(before.get("stall_blind_ticks") or 0)
     codes = facts.watcher_stall_codes
     read = watcher is not None and isinstance(codes, tuple)
@@ -399,13 +401,14 @@ def _ingest_stall(facts: Facts, before: Mapping[str, Any], watcher: datetime | N
         blind = 0
         if facts.stores_paused:
             codes = tuple(c for c in codes if c != "coverage_drop")  # the paused drain writes nothing
-        if seen_at is None or watcher > seen_at:
-            ticks, seen_at = (ticks + 1 if codes else 0), watcher
+        snapshot = [watcher.astimezone(UTC).isoformat(), facts.watcher_poll_count]
+        if seen != snapshot:
+            ticks, seen = (ticks + 1 if codes else 0), snapshot
     elif not isinstance(codes, tuple):
         blind += 1
     keep: dict[str, Any] = {}
     if ticks:
-        keep.update(alert_ticks=ticks, alert_seen_at=_iso(seen_at))
+        keep.update(alert_ticks=ticks, alert_seen=seen)
     if blind:
         keep["stall_blind_ticks"] = blind
     if ticks:

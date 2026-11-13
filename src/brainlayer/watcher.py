@@ -518,6 +518,9 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
     }
 
 
+ROOT_EXPECTED_FOR_S = 14 * 24 * 3600.0  # a vanished root alarms only if it was active this recently
+
+
 class CoverageWatchdog:
     def __init__(
         self,
@@ -1670,9 +1673,10 @@ class JSONLWatcher:
         self._health_window_started_epoch = time.time()
         self._health_entries_seen = 0
         self._health_output_at_start = 0
-        # Roots known to have existed: seen by this process, or holding offsets.json entries (prune
-        # keeps the offsets of an unavailable root), so a restart still sees a vanished root.
-        self._roots_seen: set[str] = self._roots_with_offsets()
+        # Last wall time each root was known active: present at a poll, or its newest offsets.json
+        # confirmation (prune keeps an unavailable root's offsets), so a restart still sees a
+        # vanished root. A root counts as expected for ROOT_EXPECTED_FOR_S after that.
+        self._root_last_active: dict[str, float] = self._root_offset_activity()
         self._root_missing_since: dict[str, float] = {}
         self._db_probe_failed_since: float | None = None
         self.poll_count = 0
@@ -2246,27 +2250,36 @@ class JSONLWatcher:
         except sqlite3.Error:
             return None
 
-    def _roots_with_offsets(self) -> set[str]:
+    def _root_offset_activity(self) -> dict[str, float]:
         roots = {r.provider: Path(os.path.abspath(r.resolved_path)) for r in self.watch_roots}
-        found = set()
+        latest: dict[str, float] = {}
         for filepath in self.registry._data:
+            confirmed = self.registry.checkpoint_mtime(filepath)
+            if confirmed is None:
+                continue
             candidate = Path(os.path.abspath(os.path.expanduser(filepath)))
-            found.update(p for p, root in roots.items() if p not in found and candidate.is_relative_to(root))
-            if len(found) == len(roots):
-                break
-        return found
+            for provider, root in roots.items():
+                if confirmed > latest.get(provider, 0.0) and candidate.is_relative_to(root):
+                    latest[provider] = confirmed
+        return latest
 
     def _missing_roots(self, now: float) -> list[str]:
-        """Providers whose root is known to have existed and has been gone for ``alert_after_s``."""
-        missing = []
+        """Providers whose root was active within ROOT_EXPECTED_FOR_S and has been gone for ``alert_after_s``.
+
+        A root deleted on purpose stops being expected once its last activity is that old.
+        """
+        missing, wall = [], time.time()
         for root in self.watch_roots:
+            last = self._root_last_active.get(root.provider)
             if root.resolved_path.is_dir():
-                self._roots_seen.add(root.provider)
+                self._root_last_active[root.provider] = wall
                 self._root_missing_since.pop(root.provider, None)
-            elif root.provider in self._roots_seen:
+            elif last is not None and wall - last <= ROOT_EXPECTED_FOR_S:
                 since = self._root_missing_since.setdefault(root.provider, now)
                 if now - since >= self.coverage_watchdog.alert_after_s:
                     missing.append(root.provider)
+            else:
+                self._root_missing_since.pop(root.provider, None)
         return sorted(missing)
 
     def _write_health_snapshot(self, files: list[str]):

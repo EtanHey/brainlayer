@@ -363,11 +363,12 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
         wall, awake = start, 0.0
 
         def facts_now(seen):
-            updated, codes = seen if seen is not UNOBSERVED else (UNOBSERVED, UNOBSERVED)
+            updated, codes, polls = seen if seen is not UNOBSERVED else (UNOBSERVED, UNOBSERVED, None)
             return Facts(
                 now=wall,
                 watcher_updated_at=updated,
                 watcher_stall_codes=codes,
+                watcher_poll_count=polls,
                 awake_clock_s=awake if confirmed else None,
                 boot_session="replay-boot" if confirmed else None,
             )
