@@ -4,8 +4,8 @@ import XCTest
 @testable import BrainBar
 
 /// The table test against the lead's `presentation-cases.json` (phase 8). Each case's capture is decoded from its
-/// own `inputs`, literally. P1 owes the six calm cases whole; for the eleven needs cases it owes form, count and icon
-/// (P2 turns those into whole-value equality).
+/// own `inputs`, literally, and every case's whole presentation is compared: rows, marks, states, actions, dividers,
+/// spinners and progress included (P1 owed the six calm cases; P2 adds the eleven needs cases).
 final class BrainBarMenuPresentationTests: XCTestCase {
     typealias P = BrainBarMenuPresentation
 
@@ -18,19 +18,13 @@ final class BrainBarMenuPresentationTests: XCTestCase {
         XCTAssertEqual(digest.map { String(format: "%02x", $0) }.joined(), Self.casesSHA256)
     }
 
-    func testCalmCasesMatchWholeAndNeedsCasesMatchFormCountAndIcon() throws {
+    func testEveryCaseMatchesWhole() throws {
         let cases = try Self.loadCases()
         XCTAssertEqual(cases.count, 17)
         XCTAssertEqual(cases.filter { $0["form"] as? String == "calm" }.compactMap { $0["id"] as? String }, Self.calm)
         for c in cases {
             let id = c["id"] as! String
-            let got = BrainBarMenuPresenter.present(try Self.capture(c["inputs"] as! [String: Any]))
-            if Self.calm.contains(id) {
-                XCTAssertEqual(got, Self.expected(c), id)
-            } else {
-                XCTAssertEqual([got.form.rawValue, "\(got.count)", got.icon.rawValue],
-                               [c["form"] as! String, "\(c["count"] as! Int)", c["icon"] as! String], id)
-            }
+            XCTAssertEqual(BrainBarMenuPresenter.present(try Self.capture(c["inputs"] as! [String: Any])), Self.expected(c), id)
         }
     }
 
@@ -43,6 +37,47 @@ final class BrainBarMenuPresentationTests: XCTestCase {
             .init(name: $0, state: .green, note: "", unknownTicks: 0, blind: false)
         }, notes: [], evaluatedAt: capture.now.addingTimeInterval(-900))
         XCTAssertEqual(BrainBarMenuPresenter.present(capture), Self.expected(s4))
+    }
+
+    /// Round 1 of #1787, each from a case's own capture: S07 only with no copy on record (R21), a dead upload not worded
+    /// (N2), D13's line directly under the Drive row (R22), and C14 proper (S19 over S06 with an aged local copy).
+    func testRoundOneVariantsOfTheCases() throws {
+        let cases = try Self.loadCases()
+        func capture(_ id: String) throws -> BrainBarMenuCapture { try Self.capture(cases.first { $0["id"] as? String == id }!["inputs"] as! [String: Any]) }
+        func with(_ v: BrainBarHealthVerdict, _ name: String, _ state: BrainBarHealthVerdict.State, age: Double) -> BrainBarHealthVerdict {
+            .init(dot: v.dot, checks: v.checks.map { $0.name == name ? .init(name: name, state: state, ageS: age, note: "") : $0 }, notes: v.notes,
+                  evaluatedAt: v.evaluatedAt)
+        }
+        func titles(_ c: BrainBarMenuCapture) -> [String] {
+            BrainBarMenuPresenter.present(c).rows.filter { [.needsYou, .factLine].contains($0.kind) }.compactMap(\.strings.first)
+        }
+        let generic = "Something BrainBar checks is failing."
+        var s11b = try capture("S11b")
+        s11b.verdict = with(s11b.verdict!, "backup_offsite", .green, age: 3600)
+        XCTAssertEqual(titles(s11b), [generic])
+        var s5 = try capture("S5")
+        s5.upload = .init(startedAt: s5.now.addingTimeInterval(-3420), live: false)
+        XCTAssertEqual(titles(s5), [generic])
+        var c32 = try capture("C32")
+        c32.maintenanceNightFailures = 3
+        XCTAssertEqual(titles(c32), ["Google Drive is disconnected", "Conversation backups can’t upload either until Drive is reconnected.",
+                                     "Nightly upkeep failed 3 nights in a row"])
+        var c14 = try capture("S11")
+        c14.verdict = with(c14.verdict!, "backup_local", .red, age: 200_000)
+        c14.backupDailyFailures = 2
+        XCTAssertEqual(BrainBarMenuPresenter.present(c14), Self.expected(cases.first { $0["id"] as? String == "S11" }!))
+        // CodeRabbit round 2: a copy's age is counted to `now`, not to `evaluatedAt` (the verdict stays awake-fresh in sleep).
+        func driveDetail(_ c: BrainBarMenuCapture) -> String? {
+            BrainBarMenuPresenter.present(c).rows.first { $0.strings.first == "Google Drive is disconnected" }?.strings.last
+        }
+        var s3 = try capture("S3")
+        s3.now = s3.now.addingTimeInterval(86_400)
+        s3.backupDailyNextRunAt = s3.backupDailyNextRunAt?.addingTimeInterval(86_400)
+        XCTAssertEqual(driveDetail(s3), "Backups can’t upload until you reconnect it. Your newest backup in Google Drive is from Nov 9 at 03:44.")
+        var hours = try capture("S3")
+        hours.verdict = with(hours.verdict!, "backup_offsite", .green, age: 3600)
+        hours.now = hours.now.addingTimeInterval(7200)
+        XCTAssertEqual(driveDetail(hours), "Backups can’t upload until you reconnect it. Your newest backup in Google Drive is 3 hours old.")
     }
 
     // MARK: expected output, read from the cases file
@@ -58,6 +93,12 @@ final class BrainBarMenuPresentationTests: XCTestCase {
             }
             row.state = (r["state"] as? String).map { P.RowState(rawValue: $0)! }
             row.progressPercent = (r["progress_bar"] as? [String: Any])?["value"] as? Int
+            row.spinner = r["spinner"] as? Bool ?? false
+            row.dividerBefore = r["divider_before"] as? Bool ?? false
+            if let action = r["action"] as? [String: Any] {
+                row.action = P.Action(kind: P.ActionKind(rawValue: action["kind"] as! String)!,
+                                      label: (action["strings"] as! [[String: Any]])[0]["text"] as! String)
+            }
             row.keyEquivalent = r["key_equivalent"] as? String
             row.optionAlternate = ((r["option_alternate"] as? [String: Any])?["strings"] as? [[String: Any]])?.first?["text"] as? String
             return row
@@ -115,6 +156,12 @@ final class BrainBarMenuPresentationTests: XCTestCase {
         }
         c.lagEpisodeStart = date(inputs["uiClock.offsetLagEpisodeStart"])
         c.maintenanceNightFailures = inputs["maintenance.night.consecutiveFailures"] as? Int ?? 0
+        // "invalid (wording only: not missing)" and the like: the state is the first word.
+        c.driveAuthModel = (inputs["DriveAuthModel.state"] as? String).map { DriveAuthStatus.State(rawValue: String($0.prefix { $0 != " " }))! }
+        c.backupDailyFailures = inputs["job.backupDaily.consecutiveFailures"] as? Int ?? 0
+        c.backupDailyNextRunAt = date(inputs["job.backupDaily.nextRunAt"])
+        c.jsonlBackupFailures = inputs["job.jsonlBackup.consecutiveFailures"] as? Int ?? 0
+        c.keywordCoverage = inputs["collector.signalCoverage.keyword"] as? Double
         return c
     }
 }

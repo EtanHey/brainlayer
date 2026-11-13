@@ -2,7 +2,7 @@ import Foundation
 
 /// One capture of what the app holds at one moment (truth table U1). The presenter reads only this:
 /// no globals, clocks or files. Nothing in production builds one yet (phase 8, P1 of five).
-/// P1 carries only the inputs its own rows read; P2 to P5 add the rest with the rows that use them.
+/// Each PR adds only the inputs its own rows read (P2: Drive model, job streaks, keyword coverage).
 struct BrainBarMenuCapture: Sendable {
     struct Watcher: Sendable {
         var readable = true, fresh = true
@@ -37,6 +37,14 @@ struct BrainBarMenuCapture: Sendable {
     /// Start of the watcher's `offset_lag` episode: a UI clock today, `lag_bad_since` after stability PR-3.
     var lagEpisodeStart: Date? = nil
     var maintenanceNightFailures = 0
+    /// `DriveAuthModel.state`: wording only (`missing` reads "isn’t connected"). Never a status source (F14).
+    var driveAuthModel: DriveAuthStatus.State? = nil
+    /// `job.backupDaily` (the database backup) and `job.jsonlBackup` (transcripts): failure streaks and the next run.
+    var backupDailyFailures = 0
+    var backupDailyNextRunAt: Date? = nil
+    var jsonlBackupFailures = 0
+    /// `collector.signalCoverage.keyword`, 0...1 (F07's exact-words sentence). Not in today's status inputs.
+    var keywordCoverage: Double? = nil
 }
 
 /// Everything the M menu and icon show for one capture (phase-8 PRESENTATION-SPEC.md).
