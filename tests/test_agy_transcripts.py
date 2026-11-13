@@ -63,6 +63,7 @@ def _transcript(tmp_path: Path, conversation: str = CONVERSATION, name: str = "t
 def _summarise(path: Path, agent: str = "") -> None:
     """agy's own summary row for the transcript's conversation (`agent_name` is `agy --agent <name>`)."""
     store = path.parents[4] / "conversation_summaries.db"
+    store.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(store) as conn:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS conversation_summaries (conversation_id TEXT PRIMARY KEY, agent_name TEXT)"
@@ -360,3 +361,84 @@ def test_the_legacy_gemini_sessions_root_is_not_watched(tmp_path):
     assert [r.resolved_path for r in default_watch_roots(tmp_path / "home") if r.provider == "gemini"] == [
         tmp_path / "home" / ".gemini" / "antigravity-cli" / "brain"
     ]
+
+
+# --- r4 (lead check of Codex r2 on #1786) ---------------------------------------------------------
+
+
+def test_the_deadline_counts_from_an_unreadable_first_sighting(tmp_path, monkeypatch):
+    import brainlayer.agy_attribution as agy_attribution
+
+    db = tmp_path / "db" / "brainlayer.db"
+    path = _transcript(tmp_path)
+    _write(path, [_step(0, "PLANNER_RESPONSE", "first1")], agent=None)
+    store = path.parents[4] / "conversation_summaries.db"
+    store.write_bytes(b"not a sqlite database at all" * 64)
+    clock = [1_000_000.0]
+    monkeypatch.setattr(agy_attribution, "_now", lambda: clock[0])
+    watcher = _watcher(tmp_path, db)
+    _poll(watcher)
+    assert _rows(db, "turn first1:") == []
+
+    store.unlink()  # agy's summaries DB is readable again 20 minutes later, still without this row
+    _summarise(_transcript(tmp_path, "44444444-0000-4000-8000-000000000004"))
+    clock[0] += 1200
+    _poll(watcher)
+
+    assert _class_of(db, "first1") == ("gemini-session", "cli-agent", "default")
+
+
+def test_a_literal_closing_tag_inside_a_later_metadata_block_is_not_the_boundary(tmp_path):
+    db = tmp_path / "db" / "brainlayer.db"
+    step = _step(0, "USER_INPUT", "meta1")
+    step["content"] = (
+        "<USER_REQUEST>\nkeep reqmarker-meta1 only\n</USER_REQUEST>\n"
+        "<ADDITIONAL_METADATA>\nmetaonly-xyz quoting </USER_REQUEST> here\n</ADDITIONAL_METADATA>\n"
+        "<USER_SETTINGS_CHANGE>\nsettingsonly-xyz\n</USER_SETTINGS_CHANGE>"
+    )
+    _write(_transcript(tmp_path), [step])
+
+    _poll(_watcher(tmp_path, db))
+
+    (row,) = _rows(db, "reqmarker-meta1")
+    assert "metaonly-xyz" not in row[1] and "</USER_REQUEST>" not in row[1]
+
+
+def test_attribution_state_drops_conversations_whose_transcripts_are_gone(tmp_path, monkeypatch):
+    import brainlayer.agy_attribution as agy_attribution
+
+    monkeypatch.setattr(agy_attribution, "_now", lambda: 1_000_000.0)
+    _summarise(_transcript(tmp_path, "44444444-0000-4000-8000-000000000004"))  # readable, no rows for these
+    gate = agy_attribution.AgyAttributionGate(tmp_path / "db" / "agy-attribution.json")
+    paths = [_transcript(tmp_path, f"{i:08d}-0000-4000-8000-000000000000") for i in range(1000)]
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+        assert gate.resolve(path) == (False, None)
+    assert len(gate.state["first_seen"]) == 1000
+
+    for path in paths:
+        path.unlink()
+    (gate.save if hasattr(gate, "save") else gate._save)()
+
+    state = json.loads((tmp_path / "db" / "agy-attribution.json").read_text())
+    assert state == {"fallback_indexed": {}, "first_seen": {}, "late_memory_readers": {}}
+
+
+def test_attribution_state_ages_out_old_entries(tmp_path, monkeypatch):
+    import brainlayer.agy_attribution as agy_attribution
+
+    clock = [1_000_000.0]
+    monkeypatch.setattr(agy_attribution, "_now", lambda: clock[0])
+    _summarise(_transcript(tmp_path, "44444444-0000-4000-8000-000000000004"))
+    gate = agy_attribution.AgyAttributionGate(tmp_path / "db" / "agy-attribution.json")
+    path = _transcript(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("")
+    gate.resolve(path)
+    clock[0] += 601
+    assert gate.resolve(path) == (True, "")
+
+    clock[0] += 31 * 24 * 3600
+    gate.save()
+    assert gate.state == {"fallback_indexed": {}, "first_seen": {}, "late_memory_readers": {}}

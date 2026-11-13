@@ -475,6 +475,8 @@ def scan_codex_turn_context(filepath: str, end_offset: int, inode: int) -> Codex
 
 _AGY_STEP_ROLES = {"USER_INPUT": "user", "PLANNER_RESPONSE": "assistant"}
 _AGY_REQUEST_OPEN, _AGY_REQUEST_CLOSE = "<USER_REQUEST>", "</USER_REQUEST>"
+# The blocks agy appends after the request (measured on 500 real transcripts: every one has both).
+_AGY_TRAILING_BLOCKS = ("<ADDITIONAL_METADATA>", "<USER_SETTINGS_CHANGE>")
 
 
 def _agy_step_text(entry: dict[str, Any], role: str) -> str:
@@ -483,11 +485,16 @@ def _agy_step_text(entry: dict[str, Any], role: str) -> str:
     if not isinstance(content, str):
         return ""
     stripped = content.strip()
-    # agy writes `<USER_REQUEST>…</USER_REQUEST>` first and its own blocks after it, so the request ends
-    # at the LAST closing tag: a literal closing tag inside the user's words stays part of them.
-    end = stripped.rfind(_AGY_REQUEST_CLOSE)
-    if role == "user" and stripped.startswith(_AGY_REQUEST_OPEN) and end >= len(_AGY_REQUEST_OPEN):
-        return stripped[len(_AGY_REQUEST_OPEN) : end].strip()
+    if role == "user" and stripped.startswith(_AGY_REQUEST_OPEN):
+        # agy's shape is `<USER_REQUEST>request</USER_REQUEST>` then its own blocks. The request ends at
+        # the first closing tag followed (after whitespace) by one of those blocks or by the end, so a
+        # literal closing tag inside the request, or inside a later block, is never the boundary.
+        end = stripped.find(_AGY_REQUEST_CLOSE, len(_AGY_REQUEST_OPEN))
+        while end >= 0:
+            after = stripped[end + len(_AGY_REQUEST_CLOSE) :].lstrip()
+            if not after or after.startswith(_AGY_TRAILING_BLOCKS):
+                return stripped[len(_AGY_REQUEST_OPEN) : end].strip()
+            end = stripped.find(_AGY_REQUEST_CLOSE, end + 1)
     return stripped
 
 

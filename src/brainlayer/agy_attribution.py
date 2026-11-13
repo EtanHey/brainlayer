@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,9 @@ from .ingest_denylist import MEMORY_READER_ATTRIBUTIONS
 logger = logging.getLogger(__name__)
 
 AGY_ATTRIBUTION_WAIT_S = 600.0
+# State entries older than this are dropped. fallback_indexed only saves re-deciding a conversation;
+# a re-decision is idempotent (content-hash chunk ids), it only holds new turns for one more deadline.
+STATE_MAX_AGE_S = 30 * 24 * 3600.0
 STATE_FILE_NAME = "agy-attribution.json"
 _cache: dict[str, tuple[tuple[int, ...], dict[str, str]]] = {}
 
@@ -97,11 +101,39 @@ class AgyAttributionGate:
             if isinstance(loaded, dict) and isinstance(loaded.get(key), dict):
                 self.state[key] = dict(loaded[key])
 
-    def _save(self) -> None:
+    def _prune(self) -> None:
+        """Drop entries whose transcript is gone, and first_seen/fallback_indexed entries past STATE_MAX_AGE_S."""
+        cutoff = _now() - STATE_MAX_AGE_S
+        for section, ages in (("first_seen", True), ("fallback_indexed", True), ("late_memory_readers", False)):
+            kept = {}
+            for conversation, entry in self.state[section].items():
+                if not isinstance(entry, dict):
+                    continue
+                path, at = entry.get("path"), entry.get("at")
+                if not isinstance(path, str) or not os.path.exists(path):
+                    continue
+                if ages and (not isinstance(at, (int, float)) or at < cutoff):
+                    continue
+                kept[conversation] = entry
+            self.state[section] = kept
+
+    def save(self) -> None:
+        """Prune, then replace the state file atomically (unique temp file, fsync, rename)."""
+        self._prune()
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        temp = self.state_path.with_name(self.state_path.name + ".tmp")
-        temp.write_text(json.dumps(self.state, indent=2, sort_keys=True), encoding="utf-8")
-        temp.replace(self.state_path)
+        fd, temp = tempfile.mkstemp(dir=self.state_path.parent, prefix=f".{self.state_path.name}.")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(self.state, handle, indent=2, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp, self.state_path)
+        except BaseException:
+            Path(temp).unlink(missing_ok=True)
+            raise
+
+    def _entry(self, source_file: str | Path, **extra: Any) -> dict[str, Any]:
+        return {"at": _now(), "path": os.path.abspath(os.path.expanduser(str(source_file))), **extra}
 
     def resolve(self, source_file: str | Path) -> tuple[bool, str | None]:
         """(index now, agent): agent is the row's agent_name, "" after the deadline, None while held."""
@@ -110,6 +142,12 @@ class AgyAttributionGate:
             return True, None
         store, conversation = located
         read_ok, agent = read_conversation_agent(source_file)
+        if not read_ok or agent is None:
+            # The deadline counts from the first unresolved sighting, readable or not.
+            first_seen = self.state["first_seen"].get(conversation)
+            if not isinstance(first_seen, dict):
+                self.state["first_seen"][conversation] = first_seen = self._entry(source_file)
+                self.save()
         if not read_ok:
             if str(store) not in self._alarmed:
                 self._alarmed.add(str(store))
@@ -137,18 +175,14 @@ class AgyAttributionGate:
                     conversation,
                     agent,
                 )
-                self.state["late_memory_readers"][conversation] = {"agent": agent, "recorded_at": _now()}
+                self.state["late_memory_readers"][conversation] = self._entry(source_file, agent=agent)
                 changed = True
             if changed:
-                self._save()
+                self.save()
             return True, agent
-        first_seen = self.state["first_seen"].get(conversation)
-        if first_seen is None:
-            self.state["first_seen"][conversation] = first_seen = _now()
-            self._save()
-        if _now() - float(first_seen) < AGY_ATTRIBUTION_WAIT_S:
+        if _now() - float(first_seen["at"]) < AGY_ATTRIBUTION_WAIT_S:
             return False, None
         if conversation not in self.state["fallback_indexed"]:
-            self.state["fallback_indexed"][conversation] = _now()
-            self._save()
+            self.state["fallback_indexed"][conversation] = self._entry(source_file)
+            self.save()
         return True, ""
