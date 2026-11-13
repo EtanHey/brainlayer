@@ -49,9 +49,11 @@ enum BrainBarMenuAction: Equatable, Sendable {
             if row.dividerBefore { menu.addItem(.separator()) }
             switch row.kind {
             case .separator: menu.addItem(.separator())
-            // A standing row a standard item can carry: one title, no action of its own. Anything richer is hosted, so
-            // nothing it carries is dropped and no action is inferred over an explicit one.
-            case .standardItem where row.strings.count == 1 && row.action == nil: standardItems(row).forEach(menu.addItem)
+            // A standing row a standard item can carry in full: one title and nothing else (no action, mark, state,
+            // spinner or percent). Anything richer is hosted, so nothing it carries is dropped and no action is inferred.
+            case .standardItem where row.strings.count == 1 && row.action == nil && row.mark == nil && row.state == nil
+                && !row.spinner && row.progressPercent == nil:
+                standardItems(row).forEach(menu.addItem)
             default:
                 let previous = index > 0 ? (row.dividerBefore ? .separator : rows[index - 1].kind) : nil
                 let next = index + 1 < rows.count ? (rows[index + 1].dividerBefore ? .separator : rows[index + 1].kind) : nil

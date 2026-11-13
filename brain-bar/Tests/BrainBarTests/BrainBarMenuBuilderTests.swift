@@ -124,6 +124,12 @@ import XCTest
         return try BrainBarMenuRenderHarness.rowBitmap(view)
     }
 
+    /// A standing row a standard item can carry in full: one title and nothing else. Every other row is hosted.
+    private static func isStandardRow(_ r: P.Row) -> Bool {
+        r.kind == .standardItem && r.strings.count == 1 && r.action == nil && r.mark == nil && r.state == nil && !r.spinner
+            && r.progressPercent == nil
+    }
+
     private static func host(_ row: P.Row) -> NSView {
         BrainBarMenuRowHost(BrainBarMenuRowView(row: row, previous: nil, next: nil, accessibility: .init(increaseContrast: true),
                                                 focus: BrainBarMenuRowFocus()) { _ in }, words: row.strings, isAction: row.action != nil)
@@ -135,7 +141,7 @@ import XCTest
         let metrics = BrainBarMenuRenderHarness.measured()
         let builder = BrainBarMenuBuilder(accessibility: .init(increaseContrast: true))
         let menu = builder.build(presentation)
-        var hosted = presentation.rows.filter { $0.kind != .separator && !($0.kind == .standardItem && $0.strings.count == 1 && $0.action == nil) }
+        var hosted = presentation.rows.filter { $0.kind != .separator && !Self.isStandardRow($0) }
         for item in menu.items where !item.isSeparatorItem && !item.isAlternate {
             let rep = try Self.render(BrainBarMenuRenderHarness.rowView(item, metrics: metrics))
             guard item.view != nil else {  // a standard row: its title, read left of the key equivalent
@@ -171,15 +177,20 @@ import XCTest
             .init(kind: .standardItem, strings: ["Settings…", "Account settings"], keyEquivalent: "⌘,"),
             .init(kind: .standardItem, strings: ["Settings…"], action: .init(kind: .copyReport, label: "Copy report"), keyEquivalent: "⌘,"),
             .init(kind: .needsYou, strings: ["Attention"], action: .init(kind: .copyReport, label: long)),
+            // CodeRabbit on 16773ded (Codex R2-N1): one title, no action, but one more field each.
+            .init(kind: .standardItem, strings: ["Settings…"], mark: .busy, keyEquivalent: "⌘,"),
+            .init(kind: .standardItem, strings: ["Settings…"], state: .cantTell, keyEquivalent: "⌘,"),
+            .init(kind: .standardItem, strings: ["Settings…"], spinner: true, keyEquivalent: "⌘,"),
+            .init(kind: .standardItem, strings: ["Settings…"], progressPercent: 50, keyEquivalent: "⌘,"),
         ]
         let presentation = P(form: .needs, headline: "", count: 0, icon: .marked, rows: rows)
         try assertDrawsExactly(presentation, "synthetic")
         let builder = BrainBarMenuBuilder(accessibility: .init())
         let items = builder.build(presentation).items
-        XCTAssertEqual(items.map { $0.view != nil }, [true, true, true, true, true, true], "rich standing rows are hosted")
+        XCTAssertEqual(items.map { $0.view != nil }, Array(repeating: true, count: 10), "rich standing rows are hosted")
         XCTAssertEqual(items.map { $0.representedObject as? BrainBarMenuAction },
-                       [.row(.copyReport), nil, nil, nil, .row(.copyReport), .row(.copyReport)], "no action inferred over an explicit one")
-        XCTAssertEqual(items[3].keyEquivalent, ",", "the hosted standing row keeps its key equivalent")
+                       [.row(.copyReport), nil, nil, nil, .row(.copyReport), .row(.copyReport), nil, nil, nil, nil], "no action inferred over an explicit one")
+        for index in [3, 6, 7, 8, 9] { XCTAssertEqual(items[index].keyEquivalent, ",", "hosted standing row \(index) keeps its key equivalent") }
     }
 
     /// Codex round 2 (R2-B1): a mark carries its symbol, not just colour. A disc's glyph is white on the disc, so a disc
@@ -189,7 +200,7 @@ import XCTest
         var seen = Set<String>()
         for (id, presentation, _) in try cases() {
             let builder = BrainBarMenuBuilder(accessibility: .init(increaseContrast: true))
-            let rows = presentation.rows.filter { $0.kind != .separator && !($0.kind == .standardItem && $0.strings.count == 1 && $0.action == nil) }
+            let rows = presentation.rows.filter { $0.kind != .separator && !Self.isStandardRow($0) }
             for (row, item) in zip(rows, builder.build(presentation).items.filter { $0.view != nil }) {
                 let rep = try Self.render(BrainBarMenuRenderHarness.rowView(item, metrics: metrics))
                 if let mark = row.mark, mark != .checkmark {
