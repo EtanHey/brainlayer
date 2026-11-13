@@ -39,6 +39,35 @@ final class BrainBarMenuPresentationTests: XCTestCase {
         XCTAssertEqual(BrainBarMenuPresenter.present(capture), Self.expected(s4))
     }
 
+    /// Round 1 of #1787, each from a case's own capture: S07 only with no copy on record (R21), a dead upload not worded
+    /// (N2), D13's line directly under the Drive row (R22), and C14 proper (S19 over S06 with an aged local copy).
+    func testRoundOneVariantsOfTheCases() throws {
+        let cases = try Self.loadCases()
+        func capture(_ id: String) throws -> BrainBarMenuCapture { try Self.capture(cases.first { $0["id"] as? String == id }!["inputs"] as! [String: Any]) }
+        func with(_ v: BrainBarHealthVerdict, _ name: String, _ state: BrainBarHealthVerdict.State, age: Double) -> BrainBarHealthVerdict {
+            .init(dot: v.dot, checks: v.checks.map { $0.name == name ? .init(name: name, state: state, ageS: age, note: "") : $0 }, notes: v.notes,
+                  evaluatedAt: v.evaluatedAt)
+        }
+        func titles(_ c: BrainBarMenuCapture) -> [String] {
+            BrainBarMenuPresenter.present(c).rows.filter { [.needsYou, .factLine].contains($0.kind) }.compactMap(\.strings.first)
+        }
+        let generic = "Something BrainBar checks is failing."
+        var s11b = try capture("S11b")
+        s11b.verdict = with(s11b.verdict!, "backup_offsite", .green, age: 3600)
+        XCTAssertEqual(titles(s11b), [generic])
+        var s5 = try capture("S5")
+        s5.upload = .init(startedAt: s5.now.addingTimeInterval(-3420), live: false)
+        XCTAssertEqual(titles(s5), [generic])
+        var c32 = try capture("C32")
+        c32.maintenanceNightFailures = 3
+        XCTAssertEqual(titles(c32), ["Google Drive is disconnected", "Conversation backups can’t upload either until Drive is reconnected.",
+                                     "Nightly upkeep failed 3 nights in a row"])
+        var c14 = try capture("S11")
+        c14.verdict = with(c14.verdict!, "backup_local", .red, age: 200_000)
+        c14.backupDailyFailures = 2
+        XCTAssertEqual(BrainBarMenuPresenter.present(c14), Self.expected(cases.first { $0["id"] as? String == "S11" }!))
+    }
+
     // MARK: expected output, read from the cases file
 
     static func expected(_ c: [String: Any]) -> P {

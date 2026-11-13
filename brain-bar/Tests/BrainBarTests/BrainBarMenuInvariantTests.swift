@@ -11,7 +11,7 @@ import XCTest
 /// past its limit) with nightly upkeep failures 0 and 3, and every pair of them on the plain base with upkeep 0; each
 /// crossed with the dot (green, amber, red; never unknown), `isChecking` and the wake flag (off, on), the verdict
 /// (fresh at awake age 0 and 900, stale at -1 and 901, missing) and backups measured or not. P2 crosses every input with
-/// four profiles of its capture fields (job streaks, the Drive model, keyword coverage): see `profile`.
+/// five profiles of its capture fields (job streaks, the Drive model, keyword coverage, a Drive copy with no age).
 /// Not enumerated: watcher fields other than these alerts, other ages and `since` values, recovering, notes, and triples.
 final class BrainBarMenuInvariantTests: XCTestCase {
     typealias P = BrainBarMenuPresentation
@@ -48,7 +48,11 @@ final class BrainBarMenuInvariantTests: XCTestCase {
     }
 
     static func capture(_ input: Input, dot: State, checking: Bool, wake: Bool, freshness: Freshness, measured: Bool) -> Capture {
-        let checks = names.compactMap { check($0, input.settings[$0] ?? ($0 == "new_check" ? .absent : .green)) }
+        // Profiles 1 and 4: no Drive copy has ever verified (`backup_offsite` carries no age), so R14 and S07 are reachable.
+        let checks = names.compactMap { check($0, input.settings[$0] ?? ($0 == "new_check" ? .absent : .green)) }.map {
+            [1, 4].contains(input.profile) && $0.name == "backup_offsite"
+                ? Check(name: $0.name, state: $0.state, thresholdS: $0.thresholdS, note: "", unknownTicks: 0, blind: false) : $0
+        }
         var c = Capture(now: now, timeZone: TimeZone(secondsFromGMT: 7200)!)
         c.verdict = freshness == .missing ? nil : BrainBarHealthVerdict(dot: dot, checks: checks, notes: [], evaluatedAt: now)
         c.verdictAwakeAgeS = [.fresh0: 0, .fresh900: 900, .staleNegative: -1, .stale901: 901, .missing: 0][freshness]!
@@ -58,12 +62,12 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         c.maintenanceNightFailures = input.upkeep
         // P2's fields: 0 none; 1 one database failure with a next run (S02), transcripts failing (D13), Drive never
         // connected, exact-word coverage; 2 two database failures (S06), transcripts failing, Drive invalid, coverage;
-        // 3 one database failure with a next run, Drive invalid, no coverage figure.
-        c.backupDailyFailures = [0, 1, 2, 1][input.profile]
+        // 3 one database failure with a next run, Drive invalid, no coverage figure; 4 two database failures, Drive invalid.
+        c.backupDailyFailures = [0, 1, 2, 1, 2][input.profile]
         c.backupDailyNextRunAt = [1, 3].contains(input.profile) ? now.addingTimeInterval(52_200) : nil
-        c.jsonlBackupFailures = [0, 2, 2, 0][input.profile]
-        c.driveAuthModel = [nil, .missing, .invalid, .invalid][input.profile]
-        c.keywordCoverage = [nil, 1, 1, nil][input.profile]
+        c.jsonlBackupFailures = [0, 2, 2, 0, 0][input.profile]
+        c.driveAuthModel = [nil, .missing, .invalid, .invalid, .invalid][input.profile]
+        c.keywordCoverage = [nil, 1, 1, nil, nil][input.profile]
         switch input.base {
         case 1: c.upload = .init(startedAt: now.addingTimeInterval(-1920), live: true)
         case 2, 4:
@@ -92,7 +96,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                 for sa in nonGreen { for sb in nonGreen { all.append(Input(settings: [a: sa, b: sb], base: 0, upkeep: 0)) } }
             }
         }
-        return all.flatMap { input in (0...3).map { var i = input; i.profile = $0; return i } }
+        return all.flatMap { input in (0...4).map { var i = input; i.profile = $0; return i } }
     }
 
     /// Each input's 120 captures, checked; I6 compares every flagged result with the same capture's flags-off result.
@@ -110,7 +114,10 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                         outputs += 1
                         for row in p.rows {
                             if let first = row.strings.first, let title = speaksFor.first(where: { first.hasPrefix($0.prefix) }) { seen.insert(title.prefix) }
-                            seen.formUnion(row.strings.flatMap(sentences).filter { ["Everything else is fine.", stillSaved, exactWords].contains($0) })
+                            seen.formUnion(row.strings.flatMap(sentences).filter { ["Everything else is fine.", stillSaved, exactWords, nothingInDrive].contains($0) })
+                            if row.strings.contains(where: { $0.hasPrefix("Backups can’t upload") && $0.contains(" Your newest backup in Google Drive is ") }) {
+                                seen.insert("R15 in the Drive row")
+                            }
                         }
                         var found = Self.violations(c, p)
                         if let calm, [.fresh0, .fresh900].contains(freshness), calm.form == .needs,
@@ -140,9 +147,10 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         DispatchQueue.concurrentPerform(iterations: inputs.count) { tally.add(Self.check(inputs[$0])) }
         print("BrainBarMenuInvariantTests: \(tally.outputs) outputs checked in \(String(format: "%.1f", Date().timeIntervalSince(start))) s")
         XCTAssertEqual(tally.outputs, inputs.count * 120)
-        XCTAssertGreaterThan(tally.outputs, 700_000)
+        XCTAssertGreaterThan(tally.outputs, 900_000)
         // Not vacuous: every worded row and every reassuring sentence is reached somewhere in the enumeration.
-        XCTAssertEqual(Set(Self.speaksFor.map(\.prefix) + ["Everything else is fine.", Self.stillSaved, Self.exactWords]).subtracting(tally.seen), [])
+        XCTAssertEqual(Set(Self.speaksFor.map(\.prefix) + ["Everything else is fine.", Self.stillSaved, Self.exactWords, Self.nothingInDrive,
+                                                         "R15 in the Drive row"]).subtracting(tally.seen), [])
         let first = Array(tally.violations.sorted().prefix(25))
         let byInvariant = Dictionary(grouping: tally.violations) { String($0.prefix(2)) }.mapValues(\.count).sorted { $0.key < $1.key }
         XCTAssertEqual(first, [], "\(tally.violations.count) violations \(byInvariant):\n" + first.joined(separator: "\n"))
@@ -196,6 +204,18 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                                                           "BrainBar hasn’t seen the memories waiting for it go down. " + Self.exactWords] + handoff,
                                action: report, mark: .alertCircle)
         let generic = P.Row(kind: .needsYou, strings: ["Something BrainBar checks is failing."] + handoff, action: report, mark: .alertCircle)
+        // Round 1 of #1787: the still-saved sentence needs a watcher file that proves saving (Codex P2-F2), and the I8 claims.
+        func upkeepWith(_ w: Capture.Watcher) -> Capture { base { $0.maintenanceNightFailures = 3; $0.watcher = w } }
+        let localNoRecord = base { $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks.filter { $0.name != "backup_local" }
+                                                                     + [Self.check("backup_local", .red)!], notes: [], evaluatedAt: Self.now) }
+        let s07 = P.Row(kind: .needsYou, strings: ["No verified backup on record"] + handoff, action: report, mark: .alertCircle)
+        let driveMissing = base {
+            $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks.filter { $0.name != "drive_auth" } + [Self.check("drive_auth", .red)!],
+                                               notes: [], evaluatedAt: Self.now)
+            $0.driveAuthModel = .missing
+        }
+        let connect = P.Row(kind: .needsYou, strings: ["Google Drive isn’t connected", "Backups can’t upload until you connect it. " + Self.nothingInDrive],
+                            action: P.Action(kind: .connectDrive, label: "Connect Google Drive"), mark: .alertCircle)
         let cases: [(String, Capture, P)] = [
             ("I1: calm over a red check", red, allGood),
             ("I2: All good while backups are unmeasured", unmeasured, allGood),
@@ -209,6 +229,11 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             ("I3: a reassurance sitting in a status line", driveAndSearchAmber,
              needsForm([drive, P.Row(kind: .statusLine, strings: ["Search is fine."], state: .cantTell)])),
             ("I3: Everything else is fine. beside a generic row stands for all four", red, needsForm([generic, fine])),
+            ("I3: still saved while the watcher file is unreadable", upkeepWith(.init(readable: false)), needsForm([upkeepRow])),
+            ("I3: still saved while the watcher file is stale", upkeepWith(.init(fresh: false)), needsForm([upkeepRow])),
+            ("I3: still saved while the database probe fails", upkeepWith(.init(dbProbeFailed: true)), needsForm([upkeepRow])),
+            ("I8: S07’s title while the Drive copy has an age (R21)", localNoRecord, needsForm([s07])),
+            ("I8: R14’s clause while the Drive copy has an age", driveMissing, needsForm([connect])),
             ("I7: calm over upkeep failing, verdict stale", base { $0.maintenanceNightFailures = 3; $0.verdictAwakeAgeS = 901 }, allGood),
             ("I7: calm over a watcher alert, no verdict", base { $0.verdict = nil; $0.watcher = .init(alertReasons: ["file_ingestion_failure"]) }, allGood),
         ]
@@ -318,6 +343,9 @@ final class BrainBarMenuInvariantTests: XCTestCase {
     /// The reassuring sentences the presenter may emit beyond "All good" and "… fine." (each with its own proof below).
     static let stillSaved = "Your memory is still being saved and backed up, as of the last checks."
     static let exactWords = "Agents can still find every memory by exact words."
+    /// I8: sentences that state a fact about the copies (A1's S07 title, the truth table's S07 sentence, R14's clause).
+    static let noRecord = ["No verified backup on record", "BrainBar has no record of a verified backup of your memory."]
+    static let nothingInDrive = "Nothing is backed up to Google Drive yet."
 
     static func sentences(_ string: String) -> [String] {
         let parts = string.components(separatedBy: ". ")
@@ -376,12 +404,22 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             ("saving", ["ingest", "stores"]), ("search", ["search", "embedding"]),
             ("backups", ["backup_local", "backup_offsite", "transcripts", "drive_auth", "integrity", "disk"]), ("upkeep", []),
         ]
+        /// Every check of this name satisfies `ok`, and there is at least one.
+        func every(_ name: String, _ ok: (Check) -> Bool) -> Bool {
+            guard let v, v.checks.contains(where: { $0.name == name }) else { return false }
+            return v.checks.filter { $0.name == name }.allSatisfy(ok)
+        }
         func requireFine(_ words: [String], _ said: String) {
             for thing in things where words.contains(thing.word) && !provenFine(thing.checks) { out.append("I3 \(thing.word) called fine without proof: \(said)") }
             if words.contains("backups"), !c.backupsMeasured { out.append("I3 backups called fine while unmeasured: \(said)") }
-            // R10: `quarantined_record` is Fine.
-            if words.contains("saving"), c.watcher?.alertReasons.allSatisfy({ $0 == "quarantined_record" }) != true {
-                out.append("I3 saving called fine beside a watcher alert: \(said)")
+            // Saving needs a watcher file that can prove it: readable, fresh, its database probe working, and no alert
+            // except `quarantined_record` (R10: Fine).
+            if words.contains("saving"), c.watcher.map({ $0.readable && $0.fresh && !$0.dbProbeFailed
+                && $0.alertReasons.allSatisfy { $0 == "quarantined_record" } }) != true {
+                out.append("I3 saving called fine without a clean watcher file: \(said)")
+            }
+            if words.contains("backups"), v?.checks.contains(where: { ["backup_local", "backup_offsite", "transcripts"].contains($0.name) && ($0.ageS ?? 0) < 0 }) == true {
+                out.append("I3 backups called fine beside a future-dated copy: \(said)")
             }
             if words.contains("upkeep"), c.maintenanceNightFailures >= 3 { out.append("I3 upkeep called fine while failing: \(said)") }
         }
@@ -405,6 +443,12 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                     requireFine(["saving", "backups"], sentence)
                 } else if sentence == exactWords {
                     if c.keywordCoverage != 1 || !provenFine(["search"]) { out.append("I3 exact-word search called working without proof") }
+                } else if noRecord.contains(sentence) {  // I8
+                    if !(every("backup_local") { $0.state == .red && $0.ageS == nil } && every("backup_offsite") { $0.ageS == nil }) {
+                        out.append("I8 no verified backup claimed while a copy has a record: \(sentence)")
+                    }
+                } else if sentence == nothingInDrive {  // I8
+                    if !(every("backup_offsite") { $0.ageS == nil } && c.backupsMeasured) { out.append("I8 nothing in Drive claimed while unproven") }
                 } else if text.contains("still"), !text.hasPrefix("still checking"), !text.contains("is still running") {
                     out.append("I3 an unlisted reassurance: \(sentence)")
                 }
