@@ -8,13 +8,29 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from brainlayer import agent_census, health_facts
-from brainlayer.agent_census import unindexed_agents
+from brainlayer.agent_census import KNOWN_AGENTS, KnownAgent
+from brainlayer.agent_census import unindexed_agents as _unindexed_agents
 from brainlayer.health_check import HealthCheckResult, HealthIssue
 from brainlayer.health_verdict import AMBER, GREEN, UNOBSERVED, Facts, evaluate
 from brainlayer.watcher import default_watch_roots
 
 NOW = time.time()
 GEMINI = "4242 node /opt/homebrew/bin/gemini --yolo\n"
+# The matcher and scan tests below use the shape of the legacy, deprecated Gemini CLI (a node-launched
+# agent writing outside every watched root) as a fixture agent. KNOWN_AGENTS' real "gemini" entry is
+# Antigravity (agy), the current Gemini agent; it has its own tests at the end of this file.
+LEGACY_GEMINI_CLI = KnownAgent(
+    "gemini", ("gemini",), ("gemini", "@google/gemini-cli/"), ((".gemini/tmp", "*/chats/session-*.json"),)
+)
+AGENTS = (*(agent for agent in KNOWN_AGENTS if agent.name != "gemini"), LEGACY_GEMINI_CLI)
+
+
+def unindexed_agents(ps_output, **kwargs):
+    return _unindexed_agents(ps_output, **{"agents": AGENTS, **kwargs})
+
+
+def running_agents(ps_output):
+    return agent_census.running_agents(ps_output, AGENTS)
 
 
 def _roots(home: Path) -> list[Path]:
@@ -78,7 +94,7 @@ def test_inline_code_and_modules_are_never_an_entry_script(tmp_path):
         "8 bun x gemini\n"
         "9 /opt/homebrew/bin/deno eval gemini\n"
     )
-    assert agent_census.running_agents(ps) == {}
+    assert running_agents(ps) == {}
     assert _r(unindexed_agents(ps, home=tmp_path, watch_roots=_roots(tmp_path))) == ([], [])
 
 
@@ -90,7 +106,7 @@ def test_a_real_script_after_interpreter_options_is_matched():
         "23 deno run --allow-read /srv/agents/gemini\n"
         "24 node -- /usr/lib/node_modules/@google/gemini-cli/dist/index.js\n"
     )
-    assert agent_census.running_agents(ps) == {"gemini": [20, 21, 22, 23, 24]}
+    assert running_agents(ps) == {"gemini": [20, 21, 22, 23, 24]}
 
 
 def test_an_agent_binary_or_its_interpreter_entry_script_is_matched():
@@ -100,7 +116,7 @@ def test_an_agent_binary_or_its_interpreter_entry_script_is_matched():
         "12 /home/example/.local/bin/claude --resume\n"
         "13 /opt/homebrew/bin/codex exec\n"
     )
-    assert agent_census.running_agents(ps) == {"claude": [12], "codex": [13], "gemini": [10, 11]}
+    assert running_agents(ps) == {"claude": [12], "codex": [13], "gemini": [10, 11]}
 
 
 # (2) Only a transcript written during a live instance's current run counts.
@@ -113,7 +129,6 @@ def test_a_gemini_chat_written_during_the_current_run_is_reported(tmp_path):
 
 def test_a_chat_from_a_stopped_earlier_session_does_not_count(tmp_path):
     _chat(tmp_path, age_s=3600)  # written an hour ago by a session that ended
-    _write(tmp_path / ".gemini" / "sessions" / "now.jsonl", age_s=30)  # today's run writes only to the watched root
     assert _r(_census(tmp_path, GEMINI, started_age_s=600)) == ([], [])
 
 
@@ -232,3 +247,32 @@ def test_the_census_issues_feed_ingest_context_and_codes():
     assert (blind, notes) == ((), ())
     assert context["ingest"].startswith("an agent BrainLayer does not index is running")
     assert health_facts.codes_by_check(result) == {"ingest": ("unindexed_agent_running", "agent_census_incomplete")}
+
+
+# (5) gemini is Antigravity (agy): its binary or T3's ACP server, writing into the watched brain root.
+
+AGY = "77 /home/example/.local/bin/agy --print hello\n78 /home/example/.t3/tools/antigravity-acp/agy_acp_server.par\n"
+
+
+def _agy_transcript(home: Path, age_s: float = 60) -> Path:
+    brain = home / ".gemini" / "antigravity-cli" / "brain"
+    return _write(brain / "0115a286-c627" / ".system_generated" / "logs" / "transcript_full.jsonl", age_s)
+
+
+def test_agy_and_its_acp_server_are_the_running_gemini():
+    assert agent_census.running_agents(AGY) == {"gemini": [77, 78]}
+    assert agent_census.running_agents(GEMINI) == {}  # the legacy Gemini CLI is not a listed agent
+
+
+def test_a_running_agy_writing_into_its_watched_root_is_not_reported(tmp_path):
+    _agy_transcript(tmp_path)
+    census = _unindexed_agents(AGY, home=tmp_path, watch_roots=_roots(tmp_path), process_starts=_started(600))
+    assert _r(census) == ([], [])
+
+
+def test_a_running_agy_writing_where_nothing_watches_is_reported(tmp_path):
+    _agy_transcript(tmp_path)
+    brain = tmp_path / ".gemini" / "antigravity-cli" / "brain"
+    unwatched = [root for root in _roots(tmp_path) if root != brain]
+    census = _unindexed_agents(AGY, home=tmp_path, watch_roots=unwatched, process_starts=_started(600))
+    assert _r(census) == ([f"gemini: {brain}"], [])

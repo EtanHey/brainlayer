@@ -60,8 +60,9 @@ writes, heartbeat and persisted-clock ages (awake and wall), resume and grace wi
 verdict (state, unknown ticks, good ticks), and the stall and blind counters. `coverage.json`
 maps each model action to a source line and pins each source by sha256.
 
-The wired agents are `default_watch_roots` (`watcher.py:357`): claude, codex, cursor,
-cursor-agent-transcripts and gemini. The verdict does not depend on which agent writes. Agent
+The wired agents are `default_watch_roots` (`watcher.py:360`): claude, codex, cursor,
+cursor-agent-transcripts and gemini, which is Antigravity (agy), the current Gemini agent, at
+`~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript_full.jsonl`. The verdict does not depend on which agent writes. Agent
 identity matters only in the replay, where each agent writes its own format.
 
 ## Results
@@ -171,9 +172,8 @@ The replay can fail, and each of these is a test:
 - **Agents BrainLayer is not wired to**, including future labs' agents. Sources are wired on
   purpose ("nothing is auto-detected"), so the guarantee is per wired root. The known-agent census
   (`src/brainlayer/agent_census.py`, below) catches running agents from a fixed list whose
-  transcripts land outside the watched roots. It cannot catch an agent that is not on the list. Today, for example, Gemini
-  CLI writes `~/.gemini/tmp/<hash>/chats/session-*.json`, which is not
-  `~/.gemini/sessions/**/*.jsonl`.
+  transcripts land outside the watched roots. It cannot catch an agent that is not on the list. Gemini CLI
+  (legacy, deprecated) wrote `~/.gemini/tmp/<hash>/chats/session-*.json`; it is not watched, on purpose.
 - **Wrong parsing or content**: a record ingested as the wrong text. (The lossy in-place rewrite
   used to be listed here; it is now a modelled, replayed finding.)
 - **The Swift icon drawing.** That is BrainBar's app tests, not this.
@@ -182,7 +182,8 @@ The replay can fail, and each of these is a test:
 
 ## Known-agent census (the add-on for unwired agents)
 
-`agent_census.KNOWN_AGENTS` lists claude, codex, cursor-agent, gemini and opencode. Each entry has
+`agent_census.KNOWN_AGENTS` lists claude, codex, cursor-agent, gemini (Antigravity, `agy`, the current
+Gemini agent; Gemini CLI is legacy and deprecated) and opencode. Each entry has
 its own executable, the entry script an interpreter would run, and its transcript roots with a
 filename pattern. Each health check reuses the `ps axo pid=,command=` snapshot.
 
@@ -195,7 +196,9 @@ filename pattern. Each health check reuses the `ps axo pid=,command=` snapshot.
   `--agent gemini` do not match.
 - **Tied to the current run.** Start times come from `ps -o pid=,etime=` for the matched PIDs
   only. Only a file matching the agent's transcript pattern and modified after a live
-  instance's start counts. For Gemini that pattern is `tmp/*/chats/session-*.json`.
+  instance's start counts. For gemini (agy) that pattern is
+  `brain/*/.system_generated/logs/transcript_full.jsonl` under `~/.gemini/antigravity-cli`, a watched
+  root, so a running agy writing there never fires.
 - **When it fires.** If such a file sits under a root that no `default_watch_roots` entry
   covers, three things happen: an `unindexed_agent_running` warning issue, the `ingest` check
   floored at **amber** with "an agent BrainLayer does not index is running: <agent>: <root>", and a

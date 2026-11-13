@@ -256,6 +256,18 @@ map_changed_files_to_pytests() {
           done
         fi
         ;;
+      src/brainlayer/agy_attribution.py)
+        # The Antigravity (agy) attribution gate: exercised end to end through the watcher and
+        # bridge, by provenance classification, and by the retirement inventory (its read-only
+        # sqlite3.connect is a reviewed site).
+        for rel in test_agy_transcripts.py test_agent_provenance.py test_watcher_provenance_ingest.py test_retirement_ast_portability.py; do
+          test_path="$TEST_ROOT/$rel"
+          if [ -f "$test_path" ]; then
+            append_unique "$test_path"
+            mapped=1
+          fi
+        done
+        ;;
       src/brainlayer/watcher.py|src/brainlayer/watcher_bridge.py)
         if [ "$changed" = "src/brainlayer/watcher.py" ]; then
           zst_tests=(test_jsonl_watcher.py test_codex_realtime_author_model.py test_codex_zst_author_model.py test_codex_zst_quarantine_context.py test_codex_zst_watcher.py test_codex_zst_admission_guards.py test_codex_zst_prefix.py test_codex_zst_checkpoint_guards.py test_codex_zst_legacy_replay.py test_codex_zst_restart.py test_codex_zst_resume_registry.py test_codex_zst_lifecycle.py test_codex_zst_conversations.py test_codex_zst_header_retention.py test_codex_zst_acceptance.py test_retirement_ratchet.py)
