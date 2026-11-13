@@ -140,9 +140,9 @@ enum BrainBarMenuPresenter {
         switch name {
         case "backup_offsite" where worst(v, "backup_local") == .green:
             guard let (_, onSchedule) = runningUpload(c), let start = uploadStart(c) else { return nil }
-            let started = [start.today ? Say.s03Started(hhmm(start.date, c)) : Say.s03StartedOn(at(start.date, c))]
+            let started = !hasWords(start.date, c) ? [] : [start.today ? Say.s03Started(hhmm(start.date, c)) : Say.s03StartedOn(at(start.date, c))]
             // R27: the estimate is said as a clock time only when it falls today.
-            let eta = onSchedule?.eta.flatMap { calendar(c).isDate($0, inSameDayAs: c.now) ? $0 : nil }
+            let eta = onSchedule?.eta.flatMap { calendar(c).isDate($0, inSameDayAs: c.now) && hasWords($0, c) ? $0 : nil }
             let done = onSchedule?.progress.map { p in eta.map { Say.s03ProgressEta(String(percent(p)), hhmm($0, c)) } ?? Say.s03Progress(String(percent(p))) }
             let text = ([Say.s03.text] + started + (done.map { [$0] } ?? [])).joined(separator: " ")
             return Line(thing: .safe, level: .behind, strings: [text], headline: Say.s03Headline.text, progress: onSchedule?.progress.map(percent))
@@ -204,7 +204,7 @@ enum BrainBarMenuPresenter {
             let faults = [local, offsite].filter { $0.state != .green }
             if local.state == .red, local.ageS == nil, Say.noDriveClock(c) {  // S07, only with no copy of any kind on record (R21, R25)
                 (db, dbNames) = (worded(.safe, [Say.noRecord.text], .custody, priority: 1), ["backup_local"])
-            } else if !reds.isEmpty, let upload = runningUpload(c), let start = uploadStart(c) {  // S32, R8, R9, R23
+            } else if !reds.isEmpty, let upload = runningUpload(c), let start = uploadStart(c), hasWords(start.date, c) {  // S32, R8, R9, R23
                 let age = c.backupsMeasured ? copyAge(offsite.ageS, c, v).map { Say.r15($0) + " " } : nil
                 let p = upload.onSchedule?.progress.map { String(percent($0)) }
                 let progress = start.today ? p.map { Say.s32Progress(hhmm(start.date, c), $0) } ?? Say.s32(hhmm(start.date, c))
@@ -340,7 +340,7 @@ enum BrainBarMenuPresenter {
     private static func checkingState(_ c: Capture) -> P {
         let launching = c.isChecking && c.verdict == nil
         let headline = c.wakeCatchUpPending && !launching ? Say.checkingSleep.text : Say.checkingMemory.text
-        let last = c.lastKnownBackupAt.flatMap { $0 <= c.now && sayable($0) ? " " + Say.lastBackup(at($0, c)) : nil } ?? ""
+        let last = c.lastKnownBackupAt.flatMap { $0 <= c.now && sayable($0) && hasWords($0, c) ? " " + Say.lastBackup(at($0, c)) : nil } ?? ""
         return .init(form: .calm, headline: headline, count: 0, icon: .resting,
                      rows: [P.Row(kind: .headline, strings: [headline], mark: .wait),
                             P.Row(kind: .headlineDetail, strings: [Say.notConfirmed.text + last],
@@ -355,7 +355,9 @@ enum BrainBarMenuPresenter {
     ]
 
     /// S01, the all-good line: the older of the offsite and transcript copies (U10), never a future time.
-    private static func allGoodDetail(_ c: Capture, _ v: BrainBarHealthVerdict) -> String? { allGoodDate(c).map { Say.backedUp(at($0, c)) } }
+    private static func allGoodDetail(_ c: Capture, _ v: BrainBarHealthVerdict) -> String? {
+        allGoodDate(c).flatMap { hasWords($0, c) ? Say.backedUp(at($0, c)) : nil }  // no words, no sentence (CI on #1790)
+    }
 
     static func allGoodDate(_ c: Capture) -> Date? {
         guard let v = c.verdict else { return nil }

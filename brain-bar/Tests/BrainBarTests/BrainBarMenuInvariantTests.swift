@@ -267,6 +267,63 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                        [[unconfirmed + "today at 00:00."], [unconfirmed + "today at 00:00."], [unconfirmed + "yesterday at 23:59."]])
     }
 
+    /// CI on #1790 (macOS 15, Xcode 26.3): that Foundation formats some moments as "", and the forward path then accepted the
+    /// empty words, so the guard kept "Last backup ." and "Started .". The seam: the presenter's per-thread formatter cache,
+    /// filled for one zone no other test uses with formatters that have no words, so this fails without the fix on any platform.
+    final class Wordless: DateFormatter, @unchecked Sendable { override func string(from date: Date) -> String { "" } }
+    static func wordless<T>(_ body: (TimeZone) -> T) -> T {
+        let zone = TimeZone(identifier: "Pacific/Chatham")!, keys = ["HH:mm", "MMM d 'at' HH:mm", "MMM d"].map { "BrainBarMenuPresenter.formatter|\($0)|\(zone.identifier)" }
+        for key in keys { Thread.current.threadDictionary[key] = Wordless() }
+        defer { for key in keys { Thread.current.threadDictionary.removeObject(forKey: key) } }
+        return body(zone)
+    }
+
+    /// No placeholder takes an empty value, by any path, on the edge captures, the odd dates and the wordless zone; the one
+    /// exception is `{over}`, whose empty form is the formatter's own for a stall under a minute.
+    func testNoPlaceholderTakesAnEmptyValue() {
+        let odd = [Date.distantPast, .distantFuture, Date(timeIntervalSinceReferenceDate: .nan), Date(timeIntervalSinceReferenceDate: .infinity),
+                   Date(timeIntervalSinceReferenceDate: -.infinity)].map { d -> Capture in
+            var c = Self.capture(["backup_offsite": .amber], base: 1, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
+            (c.now, c.lastKnownBackupAt, c.upload) = (d, d, .init(startedAt: d, live: true))
+            return c
+        }
+        let templated = BrainBarMenuPresenter.Say.templated.filter { !$0.template.contains("{over}") }
+        func accepted(_ captures: [Capture]) -> [String] {
+            captures.flatMap { c in
+                templated.compactMap { e -> String? in
+                    let empty = e.fill(Array(repeating: "", count: e.template.filter { $0 == "{" }.count))
+                    return BrainBarMenuPresenter.entry(for: empty, c) == nil ? nil : empty
+                }
+            }
+        }
+        XCTAssertGreaterThanOrEqual(templated.count, 20)
+        XCTAssertEqual(accepted(Self.edgeCaptures() + odd), [])
+        XCTAssertEqual(Self.wordless { zone in accepted(Self.edgeCaptures().map { var c = $0; c.timeZone = zone; return c }) }, [])
+        XCTAssertNotNil(BrainBarMenuPresenter.entry(for: "BrainBar hasn’t seen the memories waiting for it go down.", odd[0]))
+    }
+
+    /// The forward path with a moment whose words are forced empty: nothing names it (a), the matcher refuses its empty
+    /// words (b), the presenter does not say it (c), and what is returned is exactly the rest.
+    func testAMomentWithNoWordsIsNotSaid() {
+        Self.wordless { zone in
+            let now = ISO8601DateFormatter().date(from: "2026-11-12T12:00:00+02:00")!
+            var last = Capture(now: now, timeZone: zone)
+            last.lastKnownBackupAt = now.addingTimeInterval(-3600.0)
+            var upload = Self.capture(["backup_offsite": .amber], base: 1, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
+            upload.timeZone = zone
+            XCTAssertEqual(BrainBarMenuPresenter.Say.spoken(last) + BrainBarMenuPresenter.Say.spoken(upload), [])
+            XCTAssertNil(BrainBarMenuPresenter.entry(for: "Last backup .", last))
+            XCTAssertNil(BrainBarMenuPresenter.entry(for: "Started .", upload))
+            for c in [last, upload] {
+                let said = BrainBarMenuPresenter.derived(c).rows.flatMap(\.strings).flatMap(Self.sentences)
+                XCTAssertEqual(said.filter { ["Last backup .", "Started .", "Started at ."].contains($0) }, [])
+            }
+            XCTAssertEqual(BrainBarMenuPresenter.present(last).rows.first { $0.kind == .headlineDetail }?.strings,
+                           ["Saving, search, backups and upkeep aren’t confirmed yet."])
+            XCTAssertEqual(BrainBarMenuPresenter.present(upload).rows.first { $0.kind == .headlineDetail }?.strings, ["To Google Drive."])
+        }
+    }
+
     /// Registry entries no enumerated capture or case shows, each with its reason.
     static let unreached: Set<String> = [
         "action.storage",  // the Open Storage Settings action exists for P3's disk rows; no row takes it yet

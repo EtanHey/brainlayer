@@ -46,7 +46,8 @@ extension BrainBarMenuPresenter {
                     guard let r = rest.range(of: next) else { return nil }
                     (value, rest) = (rest[..<r.lowerBound], rest[r.upperBound...])
                 }
-                guard Say.fits(slot, String(value), c) else { return nil }
+                // No slot takes an empty value but `{over}`, whose empty form is the formatter's own (CI on #1790).
+                guard !value.isEmpty || slot == "over", Say.fits(slot, String(value), c) else { return nil }
                 values.append(String(value))
             }
             return values
@@ -269,9 +270,13 @@ extension BrainBarMenuPresenter {
         /// upload's start and estimate, and every copy a database backup check dates. The property test fails if the derivation
         /// ever says a moment that is not here.
         static func spoken(_ c: Capture) -> [Date] {
+            // Each as the derivation may say it (the last backup at or before now, the estimate only today, a copy `copyAge`
+            // dates), and only a moment the formatter has words for (CI on #1790).
+            let last = c.lastKnownBackupAt.flatMap { $0 <= c.now && sayable($0) ? $0 : nil }
+            let eta = runningUpload(c)?.onSchedule?.eta.flatMap { calendar(c).isDate($0, inSameDayAs: c.now) ? $0 : nil }
             let copies = (c.verdict?.checks ?? []).filter { ["backup_local", "backup_offsite"].contains($0.name) && valid($0.ageS) }
-                .map { c.verdict!.evaluatedAt.addingTimeInterval(-$0.ageS!) }
-            return [c.lastKnownBackupAt, allGoodDate(c), uploadStart(c)?.date, runningUpload(c)?.onSchedule?.eta].compactMap { $0 } + copies
+                .map { c.verdict!.evaluatedAt.addingTimeInterval(-$0.ageS!) }.filter { copyAge(since: $0, c) != nil }
+            return ([last, allGoodDate(c), uploadStart(c)?.date, eta].compactMap { $0 } + copies).filter { hasWords($0, c) }
         }
 
         /// "HH:mm" read leniently as an hour and a minute.
@@ -351,6 +356,10 @@ extension BrainBarMenuPresenter {
     /// date that does not exist ("Sep 20 at 02:00" for −∞), so no sentence names one (P2b, found by writing S4's condition).
     static func sayable(_ date: Date) -> Bool { (Date.distantPast...Date.distantFuture).contains(date) }
 
+    /// The formatter has words for this moment. An older Foundation (macOS 15, CI on #1790) formats some moments in
+    /// `sayable`'s range as "", so a moment with no words is one the presenter cannot say.
+    static func hasWords(_ date: Date, _ c: Capture) -> Bool { !hhmm(date, c).isEmpty && !formatter("MMM d 'at' HH:mm", c).string(from: date).isEmpty }
+
     static func percent(_ progress: Double) -> Int { Int((progress * 100).rounded()) }
 
     static func valid(_ age: Double?) -> Bool { age.map { $0.isFinite && $0 >= 0 } == true }
@@ -371,7 +380,7 @@ extension BrainBarMenuPresenter {
             let hours = min(23, max(1, Int((elapsed / 3600).rounded())))
             return hours == 1 ? "1 hour old" : "\(hours) hours old"
         }
-        return "from \(at(copied, c))"
+        return hasWords(copied, c) ? "from \(at(copied, c))" : nil
     }
 
     /// `{over d}`: a strict lower bound from an awake-adjusted age, rounded down ("in over an hour"); nil under a minute.
