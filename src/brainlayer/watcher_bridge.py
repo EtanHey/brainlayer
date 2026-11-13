@@ -23,7 +23,8 @@ from typing import Any
 
 import apsw
 
-from .agent_provenance import agy_attribution_pending, classify_provenance, effective_visibility
+from .agent_provenance import classify_provenance, effective_visibility
+from .agy_attribution import STATE_FILE_NAME, AgyAttributionGate
 from .alarm import BrainLayerAlarm
 from .chunk_origin import detect_chunk_origin
 from .chunk_write import insert_canonical_chunk
@@ -413,6 +414,7 @@ def create_flush_callback(
     source_projects: dict[str, str] = {}
     resolved_source_identities: dict[str, tuple[int, int, int]] = {}
     unresolved_source_versions: dict[str, tuple[int, int] | None] = {}
+    agy_gate = AgyAttributionGate(Path(db_path or get_db_path()).expanduser().parent / STATE_FILE_NAME)
 
     def ensure_direct_liveness_schema() -> None:
         if liveness_schema_ready or store is None:
@@ -507,7 +509,8 @@ def create_flush_callback(
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
-            if agy_attribution_pending(source_file):
+            agy_index_now, agy_agent = agy_gate.resolve(source_file)
+            if not agy_index_now:
                 deferred_entries.append(entry)
                 continue
             if not t3_linkage_resolved:
@@ -524,6 +527,7 @@ def create_flush_callback(
                     t3_linked_session_ids=linked_t3_session_ids,
                     t3_session_identity_cache=t3_session_identity_cache,
                     t3_session_header=entry.get("_codex_header"),
+                    agy_agent=agy_agent,
                 )
             except BrainLayerAlarm:
                 deferred_entries.append(entry)

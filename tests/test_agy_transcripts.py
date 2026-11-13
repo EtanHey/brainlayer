@@ -10,9 +10,13 @@ in the shape measured on 500 real transcripts (2026-11-13): step_index, source, 
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sqlite3
+import time
 from pathlib import Path
 
+import apsw
 import pytest
 
 from brainlayer.agent_provenance import classify_provenance
@@ -92,12 +96,19 @@ def _poll(watcher: JSONLWatcher) -> None:
 
 
 def _rows(db: Path, needle: str) -> list[tuple]:
+    # Read through apsw, the writer's own SQLite: a second SQLite library in the same process (the
+    # stdlib sqlite3 module) can read a stale WAL view of writes another library just committed.
     if not db.exists():
         return []
-    with sqlite3.connect(db) as conn:
-        return conn.execute(
-            "SELECT conversation_id, content, metadata FROM chunks WHERE content LIKE ?", (f"%{needle}%",)
-        ).fetchall()
+    conn = apsw.Connection(str(db))
+    try:
+        return list(
+            conn.cursor().execute(
+                "SELECT conversation_id, content, metadata FROM chunks WHERE content LIKE ?", (f"%{needle}%",)
+            )
+        )
+    finally:
+        conn.close()
 
 
 def test_an_agy_conversation_is_indexed_as_gemini_with_its_own_conversation_id(tmp_path):
@@ -177,7 +188,9 @@ def test_a_malformed_step_is_quarantined_and_counted_and_later_steps_still_land(
 
 
 def test_agy_transcripts_are_tagged_gemini_session(tmp_path):
-    decision = classify_provenance(str(_transcript(tmp_path)))
+    path = _transcript(tmp_path)
+    _write(path, [], agent="")
+    decision = classify_provenance(str(path))
     assert (decision.provenance_tag, decision.source_class) == ("gemini-session", "cli-agent")
 
 
@@ -219,3 +232,131 @@ def test_a_conversation_agy_has_not_summarised_yet_waits_for_its_attribution(tmp
     _summarise(path, "gatherer")
     _poll(watcher)
     assert _class_of(db, "wait1") == ("gemini-subagent", "subagent", "default")
+
+
+# --- r3: fail closed for memory readers (Codex r1 on #1786) ---------------------------------------
+
+
+def _age(path: Path, seconds: float = 3600) -> None:
+    then = time.time() - seconds
+    os.utime(path, (then, then))
+
+
+def test_an_unreadable_attribution_db_holds_the_conversation_and_says_so(tmp_path, caplog):
+    db = tmp_path / "db" / "brainlayer.db"
+    path = _transcript(tmp_path)
+    _write(path, [_step(0, "PLANNER_RESPONSE", "unr1")], agent=None)
+    (path.parents[4] / "conversation_summaries.db").write_bytes(b"not a sqlite database at all" * 64)
+    _age(path)
+
+    watcher = _watcher(tmp_path, db)
+    with caplog.at_level(logging.WARNING):
+        _poll(watcher)
+        _poll(watcher)
+
+    assert _rows(db, "turn unr1:") == []
+    assert watcher.registry.get(str(path))[0] == 0
+    assert "agy attribution unreadable" in caplog.text
+
+
+def test_a_failed_attribution_read_is_retried_not_cached(tmp_path, monkeypatch):
+    db = tmp_path / "db" / "brainlayer.db"
+    path = _transcript(tmp_path)
+    _write(path, [_step(0, "PLANNER_RESPONSE", "lock1")], agent="brain-worker")
+    _age(path)
+    real_connect, failures = sqlite3.connect, []
+
+    def locked_once(target, *args, **kwargs):
+        if "conversation_summaries.db" in str(target) and not failures:
+            failures.append(target)
+            raise sqlite3.OperationalError("database is locked")
+        return real_connect(target, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", locked_once)
+    watcher = _watcher(tmp_path, db)
+    _poll(watcher)
+    _poll(watcher)
+
+    assert failures  # the lock was hit, and the next read saw the memory-reader row
+    assert _rows(db, "turn lock1:") == []
+
+
+def test_the_hold_back_counts_from_first_sight_not_the_latest_write_and_survives_restart(tmp_path, monkeypatch):
+    import brainlayer.agy_attribution as agy_attribution
+
+    db = tmp_path / "db" / "brainlayer.db"
+    path = _transcript(tmp_path)
+    _write(path, [_step(0, "PLANNER_RESPONSE", "dl1")], agent=None)
+    _summarise(_transcript(tmp_path, "44444444-0000-4000-8000-000000000004"))  # readable store, no row for ours
+    clock = [1_000_000.0]
+    monkeypatch.setattr(agy_attribution, "_now", lambda: clock[0])
+
+    _poll(_watcher(tmp_path, db))
+    assert _rows(db, "turn dl1:") == []
+
+    clock[0] += 300
+    _write(path, [_step(1, "PLANNER_RESPONSE", "dl2")], mode="a", agent=None)  # an append must not reset it
+    _poll(_watcher(tmp_path, db))  # restarted watcher and flush callback
+    assert _rows(db, "turn dl1:") == []
+
+    clock[0] += 301
+    _write(path, [_step(2, "PLANNER_RESPONSE", "dl3")], mode="a", agent=None)
+    _poll(_watcher(tmp_path, db))
+    for marker in ("dl1", "dl2", "dl3"):
+        assert _class_of(db, marker) == ("gemini-session", "cli-agent", "default"), marker
+
+
+def test_a_late_memory_reader_row_stops_further_indexing_and_is_recorded(tmp_path, monkeypatch):
+    import brainlayer.agy_attribution as agy_attribution
+
+    db = tmp_path / "db" / "brainlayer.db"
+    path = _transcript(tmp_path)
+    _write(path, [_step(0, "PLANNER_RESPONSE", "late1")], agent=None)
+    _summarise(_transcript(tmp_path, "44444444-0000-4000-8000-000000000004"))
+    clock = [1_000_000.0]
+    monkeypatch.setattr(agy_attribution, "_now", lambda: clock[0])
+    watcher = _watcher(tmp_path, db)
+    _poll(watcher)
+    clock[0] += 601
+    _poll(watcher)
+    assert len(_rows(db, "turn late1:")) == 1  # indexed after the deadline, as no agent
+
+    _summarise(path, "brain-worker")
+    _write(path, [_step(1, "PLANNER_RESPONSE", "late2")], mode="a", agent=None)
+    _poll(watcher)
+
+    assert _rows(db, "turn late2:") == []
+    state = json.loads((db.parent / "agy-attribution.json").read_text())
+    assert state["late_memory_readers"][CONVERSATION]["agent"] == "brain-worker"
+
+
+def test_a_literal_closing_tag_inside_the_request_survives(tmp_path):
+    db = tmp_path / "db" / "brainlayer.db"
+    step = _step(0, "USER_INPUT", "tag1")
+    step["content"] = (
+        "<USER_REQUEST>\nExplain what </USER_REQUEST> means and keep tailmarker-tag1 after it\n</USER_REQUEST>\n"
+        "<ADDITIONAL_METADATA>\nmetaonly-xyz\n</ADDITIONAL_METADATA>"
+    )
+    _write(_transcript(tmp_path), [step])
+
+    _poll(_watcher(tmp_path, db))
+
+    (row,) = _rows(db, "tailmarker-tag1")
+    assert "</USER_REQUEST> means" in row[1] and "metaonly-xyz" not in row[1]
+
+
+def test_the_legacy_gemini_sessions_root_is_not_watched(tmp_path):
+    db = tmp_path / "db" / "brainlayer.db"
+    legacy = tmp_path / "home" / ".gemini" / "sessions" / "legacy.jsonl"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        json.dumps({"role": "user", "content": _text("leg1"), "timestamp": "2026-11-13T09:00:00Z"}) + "\n"
+    )
+
+    watcher = _watcher(tmp_path, db)
+    _poll(watcher)
+
+    assert _rows(db, "turn leg1:") == []
+    assert [r.resolved_path for r in default_watch_roots(tmp_path / "home") if r.provider == "gemini"] == [
+        tmp_path / "home" / ".gemini" / "antigravity-cli" / "brain"
+    ]

@@ -36,10 +36,20 @@ def test_watch_backfill_dry_run_includes_cursor_agent_transcripts(tmp_path, monk
     assert not (tmp_path / "offsets.json").exists()
 
 
-def test_watch_backfill_dry_run_includes_codex_and_gemini_sessions(tmp_path, monkeypatch):
+def test_watch_backfill_dry_run_includes_codex_and_agy_transcripts(tmp_path, monkeypatch):
     monkeypatch.delenv("BRAINLAYER_INGEST_DENYLIST", raising=False)
     codex_transcript = tmp_path / ".codex" / "sessions" / "2026" / "07" / "worker.jsonl"
-    gemini_transcript = tmp_path / ".gemini" / "sessions" / "worker.jsonl"
+    # gemini = Antigravity (agy), the current Gemini agent
+    gemini_transcript = (
+        tmp_path
+        / ".gemini"
+        / "antigravity-cli"
+        / "brain"
+        / "0115a286-0000-4000-8000-0000000000a1"
+        / ".system_generated"
+        / "logs"
+        / "transcript_full.jsonl"
+    )
     for path in (codex_transcript, gemini_transcript):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"role": "user", "content": "worker transcript line"}) + "\n")

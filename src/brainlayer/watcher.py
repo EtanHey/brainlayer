@@ -20,7 +20,6 @@ import json
 import logging
 import math
 import os
-import re
 import sqlite3
 import stat
 import tempfile
@@ -369,7 +368,6 @@ def default_watch_roots(home: Path | None = None) -> list[WatchRoot]:
             root / ".cursor" / "projects",
             "**/agent-transcripts/**/*.jsonl",
         ),
-        WatchRoot("gemini", root / ".gemini" / "sessions"),
         WatchRoot("gemini", root / ".gemini" / "antigravity-cli" / "brain", AGY_TRANSCRIPT_GLOB),
     ]
 
@@ -476,7 +474,7 @@ def scan_codex_turn_context(filepath: str, end_offset: int, inode: int) -> Codex
 
 
 _AGY_STEP_ROLES = {"USER_INPUT": "user", "PLANNER_RESPONSE": "assistant"}
-_AGY_USER_REQUEST = re.compile(r"<USER_REQUEST>(.*?)</USER_REQUEST>", re.DOTALL)
+_AGY_REQUEST_OPEN, _AGY_REQUEST_CLOSE = "<USER_REQUEST>", "</USER_REQUEST>"
 
 
 def _agy_step_text(entry: dict[str, Any], role: str) -> str:
@@ -484,9 +482,13 @@ def _agy_step_text(entry: dict[str, Any], role: str) -> str:
     content = entry.get("content")
     if not isinstance(content, str):
         return ""
-    if role == "user" and (request := _AGY_USER_REQUEST.search(content)):
-        return request.group(1).strip()
-    return content.strip()
+    stripped = content.strip()
+    # agy writes `<USER_REQUEST>…</USER_REQUEST>` first and its own blocks after it, so the request ends
+    # at the LAST closing tag: a literal closing tag inside the user's words stays part of them.
+    end = stripped.rfind(_AGY_REQUEST_CLOSE)
+    if role == "user" and stripped.startswith(_AGY_REQUEST_OPEN) and end >= len(_AGY_REQUEST_OPEN):
+        return stripped[len(_AGY_REQUEST_OPEN) : end].strip()
+    return stripped
 
 
 def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, Any] | None:

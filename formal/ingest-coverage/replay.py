@@ -33,10 +33,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 TRACES = HERE / "traces"
 TICK_S = 300
-AGENTS = ("claude", "codex", "cursor", "cursor-agent-transcripts", "gemini", "gemini-agy")
-# Replay agents that share a watcher provider name: Antigravity (agy), the current Gemini agent, is
-# provider "gemini" on its own root.
-_AGENT_ROOT = {"gemini-agy": ("gemini", ".gemini/antigravity-cli/brain")}
+AGENTS = ("claude", "codex", "cursor", "cursor-agent-transcripts", "gemini")  # gemini = Antigravity (agy)
 # Production thresholds in ticks: amber 600 s, red 1800 s, sleep gap 900 s, wake grace 7200 s.
 MODEL = {
     "AmberT": 2,
@@ -204,8 +201,7 @@ _RELATIVE = {
     "codex": "2026/11/13/rollout-2026-11-13T00-00-00-0199replay.jsonl",
     "cursor": "replay-session.jsonl",
     "cursor-agent-transcripts": "example-proj/agent-transcripts/replay-1.jsonl",
-    "gemini": "replay-session.jsonl",
-    "gemini-agy": "0115a286-0000-4000-8000-00000000a001/.system_generated/logs/transcript_full.jsonl",
+    "gemini": "0115a286-0000-4000-8000-00000000a001/.system_generated/logs/transcript_full.jsonl",
 }
 
 
@@ -230,7 +226,7 @@ def agent_record(provider: str, text: str, when: datetime, *, drift: bool = Fals
         }
     if provider == "cursor-agent-transcripts":
         return {"role": "user", "message": {"content": [{"type": "text", "text": text}]}}
-    if provider == "gemini-agy":
+    if provider == "gemini":  # Antigravity (agy), the current Gemini agent
         return {
             "step_index": 0,
             "source": "USER_EXPLICIT",
@@ -239,7 +235,7 @@ def agent_record(provider: str, text: str, when: datetime, *, drift: bool = Fals
             "created_at": ts,
             "content": f"<USER_REQUEST>\n{text}\n</USER_REQUEST>",
         }
-    return {"role": "user", "content": text, "timestamp": ts}  # cursor sessions, gemini sessions
+    return {"role": "user", "content": text, "timestamp": ts}  # cursor sessions
 
 
 def _header(provider: str, when: datetime) -> list[dict[str, Any]]:
@@ -286,7 +282,7 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
     home, db, health = work / "home", work / "db" / "brainlayer.db", work / "health" / "watcher-health.json"
     for d in (home, db.parent, health.parent):
         d.mkdir(parents=True, exist_ok=True)
-    root = _watch_root(provider, default_watch_roots(home), home)
+    root = {r.provider: r for r in default_watch_roots(home)}[provider].resolved_path
     moved = root.with_name(root.name + "-moved")
     transcript = root / _RELATIVE[provider]
     transcript.parent.mkdir(parents=True, exist_ok=True)
@@ -309,7 +305,7 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
         if trace["scenario"] == "rewrite_lossy":  # long enough that a middle record is past the 4 KiB head digest
             lines += [agent_record(provider, _text(provider, 0, f"p{i:03d}")[1], start) for i in range(PAD_RECORDS)]
         transcript.write_text("".join(json.dumps(x) + "\n" for x in lines))
-        if provider == "gemini-agy":  # agy summarises each conversation; the row carries its agent attribution
+        if provider == "gemini":  # agy summarises each conversation; the row carries its agent attribution
             store = root.parent / "conversation_summaries.db"
             with sqlite3.connect(store) as conn:
                 conn.execute("CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, agent_name TEXT)")
@@ -455,19 +451,6 @@ def _edit_middle_record(path: Path, provider: str, lines: list, tick: int, when:
         handle.write(new.encode())
     lines[index] = new_record
     return marker, offset
-
-
-def _watch_root(agent: str, roots: list, home: Path) -> Path:
-    """The real watch root an agent writes under (default_watch_roots, matched by provider and path)."""
-    provider, subdir = _AGENT_ROOT.get(agent, (agent, None))
-    matches = [r.resolved_path for r in roots if r.provider == provider]
-    if subdir is not None:
-        matches = [path for path in matches if path == home / subdir]
-    else:
-        matches = matches[:1]
-    if len(matches) != 1:
-        raise AssertionError(f"no single watch root for {agent}")
-    return matches[0]
 
 
 def watcher_path(transcript: Path, root: Path, moved: Path) -> Path:
