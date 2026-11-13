@@ -82,6 +82,7 @@ enum BrainBarMenuAction: Equatable, Sendable {
         item.view = BrainBarMenuRowHost(view, words: row.strings + [row.action?.label].compactMap { $0 }, isAction: row.action != nil)
         // Rows that are not actions are disabled: the keyboard skips them and they never highlight.
         if let action = row.action {
+            item.title = action.label  // not drawn (the view draws the row); lets type-select reach the action
             item.target = self
             item.action = #selector(performItem)
             item.representedObject = BrainBarMenuAction.row(action.kind)

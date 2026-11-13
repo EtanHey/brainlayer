@@ -59,6 +59,9 @@ import XCTest
             for item in menu.items where item.view != nil {
                 XCTAssertEqual(item.view?.frame.width, BrainBarMenuMetrics.width, "\(id): one width for every row and form")
                 if item.isEnabled { XCTAssertGreaterThanOrEqual(item.view?.frame.height ?? 0, 24, "\(id): an action row is a full target") }
+                if case .row(let kind)? = item.representedObject as? BrainBarMenuAction {  // type-select reaches the action by name
+                    XCTAssertEqual(item.title, presentation.rows.compactMap(\.action).first { $0.kind == kind }?.label, id)
+                }
             }
         }
     }
