@@ -9,6 +9,7 @@ collectors, policy and watcher.
 from __future__ import annotations
 
 import json
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -235,7 +236,7 @@ def _root_watcher(tmp_path, monkeypatch):
 
 def test_the_watcher_publishes_a_vanished_root_after_its_debounce(tmp_path, monkeypatch):
     watcher, clock, projects, health = _root_watcher(tmp_path, monkeypatch)
-    projects.mkdir(parents=True)
+    _offset(watcher, projects, age_s=0)  # a transcript written just now
 
     def poll(advance=0.0):
         clock.mono += advance
@@ -292,7 +293,9 @@ def _offset(watcher, projects, age_s):
     transcript.parent.mkdir(parents=True)
     transcript.write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
     watcher.registry.set(str(transcript), transcript.stat().st_size, transcript.stat().st_ino)
-    watcher.registry._data[str(transcript)]["mtime"] -= age_s
+    entry = watcher.registry._data[str(transcript)]
+    entry["mtime"] -= age_s
+    os.utime(transcript, (entry["mtime"] - 60, entry["mtime"] - 60))  # untouched since that confirmation
     watcher.registry.flush()
 
 
@@ -321,3 +324,30 @@ def test_a_root_that_vanished_while_active_alarms_until_14_days_after_its_last_a
     clock.mono += 30
     restarted.poll_once()
     assert json.loads(health.read_text())["roots_missing"] == []
+
+
+def test_a_present_but_stale_root_deleted_while_the_watcher_runs_never_alarms(tmp_path, monkeypatch):
+    """Lead r3 check: presence is not activity. A legacy root holding only month-old stubs, deleted."""
+    watcher, clock, projects, health = _root_watcher(tmp_path, monkeypatch)
+    _offset(watcher, projects, age_s=FOURTEEN_DAYS + 3600)
+    for _ in range(3):  # present for several polls: must not count as activity
+        watcher.poll_once()
+        clock.mono += 30
+    projects.rename(projects.with_name("projects-moved"))
+    for _ in range(3):
+        watcher.poll_once()
+        assert json.loads(health.read_text())["roots_missing"] == []
+        clock.mono += 300
+
+
+def test_a_root_with_recent_writes_deleted_while_the_watcher_runs_alarms_after_the_debounce(tmp_path, monkeypatch):
+    watcher, clock, projects, health = _root_watcher(tmp_path, monkeypatch)
+    _offset(watcher, projects, age_s=3600)  # written an hour ago
+    watcher.poll_once()
+    projects.rename(projects.with_name("projects-moved"))
+    clock.mono += 30
+    watcher.poll_once()
+    assert json.loads(health.read_text())["roots_missing"] == []
+    clock.mono += 300
+    watcher.poll_once()
+    assert json.loads(health.read_text())["roots_missing"] == ["claude"]

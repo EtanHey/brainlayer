@@ -1673,11 +1673,8 @@ class JSONLWatcher:
         self._health_window_started_epoch = time.time()
         self._health_entries_seen = 0
         self._health_output_at_start = 0
-        # Last wall time each root was known active: present at a poll, or its newest offsets.json
-        # confirmation (prune keeps an unavailable root's offsets), so a restart still sees a
-        # vanished root. A root counts as expected for ROOT_EXPECTED_FOR_S after that.
-        self._root_last_active: dict[str, float] = self._root_offset_activity()
-        self._root_missing_since: dict[str, float] = {}
+        # A vanished root -> (monotonic time first seen gone, its newest offsets.json confirmation).
+        self._root_missing: dict[str, tuple[float, float | None]] = {}
         self._db_probe_failed_since: float | None = None
         self.poll_count = 0
         self.last_poll_made_progress = False
@@ -2250,36 +2247,36 @@ class JSONLWatcher:
         except sqlite3.Error:
             return None
 
-    def _root_offset_activity(self) -> dict[str, float]:
-        roots = {r.provider: Path(os.path.abspath(r.resolved_path)) for r in self.watch_roots}
-        latest: dict[str, float] = {}
+    def _root_offset_activity(self, root: WatchRoot) -> float | None:
+        """Newest offsets.json confirmation under ``root``: its last real transcript activity.
+
+        Prune keeps an unavailable root's offsets, so this survives a restart.
+        """
+        base = Path(os.path.abspath(root.resolved_path))
+        latest = None
         for filepath in self.registry._data:
             confirmed = self.registry.checkpoint_mtime(filepath)
-            if confirmed is None:
-                continue
-            candidate = Path(os.path.abspath(os.path.expanduser(filepath)))
-            for provider, root in roots.items():
-                if confirmed > latest.get(provider, 0.0) and candidate.is_relative_to(root):
-                    latest[provider] = confirmed
+            if confirmed is not None and (latest is None or confirmed > latest):
+                if Path(os.path.abspath(os.path.expanduser(filepath))).is_relative_to(base):
+                    latest = confirmed
         return latest
 
     def _missing_roots(self, now: float) -> list[str]:
-        """Providers whose root was active within ROOT_EXPECTED_FOR_S and has been gone for ``alert_after_s``.
-
-        A root deleted on purpose stops being expected once its last activity is that old.
+        """Providers whose root had transcript activity within ROOT_EXPECTED_FOR_S and has been gone
+        for ``alert_after_s``. Presence alone is not activity: a stale root deleted on purpose never
+        alarms, and a recently used one stops once its last activity is that old.
         """
         missing, wall = [], time.time()
         for root in self.watch_roots:
-            last = self._root_last_active.get(root.provider)
             if root.resolved_path.is_dir():
-                self._root_last_active[root.provider] = wall
-                self._root_missing_since.pop(root.provider, None)
-            elif last is not None and wall - last <= ROOT_EXPECTED_FOR_S:
-                since = self._root_missing_since.setdefault(root.provider, now)
-                if now - since >= self.coverage_watchdog.alert_after_s:
-                    missing.append(root.provider)
-            else:
-                self._root_missing_since.pop(root.provider, None)
+                self._root_missing.pop(root.provider, None)
+                continue
+            if root.provider not in self._root_missing:  # nothing new is confirmed under a missing root
+                self._root_missing[root.provider] = (now, self._root_offset_activity(root))
+            since, last = self._root_missing[root.provider]
+            recent = last is not None and wall - last <= ROOT_EXPECTED_FOR_S
+            if recent and now - since >= self.coverage_watchdog.alert_after_s:
+                missing.append(root.provider)
         return sorted(missing)
 
     def _write_health_snapshot(self, files: list[str]):

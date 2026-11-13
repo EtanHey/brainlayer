@@ -71,10 +71,11 @@ test runs in the `test` job.
   `file_ingestion_failure` on the same poll. `coverage_drop` needs 300 s of monotonic (awake)
   time with inserts/active < 0.25; retained failed flushes count as active, and the window stays
   open while it writes nothing, so the alert outlives the fault by one poll (`covLinger`).
-  `roots_missing` lists a root that was active within the last 14 days (present at a poll, or its
-  newest offsets.json confirmation; prune keeps an unavailable root's offsets) and has been gone
-  for 300 s. So a root that vanished while the watcher was stopped is reported after a restart,
-  and a root deleted on purpose stops alarming once its last activity is 14 days old. The file a
+  `roots_missing` lists a root with a transcript write in the last 14 days (its newest offsets.json
+  confirmation; prune keeps an unavailable root's offsets; being present is not activity) that has
+  been gone for 300 s. So a root that vanished while the watcher was stopped is reported after a
+  restart, a stale root deleted on purpose never alarms, and a recently used one stops alarming 14
+  days after its last transcript write. The file a
   dead watcher leaves behind keeps its last alert (`fileAlert`).
 
 State: the fault this tick (none, or one of the 8 shapes, with shape 8 split into a detected and a lossy rewrite), awake or asleep, whether the agent
@@ -202,7 +203,7 @@ The replay can fail, and each of these is a test:
   CLI writes `~/.gemini/tmp/<hash>/chats/session-*.json`, which is not
   `~/.gemini/sessions/**/*.jsonl`.
 - **Wrong parsing or content**: a record ingested as the wrong text.
-- **A provider folder deleted within 14 days of its last use alarms until 14 days pass**: the
+- **A provider folder deleted within 14 days of its last transcript write alarms until then**: the
   watcher cannot tell removal from loss. A root with no offsets confirmed in the last 14 days that
   vanished before this process started is not reported.
 - **Restarts** are not modelled (in the model "dead" keeps the same process); the restart path of
