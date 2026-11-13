@@ -59,8 +59,7 @@ import SwiftUI
         for (index, item) in menu.items.enumerated() where !item.isHidden {
             let replaced = index + 1 < menu.items.count && menu.items[index + 1].isAlternate
             if item.isAlternate != optionHeld && (item.isAlternate || replaced) { continue }
-            let view = item.isSeparatorItem ? SeparatorRow(frame: NSRect(x: 0, y: 0, width: width, height: metrics.separator))
-                : item.view ?? StandardRow(item, frame: NSRect(x: 0, y: 0, width: width, height: metrics.row))
+            let view = rowView(item, metrics: metrics)
             view.appearance = appearance
             view.layoutSubtreeIfNeeded()
             rows.append((view, y))
@@ -87,6 +86,13 @@ import SwiftUI
                        from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: false, hints: nil)
         }
         return rep
+    }
+
+    /// What the picture draws for one item: its hosted view, or a separator or standard row at the measured height.
+    static func rowView(_ item: NSMenuItem, metrics: Metrics) -> NSView {
+        let width = BrainBarMenuMetrics.width
+        return item.isSeparatorItem ? SeparatorRow(frame: NSRect(x: 0, y: 0, width: width, height: metrics.separator))
+            : item.view ?? StandardRow(item, frame: NSRect(x: 0, y: 0, width: width, height: metrics.row))
     }
 
     /// One row drawn alone, at 2x (the tests read its pixels and its words from this).
