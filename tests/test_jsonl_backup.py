@@ -1068,6 +1068,7 @@ def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summa
         "gzip_test",
         "local_archive_removed",
         "local_retention_deleted",
+        "local_retention_reconciled",
         "md5Checksum",
         "retention",
         "retention_deleted",

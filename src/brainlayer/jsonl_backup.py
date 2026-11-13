@@ -349,7 +349,9 @@ def _select_backup_candidates(
     return changed, active, covered, vanished
 
 
-def _list_surviving_archives(service: Any, folder_parts: list[str]) -> dict[str, str | None]:
+def _list_surviving_archives(
+    service: Any, folder_parts: list[str], by_name: dict[str, list[dict[str, Any]]] | None = None
+) -> dict[str, str | None]:
     """Surviving archive objects in the backup folder, keyed by Drive object ID.
 
     Keyed by ID, never by name: Drive permits duplicate names in one folder, so a
@@ -357,6 +359,9 @@ def _list_surviving_archives(service: Any, folder_parts: list[str]) -> dict[str,
     prove a survival that never happened. The value is the object's md5Checksum
     when Drive reports one, so out-of-band modification of a surviving object is
     detectable too.
+
+    ``by_name``, when given, is filled from the same listing with every object's
+    id, size, md5Checksum and trashed flag under its name, for receipt reconciliation.
     """
     folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)
     surviving: dict[str, str | None] = {}
@@ -367,7 +372,7 @@ def _list_surviving_archives(service: Any, folder_parts: list[str]) -> dict[str,
             .list(
                 q=f"'{folder_id}' in parents and trashed = false",
                 spaces="drive",
-                fields="nextPageToken,files(id,name,md5Checksum)",
+                fields="nextPageToken,files(id,name,md5Checksum,size,trashed)",
                 pageSize=1000,
                 pageToken=page_token,
                 supportsAllDrives=True,
@@ -378,6 +383,10 @@ def _list_surviving_archives(service: Any, folder_parts: list[str]) -> dict[str,
             file_id = item.get("id")
             if isinstance(file_id, str) and file_id:
                 surviving[file_id] = item.get("md5Checksum")
+                if by_name is not None and isinstance(item.get("name"), str):
+                    by_name.setdefault(item["name"], []).append(
+                        {key: item.get(key) for key in ("id", "size", "md5Checksum", "trashed")}
+                    )
         page_token = response.get("nextPageToken")
         if not page_token:
             break
@@ -423,6 +432,53 @@ def _drive_archive_receipt(path: Path, uploaded: dict[str, Any], *, now: float) 
         "verified_at": now,
         "archive_id": uploaded.get("id"),
     }
+
+
+def reconcile_drive_receipts(
+    staging_dir: Path, *, state: dict[str, Any], now: float, drive_objects: dict[str, list[dict[str, Any]]]
+) -> list[str]:
+    """Give each receipt-less local archive a receipt when Drive holds exactly one live identical copy.
+
+    Archives made before #1776 have no receipt, so the sweep can never retire them. A receipt is
+    written only for a single same-named, untrashed Drive object whose size and md5Checksum match
+    the local bytes. ``verified_at`` is never earlier than now: the 14-day clock starts here, so a
+    reconciled receipt cannot authorize deletion in the run that writes it. Existing receipts,
+    verified or not, are never replaced.
+    """
+    receipts = state.setdefault("drive_archives", {})
+    if not isinstance(receipts, dict):
+        return []
+    verified_at = max(now, time.time())
+    reconciled = []
+    for path in sorted(_local_archive_paths(staging_dir)):
+        if path.name in receipts:
+            continue
+        matches = drive_objects.get(path.name, [])
+        if len(matches) != 1:
+            continue
+        remote = matches[0]
+        size = path.stat().st_size
+        try:
+            remote_size = int(remote.get("size"))
+        except (TypeError, ValueError):
+            continue
+        if remote.get("trashed") is not False or remote_size != size or not remote.get("id"):
+            continue
+        md5 = _md5_file(path)
+        if not remote.get("md5Checksum") or remote["md5Checksum"] != md5:
+            continue
+        receipts[path.name] = {
+            "name": path.name,
+            "size": size,
+            "sha256": _sha256_file(path),
+            "archive_md5": md5,
+            "verified": True,
+            "verified_at": verified_at,
+            "archive_id": remote["id"],
+            "source": "reconciled",
+        }
+        reconciled.append(path.name)
+    return reconciled
 
 
 def _local_archive_paths(staging_dir: Path) -> list[Path]:
@@ -1721,6 +1777,7 @@ def run_backup(
     credentials = None
     service = None
     surviving_archives: dict[str, str | None] | None = None
+    drive_objects: dict[str, list[dict[str, Any]]] = {}
     if upload:
         # 2026-09-09 retention incident / PR #815: 22 uploaded+verified daily bundles
         # later disappeared under retention while unchanged files still read as covered.
@@ -1737,19 +1794,34 @@ def run_backup(
             try:
                 credentials = backup_daily.get_drive_credentials()
                 service = backup_daily.build_drive_service()
-                surviving_archives = _list_surviving_archives(service, folder_parts)
+                surviving_archives = _list_surviving_archives(service, folder_parts, drive_objects)
             except Exception as exc:
                 surviving_archives = {}
+                # A listing that failed mid-pagination already filled drive_objects in part.
+                drive_objects.clear()
                 retention_receipt["local_retention_error"] = f"Drive inventory unavailable: {exc}"
                 _retention_warning(log_path, retention_receipt["local_retention_error"])
         else:
             surviving_archives = {}
     retention_receipt["local_retention_deleted"] = []
+    retention_receipt["local_retention_reconciled"] = []
     if state.get("local_retention_revoke_pending"):
         retention_receipt["local_retention_error"] = (
             "Receipt loss after interrupted Drive pruning; local retention receipts need reconciliation"
         )
         _retention_warning(log_path, retention_receipt["local_retention_error"])
+    if upload and drive_objects and "local_retention_error" not in retention_receipt:
+        try:
+            reconciled = reconcile_drive_receipts(
+                Path(staging_dir).expanduser(), state=state, now=now, drive_objects=drive_objects
+            )
+            if reconciled:
+                _atomic_write_json(state_path, state)
+                _append_json_log(log_path, {"event": "local_retention_reconciled", "names": reconciled})
+            retention_receipt["local_retention_reconciled"] = reconciled
+        except Exception as exc:
+            retention_receipt["local_retention_error"] = f"receipt reconciliation failed: {exc}"
+            _retention_warning(log_path, retention_receipt["local_retention_error"])
     if upload and "local_retention_error" not in retention_receipt:
         try:
             retention_receipt["local_retention_deleted"] = prune_local_archives(
