@@ -309,6 +309,12 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
         if trace["scenario"] == "rewrite_lossy":  # long enough that a middle record is past the 4 KiB head digest
             lines += [agent_record(provider, _text(provider, 0, f"p{i:03d}")[1], start) for i in range(PAD_RECORDS)]
         transcript.write_text("".join(json.dumps(x) + "\n" for x in lines))
+        if provider == "gemini-agy":  # agy summarises each conversation; the row carries its agent attribution
+            store = root.parent / "conversation_summaries.db"
+            with sqlite3.connect(store) as conn:
+                conn.execute("CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, agent_name TEXT)")
+                conn.execute("INSERT INTO conversation_summaries VALUES (?, '')", (transcript.parents[2].name,))
+            conn.close()
         # Every marker the agent wrote in an indexable form. A marker written under a fault that drops
         # records (format drift, an edit the fingerprint cannot see) counts only while that fault lasts.
         pending: dict[str, str] = {marker0: "none"}

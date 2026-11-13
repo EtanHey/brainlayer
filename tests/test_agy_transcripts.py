@@ -56,10 +56,22 @@ def _transcript(tmp_path: Path, conversation: str = CONVERSATION, name: str = "t
     return brain / conversation / ".system_generated" / "logs" / name
 
 
-def _write(path: Path, steps: list[dict], mode: str = "w") -> None:
+def _summarise(path: Path, agent: str = "") -> None:
+    """agy's own summary row for the transcript's conversation (`agent_name` is `agy --agent <name>`)."""
+    store = path.parents[4] / "conversation_summaries.db"
+    with sqlite3.connect(store) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS conversation_summaries (conversation_id TEXT PRIMARY KEY, agent_name TEXT)"
+        )
+        conn.execute("INSERT OR REPLACE INTO conversation_summaries VALUES (?, ?)", (path.parents[2].name, agent))
+
+
+def _write(path: Path, steps: list[dict], mode: str = "w", agent: str | None = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, mode, encoding="utf-8") as handle:
         handle.write("".join(json.dumps(step) + "\n" for step in steps))
+    if agent is not None:
+        _summarise(path, agent)
 
 
 def _watcher(tmp_path: Path, db: Path) -> JSONLWatcher:
@@ -153,6 +165,7 @@ def test_a_malformed_step_is_quarantined_and_counted_and_later_steps_still_land(
     path = _transcript(tmp_path)
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(_step(0, "USER_INPUT", "u1")) + "\n" + '{"step_index": 1, "type": \n')
+    _summarise(path)
     _write(path, [_step(2, "PLANNER_RESPONSE", "a2")], mode="a")
 
     watcher = _watcher(tmp_path, db)
@@ -166,3 +179,43 @@ def test_a_malformed_step_is_quarantined_and_counted_and_later_steps_still_land(
 def test_agy_transcripts_are_tagged_gemini_session(tmp_path):
     decision = classify_provenance(str(_transcript(tmp_path)))
     assert (decision.provenance_tag, decision.source_class) == ("gemini-session", "cli-agent")
+
+
+def _class_of(db: Path, marker: str) -> tuple[str, str, str]:
+    (row,) = _rows(db, f"turn {marker}:")
+    meta = json.loads(row[2])
+    return meta["provenance_tag"], meta["source_class"], meta["provenance_effective_visibility"]
+
+
+def test_each_agy_class_lands_by_agys_own_agent_attribution(tmp_path):
+    db = tmp_path / "db" / "brainlayer.db"
+    interactive, gatherer, reader = (
+        "11111111-0000-4000-8000-000000000001",
+        "22222222-0000-4000-8000-000000000002",
+        "33333333-0000-4000-8000-000000000003",
+    )
+    _write(_transcript(tmp_path, interactive), [_step(0, "PLANNER_RESPONSE", "own1")], agent="")
+    _write(_transcript(tmp_path, gatherer), [_step(0, "PLANNER_RESPONSE", "gath1")], agent="gatherer")
+    _write(_transcript(tmp_path, reader), [_step(0, "PLANNER_RESPONSE", "read1")], agent="brain-worker")
+
+    _poll(_watcher(tmp_path, db))
+
+    assert _class_of(db, "own1") == ("gemini-session", "cli-agent", "default")
+    assert _class_of(db, "gath1") == ("gemini-subagent", "subagent", "default")
+    assert _rows(db, "turn read1:") == []  # a memory reader is kept on disk but never indexed
+
+
+def test_a_conversation_agy_has_not_summarised_yet_waits_for_its_attribution(tmp_path):
+    db = tmp_path / "db" / "brainlayer.db"
+    path = _transcript(tmp_path)
+    _write(path, [_step(0, "PLANNER_RESPONSE", "wait1")], agent=None)
+    _summarise(_transcript(tmp_path, "44444444-0000-4000-8000-000000000004"))  # the store exists, this row does not
+
+    watcher = _watcher(tmp_path, db)
+    _poll(watcher)
+    assert _rows(db, "turn wait1:") == []
+    assert watcher.registry.get(str(path))[0] == 0  # nothing confirmed while it waits
+
+    _summarise(path, "gatherer")
+    _poll(watcher)
+    assert _class_of(db, "wait1") == ("gemini-subagent", "subagent", "default")

@@ -112,6 +112,16 @@
         "target": "self.client.request"
       }
     },
+    "076586b5d2b2c56cda2fadb6f81bf2013aa649f27fa5b69308ab0c9cefc2be64": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/agent_provenance.py <module>.agy_conversation_agent reads agy's local conversation_summaries.db read-only (mode=ro) for agent attribution",
+      "site": {
+        "call_sha256": "a0a60388e01c42a6e54856ee6ae985a8826abc8d7debbe6a7700b065cb201071",
+        "kind": "generic_send",
+        "owner": "<module>.agy_conversation_agent",
+        "path": "src/brainlayer/agent_provenance.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "08812b9decf92405afe35f186f6b49f065c4ea36a62a40b64e46440bada87c3b": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {

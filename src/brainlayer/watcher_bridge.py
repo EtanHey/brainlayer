@@ -23,7 +23,7 @@ from typing import Any
 
 import apsw
 
-from .agent_provenance import classify_provenance, effective_visibility
+from .agent_provenance import agy_attribution_pending, classify_provenance, effective_visibility
 from .alarm import BrainLayerAlarm
 from .chunk_origin import detect_chunk_origin
 from .chunk_write import insert_canonical_chunk
@@ -507,6 +507,9 @@ def create_flush_callback(
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
+            if agy_attribution_pending(source_file):
+                deferred_entries.append(entry)
+                continue
             if not t3_linkage_resolved:
                 source_only_provenance = classify_provenance(
                     source_file, t3_linked_session_ids=set(), t3_projection_version=1

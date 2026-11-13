@@ -10,12 +10,14 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
 from .content_class import normalize_content_class
-from .ingest_denylist import is_denylisted, memory_reader_attribution
+from .ingest_denylist import MEMORY_READER_ATTRIBUTIONS, is_denylisted, memory_reader_attribution
 from .t3_provenance import T3_APP_SESSION, CompactCodexHeader, is_t3_app_initiated_codex_session
 
 SearchPolicy = Literal["KEEP", "ISOLATE", "OUT"]
@@ -107,13 +109,73 @@ def _under_cursor_agent_transcripts(path: Path) -> bool:
     return "agent-transcripts" in parts[cursor_index + 1 :]
 
 
-def _under_agy_brain(path: Path) -> bool:
-    """`.gemini/antigravity-cli/brain/`: where Antigravity (agy), the current Gemini agent, exports transcripts."""
+def _agy_brain_index(path: Path) -> int | None:
+    """Index of `.gemini` in `.gemini/antigravity-cli/brain/<conversation>/...`, where Antigravity (agy),
+    the current Gemini agent, exports transcripts."""
     parts = path.parts
-    return any(
-        part == ".gemini" and parts[index + 1 : index + 3] == ("antigravity-cli", "brain")
-        for index, part in enumerate(parts)
-    )
+    for index, part in enumerate(parts[:-3]):
+        if part == ".gemini" and parts[index + 1 : index + 3] == ("antigravity-cli", "brain"):
+            return index
+    return None
+
+
+def _under_agy_brain(path: Path) -> bool:
+    return _agy_brain_index(path) is not None
+
+
+# How long a transcript whose conversation agy has not summarised yet is held back, so an agent
+# run (a memory reader above all) is not indexed as an interactive session before its row lands.
+AGY_ATTRIBUTION_WAIT_S = 600.0
+_agy_summaries_cache: dict[str, tuple[tuple[int, ...], dict[str, str]]] = {}
+
+
+def agy_conversation_agent(source_file: str | Path) -> str | None:
+    """The agent name agy recorded for this conversation ("" when none), or None while it has no row.
+
+    The attribution is agy's own `conversation_summaries.agent_name` (`agy --agent <name>`), never
+    the task text. An unreadable summaries DB reads as no row.
+    """
+    path = _abspath(str(source_file))
+    index = _agy_brain_index(path)
+    if index is None:
+        return None
+    store = Path(*path.parts[: index + 2], "conversation_summaries.db")
+    signature: list[int] = []
+    for candidate in (store, store.with_name(store.name + "-wal")):
+        try:
+            stat = candidate.stat()
+            signature += [stat.st_mtime_ns, stat.st_size]
+        except OSError:
+            signature += [0, 0]
+    cached = _agy_summaries_cache.get(str(store))
+    if cached is None or cached[0] != tuple(signature):
+        agents: dict[str, str] = {}
+        try:
+            conn = sqlite3.connect(f"file:{store}?mode=ro", uri=True, timeout=1.0)
+            try:
+                agents = {
+                    str(conversation): str(agent or "")
+                    for conversation, agent in conn.execute(
+                        "SELECT conversation_id, agent_name FROM conversation_summaries"
+                    )
+                }
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            agents = {}
+        cached = (tuple(signature), agents)
+        _agy_summaries_cache[str(store)] = cached
+    return cached[1].get(path.parts[index + 3])
+
+
+def agy_attribution_pending(source_file: str | Path) -> bool:
+    """True while a recent agy transcript's conversation has no summary row to attribute it."""
+    if not _under_agy_brain(_abspath(str(source_file))) or agy_conversation_agent(source_file) is not None:
+        return False
+    try:
+        return time.time() - os.stat(source_file).st_mtime < AGY_ATTRIBUTION_WAIT_S
+    except OSError:
+        return False
 
 
 def _project_segment(path: Path) -> str | None:
@@ -222,7 +284,15 @@ def classify_provenance(
     if _under_cursor_agent_transcripts(path):
         return ProvenanceDecision("cursor-gather", "KEEP", "Cursor coding-agent transcript root", "cli-agent")
 
-    if _under_provider_sessions(path, ".gemini") or _under_agy_brain(path):
+    if _under_agy_brain(path):
+        agent = agy_conversation_agent(path)
+        if agent in MEMORY_READER_ATTRIBUTIONS:
+            return ProvenanceDecision("recon-agent", "OUT", f"agy memory-reader agent {agent}", "brain-worker")
+        if agent:
+            return ProvenanceDecision("gemini-subagent", "KEEP", f"agy agent {agent}", "subagent")
+        return ProvenanceDecision("gemini-session", "KEEP", "Antigravity (agy) conversation", "cli-agent")
+
+    if _under_provider_sessions(path, ".gemini"):
         return ProvenanceDecision("gemini-session", "KEEP", "Gemini session root stays searchable", "cli-agent")
 
     if _is_subagent(path):
@@ -256,6 +326,7 @@ def derive_source_class(
         "codex-session": "cli-agent",
         "cursor-gather": "cli-agent",
         "gemini-session": "cli-agent",
+        "gemini-subagent": "subagent",
         "direct-session": "cli-agent",
     }
     if provenance_class in provenance_map:
