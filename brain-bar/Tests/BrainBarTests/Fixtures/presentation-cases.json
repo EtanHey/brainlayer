@@ -1,0 +1,4254 @@
+{
+ "meta": {
+  "what": "The machine-readable presentation table for the merged direction M, with the lead's rulings R1 to R16 (13 Nov) applied. One case per drawable state of fixtures version 3, plus S32 (case C29), C32 (the D13 fact line) and S13-missing (R6), which have no fixture. A Swift test constructs each case's inputs and asserts form, headline, count, icon, and every row's kind, strings and action, in order.",
+  "written_by": "brainbar-ui-lead-w35 (Claude Opus 5.5, high), 2026-11-13; rulings R1 to R16 applied the same day",
+  "human_version": "phase-8-native-build/PRESENTATION-SPEC.md",
+  "fixtures": {
+   "path": "mocks/fixtures.v3.json",
+   "sha256": "7aa65300fe3cde10ab37373eb3e74a45375bfbf357a683efd6134493ae57767e"
+  },
+  "truth_table": {
+   "path": "PRESENTATION-TRUTH-TABLE.md",
+   "version": 3,
+   "sha256": "da7693e356f8d62f2f7ef02f332aaad3af92c649b703deb40795f856c2d83752"
+  },
+  "merged_direction": {
+   "path": "MERGED-DIRECTION.md",
+   "sha256": "29eac0671eaa7465cabdd3a3b3b159e4d10b1e489d9e36728077137d50b57b13",
+   "rulings": "R1 to R12 (04:39) and R13 to R16 (04:47), 13 Nov"
+  },
+  "builds": {
+   "A1": {
+    "copy_table": "mocks/A1/COPY-TABLE.md",
+    "copy_table_sha256": "0d5807d9eecc98ea3f690c57c4ca231199d49a5ce7ab6379c1d8c47a266c7c25",
+    "index": "mocks/A1/index.html",
+    "index_sha256": "ea898b2ddf9697373223ba9086ba7b58280d5676f6765cc4cc96e8689bb38af0"
+   },
+   "A2": {
+    "copy_table": "mocks/A2/COPY-TABLE.md",
+    "copy_table_sha256": "29873e68e97fc92d9747faf66003b08cf91ecd0f34590715f004d3da0ccc616a",
+    "index": "mocks/A2/index.html",
+    "index_sha256": "51219b135a6a6038828cd0cda1239062c1e18eb4a034c555e0c6d0a6a2c7ca5c"
+   }
+  },
+  "rule": {
+   "form": "R1: needs (A1's rows as built) if and only if at least one active row, after escalation and merging (truth table Part 2 steps 1-2), is Needs you. Everything else is calm (A2's menu as built): all fine, something being handled, and Can't tell with nothing for him to do.",
+   "count": "the number of Needs-you rows after merging (Part 2 step 4). Behind, Can't tell, Fine with a fact (including the D13 transcript fact line) and Fine never count.",
+   "icon": "marked (A1's brain filled red with the \"!\") exactly when the form is needs (R1), which is exactly when count >= 1. Otherwise resting: the switch-controlled glyph (today's charts by default, A1's brain ready); this table does not choose it.",
+   "headline": "truth table Part 2 step 8, first match wins; each form draws it in its own style.",
+   "bottom": "R4: one bottom block for both forms, A2's as built: a separator, Settings… ⌘, and Quit BrainBar ⌘Q with no separator between them; Option turns Quit BrainBar into Restart BrainBar. Diagnostics is not a first-level item.",
+   "words": "each form keeps its own build's strings (MERGED-DIRECTION lead's ruling 2). Where the build has none, the lead's ruled wording is used and marked tested: false; where neither exists, text is null."
+  },
+  "conventions": {
+   "row_kinds": {
+    "headline": "the headline (with data_count and the form's disc or sign)",
+    "headline_detail": "calm form: the line under the headline",
+    "needs_you": "needs form: one block per Needs-you row: title, optional detail, two hand-off lines on a hand-off row, then one blue action button",
+    "status_line": "one secondary line per Behind or Can't-tell row that is not folded into the headline",
+    "fact_line": "a Fine-with-a-fact line (only the D13 transcript line here)",
+    "everything_else": "the one line that stands for the Fine rows it covers",
+    "separator": "a full-width hairline",
+    "standard_item": "Settings… and Quit BrainBar (with its Option alternate)"
+   },
+   "divider_before": "needs form: a hairline between consecutive Needs-you blocks (mocks/A1/index.html:72)",
+   "apostrophes": "R2: every on-screen string uses the typographic apostrophe ’, in both forms. Where a string has one, text_straight gives the same string with the straight apostrophe, as the fixtures, the truth table and A2's copy table write it. Compare text byte for byte.",
+   "source": "every build string names its build and the line of that build's COPY-TABLE.md. A2 draws fixture strings verbatim and its table leaves those out by its own rule, so they carry line: null, drawn_by (index.html line) and the fixture field. A2 strings shown with ’ in place of ' are still A2's (R2). A string with tested: false carries ruled: <section>.",
+   "inputs": "named as the truth table and the fixtures name them. Any of the 11 checks not given otherwise is green. Every check carries blind: false and unknown_ticks: 0 (seam PR-1 fields) and no recovering unless stated. Times are local (UTC+2) with offset; ageS in seconds. note_for_test explains a value and is not an input.",
+   "not_in_this_table": "the window, notifications, Diagnostics and second levels (R5: not decided here)."
+  },
+  "counts": {
+   "cases": 17,
+   "calm": 6,
+   "needs": 11,
+   "distinct_strings_by_source": {
+    "A2": 15,
+    "ruled_untested": 20,
+    "A1": 21
+   },
+   "changed_form_by_R1": [
+    "S4",
+    "S7",
+    "S8"
+   ],
+   "null_labels": 0
+  }
+ },
+ "actions": {
+  "reconnect_drive": {
+   "label": "Reconnect Google Drive",
+   "label_source": {
+    "build": "A1",
+    "copy_table": "mocks/A1/COPY-TABLE.md",
+    "line": 37,
+    "where_used": "menu (action label)",
+    "template": "Reconnect Google Drive",
+    "origin": "fixture string"
+   },
+   "does": "runs the Drive consent flow (A01: BrainBarDriveAuthModel.reconnect(), which runs brainlayer backup auth --json; RECON § 5)",
+   "states": {
+    "in_progress": {
+     "text": "Waiting for you to approve in your browser…",
+     "tested": false,
+     "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R3 (TT Part 1 row S14)",
+     "source": {
+      "replaces": {
+       "build": "A1",
+       "copy_table": "mocks/A1/COPY-TABLE.md",
+       "line": 38,
+       "where_used": "menu (disabled state)",
+       "template": "Waiting for Google…",
+       "origin": "A1 wording"
+      }
+     }
+    },
+    "ok": {
+     "text": null,
+     "behaviour": "no label: the row clears at the next status refresh (60 s timeout), truth table S14"
+    },
+    "cancelled": {
+     "text": "Reconnect was cancelled.",
+     "tested": false,
+     "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R11 (TT Part 1 row S14)",
+     "source": {}
+    },
+    "timeout": {
+     "text": "Reconnect didn’t finish in time.",
+     "text_straight": "Reconnect didn't finish in time.",
+     "tested": false,
+     "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R11 (TT Part 1 row S14)",
+     "source": {}
+    },
+    "error": {
+     "text": "Reconnect didn’t work.",
+     "text_straight": "Reconnect didn't work.",
+     "tested": false,
+     "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R11 (TT Part 1 row S14)",
+     "source": {}
+    }
+   },
+   "after_outcome": "the row's sentence stays; the same button is re-enabled after any outcome (S14). The button shows whenever S13 is active, even if DriveAuthModel says valid (S13).",
+   "today": "window only (BrainBarDriveAuth.swift:432-443); not on the status menu (RECON § 5: not found). Menu placement is N2, UI-SIDE-OK."
+  },
+  "connect_drive": {
+   "label": "Connect Google Drive",
+   "label_ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R6",
+   "does": "the same consent flow as reconnect_drive (A01), started from the never-connected row",
+   "states": {
+    "in_progress": {
+     "text": "Waiting for you to approve in your browser…",
+     "tested": false,
+     "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R3 (named for this button by MERGED-DIRECTION.md, Four more, from applying the rulings, R13)",
+     "source": {
+      "note": "R3 names the reconnect journey; S14 covers the journey on S13, so the same line is used here"
+     }
+    },
+    "ok": {
+     "text": null,
+     "behaviour": "as reconnect_drive"
+    },
+    "cancelled": {
+     "text": "Connecting was cancelled.",
+     "tested": false,
+     "ruled": "MERGED-DIRECTION.md, Four more, from applying the rulings, R13",
+     "source": {}
+    },
+    "timeout": {
+     "text": "Connecting didn’t finish in time.",
+     "text_straight": "Connecting didn't finish in time.",
+     "tested": false,
+     "ruled": "MERGED-DIRECTION.md, Four more, from applying the rulings, R13",
+     "source": {}
+    },
+    "error": {
+     "text": "Connecting didn’t work.",
+     "text_straight": "Connecting didn't work.",
+     "tested": false,
+     "ruled": "MERGED-DIRECTION.md, Four more, from applying the rulings, R13",
+     "source": {}
+    }
+   },
+   "today": "the flow exists (window); a menu item for it does not"
+  },
+  "copy_report": {
+   "label": "Copy report for an agent",
+   "label_source": {
+    "build": "A1",
+    "copy_table": "mocks/A1/COPY-TABLE.md",
+    "line": 58,
+    "where_used": "menu (action label)",
+    "template": "Copy report for an agent",
+    "origin": "fixture string"
+   },
+   "does": "puts the report on the clipboard (N1): the row's sentence; this Mac's name; BrainBar version and git commit; the evaluation time, local and ISO with offset; the evaluation id; every merged source with check name, state, age, threshold, since and note verbatim; recent action outcomes; relevant log paths. Never tokens, the resumable upload URL or the 1Password reference.",
+   "states": {
+    "done": {
+     "text": "Copied",
+     "source": {
+      "build": "A1",
+      "copy_table": "mocks/A1/COPY-TABLE.md",
+      "line": 59,
+      "where_used": "menu (disabled state)",
+      "template": "Copied",
+      "origin": "A1 wording"
+     }
+    },
+    "cancel": {
+     "text": null,
+     "behaviour": "none: a copy has no cancel"
+    },
+    "failure": {
+     "text": "Couldn’t copy the report. Try again.",
+     "text_straight": "Couldn't copy the report. Try again.",
+     "tested": false,
+     "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R12",
+     "source": {
+      "behaviour": "the button stays as it was; this one line shows under it"
+     }
+    }
+   },
+   "today": "does not exist (RECON § 5; N1, UI-SIDE-OK). A clipboard helper exists for paths (BrainBarWorkspace.swift:48-49, RECON § 5)."
+  }
+ },
+ "cases": [
+  {
+   "id": "S1",
+   "fixture_state": "S1",
+   "truth_table_cases": [
+    "C1",
+    "C20 (the same picture while a check is blind for up to two ticks: U8; D11 keeps it after PR-1)"
+   ],
+   "design_state": "S1",
+   "availability": "today",
+   "form": "calm",
+   "headline": "All good",
+   "count": 0,
+   "icon": "resting",
+   "active_rows": [
+    "S01",
+    "R01",
+    "F01",
+    "U01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A2_sign": "ok (green disc, checkmark)"
+     },
+     "data_count": 0,
+     "strings": [
+      {
+       "text": "All good",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:335",
+        "fixture": "fixtures.v3.json S1 headline"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "headline_detail",
+     "row_id": "S01",
+     "thing": "Safe",
+     "strings": [
+      {
+       "text": "Backed up to Google Drive today at 04:00.",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:347",
+        "fixture": "fixtures.v3.json S1 row S01 sentence"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "omitted_rows": {
+    "R01": "may_omit: A2 shows only the Safe sentence under \"All good\"",
+    "F01": "may_omit",
+    "U01": "may_omit"
+   },
+   "inputs": {
+    "now": "2026-11-11T20:17:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-11T20:17:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "green"
+     },
+     "backup_offsite": {
+      "state": "green",
+      "ageS": 58380,
+      "note_for_test": "last good 04:04"
+     },
+     "transcripts": {
+      "state": "green",
+      "ageS": 58620,
+      "note_for_test": "last good 04:00, the older, so S01 uses it"
+     },
+     "drive_auth": {
+      "state": "green"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "green"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "green"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "valid",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [],
+     "dbProbeFailed": false
+    },
+    "localSnapshot.uploadState": "none",
+    "uploadProcessLive": false,
+    "job.backupDaily.consecutiveFailures": 0,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 0,
+    "collector.activeCount": 1397699,
+    "operationReceipts.lastSearch.recordedAt": "2026-11-11T20:16:00+02:00",
+    "maintenance.history.lastRunAt": "2026-11-11T03:15:00+02:00",
+    "maintenance.history.result": "completed"
+   }
+  },
+  {
+   "id": "S2-today",
+   "fixture_state": "S2-today",
+   "truth_table_cases": [
+    "C11",
+    "C2"
+   ],
+   "design_state": "S2",
+   "availability": "today",
+   "form": "calm",
+   "headline": "Backing up now",
+   "count": 0,
+   "icon": "resting",
+   "active_rows": [
+    "S03",
+    "R01",
+    "F01",
+    "U01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A2_sign": "busy (blue disc, arrows)"
+     },
+     "data_count": 0,
+     "strings": [
+      {
+       "text": "Backing up now",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:335",
+        "fixture": "fixtures.v3.json S2-today headline"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "headline_detail",
+     "row_id": "S03",
+     "thing": "Safe",
+     "state": "behind",
+     "folds": "S03: the one Behind row is folded into the headline (mocks/A2/index.html:291)",
+     "strings": [
+      {
+       "text": "To Google Drive. Started at 11:28.",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": 18,
+        "where_used": "menu, headline second line (S03 folded)",
+        "template": "To {destination}. Started at {HH:mm}."
+       }
+      }
+     ]
+    },
+    {
+     "kind": "everything_else",
+     "covers": [
+      "R01",
+      "F01",
+      "U01"
+     ],
+     "placement": "under the headline: A2 puts it in the head when no other line is listed",
+     "strings": [
+      {
+       "text": "Saving, search and upkeep are fine.",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": 19,
+        "where_used": "menu, the one sentence for what is fine",
+        "template": "{fine things, joined} are fine."
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "inputs": {
+    "now": "2026-11-12T12:00:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-12T12:00:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "green"
+     },
+     "backup_offsite": {
+      "state": "amber",
+      "ageS": 114480,
+      "thresholdS": 280800,
+      "note_for_test": "31.8 h; amber after 30 h, red after 78 h"
+     },
+     "transcripts": {
+      "state": "green"
+     },
+     "drive_auth": {
+      "state": "green"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "green"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "green"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "valid",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [],
+     "dbProbeFailed": false
+    },
+    "localSnapshot.uploadState": "in_progress",
+    "uploadProcessLive": true,
+    "job.backupDaily.consecutiveFailures": 0,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 0,
+    "collector.activeCount": 1397699,
+    "uploadProcessStartedAt": "2026-11-12T11:28:00+02:00",
+    "operationReceipts.lastSearch.recordedAt": "2026-11-12T12:00:00+02:00",
+    "maintenance.history.lastRunAt": "2026-11-12T03:15:00+02:00",
+    "maintenance.history.result": "completed"
+   }
+  },
+  {
+   "id": "S2-after-seam",
+   "fixture_state": "S2-after-seam",
+   "truth_table_cases": [
+    "C11",
+    "C2"
+   ],
+   "design_state": "S2",
+   "availability": "after PR-2 (recovering on backup_offsite)",
+   "form": "calm",
+   "headline": "Backing up now",
+   "count": 0,
+   "icon": "resting",
+   "active_rows": [
+    "S03",
+    "R01",
+    "F01",
+    "U01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A2_sign": "busy (blue disc, arrows)"
+     },
+     "data_count": 0,
+     "strings": [
+      {
+       "text": "Backing up now",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:335",
+        "fixture": "fixtures.v3.json S2-after-seam headline"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "headline_detail",
+     "row_id": "S03",
+     "thing": "Safe",
+     "state": "behind",
+     "folds": "S03: the one Behind row is folded into the headline (mocks/A2/index.html:291)",
+     "strings": [
+      {
+       "text": "To Google Drive. Started at 11:28. 40% done, about 12:48.",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": 20,
+        "where_used": "menu, headline second line (S03 folded)",
+        "template": "To {destination}. Started at {HH:mm}. {p}% done, about {HH:mm of eta}."
+       }
+      }
+     ],
+     "progress_bar": {
+      "value": 40,
+      "drawn_by": "mocks/A2/index.html:340"
+     },
+     "variant_eta_null": {
+      "text": "To Google Drive. Started at 11:28. 40% done.",
+      "tested": false,
+      "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R10 (from PRESENTATION-TRUTH-TABLE.md Part 3 S2 after the seam)",
+      "source": {
+       "composed_from": "A2's tested prefix 'To {destination}. Started at {HH:mm}.' (mocks/A2/COPY-TABLE.md:18) and the ruled '{p}% done.'; A2 never drew this string",
+       "when": "backup_offsite.recovering.eta is null (fewer than two samples)"
+      }
+     }
+    },
+    {
+     "kind": "everything_else",
+     "covers": [
+      "R01",
+      "F01",
+      "U01"
+     ],
+     "placement": "under the headline: A2 puts it in the head when no other line is listed",
+     "strings": [
+      {
+       "text": "Saving, search and upkeep are fine.",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": 19,
+        "where_used": "menu, the one sentence for what is fine",
+        "template": "{fine things, joined} are fine."
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "inputs": {
+    "now": "2026-11-12T12:00:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-12T12:00:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "green"
+     },
+     "backup_offsite": {
+      "state": "amber",
+      "ageS": 114480,
+      "thresholdS": 280800,
+      "note_for_test": "31.8 h; amber after 30 h, red after 78 h",
+      "recovering": {
+       "kind": "upload",
+       "progress": 0.4,
+       "eta": "2026-11-12T12:48:00+02:00",
+       "started_at": "2026-11-12T11:28:00+02:00",
+       "updated_at": "2026-11-12T12:00:00+02:00",
+       "cadence_s": 30,
+       "note_for_test": "PR-2. On schedule (now - updated_at <= 2 x cadence_s, now <= eta), so U13 keeps the amber uncounted"
+      }
+     },
+     "transcripts": {
+      "state": "green"
+     },
+     "drive_auth": {
+      "state": "green"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "green"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "green"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "valid",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [],
+     "dbProbeFailed": false
+    },
+    "localSnapshot.uploadState": "in_progress",
+    "uploadProcessLive": true,
+    "job.backupDaily.consecutiveFailures": 0,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 0,
+    "collector.activeCount": 1397699,
+    "uploadProcessStartedAt": "2026-11-12T11:28:00+02:00",
+    "operationReceipts.lastSearch.recordedAt": "2026-11-12T12:00:00+02:00",
+    "maintenance.history.lastRunAt": "2026-11-12T03:15:00+02:00",
+    "maintenance.history.result": "completed"
+   }
+  },
+  {
+   "id": "S4",
+   "fixture_state": "S4",
+   "truth_table_cases": [
+    "C8"
+   ],
+   "design_state": "S4",
+   "availability": "today",
+   "form": "calm",
+   "form_changed_by": "R1 (was needs)",
+   "headline": "Checking after sleep…",
+   "count": 0,
+   "icon": "resting",
+   "active_rows": [
+    "X02 x4 (Remembering, Finding, Safe, Upkeep)"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A2_sign": "wait (grey disc, three dots)"
+     },
+     "data_count": 0,
+     "strings": [
+      {
+       "text": "Checking after sleep…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:335",
+        "fixture": "fixtures.v3.json S4 headline"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "headline_detail",
+     "row_id": "X02",
+     "thing": "all four",
+     "state": "cant-tell",
+     "folds": "the four Can't-tell rows, as one sentence that names all four things (mocks/A2/index.html:330)",
+     "strings": [
+      {
+       "text": "Saving, search, backups and upkeep aren’t confirmed yet. Last backup today at 04:00.",
+       "text_straight": "Saving, search, backups and upkeep aren't confirmed yet. Last backup today at 04:00.",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": 25,
+        "where_used": "menu, headline second line (the four Checking rows as one sentence)",
+        "template": "{things, joined} aren't confirmed yet. Last backup {at}."
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "inputs": {
+    "now": "2026-11-11T10:39:00+02:00",
+    "app.wakeCatchUpPending": true,
+    "app.sleepHistory": [
+     {
+      "slept": "2026-11-11T10:24:57+02:00",
+      "woke": "2026-11-11T10:38:37+02:00"
+     }
+    ],
+    "backupsObservation.lastMeasured.newestVerifiedCopyAt": "2026-11-11T04:00:00+02:00 (the older of 04:04 and 04:00)",
+    "checks": "any last-known values: X02 masks them",
+    "note_for_test": "X02: 180 s from sleep, then max(180, cadence + 60) after wake, typically 360 s (T19). Nothing was Needs you before sleep, and no fresh red check outside ingest, stores and embedding breaks through."
+   }
+  },
+  {
+   "id": "S7",
+   "fixture_state": "S7",
+   "truth_table_cases": [
+    "Part 3 S7"
+   ],
+   "design_state": "S7",
+   "availability": "today",
+   "form": "calm",
+   "form_changed_by": "R1 (was needs)",
+   "headline": "Catching up on new conversations",
+   "count": 0,
+   "icon": "resting",
+   "active_rows": [
+    "R02",
+    "F02",
+    "S01",
+    "U01",
+    "X12 (a number, not a row)"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A2_sign": "busy (blue disc, arrows)"
+     },
+     "data_count": 0,
+     "strings": [
+      {
+       "text": "Catching up on new conversations",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:335",
+        "fixture": "fixtures.v3.json S7 headline"
+       }
+      }
+     ],
+     "also_row": "R02",
+     "note": "R02 is the one Behind row; A2 folds it into the headline. Its sentence repeats the headline, so A2 draws no line under it (mocks/A2/index.html:316)",
+     "accepted": "MERGED-DIRECTION.md, Four more, from applying the rulings, R16: \"Catching up on new conversations.\" is on screen once, as the headline; the truth table's Part 3 line for R02 is satisfied by it"
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "status_line",
+     "row_id": "F02",
+     "thing": "Finding",
+     "state": "cant-tell",
+     "mark": "wait sign (grey disc, three dots)",
+     "strings": [
+      {
+       "text": "Can’t confirm agents can search right now.",
+       "text_straight": "Can't confirm agents can search right now.",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:367",
+        "fixture": "fixtures.v3.json S7 row F02 sentence"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "everything_else",
+     "covers": [
+      "S01",
+      "U01"
+     ],
+     "mark": "ok sign (green disc, checkmark)",
+     "strings": [
+      {
+       "text": "Backups and upkeep are fine.",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": 36,
+        "where_used": "menu, the one sentence for what is fine",
+        "template": "{fine things, joined} are fine."
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "not_in_menu": {
+    "X12": "Couldn't count today's new passages just now. Window only in both builds (where the number lives)."
+   },
+   "inputs": {
+    "now": "2026-11-12T12:48:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-12T12:48:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "green"
+     },
+     "backup_offsite": {
+      "state": "green",
+      "ageS": 27660,
+      "note_for_test": "last good 05:07"
+     },
+     "transcripts": {
+      "state": "green",
+      "ageS": 31620,
+      "note_for_test": "last good 04:01, the older"
+     },
+     "drive_auth": {
+      "state": "green"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "green"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "amber",
+      "since": "2026-11-12T12:45:00+02:00",
+      "note_for_test": "any since under 15 min before now (value synthetic); escalates at 15 min (U5)"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "valid",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [
+      "offset_lag"
+     ],
+     "maxOffsetLagBytes": 22020096,
+     "dbProbeFailed": false,
+     "note_for_test": "21 MB as BrainBar formats it; the exact byte count was not recorded"
+    },
+    "localSnapshot.uploadState": "none",
+    "uploadProcessLive": false,
+    "job.backupDaily.consecutiveFailures": 0,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 0,
+    "uiClock.offsetLagEpisodeStart": "2026-11-12T12:40:00+02:00 (synthetic; any start under 30 min before now)",
+    "todayCard.measured": false,
+    "maintenance.history.lastRunAt": "2026-11-12T03:15:00+02:00",
+    "maintenance.history.result": "completed"
+   }
+  },
+  {
+   "id": "S8",
+   "fixture_state": "S8",
+   "truth_table_cases": [
+    "C7"
+   ],
+   "design_state": "S8",
+   "availability": "today",
+   "form": "calm",
+   "form_changed_by": "R1 (was needs)",
+   "headline": "Checking on your memory…",
+   "count": 0,
+   "icon": "resting",
+   "active_rows": [
+    "X01 x4"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A2_sign": "wait (grey disc, three dots)"
+     },
+     "data_count": 0,
+     "strings": [
+      {
+       "text": "Checking on your memory…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:335",
+        "fixture": "fixtures.v3.json S8 headline"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "headline_detail",
+     "row_id": "X01",
+     "thing": "all four",
+     "state": "cant-tell",
+     "folds": "the four Can't-tell rows, as one sentence that names all four things",
+     "strings": [
+      {
+       "text": "Saving, search, backups and upkeep aren’t confirmed yet.",
+       "text_straight": "Saving, search, backups and upkeep aren't confirmed yet.",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": 37,
+        "where_used": "menu, headline second line (the four Checking rows as one sentence)",
+        "template": "{things, joined} aren't confirmed yet."
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "inputs": {
+    "now": null,
+    "app.isChecking": true,
+    "verdict": {
+     "decodable": false,
+     "note_for_test": "first launch: no verdict yet; a decodable verdict ends X01 at once"
+    },
+    "backupsObservation.lastMeasured": null
+   }
+  },
+  {
+   "id": "S3",
+   "fixture_state": "S3",
+   "truth_table_cases": [
+    "C4",
+    "C22 (M1, with S02 as the absorbed DB-backup row)"
+   ],
+   "design_state": "S3",
+   "availability": "today",
+   "form": "needs",
+   "headline": "1 thing needs you",
+   "count": 1,
+   "icon": "marked",
+   "active_rows": [
+    "S13",
+    "S02 (absorbed by M1)",
+    "R01",
+    "F01",
+    "U01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A1_disc": "marked (red disc, \"!\")"
+     },
+     "data_count": 1,
+     "strings": [
+      {
+       "text": "1 thing needs you",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 39,
+        "where_used": "menu headline",
+        "template": "1 thing needs you",
+        "origin": "fixture string"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "needs_you",
+     "row_id": "S13",
+     "thing": "Safe",
+     "class": "confirmed",
+     "mark": "alert-circle (red)",
+     "divider_before": false,
+     "strings": [
+      {
+       "part": "title",
+       "text": "Google Drive is disconnected",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 41,
+        "where_used": "menu, problem title",
+        "template": "Google Drive is disconnected",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "detail",
+       "text": "Backups can’t upload until you reconnect it. Your newest backup in Google Drive is 21 hours old.",
+       "text_straight": "Backups can't upload until you reconnect it. Your newest backup in Google Drive is 21 hours old.",
+       "tested": false,
+       "ruled": "MERGED-DIRECTION.md, Four more, from applying the rulings, R15",
+       "source": {
+        "replaces": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 40,
+         "where_used": "menu, problem facts",
+         "template": "Backups can’t upload until you reconnect it. {newest copy}",
+         "origin": "A1 wording"
+        },
+        "template": "Backups can't upload until you reconnect it. Your newest backup in Google Drive is {copy age of backup_offsite}.",
+        "change": "A1's tested line with 'in Google Drive' added; the age is the Drive copy's (backup_offsite.ageS)"
+       }
+      }
+     ],
+     "merged_sources": [
+      "S13",
+      "S02"
+     ],
+     "action": {
+      "kind": "reconnect_drive",
+      "strings": [
+       {
+        "text": "Reconnect Google Drive",
+        "source": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 37,
+         "where_used": "menu (action label)",
+         "template": "Reconnect Google Drive",
+         "origin": "fixture string"
+        }
+       }
+      ],
+      "style": "blue button"
+     }
+    },
+    {
+     "kind": "everything_else",
+     "covers": [
+      "R01",
+      "F01",
+      "U01"
+     ],
+     "mark": "checkmark",
+     "strings": [
+      {
+       "text": "Everything else is fine.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 32,
+        "where_used": "menu, last line before the items",
+        "template": "Everything else is fine.",
+        "origin": "A1 wording",
+        "note": "A1 draws it for any state with Fine rows and no custody-critical row (mocks/A1/index.html:399)"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "inputs": {
+    "now": "2026-11-10T00:35:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-10T00:35:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "green"
+     },
+     "backup_offsite": {
+      "state": "green",
+      "ageS": 75060,
+      "note_for_test": "last good in Google Drive Nov 9 03:44 = 20 h 51 min; R15: the Drive copy's age, \"21 hours old\""
+     },
+     "transcripts": {
+      "state": "green"
+     },
+     "drive_auth": {
+      "state": "red",
+      "note_for_test": "consent_needed (E: \"access lost; consent needed\")"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "green"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "green"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "invalid (wording only: not missing; F14)",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [],
+     "dbProbeFailed": false
+    },
+    "localSnapshot.uploadState": "none",
+    "uploadProcessLive": false,
+    "job.backupDaily.consecutiveFailures": 1,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 0,
+    "collector.activeCount": 1397699,
+    "job.backupDaily.lastRunAt": "2026-11-09T05:18:00+02:00 (failed, exit 1)",
+    "job.backupDaily.nextRunAt": "2026-11-10T03:15:00+02:00",
+    "operationReceipts.lastSearch.recordedAt": "2026-11-10T00:35:00+02:00",
+    "maintenance.history.lastRunAt": "2026-11-09T03:15:00+02:00",
+    "maintenance.history.result": "completed"
+   },
+   "note": "R15 changes three words of a tested A1 line, so S3 is in the reader pass on the native captures."
+  },
+  {
+   "id": "S5",
+   "fixture_state": "S5",
+   "truth_table_cases": [
+    "Part 3 S5 (S06, escalated class)"
+   ],
+   "design_state": "S5",
+   "availability": "today",
+   "form": "needs",
+   "headline": "1 thing needs you",
+   "count": 1,
+   "icon": "marked",
+   "active_rows": [
+    "S06",
+    "R01",
+    "F01",
+    "U01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A1_disc": "marked (red disc, \"!\")"
+     },
+     "data_count": 1,
+     "strings": [
+      {
+       "text": "1 thing needs you",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 39,
+        "where_used": "menu headline",
+        "template": "1 thing needs you",
+        "origin": "fixture string"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "needs_you",
+     "row_id": "S06",
+     "thing": "Safe",
+     "class": "escalated",
+     "mark": "alert-circle (red)",
+     "divider_before": false,
+     "strings": [
+      {
+       "part": "title",
+       "text": "The last 2 backups didn’t finish",
+       "text_straight": "The last 2 backups didn't finish",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 63,
+        "where_used": "menu, problem title",
+        "template": "The last {N} backups didn’t finish",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "detail",
+       "text": "Your newest backup is from Nov 9 at 03:44.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 62,
+        "where_used": "menu, problem facts",
+        "template": "{newest copy}",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_1",
+       "text": "BrainBar can’t fix this itself.",
+       "text_straight": "BrainBar can't fix this itself.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 60,
+        "where_used": "menu, hand-off sentence",
+        "template": "BrainBar can’t fix this itself.",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_2",
+       "text": "Give the report to an agent.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 61,
+        "where_used": "menu, hand-off sentence",
+        "template": "Give the report to an agent.",
+        "origin": "A1 wording"
+       }
+      }
+     ],
+     "action": {
+      "kind": "copy_report",
+      "strings": [
+       {
+        "text": "Copy report for an agent",
+        "source": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 58,
+         "where_used": "menu (action label)",
+         "template": "Copy report for an agent",
+         "origin": "fixture string"
+        }
+       }
+      ],
+      "style": "blue button"
+     },
+     "newest_copy_rule": "MERGED-DIRECTION.md, Four more, from applying the rulings, R15: both copies failed, so the line stays as built and the age is the newest of either copy (local or Drive)"
+    },
+    {
+     "kind": "everything_else",
+     "covers": [
+      "R01",
+      "F01",
+      "U01"
+     ],
+     "mark": "checkmark",
+     "strings": [
+      {
+       "text": "Everything else is fine.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 32,
+        "where_used": "menu, last line before the items",
+        "template": "Everything else is fine.",
+        "origin": "A1 wording",
+        "note": "A1 draws it for any state with Fine rows and no custody-critical row (mocks/A1/index.html:399)"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "second_level_not_in_menu": {
+    "S06": "The next one is scheduled tonight at 03:15. A1 draws it in the window only (mocks/A1/COPY-TABLE.md:69)"
+   },
+   "inputs": {
+    "now": "2026-11-11T01:57:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-11T01:57:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "amber",
+      "ageS": 166380,
+      "thresholdS": 194400
+     },
+     "backup_offsite": {
+      "state": "amber",
+      "ageS": 166380,
+      "thresholdS": 280800,
+      "note_for_test": "46.0 h; newest copy Nov 9 03:44, over 24 h so the date form"
+     },
+     "transcripts": {
+      "state": "green"
+     },
+     "drive_auth": {
+      "state": "green",
+      "note_for_test": "not red: with it red, M1 absorbs S06 into S13"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "green"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "green"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "valid",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [],
+     "dbProbeFailed": false
+    },
+    "localSnapshot.uploadState": "none",
+    "uploadProcessLive": false,
+    "job.backupDaily.consecutiveFailures": 2,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 0,
+    "collector.activeCount": 1397699,
+    "job.backupDaily.lastRunAt": "2026-11-10T03:44:00+02:00 (cut off)",
+    "job.backupDaily.nextRunAt": "2026-11-11T03:15:00+02:00",
+    "operationReceipts.lastSearch.recordedAt": "2026-11-11T01:57:00+02:00",
+    "maintenance.history.lastRunAt": "2026-11-10T03:15:00+02:00",
+    "maintenance.history.result": "completed"
+   }
+  },
+  {
+   "id": "S6",
+   "fixture_state": "S6",
+   "truth_table_cases": [
+    "Part 3 S6 (U03)"
+   ],
+   "design_state": "S6",
+   "availability": "today",
+   "form": "needs",
+   "headline": "1 thing needs you",
+   "count": 1,
+   "icon": "marked",
+   "active_rows": [
+    "U03",
+    "R01",
+    "F01",
+    "S01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A1_disc": "marked (red disc, \"!\")"
+     },
+     "data_count": 1,
+     "strings": [
+      {
+       "text": "1 thing needs you",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 39,
+        "where_used": "menu headline",
+        "template": "1 thing needs you",
+        "origin": "fixture string"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "needs_you",
+     "row_id": "U03",
+     "thing": "Upkeep",
+     "class": "confirmed",
+     "mark": "alert-circle (red)",
+     "divider_before": false,
+     "strings": [
+      {
+       "part": "title",
+       "text": "Nightly upkeep failed 3 nights in a row",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 74,
+        "where_used": "menu, problem title",
+        "template": "Nightly upkeep failed {N} nights in a row",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "detail",
+       "text": "Your memory is still being saved and backed up, as of the last checks.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 73,
+        "where_used": "menu, problem facts",
+        "template": "Your memory is still being saved and backed up, as of the last checks.",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_1",
+       "text": "BrainBar can’t fix this itself.",
+       "text_straight": "BrainBar can't fix this itself.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 70,
+        "where_used": "menu, hand-off sentence",
+        "template": "BrainBar can’t fix this itself.",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_2",
+       "text": "Give the report to an agent.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 71,
+        "where_used": "menu, hand-off sentence",
+        "template": "Give the report to an agent.",
+        "origin": "A1 wording"
+       }
+      }
+     ],
+     "action": {
+      "kind": "copy_report",
+      "strings": [
+       {
+        "text": "Copy report for an agent",
+        "source": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 58,
+         "where_used": "menu (action label)",
+         "template": "Copy report for an agent",
+         "origin": "fixture string"
+        }
+       }
+      ],
+      "style": "blue button"
+     }
+    },
+    {
+     "kind": "everything_else",
+     "covers": [
+      "R01",
+      "F01",
+      "S01"
+     ],
+     "mark": "checkmark",
+     "strings": [
+      {
+       "text": "Everything else is fine.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 32,
+        "where_used": "menu, last line before the items",
+        "template": "Everything else is fine.",
+        "origin": "A1 wording",
+        "note": "A1 draws it for any state with Fine rows and no custody-critical row (mocks/A1/index.html:399)"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "inputs": {
+    "now": "2026-11-12T12:48:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-12T12:48:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "green"
+     },
+     "backup_offsite": {
+      "state": "green",
+      "ageS": 31680
+     },
+     "transcripts": {
+      "state": "green",
+      "ageS": 31680,
+      "note_for_test": "04:00 today (synthetic)"
+     },
+     "drive_auth": {
+      "state": "green"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "green"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "green"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "valid",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [],
+     "dbProbeFailed": false
+    },
+    "localSnapshot.uploadState": "none",
+    "uploadProcessLive": false,
+    "job.backupDaily.consecutiveFailures": 0,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 3,
+    "collector.activeCount": 1397699,
+    "operationReceipts.lastSearch.recordedAt": "2026-11-12T12:47:00+02:00",
+    "note_for_test": "U03's second sentence appears because Remembering and Safe are both Fine"
+   }
+  },
+  {
+   "id": "S9",
+   "fixture_state": "S9",
+   "truth_table_cases": [
+    "C13"
+   ],
+   "design_state": "S9",
+   "availability": "today",
+   "form": "needs",
+   "headline": "1 thing needs you",
+   "count": 1,
+   "icon": "marked",
+   "active_rows": [
+    "F07",
+    "R01",
+    "S01",
+    "U01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A1_disc": "marked (red disc, \"!\")"
+     },
+     "data_count": 1,
+     "strings": [
+      {
+       "text": "1 thing needs you",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 39,
+        "where_used": "menu headline",
+        "template": "1 thing needs you",
+        "origin": "fixture string"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "needs_you",
+     "row_id": "F07",
+     "thing": "Finding",
+     "class": "confirmed",
+     "mark": "alert-circle (red)",
+     "divider_before": false,
+     "strings": [
+      {
+       "part": "title",
+       "text": "Search by meaning isn’t catching up",
+       "text_straight": "Search by meaning isn't catching up",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 84,
+        "where_used": "menu, problem title",
+        "template": "Search by meaning isn’t catching up",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "detail",
+       "text": "BrainBar hasn’t seen the memories waiting for it go down in over an hour. Agents can still find every memory by exact words.",
+       "text_straight": "BrainBar hasn't seen the memories waiting for it go down in over an hour. Agents can still find every memory by exact words.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 83,
+        "where_used": "menu, problem facts",
+        "template": "BrainBar hasn’t seen the memories waiting for it go down {over d}. Agents can still find every memory by exact words.",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_1",
+       "text": "BrainBar can’t fix this itself.",
+       "text_straight": "BrainBar can't fix this itself.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 80,
+        "where_used": "menu, hand-off sentence",
+        "template": "BrainBar can’t fix this itself.",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_2",
+       "text": "Give the report to an agent.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 81,
+        "where_used": "menu, hand-off sentence",
+        "template": "Give the report to an agent.",
+        "origin": "A1 wording"
+       }
+      }
+     ],
+     "action": {
+      "kind": "copy_report",
+      "strings": [
+       {
+        "text": "Copy report for an agent",
+        "source": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 58,
+         "where_used": "menu (action label)",
+         "template": "Copy report for an agent",
+         "origin": "fixture string"
+        }
+       }
+      ],
+      "style": "blue button"
+     }
+    },
+    {
+     "kind": "everything_else",
+     "covers": [
+      "R01",
+      "S01",
+      "U01"
+     ],
+     "mark": "checkmark",
+     "strings": [
+      {
+       "text": "Everything else is fine.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 82,
+        "where_used": "menu, last line before the items",
+        "template": "Everything else is fine.",
+        "origin": "A1 wording",
+        "note": "A1 draws it for any state with Fine rows and no custody-critical row (mocks/A1/index.html:399)"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "inputs": {
+    "now": "2026-11-12T12:49:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-12T12:49:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "green"
+     },
+     "backup_offsite": {
+      "state": "green",
+      "ageS": 31680
+     },
+     "transcripts": {
+      "state": "green",
+      "ageS": 31740,
+      "note_for_test": "last good 04:00, the older"
+     },
+     "drive_auth": {
+      "state": "green"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "amber",
+      "ageS": 3960,
+      "thresholdS": 21600,
+      "note_for_test": "1.1 h, awake-adjusted; {over d} gives \"in over an hour\" (U10)"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "green"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "valid",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [],
+     "dbProbeFailed": false
+    },
+    "localSnapshot.uploadState": "none",
+    "uploadProcessLive": false,
+    "job.backupDaily.consecutiveFailures": 0,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 0,
+    "collector.signalCoverage.keyword": 1.0,
+    "collector.activeCount": "unmeasurable",
+    "mac": "M1",
+    "maintenance.history.lastRunAt": "2026-11-12T03:15:00+02:00",
+    "maintenance.history.result": "completed"
+   }
+  },
+  {
+   "id": "S10",
+   "fixture_state": "S10",
+   "truth_table_cases": [
+    "C6"
+   ],
+   "design_state": "S10",
+   "availability": "today",
+   "form": "needs",
+   "headline": "1 thing needs you",
+   "count": 1,
+   "icon": "marked",
+   "active_rows": [
+    "S13",
+    "R02",
+    "F02",
+    "U01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A1_disc": "marked (red disc, \"!\")"
+     },
+     "data_count": 1,
+     "strings": [
+      {
+       "text": "1 thing needs you",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 39,
+        "where_used": "menu headline",
+        "template": "1 thing needs you",
+        "origin": "fixture string"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "needs_you",
+     "row_id": "S13",
+     "thing": "Safe",
+     "class": "confirmed",
+     "mark": "alert-circle (red)",
+     "divider_before": false,
+     "strings": [
+      {
+       "part": "title",
+       "text": "Google Drive is disconnected",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 55,
+        "where_used": "menu, problem title",
+        "template": "Google Drive is disconnected",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "detail",
+       "text": "Backups can’t upload until you reconnect it.",
+       "text_straight": "Backups can't upload until you reconnect it.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 54,
+        "where_used": "menu, problem facts",
+        "template": "Backups can’t upload until you reconnect it.",
+        "origin": "A1 wording"
+       }
+      }
+     ],
+     "action": {
+      "kind": "reconnect_drive",
+      "strings": [
+       {
+        "text": "Reconnect Google Drive",
+        "source": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 37,
+         "where_used": "menu (action label)",
+         "template": "Reconnect Google Drive",
+         "origin": "fixture string"
+        }
+       }
+      ],
+      "style": "blue button"
+     }
+    },
+    {
+     "kind": "status_line",
+     "row_id": "R02",
+     "thing": "Remembering",
+     "state": "behind",
+     "spinner": true,
+     "strings": [
+      {
+       "text": "Catching up on new conversations.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 88,
+        "where_used": "menu, one line per thing being handled or unknown",
+        "template": "Catching up on new conversations.",
+        "origin": "fixture string"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "status_line",
+     "row_id": "F02",
+     "thing": "Finding",
+     "state": "cant-tell",
+     "spinner": false,
+     "strings": [
+      {
+       "text": "Can’t confirm agents can search right now.",
+       "text_straight": "Can't confirm agents can search right now.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 77,
+        "where_used": "menu, one line per thing being handled or unknown",
+        "template": "Can’t confirm agents can search right now.",
+        "origin": "A1 wording"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "everything_else",
+     "covers": [
+      "U01"
+     ],
+     "mark": "checkmark",
+     "strings": [
+      {
+       "text": "Everything else is fine.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 33,
+        "where_used": "menu, last line before the items",
+        "template": "Everything else is fine.",
+        "origin": "A1 wording",
+        "note": "A1 draws it for any state with Fine rows and no custody-critical row (mocks/A1/index.html:399)"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "inputs": {
+    "now": "2026-11-12T12:48:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-12T12:48:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "green"
+     },
+     "backup_offsite": {
+      "state": "green"
+     },
+     "transcripts": {
+      "state": "green"
+     },
+     "drive_auth": {
+      "state": "red"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "green"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "amber",
+      "since": "2026-11-12T12:45:00+02:00",
+      "note_for_test": "under 15 min before now"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "invalid (wording only: not missing)",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [
+      "offset_lag"
+     ],
+     "maxOffsetLagBytes": 22020096,
+     "dbProbeFailed": false,
+     "note_for_test": "21 MB as BrainBar formats it; the exact byte count was not recorded"
+    },
+    "localSnapshot.uploadState": "none",
+    "uploadProcessLive": false,
+    "job.backupDaily.consecutiveFailures": 0,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 0,
+    "uiClock.offsetLagEpisodeStart": "2026-11-12T12:40:00+02:00 (synthetic; under 30 min)",
+    "note_for_test": "backup copies green and no DB-backup row active, so M1 absorbs nothing and no {newest copy} is added",
+    "maintenance.history.lastRunAt": "2026-11-12T03:15:00+02:00",
+    "maintenance.history.result": "completed"
+   }
+  },
+  {
+   "id": "S11",
+   "fixture_state": "S11",
+   "truth_table_cases": [
+    "C14"
+   ],
+   "design_state": "S11 (S11a)",
+   "availability": "today",
+   "form": "needs",
+   "headline": "1 thing needs you",
+   "count": 1,
+   "icon": "marked",
+   "active_rows": [
+    "S19 (+ S06 by M2)",
+    "R01",
+    "F01",
+    "U01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A1_disc": "marked (red disc, \"!\")"
+     },
+     "data_count": 1,
+     "strings": [
+      {
+       "text": "1 thing needs you",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 39,
+        "where_used": "menu headline",
+        "template": "1 thing needs you",
+        "origin": "fixture string"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "needs_you",
+     "row_id": "S19",
+     "thing": "Safe",
+     "class": "custody-critical",
+     "mark": "alert-circle (red)",
+     "divider_before": false,
+     "strings": [
+      {
+       "part": "title",
+       "text": "The newest checked backup is damaged",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 96,
+        "where_used": "menu, problem title",
+        "template": "The newest checked backup is damaged",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "detail",
+       "text": "Your memory itself may be damaged too.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 95,
+        "where_used": "menu, problem facts",
+        "template": "Your memory itself may be damaged too.",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_1",
+       "text": "BrainBar can’t fix this itself.",
+       "text_straight": "BrainBar can't fix this itself.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 93,
+        "where_used": "menu, hand-off sentence",
+        "template": "BrainBar can’t fix this itself.",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_2",
+       "text": "Give the report to an agent.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 94,
+        "where_used": "menu, hand-off sentence",
+        "template": "Give the report to an agent.",
+        "origin": "A1 wording"
+       }
+      }
+     ],
+     "merged_sources": [
+      "S19",
+      "S06"
+     ],
+     "action": {
+      "kind": "copy_report",
+      "strings": [
+       {
+        "text": "Copy report for an agent",
+        "source": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 58,
+         "where_used": "menu (action label)",
+         "template": "Copy report for an agent",
+         "origin": "fixture string"
+        }
+       }
+      ],
+      "style": "blue button"
+     }
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "no_everything_else_line": "A1 draws no reassurance beside a custody-critical row (mocks/A1/index.html:380): no \"Everything else is fine.\" line, and R01, F01, U01 are not drawn",
+   "inputs": {
+    "now": "2026-11-12T12:48:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-12T12:48:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "red",
+      "note_for_test": "S06 custody-critical, merged into S19 by M2; any ageS past red (not drawn)"
+     },
+     "backup_offsite": {
+      "state": "green"
+     },
+     "transcripts": {
+      "state": "green"
+     },
+     "drive_auth": {
+      "state": "green"
+     },
+     "integrity": {
+      "state": "red",
+      "note_for_test": "corruption confirmed in the newest snapshot"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "green"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "green"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "valid",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [],
+     "dbProbeFailed": false
+    },
+    "localSnapshot.uploadState": "none",
+    "uploadProcessLive": false,
+    "job.backupDaily.consecutiveFailures": 0,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 0,
+    "collector.activeCount": 1397699,
+    "operationReceipts.lastSearch.recordedAt": "2026-11-12T12:47:00+02:00",
+    "maintenance.history.lastRunAt": "2026-11-12T03:15:00+02:00",
+    "maintenance.history.result": "completed"
+   }
+  },
+  {
+   "id": "S11b",
+   "fixture_state": "S11b",
+   "truth_table_cases": [
+    "Part 3 S11b (S07)"
+   ],
+   "design_state": "S11 (S11b)",
+   "availability": "today",
+   "form": "needs",
+   "headline": "1 thing needs you",
+   "count": 1,
+   "icon": "marked",
+   "active_rows": [
+    "S07",
+    "R01",
+    "F01",
+    "U01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A1_disc": "marked (red disc, \"!\")"
+     },
+     "data_count": 1,
+     "strings": [
+      {
+       "text": "1 thing needs you",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 39,
+        "where_used": "menu headline",
+        "template": "1 thing needs you",
+        "origin": "fixture string"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "needs_you",
+     "row_id": "S07",
+     "thing": "Safe",
+     "class": "custody-critical",
+     "mark": "alert-circle (red)",
+     "divider_before": false,
+     "strings": [
+      {
+       "part": "title",
+       "text": "No verified backup on record",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 99,
+        "where_used": "menu, problem title",
+        "template": "No verified backup on record",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_1",
+       "text": "BrainBar can’t fix this itself.",
+       "text_straight": "BrainBar can't fix this itself.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 97,
+        "where_used": "menu, hand-off sentence",
+        "template": "BrainBar can’t fix this itself.",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_2",
+       "text": "Give the report to an agent.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 98,
+        "where_used": "menu, hand-off sentence",
+        "template": "Give the report to an agent.",
+        "origin": "A1 wording"
+       }
+      }
+     ],
+     "action": {
+      "kind": "copy_report",
+      "strings": [
+       {
+        "text": "Copy report for an agent",
+        "source": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 58,
+         "where_used": "menu (action label)",
+         "template": "Copy report for an agent",
+         "origin": "fixture string"
+        }
+       }
+      ],
+      "style": "blue button"
+     }
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "no_everything_else_line": "A1 draws no reassurance beside a custody-critical row (mocks/A1/index.html:380): no \"Everything else is fine.\" line, and R01, F01, U01 are not drawn",
+   "inputs": {
+    "now": "2026-11-12T12:48:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-12T12:48:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "red",
+      "ageS": null,
+      "note_for_test": "no clock ever saved"
+     },
+     "backup_offsite": {
+      "state": "green"
+     },
+     "transcripts": {
+      "state": "green"
+     },
+     "drive_auth": {
+      "state": "green",
+      "note_for_test": "not red: with it red, M1 makes this the S13 row with Reconnect"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "green"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "green"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "valid",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [],
+     "dbProbeFailed": false
+    },
+    "localSnapshot.uploadState": "none",
+    "uploadProcessLive": false,
+    "job.backupDaily.consecutiveFailures": 0,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 0,
+    "collector.activeCount": 1397699,
+    "operationReceipts.lastSearch.recordedAt": "2026-11-12T12:47:00+02:00",
+    "maintenance.history.lastRunAt": "2026-11-12T03:15:00+02:00",
+    "maintenance.history.result": "completed"
+   }
+  },
+  {
+   "id": "S12",
+   "fixture_state": "S12",
+   "truth_table_cases": [
+    "C5"
+   ],
+   "design_state": "S12",
+   "availability": "today",
+   "form": "needs",
+   "headline": "3 things need you",
+   "count": 3,
+   "icon": "marked",
+   "active_rows": [
+    "F07",
+    "S13",
+    "U03",
+    "R01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A1_disc": "marked (red disc, \"!\")"
+     },
+     "data_count": 3,
+     "strings": [
+      {
+       "text": "3 things need you",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 100,
+        "where_used": "menu headline",
+        "template": "{N} things need you",
+        "origin": "fixture string"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "needs_you",
+     "row_id": "F07",
+     "thing": "Finding",
+     "class": "confirmed",
+     "mark": "alert-circle (red)",
+     "divider_before": false,
+     "strings": [
+      {
+       "part": "title",
+       "text": "Search by meaning isn’t catching up",
+       "text_straight": "Search by meaning isn't catching up",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 107,
+        "where_used": "menu, problem title",
+        "template": "Search by meaning isn’t catching up",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "detail",
+       "text": "BrainBar hasn’t seen the memories waiting for it go down in over an hour. Agents can still find every memory by exact words.",
+       "text_straight": "BrainBar hasn't seen the memories waiting for it go down in over an hour. Agents can still find every memory by exact words.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 105,
+        "where_used": "menu, problem facts",
+        "template": "BrainBar hasn’t seen the memories waiting for it go down {over d}. Agents can still find every memory by exact words.",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_1",
+       "text": "BrainBar can’t fix this itself.",
+       "text_straight": "BrainBar can't fix this itself.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 101,
+        "where_used": "menu, hand-off sentence",
+        "template": "BrainBar can’t fix this itself.",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_2",
+       "text": "Give the report to an agent.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 103,
+        "where_used": "menu, hand-off sentence",
+        "template": "Give the report to an agent.",
+        "origin": "A1 wording"
+       }
+      }
+     ],
+     "action": {
+      "kind": "copy_report",
+      "strings": [
+       {
+        "text": "Copy report for an agent",
+        "source": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 58,
+         "where_used": "menu (action label)",
+         "template": "Copy report for an agent",
+         "origin": "fixture string"
+        }
+       }
+      ],
+      "style": "blue button"
+     }
+    },
+    {
+     "kind": "needs_you",
+     "row_id": "S13",
+     "thing": "Safe",
+     "class": "confirmed",
+     "mark": "alert-circle (red)",
+     "divider_before": true,
+     "strings": [
+      {
+       "part": "title",
+       "text": "Google Drive is disconnected",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 55,
+        "where_used": "menu, problem title",
+        "template": "Google Drive is disconnected",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "detail",
+       "text": "Backups can’t upload until you reconnect it.",
+       "text_straight": "Backups can't upload until you reconnect it.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 54,
+        "where_used": "menu, problem facts",
+        "template": "Backups can’t upload until you reconnect it.",
+        "origin": "A1 wording"
+       }
+      }
+     ],
+     "action": {
+      "kind": "reconnect_drive",
+      "strings": [
+       {
+        "text": "Reconnect Google Drive",
+        "source": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 37,
+         "where_used": "menu (action label)",
+         "template": "Reconnect Google Drive",
+         "origin": "fixture string"
+        }
+       }
+      ],
+      "style": "blue button"
+     }
+    },
+    {
+     "kind": "needs_you",
+     "row_id": "U03",
+     "thing": "Upkeep",
+     "class": "confirmed",
+     "mark": "alert-circle (red)",
+     "divider_before": true,
+     "strings": [
+      {
+       "part": "title",
+       "text": "Nightly upkeep failed 3 nights in a row",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 106,
+        "where_used": "menu, problem title",
+        "template": "Nightly upkeep failed {N} nights in a row",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_1",
+       "text": "BrainBar can’t fix this itself.",
+       "text_straight": "BrainBar can't fix this itself.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 102,
+        "where_used": "menu, hand-off sentence",
+        "template": "BrainBar can’t fix this itself.",
+        "origin": "A1 wording"
+       }
+      },
+      {
+       "part": "handoff_2",
+       "text": "Give the report to an agent.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 104,
+        "where_used": "menu, hand-off sentence",
+        "template": "Give the report to an agent.",
+        "origin": "A1 wording"
+       }
+      }
+     ],
+     "action": {
+      "kind": "copy_report",
+      "strings": [
+       {
+        "text": "Copy report for an agent",
+        "source": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 58,
+         "where_used": "menu (action label)",
+         "template": "Copy report for an agent",
+         "origin": "fixture string"
+        }
+       }
+      ],
+      "style": "blue button"
+     }
+    },
+    {
+     "kind": "everything_else",
+     "covers": [
+      "R01"
+     ],
+     "mark": "checkmark",
+     "strings": [
+      {
+       "text": "Everything else is fine.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 32,
+        "where_used": "menu, last line before the items",
+        "template": "Everything else is fine.",
+        "origin": "A1 wording",
+        "note": "A1 draws it for any state with Fine rows and no custody-critical row (mocks/A1/index.html:399)"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "inputs": {
+    "now": "2026-11-12T12:48:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-12T12:48:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "green"
+     },
+     "backup_offsite": {
+      "state": "green"
+     },
+     "transcripts": {
+      "state": "green"
+     },
+     "drive_auth": {
+      "state": "red"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "amber",
+      "ageS": 3960,
+      "thresholdS": 21600
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "green"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "invalid (wording only)",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [],
+     "dbProbeFailed": false
+    },
+    "localSnapshot.uploadState": "none",
+    "uploadProcessLive": false,
+    "job.backupDaily.consecutiveFailures": 0,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 3,
+    "collector.activeCount": 1397699,
+    "collector.signalCoverage.keyword": 1.0,
+    "note_for_test": "backup copies green (no backup row); U03 drops its second sentence because Safe is not Fine. After PR-2, embedding.progress showing progress makes F07 into F12 (Behind) and the count 2"
+   }
+  },
+  {
+   "id": "S32",
+   "fixture_state": null,
+   "truth_table_cases": [
+    "C29"
+   ],
+   "design_state": null,
+   "availability": "today (the PR-2 variant after PR-2)",
+   "form": "needs",
+   "headline": "1 thing needs you",
+   "count": 1,
+   "icon": "marked",
+   "active_rows": [
+    "S32",
+    "R01",
+    "F01",
+    "U01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A1_disc": "marked (red disc, \"!\")"
+     },
+     "data_count": 1,
+     "strings": [
+      {
+       "text": "1 thing needs you",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 39,
+        "where_used": "menu headline",
+        "template": "1 thing needs you",
+        "origin": "fixture string",
+        "note": "same headline as fixture state S5"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "needs_you",
+     "row_id": "S32",
+     "thing": "Safe",
+     "class": "confirmed",
+     "mark": "alert-circle (red)",
+     "divider_before": false,
+     "strings": [
+      {
+       "part": "title",
+       "text": "Your newest backup in Google Drive is from Nov 9 at 03:44. A backup to Google Drive started at 11:28 and is still running.",
+       "tested": false,
+       "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R8, and MERGED-DIRECTION.md, Four more, from applying the rulings, R15 (first sentence); PRESENTATION-TRUTH-TABLE.md Part 1 row S32 (second sentence)",
+       "source": {
+        "template": "Your newest backup in Google Drive is {copy age of backup_offsite}. A backup to Google Drive started at {HH:mm} and is still running.",
+        "placement": "A1's title slot, as A1 draws a row it has no title for (mocks/A1/index.html:302): MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R9 (a)"
+       }
+      },
+      {
+       "part": "handoff_1",
+       "text": "If this backup doesn’t finish, BrainBar can’t fix it itself.",
+       "text_straight": "If this backup doesn't finish, BrainBar can't fix it itself.",
+       "tested": false,
+       "ruled": "PRESENTATION-TRUTH-TABLE.md, Lead's rulings on version 3, 1 (D10); placement MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R9 (b)",
+       "source": {
+        "placement": "A1's hand-off line 1 (mocks/A1/index.html:278)"
+       }
+      },
+      {
+       "part": "handoff_2",
+       "text": "Give the report to an agent.",
+       "tested": false,
+       "ruled": "PRESENTATION-TRUTH-TABLE.md, Lead's rulings on version 3, 1 (D10); placement MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R9 (b)",
+       "source": {
+        "same_text_as": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 61,
+         "where_used": "menu, hand-off sentence",
+         "template": "Give the report to an agent.",
+         "origin": "A1 wording"
+        }
+       }
+      }
+     ],
+     "action": {
+      "kind": "copy_report",
+      "strings": [
+       {
+        "text": "Copy report for an agent",
+        "source": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 58,
+         "where_used": "menu (action label)",
+         "template": "Copy report for an agent",
+         "origin": "fixture string",
+         "note": "the label A1 draws on every hand-off row"
+        }
+       }
+      ],
+      "style": "blue button"
+     },
+     "variant_after_PR2": {
+      "part": "title",
+      "text": "Your newest backup in Google Drive is from Nov 9 at 03:44. A backup to Google Drive started at 11:28 and is 40% done.",
+      "tested": false,
+      "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R9 (c), R8; MERGED-DIRECTION.md, Four more, from applying the rulings, R15",
+      "source": {
+       "template": "Your newest backup in Google Drive is {copy age of backup_offsite}. A backup to Google Drive started at {HH:mm} and is {p}% done.",
+       "when": "backup_offsite.recovering {kind: upload} with progress set (PR-2); 40 is illustrative"
+      }
+     }
+    },
+    {
+     "kind": "everything_else",
+     "covers": [
+      "R01",
+      "F01",
+      "U01"
+     ],
+     "mark": "checkmark",
+     "strings": [
+      {
+       "text": "Everything else is fine.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 32,
+        "where_used": "menu, last line before the items",
+        "template": "Everything else is fine.",
+        "origin": "A1 wording",
+        "note": "same line as fixture state S5; A1 draws it for any state with Fine rows and no custody-critical row (mocks/A1/index.html:399)"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "note": "No fixture yet. R9: S32 gets a fixture and a cold-read cell on the native captures.",
+   "inputs": {
+    "now": "2026-11-12T12:00:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-12T12:00:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "green",
+      "note_for_test": "not red: with backup_local red the row is custody-critical; C29 keeps it confirmed (value synthetic)"
+     },
+     "backup_offsite": {
+      "state": "red",
+      "ageS": 288960,
+      "thresholdS": 280800,
+      "note_for_test": "newest Drive copy Nov 9 03:44 = 80 h 16 min, past red at 78 h; over 24 h so the date form"
+     },
+     "transcripts": {
+      "state": "green"
+     },
+     "drive_auth": {
+      "state": "green"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "green"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "green"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "valid",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [],
+     "dbProbeFailed": false
+    },
+    "localSnapshot.uploadState": "in_progress",
+    "uploadProcessLive": true,
+    "job.backupDaily.consecutiveFailures": 0,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 0,
+    "collector.activeCount": 1397699,
+    "uploadProcessStartedAt": "2026-11-12T11:28:00+02:00",
+    "operationReceipts.lastSearch.recordedAt": "2026-11-12T12:00:00+02:00",
+    "values_source": "synthetic: the truth table's own illustration, Part 7 Q18 (Nov 9 03:44; started 11:28)",
+    "maintenance.history.lastRunAt": "2026-11-12T03:15:00+02:00",
+    "maintenance.history.result": "completed"
+   }
+  },
+  {
+   "id": "C32",
+   "fixture_state": null,
+   "truth_table_cases": [
+    "C32 (lead's ruling on version 3, 4: D13)",
+    "K38 (its collision note)"
+   ],
+   "design_state": null,
+   "availability": "today",
+   "form": "needs",
+   "headline": "1 thing needs you",
+   "count": 1,
+   "icon": "marked",
+   "active_rows": [
+    "S13",
+    "S02 (absorbed by M1)",
+    "S06 from transcripts (a fact line while drive_auth is red: D13)",
+    "R01",
+    "F01",
+    "U01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A1_disc": "marked (red disc, \"!\")"
+     },
+     "data_count": 1,
+     "strings": [
+      {
+       "text": "1 thing needs you",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 39,
+        "where_used": "menu headline",
+        "template": "1 thing needs you",
+        "origin": "fixture string",
+        "note": "same headline as fixture state S3"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "needs_you",
+     "row_id": "S13",
+     "thing": "Safe",
+     "class": "confirmed",
+     "mark": "alert-circle (red)",
+     "divider_before": false,
+     "strings": [
+      {
+       "part": "title",
+       "text": "Google Drive is disconnected",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 41,
+        "where_used": "menu, problem title",
+        "template": "Google Drive is disconnected",
+        "origin": "A1 wording",
+        "note": "same row as fixture state S3"
+       }
+      },
+      {
+       "part": "detail",
+       "text": "Backups can’t upload until you reconnect it. Your newest backup in Google Drive is 21 hours old.",
+       "text_straight": "Backups can't upload until you reconnect it. Your newest backup in Google Drive is 21 hours old.",
+       "tested": false,
+       "ruled": "MERGED-DIRECTION.md, Four more, from applying the rulings, R15",
+       "source": {
+        "replaces": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 40,
+         "where_used": "menu, problem facts",
+         "template": "Backups can’t upload until you reconnect it. {newest copy}",
+         "origin": "A1 wording",
+         "note": "same row as fixture state S3"
+        },
+        "template": "Backups can't upload until you reconnect it. Your newest backup in Google Drive is {copy age of backup_offsite}.",
+        "change": "A1's tested line with 'in Google Drive' added; the age is the Drive copy's (backup_offsite.ageS)"
+       }
+      }
+     ],
+     "merged_sources": [
+      "S13",
+      "S02"
+     ],
+     "action": {
+      "kind": "reconnect_drive",
+      "strings": [
+       {
+        "text": "Reconnect Google Drive",
+        "source": {
+         "build": "A1",
+         "copy_table": "mocks/A1/COPY-TABLE.md",
+         "line": 37,
+         "where_used": "menu (action label)",
+         "template": "Reconnect Google Drive",
+         "origin": "fixture string",
+         "note": "same row as fixture state S3"
+        }
+       }
+      ],
+      "style": "blue button"
+     }
+    },
+    {
+     "kind": "fact_line",
+     "row_id": "S06 (transcripts)",
+     "thing": "Safe",
+     "counted": false,
+     "action": null,
+     "placement": "under the Drive row: A1's line zone follows the problem zone (mocks/A1/index.html:469)",
+     "strings": [
+      {
+       "text": "Conversation backups can’t upload either until Drive is reconnected.",
+       "text_straight": "Conversation backups can't upload either until Drive is reconnected.",
+       "tested": false,
+       "ruled": "PRESENTATION-TRUTH-TABLE.md, Lead's rulings on version 3, 4 (D13)",
+       "source": {
+        "ruled_text": "Conversation backups can't upload either until Drive is reconnected."
+       }
+      }
+     ],
+     "leaves": "once drive_auth is no longer red, a still-failing transcript row becomes its own Needs-you row with its own action (Retry when A02 reports ready, else Copy report for an agent)"
+    },
+    {
+     "kind": "everything_else",
+     "covers": [
+      "R01",
+      "F01",
+      "U01"
+     ],
+     "mark": "checkmark",
+     "strings": [
+      {
+       "text": "Everything else is fine.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 32,
+        "where_used": "menu, last line before the items",
+        "template": "Everything else is fine.",
+        "origin": "A1 wording",
+        "note": "same line as fixture state S3; A1 draws it for any state with Fine rows and no custody-critical row (mocks/A1/index.html:399)"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "note": "No fixture yet. R9: C32 gets a fixture and a cold-read cell on the native captures.",
+   "inputs": {
+    "now": "2026-11-10T00:35:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-10T00:35:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "green"
+     },
+     "backup_offsite": {
+      "state": "green",
+      "ageS": 75060,
+      "note_for_test": "last good in Google Drive Nov 9 03:44 = 20 h 51 min; R15: the Drive copy's age, \"21 hours old\""
+     },
+     "transcripts": {
+      "state": "amber",
+      "ageS": 144000,
+      "note_for_test": "synthetic: 40 h, past amber at 30 h; with the failure streak below this is a transcript S06"
+     },
+     "drive_auth": {
+      "state": "red",
+      "note_for_test": "consent_needed (E: \"access lost; consent needed\")"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "green"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "green"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "invalid (wording only: not missing; F14)",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [],
+     "dbProbeFailed": false
+    },
+    "localSnapshot.uploadState": "none",
+    "uploadProcessLive": false,
+    "job.backupDaily.consecutiveFailures": 1,
+    "job.jsonlBackup.consecutiveFailures": 2,
+    "maintenance.night.consecutiveFailures": 0,
+    "collector.activeCount": 1397699,
+    "job.backupDaily.lastRunAt": "2026-11-09T05:18:00+02:00 (failed, exit 1)",
+    "job.backupDaily.nextRunAt": "2026-11-10T03:15:00+02:00",
+    "operationReceipts.lastSearch.recordedAt": "2026-11-10T00:35:00+02:00",
+    "maintenance.history.lastRunAt": "2026-11-09T03:15:00+02:00",
+    "maintenance.history.result": "completed",
+    "values_source": "synthetic: fixture S3's capture plus a transcript-backup fault; no real example exists"
+   }
+  },
+  {
+   "id": "S13-missing",
+   "fixture_state": null,
+   "truth_table_cases": [
+    "Part 1 row S13 with DriveAuthModel missing, plus M1 (no case number)"
+   ],
+   "design_state": null,
+   "availability": "today",
+   "form": "needs",
+   "headline": "1 thing needs you",
+   "count": 1,
+   "icon": "marked",
+   "active_rows": [
+    "S13 (never connected)",
+    "S06 from backup_offsite (absorbed by M1, R14)",
+    "R01",
+    "F01",
+    "U01"
+   ],
+   "rows": [
+    {
+     "kind": "headline",
+     "mark": {
+      "A1_disc": "marked (red disc, \"!\")"
+     },
+     "data_count": 1,
+     "strings": [
+      {
+       "text": "1 thing needs you",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 39,
+        "where_used": "menu headline",
+        "template": "1 thing needs you",
+        "origin": "fixture string",
+        "note": "same headline as fixture state S3"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "needs_you",
+     "row_id": "S13",
+     "thing": "Safe",
+     "class": "confirmed",
+     "mark": "alert-circle (red)",
+     "divider_before": false,
+     "strings": [
+      {
+       "part": "title",
+       "text": "Google Drive isn’t connected",
+       "text_straight": "Google Drive isn't connected",
+       "tested": false,
+       "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R6 (TT Part 1 row S13, DriveAuthModel missing)",
+       "source": {
+        "shape": "A1's disconnected row with 'connect' for 'reconnect'"
+       }
+      },
+      {
+       "part": "detail",
+       "text": "Backups can’t upload until you connect it. Nothing is backed up to Google Drive yet.",
+       "text_straight": "Backups can't upload until you connect it. Nothing is backed up to Google Drive yet.",
+       "tested": false,
+       "ruled": "MERGED-DIRECTION.md, Four more, from applying the rulings, R14",
+       "source": {
+        "shape": "R6's fact line plus R14's clause; no {newest copy}, because no copy in Google Drive exists to name"
+       }
+      }
+     ],
+     "action": {
+      "kind": "connect_drive",
+      "strings": [
+       {
+        "text": "Connect Google Drive",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R6 (TT Part 1 row S13, DriveAuthModel missing)",
+        "source": {
+         "shape": "A1 Reconnect label with \"connect\""
+        }
+       }
+      ],
+      "style": "blue button"
+     },
+     "merged_sources": [
+      "S13",
+      "S06 (backup_offsite: no Drive copy ever verified)"
+     ],
+     "variant_without_db_row": {
+      "detail": {
+       "part": "detail",
+       "text": "Backups can’t upload until you connect it.",
+       "text_straight": "Backups can't upload until you connect it.",
+       "tested": false,
+       "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R6 (TT Part 1 row S13, DriveAuthModel missing)",
+       "source": {
+        "shape": "A1's facts line with 'connect' for 'reconnect'"
+       }
+      },
+      "when": "no database-backup row is active (R6 alone)"
+     }
+    },
+    {
+     "kind": "everything_else",
+     "covers": [
+      "R01",
+      "F01",
+      "U01"
+     ],
+     "mark": "checkmark",
+     "strings": [
+      {
+       "text": "Everything else is fine.",
+       "source": {
+        "build": "A1",
+        "copy_table": "mocks/A1/COPY-TABLE.md",
+        "line": 32,
+        "where_used": "menu, last line before the items",
+        "template": "Everything else is fine.",
+        "origin": "A1 wording",
+        "note": "same line as fixture state S3; A1 draws it for any state with Fine rows and no custody-critical row (mocks/A1/index.html:399)"
+       }
+      }
+     ]
+    },
+    {
+     "kind": "separator"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Settings…",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:377",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘,",
+     "behaviour": "opens today's window until the window phase (R5); today: openSettings (RECON § 5)"
+    },
+    {
+     "kind": "standard_item",
+     "strings": [
+      {
+       "text": "Quit BrainBar",
+       "source": {
+        "build": "A2",
+        "copy_table": "mocks/A2/COPY-TABLE.md",
+        "line": null,
+        "why_no_line": "A2's table lists only strings that are not fixture strings verbatim, and exempts Settings…, Quit BrainBar, ⌘, and ⌘Q as chrome (mocks/A2/COPY-TABLE.md:3)",
+        "drawn_by": "mocks/A2/index.html:378",
+        "fixture": "chrome"
+       }
+      }
+     ],
+     "key_equivalent": "⌘Q",
+     "behaviour": "terminates (today: BrainBarProcessControl.quit, RECON § 5). No separator between Settings… and Quit BrainBar",
+     "option_alternate": {
+      "strings": [
+       {
+        "text": "Restart BrainBar",
+        "tested": false,
+        "ruled": "MERGED-DIRECTION.md, Lead's rulings on the spec's eleven open items, R4",
+        "source": {
+         "named_by": "mocks/A2/index.html:375 (a comment: A2 never drew the alternate)",
+         "today": "the same label is a first-level item of today's menu (RECON § 2)"
+        }
+       }
+      ],
+      "behaviour": "holding Option replaces Quit BrainBar with Restart BrainBar (NSMenuItem alternate); today: BrainBarProcessControl.restart (RECON § 5)"
+     }
+    }
+   ],
+   "note": "No fixture: no build drew it (R6). It gets a fixture and a cold-read cell on the native captures, like S32.",
+   "inputs": {
+    "now": "2026-11-12T12:48:00+02:00",
+    "verdict": {
+     "decodable": true,
+     "evaluatedAt": "2026-11-12T12:48:00+02:00",
+     "fresh": true
+    },
+    "checks": {
+     "backup_local": {
+      "state": "green",
+      "note_for_test": "not red: the merged row stays confirmed, not custody-critical"
+     },
+     "backup_offsite": {
+      "state": "red",
+      "ageS": null,
+      "note_for_test": "no Drive copy has ever verified (no clock saved): an S06 from backup_offsite, absorbed by M1 into the S13 row (R14)"
+     },
+     "transcripts": {
+      "state": "green"
+     },
+     "drive_auth": {
+      "state": "red",
+      "note_for_test": "consent_needed"
+     },
+     "integrity": {
+      "state": "green"
+     },
+     "disk": {
+      "state": "green"
+     },
+     "ingest": {
+      "state": "green"
+     },
+     "embedding": {
+      "state": "green"
+     },
+     "stores": {
+      "state": "green"
+     },
+     "search": {
+      "state": "green"
+     },
+     "monitor": {
+      "state": "green"
+     }
+    },
+    "DriveAuthModel.state": "missing (never connected): picks this wording (TT S13)",
+    "backupsObservation.state": "measured",
+    "app.isChecking": false,
+    "app.wakeCatchUpPending": false,
+    "watcherFile": {
+     "readable": true,
+     "fresh": true,
+     "alertReasons": [],
+     "dbProbeFailed": false
+    },
+    "localSnapshot.uploadState": "none",
+    "uploadProcessLive": false,
+    "job.backupDaily.consecutiveFailures": 0,
+    "job.jsonlBackup.consecutiveFailures": 0,
+    "maintenance.night.consecutiveFailures": 0,
+    "collector.activeCount": 1397699,
+    "operationReceipts.lastSearch.recordedAt": "2026-11-12T12:47:00+02:00",
+    "note_for_test": "synthetic. drive_auth red and DriveAuthModel missing; the offsite copy has never verified, so M1 absorbs that row (R14)",
+    "maintenance.history.lastRunAt": "2026-11-12T03:15:00+02:00",
+    "maintenance.history.result": "completed"
+   }
+  }
+ ]
+}
