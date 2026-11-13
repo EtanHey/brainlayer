@@ -42,7 +42,8 @@ extension BrainBarMenuInvariantTests {
                     calendar.timeZone = zone
                     let midnight = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))!
                     out.append(with([:]) { $0.verdict = nil; $0.lastKnownBackupAt = m })  // S4
-                    out.append(with(["backup_offsite": (.green, age), "transcripts": (.green, max(0, age - 60))]))  // S01
+                    // S01, the conversation copy the older one: a moment `spoken` has only as the all-good copy (mutation R1-2b).
+                    out.append(with(["backup_offsite": (.green, max(0, age - 60)), "transcripts": (.green, age)]))
                     out.append(with(["backup_offsite": (.amber, 27_660)]) { $0.upload = .init(startedAt: m, live: true) })  // S03
                     let atMidnight = [-0.001, -0.0001, 0, 0.0001].map { midnight.addingTimeInterval($0) } + [Date(timeIntervalSinceReferenceDate: midnight.timeIntervalSinceReferenceDate.nextUp)]
                     for eta in atMidnight {  // S03 with an estimate
