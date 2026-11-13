@@ -52,7 +52,7 @@ final class BrainBarStatusSnapshotVectorTests: XCTestCase {
             let texts = BrainBarStatusSnapshot.derive(input).issues.map(\.text)
             XCTAssertTrue(texts.contains("SQL check failed"))
             XCTAssertEqual(texts.filter { $0 == BrainBarVectorCheck.unverified }.count, 1)
-            XCTAssertTrue(input.vectorCheck!.summary(now: T.now).hasPrefix(at == nil ? "Vector backlog could not" : "Last measured backlog: 5"))
+            XCTAssertTrue(input.vectorCheck!.summary(now: T.now).hasPrefix(at == nil ? "Vector backlog count failed" : "Last measured backlog: 5"))
         }
         XCTAssertTrue(BrainBarVectorCheck(count: 5, checkedAt: T.now.addingTimeInterval(-600), error: nil).isFresh(now: T.now))
         XCTAssertFalse(BrainBarVectorCheck(count: 5, checkedAt: T.now.addingTimeInterval(1), error: nil).isFresh(now: T.now))
@@ -131,6 +131,12 @@ final class BrainBarStatusSnapshotVectorTests: XCTestCase {
         XCTAssertEqual(BrainBarStatusSnapshot.derive(input).issues.filter { $0.text == BrainBarVectorCheck.unverified }.count, 1)
         input.vectorCheck = nil
         XCTAssertTrue(BrainBarStatusSnapshot.derive(input).issues.contains { $0.text.hasPrefix("The vector check could not finish.") })
+    }
+
+    func testFailedFirstBacklogCountExplainsFailure() {
+        let check = BrainBarVectorCheck(count: nil, checkedAt: nil, error: "database busy")
+        XCTAssertEqual(check.summary(now: T.now), "Vector backlog count failed: database busy; retrying")
+        XCTAssertFalse(check.summary(now: T.now).contains("still in progress"))
     }
 
     func testVectorCopyUsesSingularAndPluralChunks() {
