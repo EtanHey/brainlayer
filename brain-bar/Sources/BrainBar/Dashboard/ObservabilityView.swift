@@ -1181,7 +1181,7 @@ struct BrainBarVectorScan: Decodable, Equatable, Sendable {
 }
 
 struct BrainBarVectorCheck: Equatable, Sendable {
-    static let unverified = "Vector backlog could not be verified. The background check is still in progress."
+    static let unverified = "Vector backlog could not be verified."
     let count: Int?
     let checkedAt: Date?
     let error: String?
@@ -1197,7 +1197,10 @@ struct BrainBarVectorCheck: Equatable, Sendable {
 
     func summary(now: Date) -> String {
         if isAwaitingFirstResult { return "Checking vector backlog…" }
-        guard let count, let checkedAt else { return Self.unverified }
+        guard let count, let checkedAt else {
+            let reason = error?.split(whereSeparator: \.isNewline).first.map(String.init) ?? "unknown error"
+            return "Vector backlog count failed: \(reason.prefix(160)); retrying"
+        }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)

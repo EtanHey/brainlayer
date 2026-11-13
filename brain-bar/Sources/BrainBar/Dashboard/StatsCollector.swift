@@ -210,6 +210,22 @@ final class StatsCollector: ObservableObject {
     @Published private(set) var lastSignalCoverageError: String?
     @Published private(set) var lastSignalCoverageMeasuredAt: Date?
 
+    private struct BacklogMeasurement: Codable {
+        let count: Int
+        let checkedAt: Date
+    }
+
+    private var savedBacklog: BacklogMeasurement?
+    private var backlogStateURL: URL {
+        URL(fileURLWithPath: dbPath).deletingLastPathComponent().appendingPathComponent("vector-backlog-state.json")
+    }
+
+    var vectorCheckForPresentation: BrainBarVectorCheck {
+        let current = vectorCheck
+        guard current.count == nil, let savedBacklog else { return current }
+        return .init(count: savedBacklog.count, checkedAt: savedBacklog.checkedAt, error: current.error ?? "previous measurement")
+    }
+
     var vectorCheck: BrainBarVectorCheck {
         .init(count: stats.signalCoverageIsAvailable ? stats.vectorBacklogCount : nil,
               checkedAt: lastSignalCoverageMeasuredAt, error: lastSignalCoverageError)
@@ -295,6 +311,11 @@ final class StatsCollector: ObservableObject {
         databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
     ) {
         self.dbPath = dbPath
+        let stateURL = URL(fileURLWithPath: dbPath).deletingLastPathComponent().appendingPathComponent("vector-backlog-state.json")
+        if let data = try? Data(contentsOf: stateURL),
+           let measurement = try? JSONDecoder().decode(BacklogMeasurement.self, from: data), measurement.count >= 0 {
+            self.savedBacklog = measurement
+        }
         self.observeDatabaseChanges = observeDatabaseChanges
         self.databaseOpenConfiguration = databaseOpenConfiguration
         self.daemonMonitor = daemonMonitor
@@ -599,6 +620,16 @@ final class StatsCollector: ObservableObject {
         case .success(let coverage):
             stats = stats.withSignalCoverage(coverage)
             lastSignalCoverageMeasuredAt = lastSignalCoverageAttemptedAt
+            if let checkedAt = lastSignalCoverageMeasuredAt {
+                let measurement = BacklogMeasurement(count: stats.vectorBacklogCount, checkedAt: checkedAt)
+                savedBacklog = measurement
+                do {
+                    let data = try JSONEncoder().encode(measurement)
+                    try data.write(to: backlogStateURL, options: .atomic)
+                } catch {
+                    NSLog("Could not save vector backlog measurement: %@", String(describing: error))
+                }
+            }
             state = PipelineState.derive(daemon: daemon, stats: stats)
             lastSignalCoverageError = nil
         case .failure(let error):

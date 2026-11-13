@@ -197,7 +197,8 @@ jobs:
     # The job NAME is the required check. Without brain-bar changes every Swift step is skipped,
     # so take the skip on Linux instead of waiting for a macOS runner (#1727 queued ~3 h for it).
     runs-on: ${{ needs.changes.outputs.brain_bar == 'true' && 'macos-15' || 'ubuntu-latest' }}
-    timeout-minutes: 15
+    # 2026-11-13: Test BrainBar took 11m29s (PR #1788, run 43438292244; job 14m30s) and was cut off at 11m39s by the 15m limit (PR #1789, run 43459850246). 25 = ~10m headroom over the last passing job; still a finite hang bound.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 

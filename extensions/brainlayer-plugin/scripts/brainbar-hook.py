@@ -193,7 +193,11 @@ def _send_queue_batch_to_brainbar(batch: list[dict[str, Any]]) -> None:
             "context": event.get("cwd"),
             "session_id": event.get("session_id"),
         }
-        call_mcp_tool("brain_store", arguments)
+        result = call_mcp_tool("brain_store", arguments)
+        # BrainBar reports a rejected store as a normal JSON-RPC result with isError: true
+        # ("nothing stored"). Raise so flush_queue keeps this batch queued instead of truncating it.
+        if not isinstance(result, dict) or result.get("isError"):
+            raise RuntimeError(f"brain_store rejected: {_result_text(result)}")
 
 
 def handle_tool_event(payload: dict[str, Any], hook_event: str, queue_path: Path | None = None) -> None:

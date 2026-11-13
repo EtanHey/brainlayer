@@ -122,5 +122,5 @@ brainlayer search "query"     # Semantic + keyword search
 brainlayer stats              # Database statistics
 brainlayer brain-export       # Generate brain graph JSON
 brainlayer export-obsidian    # Export to Obsidian vault
-brainlayer dashboard          # Interactive TUI dashboard
+brainlayer dashboard          # Interactive TUI dashboard (source checkout only)
 ```
