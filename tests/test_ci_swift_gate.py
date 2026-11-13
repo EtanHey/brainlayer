@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -272,20 +273,55 @@ def test_swift_required_gate_has_a_bounded_job_timeout():
     assert 10 <= value <= 30, "Swift job must retain a finite hang-protection budget"
 
 
+def _filter_matches(path: str, pattern: str) -> bool:
+    # The filter's current glob subset: * stays in one component; ** crosses directories.
+    expression = re.escape(pattern).replace(r"\*\*/", "(?:.*/)?").replace(r"\*\*", ".*").replace(r"\*", "[^/]*")
+    return re.fullmatch(expression, path) is not None
+
+
+@pytest.mark.parametrize(
+    "path,pattern,expected",
+    [
+        ("a/Menu.swift", "a/*.swift", True),
+        ("a/nested/Menu.swift", "a/*.swift", False),
+        ("a/Menu.swift", "a/**/*.swift", True),
+        ("a/nested/Menu.swift", "a/**/*.swift", True),
+        ("a/nested/Menu.swift", "a/**", True),
+    ],
+)
+def test_filter_glob_directory_boundaries(path, pattern, expected):
+    assert _filter_matches(path, pattern) == expected
+
+
 def test_menu_function_filter_covers_dependencies_and_future_menu_sources():
-    from fnmatch import fnmatchcase
 
     changes = _load_workflow()["jobs"]["changes"]
-    assert changes["outputs"]["menu_function"] == "${{ steps.filter.outputs.menu_function }}"
     filters = yaml.safe_load(next(s for s in changes["steps"] if s.get("id") == "filter")["with"]["filters"])
     required = [
         *REPO_ROOT.glob("brain-bar/Sources/BrainBar/BrainBarMenu*.swift"),
         *REPO_ROOT.glob("brain-bar/Tests/BrainBarTests/BrainBarMenu*.swift"),
     ]
+    # Resolve top-level project types used by the function and its pure test helpers by declaration,
+    # so moving a type to an uncovered file fails without a path-list update hiding the move.
+    function_files = [
+        REPO_ROOT / f"brain-bar/Sources/BrainBar/BrainBarMenu{name}.swift"
+        for name in ("Presenter", "Presentation", "Sentences", "Cases")
+    ]
+    test_files = [
+        REPO_ROOT / f"brain-bar/Tests/BrainBarTests/BrainBarMenu{name}.swift"
+        for name in ("InvariantTests", "PresentationTests", "EdgeCaptures")
+    ]
+    identifiers = set(re.findall(r"\b[A-Z]\w*\b", "\n".join(p.read_text() for p in function_files + test_files)))
+    definitions = {}
+    # BrainBarDaemon is a separate module with same-named types, not imported by these files.
+    for source in (REPO_ROOT / "brain-bar/Sources/BrainBar").rglob("*.swift"):
+        for name in re.findall(r"^(?:struct|enum|class|protocol|typealias) (\w+)\b", source.read_text(), re.M):
+            if name in identifiers:
+                definitions.setdefault(name, set()).add(source)
+    assert {"BrainBarHealthVerdict", "DriveAuthStatus"} <= definitions.keys()
+    required += [path for paths in definitions.values() for path in paths]
     paths = [str(p.relative_to(REPO_ROOT)) for p in required] + [
         "brain-bar/Sources/BrainBar/BrainBarMenuFuture.swift",
-        "brain-bar/Sources/BrainBar/BrainBarStatusVerdict.swift",
-        "brain-bar/Sources/BrainBar/BrainBarDriveAuth.swift",
         "brain-bar/Tests/BrainBarTests/Fixtures/presentation-cases.json",
         "brain-bar/Tests/BrainBarTests/Fixtures/future-case.json",
         "brain-bar/Package.swift",
@@ -294,19 +330,21 @@ def test_menu_function_filter_covers_dependencies_and_future_menu_sources():
         ".github/workflows/ci.yml",
     ]
     for path in paths:
-        assert any(fnmatchcase(path, pattern) for pattern in filters["menu_function"]), path
+        assert any(_filter_matches(path, pattern) for pattern in filters["menu_function"]), path
     assert ".github/workflows/ci.yml" in filters["brain_bar"]
     assert "base" not in next(s for s in changes["steps"] if s.get("id") == "filter")["with"]
-    assert (
-        changes["outputs"]["brain_bar"]
-        == "${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.brain_bar }}"
-    )
+    events = _load_workflow().get("on") or _load_workflow()[True]
+    assert events["schedule"] == [{"cron": "0 3 * * 1"}]
+    for output in ("brain_bar", "menu_function"):
+        assert changes["outputs"][output] == (
+            "${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || "
+            f"steps.filter.outputs.{output} }}}}"
+        )
 
 
-@pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch"])
+@pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch", "schedule"])
 @pytest.mark.parametrize("output", [None, "", "false", "true", "FALSE", "unexpected"])
 def test_menu_suite_skip_is_fail_safe(event, output, tmp_path):
-    import re
     import subprocess
 
     step = next(s for s in _load_workflow()["jobs"]["swift"]["steps"] if s.get("id") == "brainbar-tests")
@@ -315,15 +353,18 @@ def test_menu_suite_skip_is_fail_safe(event, output, tmp_path):
     # Parse the shell condition rather than GitHub equality, which ignores case.
     parsed = re.search(
         r'if \[\[ "\$EVENT_NAME" (!=|==) "([^"]*)" (&&|\|\|) '
+        r'"\$EVENT_NAME" (!=|==) "([^"]*)" (&&|\|\|) '
         r'"\$MENU_FUNCTION" (!=|==) "([^"]*)" \]\]; then',
         step["run"],
     )
     assert parsed, step["run"]
-    op1, rhs1, join, op2, rhs2 = parsed.groups()
+    op1, rhs1, join1, op_schedule, rhs_schedule, join2, op2, rhs2 = parsed.groups()
     left = (event == rhs1) if op1 == "==" else (event != rhs1)
     right = ((output or "") == rhs2) if op2 == "==" else ((output or "") != rhs2)
-    skip = (left and right) if join == "&&" else (left or right)
-    assert skip == (event != "workflow_dispatch" and output == "false")
+    scheduled = (event == rhs_schedule) if op_schedule == "==" else (event != rhs_schedule)
+    combined = (left and scheduled) if join1 == "&&" else (left or scheduled)
+    skip = (combined and right) if join2 == "&&" else (combined or right)
+    assert skip == (event not in ("workflow_dispatch", "schedule") and output == "false")
     # Execute the actual shell with a recording Python stand-in: never invoke Swift or a build.
     executable = tmp_path / "python3"
     executable.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')

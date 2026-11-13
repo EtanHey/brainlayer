@@ -6,6 +6,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1"
 
 # Coalesce PR label/synchronize events; preserve every main/batch SHA's receipt.
 concurrency:
@@ -16,8 +18,8 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      brain_bar: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.brain_bar }}
-      menu_function: ${{ steps.filter.outputs.menu_function }}
+      brain_bar: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || steps.filter.outputs.brain_bar }}
+      menu_function: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || steps.filter.outputs.menu_function }}
       launchd: ${{ steps.filter.outputs.launchd }}
       backup_verdict_tla: ${{ steps.filter.outputs.backup_verdict_tla }}
       ingest_coverage_tla: ${{ steps.filter.outputs.ingest_coverage_tla }}
@@ -256,9 +258,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           python3 -c 'import os,time; from pathlib import Path; Path(os.environ["RUNNER_TEMP"], "brainbar-test-start").write_text(str(time.time()))'
-          # Only the exact output false permits a skip; dispatch and unknown outputs run the net.
+          # Only the exact output false permits a skip; dispatch, schedule and unknown outputs run the net.
           args=()
-          if [[ "$EVENT_NAME" != "workflow_dispatch" && "$MENU_FUNCTION" == "false" ]]; then
+          if [[ "$EVENT_NAME" != "workflow_dispatch" && "$EVENT_NAME" != "schedule" && "$MENU_FUNCTION" == "false" ]]; then
             echo "menu function unchanged: skipping BrainBarMenuInvariantTests"
             args=(--skip BrainBarMenuInvariantTests)
           else
