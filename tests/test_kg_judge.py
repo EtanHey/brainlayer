@@ -373,6 +373,7 @@ def test_git_shellout_tests_scrub_inherited_git_env():
         "test_release_tag_contains.py",
         "test_retirement_artifact.py",
         "test_retirement_dependency.py",
+        "test_root_scratch_hygiene.py",
         "test_run_tests_script.py",
         "test_prepush_mapping_coverage.py",
         "test_scoping.py",

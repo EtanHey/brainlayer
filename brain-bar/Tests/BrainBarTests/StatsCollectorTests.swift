@@ -329,6 +329,41 @@ final class StatsCollectorTests: XCTestCase {
 
     private var tempDBPath: String!
 
+    func testBacklogMeasurementSurvivesRelaunchAndBadState() async throws {
+        let dir = URL(fileURLWithPath: brainBarTestTemporaryPath()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let db = dir.appendingPathComponent("brainlayer.db").path
+        let state = dir.appendingPathComponent("vector-backlog-state.json")
+        func collector() -> StatsCollector {
+            StatsCollector(dbPath: db, daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+                agentActivityMonitor: .synthetic, signalCoverageProvider: {
+                    .init(eligibleChunkCount: 3, vectorIndexedChunkCount: 1, ftsIndexedChunkCount: 3, trigramIndexedChunkCount: 3)
+                }, signalCoverageStartDelay: 0)
+        }
+        let first = collector()
+        XCTAssertEqual(first.vectorCheckForPresentation.summary(now: Date()), "Checking vector backlog…")
+        first.start()
+        let deadline = Date().addingTimeInterval(5)
+        while first.lastSignalCoverageMeasuredAt == nil && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(first.lastSignalCoverageMeasuredAt)
+        first.stop()
+        let relaunched = collector()
+        XCTAssertTrue(relaunched.vectorCheckForPresentation.summary(now: Date()).hasPrefix("Last measured backlog: 2"))
+        XCTAssertTrue(relaunched.vectorCheck.isAwaitingFirstResult)
+        relaunched.stop()
+        try Data("bad json".utf8).write(to: state)
+        let corrupt = collector()
+        XCTAssertEqual(corrupt.vectorCheckForPresentation.summary(now: Date()), "Checking vector backlog…")
+        corrupt.stop()
+        try FileManager.default.removeItem(at: state)
+        let missing = collector()
+        XCTAssertEqual(missing.vectorCheckForPresentation.summary(now: Date()), "Checking vector backlog…")
+        missing.stop()
+    }
+
     override func setUp() {
         super.setUp()
         tempDBPath = brainBarTestTemporaryPath() + "brainbar-statscollector-\(UUID().uuidString).db"

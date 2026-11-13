@@ -24,7 +24,7 @@ Self-contained Swift (`BrainBar`, `BrainBarDaemon`, `BrainBarLifecycle`). Owns t
 ### 3. `brainlayer-root` (orchestration/packaging/docs)
 `launchd/`, `scripts/`, `.githooks/`, `.github/`, top-level `hooks/` (stdlib-only Claude Code hooks — EXCEPT `brainlayer-prompt-search.py`, which imports the engine → either relocate to engine or root-depends-on-engine), packaging (`pyproject.toml`, `uv.lock`), config (`.mcp.json`, `server.json`, `greptile.json`, `macroscope.md`), docs (`README`/`CHANGELOG`/`CONTRIBUTING`/`LICENSE`/`AGENTS`/`CLAUDE`/`GEMINI`.md, `docs/`, `mkdocs.yml`, `overrides/`, `site/`, `landing/`, `extensions/`), `CODEOWNERS`.
 - **De-dup:** `scripts/wal_checkpoint.py` must be a thin wrapper over the engine's `wal_checkpoint.py` (one canonical home), not a second copy.
-- **CLEANUP (gitignore/remove, not a package):** root `brainlayer.db` (0-byte, `git rm --cached`), `dist/`, `.perf/`, caches, `prd-json/`, `grill*/`, `progress.txt`, `.tmp-*`, `2026-*.txt`, and the **~15 `BUGBOT_*.md`/`findings.md`** pile → `docs/reviews/` or delete.
+- **CLEANUP (gitignore/remove, not a package):** root `brainlayer.db` (0-byte, `git rm --cached`), `dist/`, `.perf/`, caches, `prd-json/`, `grill*/`, `.tmp-*`, `2026-*.txt`, and `findings.md` → `docs/reviews/` or delete. (The `BUGBOT_*.md` pile, `bugbot-review-notes.md`, `SLICE-B-BRIEF.md` and `progress.txt` were removed and are now gitignored.)
 
 ## The engine↔UI contract (CORRECTED — ~7 surfaces, not 4)
 1. **Shared SQLite file + schema DDL/migrations** (dual-owned; pin the column sets + the `atomic_brick_chunks_v1` migration; FIX the `chunks_fts` 5-vs-7 drift). DB path `~/.local/share/brainlayer/brainlayer.db` (+ `BRAINLAYER_DB`).

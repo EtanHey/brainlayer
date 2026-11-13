@@ -1083,7 +1083,7 @@ private struct BrainBarDashboardView: View {
             showsDetail: true,
             vectorNetDrainRatePerHour: collector.stats.vectorNetDrainRatePerHour,
             vectorBacklogETAHours: collector.stats.vectorBacklogETAHours,
-            vectorSummary: collector.vectorCheck.summary(now: currentNow),
+            vectorSummary: collector.vectorCheckForPresentation.summary(now: currentNow),
             vectorSample: vectorScan?.detail, vectorError: collector.lastSignalCoverageError
         )
     }
@@ -1728,7 +1728,7 @@ private struct BrainBarDashboardView: View {
             compact: layout.compactCards,
             isRefreshing: collector.isSignalCoverageRefreshing,
             lastError: signalCoverageError,
-            locale: locale, vectorCheck: collector.vectorCheck, now: currentNow,
+            locale: locale, vectorCheck: collector.vectorCheck, presentationCheck: collector.vectorCheckForPresentation, now: currentNow,
             isExpanded: $panelState.signalCoverageExpanded,
             isVectorDetailExpanded: $vectorSignalDetailExpanded,
             onAnimationCompleted: panelState.disclosureAnimationDidComplete
@@ -2411,6 +2411,7 @@ private struct BrainBarSignalCoveragePanel: View {
     let lastError: String?
     let locale: Locale
     var vectorCheck: BrainBarVectorCheck? = nil
+    var presentationCheck: BrainBarVectorCheck? = nil
     var now: Date = Date()
     @Binding var isExpanded: Bool
     @Binding var isVectorDetailExpanded: Bool
@@ -2433,7 +2434,7 @@ private struct BrainBarSignalCoveragePanel: View {
                 showsDetail: true,
                 vectorNetDrainRatePerHour: stats.vectorNetDrainRatePerHour,
                 vectorBacklogETAHours: stats.vectorBacklogETAHours,
-                vectorSummary: vectorCheck?.summary(now: now)
+                vectorSummary: (presentationCheck ?? vectorCheck)?.summary(now: now)
             ),
             BrainBarSignalCoverage(
                 name: "FTS5",
