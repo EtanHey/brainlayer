@@ -347,6 +347,25 @@ class TestGraphTraversal:
         result = store.traverse(entity_id="a", max_depth=3)
         assert len(result) == 1  # Only b reachable
 
+    def test_traversal_relation_filter(self, store):
+        # A -knows-> B -knows-> C, A -works_at-> D; the filter keeps depth and type apart
+        store.upsert_entity("a", "person", "Alice")
+        store.upsert_entity("b", "person", "Bob")
+        store.upsert_entity("c", "person", "Carol")
+        store.upsert_entity("d", "organization", "Acme")
+        store.add_relation("r1", "a", "b", "knows")
+        store.add_relation("r2", "b", "c", "knows")
+        store.add_relation("r3", "a", "d", "works_at")
+
+        one_hop = {r["entity_id"] for r in store.traverse(entity_id="a", max_depth=1, relation_types=["knows"])}
+        assert one_hop == {"b"}
+        two_hop = {r["entity_id"] for r in store.traverse(entity_id="a", max_depth=2, relation_types=["knows"])}
+        assert two_hop == {"b", "c"}
+        both = {
+            r["entity_id"] for r in store.traverse(entity_id="a", max_depth=1, relation_types=["knows", "works_at"])
+        }
+        assert both == {"b", "d"}
+
 
 # ── Entity Resolution ────────────────────────────────────────
 
