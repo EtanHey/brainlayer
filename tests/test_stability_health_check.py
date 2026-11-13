@@ -200,10 +200,18 @@ def _expected_writer_pidfile(pidfile_dir: Path, db_path: Path) -> Path:
     return pidfile_dir / f"brainlayer-writer-{path_hash}-{resolved_path.name}.pid"
 
 
-@pytest.mark.parametrize("failure", [None, "backup", "job"])
-def test_48_hour_idle_machine_uses_liveness_and_preserves_real_failures(tmp_path, failure):
-    """Old sources/offsets and flat write counters are normal on the idle M1."""
-    now = datetime(2026, 10, 18, 18, tzinfo=UTC)
+# What the real watcher writes while idle (#1783: measured over 48 h of real JSONLWatcher polls with
+# and without provider roots): no alert, a healthy DB probe, no missing root.
+IDLE_WATCHER_STALL_FIELDS = {
+    "alerting": False,
+    "alert_reasons": [],
+    "db_probe_failed": False,
+    "db_probe_failed_for_s": 0.0,
+    "roots_missing": [],
+}
+
+
+def _idle_machine(tmp_path, now, failure):
     old = (now - timedelta(hours=49)).timestamp()
     db = tmp_path / "brainlayer.db"
     _make_db(db, total=3, vector_rows=3)
@@ -235,9 +243,29 @@ def test_48_hour_idle_machine_uses_liveness_and_preserves_real_failures(tmp_path
         pending_stores_path=tmp_path / "pending-stores.jsonl",
         pause_sentinel_path=tmp_path / "pause.sentinel",
     )
+    return config, watcher, drain, backup
+
+
+def _idle_tick(config, sample, failure):
+    return run_health_check(
+        config,
+        now_fn=lambda: sample,
+        ps_output_fn=lambda: "123 python scripts/hotlane_brainbar_daemon.py --backlog-batch 4\n",
+        socket_request_fn=_empty_canary,
+        command_runner=lambda args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+
+@pytest.mark.parametrize("failure", [None, "backup", "job"])
+def test_48_hour_idle_machine_uses_liveness_and_preserves_real_failures(tmp_path, failure):
+    """Old sources/offsets and flat write counters are normal on the idle M1."""
+    now = datetime(2026, 10, 18, 18, tzinfo=UTC)
+    config, watcher, drain, backup = _idle_machine(tmp_path, now, failure)
     for tick in range(3):
         sample = now + timedelta(minutes=5 * tick)
-        watcher.write_text(json.dumps({"updated_at": sample.isoformat(), "poll_count": 100 + tick}))
+        watcher.write_text(
+            json.dumps({"updated_at": sample.isoformat(), "poll_count": 100 + tick, **IDLE_WATCHER_STALL_FIELDS})
+        )
         drain.write_text(json.dumps({"updated_at": sample.isoformat(), "drain_cycles": 100 + tick, "drained_total": 0}))
         backup.write_text(
             json.dumps(
@@ -250,13 +278,7 @@ def test_48_hour_idle_machine_uses_liveness_and_preserves_real_failures(tmp_path
             )
             + "\n"
         )
-        result = run_health_check(
-            config,
-            now_fn=lambda: sample,
-            ps_output_fn=lambda: "123 python scripts/hotlane_brainbar_daemon.py --backlog-batch 4\n",
-            socket_request_fn=_empty_canary,
-            command_runner=lambda args: SimpleNamespace(returncode=0, stdout="", stderr=""),
-        )
+        result = _idle_tick(config, sample, failure)
         expected = {"backup": "jsonl_backup_attempt_failed", "job": "job_alert_maintenance-full"}.get(failure)
         assert [issue.code for issue in result.issues] == ([expected] if expected else [])
         assert result.ok is (failure is None)
@@ -2801,3 +2823,21 @@ def test_vector_scan_notice_contract(tmp_path, monkeypatch, completeness, scanne
         r not in " ".join(issues.values())
         for r in ("instruction_limit", "time_limit", "page_limit", "window_end", "scanned 1864 rows")
     )
+
+
+def test_an_old_shape_watcher_payload_turns_ingest_amber_on_the_third_check(tmp_path):
+    """Fail-closed (#1783): a heartbeat without its stall fields is not a no-stall reading."""
+    now = datetime(2026, 10, 18, 18, tzinfo=UTC)
+    config, watcher, drain, backup = _idle_machine(tmp_path, now, None)
+    seen = []
+    for tick in range(4):
+        sample = now + timedelta(minutes=5 * tick)
+        watcher.write_text(json.dumps({"updated_at": sample.isoformat(), "poll_count": 100 + tick}))
+        drain.write_text(json.dumps({"updated_at": sample.isoformat(), "drain_cycles": 100 + tick, "drained_total": 0}))
+        backup.write_text(
+            json.dumps({"attempted_at": sample.isoformat(), "status": "no-op", "verified": True, "message": "x"}) + "\n"
+        )
+        _idle_tick(config, sample, None)
+        active = json.loads(config.badge_state_path.read_text())["alerts"]["active"]
+        seen.append({issue["code"]: issue["severity"] for issue in active}.get("outcome_ingest"))
+    assert seen == [None, None, "warning", "warning"]

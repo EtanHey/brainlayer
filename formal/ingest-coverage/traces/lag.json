@@ -93,7 +93,7 @@
   }
  ],
  "model": {
-  "AlertRed": 2,
+  "AlertRed": 6,
   "AmberT": 2,
   "Cap": 40,
   "N": 2,
@@ -127,7 +127,7 @@
    "obs": "fresh",
    "pA": 0,
    "stall": 1,
-   "v": "green"
+   "v": "amber"
   },
   {
    "backlog": true,
@@ -135,7 +135,7 @@
    "obs": "fresh",
    "pA": 0,
    "stall": 2,
-   "v": "green"
+   "v": "amber"
   },
   {
    "backlog": true,
@@ -143,7 +143,7 @@
    "obs": "fresh",
    "pA": 0,
    "stall": 3,
-   "v": "green"
+   "v": "amber"
   },
   {
    "backlog": true,
@@ -151,7 +151,7 @@
    "obs": "fresh",
    "pA": 0,
    "stall": 4,
-   "v": "green"
+   "v": "amber"
   },
   {
    "backlog": true,
@@ -159,7 +159,7 @@
    "obs": "fresh",
    "pA": 0,
    "stall": 5,
-   "v": "green"
+   "v": "amber"
   },
   {
    "backlog": true,
@@ -167,7 +167,7 @@
    "obs": "fresh",
    "pA": 0,
    "stall": 6,
-   "v": "green"
+   "v": "red"
   },
   {
    "backlog": true,
@@ -175,7 +175,7 @@
    "obs": "fresh",
    "pA": 0,
    "stall": 7,
-   "v": "green"
+   "v": "red"
   },
   {
    "backlog": true,
@@ -183,7 +183,7 @@
    "obs": "fresh",
    "pA": 0,
    "stall": 8,
-   "v": "green"
+   "v": "red"
   },
   {
    "backlog": true,
@@ -191,7 +191,7 @@
    "obs": "fresh",
    "pA": 0,
    "stall": 9,
-   "v": "green"
+   "v": "red"
   },
   {
    "backlog": false,
@@ -199,7 +199,7 @@
    "obs": "fresh",
    "pA": 0,
    "stall": 0,
-   "v": "green"
+   "v": "red"
   },
   {
    "backlog": false,
