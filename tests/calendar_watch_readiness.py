@@ -40,9 +40,9 @@ def _fixture_diagnostics(path):
     return artifacts
 
 
-def wait_for_calendar_watch(query, path, *, monotonic=time.monotonic, sleep=time.sleep):
-    """Retry status timeouts within 3 s; the query retains its 0.6 s socket timeout."""
-    deadline = monotonic() + 3
+def wait_for_calendar_watch(query, path, *, monotonic=time.monotonic, sleep=time.sleep, timeout=3):
+    """Wait for the watch PID within the caller budget; the query retains its 0.6 s socket timeout."""
+    deadline = monotonic() + timeout
     last_timeout, last_components = None, None
     while monotonic() < deadline:
         try:
@@ -58,6 +58,6 @@ def wait_for_calendar_watch(query, path, *, monotonic=time.monotonic, sleep=time
             sleep(min(0.02, remaining))
     # No final blocking request: diagnostics use artifacts and already-returned state only.
     raise AssertionError(
-        f"calendar resident watch not ready within 3s; last_timeout={last_timeout!r}; "
+        f"calendar resident watch not ready within {timeout}s; last_timeout={last_timeout!r}; "
         f"last_components={last_components!r}; fixture={path}; artifacts={_fixture_diagnostics(path)!r}"
     ) from last_timeout

@@ -1,0 +1,229 @@
+{
+ "clock": "confirmed",
+ "events": [
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "blind_stale",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "blind_stale",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "blind_stale",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "blind_stale",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "blind_stale",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "blind_stale",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "blind_stale",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "blind_stale",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "blind_stale",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  }
+ ],
+ "model": {
+  "AlertRed": 2,
+  "AmberT": 2,
+  "Cap": 40,
+  "N": 2,
+  "Recovery": 2,
+  "RedT": 6,
+  "SleepGap": 3,
+  "UnknownAmber": 3,
+  "WakeGrace": 24
+ },
+ "scenario": "blind_stale",
+ "ticks": [
+  {
+   "backlog": false,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 0,
+   "v": "green"
+  },
+  {
+   "backlog": false,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 0,
+   "v": "green"
+  },
+  {
+   "backlog": false,
+   "hbA": 1,
+   "obs": "old",
+   "pA": 1,
+   "stall": 0,
+   "v": "green"
+  },
+  {
+   "backlog": false,
+   "hbA": 2,
+   "obs": "old",
+   "pA": 2,
+   "stall": 0,
+   "v": "green"
+  },
+  {
+   "backlog": false,
+   "hbA": 3,
+   "obs": "old",
+   "pA": 3,
+   "stall": 0,
+   "v": "amber"
+  },
+  {
+   "backlog": false,
+   "hbA": 4,
+   "obs": "old",
+   "pA": 4,
+   "stall": 0,
+   "v": "amber"
+  },
+  {
+   "backlog": false,
+   "hbA": 5,
+   "obs": "old",
+   "pA": 5,
+   "stall": 0,
+   "v": "amber"
+  },
+  {
+   "backlog": false,
+   "hbA": 6,
+   "obs": "old",
+   "pA": 6,
+   "stall": 0,
+   "v": "amber"
+  },
+  {
+   "backlog": false,
+   "hbA": 7,
+   "obs": "old",
+   "pA": 7,
+   "stall": 0,
+   "v": "red"
+  },
+  {
+   "backlog": false,
+   "hbA": 8,
+   "obs": "old",
+   "pA": 8,
+   "stall": 0,
+   "v": "red"
+  },
+  {
+   "backlog": false,
+   "hbA": 9,
+   "obs": "old",
+   "pA": 9,
+   "stall": 0,
+   "v": "red"
+  },
+  {
+   "backlog": false,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 0,
+   "v": "red"
+  },
+  {
+   "backlog": false,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 0,
+   "v": "green"
+  },
+  {
+   "backlog": false,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 0,
+   "v": "green"
+  },
+  {
+   "backlog": false,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 0,
+   "v": "green"
+  }
+ ]
+}

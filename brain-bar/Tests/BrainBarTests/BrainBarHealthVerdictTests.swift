@@ -26,6 +26,19 @@ final class BrainBarHealthVerdictTests: XCTestCase {
         return BadgeStateReader.read(url: url, now: now, cadence: .known(300))
     }
 
+    func testExportedRowsIncludeNoticesAndDeduplicateInWindowOrder() {
+        let verdict = BrainBarStatusVerdict(attention: ["Backup failed"],
+            notices: ["Maintenance failed", "Backup failed"], oldNotices: ["Yesterday"],
+            isChecking: false, dotOverride: .amber)
+        XCTAssertEqual(verdict.currentRows, ["Backup failed", "Maintenance failed"])
+        XCTAssertEqual(verdict.currentRowCount, verdict.currentRows.count)
+        XCTAssertEqual(verdict.dashboardStatus.headline, "1 thing needs you")
+        let green = BrainBarStatusVerdict(attention: [], notices: ["Maintenance deferred"],
+            isChecking: false, dotOverride: .green)
+        XCTAssertFalse(green.dashboardStatus.headline.contains("need you"))
+        XCTAssertFalse(green.dashboardStatus.headline.contains("needs you"))
+    }
+
     func testStaleVerdictCannotReviveYesterdayCalendarFailure() throws {
         let iso = ISO8601DateFormatter()
         let evaluated = iso.date(from: "2026-11-04T05:08:17Z")!
@@ -87,11 +100,8 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             XCTAssertEqual(snapshot.healthVerdict == nil ? "fallback" : "verdict", source)
             if source == "fallback" {
                 XCTAssertFalse(snapshot.verdict.needsAttention, "Staleness is uncertainty, not a new red outcome")
-                // Compact headline (2026-11-08): the amber dot counts the rows it shows, staleness included.
-                let count = snapshot.verdict.currentRowCount
-                XCTAssertGreaterThan(count, 0)
-                XCTAssertEqual(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict),
-                    count == 1 ? "1 thing needs you" : "\(count) things need you", "Stale fallback has an amber headline")
+                XCTAssertGreaterThan(snapshot.verdict.currentRowCount, 0)
+                XCTAssertEqual(BrainBarStatusPopoverController.statusLineTitle(for: snapshot.verdict), "Check soon")
             }
             if age == 901 { XCTAssertTrue(snapshot.notices.contains { $0.text.hasPrefix("Health check stale since ") }) }
             if state == "green", source == "verdict" {
@@ -163,6 +173,77 @@ final class BrainBarHealthVerdictTests: XCTestCase {
         }
     }
 
+    /// Producer output for an amber stores check and a blind monitor (seam PR-1 typed fields).
+    private static let typedChecks: [[String: Any]] = [
+        ["name": "stores", "state": "amber", "age_s": 1200.0, "threshold_s": 2700, "since": "2026-11-02T02:55:00Z",
+         "note": "oldest pending store has waited 20 min; canary failed 1x in a row (red at 3)",
+         "unknown_ticks": 0, "blind": false, "clock": "2026-11-02T02:40:00Z", "context_codes": ["drain_unloaded"],
+         "good_ticks": 0, "good_ticks_needed": 2, "paused_by_maintenance": true,
+         "pause_ends_at": "2026-11-02T04:00:00Z", "fails": 1, "cause": "both"],
+        ["name": "backup_local", "state": "amber", "age_s": 216000.0, "threshold_s": 194400, "since": NSNull(),
+         "note": "newest verified snapshot 60.0 h old", "unknown_ticks": 0, "blind": false,
+         "clock": "2026-11-01T15:00:00Z", "context_codes": [], "catch_up_until": "2026-11-02T05:00:00Z"],
+        ["name": "monitor", "state": "unknown", "age_s": NSNull(), "threshold_s": NSNull(),
+         "since": "2026-11-02T03:00:00Z", "note": "could not look: slow_check", "unknown_ticks": 1, "blind": true,
+         "clock": NSNull(), "context_codes": [], "blind_codes": ["slow_check"]],
+    ]
+
+    func testNewerAppDecodesTypedCheckFields() throws {
+        let health = try XCTUnwrap(badge("amber") { document in
+            var verdict = document["verdict"] as! [String: Any]
+            verdict["checks"] = Self.typedChecks
+            document["verdict"] = verdict
+        }.healthVerdict, "Typed fields must not make the verdict unreadable")
+        let stores = health.checks[0], backup = health.checks[1], monitor = health.checks[2]
+        XCTAssertEqual(stores.cause, "both")
+        XCTAssertEqual(stores.fails, 1)
+        XCTAssertEqual(stores.goodTicks, 0)
+        XCTAssertEqual(stores.goodTicksNeeded, 2)
+        XCTAssertEqual(stores.pausedByMaintenance, true)
+        XCTAssertEqual(stores.pauseEndsAt, "2026-11-02T04:00:00Z")
+        XCTAssertEqual(stores.clock, "2026-11-02T02:40:00Z")
+        XCTAssertEqual(stores.contextCodes, ["drain_unloaded"])
+        XCTAssertEqual(stores.blind, false)
+        XCTAssertEqual(stores.unknownTicks, 0)
+        XCTAssertEqual(backup.catchUpUntil, "2026-11-02T05:00:00Z")
+        XCTAssertNil(backup.cause, "A key a check does not carry stays nil")
+        XCTAssertEqual(monitor.blind, true)
+        XCTAssertEqual(monitor.unknownTicks, 1)
+        XCTAssertNil(monitor.clock)
+        XCTAssertEqual(monitor.blindCodes, ["slow_check"])
+    }
+
+    func testNewerAppReadsOlderFileWithoutTypedFields() throws {
+        let check = try XCTUnwrap(badge("amber").healthVerdict?.checks.first)
+        XCTAssertEqual(check.state, .amber)
+        XCTAssertEqual(check.note, "Fixture backup age")
+        XCTAssertNil(check.unknownTicks)
+        XCTAssertNil(check.blind)
+        XCTAssertNil(check.clock)
+        XCTAssertNil(check.catchUpUntil)
+        XCTAssertNil(check.contextCodes)
+    }
+
+    func testOlderAppCheckShapeIgnoresTypedFields() throws {
+        /// BrainBarHealthVerdict.Check as shipped in 1.5.98: six keys, synthesized Codable.
+        struct LegacyCheck: Decodable, Equatable {
+            let name: String
+            let state: BrainBarHealthVerdict.State
+            var ageS: Double? = nil
+            var thresholdS: Double? = nil
+            var since: String? = nil
+            let note: String
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let data = try JSONSerialization.data(withJSONObject: Self.typedChecks)
+        let legacy = try decoder.decode([LegacyCheck].self, from: data)
+        XCTAssertEqual(legacy.map(\.name), ["stores", "backup_local", "monitor"])
+        XCTAssertEqual(legacy[0].state, .amber)
+        XCTAssertEqual(legacy[0].thresholdS, 2700)
+        XCTAssertEqual(legacy[2].state, .unknown)
+    }
+
     func testReceiptWritesOnlyOnContentChangeOrHeartbeatOffMainThread() throws {
         let writes = HealthReceiptWrites()
         let publisher = BrainBarUIStatusPublisher { receipt, _ in
@@ -207,7 +288,7 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             var inputs = BrainBarStatusSnapshotTests.healthy()
             inputs.badge = try badge(state)
             XCTAssertEqual(BrainBarStatusPopoverController.statusLineTitle(for: BrainBarStatusSnapshot.derive(inputs).verdict),
-                state == "green" ? "Memory safe · 1 thing to look at" : "2 things need you")
+                state == "green" ? "Memory safe · 1 thing to look at" : state == "red" ? "1 thing needs you" : "Check soon")
         }
         XCTAssertEqual(BrainBarStatusPopoverController.backupReceiptColor(.red, verdictMode: true), .secondaryLabelColor)
         XCTAssertEqual(BrainBarStatusPopoverController.backupReceiptColor(.red, verdictMode: false),
@@ -264,12 +345,41 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             XCTAssertNotNil(json["verdict_evaluated_at"])
             XCTAssertNotNil(json["app_version"])
             XCTAssertNotNil(json["git_commit"])
-            XCTAssertEqual((json["reasons"] as? [String])?.isEmpty, state == "green")
+            XCTAssertEqual(json["reasons"] as? [String],
+                BrainBarStatusPopoverController.verdictRows(raw.healthVerdict!).map(\.text))
+            let collector = BrainBarDashboardFixture.makeCollector()
+            let observed = try BrainBarOnePageTestFixture.healthyResult()
+            let flow = DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: now)
+            let hero = BrainBarHeroPresentation.derive(flow: flow, stats: collector.stats,
+                backupTruth: BrainBarHeroBackupTruth.derive(from: observed, now: now, cadence: .known(300)),
+                locale: Locale(identifier: "en_US"))
+            let dashboard = BrainBarOnePagePresentation.derive(
+                snapshotFreshness: collector.snapshotFreshnessState, hero: hero, observability: observed,
+                stats: collector.stats, agentActivity: BrainBarDashboardFixture.agentActivity, now: now,
+                calendar: BrainBarOnePageTestFixture.calendar, locale: Locale(identifier: "en_US"),
+                observabilityCadence: .known(300), statusVerdict: controller.statusVerdictForTesting)
+            XCTAssertEqual(json["reasons"] as? [String], dashboard.attentionItems)
+            let items = try XCTUnwrap(json["items"] as? [[String: String]])
+            XCTAssertEqual(items.compactMap { $0["text"] }, dashboard.attentionItems)
+            XCTAssertEqual(items.map { $0["kind"] }, state == "red" ? ["attention", "notice"] :
+                Array(repeating: "notice", count: dashboard.attentionItems.count))
+            XCTAssertEqual(json["attention_count"] as? Int, controller.statusVerdictForTesting.attentionRowCount)
             if state != "green" {
                 XCTAssertEqual(BrainBarStatusPopoverController.verdictRows(health).map(\.text),
                     ["Database snapshot (verified): Fixture backup age", "Weekly maintenance deferred"])
             }
         }
+        let emptyAmber = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [],
+            healthVerdict: .init(dot: .amber, checks: [], notes: [], evaluatedAt: Date()))
+        controller.setBadgeForTesting(emptyAmber, alertsURL: root.appendingPathComponent("job-alerts.json"))
+        controller.renderStatusIconForTesting(stats: BrainBarDashboardFixture.makeCollector().stats, state: .idle)
+        controller.flushStatusReceiptForTesting()
+        let emptyURL = BrainBarUIStatusReceipt.url(dbPath: root.appendingPathComponent("fixture.db").path, environment: [:])
+        let emptyReceipt = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: emptyURL)) as? [String: Any])
+        XCTAssertEqual(emptyReceipt["dot"] as? String, "amber")
+        XCTAssertEqual(emptyReceipt["reasons"] as? [String], ["Health check: amber"])
+        XCTAssertEqual(emptyReceipt["items"] as? [[String: String]], [["text": "Health check: amber", "kind": "notice"]])
+        XCTAssertEqual(emptyReceipt["attention_count"] as? Int, 0)
         for state in ["green", "red"] {
             var raw = try badge(state)
             let health = try XCTUnwrap(raw.healthVerdict)
@@ -287,7 +397,7 @@ final class BrainBarHealthVerdictTests: XCTestCase {
             XCTAssertEqual(receipt["source"] as? String, "fallback")
             XCTAssertNotNil(receipt["verdict_evaluated_at"] as? String)
             let reasons = try XCTUnwrap(receipt["reasons"] as? [String])
-            XCTAssertTrue(reasons.first?.hasPrefix("Health check stale since ") == true)
+            XCTAssertTrue(reasons.contains { $0.hasPrefix("Health check stale since ") })
             XCTAssertFalse(reasons.contains(raw.reason))
             XCTAssertTrue(controller.contextMenuForTesting.items.contains { $0.title.hasPrefix("Health check stale since ") })
         }

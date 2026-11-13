@@ -19,6 +19,7 @@ jobs:
       brain_bar: ${{ steps.filter.outputs.brain_bar }}
       launchd: ${{ steps.filter.outputs.launchd }}
       backup_verdict_tla: ${{ steps.filter.outputs.backup_verdict_tla }}
+      ingest_coverage_tla: ${{ steps.filter.outputs.ingest_coverage_tla }}
       crash_sweeps: ${{ steps.sweeps.outputs.required }}
     steps:
       - uses: actions/checkout@v4
@@ -51,12 +52,22 @@ jobs:
               - '.github/workflows/ci.yml'
             backup_verdict_tla:
               - 'formal/backup-verdict/**'
+              - 'formal/jsonl-retention/**'
+              - 'src/brainlayer/jsonl_backup.py'
               - 'src/brainlayer/health_verdict.py'
               - 'src/brainlayer/backup_daily.py'
               - 'src/brainlayer/maintenance.py'
               - 'src/brainlayer/maintenance_calendar.py'
               - 'src/brainlayer/job_alerts.py'
               - 'src/brainlayer/health_facts.py'
+              - '.github/workflows/ci.yml'
+            ingest_coverage_tla:
+              - 'formal/ingest-coverage/**'
+              - 'src/brainlayer/health_verdict.py'
+              - 'src/brainlayer/health_facts.py'
+              - 'src/brainlayer/watcher.py'
+              - 'src/brainlayer/badge_state.py'
+              - 'src/brainlayer/health_check.py'
               - '.github/workflows/ci.yml'
 
   backup-verdict-tla:
@@ -109,6 +120,11 @@ jobs:
           TLC_WORKERS: "2"
         run: python3 formal/backup-verdict/check.py --require-sync
 
+      - name: Model-check local JSONL retention and both rule mutations
+        env:
+          TLC_JAR: ${{ runner.temp }}/tla2tools.jar
+        run: sh formal/jsonl-retention/check.sh
+
       # A failing case must be diagnosable: keep each case's TLC log, trace and results.json.
       - name: Upload TLC logs on failure
         if: failure()
@@ -119,8 +135,59 @@ jobs:
             .build.noindex/backup-verdict/*/*.log
             .build.noindex/backup-verdict/*/*.trace.txt
             .build.noindex/backup-verdict/*/results.json
+            .build.noindex/tlc/jsonl-retention
           # .build.noindex is a dot-directory; upload-artifact@v4 skips hidden paths by default, which
           # would upload nothing and leave a flake undiagnosable (Macroscope, #1601).
+          include-hidden-files: true
+          retention-days: 14
+
+  ingest-coverage-tla:
+    # TLA+ model of "an agent writes, ingest makes no progress => the dot leaves green"
+    # (formal/ingest-coverage/README.md). Guarantee cases must pass; findings and mutations must
+    # keep producing their counterexample; the committed replay traces must match the model; and
+    # --require-sync fails when a covered source changes until the model is re-confirmed.
+    # The replay against the real watcher + verdict is tests/test_ingest_coverage_replay.py (test job).
+    name: TLA+ ingest coverage
+    needs: changes
+    if: needs.changes.outputs.ingest_coverage_tla == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install TLC 1.7.4 (pinned digest)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/tla2tools.jar" \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $RUNNER_TEMP/tla2tools.jar" | sha256sum -c -
+
+      - name: Model-check every case and the replay traces
+        env:
+          TLC_JAR: ${{ runner.temp }}/tla2tools.jar
+          TLC_WORKERS: "2"
+        run: python3 formal/ingest-coverage/check.py --require-sync
+
+      - name: Upload TLC logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingest-coverage-tlc-logs
+          path: |
+            .build.noindex/ingest-coverage/*/*.log
+            .build.noindex/ingest-coverage/*/*.trace.txt
+            .build.noindex/ingest-coverage/*/results.json
+            .build.noindex/ingest-coverage/*/replay/*/tlc.log
           include-hidden-files: true
           retention-days: 14
 

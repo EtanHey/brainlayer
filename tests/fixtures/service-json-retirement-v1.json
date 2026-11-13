@@ -52,7 +52,9 @@
     "slow_check",
     "slow_check_stage",
     "t3_health",
-    "jsonl_backup"
+    "jsonl_backup",
+    "unindexed_agents",
+    "agent_census_incomplete"
   ],
   "drain_health_keys": [
     "updated_at",

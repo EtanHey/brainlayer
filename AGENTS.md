@@ -81,7 +81,7 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 ## Tests
 - Bulky local build, extract, QA and pytest output lives inside `<repo-or-worktree>/.build.noindex/` (pytest under `pytest/`) and dies with the worktree; `docs.local/` holds only small text receipts (version, SHA, cdhash, logs), never app bundles or binaries of any size, including archives. Temporary fake Applications roots may use `*.noindex`; GitHub release runners retain `dist/BrainBar.app` and `$RUNNER_TEMP`. Worktree archiving must exclude `.build.noindex/`, `*.app` and binaries over 1 MiB.
 - Run `pytest` before claiming behavior changed safely.
-- Current suite size: 4,386 Python tests (`pytest tests/ --collect-only -q`) + 890 Swift tests in `brain-bar/Tests/`.
+- Suite size measured 2026-11-11: 12,620 Python tests (`pytest tests/ --collect-only -q`) + 1,609 Swift `func test` declarations in `brain-bar/Tests/`.
 - **Suite hygiene is enforced for unmarked tests.** `tests/conftest.py` guards embedding model
   loads, canonical DB opens, and production BrainBar socket connects —
   `BRAINLAYER_FORBID_EMBEDDING_MODEL=1` (checked at every model-load site, and inherited by
@@ -140,14 +140,14 @@ not a copy here. Two contracts an agent must know:
 
 ---
 
-<!-- ARCHITECTURE: Python/Typer CLI, sqlite-vec storage via APSW, bge-large embeddings, BrainBar Swift MCP daemon over /tmp/brainbar.sock, library MCP handlers under mcp/, Textual TUI + Next.js dashboard -->
+<!-- ARCHITECTURE: Python/Typer CLI, sqlite-vec storage via APSW, bge-large embeddings, BrainBar Swift MCP daemon over /tmp/brainbar.sock, library MCP handlers under mcp/, Rich TUI + Next.js site -->
 ## Stack (WHAT)
 - Python package + Typer CLI in `src/brainlayer/`
 - sqlite-vec storage via APSW (`vector_store.py`)
 - bge-large-en-v1.5 embeddings (`embeddings.py`)
 - BrainBar (Swift) owns the MCP daemon and `/tmp/brainbar.sock`; Python keeps library handlers under `mcp/`
 - The FastAPI daemon was removed (`fix(arch): remove FastAPI daemon`, 692839cc) — there is no HTTP API
-- Textual TUI (`dashboard/`) and Next.js dashboard
+- Rich TUI (`src/brainlayer/dashboard/`) and Next.js site (`site/`)
 - Source data: JSONL in `~/.claude/projects/`
 
 ## Checkouts and worktrees — never work at the repo root
@@ -415,7 +415,7 @@ brainlayer search "how did I implement authentication"
   run against the wrong library. Rendering per-machine is `render_hook_command()`'s job; there is no
   hook installer yet to call it.
 
-<!-- PATHS: DB=~/.local/share/brainlayer/brainlayer.db | offsets=~/.local/share/brainlayer/offsets.json | logs=~/Library/Logs/brainlayer/watch.{out,err}.log | socket=/tmp/brainlayer.sock | lock=/tmp/brainlayer-enrichment.lock -->
+<!-- PATHS: DB=~/.local/share/brainlayer/brainlayer.db | offsets=~/.local/share/brainlayer/offsets.json | logs=~/Library/Logs/brainlayer/watch.{out,err}.log | socket=/tmp/brainbar.sock | lock=/tmp/brainlayer-enrichment.lock -->
 ## Data & Locks
 - Disk-space truth: use only `brainlayer disk --json` (`--path P` selects a volume).
   On macOS, `df` free is NOT Available: Available includes purgeable capacity; backup allocation
@@ -448,7 +448,7 @@ brainlayer search "how did I implement authentication"
   (idempotent: content-hash chunk ids + dedupe). Entries written before fingerprints existed
   resume only if the file's mtime is no later than the checkpoint's confirm time, so an upgrade
   does not re-read untouched files from 0; any appended or rewritten file is re-read from 0.
-- Socket: `/tmp/brainlayer.sock`
+- Socket: `/tmp/brainbar.sock`
 - Historical enrichment lock: `/tmp/brainlayer-enrichment.lock` (legacy cleanup/safety only)
 - Session dedup: `/tmp/brainlayer_session_*.json`
 
@@ -476,3 +476,6 @@ brainlayer search "how did I implement authentication"
   never report it.
 - **Pre-merge live-check against a DB copy** is required before any change that touches stored data.
   *(Etan's addition at ratification, 2026-08-02.)*
+
+## Local JSONL retention
+- Local deletion defaults on via `BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION`; `0`/`false` disables it. Require both mtime and verified-at ages >=14 days, exact verified receipt plus local/Drive MD5 match and live Drive presence; never newest across release siblings. Drive-only `BRAINLAYER_JSONL_BACKUP_RETENTION` remains opt-in, latest 30. Scratch proof: `formal/jsonl-retention/check.sh`, `tests/test_jsonl_local_retention.py`, `tests/test_jsonl_retention_r2.py`.

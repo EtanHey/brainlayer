@@ -227,7 +227,7 @@ def test_high_load_minimum_duty_never_overrides_pause_or_queue_backpressure(
     hotlane, tmp_path, monkeypatch, paused, queue_pressure, max_wait
 ):
     monkeypatch.setenv("BRAINLAYER_HOTLANE_BACKLOG_MAX_LOAD", "2")
-    monkeypatch.delenv("BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS", raising=False)
+    monkeypatch.setenv("BRAINLAYER_HOTLANE_BACKLOG_FLOOR_SECONDS", str(max_wait))
     if max_wait != 300:
         monkeypatch.setenv("BRAINLAYER_HOTLANE_BACKLOG_MAX_WAIT_SECONDS", str(max_wait))
     monkeypatch.setattr(hotlane.os, "getloadavg", lambda: (25, 0, 0))

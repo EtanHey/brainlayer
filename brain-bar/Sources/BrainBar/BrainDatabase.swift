@@ -2325,11 +2325,18 @@ final class BrainDatabase: @unchecked Sendable {
         return Int(sqlite3_column_int(stmt, 0))
     }
 
+    /// Prevent close() from freeing a handle while a borrowed read still uses it.
+    func withSQLiteHandle<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
+        guard let db else { throw DBError.notOpen }
+        return try body(db)
+    }
+
 #if DEBUG
     /// Lets private-fixture tests audit SQLite reads on the actual dashboard connection.
     func withSQLiteHandleForTesting<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
-        guard let db else { throw DBError.notOpen }
-        return try body(db)
+        try withSQLiteHandle(body)
     }
 #endif
 
@@ -5745,7 +5752,7 @@ final class BrainDatabase: @unchecked Sendable {
         return facts
     }
 
-    /// Expose the raw db pointer for EntityCache loading.
+    /// Test-only raw handle; production reads go through withSQLiteHandle.
     var dbHandle: OpaquePointer? { db }
 
     struct EnrichmentStatsSummary: Equatable, Sendable {
