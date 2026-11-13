@@ -107,6 +107,15 @@ def _under_cursor_agent_transcripts(path: Path) -> bool:
     return "agent-transcripts" in parts[cursor_index + 1 :]
 
 
+def _under_agy_brain(path: Path) -> bool:
+    """`.gemini/antigravity-cli/brain/`: where Antigravity (agy), the current Gemini agent, exports transcripts."""
+    parts = path.parts
+    return any(
+        part == ".gemini" and parts[index + 1 : index + 3] == ("antigravity-cli", "brain")
+        for index, part in enumerate(parts)
+    )
+
+
 def _project_segment(path: Path) -> str | None:
     parts = path.parts
     for index, part in enumerate(parts[:-1]):
@@ -213,7 +222,7 @@ def classify_provenance(
     if _under_cursor_agent_transcripts(path):
         return ProvenanceDecision("cursor-gather", "KEEP", "Cursor coding-agent transcript root", "cli-agent")
 
-    if _under_provider_sessions(path, ".gemini"):
+    if _under_provider_sessions(path, ".gemini") or _under_agy_brain(path):
         return ProvenanceDecision("gemini-session", "KEEP", "Gemini session root stays searchable", "cli-agent")
 
     if _is_subagent(path):

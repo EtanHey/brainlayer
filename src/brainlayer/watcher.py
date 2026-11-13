@@ -20,6 +20,7 @@ import json
 import logging
 import math
 import os
+import re
 import sqlite3
 import stat
 import tempfile
@@ -219,6 +220,9 @@ def _watch_max_record_bytes() -> int:
 
 
 _RECURSIVE_JSONL_GLOB = "**/*.jsonl"
+# Antigravity (agy), the current Gemini agent, exports each conversation's steps under its brain dir.
+# transcript.jsonl beside it is the same steps with long fields truncated, so only the full one is read.
+AGY_TRANSCRIPT_GLOB = "*/.system_generated/logs/transcript_full.jsonl"
 
 
 class _JSONLPatternMatcher:
@@ -366,6 +370,7 @@ def default_watch_roots(home: Path | None = None) -> list[WatchRoot]:
             "**/agent-transcripts/**/*.jsonl",
         ),
         WatchRoot("gemini", root / ".gemini" / "sessions"),
+        WatchRoot("gemini", root / ".gemini" / "antigravity-cli" / "brain", AGY_TRANSCRIPT_GLOB),
     ]
 
 
@@ -470,9 +475,36 @@ def scan_codex_turn_context(filepath: str, end_offset: int, inode: int) -> Codex
     return context
 
 
+_AGY_STEP_ROLES = {"USER_INPUT": "user", "PLANNER_RESPONSE": "assistant"}
+_AGY_USER_REQUEST = re.compile(r"<USER_REQUEST>(.*?)</USER_REQUEST>", re.DOTALL)
+
+
+def _agy_step_text(entry: dict[str, Any], role: str) -> str:
+    """An agy step's own words: the user turn without the metadata and settings agy wraps around it."""
+    content = entry.get("content")
+    if not isinstance(content, str):
+        return ""
+    if role == "user" and (request := _AGY_USER_REQUEST.search(content)):
+        return request.group(1).strip()
+    return content.strip()
+
+
 def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, Any] | None:
     if not isinstance(entry, dict):
         return None
+
+    # agy steps: tool steps (GENERIC) and ERROR_MESSAGE are not anyone's words and are not indexed.
+    agy_role = _AGY_STEP_ROLES.get(entry.get("type")) if provider == "gemini" and "step_index" in entry else None
+    if agy_role:
+        text = _agy_step_text(entry, agy_role)
+        if not text:
+            return None
+        return {
+            "type": agy_role,
+            "message": {"role": agy_role, "content": [{"type": "text", "text": text}]},
+            "timestamp": entry.get("created_at") or datetime.now(timezone.utc).isoformat(),
+            "_provider": provider,
+        }
 
     entry_type = entry.get("type")
     if entry_type in {"user", "assistant"} and isinstance(entry.get("message"), dict):

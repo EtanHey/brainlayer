@@ -331,6 +331,18 @@ def _extract_project_from_session_file(source_file: str) -> str | None:
     return None
 
 
+def _session_file_stem(source_file: str) -> str:
+    """The per-session name of a transcript: its stem, or its conversation dir for agy.
+
+    Every Antigravity (agy) transcript is `brain/<conversation>/.system_generated/logs/transcript_full.jsonl`,
+    so its stem names no session; the conversation dir does.
+    """
+    path = Path(source_file)
+    if len(path.parts) >= 4 and path.parts[-3] == ".system_generated" and path.parts[-2] == "logs":
+        return path.parts[-4]
+    return path.stem
+
+
 def _source_file_fingerprint(source_file: str) -> tuple[int, int] | None:
     """Return a version token for retrying an unresolved session file."""
     try:
@@ -578,7 +590,7 @@ def create_flush_callback(
                 secret_scrub_result = metrics.run("scrub", scrub_secrets, clean_content)
                 clean_content = secret_scrub_result.text
                 content_hash = normalized_exact_hash(clean_content)[:16]
-                file_stem = Path(source_file).stem
+                file_stem = _session_file_stem(source_file)
                 chunk_id = _realtime_chunk_id(file_stem, project, content_hash)
 
                 # Layer 4: Post-chunk content filter

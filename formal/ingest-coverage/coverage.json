@@ -1,6 +1,6 @@
 {
-  "pinned_at": "main 9f31efb2",
-  "sync_note": "Initial pins. Re-read the mapped lines, update the model or add a switch, rerun check.py and the replay test, and only then move a pin.",
+  "pinned_at": "main 7141c5ad + gemini-wire",
+  "sync_note": "gemini-wire: watcher.py gained the Antigravity (agy) root under provider gemini and its step parser in normalize_provider_entry; no verdict or health-snapshot logic changed, so the model is unchanged. Line refs below the parser moved +32. agy is a sixth wired agent in the replay (gemini-agy); it is append-only JSONL, so every shape applies to it, including the open rewrite_lossy finding.",
   "sources": [
     {
       "path": "src/brainlayer/health_verdict.py",
@@ -12,7 +12,7 @@
     },
     {
       "path": "src/brainlayer/watcher.py",
-      "sha256": "28ce27082eb8a8b0fdb1849a654afe0a3def83fc4658d15432378341086d40ee"
+      "sha256": "0996d6b05cbc93539321b6a310b928d85bf9f44af5e19dbaaa3449682cbd692d"
     },
     {
       "path": "src/brainlayer/badge_state.py",
@@ -24,8 +24,8 @@
     }
   ],
   "actions": {
-    "Tick.polls / writes": "watcher.py:2535 poll_once; :2789 _write_health_snapshot in its finally block; :2294 updated_at and poll_count in one payload; a failed write is swallowed (:2315-2321 except OSError)",
-    "Tick.progress (lag, coverage, dbfail, rootgone)": "watcher.py:521 CoverageWatchdog and :2244-2350 _write_health_snapshot publish alert_reasons, db_probe_failed, max_offset_lag_bytes; watcher.py:1448 _do_flush retains a failed batch; no verdict input reads any of them",
+    "Tick.polls / writes": "watcher.py:2567 poll_once; :2821 _write_health_snapshot in its finally block; :2326 updated_at and poll_count in one payload; a failed write is swallowed (:2347-2353 except OSError)",
+    "Tick.progress (lag, coverage, dbfail, rootgone)": "watcher.py:553 CoverageWatchdog and :2276-2382 _write_health_snapshot publish alert_reasons, db_probe_failed, max_offset_lag_bytes; watcher.py:1480 _do_flush retains a failed batch; no verdict input reads any of them",
     "Tick.seen": "health_facts.py:162 watcher_fact (missing = None, malformed raises); :396 _run_bounded turns a raise or timeout into UNOBSERVED; :511 the only ingest input",
     "Tick.cA (clock = max(watcher, persisted))": "health_verdict.py:427-430",
     "Tick.age / graced / g": "health_verdict.py:290 _graced_age (suspension credit, one wake-grace window per clock value)",
@@ -34,8 +34,8 @@
     "Tick.res0 (resumed_at)": "health_verdict.py:538 evaluate: confirmed clock pair vs sleep_gap_s, expiry after wake_grace_s",
     "NonGreen (dot ignores unknown)": "health_verdict.py:669; badge_state.py:127 badge_on = verdict.dot == RED (the dot is the verdict)",
     "watcher_stalled is context only": "health_check.py:1841 emits it; health_facts.py:47 CHECK_FOR_CODE maps it to ingest context, never state",
-    "Faults roots": "watcher.py:357 default_watch_roots (claude, codex, cursor, cursor-agent-transcripts, gemini)",
-    "Tick rewrite / rewrite_lossy (Dropping, StallClockIsTruthful)": "watcher.py:1212 JSONLTailer._verify_anchor and :1233 _verify_resumed_offset compare the 256 bytes before the offset and a blake2b digest of the first 4 KiB: a rewrite changing either re-reads from 0 (every record re-ingested; replay checks each); a same-length edit between them is not seen and its records are dropped"
+    "Faults roots": "watcher.py:361 default_watch_roots (claude, codex, cursor, cursor-agent-transcripts, gemini: ~/.gemini/sessions and Antigravity (agy) ~/.gemini/antigravity-cli/brain)",
+    "Tick rewrite / rewrite_lossy (Dropping, StallClockIsTruthful)": "watcher.py:1244 JSONLTailer._verify_anchor and :1265 _verify_resumed_offset compare the 256 bytes before the offset and a blake2b digest of the first 4 KiB: a rewrite changing either re-reads from 0 (every record re-ingested; replay checks each); a same-length edit between them is not seen and its records are dropped"
   },
   "bounds": {
     "exhaustive cases": "AmberT 2 < RedT 4 < WakeGrace 5 ticks, SleepGap 3, UnknownAmber 3, Recovery 2, Cap 8 (ordering-preserving, not production)",

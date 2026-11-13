@@ -60,8 +60,10 @@ writes, heartbeat and persisted-clock ages (awake and wall), resume and grace wi
 verdict (state, unknown ticks, good ticks), and the stall and blind counters. `coverage.json`
 maps each model action to a source line and pins each source by sha256.
 
-The wired agents are `default_watch_roots` (`watcher.py:357`): claude, codex, cursor,
-cursor-agent-transcripts and gemini. The verdict does not depend on which agent writes. Agent
+The wired agents are `default_watch_roots` (`watcher.py:361`): claude, codex, cursor,
+cursor-agent-transcripts and gemini. gemini has two roots: `~/.gemini/sessions` and Antigravity (agy),
+the current Gemini agent, at `~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript_full.jsonl`;
+the replay drives agy as its own agent, `gemini-agy`. The verdict does not depend on which agent writes. Agent
 identity matters only in the replay, where each agent writes its own format.
 
 ## Results
@@ -99,14 +101,14 @@ State 3: stall=2
 State 4: stall=3        <- v is still "green"; the heartbeat is fresh every tick
 ```
 
-The real code reproduces this. The replay (`coverage`, `lag`, `dbfail`, `rootgone`, all five agents)
+The real code reproduces this. The replay (`coverage`, `lag`, `dbfail`, `rootgone`, all six agents)
 writes a record every tick for 9 ticks (45 min). None reaches the scratch DB, and the real
 `evaluate()` reports ingest green on every tick. `test_the_findings_are_real_today` pins it.
 
 **The lossy rewrite.** The running tailer's `_verify_anchor` and the resume fingerprint compare only
 the 256 bytes before the offset and a digest of the first 4 KiB. In `rewrite_lossy`, the agent edits
 one record in place each tick, past 4 KiB, keeping the same length, and appends a new turn. For all
-five agents the appended turn is ingested, the edited record never is, and ingest stays green on a
+six agents the appended turn is ingested, the edited record never is, and ingest stays green on a
 fresh heartbeat. `test_a_lossy_rewrite_lands_the_newest_record_and_loses_the_edited_one` pins the
 split. A newest-record-only check, which is what round 1's replay used, would have reported no
 backlog. Fixing this needs a fingerprint that covers every byte before the offset (a running digest
@@ -135,7 +137,7 @@ the normal macOS path, it cannot happen (`real-heartbeat-shapes`).
 ticks) and commits the model's per-tick behaviour as `traces/*.json`. The scenarios are each of
 the 10 fault kinds, sleep, sleep with monitor-first wake, a stall across a wake, and unconfirmed
 short and long sleeps. `tests/test_ingest_coverage_replay.py` drives the real code with each trace
-for each of the 5 agents (75 runs):
+for each of the 6 agents (90 runs):
 
 - a real `JSONLWatcher` over the real `default_watch_roots` of a scratch home;
 - the real `create_flush_callback` into a scratch DB;
@@ -171,9 +173,8 @@ The replay can fail, and each of these is a test:
 - **Agents BrainLayer is not wired to**, including future labs' agents. Sources are wired on
   purpose ("nothing is auto-detected"), so the guarantee is per wired root. The known-agent census
   (separate stacked PR) catches running agents from a fixed list whose transcripts land outside
-  the watched roots. It cannot catch an agent that is not on the list. Today, for example, Gemini
-  CLI writes `~/.gemini/tmp/<hash>/chats/session-*.json`, which is not
-  `~/.gemini/sessions/**/*.jsonl`.
+  the watched roots. It cannot catch an agent that is not on the list. Gemini CLI (legacy, deprecated) wrote
+  `~/.gemini/tmp/<hash>/chats/session-*.json`; it is not watched, on purpose.
 - **Wrong parsing or content**: a record ingested as the wrong text. (The lossy in-place rewrite
   used to be listed here; it is now a modelled, replayed finding.)
 - **The Swift icon drawing.** That is BrainBar's app tests, not this.
