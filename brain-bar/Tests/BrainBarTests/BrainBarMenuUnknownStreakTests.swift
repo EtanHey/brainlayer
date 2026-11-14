@@ -70,7 +70,7 @@ extension BrainBarMenuInvariantTests {
         XCTAssertEqual(Set(BrainBarMenuPresenter.Say.all.filter { $0.kind == .reassurance }.map(\.id)),
                        ["S1", "A2.fine.is", "A2.fine.are", "M5", "U03.stillSaved", "F07.exactWords"])
         var count = 0, found: [String] = []
-        // Reuse present(c) across streaks already zero; nonzero streaks still get their own zero capture.
+        // Two core contexts per input, skipping its own nil streak (the known twin covers it); reuse zero presentations.
         func check(_ c: Capture, skipping: Int? = nil) {
             var cachedZero: P?
             for s in 0...2 where skipping != s {
@@ -139,7 +139,15 @@ extension BrainBarMenuInvariantTests {
         for entry in BrainBarMenuPresenter.Say.all where entry.kind == .reassurance {
             XCTAssertNotNil(BrainBarMenuPresenter.reassuranceCoverage(entry.id, ["Saving"], p, c), entry.id)
             XCTAssertNotNil(Self.oracleCoverage(entry.id, ["Saving"], f), entry.id)
+            XCTAssertFalse(BrainBarMenuPresenter.reassuranceCoverage(entry.id, ["Saving"], p, c)?.isEmpty ?? true, entry.id)
+            XCTAssertFalse(Self.oracleCoverage(entry.id, ["Saving"], f)?.isEmpty ?? true, entry.id)
         }
+    }
+
+    func testUnknownUpkeepIsNeverProvenFine() {
+        var c = Self.capture([:], base: 0, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
+        c.maintenanceNightFailures = nil
+        XCTAssertFalse(BrainBarMenuPresenter.provenFine(c).contains(.upkeep))
     }
 
     func testAllStreaksUnknownAtLaunch() {

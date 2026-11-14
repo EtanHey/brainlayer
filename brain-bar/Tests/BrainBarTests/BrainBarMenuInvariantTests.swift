@@ -112,7 +112,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             }
         }
         let known = all.flatMap { input in (0...4).map { var i = input; i.profile = $0; return i } }
-        // Nil singles on the plain base and five profiles, with upkeep 0/3; no new nil pair/triple cross.
+        // Nil singles on the plain base and five profiles; upkeep 0 only for maintenance-nil, 0/3 otherwise.
         return known + known.filter { $0.settings.count <= 1 && $0.base == 0 }.flatMap { input in
             (0...2).filter { $0 != 0 || input.upkeep == 0 }.map { s in var i = input; i.unknownStreak = s; return i }
         }
@@ -250,13 +250,13 @@ final class BrainBarMenuInvariantTests: XCTestCase {
 
     /// Round 2 of #1790 (Codex W66-B1): each "is it today" decision, by the text kept, exactly at its midnight, one representable
     /// step after, and a millisecond before: the estimate said as a clock time (R27), the upload's start said by clock or by day
-    /// (R23), and "today" or "yesterday" in `at`. No text is asserted inside the last half millisecond before a midnight, where
-    /// the formatter rounds up to 00:00 while the calendar keeps the earlier day: a known defect on main, fixed in P2d.
+    /// (R23), and "today" or "yesterday" in `at`, including the last half millisecond before midnight.
     func testEachTodayDecisionAtItsMidnight() {
         let iso = ISO8601DateFormatter(), zone = TimeZone(secondsFromGMT: 7200)!, now = iso.date(from: "2026-11-12T12:00:00+02:00")!
         func around(_ midnight: String) -> [Date] {
             let m = iso.date(from: midnight)!
-            return [m, Date(timeIntervalSinceReferenceDate: m.timeIntervalSinceReferenceDate.nextUp), m.addingTimeInterval(-0.001)]
+            return [m, Date(timeIntervalSinceReferenceDate: m.timeIntervalSinceReferenceDate.nextUp), m.addingTimeInterval(-0.001), m.addingTimeInterval(-0.0004),
+                    Date(timeIntervalSinceReferenceDate: m.timeIntervalSinceReferenceDate.nextDown)]
         }
         func detail(_ edit: (inout Capture) -> Void) -> [String] {
             var c = Self.capture(["backup_offsite": .amber], base: 0, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
@@ -268,11 +268,60 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         let start = iso.date(from: "2026-11-12T11:28:00+02:00")!, unconfirmed = "Saving, search, backups and upkeep aren’t confirmed yet. Last backup "
         XCTAssertEqual(around("2026-11-13T00:00:00+02:00").map { eta in detail { $0.offsiteRecovering = .init(progress: 0.4, eta: eta, startedAt: start, updatedAt: now, cadenceS: 30.0) } },
                        [["To Google Drive. Started at 11:28. 40% done."], ["To Google Drive. Started at 11:28. 40% done."],
-                        ["To Google Drive. Started at 11:28. 40% done, about 23:59."]])
+                        ["To Google Drive. Started at 11:28. 40% done, about 23:59."],
+                        ["To Google Drive. Started at 11:28. 40% done, about 23:59."], ["To Google Drive. Started at 11:28. 40% done, about 23:59."]])
         XCTAssertEqual(around("2026-11-12T00:00:00+02:00").map { s in detail { $0.upload = .init(startedAt: s, live: true) } },
-                       [["To Google Drive. Started at 00:00."], ["To Google Drive. Started at 00:00."], ["To Google Drive. Started yesterday at 23:59."]])
+                       [["To Google Drive. Started at 00:00."], ["To Google Drive. Started at 00:00."], ["To Google Drive. Started yesterday at 23:59."],
+                        ["To Google Drive. Started yesterday at 23:59."], ["To Google Drive. Started yesterday at 23:59."]])
         XCTAssertEqual(around("2026-11-12T00:00:00+02:00").map { m in detail { $0.verdict = nil; $0.lastKnownBackupAt = m } },
-                       [[unconfirmed + "today at 00:00."], [unconfirmed + "today at 00:00."], [unconfirmed + "yesterday at 23:59."]])
+                       [[unconfirmed + "today at 00:00."], [unconfirmed + "today at 00:00."], [unconfirmed + "yesterday at 23:59."],
+                        [unconfirmed + "yesterday at 23:59."], [unconfirmed + "yesterday at 23:59."]])
+    }
+
+    func testHistoricalSecondsOffsetKeepsMinuteAndDay() {
+        let iso = ISO8601DateFormatter(), zone = TimeZone(identifier: "Africa/Monrovia")!
+        let now = iso.date(from: "1970-06-02T12:44:30Z")!  // 12:00 local, offset −00:44:30
+        XCTAssertEqual(zone.secondsFromGMT(for: now), -2670)
+        var c = Self.capture(["backup_offsite": .amber], base: 0, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
+        (c.now, c.timeZone) = (now, zone)
+        let verdict = BrainBarHealthVerdict(dot: .green, checks: c.verdict!.checks, notes: [], evaluatedAt: now)
+        c.verdict = nil
+        let backups = [("1970-06-02T00:44:40Z", "00:00"), ("1970-06-02T10:59:40Z", "10:15")]
+        for (utc, clock) in backups {  // 00:00:10 and 10:15:10 local, far from rounding boundaries
+            c.lastKnownBackupAt = iso.date(from: utc)!
+            let p = BrainBarMenuPresenter.present(c)
+            XCTAssertEqual(p.rows.first { $0.kind == .headlineDetail }?.strings,
+                           ["Saving, search, backups and upkeep aren’t confirmed yet. Last backup today at \(clock)."])
+            XCTAssertEqual(Self.violations(c, p), [])
+        }
+        c.verdict = verdict
+        c.offsiteRecovering = .init(progress: 0.4, eta: iso.date(from: "1970-06-03T00:44:40Z")!,
+                                    startedAt: iso.date(from: "1970-06-02T12:12:30Z")!, updatedAt: now, cadenceS: 30.0)
+        let p = BrainBarMenuPresenter.present(c)
+        XCTAssertEqual(p.rows.first { $0.kind == .headlineDetail }?.strings, ["To Google Drive. Started at 11:28. 40% done."])
+        XCTAssertEqual(Self.violations(c, p), [])
+    }
+
+    func testMinuteWordsAndIndependentOracleAtEdges() {
+        let iso = ISO8601DateFormatter()
+        let boundary = iso.date(from: "2026-11-12T12:49:00+02:00")!
+        for offset in [-0.0004, -0.0001, 0.0] as [TimeInterval] {
+            var c = Self.capture(["backup_offsite": .amber], base: 0, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
+            c.now = boundary.addingTimeInterval(3600)
+            c.upload = .init(startedAt: boundary.addingTimeInterval(offset), live: true)
+            let p = BrainBarMenuPresenter.present(c)
+            let clock = offset < 0 ? "12:48" : "12:49"
+            XCTAssertEqual(p.rows.first { $0.kind == .headlineDetail }?.strings, ["To Google Drive. Started at \(clock)."])
+            XCTAssertEqual(Self.violations(c, p), [])
+            c.offsiteRecovering = .init(progress: 0.4, eta: boundary.addingTimeInterval(7200 + offset), startedAt: c.upload!.startedAt, updatedAt: c.now, cadenceS: 30.0)
+            XCTAssertEqual(BrainBarMenuPresenter.present(c).rows.first { $0.kind == .headlineDetail }?.strings,
+                           ["To Google Drive. Started at \(clock). 40% done, about \(offset < 0 ? "14:48" : "14:49")."])
+            c.verdict = nil
+            c.lastKnownBackupAt = c.upload!.startedAt
+            XCTAssertEqual(BrainBarMenuPresenter.present(c).rows.first { $0.kind == .headlineDetail }?.strings,
+                           ["Saving, search, backups and upkeep aren’t confirmed yet. Last backup today at \(clock)."])
+        }
+        for c in Self.edgeCaptures() { XCTAssertEqual(Self.violations(c, BrainBarMenuPresenter.present(c)), []) }
     }
 
     /// CI on #1790 (macOS 15, Xcode 26.3): that Foundation formats some moments as "", and the forward path then accepted the
@@ -329,6 +378,37 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             XCTAssertEqual(BrainBarMenuPresenter.present(last).rows.first { $0.kind == .headlineDetail }?.strings,
                            ["Saving, search, backups and upkeep aren’t confirmed yet."])
             XCTAssertEqual(BrainBarMenuPresenter.present(upload).rows.first { $0.kind == .headlineDetail }?.strings, ["To Google Drive."])
+        }
+    }
+
+    func testRunningUploadWithoutStartWordsKeepsWholeTextOnBothKeys() {
+        Self.wordless { zone in
+            let keys = ["HH:mm", "MMM d 'at' HH:mm"].map { "oracle|" + $0 + "|" + zone.identifier }
+            let saved = keys.map { Thread.current.threadDictionary[$0] }
+            for key in keys { Thread.current.threadDictionary[key] = Wordless() }
+            defer { for (key, value) in zip(keys, saved) { Thread.current.threadDictionary[key] = value } }
+            for date in [Date.distantPast, Date(timeIntervalSinceReferenceDate: .nan)] {
+                var c = Self.capture(["backup_offsite": .amber, "search": .amber], base: 1, dot: .green, checking: false,
+                                     wake: false, freshness: .fresh0, measured: true)
+                c.timeZone = zone
+                c.upload = .init(startedAt: date, live: true)
+                // Date ordering for NaN differs by Foundation; a wordless accepted start still means running.
+                let eligible = date <= c.now && date >= .distantPast && date <= .distantFuture
+                let expected: [[String]] = eligible
+                    ? [["Backing up now"], ["To Google Drive."], [], ["Can’t confirm agents can search right now."],
+                       ["Saving and upkeep are fine."], [], ["Settings…"], ["Quit BrainBar"]]
+                    : [["1 thing needs you"], [], ["Something BrainBar checks needs attention.", "BrainBar can’t fix this itself.",
+                        "Give the report to an agent."], ["Can’t confirm agents can search right now."], [], ["Settings…"], ["Quit BrainBar"]]
+                let p = BrainBarMenuPresenter.present(c), f = Facts(c: c, p: p)
+                XCTAssertEqual(p.rows.map(\.strings), expected)
+                for text in p.rows.flatMap(\.strings).flatMap(Self.sentences) {
+                    guard let (entry, values) = BrainBarMenuPresenter.entry(for: text, c) else { return XCTFail(text) }
+                    if entry.kind != .neutral {
+                        XCTAssertEqual(entry.holds?(c, p, values), true, text)
+                        XCTAssertEqual(Self.oracle[entry.id]?(f, values), true, text)
+                    }
+                }
+            }
         }
     }
 
@@ -523,7 +603,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
 
     /// Round 1 of #1788 (C9), widened in P2c: the two keys agree. For every conditioned entry, over every enumerated input on a
     /// reduced cross (singles, on every base, profile and upkeep value: eight settings of dot, verdict age, measured and the two
-    /// flags, which take every value of each, the flags independently; pairs: two) plus the 17 cases, and over candidate values
+    /// flags, which take every value of each, the flags independently; pairs and unknown streaks: two) plus the 17 cases, and over candidate values
     /// (every value shown anywhere and its perturbations), the registry's condition and the oracle's give the same answer
     /// wherever the filled sentence is one the matcher accepts (no other sentence reaches a condition). Each comparison runs on
     /// the presentation the function produced and on a hand-built one (R2-B2): the same rows under the headline "All good",
@@ -771,6 +851,26 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         XCTAssertEqual(Self.violations(quarantined, p), [])
     }
 
+    /// Exercise the oracle directly, independently of Foundation's Date comparison behavior.
+    func testOracleRejectsUnsayableDatesWithoutIntegerTraps() {
+        let invalid: [Double] = [.nan, .infinity, -.infinity, .greatestFiniteMagnitude, -.greatestFiniteMagnitude,
+                                 Double(Int64.max) * 60.0, Double(Int64.min) * 60.0,
+                                 Date.distantPast.timeIntervalSinceReferenceDate.nextDown,
+                                 Date.distantFuture.timeIntervalSinceReferenceDate.nextUp]
+        for value in invalid {
+            let d = Date(timeIntervalSinceReferenceDate: value)
+            let c = Capture(now: d, timeZone: TimeZone(secondsFromGMT: 0)!)
+            XCTAssertNil(Facts.minute(d, c))
+            XCTAssertNil(Facts.day(d, c))
+            XCTAssertEqual(Facts.clock(d, c), "")
+            XCTAssertEqual(Facts.dayWords(d, c), "")
+            XCTAssertFalse(Facts(c: c, p: BrainBarMenuPresenter.present(c)).today(d))
+        }
+        let c = Capture(now: Self.now, timeZone: TimeZone(secondsFromGMT: 0)!)
+        XCTAssertNotNil(Facts.minute(.distantPast, c))
+        XCTAssertNotNil(Facts.minute(.distantFuture, c))
+    }
+
     /// `present` is total over its capture type: numbers that are negative, zero, NaN or infinite, and dates at the
     /// edges of time, never trap, and the result still holds the invariants (review round 1, Codex N1, Claude N2).
     func testPresentIsTotalOverOddNumbersAndDates() {
@@ -889,7 +989,10 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         private let byName: [String: [Check]], start: Date?, startWords: (today: Bool, clock: String, day: String)?
         init(c: Capture, p: P) {
             (self.c, self.p, byName, start) = (c, p, Dictionary(grouping: c.verdict?.checks ?? [], by: \.name), Self.running(c))
-            startWords = start.map { (BrainBarMenuInvariantTests.calendar(c.timeZone).isDate($0, inSameDayAs: c.now), Self.clock($0, c), Self.dayWords($0, c)) }
+            startWords = start.flatMap { date in
+                guard let day = Self.day(date, c) else { return nil }
+                return (Self.day(c.now, c) == day, Self.clock(date, c), Self.dayWords(date, c))
+            }
         }
         /// The same capture under another presentation.
         func with(_ p: P) -> Facts { var f = self; f.p = p; return f }
@@ -936,32 +1039,55 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         }
         /// A time the words can name (Foundation's own range; NaN is in no range).
         func nameable(_ d: Date) -> Bool { Self.nameable(d) }
-        static func nameable(_ d: Date) -> Bool { d >= .distantPast && d <= .distantFuture }
+        static func nameable(_ d: Date) -> Bool {
+            let t = d.timeIntervalSinceReferenceDate
+            return t.isFinite && t >= Date.distantPast.timeIntervalSinceReferenceDate && t <= Date.distantFuture.timeIntervalSinceReferenceDate
+        }
         /// U13: a `recovering` on schedule (heard from within two cadences, not overdue) is the running upload; without
         /// one, a live upload process is. Its start, never after now.
         var running: Date? { start }
         static func running(_ c: Capture) -> Date? {
+            // Process/cadence evidence and Date ordering decide running; finite/day/word checks only gate time words.
+            func accepted(_ d: Date) -> Bool { d >= .distantPast && d <= .distantFuture }
             if let r = c.offsiteRecovering {
                 let quiet = c.now.timeIntervalSince(r.updatedAt)
-                return r.cadenceS > 0 && r.cadenceS.isFinite && quiet >= 0 && quiet <= 2 * r.cadenceS && (r.eta.map { c.now <= $0 && nameable($0) } ?? true)
-                    && r.progress.map { (0...1).contains($0) } != false && r.startedAt <= c.now && nameable(r.startedAt) ? r.startedAt : nil
+                return r.cadenceS > 0 && r.cadenceS.isFinite && quiet >= 0 && quiet <= 2 * r.cadenceS && (r.eta.map { c.now <= $0 && accepted($0) } ?? true)
+                    && r.progress.map { (0...1).contains($0) } != false && r.startedAt <= c.now && accepted(r.startedAt) ? r.startedAt : nil
             }
-            return c.upload.flatMap { $0.live && $0.startedAt <= c.now && nameable($0.startedAt) ? $0.startedAt : nil }
+            return c.upload.flatMap { $0.live && $0.startedAt <= c.now && accepted($0.startedAt) ? $0.startedAt : nil }
         }
         var progress: String? { running == nil ? nil : c.offsiteRecovering?.progress.flatMap { (0...1).contains($0) ? String(Int(($0 * 100).rounded())) : nil } }
         func clock(_ date: Date, _ format: String = "HH:mm") -> String { Self.clock(date, c, format) }
-        static func clock(_ date: Date, _ c: Capture, _ format: String = "HH:mm") -> String { BrainBarMenuInvariantTests.formatted(date, format, c.timeZone) }
+        // Integer local minutes since 2001-01-01, independent of the presenter's Calendar/formatter pair.
+        static func minute(_ d: Date, _ c: Capture) -> Int64? {
+            guard nameable(d) else { return nil }
+            let local = floor((d.timeIntervalSinceReferenceDate + Double(c.timeZone.secondsFromGMT(for: d))) / 60.0)
+            return Int64(exactly: local)
+        }
+        static func day(_ d: Date, _ c: Capture) -> Int64? {
+            minute(d, c).map { $0 / 1440 - ($0 % 1440 < 0 ? 1 : 0) }
+        }
+        func today(_ d: Date) -> Bool {
+            guard let day = Self.day(d, c) else { return false }
+            return Self.day(c.now, c) == day
+        }
+        static func clock(_ date: Date, _ c: Capture, _ format: String = "HH:mm") -> String {
+            guard let minute = minute(date, c) else { return "" }
+            let seconds = Double(minute) * 60.0 - Double(c.timeZone.secondsFromGMT(for: date))
+            return BrainBarMenuInvariantTests.formatted(Date(timeIntervalSinceReferenceDate: seconds), format, c.timeZone)
+        }
         func dayWords(_ d: Date) -> String { Self.dayWords(d, c) }
         /// Part 0's `{at}`, written here from the truth table: "today at 04:00" or "yesterday at 23:10" under a day ago, else
         /// "Nov 9 at 03:44".
         static func dayWords(_ d: Date, _ c: Capture) -> String {
-            let recent = c.now.timeIntervalSince(d) < 86_400.0, calendar = BrainBarMenuInvariantTests.calendar(c.timeZone)
-            func clock(_ d: Date, _ format: String = "HH:mm") -> String { Self.clock(d, c, format) }
-            if recent, calendar.isDate(d, inSameDayAs: c.now) { return "today at " + clock(d) }
-            if recent, let y = calendar.date(byAdding: .day, value: -1, to: c.now), calendar.isDate(d, inSameDayAs: y) { return "yesterday at " + clock(d) }
-            return clock(d, "MMM d") + " at " + clock(d)
+            guard let day = day(d, c) else { return "" }
+            let clock = Self.clock(d, c), dated = Self.clock(d, c, "MMM d 'at' HH:mm")
+            guard !clock.isEmpty, !dated.isEmpty else { return "" }
+            let recent = c.now.timeIntervalSince(d) < 86_400.0, now = Self.day(c.now, c)
+            if recent, now == day { return "today at " + clock }
+            if recent, now.map({ $0 - 1 }) == day { return "yesterday at " + clock }
+            return dated
         }
-        var calendar: Calendar { BrainBarMenuInvariantTests.calendar(c.timeZone) }
         /// A bare clock time reads as a time today, so it is true only for a start on today's date (P2b, ruling R23).
         func startedToday(_ value: String) -> Bool { startWords.map { $0.today && $0.clock == value } == true }
         /// R23: a start on another day says its day.
@@ -1010,7 +1136,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         "S03.started": { f, v in f.startedToday(v[0]) },
         "S03.startedOn": { f, v in f.startedOn(v[0]) },
         "S03.progress": { f, v in f.progress == v[0] },
-        "S03.progressEta": { f, v in f.progress == v[0] && f.c.offsiteRecovering?.eta.map { f.calendar.isDate($0, inSameDayAs: f.c.now) && f.clock($0) == v[1] } == true },
+        "S03.progressEta": { f, v in f.progress == v[0] && f.c.offsiteRecovering?.eta.map { f.today($0) && f.clock($0) == v[1] } == true },
         "C3": { f, v in v[0].components(separatedBy: " and ").allSatisfy { ($0 == "new conversations" && f.catchingUp) || ($0 == "backups" && f.running != nil) } },
         "C.few": { f, _ in [f.catchingUp, f.running != nil].filter { $0 }.count >= 3 },
         "A2.fine.is": { f, v in f.fine(f.fineWords(v[0])) },
@@ -1042,17 +1168,6 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         "D13": { f, _ in f.red("drive_auth") && f.c.driveAuthModel != .missing },
         "D13.missing": { f, _ in f.red("drive_auth") && f.c.driveAuthModel == .missing },
     ]
-
-    /// The oracle's own Gregorian calendar, one per zone on each thread.
-    static func calendar(_ zone: TimeZone) -> Calendar {
-        final class Made { let calendar: Calendar; init(_ calendar: Calendar) { self.calendar = calendar } }
-        let key = "oracle.calendar|" + zone.identifier
-        if let made = Thread.current.threadDictionary[key] as? Made { return made.calendar }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = zone
-        Thread.current.threadDictionary[key] = Made(calendar)
-        return calendar
-    }
 
     /// The oracle's own formatters, one per format and zone on each thread.
     static func formatted(_ date: Date, _ format: String, _ zone: TimeZone) -> String {
