@@ -85,8 +85,8 @@ enum BrainBarMenuPresenter {
     /// A failed database probe makes only `coverage_drop` unprovable (R24); other alerts still count (R09, X10).
     private static func appFacts(_ c: Capture) -> [Line] {
         var lines: [Line] = []
-        if c.maintenanceNightFailures >= 3 {  // U03; its second sentence only when saving and backups are proven fine
-            lines.append(worded(.upkeep, [Say.u03(String(c.maintenanceNightFailures))]
+        if let failures = c.maintenanceNightFailures, failures >= 3 {  // U03; its second sentence only when saving and backups are proven fine
+            lines.append(worded(.upkeep, [Say.u03(String(failures))]
                 + (provenFine(c).isSuperset(of: [.remembering, .safe]) ? [Say.stillSaved.text] : []), .confirmed))
         }
         guard let w = c.watcher, w.readable, w.fresh else { return lines }
@@ -113,6 +113,8 @@ enum BrainBarMenuPresenter {
             case .unknown?, nil: lines.append(checking(thing(of: name)))
             }
         }
+        if c.maintenanceNightFailures == nil { lines.append(checking(.upkeep)) }
+        if c.backupDailyFailures == nil || c.jsonlBackupFailures == nil { lines.append(checking(.safe)) }
         // X05, X06: a monitor that is not green blinds every thing.
         if worst(v, "monitor") != .green {
             if [.red, .amber].contains(worst(v, "monitor")) { lines.append(needs(.system)) }
@@ -212,12 +214,12 @@ enum BrainBarMenuPresenter {
                 db = worded(.safe, [(age ?? "") + progress], local.state == .red ? .custody : .confirmed, priority: 2)
                 db?.handoff = [Say.ifNotFinished.text, Say.giveReport.text]
                 dbNames = reds.map(\.name)
-            } else if c.backupDailyFailures >= 2, !faults.isEmpty, c.upload == nil, c.offsiteRecovering == nil,
+            } else if let failures = c.backupDailyFailures, failures >= 2, !faults.isEmpty, c.upload == nil, c.offsiteRecovering == nil,
                       faults.allSatisfy({ ($0.state == .red && valid($0.ageS)) || ($0.state == .amber && within($0)) }) {  // S06
                 let newest = [local, offsite].compactMap(\.ageS).filter { valid($0) }.min().flatMap { copyAge($0, c, v) }.map {
                     c.backupsMeasured ? Say.s06Newest($0) : Say.s06Confirmed($0)
                 }
-                db = worded(.safe, [Say.s06(String(c.backupDailyFailures))] + (newest.map { [$0] } ?? []),
+                db = worded(.safe, [Say.s06(String(failures))] + (newest.map { [$0] } ?? []),
                             local.state == .red ? .custody : reds.isEmpty ? .escalated : .confirmed, priority: 3)
                 dbNames = faults.map(\.name)
             } else if faults.isEmpty, c.backupDailyFailures == 1, c.backupDailyNextRunAt.map({ $0 > c.now }) == true {
@@ -236,7 +238,7 @@ enum BrainBarMenuPresenter {
         } else if absorbs, c.backupsMeasured, missing, offsite?.state == .red, Say.noDriveClock(c) {  // R14, R25
             detail += " " + Say.nothingInDrive.text
         }
-        let transcriptsFailing = one("transcripts").map { [.amber, .red].contains($0.state) && $0.ageS != nil } == true && c.jsonlBackupFailures >= 2
+        let transcriptsFailing = one("transcripts").map { [.amber, .red].contains($0.state) && $0.ageS != nil } == true && c.jsonlBackupFailures.map { $0 >= 2 } == true
         var s13 = worded(.safe, [missing ? Say.s13Missing.text : Say.s13.text, detail],
                          db?.rank == .custody || local?.state == .red ? .custody : .confirmed, priority: 4)
         s13.action = missing ? .connectDrive : .reconnectDrive
@@ -402,7 +404,7 @@ enum BrainBarMenuPresenter {
         var needsRows = p.rows.filter { $0.kind == .needsYou }
         let red = c.verdict.map { $0.dot == .red || $0.checks.contains { $0.state == .red } } ?? false
         let w = c.watcher.flatMap { $0.readable && $0.fresh ? $0 : nil }
-        let appFact = c.maintenanceNightFailures >= 3
+        let appFact = c.maintenanceNightFailures.map { $0 >= 3 } == true
             || w?.alertReasons.contains { !["offset_lag", "quarantined_record"].contains($0) && !($0 == "coverage_drop" && w?.dbProbeFailed == true) } == true
             || (w?.alertReasons.contains("offset_lag") == true && c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } == true)
         if needsRows.isEmpty, red || appFact || p.form == .needs || p.count != 0 || p.icon == .marked {
@@ -484,7 +486,8 @@ enum BrainBarMenuPresenter {
         if w == nil || w?.readable == false || w?.fresh == false || w?.dbProbeFailed == true
             || w?.alertReasons.contains(where: { $0 != "quarantined_record" }) == true { fine.remove(.remembering) }
         if !c.backupsMeasured || v.checks.contains(where: { copies.contains($0.name) && ($0.ageS ?? 0) < 0 }) { fine.remove(.safe) }
-        if c.maintenanceNightFailures >= 3 { fine.remove(.upkeep) }
+        if c.maintenanceNightFailures.map({ $0 < 3 }) != true { fine.remove(.upkeep) }
+        if c.backupDailyFailures == nil || c.jsonlBackupFailures == nil { fine.remove(.safe) }
         return fine
     }
 
