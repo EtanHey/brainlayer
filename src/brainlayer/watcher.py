@@ -501,12 +501,49 @@ def _agy_step_text(entry: dict[str, Any], role: str) -> str:
 _GROWTH_PROVIDERS = frozenset({"claude", "codex", "cursor", "cursor-agent-transcripts", "gemini"})
 
 
-def recognised_provider_entry(entry: dict, provider: str) -> bool:
-    """Recognise the wire format before noise, text extraction or chunk filters."""
-    if entry.get("type") in {"user", "assistant"} and isinstance(entry.get("message"), dict):
+_GROWTH_CONTENT_ROLES = frozenset({"user", "assistant", "model", "gemini", "ai", "bot"})
+_GROWTH_NEUTRAL_TYPES = frozenset({"summary", "system", "progress", "file-history-snapshot", "queue-operation"})
+_GROWTH_CODEX_METADATA = frozenset({"session_meta", "turn_context", "event_msg"})
+_GROWTH_CODEX_SKIPPED_ITEMS = frozenset({"function_call", "function_call_output"})
+_GROWTH_CURSOR_METADATA = frozenset({"tool"})
+_GROWTH_AGY_METADATA = frozenset({"GENERIC", "ERROR_MESSAGE"})
+_GROWTH_TOOL_BLOCKS = frozenset({"tool_use", "tool_result", "function_call", "function_call_output"})
+
+_GROWTH_LIST_BLOCKS = frozenset({None, "text", "input_text", "output_text"}) | _GROWTH_TOOL_BLOCKS
+
+
+def _growth_content_shape(value: Any) -> bool:
+    if _content_to_text(value):
         return True
+    if isinstance(value, str):
+        return True
+    if isinstance(value, list):
+        return all(
+            (not isinstance(item, dict) or item.get("type") in _GROWTH_LIST_BLOCKS) and _growth_content_shape(item)
+            for item in value
+        )
+    if isinstance(value, dict):
+        if value.get("type") in _GROWTH_TOOL_BLOCKS:
+            return any(key in value for key in ("name", "content", "output", "tool_use_id"))
+        return any(key in value and _growth_content_shape(value[key]) for key in ("text", "content", "message"))
+    return False
+
+
+def growth_entry_class(entry: dict, provider: str) -> str:
+    """Content shape, deliberately skipped metadata, or unknown format; never type-only content."""
+    kind = entry.get("type")
+    if provider == "gemini" and kind in _AGY_STEP_ROLES:
+        return "recognised" if "step_index" in entry and isinstance(entry.get("content"), str) else "unrecognised"
+    if kind in {"user", "assistant"} and isinstance(entry.get("message"), dict):
+        message = entry["message"]
+        return "recognised" if "content" in message and _growth_content_shape(message["content"]) else "unrecognised"
     payload = entry.get("payload")
     candidate = payload if isinstance(payload, dict) and payload else entry
+    if provider == "codex" and kind == "response_item":
+        if candidate.get("type") in _GROWTH_CODEX_SKIPPED_ITEMS:
+            return "neutral" if any(key in candidate for key in ("name", "output")) else "unrecognised"
+        if not isinstance(payload, dict) or payload.get("type") != "message":
+            return "unrecognised"
     role = (
         candidate.get("role")
         or candidate.get("sender")
@@ -514,16 +551,34 @@ def recognised_provider_entry(entry: dict, provider: str) -> bool:
         or _mapping_value(candidate.get("author")).get("role")
         or _mapping_value(candidate.get("message")).get("role")
     )
-    if str(role or "").lower() in {"user", "assistant", "model", "gemini", "ai", "bot"}:
-        return True
-    known = {
-        "claude": {"user", "assistant", "system", "progress", "summary", "file-history-snapshot", "queue-operation"},
-        "codex": {"session_meta", "turn_context", "event_msg", "response_item"},
-        "cursor": {"user", "assistant", "tool"},
-        "cursor-agent-transcripts": {"user", "assistant", "tool"},
-        "gemini": {"USER_INPUT", "PLANNER_RESPONSE", "GENERIC", "ERROR_MESSAGE"},
-    }
-    return entry.get("type") in known.get(provider, set())
+    if str(role or "").lower() in _GROWTH_CONTENT_ROLES:
+        body = candidate.get("content") or candidate.get("text") or candidate.get("message")
+        if body is None:
+            body = next((candidate[key] for key in ("content", "text", "message") if key in candidate), None)
+        return "recognised" if _growth_content_shape(body) else "unrecognised"
+    # Generic role-bearing metadata can carry content: test the normaliser's role gate first.
+    if not role and (
+        kind in _GROWTH_NEUTRAL_TYPES
+        or provider == "codex"
+        and kind in _GROWTH_CODEX_METADATA
+        or provider in ("cursor", "cursor-agent-transcripts")
+        and kind in _GROWTH_CURSOR_METADATA
+        or provider == "gemini"
+        and kind in _GROWTH_AGY_METADATA
+    ):
+        return "neutral"
+    return "unrecognised"
+
+
+def recognised_provider_entry(entry: dict, provider: str) -> bool:
+    return growth_entry_class(entry, provider) == "recognised"
+
+
+def _growth_timestamp(value: Any) -> bool:
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, Any] | None:
@@ -1360,6 +1415,13 @@ class JSONLTailer:
         """Return whether an already-read complete record is waiting to be emitted."""
         return b"\n" in self._buffer
 
+    def _count_source_line(self, end_offset: int, *, neutral: bool = False) -> None:
+        self.lines_read_total = getattr(self, "lines_read_total", 0) + 1
+        self.neutral_lines_total = getattr(self, "neutral_lines_total", 0) + int(neutral)
+        if end_offset > getattr(self, "growth_frontier", 0):
+            self.growth_lines_total = getattr(self, "growth_lines_total", 0) + 1
+            self.growth_neutral_total = getattr(self, "growth_neutral_total", 0) + int(neutral)
+
     def read_buffered_lines(self, max_lines: int | None = None) -> list[dict]:
         """Parse complete buffered records without reading more bytes from disk."""
         lines = []
@@ -1379,7 +1441,7 @@ class JSONLTailer:
 
             if not line_data.strip():
                 consumed_bytes = nl_idx + 1
-                self.lines_read_total = getattr(self, "lines_read_total", 0) + 1
+                self._count_source_line(starting_offset + nl_idx + 1, neutral=True)
                 continue
 
             if self.max_record_bytes is not None and len(line_data) > self.max_record_bytes:
@@ -1396,7 +1458,7 @@ class JSONLTailer:
                 from .t3_provenance import compact_codex_header
 
                 self.first_record = compact_codex_header(parsed, nl_idx + 1)
-            self.lines_read_total = getattr(self, "lines_read_total", 0) + 1
+            self._count_source_line(starting_offset + nl_idx + 1)
             line_end_offset = starting_offset + nl_idx + 1
             consumed_bytes = nl_idx + 1
             if isinstance(parsed, dict):
@@ -1739,29 +1801,45 @@ class JSONLWatcher:
         self._last_registry_flush = time.monotonic()
         self.health_path = Path(health_path).expanduser() if health_path else None
         self._growth = {}
+        self._growth_backfill = {}
         if self.health_path and self.health_path.exists():
             try:
-                prior = json.loads(self.health_path.read_text()).get("source_growth", {})
+                restored = json.loads(self.health_path.read_text())
+                prior = restored.get("source_growth", {})
+                backfill = restored.get("growth_backfill", {})
+                if isinstance(backfill, dict):
+                    self._growth_backfill = {
+                        k: v
+                        for k, v in backfill.items()
+                        if isinstance(k, str)
+                        and isinstance(v, dict)
+                        and all(
+                            type(v.get(field)) is int and v[field] >= 0 for field in ("frontier", "inode", "generation")
+                        )
+                    }
                 for provider in {r.provider for r in self.watch_roots} & _GROWTH_PROVIDERS:
                     state = prior.get(provider)
                     if (
                         isinstance(state, dict)
-                        and isinstance(state.get("since"), (int, float))
+                        and _growth_timestamp(state.get("since"))
+                        and _growth_timestamp(state.get("last_line_at", state.get("since")))
                         and isinstance(state.get("alerting"), bool)
                         and isinstance(state.get("samples"), list)
                         and all(
                             isinstance(s, list)
                             and len(s) == 2
-                            and isinstance(s[0], (int, float))
+                            and _growth_timestamp(s[0])
                             and type(s[1]) is int
                             and s[1] >= 0
                             for s in state["samples"]
                         )
                     ):
+                        state.setdefault("last_line_at", max([state["since"], *[s[0] for s in state["samples"]]]))
                         self._growth[provider] = state
             except (OSError, ValueError, AttributeError):
                 logger.warning("Could not restore source growth window", exc_info=True)
         self._growth_poll = {}
+        self._growth_activity = {}
         self.db_path = Path(db_path).expanduser() if db_path else None
         self.coverage_watchdog = coverage_watchdog or CoverageWatchdog()
         self._health_window_started = time.monotonic()
@@ -2374,6 +2452,21 @@ class JSONLWatcher:
                 missing.append(root.provider)
         return sorted(missing)
 
+    def _growth_frontier(self, filepath: str, inode: int, generation: int) -> int:
+        marker = self._growth_backfill.get(filepath)
+        current = self._current_file_stats.get(filepath)
+        if (
+            marker
+            and (marker["inode"], marker["generation"]) == (inode, generation)
+            and (current is None or current[1] >= marker["frontier"])
+        ):
+            # Archives have decoded offsets but physical stat sizes; all first-decode bytes are backfill.
+            if self._physical_files.get(filepath, filepath).endswith(".zst"):
+                return (1 << 63) - 1
+            return marker["frontier"]
+        self._growth_backfill.pop(filepath, None)
+        return 0
+
     def _growth_snapshot(self) -> list[str]:
         # Keep 31 minutes of samples to include a boundary poll at the 30-minute age.
         # Wall time survives restarts; no source lines while asleep/idle can meet the count.
@@ -2381,8 +2474,14 @@ class JSONLWatcher:
         reasons = []
         for provider in {r.provider for r in self.watch_roots} & _GROWTH_PROVIDERS:
             lines, recognised = self._growth_poll.get(provider, (0, 0))
-            state = self._growth.setdefault(provider, {"since": now, "samples": [], "alerting": False})
+            state = self._growth.setdefault(
+                provider, {"since": now, "last_line_at": now, "samples": [], "alerting": False}
+            )
             state["samples"] = [s for s in state["samples"] if now - 1860 <= s[0] <= now]
+            if self._growth_activity.get(provider, 0):
+                state["last_line_at"] = now
+            elif now - state["last_line_at"] >= 21600:
+                state.update(since=now, samples=[], alerting=False)
             if recognised:
                 state.update(since=now, samples=[], alerting=False)
             else:
@@ -2459,6 +2558,7 @@ class JSONLWatcher:
             "poll_count": self.poll_count,
             "providers": sorted({root.provider for root in self.watch_roots}),
             "source_growth": self._growth,
+            "growth_backfill": self._growth_backfill,
             "files_tracked": len(files),
             "active_jsonl_entries_per_minute": active_entries_per_min,
             "normalized_jsonl_entries_per_minute": normalized_entries_per_min,
@@ -2704,6 +2804,7 @@ class JSONLWatcher:
         total_new = 0
         files: list[str] = []
         self._growth_poll = {}
+        self._growth_activity = {}
         self.poll_count += 1
         self.last_poll_made_progress = False
 
@@ -2825,20 +2926,30 @@ class JSONLWatcher:
                             )
                             tailer.rewound = False
 
-                    lines_before = getattr(tailer, "lines_read_total", 0) if tailer else 0
+                    first_ingest = tailer is None and self.registry.get(filepath)[0] == 0
+                    if not drain_buffer:
+                        tailer = self._ensure_tailer(filepath)
+                    lines_before = getattr(tailer, "lines_read_total", 0)
+                    neutral_before = getattr(tailer, "neutral_lines_total", 0)
+                    eligible_before = getattr(tailer, "growth_lines_total", 0)
+                    eligible_neutral_before = getattr(tailer, "growth_neutral_total", 0)
+                    read_start_offset = tailer.offset
+                    tailer_snapshot = tailer.snapshot()
+                    source_inode = tailer.observed_inode
+                    source_generation = self.registry.generation(filepath)
+                    if first_ingest:
+                        self._growth_backfill.setdefault(
+                            filepath,
+                            {
+                                "frontier": self._current_file_stats.get(filepath, (0, 0, 0))[1],
+                                "inode": source_inode,
+                                "generation": source_generation,
+                            },
+                        )
+                    tailer.growth_frontier = self._growth_frontier(filepath, source_inode, source_generation)
                     if drain_buffer:
-                        read_start_offset = tailer.offset
-                        tailer_snapshot = tailer.snapshot()
-                        source_inode = tailer.observed_inode
-                        source_generation = self.registry.generation(filepath)
                         new_lines = tailer.read_buffered_lines(max_lines=self.max_lines_per_file)
                     else:
-                        tailer = self._ensure_tailer(filepath)
-                        lines_before = getattr(tailer, "lines_read_total", 0)
-                        read_start_offset = tailer.offset
-                        tailer_snapshot = tailer.snapshot()
-                        source_inode = tailer.observed_inode
-                        source_generation = self.registry.generation(filepath)
                         new_lines = tailer.read_new_lines(
                             max_lines=self.max_lines_per_file,
                             max_bytes=min(self.max_read_bytes_per_file, zst_bytes)
@@ -2881,11 +2992,29 @@ class JSONLWatcher:
                         )
                     normalized_lines = self._normalize_lines(filepath, new_lines) if new_lines else []
                     provider = self.provider_for_file(filepath)
+                    frontier = self._growth_frontier(filepath, source_inode, source_generation)
+                    if frontier == tailer.growth_frontier:
+                        raw_count = getattr(tailer, "growth_lines_total", 0) - eligible_before
+                        blanks = getattr(tailer, "growth_neutral_total", 0) - eligible_neutral_before
+                    else:  # The read detected a rewrite: count its new generation, not the obsolete frontier.
+                        raw_count = getattr(tailer, "lines_read_total", 0) - lines_before
+                        blanks = getattr(tailer, "neutral_lines_total", 0) - neutral_before
+                    classes = [
+                        growth_entry_class(line, provider)
+                        for line in new_lines
+                        if line.get("_line_end_offset", 0) > frontier
+                    ]
+                    self._growth_activity[provider] = self._growth_activity.get(provider, 0) + raw_count
                     read, recognised = self._growth_poll.get(provider, (0, 0))
                     self._growth_poll[provider] = (
-                        read + getattr(tailer, "lines_read_total", 0) - lines_before,
-                        recognised + sum(recognised_provider_entry(line, provider) for line in new_lines),
+                        read + raw_count - classes.count("neutral") - blanks,
+                        recognised + classes.count("recognised"),
                     )
+                    if filepath in self._growth_backfill and (
+                        (compressed and tailer.decoded_eof and not tailer._buffer)
+                        or (not compressed and tailer.offset >= frontier)
+                    ):
+                        self._growth_backfill.pop(filepath, None)
                     reconcile_through = getattr(tailer, "_archive_reconcile_through", 0)
                     if normalized_lines:
                         for line in normalized_lines:

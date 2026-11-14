@@ -80,6 +80,7 @@ def _fault(f, ticks=9, after="none"):
 
 
 SCENARIOS: dict[str, dict[str, Any]] = {
+    "growth-changed-body": {"clock": "confirmed", "events": _fault("growth")},
     "growth-idle": {
         "clock": "confirmed",
         "events": _fault("growth")[:-4] + [{**_awake(), "w": False}] * 3 + [_awake()] * 4,
@@ -292,6 +293,15 @@ def agent_record(provider: str, text: str, when: datetime, *, drift: bool = Fals
     return {"role": "user", "content": text, "timestamp": ts}  # cursor sessions
 
 
+def changed_body_record(provider: str, text: str) -> dict[str, Any]:
+    """Keep the discriminator; move the body beyond the normaliser's required shape."""
+    if provider == "codex":
+        return {"type": "response_item", "payload": {"kind": "message", "body": text}}
+    if provider == "gemini":
+        return {"type": "USER_INPUT", "content": {"parts": [text]}}
+    return {"type": "assistant", "msg": {"role": "assistant", "content": text}}
+
+
 def _header(provider: str, when: datetime) -> list[dict[str, Any]]:
     if provider != "codex":
         return []
@@ -465,6 +475,8 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
                     edited, _ = _edit_middle_record(path, provider, lines, k, start)
                     pending[edited] = f
                 record = agent_record(provider, text, wall, drift=f in ("drift", "growth"))
+                if f == "growth" and trace["scenario"] == "growth-changed-body":
+                    record = changed_body_record(provider, text)
                 with open(path, "a", encoding="utf-8") as handle:
                     handle.write((json.dumps(record) + "\n") * (40 if f == "growth" else 1))
                 lines.append(record)
