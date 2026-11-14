@@ -259,14 +259,21 @@ jobs:
         run: |
           python3 -c 'import os,time; from pathlib import Path; Path(os.environ["RUNNER_TEMP"], "brainbar-test-start").write_text(str(time.time()))'
           # Only the exact output false permits a skip; dispatch, schedule and unknown outputs run the net.
-          args=()
+          cd brain-bar
           if [[ "$EVENT_NAME" != "workflow_dispatch" && "$EVENT_NAME" != "schedule" && "$MENU_FUNCTION" == "false" ]]; then
             echo "menu function unchanged: skipping BrainBarMenuInvariantTests"
-            args=(--skip BrainBarMenuInvariantTests)
+            echo "running everything except BrainBarMenuInvariantTests"
+            python3 Tests/BrainBarTests/Scripts/run_swift_tests.py --skip BrainBarMenuInvariantTests
           else
-            echo "menu function changed: running the full suite"
+            status=0
+            echo "running everything except BrainBarMenuInvariantTests"
+            python3 Tests/BrainBarTests/Scripts/run_swift_tests.py --skip BrainBarMenuInvariantTests || status=$?
+            echo "running BrainBarMenuInvariantTests in its own process"
+            menu_status=0
+            python3 Tests/BrainBarTests/Scripts/run_swift_tests.py --filter BrainBarMenuInvariantTests || menu_status=$?
+            if (( menu_status > status )); then status=$menu_status; fi
+            exit "$status"
           fi
-          cd brain-bar && python3 Tests/BrainBarTests/Scripts/run_swift_tests.py "${args[@]}"
 
       - name: Preserve native test crash reports
         if: failure() && steps.brainbar-tests.outcome == 'failure'
