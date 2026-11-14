@@ -20,6 +20,8 @@ import XCTest
     }
 
     func testActionsDismissBeforeCallingTheirTarget() async {
+        // Standard menu-item dispatch needs an application even when no window is created.
+        NSApplication.shared.setActivationPolicy(.prohibited)
         var calls: [String] = []
         let actions = BrainBarLiveMenuActions(settings: { calls.append("settings") }, storage: { calls.append("backups") },
             quit: { calls.append("quit") }, restart: { calls.append("restart") }, reconnect: { calls.append("drive.reconnect") },
