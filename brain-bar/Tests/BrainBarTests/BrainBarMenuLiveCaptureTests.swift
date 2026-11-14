@@ -71,7 +71,7 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
     func testAnIncompleteFieldTableIsRejected() {
         var incomplete = Self.fields
         incomplete.removeValue(forKey: "watcher.readable")
-        XCTAssertNotEqual(Self.fieldNames(), Set(incomplete.keys))
+        XCTAssertEqual(Self.fieldNames().subtracting(incomplete.keys), Set(["watcher.readable"]))
     }
 
     /// Build the same value types used by StatusSnapshotTests; no models that poll, run commands or show UI.
