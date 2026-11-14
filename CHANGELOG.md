@@ -40,6 +40,15 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.2] - 2026-11-14
+
+### Search health canary waits for the hybrid budget
+
+- fix(brainbar): P2c — close four gaps in the menu function's safety net (R2-B1, R2-B2, R2-N1, CodeRabbit x2) (#1790)
+- ci: run the menu function's exhaustive suite only when the menu function can have changed (#1796)
+- docs(brainbar): describe the owner's note in plain words in the menu review notes (#1799)
+- Give the search health canary time for fallback (#1800)
+
 ## [1.6.1] - 2026-11-13
 
 ### Ingest proof fix, Antigravity indexing, native BrainBar menu
