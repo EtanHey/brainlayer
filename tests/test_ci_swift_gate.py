@@ -367,7 +367,7 @@ def test_menu_suite_skip_is_fail_safe(event, output, tmp_path):
     assert skip == (event not in ("workflow_dispatch", "schedule") and output == "false")
     # Execute the actual shell with a recording Python stand-in: never invoke Swift or a build.
     executable = tmp_path / "python3"
-    executable.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    executable.write_text('#!/bin/sh\nprintf "CALL %s %s %s\\n" "$1" "$2" "$3"\n')
     executable.chmod(0o755)
     (tmp_path / "brain-bar").mkdir()
     result = subprocess.run(
@@ -378,17 +378,82 @@ def test_menu_suite_skip_is_fail_safe(event, output, tmp_path):
         env={**os.environ, "PATH": str(tmp_path), "MENU_FUNCTION": output or "", "EVENT_NAME": event},
     )
     assert result.returncode == 0, result.stderr
-    assert ("--skip\nBrainBarMenuInvariantTests\n" in result.stdout) == skip
-    reason = (
-        "menu function unchanged: skipping BrainBarMenuInvariantTests"
-        if skip
-        else "menu function changed: running the full suite"
+    calls = [line for line in result.stdout.splitlines() if line.startswith("CALL Tests/")]
+    runner = "CALL Tests/BrainBarTests/Scripts/run_swift_tests.py"
+    assert calls == [f"{runner} --skip BrainBarMenuInvariantTests"] + (
+        [] if skip else [f"{runner} --filter BrainBarMenuInvariantTests"]
     )
-    assert reason in result.stdout
-    invocation = ["Tests/BrainBarTests/Scripts/run_swift_tests.py"]
+    assert "running everything except BrainBarMenuInvariantTests" in result.stdout
     if skip:
-        invocation += ["--skip", "BrainBarMenuInvariantTests"]
-    assert result.stdout.split(reason + "\n", 1)[1].splitlines() == invocation
+        assert "menu function unchanged: skipping BrainBarMenuInvariantTests" in result.stdout
+    else:
+        assert "running BrainBarMenuInvariantTests in its own process" in result.stdout
+
+
+@pytest.mark.parametrize("first,second", [(0, 0), (7, 0), (0, 9), (7, 9), (9, 7)])
+def test_menu_split_runs_both_and_returns_worse_status(tmp_path, first, second):
+    import subprocess
+
+    step = next(s for s in _load_workflow()["jobs"]["swift"]["steps"] if s.get("id") == "brainbar-tests")
+    executable = tmp_path / "python3"
+    executable.write_text(
+        "#!/bin/sh\n"
+        'case "$2" in\n'
+        '  --skip) echo rest; exit "$FIRST_EXIT" ;;\n'
+        '  --filter) echo menu; exit "$SECOND_EXIT" ;;\n'
+        "esac\n"
+    )
+    executable.chmod(0o755)
+    (tmp_path / "brain-bar").mkdir()
+    result = subprocess.run(
+        ["/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": str(tmp_path),
+            "MENU_FUNCTION": "true",
+            "EVENT_NAME": "pull_request",
+            "FIRST_EXIT": str(first),
+            "SECOND_EXIT": str(second),
+        },
+    )
+    assert [line for line in result.stdout.splitlines() if line in ("rest", "menu")] == ["rest", "menu"]
+    assert result.returncode == max(first, second), result.stderr
+
+
+@pytest.mark.parametrize("leaking_call", [0, 1])
+def test_swift_wrapper_split_owns_temp_roots_and_reuses_build(monkeypatch, leaking_call):
+    path = REPO_ROOT / "brain-bar/Tests/BrainBarTests/Scripts/run_swift_tests.py"
+    spec = importlib.util.spec_from_file_location("swift_split_gate", path)
+    wrapper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wrapper)
+    roots, commands = [], []
+
+    def run(command, *, env):
+        root = Path(env["BRAINBAR_TEST_TMP_ROOT"])
+        assert root.is_dir() and not list(root.iterdir())
+        assert env["TMPDIR"] == str(root) + "/"
+        roots.append(root)
+        commands.append(command)
+        if len(roots) - 1 == leaking_call:
+            (root / "brainbar-leaked-fixture").write_text("owned fixture")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(wrapper.subprocess, "run", run)
+    results = []
+    for option in ("--skip", "--filter"):
+        monkeypatch.setattr(wrapper.sys, "argv", [str(path), option, "BrainBarMenuInvariantTests"])
+        results.append(wrapper.main())
+    assert results == ([1, 0] if leaking_call == 0 else [0, 1])
+    assert roots[0] != roots[1]
+    assert all(not root.exists() for root in roots)
+    assert (
+        commands[0][:4]
+        == commands[1][:4]
+        == ["swift", "test", "--scratch-path", str(REPO_ROOT / ".build.noindex/swift")]
+    )
 
 
 @pytest.mark.parametrize(
