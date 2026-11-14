@@ -820,6 +820,26 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         XCTAssertEqual(Self.violations(quarantined, p), [])
     }
 
+    /// Exercise the oracle directly, independently of Foundation's Date comparison behavior.
+    func testOracleRejectsUnsayableDatesWithoutIntegerTraps() {
+        let invalid: [Double] = [.nan, .infinity, -.infinity, .greatestFiniteMagnitude, -.greatestFiniteMagnitude,
+                                 Double(Int64.max) * 60.0, Double(Int64.min) * 60.0,
+                                 Date.distantPast.timeIntervalSinceReferenceDate.nextDown,
+                                 Date.distantFuture.timeIntervalSinceReferenceDate.nextUp]
+        for value in invalid {
+            let d = Date(timeIntervalSinceReferenceDate: value)
+            let c = Capture(now: d, timeZone: TimeZone(secondsFromGMT: 0)!)
+            XCTAssertNil(Facts.minute(d, c))
+            XCTAssertNil(Facts.day(d, c))
+            XCTAssertEqual(Facts.clock(d, c), "")
+            XCTAssertEqual(Facts.dayWords(d, c), "")
+            XCTAssertFalse(Facts(c: c, p: BrainBarMenuPresenter.present(c)).today(d))
+        }
+        let c = Capture(now: Self.now, timeZone: TimeZone(secondsFromGMT: 0)!)
+        XCTAssertNotNil(Facts.minute(.distantPast, c))
+        XCTAssertNotNil(Facts.minute(.distantFuture, c))
+    }
+
     /// `present` is total over its capture type: numbers that are negative, zero, NaN or infinite, and dates at the
     /// edges of time, never trap, and the result still holds the invariants (review round 1, Codex N1, Claude N2).
     func testPresentIsTotalOverOddNumbersAndDates() {
@@ -938,7 +958,10 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         private let byName: [String: [Check]], start: Date?, startWords: (today: Bool, clock: String, day: String)?
         init(c: Capture, p: P) {
             (self.c, self.p, byName, start) = (c, p, Dictionary(grouping: c.verdict?.checks ?? [], by: \.name), Self.running(c))
-            startWords = start.map { (Self.day($0, c) == Self.day(c.now, c), Self.clock($0, c), Self.dayWords($0, c)) }
+            startWords = start.flatMap { date in
+                guard let day = Self.day(date, c) else { return nil }
+                return (Self.day(c.now, c) == day, Self.clock(date, c), Self.dayWords(date, c))
+            }
         }
         /// The same capture under another presentation.
         func with(_ p: P) -> Facts { var f = self; f.p = p; return f }
@@ -985,7 +1008,10 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         }
         /// A time the words can name (Foundation's own range; NaN is in no range).
         func nameable(_ d: Date) -> Bool { Self.nameable(d) }
-        static func nameable(_ d: Date) -> Bool { d >= .distantPast && d <= .distantFuture }
+        static func nameable(_ d: Date) -> Bool {
+            let t = d.timeIntervalSinceReferenceDate
+            return t.isFinite && t >= Date.distantPast.timeIntervalSinceReferenceDate && t <= Date.distantFuture.timeIntervalSinceReferenceDate
+        }
         /// U13: a `recovering` on schedule (heard from within two cadences, not overdue) is the running upload; without
         /// one, a live upload process is. Its start, never after now.
         var running: Date? { start }
@@ -1000,24 +1026,34 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         var progress: String? { running == nil ? nil : c.offsiteRecovering?.progress.flatMap { (0...1).contains($0) ? String(Int(($0 * 100).rounded())) : nil } }
         func clock(_ date: Date, _ format: String = "HH:mm") -> String { Self.clock(date, c, format) }
         // Integer local minutes since 2001-01-01, independent of the presenter's Calendar/formatter pair.
-        static func minute(_ d: Date, _ c: Capture) -> Int64 {
-            Int64(floor((d.timeIntervalSinceReferenceDate + Double(c.timeZone.secondsFromGMT(for: d))) / 60.0))
+        static func minute(_ d: Date, _ c: Capture) -> Int64? {
+            guard nameable(d) else { return nil }
+            let local = floor((d.timeIntervalSinceReferenceDate + Double(c.timeZone.secondsFromGMT(for: d))) / 60.0)
+            return Int64(exactly: local)
         }
-        static func day(_ d: Date, _ c: Capture) -> Int64 { Int64(floor(Double(minute(d, c)) / 1440.0)) }
-        func today(_ d: Date) -> Bool { Self.day(d, c) == Self.day(c.now, c) }
+        static func day(_ d: Date, _ c: Capture) -> Int64? {
+            minute(d, c).map { $0 / 1440 - ($0 % 1440 < 0 ? 1 : 0) }
+        }
+        func today(_ d: Date) -> Bool {
+            guard let day = Self.day(d, c) else { return false }
+            return Self.day(c.now, c) == day
+        }
         static func clock(_ date: Date, _ c: Capture, _ format: String = "HH:mm") -> String {
-            let seconds = Double(minute(date, c)) * 60.0 - Double(c.timeZone.secondsFromGMT(for: date))
+            guard let minute = minute(date, c) else { return "" }
+            let seconds = Double(minute) * 60.0 - Double(c.timeZone.secondsFromGMT(for: date))
             return BrainBarMenuInvariantTests.formatted(Date(timeIntervalSinceReferenceDate: seconds), format, c.timeZone)
         }
         func dayWords(_ d: Date) -> String { Self.dayWords(d, c) }
         /// Part 0's `{at}`, written here from the truth table: "today at 04:00" or "yesterday at 23:10" under a day ago, else
         /// "Nov 9 at 03:44".
         static func dayWords(_ d: Date, _ c: Capture) -> String {
-            let recent = c.now.timeIntervalSince(d) < 86_400.0
-            func clock(_ d: Date, _ format: String = "HH:mm") -> String { Self.clock(d, c, format) }
-            if recent, day(d, c) == day(c.now, c) { return "today at " + clock(d) }
-            if recent, day(d, c) == day(c.now, c) - 1 { return "yesterday at " + clock(d) }
-            return clock(d, "MMM d") + " at " + clock(d)
+            guard let day = day(d, c) else { return "" }
+            let clock = Self.clock(d, c), dated = Self.clock(d, c, "MMM d 'at' HH:mm")
+            guard !clock.isEmpty, !dated.isEmpty else { return "" }
+            let recent = c.now.timeIntervalSince(d) < 86_400.0, now = Self.day(c.now, c)
+            if recent, now == day { return "today at " + clock }
+            if recent, now.map({ $0 - 1 }) == day { return "yesterday at " + clock }
+            return dated
         }
         /// A bare clock time reads as a time today, so it is true only for a start on today's date (P2b, ruling R23).
         func startedToday(_ value: String) -> Bool { startWords.map { $0.today && $0.clock == value } == true }
