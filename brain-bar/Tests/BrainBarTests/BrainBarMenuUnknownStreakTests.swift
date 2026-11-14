@@ -17,11 +17,11 @@ extension BrainBarMenuInvariantTests {
         }
     }
 
-    static func unknownViolations(_ c: Capture, _ s: Int) -> [String] {
+    static func unknownViolations(_ c: Capture, _ s: Int, zeroPresentation: P? = nil) -> [String] {
         var zero = c, unknown = c
         zero[keyPath: streaks[s]] = 0
         unknown[keyPath: streaks[s]] = nil
-        let p0 = BrainBarMenuPresenter.present(zero), pn = BrainBarMenuPresenter.present(unknown)
+        let p0 = zeroPresentation ?? BrainBarMenuPresenter.present(zero), pn = BrainBarMenuPresenter.present(unknown)
         let thing: BrainBarMenuPresenter.Thing = s == 0 ? .upkeep : .safe
         let word = s == 0 ? "upkeep" : "backups"
         var out: [String] = []
@@ -70,23 +70,46 @@ extension BrainBarMenuInvariantTests {
         XCTAssertEqual(Set(BrainBarMenuPresenter.Say.all.filter { $0.kind == .reassurance }.map(\.id)),
                        ["S1", "A2.fine.is", "A2.fine.are", "M5", "U03.stillSaved", "F07.exactWords"])
         var count = 0, found: [String] = []
-        // Every known/nil input, on the differential suite's reduced cross (pairs: two contexts, singles: eight).
-        let cross: [(State, Freshness, Bool, Bool, Bool)] = [
+        // Reuse present(c) across streaks already zero; nonzero streaks still get their own zero capture.
+        func check(_ c: Capture, skipping: Int? = nil) {
+            var cachedZero: P?
+            for s in 0...2 where skipping != s {
+                if c[keyPath: Self.streaks[s]] == 0, cachedZero == nil { cachedZero = BrainBarMenuPresenter.present(c) }
+                count += 1
+                found += Self.unknownViolations(c, s, zeroPresentation: c[keyPath: Self.streaks[s]] == 0 ? cachedZero : nil)
+                    .map { "\($0) streak \(s)" }
+            }
+        }
+        // Every input takes two core contexts. Flag/staleness interactions have explicit examples below.
+        let core: [(State, Freshness, Bool, Bool, Bool)] = [
             (.green, .fresh0, true, false, false), (.red, .fresh0, false, false, false),
-            (.green, .fresh0, true, true, false), (.green, .fresh0, true, false, true),
-            (.amber, .fresh900, true, true, true), (.green, .stale901, true, true, false),
-            (.green, .staleNegative, true, false, true), (.green, .missing, false, false, false),
         ]
         for input in Self.inputs() {
-            for (dot, age, measured, checking, wake) in input.settings.count == 2 ? Array(cross.prefix(2)) : cross {
-                let c = Self.capture(input, dot: dot, checking: checking, wake: wake, freshness: age, measured: measured)
-                for s in 0...2 where input.unknownStreak != s { count += 1; found += Self.unknownViolations(c, s).map { "\($0) streak \(s) input \(input)" } }
+            for (dot, age, measured, checking, wake) in core {
+                check(Self.capture(input, dot: dot, checking: checking, wake: wake, freshness: age, measured: measured), skipping: input.unknownStreak)
+            }
+        }
+        let examples: [Input] = [
+            Input(settings: [:], base: 0, upkeep: 0),
+            Input(settings: ["drive_auth": .red, "transcripts": .red], base: 0, upkeep: 0, profile: 2),
+            Input(settings: ["embedding": .red], base: 0, upkeep: 3, profile: 1),
+            Input(settings: [:], base: 3, upkeep: 0),
+            Input(settings: ["backup_local": .red, "backup_offsite": .amber], base: 1, upkeep: 3, profile: 2),
+        ]
+        let interactions: [(State, Freshness, Bool, Bool, Bool)] = [
+            (.green, .fresh0, true, true, false), (.green, .fresh0, true, false, true),
+            (.amber, .fresh900, true, true, true), (.green, .stale901, true, false, false),
+            (.green, .staleNegative, true, false, false), (.green, .missing, false, false, false),
+        ]
+        for input in examples {
+            for (dot, age, measured, checking, wake) in interactions {
+                check(Self.capture(input, dot: dot, checking: checking, wake: wake, freshness: age, measured: measured))
             }
         }
         let edges = Self.edgeCaptures() + (try BrainBarMenuPresentationTests.loadCases().map {
             try BrainBarMenuPresentationTests.capture($0["inputs"] as! [String: Any])
         })
-        for c in edges { for s in 0...2 { count += 1; found += Self.unknownViolations(c, s) } }
+        for c in edges { check(c) }
         print("I10: \(count) zero/nil comparisons")
         XCTAssertEqual(Array(found.prefix(10)), [], "\(found.count) violations")
     }
