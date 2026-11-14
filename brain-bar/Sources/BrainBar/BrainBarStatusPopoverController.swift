@@ -249,8 +249,17 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private func configureStatusItem() {
         statusItemForTesting.menu = contextMenuForTesting
         guard let button = statusItemForTesting.button else { return }
+#if BRAINBAR_UI
+        if BrainBarNewMenuPreference.isEnabled(in: menuDefaults) {
+            renderBrainIcon(BrainBarMenuPresenter.present(menuCapture(stats: runtime.collector?.stats)))
+        } else {
+            button.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "BrainBar")
+            button.toolTip = "BrainBar"
+        }
+#else
         button.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "BrainBar")
         button.toolTip = "BrainBar"
+#endif
         observeAppearance(of: button)
     }
 
@@ -391,7 +400,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         if lastBrainPresentation != nil {
             lastBrainPresentation = nil
             lastRenderedIcon = nil
-            statusItemForTesting.button?.setAccessibilityLabel("BrainBar")
+            statusItemForTesting.button?.setAccessibilityLabel(nil)
         }
 #endif
         let appearance = statusItemForTesting.button?.effectiveAppearance ?? NSAppearance.currentDrawing()
@@ -566,6 +575,12 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     private func updateTooltip() {
         guard !isStopped, !isMenuTracking else { return }
+#if BRAINBAR_UI
+        if BrainBarNewMenuPreference.isEnabled(in: menuDefaults), let presentation = lastBrainPresentation {
+            statusItemForTesting.button?.toolTip = presentation.headline
+            return
+        }
+#endif
         statusItemForTesting.button?.toolTip = currentVerdict.tooltip
     }
 

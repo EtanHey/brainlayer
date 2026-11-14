@@ -4,10 +4,14 @@ import XCTest
 
 /// Headless: an in-memory button, never a system status item, menu tracking or window.
 @MainActor final class BrainBarBrainIconTests: XCTestCase {
+    private final class Button: NSButton {
+        var assignedImages: [NSImage] = []
+        override var image: NSImage? { didSet { if let image { assignedImages.append(image) } } }
+    }
     private final class Item: BrainBarStatusItem {
         let length: CGFloat = NSStatusItem.variableLength
         var menu: NSMenu?
-        let view = NSButton()
+        let view = Button()
         var button: NSButton? { view }
     }
     private final class Host: BrainBarStatusItemHosting {
@@ -35,6 +39,7 @@ import XCTest
         defer { controller.stop() }
         controller.renderStatusIconForTesting(stats: stats(), state: .idle)
         XCTAssertEqual(host.item.view.image?.size, NSSize(width: 26, height: 14))
+        XCTAssertEqual(host.item.view.toolTip, controller.statusVerdictForTesting.tooltip)
         d.set(true, forKey: BrainBarNewMenuPreference.key)
         controller.renderStatusIconForTesting(stats: stats(), state: .idle)
         XCTAssertEqual(host.item.view.image?.size, NSSize(width: 22, height: 22))
@@ -42,6 +47,7 @@ import XCTest
             wakeCatchUpPending: false, driveAuth: nil, backups: .notRead, backupsNotice: nil,
             watcher: nil, watcherAwakeAgeS: nil, observations: nil, now: Date(), timeZone: .current)
         XCTAssertEqual(host.item.view.accessibilityLabel(), "BrainBar — " + BrainBarMenuPresenter.present(checking).headline)
+        XCTAssertEqual(host.item.view.toolTip, BrainBarMenuPresenter.present(checking).headline)
         controller.setMenuTrackingForTesting(true)
         let frozen = host.item.view.image
         d.set(false, forKey: BrainBarNewMenuPreference.key)
@@ -51,6 +57,8 @@ import XCTest
         d.set(false, forKey: BrainBarNewMenuPreference.key)
         controller.renderStatusIconForTesting(stats: stats(), state: .idle)
         XCTAssertEqual(host.item.view.image?.size, NSSize(width: 26, height: 14))
+        XCTAssertNil(host.item.view.accessibilityLabel())
+        XCTAssertEqual(host.item.view.toolTip, controller.statusVerdictForTesting.tooltip)
         d.set(true, forKey: BrainBarNewMenuPreference.key)
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
         XCTAssertEqual(host.item.view.image?.size, NSSize(width: 22, height: 22))
@@ -108,13 +116,13 @@ import XCTest
                         }
                         if c.alphaComponent > 0.99 {
                             ink += 1
-                            if c.redComponent > 0.99 && abs(c.greenComponent - 59.0 / 255) < 1.01 / 255 && abs(c.blueComponent - 48.0 / 255) < 1.01 / 255 { red += 1 }
+                            if isAlertRed(c) { red += 1 }
                             if c.redComponent > 0.99 && c.greenComponent > 0.99 && c.blueComponent > 0.99 { white += 1 }
                         }
                     }
                 }
-                // A1's 2x reference has ink rows 1...38 in its 44-pixel slot.
-                XCTAssertEqual(firstInkRow, 1); XCTAssertEqual(lastInkRow, 38)
+                // Centred 20-point glyph: ink rows 3...40 within the 44-pixel slot.
+                XCTAssertEqual(firstInkRow, 3); XCTAssertEqual(lastInkRow, 40)
                 XCTAssertGreaterThan(ink, 50)
                 if p.icon == .marked { XCTAssertGreaterThan(red, 100); XCTAssertGreaterThan(white, 5) }
                 else { XCTAssertEqual(red, 0); if dark { XCTAssertEqual(white, ink) } }
@@ -124,6 +132,84 @@ import XCTest
                 }
             }
         }
+    }
+
+    func testLaunchFirstImageUsesTheSelectedIcon() throws {
+        for enabled in [false, true] {
+            let d = defaults(), host = Host(), runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+            d.set(enabled, forKey: BrainBarNewMenuPreference.key)
+            let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
+                dashboardPanelController: nil, statusBar: host, menuDefaults: d)
+            defer { controller.stop() }
+            let first: NSImage = try XCTUnwrap(host.item.view.assignedImages.first)
+            if enabled {
+                XCTAssertEqual(first.size, NSSize(width: 22, height: 22))
+                XCTAssertTrue(first.isTemplate)
+                XCTAssertTrue(first.accessibilityDescription?.hasPrefix("BrainBar — ") == true)
+            } else {
+                let legacy: NSImage = try XCTUnwrap(NSImage(systemSymbolName: "brain", accessibilityDescription: "BrainBar"))
+                XCTAssertEqual(first.size, legacy.size)
+                XCTAssertEqual(try bitmap(first).representation(using: .png, properties: [:]),
+                               try bitmap(legacy).representation(using: .png, properties: [:]))
+                XCTAssertEqual(host.item.view.toolTip, "BrainBar")
+            }
+        }
+    }
+
+    func testRealModelRedrawFollowsMarkedRestingMarked() throws {
+        let d = defaults(), host = Host(), runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let now: Date = BrainBarStatusSnapshotTests.now
+        let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(),
+            store: .init(loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) }),
+            refreshStatusOnLoad: false, now: { now },
+            initialObservabilityResult: BrainBarDashboardFixture.healthyObservabilityResult,
+            awakeClock: { 100.0 }, sleepHistory: BrainBarSleepHistory(uptime: { 100.0 }),
+            statusDeadlineScheduler: { _, _ in })
+        runtime.jobsModel = model
+        d.set(true, forKey: BrainBarNewMenuPreference.key)
+        let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
+            dashboardPanelController: nil, statusBar: host, menuDefaults: d)
+        defer { controller.stop() }
+        let alerts = URL(fileURLWithPath: "/tmp/w85b-absent-" + UUID().uuidString)
+        for marked in [true, false, true] {
+            let state: BrainBarHealthVerdict.State = marked ? .red : .green
+            let checks: [BrainBarHealthVerdict.Check] = BrainBarMenuPresenter.known.map {
+                .init(name: $0, state: $0 == "stores" ? state : .green, note: "fixture")
+            }
+            let verdict = BrainBarHealthVerdict(dot: state, checks: checks, notes: [], evaluatedAt: now)
+            controller.setBadgeForTesting(.init(badgeOn: marked, reason: marked ? "fixture failure" : "",
+                activeCodes: [], healthVerdict: verdict), alertsURL: alerts)
+            let p: BrainBarMenuPresentation = BrainBarMenuPresenter.present(model.menuCapture(stats: stats()))
+            XCTAssertEqual(p.icon, marked ? .marked : .resting, "The real model must drive both states")
+            controller.renderStatusIconForTesting(stats: stats(), state: .idle)
+            let image: NSImage = try XCTUnwrap(host.item.view.image)
+            XCTAssertEqual(image.isTemplate, !marked)
+            XCTAssertEqual(host.item.view.accessibilityLabel(), "BrainBar — " + p.headline)
+            XCTAssertEqual(host.item.view.toolTip, p.headline)
+            let rep: NSBitmapImageRep = try bitmap(image)
+            var red: Int = 0
+            for y in 0..<rep.pixelsHigh {
+                for x in 0..<rep.pixelsWide {
+                    if let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), isAlertRed(color), color.alphaComponent > 0.99 { red += 1 }
+                }
+            }
+            if marked { XCTAssertGreaterThan(red, 100) } else { XCTAssertEqual(red, 0) }
+        }
+        d.set(false, forKey: BrainBarNewMenuPreference.key)
+        controller.renderStatusIconForTesting(stats: stats(), state: .idle)
+        XCTAssertEqual(host.item.view.toolTip, controller.statusVerdictForTesting.tooltip)
+    }
+
+    func testRedToleranceRejectsDifferentRed() {
+        XCTAssertTrue(isAlertRed(NSColor(srgbRed: 1, green: 59.0 / 255.0, blue: 48.0 / 255.0, alpha: 1)))
+        XCTAssertFalse(isAlertRed(NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)))
+    }
+
+    private func isAlertRed(_ color: NSColor) -> Bool {
+        let tolerance: CGFloat = 6.0 / 255.0
+        return abs(color.redComponent - 1) <= tolerance
+            && abs(color.greenComponent - 59.0 / 255.0) <= tolerance
+            && abs(color.blueComponent - 48.0 / 255.0) <= tolerance
     }
 
     private func bitmap(_ image: NSImage, tint: NSColor? = nil) throws -> NSBitmapImageRep {

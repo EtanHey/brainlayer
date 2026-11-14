@@ -9,8 +9,8 @@ import AppKit
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
             context.saveGState()
             defer { context.restoreGState() }
-            // A1 reference captures align the 20-point SVG at the slot’s top, with a 1-point horizontal inset.
-            context.translateBy(x: 1, y: 0)
+            // Inset the 20-point glyph equally within its 22-point slot.
+            context.translateBy(x: 1, y: 1)
             context.scaleBy(x: 20.0 / 22.0, y: 20.0 / 22.0)
             context.clip(to: CGRect(x: 0, y: 0, width: 22, height: 22))
             context.beginTransparencyLayer(auxiliaryInfo: nil)
