@@ -514,7 +514,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         }
     }
 
-    private func deriveStatus(at time: Date) -> BrainBarStatusSnapshot {
+    private var menuBackups: BrainBarStatusInputs.Backups {
         let backups: BrainBarStatusInputs.Backups
         if !hasCompletedObservabilityRead {
             backups = .notRead
@@ -523,6 +523,29 @@ final class BrainBarSettingsViewModel: ObservableObject {
         } else {
             backups = .unavailable(backupStatusReason ?? "Backup status is unmeasurable.")
         }
+        return backups
+    }
+
+    /// Samples cached inputs only, at one clock instant; no IO on the menu-opening path.
+    func menuCapture(stats: DashboardStats?, timeZone: TimeZone = .current) -> BrainBarMenuCapture {
+        let time = now()
+        let verdict = publishedStatus.healthVerdict ?? publishedStatus.staleHealthVerdict
+        let file: WatcherHealthFile? = if case let .readable(value) = watcherHealth { value } else { nil }
+        let observations = hasCompletedLaunchdSample ? launchdObservations : nil
+        return BrainBarMenuLiveCapture.capture(
+            status: publishedStatus,
+            verdictAwakeAgeS: verdict.map { sleepHistory.elapsed(since: $0.evaluatedAt, now: time) },
+            wakeCatchUpPending: wakeCatchUp.isPending(uptime: awakeUptime),
+            driveAuth: driveAuthSource?.status, backups: menuBackups,
+            backupsNotice: hasCompletedObservabilityRead ? backupTruth.statusNotice : nil,
+            watcher: watcherHealth,
+            watcherAwakeAgeS: file.map { sleepHistory.elapsed(since: $0.updatedAt, now: time) },
+            observations: observations,
+            stats: stats, now: time, timeZone: timeZone)
+    }
+
+    private func deriveStatus(at time: Date) -> BrainBarStatusSnapshot {
+        let backups = menuBackups
         let file: WatcherHealthFile? = if case let .readable(value) = watcherHealth { value } else { nil }
         let watcher = WatcherHealthStatus.derive(
             launchd: WatcherLaunchdEvidence(setting: config.launchdJobs[.watch], loadState: config.launchdJobs[.watch]?.loadState),
@@ -1142,6 +1165,7 @@ final class BrainBarSettingsNavigation: ObservableObject {
 }
 
 struct BrainBarSettingsView: View {
+    @AppStorage(BrainBarNewMenuPreference.key) private var newMenuEnabled = false
     @StateObject var viewModel: BrainBarSettingsViewModel
     @StateObject private var navigation = BrainBarSettingsNavigation()
     @Environment(\.brainBarDriveAuth) private var driveAuth
@@ -1340,6 +1364,13 @@ struct BrainBarSettingsView: View {
             }
         case .advanced:
             VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("Try the new menu").font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Toggle("Try the new menu", isOn: $newMenuEnabled)
+                        .labelsHidden().toggleStyle(.switch).controlSize(.small)
+                }.padding(.vertical, 7)
+                Divider()
                 sectionHeading("Embedding model")
                 ForEach(viewModel.modelResidencyPresentation.rows) { row in
                     settingsTruthRow(label: row.label, value: row.value)

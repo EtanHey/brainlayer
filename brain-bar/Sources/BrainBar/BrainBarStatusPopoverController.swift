@@ -61,9 +61,27 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         logPathsOverride ?? .live(databasePath: runtime.databasePath ?? BrainBarServer.defaultDBPath())
     }
 #endif
+#if BRAINBAR_UI
+    private let menuDefaults: UserDefaults
+    private var legacyMenuItems: [NSMenuItem]?
+    private var newMenuReport = ""
+    private var copyReportFailed = false
+    private lazy var liveMenuActions = BrainBarLiveMenuActions(
+        settings: { [weak self] in self?.openSettings(nil) },
+        storage: { [weak self] in self?.dashboardPanelController?.showSettings(section: .backups) },
+        quit: { [weak self] in self?.quitBrainBar(nil) },
+        restart: { [weak self] in self?.restartBrainBar(nil) },
+        reconnect: { [weak self] in
+            guard let drive = self?.runtime.driveAuth else { return }
+            Task { await drive.reconnect() }
+        },
+        copy: { [weak self] in self?.copyMenuReport() },
+        dismiss: { [weak self] in self?.contextMenuForTesting.cancelTracking() })
+    private lazy var liveMenuBuilder = BrainBarMenuBuilder(actions: liveMenuActions)
+#endif
     private let workspace: any BrainBarWorkspaceActing
     private let runtime: BrainBarRuntime
-    private let dashboardPanelController: BrainBarDashboardPanelController
+    private let dashboardPanelController: BrainBarDashboardPanelController?
     private let statusBar: any BrainBarStatusItemHosting
     private var isStopped = false
     private var isMenuTracking = false
@@ -98,9 +116,13 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     init(
         workspace: any BrainBarWorkspaceActing,
         runtime: BrainBarRuntime,
-        dashboardPanelController: BrainBarDashboardPanelController,
-        statusBar: any BrainBarStatusItemHosting
+        dashboardPanelController: BrainBarDashboardPanelController?,
+        statusBar: any BrainBarStatusItemHosting,
+        menuDefaults: UserDefaults = .standard
     ) {
+#if BRAINBAR_UI
+        self.menuDefaults = menuDefaults
+#endif
         self.workspace = workspace
         self.runtime = runtime
         self.dashboardPanelController = dashboardPanelController
@@ -112,7 +134,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         configureContextMenu()
         configureStatusItem()
         bindRuntime()
-        dashboardPanelController.statusItemButton = statusItemForTesting.button
+        dashboardPanelController?.statusItemButton = statusItemForTesting.button
     }
 
     /// Includes the attention prefix and ellipsis, so long errors cannot widen the menu.
@@ -183,15 +205,15 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #endif
 
     func toggle(_ sender: Any?) {
-        dashboardPanelController.toggle(anchoredTo: statusItemForTesting.button)
+        dashboardPanelController?.toggle(anchoredTo: statusItemForTesting.button)
     }
 
     func show(_ sender: Any?) {
-        dashboardPanelController.show(anchoredTo: statusItemForTesting.button)
+        dashboardPanelController?.show(anchoredTo: statusItemForTesting.button)
     }
 
     func close(_ sender: Any?) {
-        dashboardPanelController.dismiss()
+        dashboardPanelController?.dismiss()
     }
 
     func stop() {
@@ -212,7 +234,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         contextMenuForTesting.cancelTracking()
         isMenuTracking = false
         close(nil)
-        dashboardPanelController.statusItemButton = nil
+        dashboardPanelController?.statusItemButton = nil
         contextMenuForTesting.delegate = nil
         statusItemForTesting.menu = nil
         statusBar.removeStatusItem(statusItemForTesting)
@@ -589,6 +611,30 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #else
         reconcileBadgeFromAlertFile()
 #endif
+#if BRAINBAR_UI
+        if BrainBarNewMenuPreference.isEnabled(in: menuDefaults) {
+            if legacyMenuItems == nil { legacyMenuItems = menu.items }
+            let capture: BrainBarMenuCapture = runtime.jobsModel?.menuCapture(stats: runtime.collector?.stats)
+                ?? BrainBarMenuLiveCapture.capture(status: .checking, verdictAwakeAgeS: nil,
+                    wakeCatchUpPending: false, driveAuth: runtime.driveAuth.status, backups: .notRead,
+                    backupsNotice: nil, watcher: nil, watcherAwakeAgeS: nil, observations: nil,
+                    stats: runtime.collector?.stats, now: Date(), timeZone: .current)
+            var presentation = BrainBarMenuPresenter.present(capture)
+            if copyReportFailed, let index = presentation.rows.firstIndex(where: { $0.action?.kind == .copyReport }) {
+                presentation.rows[index].strings.append("Couldn’t copy the report. Try again.")
+            }
+            newMenuReport = BrainBarMenuReport.text(presentation: presentation, verdict: capture.verdict,
+                version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+                now: capture.now)
+            liveMenuBuilder.populate(menu, with: presentation)
+            return
+        }
+        if let items = legacyMenuItems {
+            menu.removeAllItems()
+            for item in items { menu.addItem(item) }
+            legacyMenuItems = nil
+        }
+#endif
         // S5: the menu text is the shared verdict, the same one the icon and Dashboard render.
         let verdict = currentVerdict
 #if BRAINBAR_UI
@@ -661,6 +707,18 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #endif
     }
 
+#if BRAINBAR_UI
+    private func copyMenuReport() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        copyReportFailed = !pasteboard.setString(newMenuReport, forType: .string)
+    }
+
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        if legacyMenuItems != nil { liveMenuBuilder.menu(menu, willHighlight: item) }
+    }
+#endif
+
     /// Without the app model (the daemon target), the menu reconciles the badge with the alert file.
     private func reconcileBadgeFromAlertFile() {
         guard let raw = rawBadgePresentation, let jobAlertsURL else { return }
@@ -725,7 +783,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openDashboard(_ sender: Any?) {
-        dashboardPanelController.showDashboard()
+        dashboardPanelController?.showDashboard()
     }
 
 #if BRAINBAR_UI
