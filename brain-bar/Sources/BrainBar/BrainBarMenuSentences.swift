@@ -6,6 +6,18 @@ import Foundation
 /// and the word formatters below; `finalGuard` checks every sentence it is about to return against them. The invariant
 /// test keeps its own conditions under the same ids and fails on any emitted sentence that is not registered here.
 extension BrainBarMenuPresenter {
+    /// I3/R30: which things a reassurance covers, using the same nouns and uncovered-row rule as its condition.
+    static func reassuranceCoverage(_ id: String, _ values: [String], _ p: P, _ c: Capture) -> Set<Thing>? {
+        switch id {
+        case "S1": return Set(four)
+        case "A2.fine.is", "A2.fine.are": return Say.fineThings(values[0])
+        case "M5": return uncovered(p, c)
+        case "U03.stillSaved": return [.remembering, .safe]
+        case "F07.exactWords": return [.finding]
+        default: return nil
+        }
+    }
+
     struct Sentence: Sendable {
         /// A claim states a fact about the world; a reassurance says something is fine; a neutral entry is an instruction,
         /// a label, or a statement of uncertainty, and cannot be false.
@@ -130,9 +142,9 @@ extension BrainBarMenuPresenter {
         static let cantConfirmBackups = S("C.backups", .neutral, "Can’t confirm backups yet")
         static let stillChecking = S("C.one", .neutral, "Still checking {thing}")
         static let stillCheckingFew = S("C.few.checking", .neutral, "Still checking a few things")
-        static let fineIs = S("A2.fine.is", .reassurance, "{fine} is fine.") { c, _, v in fineThings(v[0]).isSubset(of: provenFine(c)) }
-        static let fineAre = S("A2.fine.are", .reassurance, "{fines} are fine.") { c, _, v in fineThings(v[0]).isSubset(of: provenFine(c)) }
-        static let everythingElse = S("M5", .reassurance, "Everything else is fine.") { c, p, _ in uncovered(p, c).isSubset(of: provenFine(c)) }
+        static let fineIs = S("A2.fine.is", .reassurance, "{fine} is fine.") { c, p, v in reassuranceCoverage("A2.fine.is", v, p, c).map { $0.isSubset(of: provenFine(c)) } == true }
+        static let fineAre = S("A2.fine.are", .reassurance, "{fines} are fine.") { c, p, v in reassuranceCoverage("A2.fine.are", v, p, c).map { $0.isSubset(of: provenFine(c)) } == true }
+        static let everythingElse = S("M5", .reassurance, "Everything else is fine.") { c, p, _ in reassuranceCoverage("M5", [], p, c).map { $0.isSubset(of: provenFine(c)) } == true }
 
         // MARK: the needs form (A1)
 
@@ -144,10 +156,10 @@ extension BrainBarMenuPresenter {
         static let giveReport = S("U12.give", .neutral, "Give the report to an agent.")
         static let ifNotFinished = S("D10", .neutral, "If this backup doesn’t finish, BrainBar can’t fix it itself.")
         static let u03 = S("U03", .claim, "Nightly upkeep failed {N3} nights in a row", .upkeep) { c, _, v in
-            c.maintenanceNightFailures >= 3 && String(c.maintenanceNightFailures) == v[0]
+            c.maintenanceNightFailures.map { $0 >= 3 && String($0) == v[0] } == true
         }
-        static let stillSaved = S("U03.stillSaved", .reassurance, "Your memory is still being saved and backed up, as of the last checks.") { c, _, _ in
-            provenFine(c).isSuperset(of: [.remembering, .safe])
+        static let stillSaved = S("U03.stillSaved", .reassurance, "Your memory is still being saved and backed up, as of the last checks.") { c, p, v in
+            reassuranceCoverage("U03.stillSaved", v, p, c).map { $0.isSubset(of: provenFine(c)) } == true
         }
         static let s19 = S("S19", .claim, "The newest checked backup is damaged", .safe) { c, _, _ in red(c, "integrity") }
         static let s19Memory = S("S19.memory", .claim, "Your memory itself may be damaged too.") { c, _, _ in red(c, "integrity") }
@@ -177,7 +189,7 @@ extension BrainBarMenuPresenter {
             started(c, today: false, v[0]) && progress(c, v[1])
         }
         static let s06 = S("S06", .claim, "The last {N2} backups didn’t finish", .safe) { c, _, v in
-            c.backupDailyFailures >= 2 && String(c.backupDailyFailures) == v[0]
+            c.backupDailyFailures.map { $0 >= 2 && String($0) == v[0] } == true
         }
         static let s06Newest = S("S06.newest", .claim, "Your newest backup is {age}.") { c, _, v in
             c.backupsMeasured && age(c, ["backup_local", "backup_offsite"], v[0])

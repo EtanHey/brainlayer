@@ -12,6 +12,8 @@ import XCTest
 /// crossed with the dot (green, amber, red; never unknown), `isChecking` and the wake flag (off, on), the verdict
 /// (fresh at awake age 0 and 900, stale at -1 and 901, missing) and backups measured or not. P2 crosses every input with
 /// five profiles of its capture fields (job streaks, the Drive model, keyword coverage, a Drive copy with no age).
+/// P2f: additionally, nil for each streak singly on the plain base, all profiles/upkeep values and the full 120 cross.
+/// I10 samples nil on other bases and nil pairs on its reduced cross; a focused whole-value test covers nil triples.
 /// Not enumerated: watcher fields other than these alerts, other ages and `since` values, recovering, notes, and triples.
 /// P2b: every sentence shown must be a registered one (`BrainBarMenuPresenter.Say.all`), and every claim and reassurance
 /// is checked against this file's own condition for its id (`oracle`), never against the registry's.
@@ -47,6 +49,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
 
     struct Input { var settings: [String: Setting], base: Int, upkeep: Int
         var profile = 0
+        var unknownStreak: Int? = nil
     }
 
     static func capture(_ input: Input, dot: State, checking: Bool, wake: Bool, freshness: Freshness, measured: Bool) -> Capture {
@@ -87,6 +90,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             c.offsiteRecovering = .init(progress: 0.4, eta: [2: now.addingTimeInterval(1800), 4: now.addingTimeInterval(86_400)][input.profile],
                                         startedAt: now.addingTimeInterval(input.base == 1 ? -1920 : -93_600), updatedAt: now, cadenceS: 30)
         }
+        if let s = input.unknownStreak { c[keyPath: Self.streaks[s]] = nil }
         return c
     }
 
@@ -107,7 +111,11 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                 for sa in nonGreen { for sb in nonGreen { all.append(Input(settings: [a: sa, b: sb], base: 0, upkeep: 0)) } }
             }
         }
-        return all.flatMap { input in (0...4).map { var i = input; i.profile = $0; return i } }
+        let known = all.flatMap { input in (0...4).map { var i = input; i.profile = $0; return i } }
+        // Nil singles on the plain base and five profiles, with upkeep 0/3; no new nil pair/triple cross.
+        return known + known.filter { $0.settings.count <= 1 && $0.base == 0 }.flatMap { input in
+            (0...2).filter { $0 != 0 || input.upkeep == 0 }.map { s in var i = input; i.unknownStreak = s; return i }
+        }
     }
 
     /// Each input's 120 captures, checked; I6 compares every flagged result with the same capture's flags-off result.
@@ -530,7 +538,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         ]
         var captures: [Capture] = []
         for input in Self.inputs() {
-            for (dot, freshness, measured, checking, wake) in input.settings.count == 2 ? [cross[0], cross[3]] : cross {
+            for (dot, freshness, measured, checking, wake) in (input.settings.count == 2 || input.unknownStreak != nil) ? [cross[0], cross[3]] : cross {
                 captures.append(Self.capture(input, dot: dot, checking: checking, wake: wake, freshness: freshness, measured: measured))
             }
         }
@@ -901,9 +909,9 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         /// no alert but R10's `quarantined_record`); backups a measured observation with no future-dated copy; upkeep < 3 nights.
         func fine(_ words: [String]) -> Bool {
             BrainBarMenuInvariantTests.things.filter { words.contains($0.word) }.allSatisfy { provenFine($0.checks) }
-                && (!words.contains("backups") || (c.backupsMeasured && !checks("backup_local", "backup_offsite", "transcripts").contains { ($0.ageS ?? 0) < 0 }))
+                && (!words.contains("backups") || (c.backupDailyFailures != nil && c.jsonlBackupFailures != nil && c.backupsMeasured && !checks("backup_local", "backup_offsite", "transcripts").contains { ($0.ageS ?? 0) < 0 }))
                 && (!words.contains("saving") || c.watcher.map { $0.readable && $0.fresh && !$0.dbProbeFailed && $0.alertReasons.allSatisfy { $0 == "quarantined_record" } } == true)
-                && (!words.contains("upkeep") || c.maintenanceNightFailures < 3)
+                && (!words.contains("upkeep") || c.maintenanceNightFailures.map { $0 < 3 } == true)
         }
         func checks(_ names: String...) -> [Check] { names.flatMap { named($0) } }
         var allGoodProven: Bool {
@@ -1010,7 +1018,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         "M5": { f, _ in f.fine(f.everythingElse) },
         "A1.count.one": { f, _ in f.needsRows == 1 },
         "A1.count.many": { f, v in Int(v[0]) == f.needsRows && f.needsRows >= 2 },
-        "U03": { f, v in Int(v[0]) == f.c.maintenanceNightFailures && f.c.maintenanceNightFailures >= 3 },
+        "U03": { f, v in Int(v[0]) == f.c.maintenanceNightFailures && f.c.maintenanceNightFailures.map { $0 >= 3 } == true },
         "U03.stillSaved": { f, _ in f.fine(["saving", "backups"]) },
         "S19": { f, _ in f.red("integrity") },
         "S19.memory": { f, _ in f.red("integrity") },
@@ -1023,7 +1031,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         "S32.progress": { f, v in f.startedToday(v[0]) && f.progress == v[1] },
         "S32.on": { f, v in f.startedOn(v[0]) },
         "S32.progressOn": { f, v in f.startedOn(v[0]) && f.progress == v[1] },
-        "S06": { f, v in Int(v[0]) == f.c.backupDailyFailures && f.c.backupDailyFailures >= 2 },
+        "S06": { f, v in Int(v[0]) == f.c.backupDailyFailures && f.c.backupDailyFailures.map { $0 >= 2 } == true },
         "S06.newest": { f, v in f.c.backupsMeasured && f.age(["backup_local", "backup_offsite"], v[0]) },
         "S06.confirmed": { f, v in f.age(["backup_local", "backup_offsite"], v[0]) },
         "R15": { f, v in f.c.backupsMeasured && f.age(["backup_offsite"], v[0]) },
@@ -1102,7 +1110,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             let lagPast = w.alertReasons.contains("offset_lag") && c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } == true
             if (alert || lagPast), p.form != .needs { out.append("I7 a readable watcher fact did not count") }
         }
-        if c.maintenanceNightFailures >= 3, p.form != .needs { out.append("I7 nightly upkeep failing did not count") }
+        if c.maintenanceNightFailures.map({ $0 >= 3 }) == true, p.form != .needs { out.append("I7 nightly upkeep failing did not count") }
         // I5: words.
         for row in p.rows where row.kind != .separator {
             if row.strings.isEmpty || row.strings.contains("") { out.append("I5 a \(row.kind) row with an empty string list or string") }
