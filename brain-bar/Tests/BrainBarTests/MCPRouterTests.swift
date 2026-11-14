@@ -3235,7 +3235,8 @@ No results found.
         var storedContents: [String] = []
         while Date() < deadline {
             storedContents = (try? chunkContents(path: dbPath)) ?? []
-            if storedContents.contains("Startup drain survives one unreadable pending store queue snapshot") {
+            if storedContents.contains("Startup drain survives one unreadable pending store queue snapshot")
+                && !FileManager.default.fileExists(atPath: queuePath.path) {
                 break
             }
             Thread.sleep(forTimeInterval: 0.05)

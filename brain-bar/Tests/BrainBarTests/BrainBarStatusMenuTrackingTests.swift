@@ -227,10 +227,12 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
                 delegate.ends += 1
                 delegate.nativeWrites.append(fixture.host.button.imageWrites - delegate.beginWrites)
                 XCTAssertEqual(fixture.host.button.tooltipWrites, delegate.beginTooltipWrites)
+                delegate.didEnd?.fulfill()
             }
         }
         defer { NotificationCenter.default.removeObserver(observer) }
         for cycle in 1...3 {
+            delegate.didEnd = expectation(description: "native tracking ends for cycle \(cycle)")
             try fixture.prepareJobAlert(currentReason: cycle == 2 ? "Changed failure" : nil)
             let watchdog = Timer(timeInterval: 2, repeats: false) { _ in
                 MainActor.assumeIsolated {
@@ -264,6 +266,8 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
             _ = menu.popUp(positioning: nil, at: NSPoint(x: 20, y: 40), in: view)
             timer.invalidate()
             watchdog.invalidate()
+            wait(for: [try XCTUnwrap(delegate.didEnd)], timeout: 3)
+            delegate.didEnd = nil
             XCTAssertFalse(delegate.watchdogFired, "Cancellation must complete without the safety timeout")
             XCTAssertEqual(delegate.opens, cycle)
             XCTAssertEqual(delegate.ends, cycle, "Native tracking must end, including after stop detaches its delegate")
@@ -325,6 +329,7 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
         var opens = 0
         var closes = 0
         var ends = 0
+        var didEnd: XCTestExpectation?
         var writesDuringTracking = 0
         var watchdogFired = false
         let button: Button
