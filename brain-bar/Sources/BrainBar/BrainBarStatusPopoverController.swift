@@ -65,6 +65,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private let menuDefaults: UserDefaults
     private var legacyMenuItems: [NSMenuItem]?
     private var newMenuReport = ""
+    private var lastBrainPresentation: BrainBarMenuPresentation?
     private var copyReportFailed = false
     private var menuQuit: () -> Void = { BrainBarProcessControl.quit() }
     private var menuRestart: () -> Void = { BrainBarProcessControl.restart() }
@@ -382,6 +383,17 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         // fullscreen menu bar instead of the old single gray line that vanished.
         // Coalesce by content: late collector/badge deliveries after a menu closes must not relayout
         // the status item again when the icon they would draw is identical.
+#if BRAINBAR_UI
+        if BrainBarNewMenuPreference.isEnabled(in: menuDefaults) {
+            renderBrainIcon(BrainBarMenuPresenter.present(menuCapture(stats: stats)))
+            return
+        }
+        if lastBrainPresentation != nil {
+            lastBrainPresentation = nil
+            lastRenderedIcon = nil
+            statusItemForTesting.button?.setAccessibilityLabel("BrainBar")
+        }
+#endif
         let appearance = statusItemForTesting.button?.effectiveAppearance ?? NSAppearance.currentDrawing()
         let icon = RenderedIcon(agent: stats.recentAgentWriteBuckets, watcher: stats.recentWatcherWriteBuckets,
                                 dot: currentVerdict.dot,
@@ -569,6 +581,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
     func setLogPathsForTesting(_ paths: BrainBarBackupSources.Paths) { logPathsOverride = paths }
 #endif
+    func setMenuTrackingForTesting(_ tracking: Bool) { isMenuTracking = tracking }
     func flushStatusReceiptForTesting() { statusPublisher.flush() }
     var statusVerdictForTesting: BrainBarStatusVerdict { currentVerdict }
     var statusDotForTesting: Bool { currentVerdict.needsAttention }
@@ -610,6 +623,28 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         }
     }
 
+#if BRAINBAR_UI
+    private func menuCapture(stats: DashboardStats?) -> BrainBarMenuCapture {
+        runtime.jobsModel?.menuCapture(stats: stats)
+            ?? BrainBarMenuLiveCapture.capture(status: .checking, verdictAwakeAgeS: nil,
+                wakeCatchUpPending: false, driveAuth: runtime.driveAuth.status, backups: .notRead,
+                backupsNotice: nil, watcher: nil, watcherAwakeAgeS: nil, observations: nil,
+                stats: stats, now: Date(), timeZone: .current)
+    }
+
+    private func renderBrainIcon(_ presentation: BrainBarMenuPresentation) {
+        guard !isStopped, !isMenuTracking else { return }
+        if presentation.icon != lastBrainPresentation?.icon || statusItemForTesting.button?.image == nil {
+            statusItemForTesting.button?.image = BrainBarBrainIcon.image(for: presentation)
+        }
+        statusItemForTesting.button?.setAccessibilityLabel("BrainBar — " + presentation.headline)
+        statusItemForTesting.button?.image?.accessibilityDescription = "BrainBar — " + presentation.headline
+        lastBrainPresentation = presentation
+        updateTooltip()
+        publishRenderedStatus()
+    }
+#endif
+
     func menuNeedsUpdate(_ menu: NSMenu) {
 #if BRAINBAR_UI
         if let model = runtime.jobsModel {
@@ -627,11 +662,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 #if BRAINBAR_UI
         if BrainBarNewMenuPreference.isEnabled(in: menuDefaults) {
             if legacyMenuItems == nil { legacyMenuItems = menu.items }
-            let capture: BrainBarMenuCapture = runtime.jobsModel?.menuCapture(stats: runtime.collector?.stats)
-                ?? BrainBarMenuLiveCapture.capture(status: .checking, verdictAwakeAgeS: nil,
-                    wakeCatchUpPending: false, driveAuth: runtime.driveAuth.status, backups: .notRead,
-                    backupsNotice: nil, watcher: nil, watcherAwakeAgeS: nil, observations: nil,
-                    stats: runtime.collector?.stats, now: Date(), timeZone: .current)
+            let capture = menuCapture(stats: runtime.collector?.stats)
             var presentation = BrainBarMenuPresenter.present(capture)
             if copyReportFailed, let index = presentation.rows.firstIndex(where: { $0.action?.kind == .copyReport }) {
                 presentation.rows[index].strings.append("Couldn’t copy the report. Try again.")
@@ -639,6 +670,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
             newMenuReport = BrainBarMenuReport.text(presentation: presentation, verdict: capture.verdict,
                 version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
                 now: capture.now)
+            renderBrainIcon(presentation)
             liveMenuBuilder.populate(menu, with: presentation)
             return
         }
