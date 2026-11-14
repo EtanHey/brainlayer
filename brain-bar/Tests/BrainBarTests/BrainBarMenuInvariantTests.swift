@@ -13,7 +13,7 @@ import XCTest
 /// (fresh at awake age 0 and 900, stale at -1 and 901, missing) and backups measured or not. P2 crosses every input with
 /// five profiles of its capture fields (job streaks, the Drive model, keyword coverage, a Drive copy with no age).
 /// P2f: additionally, nil for each streak singly on the plain base, all profiles/upkeep values and the full 120 cross.
-/// I10 samples nil on other bases and nil pairs on its reduced cross; nil triples are not sampled.
+/// I10 samples nil on other bases and nil pairs on its reduced cross; a focused whole-value test covers nil triples.
 /// Not enumerated: watcher fields other than these alerts, other ages and `since` values, recovering, notes, and triples.
 /// P2b: every sentence shown must be a registered one (`BrainBarMenuPresenter.Say.all`), and every claim and reassurance
 /// is checked against this file's own condition for its id (`oracle`), never against the registry's.
@@ -101,7 +101,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
     }
 
     /// Every check configuration enumerated: singles on every base and upkeep value, pairs on the plain base.
-    static func inputs(includeUnknown: Bool = true) -> [Input] {
+    static func inputs() -> [Input] {
         let nonGreen: [Setting] = [.amber, .red, .unknown, .absent]
         var singles: [[String: Setting]] = [[:]]
         for name in names { for s in nonGreen { singles.append([name: s]) } }
@@ -113,9 +113,9 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         }
         let known = all.flatMap { input in (0...4).map { var i = input; i.profile = $0; return i } }
         // Nil singles on the plain base and five profiles, with upkeep 0/3; no new nil pair/triple cross.
-        return known + (includeUnknown ? known.filter { $0.settings.count <= 1 && $0.base == 0 }.flatMap { input in
-            (0...2).map { s in var i = input; i.unknownStreak = s; return i }
-        } : [])
+        return known + known.filter { $0.settings.count <= 1 && $0.base == 0 }.flatMap { input in
+            (0...2).filter { $0 != 0 || input.upkeep == 0 }.map { s in var i = input; i.unknownStreak = s; return i }
+        }
     }
 
     /// Each input's 120 captures, checked; I6 compares every flagged result with the same capture's flags-off result.
@@ -538,7 +538,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         ]
         var captures: [Capture] = []
         for input in Self.inputs() {
-            for (dot, freshness, measured, checking, wake) in input.settings.count == 2 ? [cross[0], cross[3]] : cross {
+            for (dot, freshness, measured, checking, wake) in (input.settings.count == 2 || input.unknownStreak != nil) ? [cross[0], cross[3]] : cross {
                 captures.append(Self.capture(input, dot: dot, checking: checking, wake: wake, freshness: freshness, measured: measured))
             }
         }

@@ -7,17 +7,16 @@ import Foundation
 /// test keeps its own conditions under the same ids and fails on any emitted sentence that is not registered here.
 extension BrainBarMenuPresenter {
     /// I3/R30: which things a reassurance covers, using the same nouns and uncovered-row rule as its condition.
-    static func reassuranceCoverage(_ id: String, _ values: [String], _ p: P, _ c: Capture) -> Set<Thing> {
+    static func reassuranceCoverage(_ id: String, _ values: [String], _ p: P, _ c: Capture) -> Set<Thing>? {
         switch id {
         case "S1": return Set(four)
         case "A2.fine.is", "A2.fine.are": return Say.fineThings(values[0])
         case "M5": return uncovered(p, c)
         case "U03.stillSaved": return [.remembering, .safe]
         case "F07.exactWords": return [.finding]
-        default: return []
+        default: return nil
         }
     }
-
 
     struct Sentence: Sendable {
         /// A claim states a fact about the world; a reassurance says something is fine; a neutral entry is an instruction,
@@ -143,9 +142,9 @@ extension BrainBarMenuPresenter {
         static let cantConfirmBackups = S("C.backups", .neutral, "Can’t confirm backups yet")
         static let stillChecking = S("C.one", .neutral, "Still checking {thing}")
         static let stillCheckingFew = S("C.few.checking", .neutral, "Still checking a few things")
-        static let fineIs = S("A2.fine.is", .reassurance, "{fine} is fine.") { c, p, v in reassuranceCoverage("A2.fine.is", v, p, c).isSubset(of: provenFine(c)) }
-        static let fineAre = S("A2.fine.are", .reassurance, "{fines} are fine.") { c, p, v in reassuranceCoverage("A2.fine.are", v, p, c).isSubset(of: provenFine(c)) }
-        static let everythingElse = S("M5", .reassurance, "Everything else is fine.") { c, p, _ in reassuranceCoverage("M5", [], p, c).isSubset(of: provenFine(c)) }
+        static let fineIs = S("A2.fine.is", .reassurance, "{fine} is fine.") { c, p, v in reassuranceCoverage("A2.fine.is", v, p, c).map { $0.isSubset(of: provenFine(c)) } == true }
+        static let fineAre = S("A2.fine.are", .reassurance, "{fines} are fine.") { c, p, v in reassuranceCoverage("A2.fine.are", v, p, c).map { $0.isSubset(of: provenFine(c)) } == true }
+        static let everythingElse = S("M5", .reassurance, "Everything else is fine.") { c, p, _ in reassuranceCoverage("M5", [], p, c).map { $0.isSubset(of: provenFine(c)) } == true }
 
         // MARK: the needs form (A1)
 
@@ -160,7 +159,7 @@ extension BrainBarMenuPresenter {
             c.maintenanceNightFailures.map { $0 >= 3 && String($0) == v[0] } == true
         }
         static let stillSaved = S("U03.stillSaved", .reassurance, "Your memory is still being saved and backed up, as of the last checks.") { c, p, v in
-            reassuranceCoverage("U03.stillSaved", v, p, c).isSubset(of: provenFine(c))
+            reassuranceCoverage("U03.stillSaved", v, p, c).map { $0.isSubset(of: provenFine(c)) } == true
         }
         static let s19 = S("S19", .claim, "The newest checked backup is damaged", .safe) { c, _, _ in red(c, "integrity") }
         static let s19Memory = S("S19.memory", .claim, "Your memory itself may be damaged too.") { c, _, _ in red(c, "integrity") }

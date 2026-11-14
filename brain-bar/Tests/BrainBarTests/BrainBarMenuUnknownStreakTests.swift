@@ -6,14 +6,14 @@ extension BrainBarMenuInvariantTests {
     static var streaks: [WritableKeyPath<Capture, Int?>] { [\Capture.maintenanceNightFailures, \Capture.backupDailyFailures, \Capture.jsonlBackupFailures] }
 
     /// The second key: the oracle's coverage table, independent of the registry's thing names and helpers.
-    static func oracleCoverage(_ id: String, _ values: [String], _ f: Facts) -> Set<String> {
+    static func oracleCoverage(_ id: String, _ values: [String], _ f: Facts) -> Set<String>? {
         switch id {
         case "S1": return Set(things.map(\.word))
         case "A2.fine.is", "A2.fine.are": return Set(f.fineWords(values[0]))
         case "M5": return Set(f.everythingElse)
         case "U03.stillSaved": return ["saving", "backups"]
         case "F07.exactWords": return ["search"]
-        default: return []
+        default: return nil
         }
     }
 
@@ -25,31 +25,37 @@ extension BrainBarMenuInvariantTests {
         let thing: BrainBarMenuPresenter.Thing = s == 0 ? .upkeep : .safe
         let word = s == 0 ? "upkeep" : "backups"
         var out: [String] = []
+        // Match each unique sentence once per capture, then reuse it for both coverage keys and the count check.
+        func matches(_ texts: [String], _ capture: Capture) -> [String: (BrainBarMenuPresenter.Sentence, [String])] {
+            var result: [String: (BrainBarMenuPresenter.Sentence, [String])] = [:]
+            for text in Set(texts.flatMap(sentences)) { result[text] = BrainBarMenuPresenter.entry(for: text, capture) }
+            return result
+        }
+        let before = matches(p0.rows.filter { $0.kind == .needsYou }.flatMap(\.strings), zero)
+        let after = matches([pn.headline] + pn.rows.flatMap(\.strings), unknown)
+        let f0 = Facts(c: zero, p: p0), fn = Facts(c: unknown, p: pn)
         // R30: only unsupported reassurance may leave a Needs-you row; all other fields and ordering stay.
         for oracle in [false, true] {
-            func covers(_ sentence: String, _ p: P, _ capture: Capture) -> Bool {
-                guard let (entry, values) = BrainBarMenuPresenter.entry(for: sentence, capture), entry.kind == .reassurance else { return false }
-                let coverage = oracleCoverage(entry.id, values, Facts(c: capture, p: p))
-                if oracle { return coverage.contains(word) }
-                return BrainBarMenuPresenter.reassuranceCoverage(entry.id, values, p, capture).contains(thing)
+            func covers(_ sentence: String, _ unmeasured: Bool) -> Bool {
+                guard let (entry, values) = (unmeasured ? after : before)[sentence], entry.kind == .reassurance else { return false }
+                if oracle { return oracleCoverage(entry.id, values, unmeasured ? fn : f0)?.contains(word) == true }
+                return BrainBarMenuPresenter.reassuranceCoverage(entry.id, values, unmeasured ? pn : p0, unmeasured ? unknown : zero)?.contains(thing) == true
             }
             let expected = p0.rows.filter { $0.kind == .needsYou }.map { row in
                 var row = row
                 row.strings = row.strings.compactMap { text in
-                    let kept = sentences(text).filter { !covers($0, p0, zero) }
+                    let kept = sentences(text).filter { !covers($0, false) }
                     return kept.isEmpty ? nil : kept.joined(separator: " ")
                 }
                 return row
             }
             if expected != pn.rows.filter({ $0.kind == .needsYou }) { out.append("I10 rows changed (oracle=\(oracle))") }
-            if ([pn.headline] + pn.rows.flatMap(\.strings)).flatMap(sentences).contains(where: { covers($0, pn, unknown) }) {
-                out.append("I10 reassurance covers \(word) (oracle=\(oracle))")
-            }
+            if after.keys.contains(where: { covers($0, true) }) { out.append("I10 reassurance covers \(word) (oracle=\(oracle))") }
         }
         if p0.form == .needs && (pn.form != .needs || pn.count != p0.count) { out.append("I10 needs form/count changed") }
         if pn.headline == "All good" { out.append("I10 All good with unknown \(word)") }
         let countID = s == 0 ? "U03" : s == 1 ? "S06" : "no transcript count sentence yet"
-        if pn.rows.flatMap(\.strings).flatMap(sentences).contains(where: { BrainBarMenuPresenter.entry(for: $0, unknown)?.0.id == countID }) {
+        if after.values.contains(where: { $0.0.id == countID }) {
             out.append("I10 unmeasured count")
         }
         // Fresh unflagged captures use the existing family checking line. Stale/flagged captures may use X01's global line.
@@ -74,7 +80,7 @@ extension BrainBarMenuInvariantTests {
         for input in Self.inputs() {
             for (dot, age, measured, checking, wake) in input.settings.count == 2 ? Array(cross.prefix(2)) : cross {
                 let c = Self.capture(input, dot: dot, checking: checking, wake: wake, freshness: age, measured: measured)
-                for s in 0...2 { count += 1; found += Self.unknownViolations(c, s).map { "\($0) streak \(s) input \(input)" } }
+                for s in 0...2 where input.unknownStreak != s { count += 1; found += Self.unknownViolations(c, s).map { "\($0) streak \(s) input \(input)" } }
             }
         }
         let edges = Self.edgeCaptures() + (try BrainBarMenuPresentationTests.loadCases().map {
@@ -88,6 +94,35 @@ extension BrainBarMenuInvariantTests {
     private func assertUnknownDoesNotReassure(_ s: Int) {
         let c = Self.capture([:], base: 0, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
         XCTAssertEqual(Self.unknownViolations(c, s), [], "streak \(s)")
+        var unknown = c
+        unknown[keyPath: Self.streaks[s]] = nil
+        XCTAssertEqual(BrainBarMenuPresenter.present(unknown), Self.expectedUnknown(
+            s == 0 ? "Still checking upkeep" : "Can’t confirm backups yet",
+            s == 0 ? "Saving, search and backups are fine." : "Saving, search and upkeep are fine."))
+    }
+
+    static func expectedUnknown(_ headline: String, _ fine: String, lines: Int = 1) -> P {
+        P(form: .calm, headline: headline, count: 0, icon: .resting, rows:
+            [P.Row(kind: .headline, strings: [headline], mark: .wait), P.Row(kind: .separator)]
+            + Array(repeating: P.Row(kind: .statusLine, strings: ["Checking…"], mark: .wait, state: .cantTell), count: lines)
+            + [P.Row(kind: .everythingElse, strings: [fine], mark: .ok), P.Row(kind: .separator),
+               P.Row(kind: .standardItem, strings: ["Settings…"], keyEquivalent: "⌘,"),
+               P.Row(kind: .standardItem, strings: ["Quit BrainBar"], keyEquivalent: "⌘Q", optionAlternate: "Restart BrainBar")])
+    }
+
+    func testEveryReassuranceHasBothCoverageEntries() {
+        let c = Self.capture([:], base: 0, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
+        let p = BrainBarMenuPresenter.present(c), f = Facts(c: c, p: p)
+        for entry in BrainBarMenuPresenter.Say.all where entry.kind == .reassurance {
+            XCTAssertNotNil(BrainBarMenuPresenter.reassuranceCoverage(entry.id, ["Saving"], p, c), entry.id)
+            XCTAssertNotNil(Self.oracleCoverage(entry.id, ["Saving"], f), entry.id)
+        }
+    }
+
+    func testAllStreaksUnknownAtLaunch() {
+        var c = Self.capture([:], base: 0, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
+        for streak in Self.streaks { c[keyPath: streak] = nil }
+        XCTAssertEqual(BrainBarMenuPresenter.present(c), Self.expectedUnknown("Can’t confirm backups yet", "Saving and search are fine.", lines: 2))
     }
 
     func testStreaksStartUnknown() {
