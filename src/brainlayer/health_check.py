@@ -63,6 +63,9 @@ DEFAULT_BACKLOG_BATCH = 4
 DEFAULT_HEAL_MIN_CONSECUTIVE_FAILURES = 2
 DEFAULT_HEAL_CIRCUIT_BREAKER_LIMIT = 3
 DEFAULT_MAX_DURATION_SECONDS = 45.0
+# Kept in sync with MCPRouter.defaultHybridSearchBudget by a cross-language test.
+HYBRID_SEARCH_BUDGET_SECONDS = 6.0
+CANARY_FALLBACK_AND_MARGIN_SECONDS = 4.0
 DEFAULT_JSONL_BACKUP_LOG_PATH = Path("~/.local/share/brainlayer/logs/jsonl-backup.log").expanduser()
 DEFAULT_JSONL_BACKUP_MAX_AGE_SECONDS = 36 * 60 * 60
 DEFAULT_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS = 2
@@ -198,7 +201,7 @@ class HealthCheckConfig:
     missing_embedding_max_pages: int = 16
     missing_embedding_instruction_limit: int = 100_000
     heal: bool = False
-    socket_timeout_seconds: float = 5.0
+    socket_timeout_seconds: float = HYBRID_SEARCH_BUDGET_SECONDS + CANARY_FALLBACK_AND_MARGIN_SECONDS
     agent_home: Path | None = None  # None: Path.home(); where the known-agent census looks
     max_stalled_ticks: int = 2
     heal_min_consecutive_failures: int = field(
@@ -266,6 +269,7 @@ class HealthCheckResult:
     canary_ok: bool = False
     canary_status: str | None = None
     canary_result_count: int | None = None
+    canary_latency_seconds: float | None = None
     duration_seconds: float = 0.0
     slow_check: bool = False
     slow_check_stage: str | None = None
@@ -275,7 +279,9 @@ class HealthCheckResult:
     agent_census_incomplete: list[str] = field(default_factory=list)  # agents not measured this check
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload.pop("canary_latency_seconds")
+        return payload
 
 
 CommandRunner = Callable[[list[str]], Any]
@@ -1710,10 +1716,12 @@ def _run_health_check_locked(
             _plist_for_label(config, config.hotlane_label),
         )
 
+    canary_started = monotonic_fn()
     try:
         response = socket_request_fn(config.socket_path, config.canary_query, config.socket_timeout_seconds)
         canary_success, text = _canary_text(response)
         if canary_success:
+            result.canary_latency_seconds = max(0.0, monotonic_fn() - canary_started)
             result.canary_result_count = _canary_count(text, response.get("result"))
             result.canary_ok = True
             # This is request liveness, not recall quality: a well-formed empty search

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Run Swift tests in an owned TMPDIR and reject leaked brainbar-* fixtures."""
+"""Run Swift tests in an owned TMPDIR and reject leaked brainbar-* fixtures.
+
+Arguments pass through unchanged to `swift test`, including --filter and --skip.
+With no arguments, the full suite runs.
+"""
 
 import os
 import subprocess
