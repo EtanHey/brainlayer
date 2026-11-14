@@ -144,7 +144,7 @@ enum BrainBarMenuPresenter {
             guard let (_, onSchedule) = runningUpload(c), let start = uploadStart(c) else { return nil }
             let started = !hasWords(start.date, c) ? [] : [start.today ? Say.s03Started(hhmm(start.date, c)) : Say.s03StartedOn(at(start.date, c))]
             // R27: the estimate is said as a clock time only when it falls today.
-            let eta = onSchedule?.eta.flatMap { calendar(c).isDate($0, inSameDayAs: c.now) && hasWords($0, c) ? $0 : nil }
+            let eta = onSchedule?.eta.flatMap { calendar(c).isDate(minute($0, c), inSameDayAs: c.now) && hasWords($0, c) ? $0 : nil }
             let done = onSchedule?.progress.map { p in eta.map { Say.s03ProgressEta(String(percent(p)), hhmm($0, c)) } ?? Say.s03Progress(String(percent(p))) }
             let text = ([Say.s03.text] + started + (done.map { [$0] } ?? [])).joined(separator: " ")
             return Line(thing: .safe, level: .behind, strings: [text], headline: Say.s03Headline.text, progress: onSchedule?.progress.map(percent))
@@ -175,7 +175,10 @@ enum BrainBarMenuPresenter {
     /// The running upload's start, and whether it is on today's date in the capture's zone: a bare `{HH:mm}` reads as today,
     /// so a start on another day takes the day words every other past time uses (P2b, ruling R23).
     static func uploadStart(_ c: Capture) -> (today: Bool, date: Date)? {
-        runningUpload(c).map { (calendar(c).isDate($0.started, inSameDayAs: c.now), $0.started) }
+        runningUpload(c).map {
+            let date = minute($0.started, c)
+            return (calendar(c).isDate(date, inSameDayAs: c.now), $0.started)
+        }
     }
 
     // MARK: P2: the Needs-you rows of the eleven needs cases
