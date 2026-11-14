@@ -40,6 +40,16 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.3] - 2026-11-14
+
+### The new BrainBar menu, behind a switch in Settings
+
+- Wait for BrainBar test completion signals (#1803)
+- fix(menu): preserve unknown failure streaks (#1798)
+- fix(menu): keep near-midnight times on the correct day (#1804)
+- feat(brainbar): adapt live status to the menu input (#1794)
+- Offer the live BrainBar menu behind a default-off switch (#1805)
+
 ## [1.6.2] - 2026-11-14
 
 ### Search health canary waits for the hybrid budget
