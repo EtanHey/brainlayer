@@ -278,14 +278,33 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                         [unconfirmed + "yesterday at 23:59."], [unconfirmed + "yesterday at 23:59."]])
     }
 
+    func testHistoricalSecondsOffsetKeepsMinuteAndDay() {
+        let iso = ISO8601DateFormatter(), zone = TimeZone(identifier: "Africa/Monrovia")!
+        let now = iso.date(from: "1970-06-02T12:44:30Z")!  // 12:00 local, offset −00:44:30
+        XCTAssertEqual(zone.secondsFromGMT(for: now), -2670)
+        var c = Self.capture(["backup_offsite": .amber], base: 0, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
+        (c.now, c.timeZone) = (now, zone)
+        let verdict = BrainBarHealthVerdict(dot: .green, checks: c.verdict!.checks, notes: [], evaluatedAt: now)
+        c.verdict = nil
+        let backups = [("1970-06-02T00:44:40Z", "00:00"), ("1970-06-02T10:59:40Z", "10:15")]
+        for (utc, clock) in backups {  // 00:00:10 and 10:15:10 local, far from rounding boundaries
+            c.lastKnownBackupAt = iso.date(from: utc)!
+            let p = BrainBarMenuPresenter.present(c)
+            XCTAssertEqual(p.rows.first { $0.kind == .headlineDetail }?.strings,
+                           ["Saving, search, backups and upkeep aren’t confirmed yet. Last backup today at \(clock)."])
+            XCTAssertEqual(Self.violations(c, p), [])
+        }
+        c.verdict = verdict
+        c.offsiteRecovering = .init(progress: 0.4, eta: iso.date(from: "1970-06-03T00:44:40Z")!,
+                                    startedAt: iso.date(from: "1970-06-02T12:12:30Z")!, updatedAt: now, cadenceS: 30.0)
+        let p = BrainBarMenuPresenter.present(c)
+        XCTAssertEqual(p.rows.first { $0.kind == .headlineDetail }?.strings, ["To Google Drive. Started at 11:28. 40% done."])
+        XCTAssertEqual(Self.violations(c, p), [])
+    }
+
     func testMinuteWordsAndIndependentOracleAtEdges() {
         let iso = ISO8601DateFormatter()
         let boundary = iso.date(from: "2026-11-12T12:49:00+02:00")!
-        let raw = DateFormatter()
-        raw.locale = Locale(identifier: "en_US_POSIX")
-        raw.timeZone = TimeZone(secondsFromGMT: 7200)!
-        raw.dateFormat = "HH:mm"
-        print("Foundation raw HH:mm at 12:48:59.9996: \(raw.string(from: boundary.addingTimeInterval(-0.0004)))")
         for offset in [-0.0004, -0.0001, 0.0] as [TimeInterval] {
             var c = Self.capture(["backup_offsite": .amber], base: 0, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
             c.now = boundary.addingTimeInterval(3600)
@@ -1000,7 +1019,6 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             if recent, day(d, c) == day(c.now, c) - 1 { return "yesterday at " + clock(d) }
             return clock(d, "MMM d") + " at " + clock(d)
         }
-        var calendar: Calendar { BrainBarMenuInvariantTests.calendar(c.timeZone) }
         /// A bare clock time reads as a time today, so it is true only for a start on today's date (P2b, ruling R23).
         func startedToday(_ value: String) -> Bool { startWords.map { $0.today && $0.clock == value } == true }
         /// R23: a start on another day says its day.
@@ -1081,17 +1099,6 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         "D13": { f, _ in f.red("drive_auth") && f.c.driveAuthModel != .missing },
         "D13.missing": { f, _ in f.red("drive_auth") && f.c.driveAuthModel == .missing },
     ]
-
-    /// The oracle's own Gregorian calendar, one per zone on each thread.
-    static func calendar(_ zone: TimeZone) -> Calendar {
-        final class Made { let calendar: Calendar; init(_ calendar: Calendar) { self.calendar = calendar } }
-        let key = "oracle.calendar|" + zone.identifier
-        if let made = Thread.current.threadDictionary[key] as? Made { return made.calendar }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = zone
-        Thread.current.threadDictionary[key] = Made(calendar)
-        return calendar
-    }
 
     /// The oracle's own formatters, one per format and zone on each thread.
     static func formatted(_ date: Date, _ format: String, _ zone: TimeZone) -> String {

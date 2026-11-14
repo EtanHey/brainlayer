@@ -339,10 +339,10 @@ extension BrainBarMenuPresenter {
         return f
     }
 
-    /// Truncate once before choosing day or clock words; Foundation can round a sub-millisecond tail into the next day.
+    /// Drop fractional seconds before day/clock words; whole seconds preserve historical offsets with leftover seconds.
     static func minute(_ date: Date, _ c: Capture) -> Date {
         guard sayable(date) else { return date }
-        return calendar(c).dateInterval(of: .minute, for: date)?.start ?? date
+        return Date(timeIntervalSinceReferenceDate: date.timeIntervalSinceReferenceDate.rounded(.down))
     }
 
     static func hhmm(_ date: Date, _ c: Capture) -> String { formatter("HH:mm", c).string(from: minute(date, c)) }
