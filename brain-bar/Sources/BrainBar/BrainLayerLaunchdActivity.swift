@@ -33,6 +33,8 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
     var calendarIndexDeferralReason: String? = nil
     /// S5: failed calendar runs of this step in a row, newest first (deferrals neither count nor reset).
     var calendarConsecutiveFailures: Int? = nil
+    /// True when the job’s calendar history read had an error, was truncated, or skipped damaged lines; nil when not read.
+    var calendarHistoryDamaged: Bool? = nil
     var calendarRunStatus: String? = nil
     /// S5: the schedule or parent probe could not be read; the known run above still stands.
     var calendarScheduleUncertainty: String? = nil

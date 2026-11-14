@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import BrainBar
@@ -28,11 +29,11 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         "offsiteRecovering.updatedAt": "not carried by the app yet",
         "offsiteRecovering.cadenceS": "not carried by the app yet",
         "lagEpisodeStart": "not carried by the app yet",
-        "maintenanceNightFailures": "mapped from caller-known complete nightly/weekly streak; unknown -> nil",
+        "maintenanceNightFailures": "mapped from complete nightly/weekly observation with calendarHistoryDamaged != true; unknown -> nil",
         "driveAuthModel": "mapped from DriveAuthModel.status.state (wording only)",
-        "backupDailyFailures": "mapped from observations.backupDaily.calendarConsecutiveFailures; unknown remains nil",
+        "backupDailyFailures": "mapped from observations.backupDaily.calendarConsecutiveFailures with calendarHistoryDamaged != true; unknown remains nil",
         "backupDailyNextRunAt": "mapped from observations.backupDaily.nextRunAt",
-        "jsonlBackupFailures": "mapped from observations.jsonlBackup.calendarConsecutiveFailures; unknown remains nil",
+        "jsonlBackupFailures": "mapped from observations.jsonlBackup.calendarConsecutiveFailures with calendarHistoryDamaged != true; unknown remains nil",
         "keywordCoverage": "mapped from collector.stats.ftsCoveragePercent / 100 when signalCoverageIsAvailable",
     ]
 
@@ -76,7 +77,7 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
 
     /// Build the same value types used by StatusSnapshotTests; no models that poll, run commands or show UI.
     static func adapt(_ source: C, status: BrainBarStatusSnapshot? = nil, awake: TimeInterval? = 0.0,
-                      watcherAge: TimeInterval? = 0.0, backupsNotice: String? = nil, upkeepKnown: Bool = true, uploadStart: Date? = nil, uploadLive: Bool? = nil,
+                      watcherAge: TimeInterval? = 0.0, backupsNotice: String? = nil, uploadStart: Date? = nil, uploadLive: Bool? = nil,
                       editObservations: ([BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]) -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]? = { $0 }) -> C {
         var backups = BrainBarStatusSnapshotTests.backups()
         if let upload = source.upload {
@@ -108,7 +109,7 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
             verdictAwakeAgeS: awake, wakeCatchUpPending: source.wakeCatchUpPending,
             driveAuth: source.driveAuthModel.map { .init(state: $0, reason: nil, expiresAt: nil) },
             backups: source.backupsMeasured ? .measured(backups) : .unavailable("fixture"), backupsNotice: backupsNotice,
-            watcher: file, watcherAwakeAgeS: watcherAge, observations: editObservations(observations), maintenanceNightStreakKnown: upkeepKnown,
+            watcher: file, watcherAwakeAgeS: watcherAge, observations: editObservations(observations),
             stats: .init(chunkCount: 100, enrichedChunkCount: 0, pendingEnrichmentCount: 0,
                 enrichmentPercent: 0.0, enrichmentRatePerMinute: 0.0, databaseSizeBytes: 0,
                 recentActivityBuckets: [], recentEnrichmentBuckets: [], ftsEligibleChunkCount: 100,
@@ -165,7 +166,7 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 1_800_000_000.0), zone = TimeZone(secondsFromGMT: 0)!
         let empty = BrainBarMenuLiveCapture.capture(status: .checking, verdictAwakeAgeS: nil,
             wakeCatchUpPending: false, driveAuth: nil, backups: .notRead, backupsNotice: nil, watcher: nil,
-            watcherAwakeAgeS: nil, observations: nil, maintenanceNightStreakKnown: false, now: now, timeZone: zone)
+            watcherAwakeAgeS: nil, observations: nil, now: now, timeZone: zone)
         XCTAssertFalse(empty.backupsMeasured); XCTAssertNil(empty.watcher); XCTAssertNil(empty.upload)
         XCTAssertNil(empty.driveAuthModel); XCTAssertNil(empty.backupDailyNextRunAt)
         XCTAssertEqual(empty.verdictAwakeAgeS, .infinity)
@@ -184,7 +185,7 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
                 uploadProcessStartedAt: start, localIntegrity: nil, localIntegrityPragma: nil)
             let c = BrainBarMenuLiveCapture.capture(status: .checking, verdictAwakeAgeS: nil,
                 wakeCatchUpPending: false, driveAuth: nil, backups: .measured(backups), backupsNotice: nil,
-                watcher: .missing(path: "fixture"), watcherAwakeAgeS: nil, observations: nil, maintenanceNightStreakKnown: false,
+                watcher: .missing(path: "fixture"), watcherAwakeAgeS: nil, observations: nil,
                 now: now, timeZone: TimeZone(secondsFromGMT: 0)!)
             XCTAssertNil(c.upload, "A snapshot date or now must never stand in for a process start")
             XCTAssertNil(c.watcher)
@@ -241,33 +242,75 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         }
     }
 
-    func testUnknownUpkeepIsNotProvenFine() throws {
-        let row = try BrainBarMenuPresentationTests.loadCases().first { $0["id"] as? String == "S1" }!
-        var source = try BrainBarMenuCases.capture(row["inputs"] as! [String: Any])
-        source.maintenanceNightFailures = 3 // An untrusted prior value must not be treated as a known streak.
-        let c = Self.adapt(source, upkeepKnown: false)
-        XCTAssertNil(c.maintenanceNightFailures)
-        XCTAssertEqual(BrainBarMenuPresenter.present(c), Self.checking("Still checking upkeep",
-            fine: "Saving, search and backups are fine."))
+    static func damagedHistory(_ shape: String) throws -> BrainBarCalendarHistory {
+        let canonical = try XCTUnwrap(realpath(brainBarTestTemporaryDirectory().path, nil))
+        defer { free(canonical) }
+        let directory = URL(fileURLWithPath: String(cString: canonical)).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                               attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var data = Data()
+        for (index, date) in ["2026-07-14", "2026-07-15", "2026-07-16"].enumerated() {
+            let ts = ISO8601DateFormatter().date(from: date + "T03:00:00Z")!.timeIntervalSince1970
+            var rows: [[String: Any]] = [["event": "runner", "kind": "nightly", "scheduled_date": date, "ts": ts]]
+            for step in ["backup-daily", "jsonl-backup"] {
+                let damaged = index == 2 && shape == step
+                rows.append(["event": "finished", "step": step, "status": "ok", "returncode": damaged ? "torn" as Any : 0, "ts": ts])
+            }
+            let damaged = (shape == "latest summary" && index == 2) || (shape == "older summary" && index == 1)
+            rows.append(["event": "summary", "kind": "nightly", "scheduled_date": date,
+                         "failed": damaged ? "torn" as Any : (shape.contains("summary") ? 1 : 0), "ts": ts])
+            for row in rows { data.append(try JSONSerialization.data(withJSONObject: row)); data.append(10) }
+        }
+        data.append(Data("{\"event\":\"heartbeat\"}\n".utf8)) // Damage is followed by a complete row.
+        let file = directory.appendingPathComponent("runs.jsonl")
+        try data.write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        return BrainBarCalendarHistory.read(directory: directory)
     }
+
+    private func assertDamagedHistoryCannotReassure(_ shape: String) throws {
+        let history = try Self.damagedHistory(shape)
+        XCTAssertNil(history.error); XCTAssertEqual(history.skippedLineCount, 1)
+        let observations = BrainBarSupervisorStatusTests.supervised(history: history, logs: brainBarTestTemporaryDirectory()).sampleActivity()
+        XCTAssertEqual(observations[.backupDaily]?.calendarConsecutiveFailures, 0)
+        XCTAssertEqual(observations[.jsonlBackup]?.calendarConsecutiveFailures, 0)
+        if shape.contains("summary") {
+            XCTAssertEqual(history.maintenanceNight?.consecutiveFailures, 2)
+            XCTAssertEqual(history.maintenanceNight?.streakComplete, true)
+        }
+        for job in [BrainLayerLaunchdJob.backupDaily, .jsonlBackup, .maintenanceNightly] {
+            XCTAssertEqual(observations[job]?.calendarHistoryDamaged, true)
+        }
+        let row = try BrainBarMenuPresentationTests.loadCases().first { $0["id"] as? String == "S1" }!
+        let c = Self.adapt(try BrainBarMenuCases.capture(row["inputs"] as! [String: Any]), editObservations: { _ in observations })
+        XCTAssertNil(c.backupDailyFailures); XCTAssertNil(c.jsonlBackupFailures); XCTAssertNil(c.maintenanceNightFailures)
+        var expected = Self.checking("Can’t confirm backups yet", fine: "Saving and search are fine.")
+        expected.rows.insert(.init(kind: .statusLine, strings: ["Checking…"], mark: .wait, state: .cantTell), at: 3)
+        XCTAssertEqual(BrainBarMenuPresenter.present(c), expected, shape)
+    }
+
+    func testDamagedLatestDailyBackupRow() throws { try assertDamagedHistoryCannotReassure("backup-daily") }
+    func testDamagedLatestTranscriptBackupRow() throws { try assertDamagedHistoryCannotReassure("jsonl-backup") }
+    func testDamagedLatestUpkeepSummary() throws { try assertDamagedHistoryCannotReassure("latest summary") }
+    func testDamagedOlderUpkeepSummary() throws { try assertDamagedHistoryCannotReassure("older summary") }
 
     func testAllThreeStreaksStayUnknownAcrossUnavailableHistory() throws {
         let row = try BrainBarMenuPresentationTests.loadCases().first { $0["id"] as? String == "S1" }!
         let source = try BrainBarMenuCases.capture(row["inputs"] as! [String: Any])
         let jobs: [BrainLayerLaunchdJob] = [.backupDaily, .jsonlBackup, .maintenanceNightly]
         for job in jobs {
-            for reason in ["read error", "damaged latest record", "history over limit", "missing observation"] {
+            for reason in ["read error", "history over limit", "missing observation"] {
                 let c = Self.adapt(source, editObservations: { original in
                     var observations = original
                     switch reason {
-                    case "read error": observations[job] = .stateOnly(.probeError("History unreadable"))
+                    case "read error":
+                        observations[job] = .stateOnly(.probeError("History unreadable"))
+                        observations[job]?.calendarHistoryDamaged = true
                     case "missing observation": observations.removeValue(forKey: job)
-                    case "history over limit":
-                        observations[job]?.calendarConsecutiveFailures = nil
+                    default: // History over limit, even if the app retains an older count.
+                        observations[job]?.calendarHistoryDamaged = true
                         observations[job]?.calendarNightOutcome?.streakComplete = false
-                    default:
-                        observations[job]?.calendarConsecutiveFailures = nil
-                        observations[job]?.calendarNightOutcome = nil
                     }
                     return observations
                 })
@@ -278,7 +321,7 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
                     fine: job == .maintenanceNightly ? "Saving, search and backups are fine." : "Saving, search and upkeep are fine."), "\(job) \(reason)")
             }
         }
-        let firstSample = Self.adapt(source, upkeepKnown: false, editObservations: { _ in nil })
+        let firstSample = Self.adapt(source, editObservations: { _ in nil })
         XCTAssertNil(firstSample.backupDailyFailures); XCTAssertNil(firstSample.jsonlBackupFailures)
         XCTAssertNil(firstSample.maintenanceNightFailures)
         var expected = Self.checking("Can’t confirm backups yet", fine: "Saving and search are fine.")

@@ -15,7 +15,6 @@ enum BrainBarMenuLiveCapture {
         watcher: WatcherHealthFileRead?,
         watcherAwakeAgeS: TimeInterval?,
         observations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]?,
-        maintenanceNightStreakKnown: Bool,
         stats: DashboardStats? = nil,
         now: Date, timeZone: TimeZone
     ) -> BrainBarMenuCapture {
@@ -39,13 +38,15 @@ enum BrainBarMenuLiveCapture {
                 fresh: watcherAwakeAgeS.map { (0.0...WatcherHealthStatus.staleHeartbeatSeconds).contains($0) } ?? false,
                 alertReasons: file.alertReasons, dbProbeFailed: file.dbProbeFailed)
         }
-        c.backupDailyFailures = observations?[.backupDaily]?.calendarConsecutiveFailures
+        let daily = observations?[.backupDaily]
+        c.backupDailyFailures = daily?.calendarHistoryDamaged == true ? nil : daily?.calendarConsecutiveFailures
         c.backupDailyNextRunAt = observations?[.backupDaily]?.nextRunAt
-        c.jsonlBackupFailures = observations?[.jsonlBackup]?.calendarConsecutiveFailures
+        let transcript = observations?[.jsonlBackup]
+        c.jsonlBackupFailures = transcript?.calendarHistoryDamaged == true ? nil : transcript?.calendarConsecutiveFailures
         let night = [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly]
-            .compactMap { observations?[$0]?.calendarNightOutcome }.first
-        c.maintenanceNightFailures = maintenanceNightStreakKnown && night?.streakComplete == true
-            ? night?.consecutiveFailures : nil
+            .compactMap { observations?[$0] }.first { $0.calendarNightOutcome != nil }
+        c.maintenanceNightFailures = night?.calendarHistoryDamaged != true && night?.calendarNightOutcome?.streakComplete == true
+            ? night?.calendarNightOutcome?.consecutiveFailures : nil
         c.keywordCoverage = stats.flatMap { $0.signalCoverageIsAvailable ? $0.ftsCoveragePercent / 100.0 : nil }
         // Not carried yet: lastKnownBackupAt, offsiteRecovering, lagEpisodeStart.
         return c
