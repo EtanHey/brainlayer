@@ -130,7 +130,7 @@ extension BrainBarMenuPresenter {
         static let s03StartedOn = S("S03.startedOn", .claim, "Started {at}.") { c, _, v in started(c, today: false, v[0]) }
         static let s03Progress = S("S03.progress", .claim, "{p}% done.") { c, _, v in progress(c, v[0]) }
         static let s03ProgressEta = S("S03.progressEta", .claim, "{p}% done, about {HH:mm}.") { c, _, v in
-            progress(c, v[0]) && runningUpload(c)?.onSchedule?.eta.map { calendar(c).isDate($0, inSameDayAs: c.now) && hhmm($0, c) == v[1] } == true
+            progress(c, v[0]) && runningUpload(c)?.onSchedule?.eta.map { calendar(c).isDate(minute($0, c), inSameDayAs: c.now) && hhmm($0, c) == v[1] } == true
         }
         static let catchingTwo = S("C3", .claim, "Catching up on {two}") { c, _, v in
             v[0].components(separatedBy: " and ").allSatisfy { behind($0, c) }
@@ -285,7 +285,7 @@ extension BrainBarMenuPresenter {
             // Each as the derivation may say it (the last backup at or before now, the estimate only today, a copy `copyAge`
             // dates), and only a moment the formatter has words for (CI on #1790).
             let last = c.lastKnownBackupAt.flatMap { $0 <= c.now && sayable($0) ? $0 : nil }
-            let eta = runningUpload(c)?.onSchedule?.eta.flatMap { calendar(c).isDate($0, inSameDayAs: c.now) ? $0 : nil }
+            let eta = runningUpload(c)?.onSchedule?.eta.flatMap { calendar(c).isDate(minute($0, c), inSameDayAs: c.now) ? $0 : nil }
             let copies = (c.verdict?.checks ?? []).filter { ["backup_local", "backup_offsite"].contains($0.name) && valid($0.ageS) }
                 .map { c.verdict!.evaluatedAt.addingTimeInterval(-$0.ageS!) }.filter { copyAge(since: $0, c) != nil }
             return ([last, allGoodDate(c), uploadStart(c)?.date, eta].compactMap { $0 } + copies).filter { hasWords($0, c) }
@@ -339,7 +339,13 @@ extension BrainBarMenuPresenter {
         return f
     }
 
-    static func hhmm(_ date: Date, _ c: Capture) -> String { formatter("HH:mm", c).string(from: date) }
+    /// Truncate once before choosing day or clock words; Foundation can round a sub-millisecond tail into the next day.
+    static func minute(_ date: Date, _ c: Capture) -> Date {
+        guard sayable(date) else { return date }
+        return calendar(c).dateInterval(of: .minute, for: date)?.start ?? date
+    }
+
+    static func hhmm(_ date: Date, _ c: Capture) -> String { formatter("HH:mm", c).string(from: minute(date, c)) }
 
     /// One Gregorian calendar per zone on each thread, reused like the formatters (P2c: the matcher's round trip reads with it).
     static func calendar(_ c: Capture) -> Calendar {
@@ -354,14 +360,14 @@ extension BrainBarMenuPresenter {
 
     /// `{at}`, a past event: "today at 04:00", "yesterday at 23:10" (both under 24 h), else "Nov 9 at 03:44".
     static func at(_ date: Date, _ c: Capture) -> String {
-        let calendar = calendar(c)
+        let calendar = calendar(c), spoken = minute(date, c)
         if c.now.timeIntervalSince(date) < 86_400 {
-            if calendar.isDate(date, inSameDayAs: c.now) { return "today at \(hhmm(date, c))" }
-            if let yesterday = calendar.date(byAdding: .day, value: -1, to: c.now), calendar.isDate(date, inSameDayAs: yesterday) {
-                return "yesterday at \(hhmm(date, c))"
+            if calendar.isDate(spoken, inSameDayAs: c.now) { return "today at \(hhmm(spoken, c))" }
+            if let yesterday = calendar.date(byAdding: .day, value: -1, to: c.now), calendar.isDate(spoken, inSameDayAs: yesterday) {
+                return "yesterday at \(hhmm(spoken, c))"
             }
         }
-        return formatter("MMM d 'at' HH:mm", c).string(from: date)
+        return formatter("MMM d 'at' HH:mm", c).string(from: minute(date, c))
     }
 
     /// A time the words can name: Foundation formats a time outside `distantPast…distantFuture` (or not finite) as a
@@ -370,7 +376,7 @@ extension BrainBarMenuPresenter {
 
     /// The formatter has words for this moment. An older Foundation (macOS 15, CI on #1790) formats some moments in
     /// `sayable`'s range as "", so a moment with no words is one the presenter cannot say.
-    static func hasWords(_ date: Date, _ c: Capture) -> Bool { !hhmm(date, c).isEmpty && !formatter("MMM d 'at' HH:mm", c).string(from: date).isEmpty }
+    static func hasWords(_ date: Date, _ c: Capture) -> Bool { !hhmm(date, c).isEmpty && !formatter("MMM d 'at' HH:mm", c).string(from: minute(date, c)).isEmpty }
 
     static func percent(_ progress: Double) -> Int { Int((progress * 100).rounded()) }
 
