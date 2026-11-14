@@ -640,6 +640,29 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         calendarIsDisabled: { _ in false })
     }
 
+    func testSampleCarriesHistoryDamageWithoutChangingRunCounts() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        _ = try weeklyTwice76(directory)
+        let url = directory.appendingPathComponent("runs.jsonl")
+        var data = try Data(contentsOf: url)
+        data.append(Data(#"{"event":"finished","step":"backup-daily","ts":1784466100,"status":"failed","returncode":"torn"}"#.utf8))
+        data.append(10)
+        try data.write(to: url)
+        let history = BrainBarCalendarHistory.read(directory: directory)
+        XCTAssertEqual(history.skippedLineCount, 1)
+        let observations = Self.supervised(history: history, logs: directory).sampleActivity()
+        for job in [BrainLayerLaunchdJob.index, .backupDaily, .jsonlBackup, .maintenanceNightly, .maintenanceWeekly] {
+            XCTAssertEqual(observations[job]?.calendarHistoryDamaged, true)
+        }
+        XCTAssertNil(observations[.watch]?.calendarHistoryDamaged)
+        XCTAssertEqual(observations[.backupDaily]?.calendarConsecutiveFailures, 0)
+        let policies: [(BrainBarCalendarHistory, Bool)] = [(.empty, false), (.init(error: "Read failed"), true), (.init(truncated: true), true)]
+        for (value, expected) in policies {
+            XCTAssertEqual(Self.supervised(history: value, logs: directory).sampleActivity()[.backupDaily]?.calendarHistoryDamaged, expected)
+        }
+        XCTAssertNil(BrainLayerLaunchdJobObservation.stateOnly(.unknown).calendarHistoryDamaged)
+    }
+
     func testCalendarHistoryCountsConsecutiveFailuresPerStepAndDeferralsDoNotReset() throws {
         let history = try weeklyTwice76(try journal("migrated").deletingLastPathComponent())
         XCTAssertEqual(history.runs["maintenance-weekly"]?.consecutiveFailures, 2)
