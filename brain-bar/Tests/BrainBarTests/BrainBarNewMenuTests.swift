@@ -19,7 +19,7 @@ import XCTest
         XCTAssertFalse(BrainBarNewMenuPreference.isEnabled(in: d))
     }
 
-    func testActionsDismissBeforeCallingTheirTarget() {
+    func testActionsDismissBeforeCallingTheirTarget() async {
         var calls: [String] = []
         let actions = BrainBarLiveMenuActions(settings: { calls.append("settings") }, storage: { calls.append("backups") },
             quit: { calls.append("quit") }, restart: { calls.append("restart") }, reconnect: { calls.append("drive.reconnect") },
@@ -39,7 +39,81 @@ import XCTest
             let builder = BrainBarMenuBuilder(actions: actions, accessibility: .init())
             let menu = builder.build(p)
             menu.performActionForItem(at: action == .restart ? 1 : 0)
+            XCTAssertEqual(calls, ["dismiss"], "No target runs inside tracking teardown")
+            await nextMainTurn()
             XCTAssertEqual(calls, ["dismiss", target])
+        }
+    }
+
+    private func nextMainTurn() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
+    private final class Runner: BrainLayerCLIRunning, @unchecked Sendable {
+        let lock = NSLock()
+        private var recorded: [[String]] = []
+        let called: XCTestExpectation
+        init(called: XCTestExpectation) { self.called = called }
+        var calls: [[String]] { lock.withLock { recorded } }
+        func run(_ arguments: [String], timeout: TimeInterval) -> BrainLayerCLIResult? {
+            lock.withLock { recorded.append(arguments) }
+            called.fulfill()
+            return .init(terminationStatus: 0, stdout: #"{"status":"cancelled"}"#)
+        }
+    }
+
+    func testControllerRealActionWiring() async throws {
+        // This XCTest process cannot activate or add a Dock item; no window/status item is created.
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        let d = defaults(), runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        d.set(true, forKey: BrainBarNewMenuPreference.key)
+        let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
+            dashboardPanelController: nil, statusBar: Host(), menuDefaults: d)
+        defer { controller.stop(); BrainBarSettingsActions.installOpenHandler {} }
+        let pasteboard = NSPasteboard(name: .init("BrainBarMenuTests." + UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        var calls: [String] = []
+        BrainBarSettingsActions.installOpenHandler { calls.append("settings") }
+        controller.setMenuTargetsForTesting(quit: { calls.append("quit") }, restart: { calls.append("restart") },
+            storage: { calls.append("section:" + $0.rawValue) }, pasteboard: pasteboard)
+        controller.menuNeedsUpdate(controller.contextMenuForTesting)
+        let rowKinds: [BrainBarMenuPresentation.ActionKind] = [.openStorageSettings, .copyReport, .connectDrive, .reconnectDrive]
+        let rows: [BrainBarMenuPresentation.Row] = rowKinds.map { .init(kind: .needsYou, strings: [], action: .init(kind: $0, label: $0.rawValue)) }
+            + [.init(kind: .standardItem, strings: ["Settings"], keyEquivalent: "⌘,"),
+               .init(kind: .standardItem, strings: ["Quit"], keyEquivalent: "⌘Q", optionAlternate: "Restart")]
+        controller.populateLiveMenuForTesting(.init(form: .needs, headline: "", count: 4, icon: .marked, rows: rows))
+        let menu = controller.contextMenuForTesting
+        func click(_ action: BrainBarMenuAction) throws {
+            let index = try XCTUnwrap(menu.items.firstIndex { ($0.representedObject as? BrainBarMenuAction) == action })
+            menu.performActionForItem(at: index)
+        }
+        let standing: [(BrainBarMenuAction, String)] = [(.settings, "settings"), (.quit, "quit"),
+            (.restart, "restart"), (.row(.openStorageSettings), "section:backups")]
+        for (action, expected) in standing {
+            calls = []
+            try click(action)
+            XCTAssertTrue(calls.isEmpty)
+            await nextMainTurn()
+            XCTAssertEqual(calls, [expected])
+        }
+        pasteboard.setString("untouched", forType: .string)
+        try click(.row(.copyReport))
+        XCTAssertEqual(pasteboard.string(forType: .string), "untouched")
+        await nextMainTurn()
+        XCTAssertTrue(try XCTUnwrap(pasteboard.string(forType: .string)).hasPrefix("BrainBar report\nVersion:"))
+        let driveKinds: [BrainBarMenuPresentation.ActionKind] = [.connectDrive, .reconnectDrive]
+        for kind in driveKinds {
+            let called = expectation(description: kind.rawValue)
+            let runner = Runner(called: called)
+            runtime.driveAuth.install(runner: runner)
+            try click(.row(kind))
+            XCTAssertTrue(runner.calls.isEmpty)
+            await fulfillment(of: [called], timeout: 5)
+            // Let the reconnect Task consume the completed runner result before the next click.
+            while runtime.driveAuth.isReconnecting { await Task.yield() }
+            XCTAssertEqual(runner.calls, [BrainBarDriveAuthModel.reconnectArguments])
         }
     }
 
@@ -144,9 +218,61 @@ import XCTest
     func testReportRedactsPersonalDiagnosticIdentifiers() {
         let p = BrainBarMenuPresentation(form: .calm, headline: "", count: 0, icon: .resting, rows: [])
         let v = BrainBarHealthVerdict(dot: .red,
-            checks: [.init(name: "disk", state: .red, note: "/home/fixture/db a@example.com")], notes: [], evaluatedAt: .distantPast)
+            checks: [.init(name: "disk", state: .red, note: "/home/fixture/db a@example.com aB3dE6gH9jK2mN5pQ8sT1vW4xY7zA0bC@example.com")], notes: [], evaluatedAt: .distantPast)
         let report = BrainBarMenuReport.text(presentation: p, verdict: v, version: "test", now: Date(timeIntervalSince1970: 0.0))
-        XCTAssertTrue(report.contains("disk: red — /home/[user]/db [email]"))
+        XCTAssertEqual(report.components(separatedBy: "\n").first { $0.hasPrefix("disk:") },
+                       "disk: red — /home/[user]/db [email] [email]")
+    }
+
+    func testReportRemovesUnlabelledMixedClassTokens() {
+        let tokens: [String] = ["aB3dE6gH9jK2mN5pQ8sT1vW4xY7zA0bC", "0123456789abcdef0123456789abcdef",
+                                "aB3d_6gH-9jK2mN5pQ8sT1vW4xY7zA0bC"]
+        let p = BrainBarMenuPresentation(form: .calm, headline: "", count: 0, icon: .resting, rows: [])
+        let v = BrainBarHealthVerdict(dot: .red, checks: [.init(name: "stores", state: .red,
+            note: "command=worker " + tokens.joined(separator: " "))], notes: [], evaluatedAt: .distantPast)
+        let report = BrainBarMenuReport.text(presentation: p, verdict: v, version: "test", now: .distantPast)
+        for token in tokens { XCTAssertFalse(report.contains(token)) }
+        XCTAssertTrue(report.contains("command=worker [redacted] [redacted] [redacted]"))
+    }
+
+    func testModelOffPathRestoresVerdictOverflowAndBackupRows() throws {
+        let now = BrainBarStatusSnapshotTests.now
+        guard case let .readable(base) = BrainBarDashboardFixture.healthyObservabilityResult else { return XCTFail("Fixture") }
+        let document = ObservabilityDocument(schemaVersion: 1, generatedAt: now, dbPath: "/tmp/fixture.db", windowHours: 24,
+            stores: base.stores, emitters: base.emitters, authorUnknown: base.authorUnknown, backups: BrainBarStatusSnapshotTests.backups())
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(),
+            store: .init(loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) }),
+            refreshStatusOnLoad: false, now: { now }, initialObservabilityResult: .readable(document))
+        runtime.jobsModel = model
+        let checks: [BrainBarHealthVerdict.Check] = ["stores", "search", "disk", "backup_local"].map {
+            .init(name: $0, state: .red, note: "fixture failure " + $0)
+        }
+        model.applyHealthBadge(.init(badgeOn: true, reason: "fixture", activeCodes: [],
+            healthVerdict: .init(dot: .red, checks: checks, notes: [], evaluatedAt: now)), alerts: nil)
+        let d = defaults()
+        let control = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
+            dashboardPanelController: nil, statusBar: Host(), menuDefaults: defaults())
+        let switched = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
+            dashboardPanelController: nil, statusBar: Host(), menuDefaults: d)
+        defer { control.stop(); switched.stop() }
+        func inventory(_ menu: NSMenu) -> [String] {
+            menu.items.flatMap { item in
+                ["\(item.title)|\(item.isHidden)|\(item.isEnabled)|\(item.isSeparatorItem)|\(item.keyEquivalent)|\(item.identifier?.rawValue ?? "")"]
+                    + (item.submenu.map(inventory) ?? [])
+            }
+        }
+        control.menuNeedsUpdate(control.contextMenuForTesting)
+        let expected = inventory(control.contextMenuForTesting)
+        XCTAssertTrue(control.contextMenuForTesting.items.contains { $0.identifier?.rawValue.hasPrefix("brainbar.menu.backup.") == true })
+        XCTAssertTrue(control.contextMenuForTesting.items.contains { $0.submenu != nil })
+        switched.menuNeedsUpdate(switched.contextMenuForTesting)
+        XCTAssertEqual(inventory(switched.contextMenuForTesting), expected)
+        d.set(true, forKey: BrainBarNewMenuPreference.key)
+        switched.menuNeedsUpdate(switched.contextMenuForTesting)
+        d.set(false, forKey: BrainBarNewMenuPreference.key)
+        switched.menuNeedsUpdate(switched.contextMenuForTesting)
+        XCTAssertEqual(inventory(switched.contextMenuForTesting), expected)
     }
 
     private final class Item: BrainBarStatusItem {

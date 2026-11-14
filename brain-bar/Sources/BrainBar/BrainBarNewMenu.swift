@@ -17,9 +17,26 @@ enum BrainBarMenuReport {
         let checks: [String] = verdict?.checks.map { "\($0.name): \($0.state.rawValue) — \($0.note)" } ?? ["Unavailable"]
         let report = (["BrainBar report", "Version: \(version)", "Time: \(timestamp)", "", "Menu:"]
                 + words + ["", "Checks:"] + checks).joined(separator: "\n") + "\n"
-        return SecretScrubber.scrub(report).text
+        let scrubbed = SecretScrubber.scrub(report).text
             .replacingOccurrences(of: #"/(Users|home)/[^/\s]+"#, with: "/$1/[user]", options: .regularExpression)
             .replacingOccurrences(of: #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#, with: "[email]", options: .regularExpression)
+        return scrubUnlabelledTokens(scrubbed)
+    }
+
+    /// Reports leave the process: unlike ingestion's quarantine, remove mixed-class opaque tokens.
+    private static func scrubUnlabelledTokens(_ text: String) -> String {
+        let pattern = try! NSRegularExpression(pattern: #"[A-Za-z0-9_+/=-]{24,}"#)
+        var result = text
+        for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+            guard let range = Range(match.range, in: result) else { continue }
+            let token = String(result[range])
+            let classes = [token.rangeOfCharacter(from: .lowercaseLetters) != nil,
+                           token.rangeOfCharacter(from: .uppercaseLetters) != nil,
+                           token.rangeOfCharacter(from: .decimalDigits) != nil,
+                           token.contains { "_+/=-".contains($0) }].filter { $0 }.count
+            if classes >= 2 { result.replaceSubrange(range, with: "[redacted]") }
+        }
+        return result
     }
 }
 
@@ -37,13 +54,15 @@ enum BrainBarMenuReport {
 
     func perform(_ action: BrainBarMenuAction) {
         dismiss()
-        switch action {
-        case .settings: settings()
-        case .quit: quit()
-        case .restart: restart()
-        case .row(.connectDrive), .row(.reconnectDrive): reconnect()
-        case .row(.openStorageSettings): storage()
-        case .row(.copyReport): copy()
+        DispatchQueue.main.async { [self] in
+            switch action {
+            case .settings: settings()
+            case .quit: quit()
+            case .restart: restart()
+            case .row(.connectDrive), .row(.reconnectDrive): reconnect()
+            case .row(.openStorageSettings): storage()
+            case .row(.copyReport): copy()
+            }
         }
     }
 }

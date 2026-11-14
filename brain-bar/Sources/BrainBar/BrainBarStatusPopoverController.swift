@@ -66,11 +66,16 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private var legacyMenuItems: [NSMenuItem]?
     private var newMenuReport = ""
     private var copyReportFailed = false
+    private var menuQuit: () -> Void = { BrainBarProcessControl.quit() }
+    private var menuRestart: () -> Void = { BrainBarProcessControl.restart() }
+    private var menuPasteboard: () -> NSPasteboard = { .general }
+    private var menuStorage: ((BrainBarSettingsSection) -> Void)?
+
     private lazy var liveMenuActions = BrainBarLiveMenuActions(
         settings: { [weak self] in self?.openSettings(nil) },
-        storage: { [weak self] in self?.dashboardPanelController?.showSettings(section: .backups) },
-        quit: { [weak self] in self?.quitBrainBar(nil) },
-        restart: { [weak self] in self?.restartBrainBar(nil) },
+        storage: { [weak self] in self?.openMenuStorageSettings(section: .backups) },
+        quit: { [weak self] in self?.menuQuit() },
+        restart: { [weak self] in self?.menuRestart() },
         reconnect: { [weak self] in
             guard let drive = self?.runtime.driveAuth else { return }
             Task { await drive.reconnect() }
@@ -554,6 +559,14 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
 #if DEBUG
 #if BRAINBAR_UI
+    func setMenuTargetsForTesting(quit: @escaping () -> Void, restart: @escaping () -> Void,
+                                  storage: @escaping (BrainBarSettingsSection) -> Void, pasteboard: NSPasteboard) {
+        menuQuit = quit; menuRestart = restart; menuStorage = storage
+        menuPasteboard = { pasteboard }
+    }
+    func populateLiveMenuForTesting(_ presentation: BrainBarMenuPresentation) {
+        liveMenuBuilder.populate(contextMenuForTesting, with: presentation)
+    }
     func setLogPathsForTesting(_ paths: BrainBarBackupSources.Paths) { logPathsOverride = paths }
 #endif
     func flushStatusReceiptForTesting() { statusPublisher.flush() }
@@ -708,8 +721,13 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
 #if BRAINBAR_UI
+    private func openMenuStorageSettings(section: BrainBarSettingsSection) {
+        if let menuStorage { menuStorage(section) }
+        else { dashboardPanelController?.showSettings(section: section) }
+    }
+
     private func copyMenuReport() {
-        let pasteboard = NSPasteboard.general
+        let pasteboard = menuPasteboard()
         pasteboard.clearContents()
         copyReportFailed = !pasteboard.setString(newMenuReport, forType: .string)
     }
