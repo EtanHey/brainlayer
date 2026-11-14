@@ -559,6 +559,9 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
     }
 
 
+ROOT_EXPECTED_FOR_S = 14 * 24 * 3600.0  # a vanished root alarms only if it was active this recently
+
+
 class CoverageWatchdog:
     def __init__(
         self,
@@ -1711,6 +1714,9 @@ class JSONLWatcher:
         self._health_window_started_epoch = time.time()
         self._health_entries_seen = 0
         self._health_output_at_start = 0
+        # A vanished root -> (monotonic time first seen gone, its newest offsets.json confirmation).
+        self._root_missing: dict[str, tuple[float, float | None]] = {}
+        self._db_probe_failed_since: float | None = None
         self.poll_count = 0
         self.last_poll_made_progress = False
         self._offset_prune_complete = False
@@ -2282,6 +2288,38 @@ class JSONLWatcher:
         except sqlite3.Error:
             return None
 
+    def _root_offset_activity(self, root: WatchRoot) -> float | None:
+        """Newest offsets.json confirmation under ``root``: its last real transcript activity.
+
+        Prune keeps an unavailable root's offsets, so this survives a restart.
+        """
+        base = Path(os.path.abspath(root.resolved_path))
+        latest = None
+        for filepath in self.registry._data:
+            confirmed = self.registry.checkpoint_mtime(filepath)
+            if confirmed is not None and (latest is None or confirmed > latest):
+                if Path(os.path.abspath(os.path.expanduser(filepath))).is_relative_to(base):
+                    latest = confirmed
+        return latest
+
+    def _missing_roots(self, now: float) -> list[str]:
+        """Providers whose root had transcript activity within ROOT_EXPECTED_FOR_S and has been gone
+        for ``alert_after_s``. Presence alone is not activity: a stale root deleted on purpose never
+        alarms, and a recently used one stops once its last activity is that old.
+        """
+        missing, wall = [], time.time()
+        for root in self.watch_roots:
+            if root.resolved_path.is_dir():
+                self._root_missing.pop(root.provider, None)
+                continue
+            if root.provider not in self._root_missing:  # nothing new is confirmed under a missing root
+                self._root_missing[root.provider] = (now, self._root_offset_activity(root))
+            since, last = self._root_missing[root.provider]
+            recent = last is not None and wall - last <= ROOT_EXPECTED_FOR_S
+            if recent and now - since >= self.coverage_watchdog.alert_after_s:
+                missing.append(root.provider)
+        return sorted(missing)
+
     def _write_health_snapshot(self, files: list[str]):
         if not self.health_path:
             return
@@ -2301,6 +2339,12 @@ class JSONLWatcher:
         else:
             db_inserts_per_min = outputs_per_min
         watchdog_inserts_per_min = 0.0 if db_probe_failed else db_inserts_per_min
+        if not db_probe_failed:
+            self._db_probe_failed_since = None
+        elif self._db_probe_failed_since is None:
+            self._db_probe_failed_since = now
+        db_probe_failed_for_s = now - self._db_probe_failed_since if db_probe_failed else 0.0
+        roots_missing = self._missing_roots(now)
         max_lag = self._max_offset_lag_bytes(files)
         watchdog = self.coverage_watchdog.evaluate(
             active_entries_per_minute=active_entries_per_min,
@@ -2339,6 +2383,8 @@ class JSONLWatcher:
             "active_jsonl_entries_per_minute": active_entries_per_min,
             "normalized_jsonl_entries_per_minute": normalized_entries_per_min,
             "db_probe_failed": db_probe_failed,
+            "db_probe_failed_for_s": db_probe_failed_for_s,
+            "roots_missing": roots_missing,
             "db_realtime_inserts_per_minute": db_inserts_per_min,
             "failed_flush_inputs_per_minute": failed_flush_inputs_per_min,
             "watcher_chunks_output_per_minute": outputs_per_min,

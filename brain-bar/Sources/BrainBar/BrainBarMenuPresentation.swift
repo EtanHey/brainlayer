@@ -36,13 +36,15 @@ struct BrainBarMenuCapture: Sendable {
     var offsiteRecovering: Recovering? = nil
     /// Start of the watcher's `offset_lag` episode: a UI clock today, `lag_bad_since` after stability PR-3.
     var lagEpisodeStart: Date? = nil
-    var maintenanceNightFailures = 0
+    /// Consecutive failed nights; nil means the app cannot read the streak.
+    var maintenanceNightFailures: Int? = nil
     /// `DriveAuthModel.state`: wording only (`missing` reads "isn’t connected"). Never a status source (F14).
     var driveAuthModel: DriveAuthStatus.State? = nil
-    /// `job.backupDaily` (the database backup) and `job.jsonlBackup` (transcripts): failure streaks and the next run.
-    var backupDailyFailures = 0
+    /// `job.backupDaily` (the database backup) and `job.jsonlBackup` (transcripts): failure streaks (nil when unreadable) and the next run.
+    var backupDailyFailures: Int? = nil
     var backupDailyNextRunAt: Date? = nil
-    var jsonlBackupFailures = 0
+    /// nil means the app cannot read the transcript-backup streak.
+    var jsonlBackupFailures: Int? = nil
     /// `collector.signalCoverage.keyword`, 0...1 (F07's exact-words sentence). Not in today's status inputs.
     var keywordCoverage: Double? = nil
 }

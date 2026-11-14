@@ -1,0 +1,229 @@
+{
+ "clock": "confirmed",
+ "events": [
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "lag",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "lag",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "lag",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "sleep",
+   "w": false
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "sleep",
+   "w": false
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "sleep",
+   "w": false
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "sleep",
+   "w": false
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "sleep",
+   "w": false
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "sleep",
+   "w": false
+  },
+  {
+   "f": "none",
+   "o": "monitorFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  },
+  {
+   "f": "none",
+   "o": "watcherFirst",
+   "s": "awake",
+   "w": true
+  }
+ ],
+ "model": {
+  "AlertRed": 6,
+  "AmberT": 2,
+  "Cap": 40,
+  "N": 2,
+  "Recovery": 2,
+  "RedT": 6,
+  "SleepGap": 3,
+  "UnknownAmber": 3,
+  "WakeGrace": 24
+ },
+ "scenario": "alert-across-sleep",
+ "ticks": [
+  {
+   "backlog": false,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 0,
+   "v": "green"
+  },
+  {
+   "backlog": false,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 0,
+   "v": "green"
+  },
+  {
+   "backlog": true,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 1,
+   "v": "amber"
+  },
+  {
+   "backlog": true,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 2,
+   "v": "amber"
+  },
+  {
+   "backlog": true,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 3,
+   "v": "amber"
+  },
+  {
+   "backlog": true,
+   "hbA": 0,
+   "obs": "asleep",
+   "pA": 0,
+   "stall": 3,
+   "v": "amber"
+  },
+  {
+   "backlog": true,
+   "hbA": 0,
+   "obs": "asleep",
+   "pA": 0,
+   "stall": 3,
+   "v": "amber"
+  },
+  {
+   "backlog": true,
+   "hbA": 0,
+   "obs": "asleep",
+   "pA": 0,
+   "stall": 3,
+   "v": "amber"
+  },
+  {
+   "backlog": true,
+   "hbA": 0,
+   "obs": "asleep",
+   "pA": 0,
+   "stall": 3,
+   "v": "amber"
+  },
+  {
+   "backlog": true,
+   "hbA": 0,
+   "obs": "asleep",
+   "pA": 0,
+   "stall": 3,
+   "v": "amber"
+  },
+  {
+   "backlog": true,
+   "hbA": 0,
+   "obs": "asleep",
+   "pA": 0,
+   "stall": 3,
+   "v": "amber"
+  },
+  {
+   "backlog": false,
+   "hbA": 0,
+   "obs": "old",
+   "pA": 1,
+   "stall": 0,
+   "v": "amber"
+  },
+  {
+   "backlog": false,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 0,
+   "v": "amber"
+  },
+  {
+   "backlog": false,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 0,
+   "v": "green"
+  },
+  {
+   "backlog": false,
+   "hbA": 0,
+   "obs": "fresh",
+   "pA": 0,
+   "stall": 0,
+   "v": "green"
+  }
+ ]
+}

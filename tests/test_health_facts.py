@@ -250,7 +250,7 @@ def test_embedding_counts_recent_unvectored_chunks(tmp_path: Path) -> None:
 def test_slow_or_failing_collector_is_unobserved_within_the_timeout(tmp_path: Path, monkeypatch) -> None:
     config = _config(tmp_path)
     monkeypatch.setattr(hf, "disk_fact", lambda *_: time.sleep(2))
-    monkeypatch.setattr(hf, "watcher_fact", lambda *_: 1 / 0)
+    monkeypatch.setattr(hf, "watcher_health_fact", lambda *_: 1 / 0)
     started = time.monotonic()
     facts, _ = hf.collect_facts(config, HealthCheckResult(checked_at="", ok=True), None, NOW, timeout=0.3)
     assert time.monotonic() - started < 1.5

@@ -57,7 +57,9 @@ enum BrainBarMenuPresenter {
     /// The only entry point. It is total over its capture type: no input traps, and the guard runs last on every path.
     static func present(_ c: Capture) -> P { finalGuard(c, derived(c)) }
 
-    private static func derived(_ c: Capture) -> P {
+    /// What the presenter says before its guard. Internal only as the seam for the property test (round 1 of #1790): every
+    /// sentence it says is registered for `c`, which `present`'s output alone cannot show, as the guard drops one that is not.
+    static func derived(_ c: Capture) -> P {
         if let v = c.verdict, (0...900).contains(c.verdictAwakeAgeS) {
             let lines = derive(c, v)
             if !c.isChecking, !c.wakeCatchUpPending { return assemble(c, lines, allGood: allGoodDetail(c, v)) }
@@ -83,8 +85,8 @@ enum BrainBarMenuPresenter {
     /// A failed database probe makes only `coverage_drop` unprovable (R24); other alerts still count (R09, X10).
     private static func appFacts(_ c: Capture) -> [Line] {
         var lines: [Line] = []
-        if c.maintenanceNightFailures >= 3 {  // U03; its second sentence only when saving and backups are proven fine
-            lines.append(worded(.upkeep, [Say.u03(String(c.maintenanceNightFailures))]
+        if let failures = c.maintenanceNightFailures, failures >= 3 {  // U03; its second sentence only when saving and backups are proven fine
+            lines.append(worded(.upkeep, [Say.u03(String(failures))]
                 + (provenFine(c).isSuperset(of: [.remembering, .safe]) ? [Say.stillSaved.text] : []), .confirmed))
         }
         guard let w = c.watcher, w.readable, w.fresh else { return lines }
@@ -111,6 +113,8 @@ enum BrainBarMenuPresenter {
             case .unknown?, nil: lines.append(checking(thing(of: name)))
             }
         }
+        if c.maintenanceNightFailures == nil { lines.append(checking(.upkeep)) }
+        if c.backupDailyFailures == nil || c.jsonlBackupFailures == nil { lines.append(checking(.safe)) }
         // X05, X06: a monitor that is not green blinds every thing.
         if worst(v, "monitor") != .green {
             if [.red, .amber].contains(worst(v, "monitor")) { lines.append(needs(.system)) }
@@ -138,9 +142,9 @@ enum BrainBarMenuPresenter {
         switch name {
         case "backup_offsite" where worst(v, "backup_local") == .green:
             guard let (_, onSchedule) = runningUpload(c), let start = uploadStart(c) else { return nil }
-            let started = [start.today ? Say.s03Started(hhmm(start.date, c)) : Say.s03StartedOn(at(start.date, c))]
+            let started = !hasWords(start.date, c) ? [] : [start.today ? Say.s03Started(hhmm(start.date, c)) : Say.s03StartedOn(at(start.date, c))]
             // R27: the estimate is said as a clock time only when it falls today.
-            let eta = onSchedule?.eta.flatMap { calendar(c).isDate($0, inSameDayAs: c.now) ? $0 : nil }
+            let eta = onSchedule?.eta.flatMap { calendar(c).isDate($0, inSameDayAs: c.now) && hasWords($0, c) ? $0 : nil }
             let done = onSchedule?.progress.map { p in eta.map { Say.s03ProgressEta(String(percent(p)), hhmm($0, c)) } ?? Say.s03Progress(String(percent(p))) }
             let text = ([Say.s03.text] + started + (done.map { [$0] } ?? [])).joined(separator: " ")
             return Line(thing: .safe, level: .behind, strings: [text], headline: Say.s03Headline.text, progress: onSchedule?.progress.map(percent))
@@ -202,7 +206,7 @@ enum BrainBarMenuPresenter {
             let faults = [local, offsite].filter { $0.state != .green }
             if local.state == .red, local.ageS == nil, Say.noDriveClock(c) {  // S07, only with no copy of any kind on record (R21, R25)
                 (db, dbNames) = (worded(.safe, [Say.noRecord.text], .custody, priority: 1), ["backup_local"])
-            } else if !reds.isEmpty, let upload = runningUpload(c), let start = uploadStart(c) {  // S32, R8, R9, R23
+            } else if !reds.isEmpty, let upload = runningUpload(c), let start = uploadStart(c), hasWords(start.date, c) {  // S32, R8, R9, R23
                 let age = c.backupsMeasured ? copyAge(offsite.ageS, c, v).map { Say.r15($0) + " " } : nil
                 let p = upload.onSchedule?.progress.map { String(percent($0)) }
                 let progress = start.today ? p.map { Say.s32Progress(hhmm(start.date, c), $0) } ?? Say.s32(hhmm(start.date, c))
@@ -210,12 +214,12 @@ enum BrainBarMenuPresenter {
                 db = worded(.safe, [(age ?? "") + progress], local.state == .red ? .custody : .confirmed, priority: 2)
                 db?.handoff = [Say.ifNotFinished.text, Say.giveReport.text]
                 dbNames = reds.map(\.name)
-            } else if c.backupDailyFailures >= 2, !faults.isEmpty, c.upload == nil, c.offsiteRecovering == nil,
+            } else if let failures = c.backupDailyFailures, failures >= 2, !faults.isEmpty, c.upload == nil, c.offsiteRecovering == nil,
                       faults.allSatisfy({ ($0.state == .red && valid($0.ageS)) || ($0.state == .amber && within($0)) }) {  // S06
                 let newest = [local, offsite].compactMap(\.ageS).filter { valid($0) }.min().flatMap { copyAge($0, c, v) }.map {
                     c.backupsMeasured ? Say.s06Newest($0) : Say.s06Confirmed($0)
                 }
-                db = worded(.safe, [Say.s06(String(c.backupDailyFailures))] + (newest.map { [$0] } ?? []),
+                db = worded(.safe, [Say.s06(String(failures))] + (newest.map { [$0] } ?? []),
                             local.state == .red ? .custody : reds.isEmpty ? .escalated : .confirmed, priority: 3)
                 dbNames = faults.map(\.name)
             } else if faults.isEmpty, c.backupDailyFailures == 1, c.backupDailyNextRunAt.map({ $0 > c.now }) == true {
@@ -234,7 +238,7 @@ enum BrainBarMenuPresenter {
         } else if absorbs, c.backupsMeasured, missing, offsite?.state == .red, Say.noDriveClock(c) {  // R14, R25
             detail += " " + Say.nothingInDrive.text
         }
-        let transcriptsFailing = one("transcripts").map { [.amber, .red].contains($0.state) && $0.ageS != nil } == true && c.jsonlBackupFailures >= 2
+        let transcriptsFailing = one("transcripts").map { [.amber, .red].contains($0.state) && $0.ageS != nil } == true && c.jsonlBackupFailures.map { $0 >= 2 } == true
         var s13 = worded(.safe, [missing ? Say.s13Missing.text : Say.s13.text, detail],
                          db?.rank == .custody || local?.state == .red ? .custody : .confirmed, priority: 4)
         s13.action = missing ? .connectDrive : .reconnectDrive
@@ -338,7 +342,7 @@ enum BrainBarMenuPresenter {
     private static func checkingState(_ c: Capture) -> P {
         let launching = c.isChecking && c.verdict == nil
         let headline = c.wakeCatchUpPending && !launching ? Say.checkingSleep.text : Say.checkingMemory.text
-        let last = c.lastKnownBackupAt.flatMap { $0 <= c.now && sayable($0) ? " " + Say.lastBackup(at($0, c)) : nil } ?? ""
+        let last = c.lastKnownBackupAt.flatMap { $0 <= c.now && sayable($0) && hasWords($0, c) ? " " + Say.lastBackup(at($0, c)) : nil } ?? ""
         return .init(form: .calm, headline: headline, count: 0, icon: .resting,
                      rows: [P.Row(kind: .headline, strings: [headline], mark: .wait),
                             P.Row(kind: .headlineDetail, strings: [Say.notConfirmed.text + last],
@@ -353,7 +357,9 @@ enum BrainBarMenuPresenter {
     ]
 
     /// S01, the all-good line: the older of the offsite and transcript copies (U10), never a future time.
-    private static func allGoodDetail(_ c: Capture, _ v: BrainBarHealthVerdict) -> String? { allGoodDate(c).map { Say.backedUp(at($0, c)) } }
+    private static func allGoodDetail(_ c: Capture, _ v: BrainBarHealthVerdict) -> String? {
+        allGoodDate(c).flatMap { hasWords($0, c) ? Say.backedUp(at($0, c)) : nil }  // no words, no sentence (CI on #1790)
+    }
 
     static func allGoodDate(_ c: Capture) -> Date? {
         guard let v = c.verdict else { return nil }
@@ -380,16 +386,12 @@ enum BrainBarMenuPresenter {
             var row = row
             row.strings = row.strings.map(words).filter { !$0.isEmpty }
             row.action = row.action.map { action($0.kind) }
-            // B5 (round 1): the standing items keep their one permitted key and Option alternate; no other row has either.
-            let standing = row.kind == .standardItem ? row.strings : []
-            row.keyEquivalent = standing == [Say.settings.text] ? Say.settingsKey : standing == [Say.quit.text] ? Say.quitKey : nil
-            row.optionAlternate = standing == [Say.quit.text] && row.optionAlternate != nil ? Say.restart.text : nil
             if row.kind == .separator || !row.strings.isEmpty { return row }
             return row.kind == .needsYou ? P.Row(kind: .needsYou, strings: needs(.system).strings + handoff, action: copyReport) : nil
         }
         /// A sentence is registered and, when it is of one of `kinds`, its condition holds on `drawn`.
         func holds(_ sentence: String, on drawn: P, _ kinds: Set<Sentence.Kind> = [.claim, .reassurance]) -> Bool {
-            guard let (entry, values) = entry(for: sentence) else { return false }
+            guard let (entry, values) = entry(for: sentence, c) else { return false }
             return !kinds.contains(entry.kind) || entry.holds?(c, drawn, values) != false
         }
         // I2 and every calm headline ("All good", a Behind headline, "Checking after sleep…"): one that is unregistered or
@@ -402,14 +404,17 @@ enum BrainBarMenuPresenter {
         var needsRows = p.rows.filter { $0.kind == .needsYou }
         let red = c.verdict.map { $0.dot == .red || $0.checks.contains { $0.state == .red } } ?? false
         let w = c.watcher.flatMap { $0.readable && $0.fresh ? $0 : nil }
-        let appFact = c.maintenanceNightFailures >= 3
+        let appFact = c.maintenanceNightFailures.map { $0 >= 3 } == true
             || w?.alertReasons.contains { !["offset_lag", "quarantined_record"].contains($0) && !($0 == "coverage_drop" && w?.dbProbeFailed == true) } == true
             || (w?.alertReasons.contains("offset_lag") == true && c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } == true)
         if needsRows.isEmpty, red || appFact || p.form == .needs || p.count != 0 || p.icon == .marked {
             needsRows = [P.Row(kind: .needsYou, strings: needs(.system).strings + handoff, action: copyReport)]
         }
+        // A needs form is headed, in its headline and its headline row, by the count sentence for the rows it returns, never by
+        // another registered sentence (P2c, CodeRabbit on #1788).
+        let count = needsRows.count == 1 ? Say.countOne.text : Say.countMany(String(needsRows.count))
         if !needsRows.isEmpty, p.form != .needs || p.count != needsRows.count || p.icon != .marked || p.rows.filter({ $0.kind == .needsYou }) != needsRows
-            || !holds(p.headline, on: p) {
+            || p.headline != count || p.rows.filter({ $0.kind == .headline }).map(\.strings) != [[count]] {
             let carried = p.rows.contains { $0.kind == .needsYou } ? p.rows.filter { [.needsYou, .factLine].contains($0.kind) }
                 : needsRows + p.rows.filter { $0.kind == .factLine }
             p = needsForm(carried, statuses: p.rows.filter { $0.kind == .statusLine }, everythingElse: p.rows.contains { $0.kind == .everythingElse })
@@ -432,15 +437,24 @@ enum BrainBarMenuPresenter {
         bySentence { holds($0, on: drawn, [.claim]) ? $0 : $1 ? Say.generic.text : nil }
         let corrected = p
         bySentence { sentence, _ in holds(sentence, on: corrected, [.reassurance]) ? sentence : nil }
+        // B5 (round 1), last since P2c (CodeRabbit on #1788): once both passes have dropped what they drop, the standing items
+        // keep their one permitted key and Option alternate, and no other row has either.
+        p.rows = p.rows.map { row in
+            var row = row
+            let standing = row.kind == .standardItem ? row.strings : []
+            row.keyEquivalent = standing == [Say.settings.text] ? Say.settingsKey : standing == [Say.quit.text] ? Say.quitKey : nil
+            row.optionAlternate = standing == [Say.quit.text] && row.optionAlternate != nil ? Say.restart.text : nil
+            return row
+        }
         return p
     }
 
     /// The things "Everything else is fine." speaks for: every thing no drawn row speaks for, and all four beside a row
     /// whose first sentence speaks for no one thing (R17's generic rows).
-    static func uncovered(_ p: P) -> Set<Thing> {
+    static func uncovered(_ p: P, _ c: Capture) -> Set<Thing> {
         var left = Set(four)
         for row in p.rows where [.needsYou, .statusLine, .factLine, .headlineDetail].contains(row.kind) {
-            guard let first = row.strings.first.flatMap({ sentences($0).first }), let thing = entry(for: first)?.0.thing else { return Set(four) }
+            guard let first = row.strings.first.flatMap({ sentences($0).first }), let thing = entry(for: first, c)?.0.thing else { return Set(four) }
             left.remove(thing)
         }
         return left
@@ -472,7 +486,8 @@ enum BrainBarMenuPresenter {
         if w == nil || w?.readable == false || w?.fresh == false || w?.dbProbeFailed == true
             || w?.alertReasons.contains(where: { $0 != "quarantined_record" }) == true { fine.remove(.remembering) }
         if !c.backupsMeasured || v.checks.contains(where: { copies.contains($0.name) && ($0.ageS ?? 0) < 0 }) { fine.remove(.safe) }
-        if c.maintenanceNightFailures >= 3 { fine.remove(.upkeep) }
+        if c.maintenanceNightFailures.map({ $0 < 3 }) != true { fine.remove(.upkeep) }
+        if c.backupDailyFailures == nil || c.jsonlBackupFailures == nil { fine.remove(.safe) }
         return fine
     }
 

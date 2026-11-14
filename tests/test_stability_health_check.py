@@ -200,10 +200,18 @@ def _expected_writer_pidfile(pidfile_dir: Path, db_path: Path) -> Path:
     return pidfile_dir / f"brainlayer-writer-{path_hash}-{resolved_path.name}.pid"
 
 
-@pytest.mark.parametrize("failure", [None, "backup", "job"])
-def test_48_hour_idle_machine_uses_liveness_and_preserves_real_failures(tmp_path, failure):
-    """Old sources/offsets and flat write counters are normal on the idle M1."""
-    now = datetime(2026, 10, 18, 18, tzinfo=UTC)
+# What the real watcher writes while idle (#1783: measured over 48 h of real JSONLWatcher polls with
+# and without provider roots): no alert, a healthy DB probe, no missing root.
+IDLE_WATCHER_STALL_FIELDS = {
+    "alerting": False,
+    "alert_reasons": [],
+    "db_probe_failed": False,
+    "db_probe_failed_for_s": 0.0,
+    "roots_missing": [],
+}
+
+
+def _idle_machine(tmp_path, now, failure):
     old = (now - timedelta(hours=49)).timestamp()
     db = tmp_path / "brainlayer.db"
     _make_db(db, total=3, vector_rows=3)
@@ -235,9 +243,29 @@ def test_48_hour_idle_machine_uses_liveness_and_preserves_real_failures(tmp_path
         pending_stores_path=tmp_path / "pending-stores.jsonl",
         pause_sentinel_path=tmp_path / "pause.sentinel",
     )
+    return config, watcher, drain, backup
+
+
+def _idle_tick(config, sample, failure):
+    return run_health_check(
+        config,
+        now_fn=lambda: sample,
+        ps_output_fn=lambda: "123 python scripts/hotlane_brainbar_daemon.py --backlog-batch 4\n",
+        socket_request_fn=_empty_canary,
+        command_runner=lambda args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+
+@pytest.mark.parametrize("failure", [None, "backup", "job"])
+def test_48_hour_idle_machine_uses_liveness_and_preserves_real_failures(tmp_path, failure):
+    """Old sources/offsets and flat write counters are normal on the idle M1."""
+    now = datetime(2026, 10, 18, 18, tzinfo=UTC)
+    config, watcher, drain, backup = _idle_machine(tmp_path, now, failure)
     for tick in range(3):
         sample = now + timedelta(minutes=5 * tick)
-        watcher.write_text(json.dumps({"updated_at": sample.isoformat(), "poll_count": 100 + tick}))
+        watcher.write_text(
+            json.dumps({"updated_at": sample.isoformat(), "poll_count": 100 + tick, **IDLE_WATCHER_STALL_FIELDS})
+        )
         drain.write_text(json.dumps({"updated_at": sample.isoformat(), "drain_cycles": 100 + tick, "drained_total": 0}))
         backup.write_text(
             json.dumps(
@@ -250,13 +278,7 @@ def test_48_hour_idle_machine_uses_liveness_and_preserves_real_failures(tmp_path
             )
             + "\n"
         )
-        result = run_health_check(
-            config,
-            now_fn=lambda: sample,
-            ps_output_fn=lambda: "123 python scripts/hotlane_brainbar_daemon.py --backlog-batch 4\n",
-            socket_request_fn=_empty_canary,
-            command_runner=lambda args: SimpleNamespace(returncode=0, stdout="", stderr=""),
-        )
+        result = _idle_tick(config, sample, failure)
         expected = {"backup": "jsonl_backup_attempt_failed", "job": "job_alert_maintenance-full"}.get(failure)
         assert [issue.code for issue in result.issues] == ([expected] if expected else [])
         assert result.ok is (failure is None)
@@ -300,6 +322,67 @@ def _ok_canary(_socket_path: Path, _query: str, _timeout_seconds: float) -> dict
             ]
         },
     }
+
+
+def test_canary_answered_after_5_5_seconds_succeeds_and_reports_latency(tmp_path, monkeypatch):
+    import socket
+
+    from brainlayer.health_facts import classify_issues, search_canary_fact
+    from brainlayer.health_verdict import GREEN, Facts, evaluate
+
+    clock = [0.0]
+
+    class DelayedSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def settimeout(self, timeout):
+            self.timeout = timeout
+
+        def connect(self, _path):
+            pass
+
+        def sendall(self, _payload):
+            pass
+
+        def recv(self, _size):
+            clock[0] += min(5.5, self.timeout)
+            if self.timeout < 5.5:
+                raise socket.timeout("timed out")
+            return json.dumps(_ok_canary(None, "", 0)).encode() + b"\n"
+
+    monkeypatch.setattr(health_check.socket, "socket", lambda *_args: DelayedSocket())
+    db = tmp_path / "brainlayer.db"
+    _make_db(db, total=1, vector_rows=1)
+    result = run_health_check(
+        HealthCheckConfig(db_path=db, state_path=tmp_path / "state.json", socket_path=tmp_path / "brainbar.sock"),
+        ps_output_fn=lambda: "",
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        monotonic_fn=lambda: clock[0],
+    )
+    assert result.canary_ok is True
+    assert not any(issue.code == "brain_search_canary_failed" for issue in result.issues)
+    context = classify_issues(result)[2]
+    verdict = evaluate(
+        Facts(
+            now=datetime.now(UTC), search_canary_ok=search_canary_fact(result, datetime.now(UTC)), check_notes=context
+        )
+    )
+    assert verdict.check("search").state == GREEN
+    assert "5.5" in verdict.check("search").note
+
+
+def test_canary_timeout_covers_swift_hybrid_budget_and_fallback():
+    import re
+
+    source = (REPO_ROOT / "brain-bar/Sources/BrainBar/MCPRouter.swift").read_text()
+    match = re.search(r"defaultHybridSearchBudget:\s*TimeInterval\s*=\s*([\d.]+)", source)
+    assert match is not None
+    assert health_check.HYBRID_SEARCH_BUDGET_SECONDS == float(match.group(1))
+    assert HealthCheckConfig().socket_timeout_seconds >= float(match.group(1)) + 4.0
 
 
 def test_health_check_consumes_alerting_t3_health_snapshot(tmp_path):
@@ -2801,3 +2884,21 @@ def test_vector_scan_notice_contract(tmp_path, monkeypatch, completeness, scanne
         r not in " ".join(issues.values())
         for r in ("instruction_limit", "time_limit", "page_limit", "window_end", "scanned 1864 rows")
     )
+
+
+def test_an_old_shape_watcher_payload_turns_ingest_amber_on_the_third_check(tmp_path):
+    """Fail-closed (#1783): a heartbeat without its stall fields is not a no-stall reading."""
+    now = datetime(2026, 10, 18, 18, tzinfo=UTC)
+    config, watcher, drain, backup = _idle_machine(tmp_path, now, None)
+    seen = []
+    for tick in range(4):
+        sample = now + timedelta(minutes=5 * tick)
+        watcher.write_text(json.dumps({"updated_at": sample.isoformat(), "poll_count": 100 + tick}))
+        drain.write_text(json.dumps({"updated_at": sample.isoformat(), "drain_cycles": 100 + tick, "drained_total": 0}))
+        backup.write_text(
+            json.dumps({"attempted_at": sample.isoformat(), "status": "no-op", "verified": True, "message": "x"}) + "\n"
+        )
+        _idle_tick(config, sample, None)
+        active = json.loads(config.badge_state_path.read_text())["alerts"]["active"]
+        seen.append({issue["code"]: issue["severity"] for issue in active}.get("outcome_ingest"))
+    assert seen == [None, None, "warning", "warning"]

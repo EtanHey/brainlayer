@@ -32,7 +32,7 @@ Colour and marks
     headline's disc already carries its state.
 11. **The busy arrows turn (R28c)**: one even, linear turn every 2 s while shown (S2-today, S2-after-seam, S7), and still under
     Reduce Motion. The harness draws them at a fixed phase (upright), and no picture can show the motion.
-12. **The button fill is the system accent colour**, blue by default. **Flag:** Etan said "the blue button". If it must stay blue
+12. **The button fill is the system accent colour**, blue by default. **Flag:** on 13 Nov the owner named the blue button as something he wanted kept. If it must stay blue
     under any accent setting, pinning it to `.systemBlue` is a one-word change.
 
 Controls

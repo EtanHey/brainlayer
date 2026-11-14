@@ -6,6 +6,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1"
 
 # Coalesce PR label/synchronize events; preserve every main/batch SHA's receipt.
 concurrency:
@@ -16,7 +18,8 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      brain_bar: ${{ steps.filter.outputs.brain_bar }}
+      brain_bar: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || steps.filter.outputs.brain_bar }}
+      menu_function: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || steps.filter.outputs.menu_function }}
       launchd: ${{ steps.filter.outputs.launchd }}
       backup_verdict_tla: ${{ steps.filter.outputs.backup_verdict_tla }}
       ingest_coverage_tla: ${{ steps.filter.outputs.ingest_coverage_tla }}
@@ -45,6 +48,17 @@ jobs:
             brain_bar:
               - 'brain-bar/**'
               - 'scripts/launchd/**'
+              - '.github/workflows/ci.yml'
+            menu_function:
+              - 'brain-bar/Sources/BrainBar/BrainBarMenu*.swift'
+              - 'brain-bar/Sources/BrainBar/BrainBarStatusVerdict.swift'
+              - 'brain-bar/Sources/BrainBar/BrainBarDriveAuth.swift'
+              - 'brain-bar/Tests/BrainBarTests/BrainBarMenu*.swift'
+              - 'brain-bar/Tests/BrainBarTests/Fixtures/**'
+              - 'brain-bar/Package.swift'
+              - 'brain-bar/Package.resolved'
+              - 'brain-bar/Tests/BrainBarTests/Scripts/run_swift_tests.py'
+              - '.github/workflows/ci.yml'
             launchd:
               - 'scripts/launchd/**'
               - 'src/brainlayer/pause.py'
@@ -240,9 +254,26 @@ jobs:
         if: needs.changes.outputs.brain_bar == 'true'
         env:
           SWIFT_BACKTRACE: enable=yes,interactive=no
+          MENU_FUNCTION: ${{ needs.changes.outputs.menu_function }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           python3 -c 'import os,time; from pathlib import Path; Path(os.environ["RUNNER_TEMP"], "brainbar-test-start").write_text(str(time.time()))'
-          cd brain-bar && python3 Tests/BrainBarTests/Scripts/run_swift_tests.py
+          # Only the exact output false permits a skip; dispatch, schedule and unknown outputs run the net.
+          cd brain-bar
+          if [[ "$EVENT_NAME" != "workflow_dispatch" && "$EVENT_NAME" != "schedule" && "$MENU_FUNCTION" == "false" ]]; then
+            echo "menu function unchanged: skipping BrainBarMenuInvariantTests"
+            echo "running everything except BrainBarMenuInvariantTests"
+            python3 Tests/BrainBarTests/Scripts/run_swift_tests.py --skip BrainBarMenuInvariantTests
+          else
+            status=0
+            echo "running everything except BrainBarMenuInvariantTests"
+            python3 Tests/BrainBarTests/Scripts/run_swift_tests.py --skip BrainBarMenuInvariantTests || status=$?
+            echo "running BrainBarMenuInvariantTests in its own process"
+            menu_status=0
+            python3 Tests/BrainBarTests/Scripts/run_swift_tests.py --filter BrainBarMenuInvariantTests || menu_status=$?
+            if (( menu_status > status )); then status=$menu_status; fi
+            exit "$status"
+          fi
 
       - name: Preserve native test crash reports
         if: failure() && steps.brainbar-tests.outcome == 'failure'

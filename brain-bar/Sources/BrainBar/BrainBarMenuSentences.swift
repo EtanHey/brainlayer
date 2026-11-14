@@ -6,6 +6,18 @@ import Foundation
 /// and the word formatters below; `finalGuard` checks every sentence it is about to return against them. The invariant
 /// test keeps its own conditions under the same ids and fails on any emitted sentence that is not registered here.
 extension BrainBarMenuPresenter {
+    /// I3/R30: which things a reassurance covers, using the same nouns and uncovered-row rule as its condition.
+    static func reassuranceCoverage(_ id: String, _ values: [String], _ p: P, _ c: Capture) -> Set<Thing>? {
+        switch id {
+        case "S1": return Set(four)
+        case "A2.fine.is", "A2.fine.are": return Say.fineThings(values[0])
+        case "M5": return uncovered(p, c)
+        case "U03.stillSaved": return [.remembering, .safe]
+        case "F07.exactWords": return [.finding]
+        default: return nil
+        }
+    }
+
     struct Sentence: Sendable {
         /// A claim states a fact about the world; a reassurance says something is fine; a neutral entry is an instruction,
         /// a label, or a statement of uncertainty, and cannot be false.
@@ -32,8 +44,8 @@ extension BrainBarMenuPresenter {
         func callAsFunction(_ values: String...) -> String { fill(values) }
         func fill(_ values: [String]) -> String { zip(values, parts.dropFirst()).reduce(parts[0]) { $0 + $1.0 + $1.1 } }
 
-        /// The placeholder values when `sentence` is this entry with each slot filled by a word its formatter can make.
-        func match(_ sentence: String) -> [String]? {
+        /// The placeholder values when `sentence` is this entry with each slot filled by a word its formatter makes for `c`.
+        func match(_ sentence: String, _ c: Capture) -> [String]? {
             guard !slots.isEmpty else { return sentence == template ? [] : nil }
             guard sentence.hasPrefix(parts[0]) else { return nil }
             var rest = Substring(sentence.dropFirst(parts[0].count)), values: [String] = []
@@ -46,7 +58,8 @@ extension BrainBarMenuPresenter {
                     guard let r = rest.range(of: next) else { return nil }
                     (value, rest) = (rest[..<r.lowerBound], rest[r.upperBound...])
                 }
-                guard Say.fits(slot, String(value)) else { return nil }
+                // No slot takes an empty value but `{over}`, whose empty form is the formatter's own (CI on #1790).
+                guard !value.isEmpty || slot == "over", Say.fits(slot, String(value), c) else { return nil }
                 values.append(String(value))
             }
             return values
@@ -54,9 +67,9 @@ extension BrainBarMenuPresenter {
     }
 
     /// The entry and placeholder values for one sentence, or nil when no entry makes it (a fault the guard corrects).
-    static func entry(for sentence: String) -> (Sentence, [String])? {
+    static func entry(for sentence: String, _ c: Capture) -> (Sentence, [String])? {
         if let exact = Say.exact[sentence] { return (exact, []) }
-        for entry in Say.templated { if let values = entry.match(sentence) { return (entry, values) } }
+        for entry in Say.templated { if let values = entry.match(sentence, c) { return (entry, values) } }
         return nil
     }
 
@@ -101,8 +114,9 @@ extension BrainBarMenuPresenter {
         // MARK: the calm form (A2)
 
         static let allGood = S("S1", .reassurance, "All good") { c, _, _ in allGoodProven(c) }
+        /// P2c (R2-B2): the headline is not proof on its own; All good itself is proven, as the oracle proves it.
         static let backedUp = S("S01", .claim, "Backed up to Google Drive {at}.") { c, p, v in
-            p.headline == allGood.text && allGoodDate(c).map { at($0, c) } == v[0]
+            allGoodProven(c) && p.headline == allGood.text && allGoodDate(c).map { at($0, c) } == v[0]
         }
         static let checkingMemory = S("X01", .neutral, "Checking on your memory…")
         static let checkingSleep = S("X02", .claim, "Checking after sleep…") { c, _, _ in c.wakeCatchUpPending }
@@ -128,9 +142,9 @@ extension BrainBarMenuPresenter {
         static let cantConfirmBackups = S("C.backups", .neutral, "Can’t confirm backups yet")
         static let stillChecking = S("C.one", .neutral, "Still checking {thing}")
         static let stillCheckingFew = S("C.few.checking", .neutral, "Still checking a few things")
-        static let fineIs = S("A2.fine.is", .reassurance, "{fine} is fine.") { c, _, v in fineThings(v[0]).isSubset(of: provenFine(c)) }
-        static let fineAre = S("A2.fine.are", .reassurance, "{fines} are fine.") { c, _, v in fineThings(v[0]).isSubset(of: provenFine(c)) }
-        static let everythingElse = S("M5", .reassurance, "Everything else is fine.") { c, p, _ in uncovered(p).isSubset(of: provenFine(c)) }
+        static let fineIs = S("A2.fine.is", .reassurance, "{fine} is fine.") { c, p, v in reassuranceCoverage("A2.fine.is", v, p, c).map { $0.isSubset(of: provenFine(c)) } == true }
+        static let fineAre = S("A2.fine.are", .reassurance, "{fines} are fine.") { c, p, v in reassuranceCoverage("A2.fine.are", v, p, c).map { $0.isSubset(of: provenFine(c)) } == true }
+        static let everythingElse = S("M5", .reassurance, "Everything else is fine.") { c, p, _ in reassuranceCoverage("M5", [], p, c).map { $0.isSubset(of: provenFine(c)) } == true }
 
         // MARK: the needs form (A1)
 
@@ -142,10 +156,10 @@ extension BrainBarMenuPresenter {
         static let giveReport = S("U12.give", .neutral, "Give the report to an agent.")
         static let ifNotFinished = S("D10", .neutral, "If this backup doesn’t finish, BrainBar can’t fix it itself.")
         static let u03 = S("U03", .claim, "Nightly upkeep failed {N3} nights in a row", .upkeep) { c, _, v in
-            c.maintenanceNightFailures >= 3 && String(c.maintenanceNightFailures) == v[0]
+            c.maintenanceNightFailures.map { $0 >= 3 && String($0) == v[0] } == true
         }
-        static let stillSaved = S("U03.stillSaved", .reassurance, "Your memory is still being saved and backed up, as of the last checks.") { c, _, _ in
-            provenFine(c).isSuperset(of: [.remembering, .safe])
+        static let stillSaved = S("U03.stillSaved", .reassurance, "Your memory is still being saved and backed up, as of the last checks.") { c, p, v in
+            reassuranceCoverage("U03.stillSaved", v, p, c).map { $0.isSubset(of: provenFine(c)) } == true
         }
         static let s19 = S("S19", .claim, "The newest checked backup is damaged", .safe) { c, _, _ in red(c, "integrity") }
         static let s19Memory = S("S19.memory", .claim, "Your memory itself may be damaged too.") { c, _, _ in red(c, "integrity") }
@@ -175,7 +189,7 @@ extension BrainBarMenuPresenter {
             started(c, today: false, v[0]) && progress(c, v[1])
         }
         static let s06 = S("S06", .claim, "The last {N2} backups didn’t finish", .safe) { c, _, v in
-            c.backupDailyFailures >= 2 && String(c.backupDailyFailures) == v[0]
+            c.backupDailyFailures.map { $0 >= 2 && String($0) == v[0] } == true
         }
         static let s06Newest = S("S06.newest", .claim, "Your newest backup is {age}.") { c, _, v in
             c.backupsMeasured && age(c, ["backup_local", "backup_offsite"], v[0])
@@ -225,60 +239,87 @@ extension BrainBarMenuPresenter {
         static func joined(_ words: [String]) -> String { words.count < 2 ? words.joined() : words.dropLast().joined(separator: ", ") + " and " + words.last! }
         static func list(_ words: [String]) -> String { let s = joined(words); return s.prefix(1).uppercased() + s.dropFirst() }
 
-        /// The nouns a list names, when it is exactly what `joined` (or `list`) makes from distinct nouns in the things' order.
-        static func canonical(_ value: String, _ nouns: [Thing: String], capitalised: Bool) -> [String]? {
-            let ordered = Thing.allCases.compactMap { nouns[$0] }
-            let words = (capitalised ? value.prefix(1).lowercased() + value.dropFirst() : value)
-                .replacingOccurrences(of: " and ", with: ", ").components(separatedBy: ", ")
-            let at = words.compactMap { ordered.firstIndex(of: $0) }
-            guard at.count == words.count, at == at.sorted(), Set(at).count == at.count else { return nil }
-            return (capitalised ? list(words) : joined(words)) == value ? words : nil
+        /// The things a list of nouns names, distinct and in the things' order, read leniently (any case, any order, repeats).
+        static func things(_ value: String, _ nouns: [Thing: String]) -> [Thing] {
+            let words = Set(value.lowercased().replacingOccurrences(of: " and ", with: ", ").components(separatedBy: ", "))
+            return Thing.allCases.filter { nouns[$0].map(words.contains) == true }
         }
 
         /// The things a "… fine." list names.
-        static func fineThings(_ value: String) -> Set<Thing> {
-            Set(value.lowercased().replacingOccurrences(of: " and ", with: ", ").components(separatedBy: ", ").compactMap { word in
-                fineNoun.first { $0.value == word }?.key
-            })
-        }
+        static func fineThings(_ value: String) -> Set<Thing> { Set(things(value, fineNoun)) }
 
-        private static let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
-        /// Whether `value` is a word its slot's formatter can make (round 1 of #1788, Codex B2): numbers in canonical decimal
-        /// within their range (N2 at least 2, N3 at least 3, p 0 to 100), real clock times and days, the age and `{over}`
-        /// forms exactly, and noun lists exactly as `joined` / `list` make them.
-        static func fits(_ slot: String, _ value: String) -> Bool {
-            func number(_ s: some StringProtocol, _ range: ClosedRange<Int>) -> Bool { Int(s).map { String($0) == s && range.contains($0) } == true }
-            func clock(_ s: some StringProtocol) -> Bool {
-                s.count == 5 && s.dropFirst(2).first == ":" && Int(s.prefix(2)).map { (0...23).contains($0) } == true && s.prefix(2).allSatisfy(\.isNumber)
-                    && Int(s.suffix(2)).map { (0...59).contains($0) } == true && s.suffix(2).allSatisfy(\.isNumber)
-            }
-            func day(_ s: String, relative: Bool) -> Bool {
-                let halves = s.components(separatedBy: " at "), date = halves[0].split(separator: " ")
-                guard halves.count == 2, clock(halves[1]) else { return false }
-                return (relative && ["today", "yesterday"].contains(halves[0])) || (date.count == 2 && months.contains(String(date[0])) && number(date[1], 1...31))
-            }
+        /// Whether `value` is a word its slot's formatter makes for this capture (P2c, round 2 of #1788, R2-B1). A round trip:
+        /// the value is read back, leniently, to the quantity it names (a moment in the capture's zone, a duration, a count, a
+        /// list of things), the presenter's own formatter says that quantity again, and only a byte-for-byte equal result is
+        /// accepted, so a lenient reading can never widen what matches. One part is not a round trip: the floors of N2 and N3.
+        /// A count is said by `String(_:)`, but its floor (2, 3) is the range of its template, which the presenter picks by
+        /// the count, not a property of any formatter; it stays an explicit range, with negative tests.
+        static func fits(_ slot: String, _ value: String, _ c: Capture) -> Bool {
             switch slot {
-            case "N2": return number(value, 2...Int.max)
-            case "N3": return number(value, 3...Int.max)
-            case "p": return number(value, 0...100)
-            case "HH:mm": return clock(value)
-            case "at": return day(value, relative: true)
+            case "N2", "N3": return Int(value).map { $0 >= (slot == "N2" ? 2 : 3) && String($0) == value } == true
+            case "p": return Double(value).map { (0...1).contains($0 / 100) && String(percent($0 / 100)) == value } == true
+            // A moment's words: first the formatter's own words for a moment the capture holds (`spoken`), which the presenter's
+            // words match by construction (round 1 of #1790); then a reading back, for values not the capture's own.
+            case "HH:mm": return spoken(c).contains { hhmm($0, c) == value } || clock(value).flatMap { on(c.now, $0, c) }.map { hhmm($0, c) == value } == true
+            case "at": return spoken(c).contains { at($0, c) == value } || moments(value, c).contains { at($0, c) == value }
             case "age":
-                return value == "1 hour old" || (value.hasSuffix(" hours old") && number(value.dropLast(10), 2...23))
-                    || (value.hasPrefix("from ") && day(String(value.dropFirst(5)), relative: false))
+                let hours = value.split(separator: " ").first.flatMap { Double($0) }.map { [c.now.addingTimeInterval(-$0 * 3600)] } ?? []
+                return (spoken(c) + hours + (value.hasPrefix("from ") ? moments(String(value.dropFirst(5)), c) : [])).contains { copyAge(since: $0, c) == value }
             case "over":
-                let words = value.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-                guard !value.isEmpty else { return true }
-                return words.count == 5 && words[0].isEmpty && words[1] == "in" && words[2] == "over"
-                    && (words[3...] == ["an", "hour"] || words[3...] == ["a", "minute"] || (number(words[3], 2...Int.max) && words[4] == "hours")
-                        || (number(words[3], 2...59) && words[4] == "minutes"))
-            case "thing": return behindNoun.values.contains(value)
-            case "two": return canonical(value, behindNoun, capitalised: false)?.count == 2
-            case "fine": return canonical(value, fineNoun, capitalised: true)?.count == 1
-            case "fines": return (canonical(value, fineNoun, capitalised: true)?.count ?? 0) >= 2
+                // A stall's age: just over the count of units the words name. The empty form is the formatter's for no age over a minute.
+                let words = value.split(separator: " "), unit = words.last.map { $0.hasPrefix("hour") ? 3600.0 : $0.hasPrefix("minute") ? 60 : 0 } ?? 0
+                let n = words.count < 2 ? nil : ["a", "an"].contains(words[words.count - 2]) ? 1 : Double(words[words.count - 2])
+                return value.isEmpty || n.map { over($0 * unit + 1).map { " " + $0 } == value } == true
+            case "thing", "two", "fine", "fines":
+                let nouns = slot.hasPrefix("fine") ? fineNoun : behindNoun, named = things(value, nouns)
+                let said = (slot.hasPrefix("fine") ? list : joined)(named.compactMap { nouns[$0] })
+                return said == value && (slot == "two" ? named.count == 2 : slot == "fines" ? named.count >= 2 : named.count == 1)
             default: return false
             }
+        }
+
+        /// Every moment the presenter says as `{at}`, `{HH:mm}` or `{age}`: the last known backup, the all-good copy, the running
+        /// upload's start and estimate, and every copy a database backup check dates. The property test fails if the derivation
+        /// ever says a moment that is not here.
+        static func spoken(_ c: Capture) -> [Date] {
+            // Each as the derivation may say it (the last backup at or before now, the estimate only today, a copy `copyAge`
+            // dates), and only a moment the formatter has words for (CI on #1790).
+            let last = c.lastKnownBackupAt.flatMap { $0 <= c.now && sayable($0) ? $0 : nil }
+            let eta = runningUpload(c)?.onSchedule?.eta.flatMap { calendar(c).isDate($0, inSameDayAs: c.now) ? $0 : nil }
+            let copies = (c.verdict?.checks ?? []).filter { ["backup_local", "backup_offsite"].contains($0.name) && valid($0.ageS) }
+                .map { c.verdict!.evaluatedAt.addingTimeInterval(-$0.ageS!) }.filter { copyAge(since: $0, c) != nil }
+            return ([last, allGoodDate(c), uploadStart(c)?.date, eta].compactMap { $0 } + copies).filter { hasWords($0, c) }
+        }
+
+        /// "HH:mm" read leniently as an hour and a minute.
+        private static func clock(_ value: String) -> (hour: Int, minute: Int)? {
+            let parts = value.split(separator: ":").map { Int($0) }
+            guard parts.count == 2, let hour = parts[0], let minute = parts[1] else { return nil }
+            return (hour, minute)
+        }
+
+        /// The moment at that clock time on `day`'s date in the capture's zone (a time the day skips moves, and so says
+        /// another clock time).
+        private static func on(_ day: Date, _ time: (hour: Int, minute: Int), _ c: Capture) -> Date? {
+            sayable(day) ? calendar(c).date(bySettingHour: time.hour, minute: time.minute, second: 0, of: day) : nil
+        }
+
+        /// The moments `{at}` words can name, all at or before now (every `{at}` is a past event): "today" or "yesterday" at a
+        /// clock time, or a month and day at one in any of the last nine years (no year is said; Feb 29 needs a leap year).
+        /// Words name a minute and no year, so reading them back is lossy at the edges (a repeated minute's second pass, a moment
+        /// just inside a day, one over nine years old): only values that are not the capture's own depend on it.
+        static func moments(_ value: String, _ c: Capture) -> [Date] {
+            let halves = value.components(separatedBy: " at "), cal = calendar(c)
+            guard halves.count == 2, let time = clock(halves[1]), sayable(c.now) else { return [] }
+            let day = halves[0].split(separator: " ").map(String.init)
+            var dates: [Date?] = []
+            if day == ["today"] || day == ["yesterday"] {
+                dates = [cal.date(byAdding: .day, value: day == ["today"] ? 0 : -1, to: c.now).flatMap { on($0, time, c) }]
+            } else if day.count == 2, let month = formatter("MMM", c).shortMonthSymbols.firstIndex(of: day[0]), let d = Int(day[1]) {
+                let year = cal.component(.year, from: c.now)
+                dates = (0...8).map { cal.date(from: DateComponents(year: year - $0, month: month + 1, day: d, hour: time.hour, minute: time.minute)) }
+            }
+            return dates.compactMap { $0 }.filter { $0 <= c.now && sayable($0) }
         }
     }
 
@@ -300,9 +341,14 @@ extension BrainBarMenuPresenter {
 
     static func hhmm(_ date: Date, _ c: Capture) -> String { formatter("HH:mm", c).string(from: date) }
 
+    /// One Gregorian calendar per zone on each thread, reused like the formatters (P2c: the matcher's round trip reads with it).
     static func calendar(_ c: Capture) -> Calendar {
+        final class Made { let calendar: Calendar; init(_ calendar: Calendar) { self.calendar = calendar } }
+        let key = "BrainBarMenuPresenter.calendar|" + c.timeZone.identifier
+        if let made = Thread.current.threadDictionary[key] as? Made { return made.calendar }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = c.timeZone
+        Thread.current.threadDictionary[key] = Made(calendar)
         return calendar
     }
 
@@ -322,6 +368,10 @@ extension BrainBarMenuPresenter {
     /// date that does not exist ("Sep 20 at 02:00" for −∞), so no sentence names one (P2b, found by writing S4's condition).
     static func sayable(_ date: Date) -> Bool { (Date.distantPast...Date.distantFuture).contains(date) }
 
+    /// The formatter has words for this moment. An older Foundation (macOS 15, CI on #1790) formats some moments in
+    /// `sayable`'s range as "", so a moment with no words is one the presenter cannot say.
+    static func hasWords(_ date: Date, _ c: Capture) -> Bool { !hhmm(date, c).isEmpty && !formatter("MMM d 'at' HH:mm", c).string(from: date).isEmpty }
+
     static func percent(_ progress: Double) -> Int { Int((progress * 100).rounded()) }
 
     static func valid(_ age: Double?) -> Bool { age.map { $0.isFinite && $0 >= 0 } == true }
@@ -331,13 +381,18 @@ extension BrainBarMenuPresenter {
     /// old" under a day, else "from Nov 9 at 03:44". Nil for no, a negative or non-finite age, or a time after now.
     static func copyAge(_ age: Double?, _ c: Capture, _ v: BrainBarHealthVerdict) -> String? {
         guard let age, valid(age) else { return nil }
-        let copied = v.evaluatedAt.addingTimeInterval(-age), elapsed = c.now.timeIntervalSince(copied)
+        return copyAge(since: v.evaluatedAt.addingTimeInterval(-age), c)
+    }
+
+    /// `{copy age}` of a copy made at `copied`, at `now`.
+    static func copyAge(since copied: Date, _ c: Capture) -> String? {
+        let elapsed = c.now.timeIntervalSince(copied)
         guard sayable(copied), elapsed.isFinite, elapsed >= 0 else { return nil }
         guard elapsed >= 86_400 else {
             let hours = min(23, max(1, Int((elapsed / 3600).rounded())))
             return hours == 1 ? "1 hour old" : "\(hours) hours old"
         }
-        return "from \(at(copied, c))"
+        return hasWords(copied, c) ? "from \(at(copied, c))" : nil
     }
 
     /// `{over d}`: a strict lower bound from an awake-adjusted age, rounded down ("in over an hour"); nil under a minute.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -270,3 +271,204 @@ def test_swift_required_gate_has_a_bounded_job_timeout():
     value = job.get("timeout-minutes")
     assert value == 25
     assert 10 <= value <= 30, "Swift job must retain a finite hang-protection budget"
+
+
+def _filter_matches(path: str, pattern: str) -> bool:
+    # The filter's current glob subset: * stays in one component; ** crosses directories.
+    expression = re.escape(pattern).replace(r"\*\*/", "(?:.*/)?").replace(r"\*\*", ".*").replace(r"\*", "[^/]*")
+    return re.fullmatch(expression, path) is not None
+
+
+@pytest.mark.parametrize(
+    "path,pattern,expected",
+    [
+        ("a/Menu.swift", "a/*.swift", True),
+        ("a/nested/Menu.swift", "a/*.swift", False),
+        ("a/Menu.swift", "a/**/*.swift", True),
+        ("a/nested/Menu.swift", "a/**/*.swift", True),
+        ("a/nested/Menu.swift", "a/**", True),
+    ],
+)
+def test_filter_glob_directory_boundaries(path, pattern, expected):
+    assert _filter_matches(path, pattern) == expected
+
+
+def test_menu_function_filter_covers_dependencies_and_future_menu_sources():
+
+    changes = _load_workflow()["jobs"]["changes"]
+    filters = yaml.safe_load(next(s for s in changes["steps"] if s.get("id") == "filter")["with"]["filters"])
+    required = [
+        *REPO_ROOT.glob("brain-bar/Sources/BrainBar/BrainBarMenu*.swift"),
+        *REPO_ROOT.glob("brain-bar/Tests/BrainBarTests/BrainBarMenu*.swift"),
+    ]
+    # Resolve top-level project types used by the function and its pure test helpers by declaration,
+    # so moving a type to an uncovered file fails without a path-list update hiding the move.
+    function_files = [
+        REPO_ROOT / f"brain-bar/Sources/BrainBar/BrainBarMenu{name}.swift"
+        for name in ("Presenter", "Presentation", "Sentences", "Cases")
+    ]
+    test_files = [
+        REPO_ROOT / f"brain-bar/Tests/BrainBarTests/BrainBarMenu{name}.swift"
+        for name in ("InvariantTests", "PresentationTests", "EdgeCaptures")
+    ]
+    identifiers = set(re.findall(r"\b[A-Z]\w*\b", "\n".join(p.read_text() for p in function_files + test_files)))
+    definitions = {}
+    # BrainBarDaemon is a separate module with same-named types, not imported by these files.
+    for source in (REPO_ROOT / "brain-bar/Sources/BrainBar").rglob("*.swift"):
+        for name in re.findall(r"^(?:struct|enum|class|protocol|typealias) (\w+)\b", source.read_text(), re.M):
+            if name in identifiers:
+                definitions.setdefault(name, set()).add(source)
+    assert {"BrainBarHealthVerdict", "DriveAuthStatus"} <= definitions.keys()
+    required += [path for paths in definitions.values() for path in paths]
+    paths = [str(p.relative_to(REPO_ROOT)) for p in required] + [
+        "brain-bar/Sources/BrainBar/BrainBarMenuFuture.swift",
+        "brain-bar/Tests/BrainBarTests/Fixtures/presentation-cases.json",
+        "brain-bar/Tests/BrainBarTests/Fixtures/future-case.json",
+        "brain-bar/Package.swift",
+        "brain-bar/Package.resolved",
+        "brain-bar/Tests/BrainBarTests/Scripts/run_swift_tests.py",
+        ".github/workflows/ci.yml",
+    ]
+    for path in paths:
+        assert any(_filter_matches(path, pattern) for pattern in filters["menu_function"]), path
+    assert ".github/workflows/ci.yml" in filters["brain_bar"]
+    assert "base" not in next(s for s in changes["steps"] if s.get("id") == "filter")["with"]
+    events = _load_workflow().get("on") or _load_workflow()[True]
+    assert events["schedule"] == [{"cron": "0 3 * * 1"}]
+    for output in ("brain_bar", "menu_function"):
+        assert changes["outputs"][output] == (
+            "${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || "
+            f"steps.filter.outputs.{output} }}}}"
+        )
+
+
+@pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch", "schedule"])
+@pytest.mark.parametrize("output", [None, "", "false", "true", "FALSE", "unexpected"])
+def test_menu_suite_skip_is_fail_safe(event, output, tmp_path):
+    import subprocess
+
+    step = next(s for s in _load_workflow()["jobs"]["swift"]["steps"] if s.get("id") == "brainbar-tests")
+    assert step["env"]["MENU_FUNCTION"] == "${{ needs.changes.outputs.menu_function }}"
+    assert step["env"]["EVENT_NAME"] == "${{ github.event_name }}"
+    # Parse the shell condition rather than GitHub equality, which ignores case.
+    parsed = re.search(
+        r'if \[\[ "\$EVENT_NAME" (!=|==) "([^"]*)" (&&|\|\|) '
+        r'"\$EVENT_NAME" (!=|==) "([^"]*)" (&&|\|\|) '
+        r'"\$MENU_FUNCTION" (!=|==) "([^"]*)" \]\]; then',
+        step["run"],
+    )
+    assert parsed, step["run"]
+    op1, rhs1, join1, op_schedule, rhs_schedule, join2, op2, rhs2 = parsed.groups()
+    left = (event == rhs1) if op1 == "==" else (event != rhs1)
+    right = ((output or "") == rhs2) if op2 == "==" else ((output or "") != rhs2)
+    scheduled = (event == rhs_schedule) if op_schedule == "==" else (event != rhs_schedule)
+    combined = (left and scheduled) if join1 == "&&" else (left or scheduled)
+    skip = (combined and right) if join2 == "&&" else (combined or right)
+    assert skip == (event not in ("workflow_dispatch", "schedule") and output == "false")
+    # Execute the actual shell with a recording Python stand-in: never invoke Swift or a build.
+    executable = tmp_path / "python3"
+    executable.write_text('#!/bin/sh\nprintf "CALL %s %s %s\\n" "$1" "$2" "$3"\n')
+    executable.chmod(0o755)
+    (tmp_path / "brain-bar").mkdir()
+    result = subprocess.run(
+        ["/bin/bash", "-e", "-c", step["run"]],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": str(tmp_path), "MENU_FUNCTION": output or "", "EVENT_NAME": event},
+    )
+    assert result.returncode == 0, result.stderr
+    calls = [line for line in result.stdout.splitlines() if line.startswith("CALL Tests/")]
+    runner = "CALL Tests/BrainBarTests/Scripts/run_swift_tests.py"
+    assert calls == [f"{runner} --skip BrainBarMenuInvariantTests"] + (
+        [] if skip else [f"{runner} --filter BrainBarMenuInvariantTests"]
+    )
+    assert "running everything except BrainBarMenuInvariantTests" in result.stdout
+    if skip:
+        assert "menu function unchanged: skipping BrainBarMenuInvariantTests" in result.stdout
+    else:
+        assert "running BrainBarMenuInvariantTests in its own process" in result.stdout
+
+
+@pytest.mark.parametrize("first,second", [(0, 0), (7, 0), (0, 9), (7, 9), (9, 7)])
+def test_menu_split_runs_both_and_returns_worse_status(tmp_path, first, second):
+    import subprocess
+
+    step = next(s for s in _load_workflow()["jobs"]["swift"]["steps"] if s.get("id") == "brainbar-tests")
+    executable = tmp_path / "python3"
+    executable.write_text(
+        "#!/bin/sh\n"
+        'case "$2" in\n'
+        '  --skip) echo rest; exit "$FIRST_EXIT" ;;\n'
+        '  --filter) echo menu; exit "$SECOND_EXIT" ;;\n'
+        "esac\n"
+    )
+    executable.chmod(0o755)
+    (tmp_path / "brain-bar").mkdir()
+    result = subprocess.run(
+        ["/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": str(tmp_path),
+            "MENU_FUNCTION": "true",
+            "EVENT_NAME": "pull_request",
+            "FIRST_EXIT": str(first),
+            "SECOND_EXIT": str(second),
+        },
+    )
+    assert [line for line in result.stdout.splitlines() if line in ("rest", "menu")] == ["rest", "menu"]
+    assert result.returncode == max(first, second), result.stderr
+
+
+@pytest.mark.parametrize("leaking_call", [0, 1])
+def test_swift_wrapper_split_owns_temp_roots_and_reuses_build(monkeypatch, leaking_call):
+    path = REPO_ROOT / "brain-bar/Tests/BrainBarTests/Scripts/run_swift_tests.py"
+    spec = importlib.util.spec_from_file_location("swift_split_gate", path)
+    wrapper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wrapper)
+    roots, commands = [], []
+
+    def run(command, *, env):
+        root = Path(env["BRAINBAR_TEST_TMP_ROOT"])
+        assert root.is_dir() and not list(root.iterdir())
+        assert env["TMPDIR"] == str(root) + "/"
+        roots.append(root)
+        commands.append(command)
+        if len(roots) - 1 == leaking_call:
+            (root / "brainbar-leaked-fixture").write_text("owned fixture")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(wrapper.subprocess, "run", run)
+    results = []
+    for option in ("--skip", "--filter"):
+        monkeypatch.setattr(wrapper.sys, "argv", [str(path), option, "BrainBarMenuInvariantTests"])
+        results.append(wrapper.main())
+    assert results == ([1, 0] if leaking_call == 0 else [0, 1])
+    assert roots[0] != roots[1]
+    assert all(not root.exists() for root in roots)
+    assert (
+        commands[0][:4]
+        == commands[1][:4]
+        == ["swift", "test", "--scratch-path", str(REPO_ROOT / ".build.noindex/swift")]
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [[], ["--skip", "BrainBarMenuInvariantTests"], ["--filter", "FixtureTest", "--skip", "BrainBarMenuInvariantTests"]],
+)
+def test_swift_wrapper_forwards_skip_and_preserves_default(monkeypatch, arguments):
+    path = REPO_ROOT / "brain-bar/Tests/BrainBarTests/Scripts/run_swift_tests.py"
+    spec = importlib.util.spec_from_file_location("swift_skip_gate", path)
+    wrapper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wrapper)
+    calls = []
+    monkeypatch.setattr(
+        wrapper.subprocess, "run", lambda command, **kwargs: calls.append(command) or SimpleNamespace(returncode=0)
+    )
+    monkeypatch.setattr(wrapper.sys, "argv", [str(path), *arguments])
+    assert wrapper.main() == 0
+    assert calls == [["swift", "test", "--scratch-path", str(REPO_ROOT / ".build.noindex/swift"), *arguments]]
