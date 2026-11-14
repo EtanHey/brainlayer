@@ -24,13 +24,13 @@ CONSTANTS AmberT, RedT, UnknownAmber, Recovery, SleepGap, WakeGrace, AlertRed,
 
 VARIABLES t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
           v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun, faultEver, wokeInStall, obs,
-          covPrev, rootPrev, covLinger, fileNew, sBlind, partialRun
+          covPrev, rootPrev, covLinger, fileNew, sBlind, partialRun, growthSamples, growthAge, growthAlarm
 
 NoScript == <<>>   \* cfg files cannot spell <<>>: they say Script <- NoScript
 
 vars == <<t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
           v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun, faultEver, wokeInStall, obs,
-          covPrev, rootPrev, covLinger, fileNew, sBlind, partialRun>>
+          covPrev, rootPrev, covLinger, fileNew, sBlind, partialRun, growthSamples, growthAge, growthAlarm>>
 
 (* The eight shapes, with shape 8 split in two. "stuck" is a live process whose
    poll loop no longer completes, so poll_count and updated_at freeze together
@@ -43,10 +43,10 @@ vars == <<t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
    "drift" (records in a shape no parser takes) publishes no watcher signal;
    finding-real-drift shows it stays green. *)
 Shapes == {"dead", "stuck", "lag", "coverage", "dbfail",
-           "blind_stale", "blind_unreadable", "rootgone", "rewrite", "rewrite_lossy", "drift", "partial"}
-NoProgress == {"dead", "stuck", "lag", "coverage", "dbfail", "rootgone", "rewrite_lossy", "drift"}
+           "blind_stale", "blind_unreadable", "rootgone", "rewrite", "rewrite_lossy", "drift", "growth", "partial"}
+NoProgress == {"dead", "stuck", "lag", "coverage", "dbfail", "rootgone", "rewrite_lossy", "drift", "growth"}
 \* Ground truth: records these faults consume and never index (independent of Mut).
-Dropping == {"coverage", "rewrite_lossy", "drift"}
+Dropping == {"coverage", "rewrite_lossy", "drift", "growth"}
 \* Mutation rewrite_progress: count every rewrite as progress, lossy or not.
 ProgressLabel(f) == IF Mut = "rewrite_progress" THEN f \notin NoProgress \ {"rewrite_lossy"}
                     ELSE f \notin NoProgress
@@ -66,6 +66,7 @@ Init == /\ t = 0 /\ fault = "none" /\ asleep = FALSE /\ slept = 0
         /\ resumed = -1 /\ grace = -1 /\ unk = 0 /\ good = 0 /\ alertT = 0 /\ fileAlert = FALSE
         /\ backlog = FALSE /\ dropped = FALSE /\ stall = 0 /\ blindRun = 0 /\ faultEver = FALSE /\ wokeInStall = FALSE
         /\ obs = "fresh" /\ covPrev = FALSE /\ rootPrev = FALSE /\ covLinger = FALSE
+        /\ growthSamples = <<0,0,0,0,0,0,0>> /\ growthAge = 0 /\ growthAlarm = FALSE
         /\ fileNew = FALSE /\ sBlind = 0 /\ partialRun = 0
         /\ IF Script = <<>> THEN InitSteady \/ InitFresh ELSE InitSteady
 
@@ -75,6 +76,9 @@ Sleep == /\ asleep' = TRUE
          /\ hbW' = Wall(Inc(hbW)) /\ pW' = Wall(Inc(pW))
          /\ resumed' = IF resumed >= 0 THEN Min(resumed + 1, Cap) ELSE -1
          /\ grace' = IF grace >= 0 THEN Min(grace + 1, WakeGrace + 1) ELSE -1
+         /\ growthSamples' = Append(Tail(growthSamples), 0)
+         /\ growthAge' = IF growthAge = 0 THEN 0 ELSE Min(growthAge + 1, 7)
+         /\ growthAlarm' = growthAlarm
          /\ obs' = "asleep"
          /\ t' = IF Script = <<>> THEN t ELSE t + 1
          /\ UNCHANGED <<fault, hbA, pA, v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun,
@@ -120,7 +124,19 @@ Tick(f, w, o) ==
       \* the first poll after the fault (covLinger).
       covC == Mut # "no_coverage" /\ f \in {"coverage", "dbfail"} /\ backlogNow
       rootC == f = "rootgone"
-      alertWritten == \/ f = "lag" /\ backlogNow
+      \* Seven samples retain the inclusive 30-minute boundary at 300 s/tick.
+      \* growth writes 40 unknown lines per w tick; drift writes one. Idle writes zero.
+      recognised == polls /\ w /\ f \notin {"growth", "drift", "lag", "rootgone"}
+      retained == Tail(growthSamples)
+      previousVolume == retained[1]+retained[2]+retained[3]+retained[4]+retained[5]+retained[6]
+      incoming == IF polls /\ w /\ f = "growth" THEN 40
+                  ELSE IF polls /\ w /\ f = "drift" THEN 1 ELSE 0
+      samples == IF recognised THEN <<0,0,0,0,0,0,0>> ELSE Append(retained, incoming)
+      gAge == IF recognised \/ (previousVolume = 0 /\ incoming = 0) THEN 0
+              ELSE IF previousVolume = 0 THEN 1 ELSE Min(growthAge + 1, 7)
+      gAlarm == ~recognised /\ (growthAlarm \/ (gAge >= 7 /\ previousVolume + incoming >= 200))
+      alertWritten == \/ gAlarm /\ Mut # "no_growth"
+                      \/ f = "lag" /\ backlogNow
                       \/ covC /\ covPrev
                       \/ rootC /\ rootPrev
                       \/ covLinger /\ f # "coverage"
@@ -168,6 +184,7 @@ Tick(f, w, o) ==
                     [] OTHER -> 0
       stalledNow == backlogNow /\ ~progress
   IN /\ t' = IF Script = <<>> THEN t ELSE t + 1
+     /\ growthSamples' = samples /\ growthAge' = gAge /\ growthAlarm' = gAlarm
      /\ fault' = f /\ asleep' = FALSE /\ slept' = 0
      /\ hbA' = IF writes THEN 0 ELSE rA
      /\ hbW' = IF writes THEN 0 ELSE rW
@@ -210,14 +227,16 @@ TypeOK == /\ partialRun \in 0..Cap /\ fault \in Faults \cup {"none"} /\ v \in {"
    amber or red. stall resets only on progress (blindRun only when the monitor
    reads a heartbeat newer than the one it had; partialRun only when the stall
    fields read again), so this also says it stays non-green until that happens. *)
-IngestFailureLeavesGreen == (stall > N \/ blindRun > N \/ partialRun > N) => NonGreen(v)
+\* Growth can cross its volume threshold after an arbitrarily sparse stall.
+\* A monitor-first wake sees that first alarm on the next read (fileNew).
+IngestFailureLeavesGreen == ((stall > N /\ (fault # "growth" \/ (growthAlarm /\ ~fileNew))) \/ blindRun > N \/ partialRun > N) => NonGreen(v)
 (* The stall clock never ignores agent content that is waiting or was dropped
    this tick: the bookkeeping IngestFailureLeavesGreen rests on. *)
 StallClockIsTruthful == (backlog \/ dropped) => stall > 0
 (* No fault in the whole behaviour: lid closes alone never leave green. *)
 SleepIsNotFailure == ~faultEver => ~NonGreen(v)
 (* A stall that was already running when the lid closed still counts after wake. *)
-StallAcrossWakeStillCounts == (wokeInStall /\ stall > N) => NonGreen(v)
+StallAcrossWakeStillCounts == (wokeInStall /\ stall > N /\ (fault # "growth" \/ (growthAlarm /\ ~fileNew))) => NonGreen(v)
 (* Replay helper: violated exactly when the script has run, so TLC prints it. *)
 ScriptRunning == t < Len(Script)
 =============================================================================

@@ -66,6 +66,23 @@ def case(
 
 
 CASES = [
+    case(
+        "finding-real-growth",
+        "guarantee",
+        "High-volume unknown format leaves green after 30 minutes",
+        faults=("none", "growth"),
+        n=7,
+    ),
+    case(
+        "before-fix-growth",
+        "history",
+        "Without the growth detector, unknown records stay green",
+        faults=("none", "growth"),
+        mut="no_growth",
+        n=7,
+        inv=("IngestFailureLeavesGreen",),
+        expect="IngestFailureLeavesGreen",
+    ),
     *[
         case(
             f"real-{s}",

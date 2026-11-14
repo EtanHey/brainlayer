@@ -204,6 +204,7 @@ def watcher_stall_codes(payload: Mapping[str, Any]) -> Any:
     ):
         return UNOBSERVED
     codes = [r for r in WATCHER_STALL_REASONS if r in reasons]
+    codes += sorted({r for r in reasons if r.startswith("growth_not_indexed:")})
     if probe and probe_for >= WATCHER_DB_PROBE_GRACE_S:
         codes.append("db_probe_failed")
     return tuple(codes + [f"root_missing:{r}" for r in roots])

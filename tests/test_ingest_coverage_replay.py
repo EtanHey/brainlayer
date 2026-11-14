@@ -50,7 +50,7 @@ OPEN = ("drift", "rewrite_lossy")  # no watcher signal sees these (README "Open 
 def test_every_alert_or_heartbeat_shape_leaves_green_within_two_ticks_and_stays_until_progress():
     """IngestFailureLeavesGreen on the traces the real code matched: stall > 2 ticks => amber or red."""
     for shape in replay.SHAPES:
-        if shape in OPEN:
+        if shape in (*OPEN, "growth"):
             continue
         ticks = replay.load_trace(shape)["ticks"]
         assert all(t["v"] in ("amber", "red") for t in ticks if t["stall"] > 2), shape
@@ -112,3 +112,8 @@ def test_a_replay_run_leaves_no_file_descriptor_open(tmp_path):
     for i in range(3):  # coverage opens both flush callbacks (the probed DB and "elsewhere")
         replay.run_real("gemini", replay.load_trace("coverage"), tmp_path / f"w{i}")
     assert open_fds() <= before
+
+
+def test_high_volume_drift_leaves_green_after_the_growth_window():
+    ticks = replay.load_trace("growth")["ticks"]
+    assert all(t["v"] in ("amber", "red") for t in ticks if t["stall"] > 7)

@@ -498,6 +498,23 @@ def _agy_step_text(entry: dict[str, Any], role: str) -> str:
     return stripped
 
 
+_GROWTH_PROVIDERS = frozenset({"claude", "codex", "cursor", "cursor-agent-transcripts", "gemini"})
+
+
+def recognised_provider_entry(entry: dict, provider: str) -> bool:
+    """Recognise the wire format before noise, text extraction or chunk filters."""
+    if normalize_provider_entry(entry, provider) is not None:
+        return True
+    known = {
+        "claude": {"user", "assistant", "system", "progress", "summary", "file-history-snapshot", "queue-operation"},
+        "codex": {"session_meta", "turn_context", "event_msg", "response_item"},
+        "cursor": {"user", "assistant", "tool"},
+        "cursor-agent-transcripts": {"user", "assistant", "tool"},
+        "gemini": {"USER_INPUT", "PLANNER_RESPONSE", "GENERIC", "ERROR_MESSAGE"},
+    }
+    return entry.get("type") in known.get(provider, set())
+
+
 def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, Any] | None:
     if not isinstance(entry, dict):
         return None
@@ -1351,6 +1368,7 @@ class JSONLTailer:
 
             if not line_data.strip():
                 consumed_bytes = nl_idx + 1
+                self.lines_read_total = getattr(self, "lines_read_total", 0) + 1
                 continue
 
             if self.max_record_bytes is not None and len(line_data) > self.max_record_bytes:
@@ -1367,6 +1385,7 @@ class JSONLTailer:
                 from .t3_provenance import compact_codex_header
 
                 self.first_record = compact_codex_header(parsed, nl_idx + 1)
+            self.lines_read_total = getattr(self, "lines_read_total", 0) + 1
             line_end_offset = starting_offset + nl_idx + 1
             consumed_bytes = nl_idx + 1
             if isinstance(parsed, dict):
@@ -1708,6 +1727,30 @@ class JSONLWatcher:
         self._stop = threading.Event()
         self._last_registry_flush = time.monotonic()
         self.health_path = Path(health_path).expanduser() if health_path else None
+        self._growth = {}
+        if self.health_path and self.health_path.exists():
+            try:
+                prior = json.loads(self.health_path.read_text()).get("source_growth", {})
+                for provider in {r.provider for r in self.watch_roots} & _GROWTH_PROVIDERS:
+                    state = prior.get(provider)
+                    if (
+                        isinstance(state, dict)
+                        and isinstance(state.get("since"), (int, float))
+                        and isinstance(state.get("alerting"), bool)
+                        and isinstance(state.get("samples"), list)
+                        and all(
+                            isinstance(s, list)
+                            and len(s) == 2
+                            and isinstance(s[0], (int, float))
+                            and type(s[1]) is int
+                            and s[1] >= 0
+                            for s in state["samples"]
+                        )
+                    ):
+                        self._growth[provider] = state
+            except (OSError, ValueError, AttributeError):
+                logger.warning("Could not restore source growth window", exc_info=True)
+        self._growth_poll = {}
         self.db_path = Path(db_path).expanduser() if db_path else None
         self.coverage_watchdog = coverage_watchdog or CoverageWatchdog()
         self._health_window_started = time.monotonic()
@@ -2320,6 +2363,30 @@ class JSONLWatcher:
                 missing.append(root.provider)
         return sorted(missing)
 
+    def _growth_snapshot(self) -> list[str]:
+        # Keep 31 minutes of samples to include a boundary poll at the 30-minute age.
+        # Wall time survives restarts; no source lines while asleep/idle can meet the count.
+        now = time.time()
+        reasons = []
+        for provider in {r.provider for r in self.watch_roots} & _GROWTH_PROVIDERS:
+            lines, recognised = self._growth_poll.get(provider, (0, 0))
+            state = self._growth.setdefault(provider, {"since": now, "samples": [], "alerting": False})
+            state["samples"] = [s for s in state["samples"] if now - 1860 <= s[0] <= now]
+            if recognised:
+                state.update(since=now, samples=[], alerting=False)
+            else:
+                if lines:
+                    if not state["samples"] and not state["alerting"]:
+                        state["since"] = now
+                    state["samples"].append([now, lines])
+                if now - state["since"] >= 1800 and sum(s[1] for s in state["samples"]) >= 200:
+                    state["alerting"] = True
+            state["lines_read"] = lines
+            state["recognised_lines"] = recognised
+            if state["alerting"]:
+                reasons.append(f"growth_not_indexed:{provider}")
+        return sorted(reasons)
+
     def _write_health_snapshot(self, files: list[str]):
         if not self.health_path:
             return
@@ -2357,14 +2424,15 @@ class JSONLWatcher:
         ]
         failure_payloads = all_failure_payloads[:_MAX_HEALTH_FAILURE_DETAILS]
         failure_overflow_count = len(all_failure_payloads) - len(failure_payloads)
-        alert_reasons = list(watchdog.get("alert_reasons", []))
+        alert_reasons = list(watchdog.get("alert_reasons", [])) + self._growth_snapshot()
         if all_failure_payloads and "file_ingestion_failure" not in alert_reasons:
             alert_reasons.append("file_ingestion_failure")
         if self._quarantined_record_count_total and "quarantined_record" not in alert_reasons:
             alert_reasons.append("quarantined_record")
         watchdog = {
             **watchdog,
-            "alerting": bool(watchdog.get("alerting"))
+            "alerting": bool(alert_reasons)
+            or bool(watchdog.get("alerting"))
             or bool(all_failure_payloads)
             or bool(self._quarantined_record_count_total),
             "alert_reasons": alert_reasons,
@@ -2379,6 +2447,7 @@ class JSONLWatcher:
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "poll_count": self.poll_count,
             "providers": sorted({root.provider for root in self.watch_roots}),
+            "source_growth": self._growth,
             "files_tracked": len(files),
             "active_jsonl_entries_per_minute": active_entries_per_min,
             "normalized_jsonl_entries_per_minute": normalized_entries_per_min,
@@ -2623,6 +2692,7 @@ class JSONLWatcher:
         """Run one poll cycle. Returns number of new lines found."""
         total_new = 0
         files: list[str] = []
+        self._growth_poll = {}
         self.poll_count += 1
         self.last_poll_made_progress = False
 
@@ -2744,6 +2814,7 @@ class JSONLWatcher:
                             )
                             tailer.rewound = False
 
+                    lines_before = getattr(tailer, "lines_read_total", 0) if tailer else 0
                     if drain_buffer:
                         read_start_offset = tailer.offset
                         tailer_snapshot = tailer.snapshot()
@@ -2752,6 +2823,7 @@ class JSONLWatcher:
                         new_lines = tailer.read_buffered_lines(max_lines=self.max_lines_per_file)
                     else:
                         tailer = self._ensure_tailer(filepath)
+                        lines_before = getattr(tailer, "lines_read_total", 0)
                         read_start_offset = tailer.offset
                         tailer_snapshot = tailer.snapshot()
                         source_inode = tailer.observed_inode
@@ -2797,6 +2869,12 @@ class JSONLWatcher:
                             filepath, tailer, new_lines, read_start_offset, source_inode
                         )
                     normalized_lines = self._normalize_lines(filepath, new_lines) if new_lines else []
+                    provider = self.provider_for_file(filepath)
+                    read, recognised = self._growth_poll.get(provider, (0, 0))
+                    self._growth_poll[provider] = (
+                        read + getattr(tailer, "lines_read_total", 0) - lines_before,
+                        recognised + sum(recognised_provider_entry(line, provider) for line in new_lines),
+                    )
                     reconcile_through = getattr(tailer, "_archive_reconcile_through", 0)
                     if normalized_lines:
                         for line in normalized_lines:
