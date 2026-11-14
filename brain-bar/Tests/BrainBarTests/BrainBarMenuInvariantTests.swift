@@ -381,6 +381,37 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         }
     }
 
+    func testRunningUploadWithoutStartWordsKeepsWholeTextOnBothKeys() {
+        Self.wordless { zone in
+            let keys = ["HH:mm", "MMM d 'at' HH:mm"].map { "oracle|" + $0 + "|" + zone.identifier }
+            let saved = keys.map { Thread.current.threadDictionary[$0] }
+            for key in keys { Thread.current.threadDictionary[key] = Wordless() }
+            defer { for (key, value) in zip(keys, saved) { Thread.current.threadDictionary[key] = value } }
+            for date in [Date.distantPast, Date(timeIntervalSinceReferenceDate: .nan)] {
+                var c = Self.capture(["backup_offsite": .amber, "search": .amber], base: 1, dot: .green, checking: false,
+                                     wake: false, freshness: .fresh0, measured: true)
+                c.timeZone = zone
+                c.upload = .init(startedAt: date, live: true)
+                // Date ordering for NaN differs by Foundation; a wordless accepted start still means running.
+                let eligible = date <= c.now && date >= .distantPast && date <= .distantFuture
+                let expected: [[String]] = eligible
+                    ? [["Backing up now"], ["To Google Drive."], [], ["Can’t confirm agents can search right now."],
+                       ["Saving and upkeep are fine."], [], ["Settings…"], ["Quit BrainBar"]]
+                    : [["1 thing needs you"], [], ["Something BrainBar checks needs attention.", "BrainBar can’t fix this itself.",
+                        "Give the report to an agent."], ["Can’t confirm agents can search right now."], [], ["Settings…"], ["Quit BrainBar"]]
+                let p = BrainBarMenuPresenter.present(c), f = Facts(c: c, p: p)
+                XCTAssertEqual(p.rows.map(\.strings), expected)
+                for text in p.rows.flatMap(\.strings).flatMap(Self.sentences) {
+                    guard let (entry, values) = BrainBarMenuPresenter.entry(for: text, c) else { return XCTFail(text) }
+                    if entry.kind != .neutral {
+                        XCTAssertEqual(entry.holds?(c, p, values), true, text)
+                        XCTAssertEqual(Self.oracle[entry.id]?(f, values), true, text)
+                    }
+                }
+            }
+        }
+    }
+
     /// Registry entries no enumerated capture or case shows, each with its reason.
     static let unreached: Set<String> = [
         "action.storage",  // the Open Storage Settings action exists for P3's disk rows; no row takes it yet
@@ -1016,12 +1047,14 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         /// one, a live upload process is. Its start, never after now.
         var running: Date? { start }
         static func running(_ c: Capture) -> Date? {
+            // Process/cadence evidence and Date ordering decide running; finite/day/word checks only gate time words.
+            func accepted(_ d: Date) -> Bool { d >= .distantPast && d <= .distantFuture }
             if let r = c.offsiteRecovering {
                 let quiet = c.now.timeIntervalSince(r.updatedAt)
-                return r.cadenceS > 0 && r.cadenceS.isFinite && quiet >= 0 && quiet <= 2 * r.cadenceS && (r.eta.map { c.now <= $0 && nameable($0) } ?? true)
-                    && r.progress.map { (0...1).contains($0) } != false && r.startedAt <= c.now && nameable(r.startedAt) ? r.startedAt : nil
+                return r.cadenceS > 0 && r.cadenceS.isFinite && quiet >= 0 && quiet <= 2 * r.cadenceS && (r.eta.map { c.now <= $0 && accepted($0) } ?? true)
+                    && r.progress.map { (0...1).contains($0) } != false && r.startedAt <= c.now && accepted(r.startedAt) ? r.startedAt : nil
             }
-            return c.upload.flatMap { $0.live && $0.startedAt <= c.now && nameable($0.startedAt) ? $0.startedAt : nil }
+            return c.upload.flatMap { $0.live && $0.startedAt <= c.now && accepted($0.startedAt) ? $0.startedAt : nil }
         }
         var progress: String? { running == nil ? nil : c.offsiteRecovering?.progress.flatMap { (0...1).contains($0) ? String(Int(($0 * 100).rounded())) : nil } }
         func clock(_ date: Date, _ format: String = "HH:mm") -> String { Self.clock(date, c, format) }
