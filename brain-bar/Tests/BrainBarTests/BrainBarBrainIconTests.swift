@@ -6,7 +6,8 @@ import XCTest
 @MainActor final class BrainBarBrainIconTests: XCTestCase {
     private final class Button: NSButton {
         var assignedImages: [NSImage] = []
-        override var image: NSImage? { didSet { if let image { assignedImages.append(image) } } }
+        var didAssignImage: (() -> Void)?
+        override var image: NSImage? { didSet { if let image { assignedImages.append(image) }; didAssignImage?() } }
     }
     private final class Item: BrainBarStatusItem {
         let length: CGFloat = NSStatusItem.variableLength
@@ -198,6 +199,41 @@ import XCTest
         d.set(false, forKey: BrainBarNewMenuPreference.key)
         controller.renderStatusIconForTesting(stats: stats(), state: .idle)
         XCTAssertEqual(host.item.view.toolTip, controller.statusVerdictForTesting.tooltip)
+    }
+
+    func testStatusPublishMarksIconBeforeAnyCollectorSample() async throws {
+        let d = defaults(), host = Host(), runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let now: Date = BrainBarStatusSnapshotTests.now
+        let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(),
+            store: .init(loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) }),
+            refreshStatusOnLoad: false, now: { now },
+            initialObservabilityResult: BrainBarDashboardFixture.healthyObservabilityResult,
+            awakeClock: { 100.0 }, sleepHistory: BrainBarSleepHistory(uptime: { 100.0 }),
+            statusDeadlineScheduler: { _, _ in })
+        runtime.jobsModel = model
+        d.set(true, forKey: BrainBarNewMenuPreference.key)
+        let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
+            dashboardPanelController: nil, statusBar: host, menuDefaults: d)
+        defer { host.item.view.didAssignImage = nil; controller.stop() }
+        XCTAssertNil(runtime.collector)
+        XCTAssertTrue(try XCTUnwrap(host.item.view.image).isTemplate)
+        let changed: XCTestExpectation = expectation(description: "Published red status marks the icon without collector stats")
+        host.item.view.didAssignImage = { [weak button = host.item.view] in
+            if button?.image?.isTemplate == false { changed.fulfill() }
+        }
+        let verdict = BrainBarHealthVerdict(dot: .red,
+            checks: [.init(name: "stores", state: .red, note: "fixture failure")], notes: [], evaluatedAt: now)
+        model.applyHealthBadge(.init(badgeOn: true, reason: "fixture failure", activeCodes: [], healthVerdict: verdict), alerts: nil)
+        let presentation: BrainBarMenuPresentation = BrainBarMenuPresenter.present(model.menuCapture(stats: nil))
+        XCTAssertEqual(presentation.icon, .marked)
+        await fulfillment(of: [changed], timeout: 3)
+        XCTAssertNil(runtime.collector)
+        let image: NSImage = try XCTUnwrap(host.item.view.image)
+        XCTAssertFalse(image.isTemplate)
+        XCTAssertEqual(host.item.view.accessibilityLabel(), "BrainBar — " + presentation.headline)
+        XCTAssertEqual(host.item.view.toolTip, presentation.headline)
+        let red: NSColor = try XCTUnwrap(try bitmap(image).colorAt(x: 8, y: 22)?.usingColorSpace(.sRGB))
+        XCTAssertTrue(isAlertRed(red))
     }
 
     func testRedToleranceRejectsDifferentRed() {

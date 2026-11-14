@@ -318,6 +318,12 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         if let stats = latestStats, let state = latestState {
             renderStatusIcon(stats: stats, state: state)
         } else {
+#if BRAINBAR_UI
+            if BrainBarNewMenuPreference.isEnabled(in: menuDefaults) {
+                renderBrainIcon(BrainBarMenuPresenter.present(menuCapture(stats: latestStats)))
+                return
+            }
+#endif
             updateTooltip()
         }
     }
