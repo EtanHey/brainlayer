@@ -12,7 +12,7 @@
     },
     {
       "path": "src/brainlayer/watcher.py",
-      "sha256": "4ee76b6dfb682964f070640f332099d7aab209be6f98b795cff8275b10f6bc2e"
+      "sha256": "ba3e9266ad9cb488c5f8c235359b2763847af85acfc5fcc5d719baf487b5dd6b"
     },
     {
       "path": "src/brainlayer/badge_state.py",
@@ -41,7 +41,7 @@
     "Tick.seen / codesSeen / alertNow": "health_facts.py:212 watcher_health_fact (missing = (None, (), None), malformed raises); :180 watcher_stall_codes returns UNOBSERVED when any stall field is absent, malformed or inconsistent (fault partial); :451 _run_bounded turns a raise or timeout into UNOBSERVED; :566 and :658 the ingest inputs",
     "Census amber floor (not modelled; only adds non-green)": "health_verdict.py:509-533 (after _ingest_stall) per-agent merge: measured agents replace their entry, unmeasured ones (census_incomplete) keep it; a non-empty result floors ingest at amber; health_check.py census after the ps snapshot; agent_census.py",
     "Tick.alertWritten (growth)": "watcher.py: recognised_provider_entry, JSONLTailer.read_buffered_lines lines_read_total, JSONLWatcher.poll_once _growth_poll, _growth_snapshot, _write_health_snapshot source_growth; health_facts.py:watcher_stall_codes forwards growth_not_indexed:<provider>. At least 30 minutes and 200 lines in the last 31 minutes without recognition; first recognised poll clears. Persisted health snapshot restores sample window and latch across restarts. Growth shape assumes 40 unknown lines per tick; drift remains the below-threshold shape. The model explicitly shifts seven 300-second volume samples on awake and sleep ticks, keeps a growth alarm through idle, and clears only on recognition. Replay includes growth-idle, growth-sleep-reset, growth-sparse.",
-    "growth classification and exclusions": "watcher.py:growth_entry_class and _growth_content_shape validate content shapes before filters, neutral metadata never recognises; JSONLWatcher.poll_once excludes first-ingest backlog until initial byte frontier (persisted growth_backfill); _growth_snapshot expires latch after six idle hours; finite timestamp restoration. Six-hour expiry is outside this bounded formal model; real-code unit tested. growth-changed-body trace keeps known types and breaks body shape for all providers."
+    "growth classification and exclusions": "watcher.py:growth_entry_class and _growth_content_shape validate content shapes before filters, neutral metadata never recognises; JSONLWatcher.poll_once excludes first-ingest backlog until initial byte frontier (persisted growth_backfill); _growth_snapshot expires latch after six idle hours; finite timestamp restoration. Six-hour expiry is outside this bounded formal model; real-code unit tested. growth-changed-body trace keeps known types and breaks body shape for all providers. _growth_frontier preserves a logical byte frontier across verified same-generation plain/archive representation changes; archive-only unknown decoded frontiers remain excluded until first decode completes."
   },
   "bounds": {
     "exhaustive cases": "AmberT 2 < RedT 4 < WakeGrace 5 ticks, SleepGap 3, UnknownAmber 3, Recovery 2, Cap 8 (ordering-preserving, not production)",

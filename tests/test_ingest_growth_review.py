@@ -200,3 +200,31 @@ def test_compressed_history_uses_decoded_backfill_boundary(tmp_path, monkeypatch
         state = json.loads(w.health_path.read_text())
         assert state["source_growth"]["codex"]["lines_read"] == 0
         assert not any(r.startswith("growth_not_indexed:") for r in state["alert_reasons"])
+
+
+@pytest.mark.parametrize("new_lines", (False, True))
+def test_backfill_survives_plain_to_archive_representation_change(tmp_path, monkeypatch, compress, new_lines):
+    from tests.test_codex_zst_watcher import watcher
+    from tests.test_codex_zstd_stream import rollout
+
+    clock = _Clock(wm.time)
+    monkeypatch.setattr(wm, "time", clock)
+    history = rollout() + (json.dumps(CHANGED["codex"]) + "\n").encode() * 1000
+    plain = tmp_path / "history.jsonl"
+    plain.write_bytes(history)
+    w, _ = watcher(tmp_path, monkeypatch, max_lines=100)
+    w.health_path = tmp_path / "health.json"
+    w.poll_once()
+    extra = (json.dumps(CHANGED["codex"]) + "\n").encode() * 200 if new_lines else b""
+    compress("history.jsonl.zst", history + extra)
+    plain.unlink()
+    w.max_lines_per_file = 2000
+    w.poll_once()
+    assert json.loads(w.health_path.read_text())["source_growth"]["codex"]["lines_read"] == (200 if new_lines else 0)
+    clock.wall_shift += 1800
+    clock.mono += 1800
+    w.poll_once()
+    assert (
+        any(r.startswith("growth_not_indexed:") for r in json.loads(w.health_path.read_text())["alert_reasons"])
+        == new_lines
+    )

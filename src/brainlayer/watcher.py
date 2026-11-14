@@ -1813,6 +1813,7 @@ class JSONLWatcher:
                         for k, v in backfill.items()
                         if isinstance(k, str)
                         and isinstance(v, dict)
+                        and ("compressed" not in v or isinstance(v["compressed"], bool))
                         and all(
                             type(v.get(field)) is int and v[field] >= 0 for field in ("frontier", "inode", "generation")
                         )
@@ -2455,15 +2456,17 @@ class JSONLWatcher:
     def _growth_frontier(self, filepath: str, inode: int, generation: int) -> int:
         marker = self._growth_backfill.get(filepath)
         current = self._current_file_stats.get(filepath)
-        if (
-            marker
-            and (marker["inode"], marker["generation"]) == (inode, generation)
-            and (current is None or current[1] >= marker["frontier"])
-        ):
-            # Archives have decoded offsets but physical stat sizes; all first-decode bytes are backfill.
-            if self._physical_files.get(filepath, filepath).endswith(".zst"):
-                return (1 << 63) - 1
-            return marker["frontier"]
+        compressed = self._physical_files.get(filepath, filepath).endswith(".zst")
+        if marker and marker["generation"] == generation:
+            prior_compressed = marker.get("compressed", compressed)
+            representation_changed = prior_compressed != compressed
+            same_source = marker["inode"] == inode and (current is None or current[1] >= marker["frontier"])
+            if representation_changed and prior_compressed and current is not None:
+                # The decoded archive frontier was unknown. Freeze the equivalent plain snapshot.
+                marker.update(frontier=current[1], inode=inode, compressed=False)
+                prior_compressed = False
+            if representation_changed or same_source:
+                return (1 << 63) - 1 if prior_compressed else marker["frontier"]
         self._growth_backfill.pop(filepath, None)
         return 0
 
@@ -2942,6 +2945,7 @@ class JSONLWatcher:
                             filepath,
                             {
                                 "frontier": self._current_file_stats.get(filepath, (0, 0, 0))[1],
+                                "compressed": compressed,
                                 "inode": source_inode,
                                 "generation": source_generation,
                             },
