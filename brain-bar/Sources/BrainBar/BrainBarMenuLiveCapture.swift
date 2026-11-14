@@ -39,19 +39,15 @@ enum BrainBarMenuLiveCapture {
                 fresh: watcherAwakeAgeS.map { (0.0...WatcherHealthStatus.staleHeartbeatSeconds).contains($0) } ?? false,
                 alertReasons: file.alertReasons, dbProbeFailed: file.dbProbeFailed)
         }
-        c.backupDailyFailures = observations?[.backupDaily]?.calendarConsecutiveFailures ?? 0
+        c.backupDailyFailures = observations?[.backupDaily]?.calendarConsecutiveFailures
         c.backupDailyNextRunAt = observations?[.backupDaily]?.nextRunAt
-        c.jsonlBackupFailures = observations?[.jsonlBackup]?.calendarConsecutiveFailures ?? 0
-        let nightFailures: Int? = maintenanceNightStreakKnown
-            ? [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly]
-                .compactMap { observations?[$0]?.calendarNightOutcome }.first?.consecutiveFailures : nil
-        c.maintenanceNightFailures = upkeepFailuresUntilP2f(nightFailures)
+        c.jsonlBackupFailures = observations?[.jsonlBackup]?.calendarConsecutiveFailures
+        let night = [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly]
+            .compactMap { observations?[$0]?.calendarNightOutcome }.first
+        c.maintenanceNightFailures = maintenanceNightStreakKnown && night?.streakComplete == true
+            ? night?.consecutiveFailures : nil
         c.keywordCoverage = stats.flatMap { $0.signalCoverageIsAvailable ? $0.ftsCoveragePercent / 100.0 : nil }
         // Not carried yet: lastKnownBackupAt, offsiteRecovering, lagEpisodeStart.
         return c
     }
-
-    // TODO(P2f): B2 — Capture cannot represent unknown upkeep; replace this bridge with the optional slot.
-    // Caller marks unknown before sampling, on history errors/damaged nights, or incomplete/truncated streaks.
-    private static func upkeepFailuresUntilP2f(_ measured: Int?) -> Int { measured ?? 0 }
 }

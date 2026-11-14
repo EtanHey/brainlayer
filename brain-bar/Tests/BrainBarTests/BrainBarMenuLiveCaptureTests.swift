@@ -28,11 +28,11 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         "offsiteRecovering.updatedAt": "not carried by the app yet",
         "offsiteRecovering.cadenceS": "not carried by the app yet",
         "lagEpisodeStart": "not carried by the app yet",
-        "maintenanceNightFailures": "mapped from caller-known nightly/weekly streak; B2 unknown maps to 0 only until P2f",
+        "maintenanceNightFailures": "mapped from caller-known complete nightly/weekly streak; unknown -> nil",
         "driveAuthModel": "mapped from DriveAuthModel.status.state (wording only)",
-        "backupDailyFailures": "mapped from observations.backupDaily.calendarConsecutiveFailures; nil -> 0",
+        "backupDailyFailures": "mapped from observations.backupDaily.calendarConsecutiveFailures; unknown remains nil",
         "backupDailyNextRunAt": "mapped from observations.backupDaily.nextRunAt",
-        "jsonlBackupFailures": "mapped from observations.jsonlBackup.calendarConsecutiveFailures; nil -> 0",
+        "jsonlBackupFailures": "mapped from observations.jsonlBackup.calendarConsecutiveFailures; unknown remains nil",
         "keywordCoverage": "mapped from collector.stats.ftsCoveragePercent / 100 when signalCoverageIsAvailable",
     ]
 
@@ -76,7 +76,8 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
 
     /// Build the same value types used by StatusSnapshotTests; no models that poll, run commands or show UI.
     static func adapt(_ source: C, status: BrainBarStatusSnapshot? = nil, awake: TimeInterval? = 0.0,
-                      watcherAge: TimeInterval? = 0.0, backupsNotice: String? = nil, upkeepKnown: Bool = true, uploadStart: Date? = nil, uploadLive: Bool? = nil) -> C {
+                      watcherAge: TimeInterval? = 0.0, backupsNotice: String? = nil, upkeepKnown: Bool = true, uploadStart: Date? = nil, uploadLive: Bool? = nil,
+                      editObservations: ([BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]) -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]? = { $0 }) -> C {
         var backups = BrainBarStatusSnapshotTests.backups()
         if let upload = source.upload {
             backups.localSnapshot = .init(lastAt: nil, destination: nil, localVerified: true, uploaded: false,
@@ -84,11 +85,15 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
                 uploadProcessStartedAt: uploadStart ?? upload.startedAt, localIntegrity: nil, localIntegrityPragma: nil)
         }
         var observations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] = [
-            .backupDaily: BrainBarStatusSnapshotTests.step(next: source.backupDailyNextRunAt, consecutiveFailures: source.backupDailyFailures),
-            .jsonlBackup: BrainBarStatusSnapshotTests.step(consecutiveFailures: source.jsonlBackupFailures),
-            .maintenanceNightly: BrainBarStatusSnapshotTests.failed(.maintenanceNightly, code: 1, consecutive: source.maintenanceNightFailures),
+            .backupDaily: BrainBarStatusSnapshotTests.step(next: source.backupDailyNextRunAt),
+            .jsonlBackup: BrainBarStatusSnapshotTests.step(), .maintenanceNightly: BrainBarStatusSnapshotTests.step(),
         ]
-        if source.maintenanceNightFailures == 0 { observations.removeValue(forKey: .maintenanceNightly) }
+        observations[.backupDaily]?.calendarConsecutiveFailures = source.backupDailyFailures
+        observations[.jsonlBackup]?.calendarConsecutiveFailures = source.jsonlBackupFailures
+        if let count = source.maintenanceNightFailures {
+            observations[.maintenanceNightly]?.calendarNightOutcome = .init(scheduledDate: "fixture", at: source.now,
+                failed: count > 0, abandoned: false, consecutiveFailures: count)
+        }
         let file = source.watcher.map { w -> WatcherHealthFileRead in
             if !w.readable { return .unreadable(path: "fixture", reason: "fixture") }
             return .readable(.init(updatedAt: source.now, pollCount: 1, alertReasons: w.alertReasons, dbProbeFailed: w.dbProbeFailed))
@@ -103,7 +108,7 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
             verdictAwakeAgeS: awake, wakeCatchUpPending: source.wakeCatchUpPending,
             driveAuth: source.driveAuthModel.map { .init(state: $0, reason: nil, expiresAt: nil) },
             backups: source.backupsMeasured ? .measured(backups) : .unavailable("fixture"), backupsNotice: backupsNotice,
-            watcher: file, watcherAwakeAgeS: watcherAge, observations: observations, maintenanceNightStreakKnown: upkeepKnown,
+            watcher: file, watcherAwakeAgeS: watcherAge, observations: editObservations(observations), maintenanceNightStreakKnown: upkeepKnown,
             stats: .init(chunkCount: 100, enrichedChunkCount: 0, pendingEnrichmentCount: 0,
                 enrichmentPercent: 0.0, enrichmentRatePerMinute: 0.0, databaseSizeBytes: 0,
                 recentActivityBuckets: [], recentEnrichmentBuckets: [], ftsEligibleChunkCount: 100,
@@ -164,8 +169,8 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         XCTAssertFalse(empty.backupsMeasured); XCTAssertNil(empty.watcher); XCTAssertNil(empty.upload)
         XCTAssertNil(empty.driveAuthModel); XCTAssertNil(empty.backupDailyNextRunAt)
         XCTAssertEqual(empty.verdictAwakeAgeS, .infinity)
-        XCTAssertEqual(empty.backupDailyFailures, 0); XCTAssertEqual(empty.jsonlBackupFailures, 0)
-        XCTAssertEqual(empty.maintenanceNightFailures, 0)
+        XCTAssertNil(empty.backupDailyFailures); XCTAssertNil(empty.jsonlBackupFailures)
+        XCTAssertNil(empty.maintenanceNightFailures)
     }
 
     func testAnUploadNeedsItsOwnMeasuredProcessFields() {
@@ -236,17 +241,49 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         }
     }
 
-    func testUnknownUpkeepIsNotProvenUntilP2f() throws {
+    func testUnknownUpkeepIsNotProvenFine() throws {
         let row = try BrainBarMenuPresentationTests.loadCases().first { $0["id"] as? String == "S1" }!
         var source = try BrainBarMenuCases.capture(row["inputs"] as! [String: Any])
         source.maintenanceNightFailures = 3 // An untrusted prior value must not be treated as a known streak.
         let c = Self.adapt(source, upkeepKnown: false)
-        XCTAssertEqual(c.maintenanceNightFailures, 0) // Today's known-wrong bridge, not a measured zero.
-        XCTAssertEqual(BrainBarMenuPresenter.present(c), BrainBarMenuPresentationTests.expected(row))
-        XCTExpectFailure("B2: Capture has no unknown upkeep streak until P2f") {
-            XCTAssertEqual(BrainBarMenuPresenter.present(c), Self.checking("Still checking upkeep",
-                fine: "Saving, search and backups are fine."))
+        XCTAssertNil(c.maintenanceNightFailures)
+        XCTAssertEqual(BrainBarMenuPresenter.present(c), Self.checking("Still checking upkeep",
+            fine: "Saving, search and backups are fine."))
+    }
+
+    func testAllThreeStreaksStayUnknownAcrossUnavailableHistory() throws {
+        let row = try BrainBarMenuPresentationTests.loadCases().first { $0["id"] as? String == "S1" }!
+        let source = try BrainBarMenuCases.capture(row["inputs"] as! [String: Any])
+        let jobs: [BrainLayerLaunchdJob] = [.backupDaily, .jsonlBackup, .maintenanceNightly]
+        for job in jobs {
+            for reason in ["read error", "damaged latest record", "history over limit", "missing observation"] {
+                let c = Self.adapt(source, editObservations: { original in
+                    var observations = original
+                    switch reason {
+                    case "read error": observations[job] = .stateOnly(.probeError("History unreadable"))
+                    case "missing observation": observations.removeValue(forKey: job)
+                    case "history over limit":
+                        observations[job]?.calendarConsecutiveFailures = nil
+                        observations[job]?.calendarNightOutcome?.streakComplete = false
+                    default:
+                        observations[job]?.calendarConsecutiveFailures = nil
+                        observations[job]?.calendarNightOutcome = nil
+                    }
+                    return observations
+                })
+                XCTAssertNil(job == .backupDaily ? c.backupDailyFailures
+                    : job == .jsonlBackup ? c.jsonlBackupFailures : c.maintenanceNightFailures, "\(job) \(reason)")
+                XCTAssertEqual(BrainBarMenuPresenter.present(c), Self.checking(
+                    job == .maintenanceNightly ? "Still checking upkeep" : "Can’t confirm backups yet",
+                    fine: job == .maintenanceNightly ? "Saving, search and backups are fine." : "Saving, search and upkeep are fine."), "\(job) \(reason)")
+            }
         }
+        let firstSample = Self.adapt(source, upkeepKnown: false, editObservations: { _ in nil })
+        XCTAssertNil(firstSample.backupDailyFailures); XCTAssertNil(firstSample.jsonlBackupFailures)
+        XCTAssertNil(firstSample.maintenanceNightFailures)
+        var expected = Self.checking("Can’t confirm backups yet", fine: "Saving and search are fine.")
+        expected.rows.insert(.init(kind: .statusLine, strings: ["Checking…"], mark: .wait, state: .cantTell), at: 3)
+        XCTAssertEqual(BrainBarMenuPresenter.present(firstSample), expected)
     }
 
     func testSleepStaleMissingAndUnavailableClocks() throws {
