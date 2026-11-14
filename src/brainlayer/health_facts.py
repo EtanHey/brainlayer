@@ -497,6 +497,11 @@ def classify_issues(result: HealthCheckResult) -> tuple[tuple[str, ...], tuple[N
             context.setdefault(check, []).append(issue.message[:200])
         else:
             notes.append(Note(issue.code, issue.message))
+    from .health_check import HYBRID_SEARCH_BUDGET_SECONDS
+
+    if result.canary_ok and result.canary_latency_seconds is not None:
+        if result.canary_latency_seconds > HYBRID_SEARCH_BUDGET_SECONDS / 2:
+            context.setdefault("search", []).append(f"search canary took {result.canary_latency_seconds:.1f}s")
     return tuple(blind), tuple(notes), {name: "; ".join(dict.fromkeys(msgs)) for name, msgs in context.items()}
 
 
