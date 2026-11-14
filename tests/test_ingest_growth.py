@@ -144,3 +144,62 @@ def test_expired_samples_start_a_fresh_observation_window(tmp_path, monkeypatch)
     clock.wall_shift += 1800
     w.poll_once()
     assert json.loads(health.read_text())["alert_reasons"] == ["growth_not_indexed:codex"]
+
+
+ROLE_NOISE = {
+    "claude": {"message": {"role": "assistant", "content": [{"type": "tool_use", "name": "read"}]}},
+    "codex": {"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": []}},
+    "cursor": {"role": "assistant", "content": [{"type": "tool_use", "name": "read"}]},
+    "cursor-agent-transcripts": {"speaker": "assistant", "content": []},
+    "gemini": {"author": {"role": "model"}, "content": []},
+}
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("field", ("role", "sender", "speaker", "author", "message"))
+def test_role_only_recognition_precedes_text_extraction(provider, field):
+    role = "model" if provider == "gemini" else "assistant"
+    record = {field: {"role": role} if field in ("author", "message") else role, "content": []}
+    assert wm.recognised_provider_entry(record, provider)
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_role_only_tool_noise_never_alarms_on_the_real_poll_path(tmp_path, monkeypatch, provider):
+    clock = _Clock(wm.time)
+    monkeypatch.setattr(wm, "time", clock)
+    root = tmp_path / "sessions"
+    source = root / "-proj" / "s.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_text((json.dumps(ROLE_NOISE[provider]) + "\n") * 200)
+    health = tmp_path / "health.json"
+    w = JSONLWatcher(
+        watch_roots=[WatchRoot(provider, root)],
+        registry_path=tmp_path / "offsets.json",
+        health_path=health,
+        max_lines_per_file=1000,
+    )
+    w.poll_once()
+    assert json.loads(health.read_text())["source_growth"][provider]["recognised_lines"] == 200
+    clock.wall_shift += 1800
+    w.poll_once()
+    assert not any(r.startswith("growth_not_indexed:") for r in json.loads(health.read_text())["alert_reasons"])
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("entry_type", ("user", "assistant"))
+def test_typed_empty_messages_keep_the_normalisers_early_branch(provider, entry_type):
+    record = {"type": entry_type, "message": {}}
+    assert wm.normalize_provider_entry(record, provider) is not None
+    assert wm.recognised_provider_entry(record, provider)
+
+
+@pytest.mark.parametrize("role", ("user", "assistant", "model", "gemini", "ai", "bot"))
+def test_all_normaliser_role_aliases_are_recognised_without_text(role):
+    assert wm.recognised_provider_entry({"role": role.upper(), "content": []}, "gemini")
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_empty_payload_falls_back_to_the_top_level_role(provider):
+    record = {"role": "assistant", "content": "tool output", "payload": {}}
+    assert wm.normalize_provider_entry(record, provider) is not None
+    assert wm.recognised_provider_entry(record, provider)

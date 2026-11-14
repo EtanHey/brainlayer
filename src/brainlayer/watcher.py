@@ -503,7 +503,18 @@ _GROWTH_PROVIDERS = frozenset({"claude", "codex", "cursor", "cursor-agent-transc
 
 def recognised_provider_entry(entry: dict, provider: str) -> bool:
     """Recognise the wire format before noise, text extraction or chunk filters."""
-    if normalize_provider_entry(entry, provider) is not None:
+    if entry.get("type") in {"user", "assistant"} and isinstance(entry.get("message"), dict):
+        return True
+    payload = entry.get("payload")
+    candidate = payload if isinstance(payload, dict) and payload else entry
+    role = (
+        candidate.get("role")
+        or candidate.get("sender")
+        or candidate.get("speaker")
+        or _mapping_value(candidate.get("author")).get("role")
+        or _mapping_value(candidate.get("message")).get("role")
+    )
+    if str(role or "").lower() in {"user", "assistant", "model", "gemini", "ai", "bot"}:
         return True
     known = {
         "claude": {"user", "assistant", "system", "progress", "summary", "file-history-snapshot", "queue-operation"},
