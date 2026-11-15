@@ -34,7 +34,8 @@ enum BrainBarMenuPresenter {
         var handoff = BrainBarMenuPresenter.handoff
         /// D13's line, drawn directly under this row (R22) and never counted.
         var fact: [String]? = nil
-        var faultID: String { "\(thing)-\(worded ? action.rawValue : "generic")" }
+        var mergeKey: String { "\(thing)-\(worded ? action.rawValue : "generic")" }
+        var faultID: String { String(describing: thing) }
     }
 
     private static let checksOf: [Thing: [String]] = [
@@ -80,27 +81,74 @@ enum BrainBarMenuPresenter {
         return Thing.allCases.filter(reds.contains).map(needs) + appFacts(c)
     }
 
-    struct NotificationFault: Equatable {
+    struct NotificationFault: Equatable, Sendable {
         var id: String
         var title: String
+        var causes: Set<String> = ["attention"]
     }
 
-    /// Uses the very same merge keys and row order as the menu. Copy changes do not start an episode.
+    static func notificationCaptureIsComplete(_ c: Capture) -> Bool {
+        guard let v = c.verdict, v.dot != .unknown, (0...900).contains(c.verdictAwakeAgeS), !c.isChecking, !c.wakeCatchUpPending,
+              c.backupsMeasured, c.maintenanceNightFailures != nil, c.backupDailyFailures != nil,
+              c.jsonlBackupFailures != nil, let w = c.watcher, w.readable, w.fresh, !w.dbProbeFailed else { return false }
+        if w.alertReasons.contains("offset_lag"), c.lagEpisodeStart == nil { return false }
+        return known.allSatisfy { name in
+            let checks: [BrainBarHealthVerdict.Check] = v.checks.filter { $0.name == name }
+            return checks.count == 1 && checks[0].state != .unknown && checks[0].blind != true
+        } && !v.checks.contains { $0.state == .unknown || $0.blind == true }
+    }
+
+    private static func appNotificationCauses(_ c: Capture) -> [Thing: Set<String>] {
+        var causes: [Thing: Set<String>] = [:]
+        if let failures = c.maintenanceNightFailures, failures >= 3 { causes[.upkeep] = ["app:maintenance"] }
+        if let w = c.watcher, w.readable, w.fresh {
+            for reason in w.alertReasons where reason != "quarantined_record" {
+                if reason == "coverage_drop", w.dbProbeFailed { continue }
+                if reason == "offset_lag", !lagPastLimit(c) { continue }
+                let thing: Thing = ["offset_lag", "coverage_drop", "file_ingestion_failure"].contains(reason) ? .remembering : .system
+                causes[thing, default: []].insert("app:" + reason)
+            }
+        }
+        return causes
+    }
+
+    private static func genericNotificationTitle(_ thing: Thing) -> String {
+        switch thing {
+        case .remembering: "Conversation saving needs attention"
+        case .finding: "Memory search needs attention"
+        case .safe: "Backups need attention"
+        case .upkeep: "Upkeep needs attention"
+        case .system: "BrainLayer needs attention"
+        }
+    }
+
+    /// Menu merge keys remain untouched; notification episodes group its rows by thing alone.
     static func notificationFaults(_ c: Capture) -> [NotificationFault] {
-        let fresh = c.verdict != nil && (0...900).contains(c.verdictAwakeAgeS)
-        let lines: [Line]
-        if fresh, let verdict = c.verdict { lines = derive(c, verdict) }
-        else { lines = staleNeeds(c) }
-        var merged = mergedNeeds(lines)
-        let rows = present(c).rows.filter { $0.kind == .needsYou }
-        // The final guard can introduce one generic system row for an inconsistent red verdict.
+        let fresh: Bool = c.verdict != nil && (0...900).contains(c.verdictAwakeAgeS)
+        let lines: [Line] = fresh ? derive(c, c.verdict!) : staleNeeds(c)
+        var merged: [Line] = mergedNeeds(lines)
+        let rows: [P.Row] = present(c).rows.filter { $0.kind == .needsYou }
         if merged.isEmpty, rows.count == 1 { merged = [needs(.system)] }
         guard rows.count == merged.count else { return [] }
-        let appIDs = Set(appFacts(c).map(\.faultID))
-        return zip(merged, rows).compactMap { line, row in
-            guard fresh || appIDs.contains(line.faultID), let title = row.strings.first else { return nil }
-            return NotificationFault(id: line.faultID, title: title)
+        let app: [Thing: Set<String>] = appNotificationCauses(c)
+        var faults: [NotificationFault] = []
+        for (line, row) in zip(merged, rows) {
+            guard fresh || app[line.thing]?.isEmpty == false, let sentence: String = row.strings.first else { continue }
+            var causes: Set<String> = ["attention"]
+            causes.formUnion(app[line.thing] ?? [])
+            if fresh {
+                causes.formUnion((c.verdict?.checks ?? []).filter {
+                    $0.state == .red && thing(of: $0.name) == line.thing
+                }.map { "check:" + $0.name })
+            }
+            if let index: Int = faults.firstIndex(where: { $0.id == line.faultID }) {
+                faults[index].causes.formUnion(causes)
+            } else {
+                faults.append(.init(id: line.faultID,
+                    title: sentence == Say.generic.text ? genericNotificationTitle(line.thing) : sentence, causes: causes))
+            }
         }
+        return faults
     }
 
     /// The worst state a check reports under this name, or nil when no check has the name.
@@ -293,7 +341,7 @@ enum BrainBarMenuPresenter {
     private static func mergedNeeds(_ input: [Line]) -> [Line] {
         var needs: [Line] = []
         for line in ordered(input.filter { $0.level == .needs }, { ($0.rank.rawValue, $0.priority, 0) })
-            where !needs.contains(where: { $0.faultID == line.faultID }) {
+            where !needs.contains(where: { $0.mergeKey == line.mergeKey }) {
             needs.append(line)
         }
         return ordered(needs) { ($0.rank.rawValue, $0.thing.rawValue, $0.priority) }

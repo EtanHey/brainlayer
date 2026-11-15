@@ -62,7 +62,6 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 #endif
 #if BRAINBAR_UI
-    private var notifications: BrainBarFaultNotifications?
     private let menuDefaults: UserDefaults
     private var legacyMenuItems: [NSMenuItem]?
     private var newMenuReport = ""
@@ -273,16 +272,12 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
 #if BRAINBAR_UI
     func openNotificationDestination() {
-        guard let button = statusItemForTesting.button, button.window != nil else { openSettings(nil); return }
-        NSApp.activate(ignoringOtherApps: true)
-        if !contextMenuForTesting.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button) {
-            openSettings(nil)
-        }
-    }
-
-    func enableFaultNotifications(_ notifications: BrainBarFaultNotifications) {
-        self.notifications = notifications
-        renderCurrentStatus()
+        let button: NSButton? = statusItemForTesting.button
+        BrainBarNotificationClick.perform(hasButton: button != nil, popup: {
+            guard let button, button.window != nil else { return false }
+            NSApp.activate()
+            return contextMenuForTesting.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button)
+        }, settings: { self.openSettings(nil) })
     }
 
     /// S5: the icon and its tooltip follow the one shared snapshot, refreshed whenever the model
@@ -291,8 +286,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         guard !isStopped else { return }
         statusModelCancellables.removeAll()
         // B6: the binding consumes the published snapshot; it never reads a file itself.
-        // R20 inputs can change while the shared verdict stays frozen during wake catch-up.
-        model?.objectWillChange
+        model?.$publishedStatus
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.renderCurrentStatus() }
             .store(in: &statusModelCancellables)
@@ -320,12 +314,6 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
     private func renderCurrentStatus() {
-#if BRAINBAR_UI
-        if !isStopped, let notifications, let model = runtime.jobsModel {
-            let capture = model.menuCapture(stats: runtime.collector?.stats)
-            Task { await notifications.update(capture) }
-        }
-#endif
         if let stats = latestStats, let state = latestState {
             renderStatusIcon(stats: stats, state: state)
         } else {

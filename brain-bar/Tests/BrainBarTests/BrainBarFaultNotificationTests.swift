@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import XCTest
 @testable import BrainBar
@@ -5,6 +6,12 @@ import XCTest
 @MainActor
 final class BrainBarFaultNotificationTests: XCTestCase {
     private final class Center: BrainBarFaultNotificationCenter {
+        enum Failure: Error { case invented }
+        var postFailures = 0
+        var authorizationFailures = 0
+        var holdPost = false
+        var posting: CheckedContinuation<Void, Never>?
+        var didPost: (@MainActor () -> Void)?
         var allowed = true
         var requests = 0
         var posts: [(String, String)] = []
@@ -12,10 +19,16 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         var holdAuthorization = false
         func authorize() async throws -> Bool {
             requests += 1
+            if authorizationFailures > 0 { authorizationFailures -= 1; throw Failure.invented }
             if holdAuthorization { return await withCheckedContinuation { authorization = $0 } }
             return allowed
         }
-        func post(id: String, body: String) async throws { posts.append((id, body)) }
+        func post(id: String, body: String) async throws {
+            if postFailures > 0 { postFailures -= 1; throw Failure.invented }
+            if holdPost { await withCheckedContinuation { posting = $0 } }
+            posts.append((id, body))
+            didPost?()
+        }
     }
 
     private func defaults() -> UserDefaults {
@@ -43,7 +56,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
         let c = capture("search")
         await subject.update(c)
-        XCTAssertEqual(center.posts.count, BrainBarMenuPresenter.notificationFaults(c).count)
+        XCTAssertEqual(center.posts.count, 1)
         XCTAssertFalse(center.posts.isEmpty)
         let count = center.posts.count
         for _ in 0..<20 { await subject.update(c) }
@@ -51,7 +64,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         await subject.update(capture())
         await subject.update(c)
         XCTAssertEqual(center.posts.count, count * 2)
-        XCTAssertEqual(center.posts.first?.1, BrainBarMenuPresenter.present(c).rows.first { $0.kind == .needsYou }?.strings.first)
+        XCTAssertEqual(center.posts.first?.1, "Memory search needs attention")
     }
 
     func testRelaunchKeepsSet() async {
@@ -83,8 +96,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         c.maintenanceNightFailures = 3
         await observed.update(c)
         XCTAssertEqual(center.posts.count, 1)
-        c.maintenanceNightFailures = 0
-        await observed.update(c)
+        await observed.update(capture())
         c.maintenanceNightFailures = 4
         await observed.update(c)
         XCTAssertEqual(center.posts.count, 2)
@@ -103,21 +115,6 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertEqual(center.posts.count, count)
     }
 
-    func testDeniedLogsOnceAndDoesNotRepeatRequests() async {
-        let center = Center(), d = defaults()
-        center.allowed = false
-        var logs: [String] = []
-        let subject = BrainBarFaultNotifications(center: center, defaults: d, log: { logs.append($0) })
-        await subject.update(capture("disk"))
-        await subject.update(capture())
-        await subject.update(capture("search"))
-        XCTAssertTrue(center.posts.isEmpty)
-        XCTAssertEqual(center.requests, 1)
-        XCTAssertEqual(logs.count, 1)
-        await BrainBarFaultNotifications(center: center, defaults: d, log: { logs.append($0) }).update(capture("disk"))
-        XCTAssertEqual(logs.count, 1)
-    }
-
     func testRecoveryWhileAuthorizationPendingDoesNotPostOldFault() async {
         let center = Center()
         center.holdAuthorization = true
@@ -130,39 +127,22 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertTrue(center.posts.isEmpty)
     }
 
-    func testUnknownProducerWhileAuthorizationPendingOnlyPostsAppFault() async {
-        let center = Center()
-        center.holdAuthorization = true
-        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
-        let update = Task { await subject.update(capture("disk")) }
-        while center.authorization == nil { await Task.yield() }
-        var c = capture("disk")
-        c.verdictAwakeAgeS = 901
-        c.maintenanceNightFailures = 3
-        await subject.update(c)
-        center.authorization?.resume(returning: true)
-        await update.value
-        XCTAssertEqual(center.posts.map { $0.0 }, BrainBarMenuPresenter.notificationFaults(c).map(\.id))
-    }
-
-    func testDisabledMenuStillNotifiesAndAllNeedsRowsAreCovered() async throws {
-        let d = defaults(), center = Center()
-        d.set(false, forKey: "BrainBarNewMenuEnabled")
-        await BrainBarFaultNotifications(center: center, defaults: d).update(capture("search"))
-        XCTAssertFalse(center.posts.isEmpty)
+    func testGoldenMenuPresentationsRemainUnchanged() throws {
         for fixture in try BrainBarMenuPresentationTests.loadCases() {
             let c = try BrainBarMenuCases.capture(fixture["inputs"] as! [String: Any])
             XCTAssertEqual(BrainBarMenuPresenter.present(c), BrainBarMenuPresentationTests.expected(fixture))
             let rows = BrainBarMenuPresenter.present(c).rows.filter { $0.kind == .needsYou }
             let faults = BrainBarMenuPresenter.notificationFaults(c)
             if c.verdict != nil, (0...900).contains(c.verdictAwakeAgeS) {
-                XCTAssertEqual(faults.map(\.title), rows.compactMap { $0.strings.first })
+                XCTAssertLessThanOrEqual(faults.count, rows.count)
+                if !rows.isEmpty { XCTAssertFalse(faults.isEmpty) }
+                XCTAssertFalse(faults.contains { $0.title == "Something BrainBar checks needs attention." })
                 XCTAssertEqual(Set(faults.map(\.id)).count, faults.count)
             }
         }
     }
 
-    func testIdentityUsesThingAndActionRatherThanWords() {
+    func testIdentityUsesThingRatherThanWords() {
         var c = capture()
         c.maintenanceNightFailures = 3
         let first = BrainBarMenuPresenter.notificationFaults(c)
@@ -171,4 +151,290 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertEqual(first.map(\.id), second.map(\.id))
         XCTAssertNotEqual(first.map(\.title), second.map(\.title))
     }
+
+    func testRound1UnknownProducerIsNotRecovery() async {
+        let center = Center()
+        let observed = BrainBarFaultNotifications(center: center, defaults: defaults())
+        await observed.update(capture("search"))
+        await observed.update(capture("search", state: .unknown))
+        await observed.update(capture("search"))
+        XCTAssertEqual(center.posts.count, 1)
+    }
+
+    func testRound1PartialRelaunchDoesNotPruneAppFault() async {
+        let d = defaults(), center = Center()
+        var c = capture()
+        c.maintenanceNightFailures = 3
+        await BrainBarFaultNotifications(center: center, defaults: d).update(c)
+        let next = Center(), relaunched = BrainBarFaultNotifications(center: next, defaults: d)
+        await relaunched.update(BrainBarMenuCapture(now: c.now, timeZone: c.timeZone))
+        await relaunched.update(c)
+        XCTAssertTrue(next.posts.isEmpty)
+    }
+
+    func testRound1DriveWordingDoesNotCreateNewThing() async {
+        let center = Center()
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        var c = capture("drive_auth")
+        await subject.update(c)
+        c.driveAuthModel = .missing
+        await subject.update(c)
+        XCTAssertEqual(center.posts.count, 1)
+    }
+
+    func testRound1NewRedCauseNotifiesSameThingAgain() async {
+        let center = Center()
+        let observed = BrainBarFaultNotifications(center: center, defaults: defaults())
+        var c = capture("backup_local")
+        await observed.update(c)
+        c.verdict = BrainBarHealthVerdict(dot: .red, checks: BrainBarMenuPresenter.known.map {
+            .init(name: $0, state: ["backup_local", "integrity"].contains($0) ? .red : .green,
+                  note: "Invented cause", unknownTicks: 0, blind: false)
+        }, notes: [], evaluatedAt: c.now)
+        await observed.update(c)
+        XCTAssertEqual(center.posts.count, 2)
+        XCTAssertNotEqual(center.posts.first?.1, center.posts.last?.1)
+        XCTAssertEqual(center.posts.last?.1, BrainBarMenuPresenter.present(c).rows.first { $0.kind == .needsYou }?.strings.first)
+    }
+
+    func testRound1FailedAddRetriesNextUpdate() async {
+        let center = Center()
+        center.postFailures = 1
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults(), log: { _ in })
+        await subject.update(capture("disk"))
+        await subject.update(capture("disk"))
+        XCTAssertEqual(center.posts.count, 1)
+    }
+
+    func testRound1PendingAuthorizationIsNotPersistedAsDelivered() async {
+        let d = defaults(), center = Center()
+        center.holdAuthorization = true
+        let subject = BrainBarFaultNotifications(center: center, defaults: d)
+        let pending = Task { await subject.update(capture("disk")) }
+        while center.authorization == nil { await Task.yield() }
+        let next = Center()
+        await BrainBarFaultNotifications(center: next, defaults: d).update(capture("disk"))
+        center.authorization?.resume(returning: false)
+        await pending.value
+        XCTAssertEqual(next.posts.count, 1)
+    }
+
+    func testRound1StalePendingPostsWhenFreshAgain() async {
+        let center = Center()
+        center.holdAuthorization = true
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        let pending = Task { await subject.update(capture("disk")) }
+        while center.authorization == nil { await Task.yield() }
+        var c = capture("disk")
+        c.verdictAwakeAgeS = 901
+        await subject.update(c)
+        center.authorization?.resume(returning: true)
+        await pending.value
+        XCTAssertTrue(center.posts.isEmpty)
+        center.holdAuthorization = false
+        await subject.update(capture("disk"))
+        XCTAssertEqual(center.posts.count, 1)
+    }
+
+    func testRound1DenialRechecksAndLogsStateChangesOnly() async {
+        let center = Center()
+        center.allowed = false
+        var logs: [String] = []
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults(), log: { logs.append($0) })
+        await subject.update(capture("disk"))
+        await subject.update(capture("disk"))
+        XCTAssertEqual(logs.count, 1)
+        center.allowed = true
+        await subject.update(capture("disk"))
+        XCTAssertEqual(center.posts.count, 1)
+        center.allowed = false
+        await subject.update(capture("search"))
+        XCTAssertEqual(logs.count, 2)
+    }
+
+    func testRound1GenericNotificationNamesThing() async {
+        let center = Center()
+        await BrainBarFaultNotifications(center: center, defaults: defaults()).update(capture("search"))
+        XCTAssertEqual(center.posts.first?.1, "Memory search needs attention")
+    }
+
+    func testAppKnownWatcherUnknownGapDoesNotRearm() async {
+        let center = Center()
+        let observed = BrainBarFaultNotifications(center: center, defaults: defaults())
+        var c = capture()
+        c.watcher?.alertReasons = ["file_ingestion_failure"]
+        await observed.update(c)
+        var missing = c
+        missing.watcher = nil
+        await observed.update(missing)
+        await observed.update(c)
+        XCTAssertEqual(center.posts.count, 1)
+    }
+
+    func testAppKnownHistoryUnknownGapDoesNotRearm() async {
+        let center = Center()
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        var c = capture()
+        c.maintenanceNightFailures = 3
+        await subject.update(c)
+        var missing = c
+        missing.maintenanceNightFailures = nil
+        await subject.update(missing)
+        await subject.update(c)
+        XCTAssertEqual(center.posts.count, 1)
+    }
+
+    func testLosingCauseDoesNotPostAndReturningCauseDoes() async {
+        let center = Center()
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        var c = capture("ingest")
+        await subject.update(c)
+        c.watcher?.alertReasons = ["file_ingestion_failure"]
+        await subject.update(c)
+        XCTAssertEqual(center.posts.count, 2)
+        c.watcher?.alertReasons = []
+        await subject.update(c)
+        XCTAssertEqual(center.posts.count, 2)
+        c.watcher?.alertReasons = ["file_ingestion_failure"]
+        await subject.update(c)
+        XCTAssertEqual(center.posts.count, 3)
+    }
+
+    func testAuthorizationErrorRemainsPending() async {
+        let center = Center()
+        center.authorizationFailures = 1
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults(), log: { _ in })
+        await subject.update(capture("disk"))
+        await subject.update(capture("disk"))
+        XCTAssertEqual(center.posts.count, 1)
+    }
+
+    func testJobAlertsOwnMessageUnknownRecoveryAndRelaunch() async {
+        let center = Center(), d = defaults()
+        let subject = BrainBarFaultNotifications(center: center, defaults: d)
+        let alerts: [String: String] = ["mcp-transport": "Invented transport fault"]
+        await subject.update(capture(), jobAlerts: alerts)
+        await subject.update(capture(), jobAlerts: nil)
+        await subject.update(capture(), jobAlerts: alerts)
+        XCTAssertEqual(center.posts.count, 1)
+        XCTAssertEqual(center.posts.first?.0, "job:mcp-transport")
+        XCTAssertEqual(center.posts.first?.1, "Invented transport fault")
+        let next = Center()
+        let relaunched = BrainBarFaultNotifications(center: next, defaults: d)
+        await relaunched.update(BrainBarMenuCapture(now: Date(), timeZone: .current))
+        await relaunched.update(capture(), jobAlerts: alerts)
+        XCTAssertTrue(next.posts.isEmpty)
+        await relaunched.update(capture(), jobAlerts: [:])
+        await relaunched.update(capture(), jobAlerts: alerts)
+        XCTAssertEqual(next.posts.count, 1)
+    }
+
+    func testEveryJobKeyHasAnIndependentEpisode() async {
+        let center = Center()
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        let keys: [String] = [
+            "brainbar-activation",
+            "brainbar-activation-brew",
+            "backup-daily",
+            "backup-snapshot",
+            "backup-upload-abandoned",
+            "drive-consent",
+            "fleet-watchdog-hold",
+            "index",
+            "jsonl-backup",
+            "jsonl-retention",
+            "maintenance-light",
+            "maintenance-full",
+            "maintenance-burn",
+            "mcp-transport",
+            "repair-fts",
+            "wal-checkpoint",
+            "wal-checkpoint-fallback",
+        ]
+        let alerts: [String: String] = Dictionary(uniqueKeysWithValues: keys.map { ($0, "Invented fault for " + $0) })
+        await subject.update(capture(), jobAlerts: alerts)
+        XCTAssertEqual(Set(center.posts.map { $0.0 }), Set(keys.map { "job:" + $0 }))
+    }
+
+    func testRecoveryAcrossUnknownWhileAddIsInFlightDoesNotSuppressNextEpisode() async {
+        let center = Center()
+        center.holdPost = true
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        let alerts: [String: String] = ["mcp-transport": "Invented transport fault"]
+        let pending = Task { await subject.update(capture(), jobAlerts: alerts) }
+        while center.posting == nil { await Task.yield() }
+        await subject.update(capture(), jobAlerts: nil)
+        await subject.update(capture(), jobAlerts: [:])
+        await subject.update(capture(), jobAlerts: alerts)
+        center.holdPost = false
+        center.posting?.resume()
+        await pending.value
+        XCTAssertEqual(center.posts.count, 2)
+    }
+
+    func testNotificationDismissalDoesNotOpenSettings() {
+        for selected in [false, true] {
+            var settings = 0, popups = 0
+            BrainBarNotificationClick.perform(hasButton: true, popup: { popups += 1; return selected }, settings: { settings += 1 })
+            XCTAssertEqual(popups, 1)
+            XCTAssertEqual(settings, 0)
+        }
+        var settings = 0
+        BrainBarNotificationClick.perform(hasButton: false, popup: { XCTFail("No button"); return false }, settings: { settings += 1 })
+        XCTAssertEqual(settings, 1)
+    }
+
+    func testMenuOffStillDeliversThroughTheAppLifetimeSubscription() async {
+        let d = defaults(), center = Center()
+        d.set(false, forKey: "BrainBarNewMenuEnabled")
+        let subject = BrainBarFaultNotifications(center: center, defaults: d)
+        let changes = PassthroughSubject<Void, Never>()
+        let posted = expectation(description: "Menu-off publisher delivers")
+        center.didPost = { posted.fulfill() }
+        let c = capture("search")
+        subject.observe(changes: changes.eraseToAnyPublisher()) { .init(capture: c) }
+        changes.send(())
+        await fulfillment(of: [posted], timeout: 5)
+        subject.stopObserving()
+        XCTAssertEqual(center.posts.count, 1)
+    }
+
+    func testPublishedBurstIsCoalescedBeforeCapture() async {
+        let center = Center()
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        let changes = PassthroughSubject<Void, Never>()
+        let first = expectation(description: "First delivery")
+        let coalesced = expectation(description: "One latest capture")
+        center.didPost = { first.fulfill() }
+        var captures = 0
+        let c = capture("search")
+        subject.observe(changes: changes.eraseToAnyPublisher()) {
+            captures += 1
+            if captures == 2 { coalesced.fulfill() }
+            return .init(capture: c)
+        }
+        await fulfillment(of: [first], timeout: 5)
+        for _ in 0..<100 { changes.send(()) }
+        await fulfillment(of: [coalesced], timeout: 5)
+        subject.stopObserving()
+        XCTAssertEqual(captures, 2)
+        XCTAssertEqual(center.posts.count, 1)
+    }
+
+    func testRound1WordedToGenericKeepsOneEpisode() async {
+        let center = Center()
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        let ages: [Double] = [10, 30]
+        for age in ages {
+            var c = capture()
+            c.verdict = BrainBarHealthVerdict(dot: .amber, checks: BrainBarMenuPresenter.known.map { name -> BrainBarHealthVerdict.Check in
+                .init(name: name, state: name == "embedding" ? .amber : .green,
+                      ageS: name == "embedding" ? age : nil, thresholdS: name == "embedding" ? 20 : nil,
+                      note: "Invented aging check")
+            }, notes: [], evaluatedAt: c.now)
+            await subject.update(c)
+        }
+        XCTAssertEqual(center.posts.count, 1)
+    }
+
 }

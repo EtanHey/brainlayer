@@ -27,9 +27,23 @@ def _times_path(path: Path) -> Path:
     return path.with_name(f"{path.stem}.times.json")
 
 
-def _notify(message: str) -> None:
-    """BrainBar owns user notifications; report() still persists every alert."""
-    return None
+def _notify(message: str, *, key: str | None = None) -> None:
+    """Only activation failures may notify without a running BrainBar."""
+    if key != "brainbar-activation":
+        return
+    if os.environ.get("BRAINLAYER_TEST_PATH_PROVENANCE") == "pytest":
+        return
+    subprocess.run(
+        [
+            "osascript",
+            "-e",
+            'on run argv\n display notification (item 1 of argv) with title "BrainLayer"\nend run',
+            message,
+        ],
+        timeout=8,
+        check=True,
+        capture_output=True,
+    )
 
 
 @contextmanager
@@ -98,9 +112,9 @@ def report(
     """Set or clear one episode. Return true only when the visible state changes.
 
     Only a new failure invokes the optional notification hook, and only when no
-    other active key carries the identical message. The production hook is silent;
-    BrainBar delivers notifications from its presentation. Recovery only updates
-    the alert file and health log.
+    other active key carries the identical message. Only brainbar-activation uses
+    the production OS hook; BrainBar delivers every other job notification from
+    the alert records. Recovery only updates the alert file and health log.
     """
     destination = path or alert_path()
     with _locked(destination):
@@ -127,7 +141,10 @@ def report(
     if not post:
         return True
     try:
-        notify(message)
+        if notify is _notify:
+            _notify(message, key=key)
+        else:
+            notify(message)
     except (OSError, subprocess.SubprocessError) as exc:
         LOG.warning("macOS notification failed for %s: %s", key, type(exc).__name__)
     return True

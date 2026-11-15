@@ -293,3 +293,48 @@ def test_maintenance_deliberate_deferrals_match_swift_allowlist():
     block = swift.split("static let deliberateDeferrals = [", 1)[1].split("\n    ]", 1)[0]
     patterns = re.findall(r'#"(.*?)"#', block)
     assert tuple(patterns) == maintenance.DELIBERATE_DEFERRALS
+
+
+def test_activation_alone_keeps_python_fallback(tmp_path, monkeypatch):
+    import subprocess
+
+    from brainlayer import job_alerts
+
+    calls = []
+    monkeypatch.delenv("BRAINLAYER_TEST_PATH_PROVENANCE", raising=False)
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    assert job_alerts.report("brainbar-activation", "Invented activation fault", path=tmp_path / "alerts.json")
+    assert len(calls) == 1
+    assert calls[0][0][0][0] == "osascript"
+    assert calls[0][1]["timeout"] == 8
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "brainbar-activation-brew",
+        "backup-daily",
+        "backup-snapshot",
+        "backup-upload-abandoned",
+        "drive-consent",
+        "fleet-watchdog-hold",
+        "index",
+        "jsonl-backup",
+        "jsonl-retention",
+        "maintenance-light",
+        "maintenance-full",
+        "maintenance-burn",
+        "mcp-transport",
+        "repair-fts",
+        "wal-checkpoint",
+        "wal-checkpoint-fallback",
+    ],
+)
+def test_other_jobs_never_use_python_os_notification(tmp_path, monkeypatch, key):
+    import subprocess
+
+    calls = []
+    monkeypatch.delenv("BRAINLAYER_TEST_PATH_PROVENANCE", raising=False)
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    assert report(key, "Invented non-activation fault", path=tmp_path / "alerts.json")
+    assert calls == []
