@@ -66,8 +66,9 @@ final class BrainBarFaultNotificationTests: XCTestCase {
     }
 
     func testNewSameGoneAndReturned() async {
+        let clock = Box()
         let center = Center()
-        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults(), clock: { clock.now })
         var c = capture("search")
         await subject.update(c)
         XCTAssertEqual(center.posts.count, 1)
@@ -77,6 +78,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertEqual(center.posts.count, count)
         await subject.update(capture())
         c.now = c.now.addingTimeInterval(601)
+        clock.now = clock.now.addingTimeInterval(601)
         await subject.update(c)
         XCTAssertEqual(center.posts.count, count * 2)
         XCTAssertEqual(center.posts.first?.1, "Memory search needs attention")
@@ -102,10 +104,11 @@ final class BrainBarFaultNotificationTests: XCTestCase {
     }
 
     func testStaleProducerSuppressedButAppFactsNotifyAndRearm() async {
+        let clock = Box()
         let center = Center()
         var c = capture("disk")
         c.verdictAwakeAgeS = 901
-        let observed = BrainBarFaultNotifications(center: center, defaults: defaults())
+        let observed = BrainBarFaultNotifications(center: center, defaults: defaults(), clock: { clock.now })
         await observed.update(c)
         XCTAssertTrue(center.posts.isEmpty)
         c.maintenanceNightFailures = 3
@@ -114,6 +117,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         await observed.update(capture())
         c.maintenanceNightFailures = 4
         c.now = c.now.addingTimeInterval(601)
+        clock.now = clock.now.addingTimeInterval(601)
         await observed.update(c)
         XCTAssertEqual(center.posts.count, 2)
     }
@@ -301,8 +305,9 @@ final class BrainBarFaultNotificationTests: XCTestCase {
     }
 
     func testLosingCauseDoesNotPostAndReturningCauseDoes() async {
+        let clock = Box()
         let center = Center()
-        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults(), clock: { clock.now })
         var c = capture("ingest")
         await subject.update(c)
         c.watcher?.alertReasons = ["file_ingestion_failure"]
@@ -315,6 +320,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         await subject.update(c)
         XCTAssertEqual(center.posts.count, 2)
         c.now = c.now.addingTimeInterval(601)
+        clock.now = clock.now.addingTimeInterval(601)
         await subject.update(c)
         XCTAssertEqual(center.posts.count, 3)
     }
@@ -329,8 +335,9 @@ final class BrainBarFaultNotificationTests: XCTestCase {
     }
 
     func testJobAlertsOwnMessageUnknownRecoveryAndRelaunch() async {
+        let clock = Box()
         let center = Center(), d = defaults()
-        let subject = BrainBarFaultNotifications(center: center, defaults: d)
+        let subject = BrainBarFaultNotifications(center: center, defaults: d, clock: { clock.now })
         let alerts: [String: String] = ["mcp-transport": "Invented transport fault"]
         await subject.update(capture(), jobAlerts: alerts)
         await subject.update(capture(), jobAlerts: nil)
@@ -339,13 +346,14 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertEqual(center.posts.first?.0, "job:mcp-transport")
         XCTAssertEqual(center.posts.first?.1, "Invented transport fault")
         let next = Center()
-        let relaunched = BrainBarFaultNotifications(center: next, defaults: d)
+        let relaunched = BrainBarFaultNotifications(center: next, defaults: d, clock: { clock.now })
         await relaunched.update(BrainBarMenuCapture(now: Date(), timeZone: .current))
         await relaunched.update(capture(), jobAlerts: alerts)
         XCTAssertTrue(next.posts.isEmpty)
         await relaunched.update(capture(), jobAlerts: [:])
         var returned = capture()
         returned.now = returned.now.addingTimeInterval(601)
+        clock.now = clock.now.addingTimeInterval(601)
         await relaunched.update(returned, jobAlerts: alerts)
         XCTAssertEqual(next.posts.count, 1)
     }
@@ -459,8 +467,9 @@ final class BrainBarFaultNotificationTests: XCTestCase {
     }
 
     func testRound2RecoveredThingRearmsWhileOtherThingRemainsUnknown() async {
+        let clock = Box()
         let center = Center()
-        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults(), clock: { clock.now })
         var c = capture("disk")
         c.watcher = nil
         await subject.update(c)
@@ -468,11 +477,13 @@ final class BrainBarFaultNotificationTests: XCTestCase {
             c = capture()
             c.watcher = nil
             c.now = c.now.addingTimeInterval(3600)
+            clock.now = clock.now.addingTimeInterval(3600)
             await subject.update(c)
         }
         c = capture("disk")
         c.watcher = nil
         c.now = c.now.addingTimeInterval(3601)
+        clock.now = clock.now.addingTimeInterval(3601)
         await subject.update(c)
         XCTAssertEqual(center.posts.count, 2)
     }
@@ -613,8 +624,9 @@ final class BrainBarFaultNotificationTests: XCTestCase {
     }
 
     func testRound2InitialBannerUsesTopRowAndOffsetLagDoesNotHoldOtherThings() async {
+        let clock = Box()
         let center = Center()
-        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults(), clock: { clock.now })
         var c = capture("drive_auth")
         c.verdict = BrainBarHealthVerdict(dot: .red, checks: BrainBarMenuPresenter.known.map {
             .init(name: $0, state: ["drive_auth", "disk"].contains($0) ? .red : .green, note: "Invented cause")
@@ -627,7 +639,51 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         recovered.watcher?.alertReasons = ["offset_lag"]
         await subject.update(recovered)
         c.now = c.now.addingTimeInterval(3600)
+        clock.now = clock.now.addingTimeInterval(3600)
         await subject.update(c)
+        XCTAssertEqual(center.posts.count, 2)
+    }
+
+    func testCodeRabbitDiskThenBackupJobKeepsDistinctIncidents() async {
+        let center = Center()
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        let c = capture("disk")
+        await subject.update(c)
+        await subject.update(c, jobAlerts: ["backup-daily": "Invented daily backup failure"])
+        XCTAssertEqual(center.posts.count, 2)
+        XCTAssertEqual(center.posts.last?.1, "Invented daily backup failure")
+    }
+
+    func testCodeRabbitBackupJobThenDiskKeepsDistinctIncidents() async {
+        let center = Center()
+        let subject = BrainBarFaultNotifications(center: center, defaults: defaults())
+        let alerts = ["backup-daily": "Invented daily backup failure"]
+        await subject.update(capture(), jobAlerts: alerts)
+        await subject.update(capture("disk"), jobAlerts: alerts)
+        XCTAssertEqual(center.posts.count, 2)
+        XCTAssertEqual(center.posts.last?.1, "Backups need attention")
+    }
+
+    func testCodeRabbitCooldownStartsWhenSlowPostSucceedsIncludingAliases() async {
+        let center = Center(), clock = Box(), d = defaults()
+        center.holdPost = true
+        let subject = BrainBarFaultNotifications(center: center, defaults: d, clock: { clock.now })
+        let alerts = ["mcp-transport": "Invented shared incident", "wal-checkpoint": "Invented shared incident"]
+        let pending = Task { await subject.update(capture(), jobAlerts: alerts) }
+        while center.posting == nil { await Task.yield() }
+        clock.now = clock.now.addingTimeInterval(601)
+        center.holdPost = false
+        center.posting?.resume()
+        await pending.value
+        XCTAssertEqual(center.posts.count, 1)
+        let times = d.dictionary(forKey: "BrainBarNotificationRecentCauses.v1") as? [String: [String: Double]]
+        for key in alerts.keys { XCTAssertEqual(times?["job:" + key]?["job:" + key], clock.now.timeIntervalSince1970) }
+        await subject.update(capture(), jobAlerts: [:])
+        clock.now = clock.now.addingTimeInterval(1)
+        await subject.update(capture(), jobAlerts: alerts)
+        XCTAssertEqual(center.posts.count, 1)
+        clock.now = clock.now.addingTimeInterval(599)
+        await subject.update(capture(), jobAlerts: alerts)
         XCTAssertEqual(center.posts.count, 2)
     }
 

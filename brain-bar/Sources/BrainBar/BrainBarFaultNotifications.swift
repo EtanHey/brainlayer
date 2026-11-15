@@ -76,7 +76,7 @@ final class BrainBarFaultNotifications {
     private let center: any BrainBarFaultNotificationCenter
     private let defaults: UserDefaults
     private let log: (String) -> Void
-    private let clock: (() -> Date)?
+    private let clock: () -> Date
     private var now = Date()
     private var recent: [String: [String: Double]]
     private var savedDelivered: [String: [String]]
@@ -91,7 +91,7 @@ final class BrainBarFaultNotifications {
     private var observationID = UUID()
 
     init(center: any BrainBarFaultNotificationCenter, defaults: UserDefaults,
-         clock: (() -> Date)? = nil,
+         clock: @escaping () -> Date = Date.init,
          log: @escaping (String) -> Void = { NSLog("[BrainBar] %@", $0) }) {
         self.center = center
         self.defaults = defaults
@@ -176,10 +176,11 @@ final class BrainBarFaultNotifications {
             }) {
                 record(job.id, job.causes, at: recent[posted.id]?.values.min())
             } else if let pair = Self.pair(job.id), let thing = current[pair.thing],
+                      thing.pairingCauses.contains(pair.cause),
                       thing.causes.isSubset(of: delivered[thing.id] ?? []) {
-                record(job.id, job.causes, at: recent[thing.id]?.values.min())
+                record(job.id, job.causes, at: recent[thing.id]?[pair.cause] ?? recent[thing.id]?["attention"])
             }
-            if let pair = Self.pair(job.id), current[pair.thing] != nil,
+            if let pair = Self.pair(job.id), current[pair.thing]?.pairingCauses.contains(pair.cause) == true,
                job.causes.isSubset(of: delivered[job.id] ?? []) {
                 record(pair.thing, ["attention", pair.cause], at: recent[job.id]?.values.min())
             }
@@ -187,7 +188,7 @@ final class BrainBarFaultNotifications {
     }
 
     private func pendingCauses(_ fault: BrainBarMenuPresenter.NotificationFault) -> Set<String> {
-        if let pair = Self.pair(fault.id), current[pair.thing] != nil { return [] }
+        if let pair = Self.pair(fault.id), current[pair.thing]?.pairingCauses.contains(pair.cause) == true { return [] }
         let cooling = Set((recent[fault.id] ?? [:]).keys)
         return fault.causes.subtracting(delivered[fault.id] ?? []).subtracting(cooling)
     }
@@ -199,7 +200,7 @@ final class BrainBarFaultNotifications {
     }
 
     func update(_ capture: BrainBarMenuCapture, jobAlerts: [String: String]? = nil) async {
-        now = clock?() ?? capture.now
+        now = clock()
         recent = recent.compactMapValues { times in
             let live = times.filter { now.timeIntervalSince1970 - $0.value >= 0 && now.timeIntervalSince1970 - $0.value < 600 }
             return live.isEmpty ? nil : live
@@ -255,7 +256,7 @@ final class BrainBarFaultNotifications {
                     try await center.post(id: id, body: fault.title(for: newCauses))
                     // A recovery while add was in flight must not suppress the next episode.
                     if generations[id, default: 0] == generation {
-                        record(id, fault.causes)
+                        record(id, fault.causes, at: clock().timeIntervalSince1970)
                         persist()
                     }
                 } catch {

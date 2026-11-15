@@ -91,6 +91,8 @@ enum BrainBarMenuPresenter {
         var title: String
         var causes: Set<String> = ["attention"]
         var causeTitles: [String: String] = [:]
+        /// Needs-you sources, including amber needs; separate from red worsening receipts.
+        var pairingCauses: Set<String> = []
 
         func title(for newCauses: Set<String>) -> String {
             if newCauses.contains("attention") { return title }
@@ -168,12 +170,13 @@ enum BrainBarMenuPresenter {
                 }.map { "check:" + $0.name })
             }
             if let index: Int = faults.firstIndex(where: { $0.id == line.faultID }) {
+                faults[index].pairingCauses.formUnion(titles[line.thing]?.keys.map { $0 } ?? [])
                 faults[index].causes.formUnion(causes)
                 faults[index].causeTitles.merge(titles[line.thing] ?? [:]) { first, _ in first }
             } else {
                 faults.append(.init(id: line.faultID,
                     title: sentence == Say.generic.text ? genericNotificationTitle(line.thing) : sentence, causes: causes,
-                    causeTitles: titles[line.thing] ?? [:]))
+                    causeTitles: titles[line.thing] ?? [:], pairingCauses: Set(titles[line.thing]?.keys.map { $0 } ?? [])))
             }
         }
         return faults
@@ -215,7 +218,7 @@ enum BrainBarMenuPresenter {
             switch worst(v, name) {
             case .green?: break
             case .red?: lines.append(needs(thing(of: name), cause: "check:" + name))
-            case .amber?: lines.append(calmAmber(name, c, v) ?? needs(thing(of: name)))
+            case .amber?: lines.append(calmAmber(name, c, v) ?? needs(thing(of: name), cause: "check:" + name))
             case .unknown?, nil: lines.append(checking(thing(of: name)))
             }
         }
