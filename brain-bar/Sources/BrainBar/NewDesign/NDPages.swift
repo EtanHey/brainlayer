@@ -133,6 +133,10 @@ struct NDBackupsPage: View {
         }
         let fact = fault ? (missing ? BrainBarMenuPresenter.Say.s13DetailMissing.text : BrainBarMenuPresenter.Say.s13Detail.text)
             : state == "Connected" ? BrainBarMenuPresenter.SurfaceSay.driveUploadsHere : ""
+        if state == "—", !fault {
+            // B3: an unknown Drive state is one row, its name and its state cell, as every other unknown is drawn.
+            NDFactRow(name: "Google Drive", fact: state) { EmptyView() }.padding(.top, 18)
+        } else {
         NDGroupLabel(title: "Google Drive", fault: fault)
         NDFactRow(name: state, nameTone: fault ? .fault : .fine, fact: fact) {
             if fault {
@@ -147,13 +151,21 @@ struct NDBackupsPage: View {
                 }
             }
         }
+        }
+    }
+
+    /// B3: "Newest copy" follows the "Copy on this Mac" lane: one reading, one staleness rule. When the lane's age is
+    /// unknown (a stale or missing check), the time is unknown too.
+    func newestCopyFact(_ m: NDModel) -> String {
+        let lane = lanes(m).first { $0.id == "backup_local" }
+        guard let at = store.inputs.newestLocalCopyAt, let lane, lane.number.value != NDModel.Number.unknown.value else { return "—" }
+        return NDFormat.day(at, now: store.inputs.capture.now, zone: store.inputs.capture.timeZone)
     }
 
     @ViewBuilder private func macGroup(_ m: NDModel) -> some View {
         let disk = m.areas.first { $0.thing == .safe }?.rows.first { $0.id == "disk" }
         NDGroupLabel(title: "On this Mac", fault: false)
-        NDFactRow(name: "Newest copy", fact: store.inputs.newestLocalCopyAt.map { NDFormat.day($0, now: store.inputs.capture.now,
-                                                                                          zone: store.inputs.capture.timeZone) } ?? "—") {
+        NDFactRow(name: "Newest copy", fact: newestCopyFact(m)) {
             if store.inputs.canRevealLocalCopy {
                 Button("Show in Finder") { store.revealLocalCopy() }.buttonStyle(NDLinkButtonStyle())
             }

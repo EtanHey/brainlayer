@@ -353,7 +353,8 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
         var i = BrainBarDesignFixture.inputs(.calm)
         let m = NDModel.make(i)
         let gemini = m.areas.first { $0.name == "Agents" }!.rows.first { $0.id == "gemini" }!
-        XCTAssertEqual(gemini.visual, .agent(sessions: 0, saves: 0, scale: 72))
+        // The scale is the busiest agent's saves (the fixture's Agents rows now sum to its 24 h saves, review B2).
+        XCTAssertEqual(gemini.visual, .agent(sessions: 0, saves: 0, scale: i.agents.agents.compactMap(\.saves).max()!))
         XCTAssertEqual(gemini.number.value, "0")
         i.agents = .unknown
         let unknown = NDModel.make(i).areas.first { $0.name == "Agents" }!
@@ -659,27 +660,81 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         XCTAssertEqual(BrainBarDesignFixture.makeNow(capturing: false, wall: wall), BrainBarDesignFixture.fixedNow)
     }
 
-    /// Fix 5: a tick shifts every wave by one invented bucket, keeps its length, moves its end one bucket width, and is
-    /// the same on every run.
-    func testCaptureTickShiftsEveryWaveByOneBucket() throws {
+    /// Fix 5 with review B2: a capture tick moves the fixture clock one minute; the 1 h hero shifts by exactly one bucket
+    /// (and the first tick after opening slides: polish 7), every wave is read again off the one series, deterministically.
+    func testCaptureTickShiftsTheHourByOneBucket() throws {
         let start = BrainBarDesignFixture.inputs(.calm)
         let store = NDStore(fixture: start), twin = NDStore(fixture: start)
         store.tickFixture(); twin.tickFixture()
-        let menu = try XCTUnwrap(store.inputs.menuWave), before = try XCTUnwrap(start.menuWave)
-        XCTAssertEqual(menu.reads.count, before.reads.count)
-        XCTAssertEqual(Array(menu.reads.dropLast()), Array(before.reads.dropFirst()))
-        XCTAssertEqual(try XCTUnwrap(menu.endsAt).timeIntervalSince(try XCTUnwrap(before.endsAt)), 150, accuracy: 0.001)
-        for range in NDRange.allCases {
-            let hero = try XCTUnwrap(store.inputs.heroWaves[range]), was = try XCTUnwrap(start.heroWaves[range])
-            XCTAssertEqual(Array(hero.saves.dropLast()), Array(was.saves.dropFirst()))
-            XCTAssertEqual(try XCTUnwrap(hero.endsAt).timeIntervalSince(try XCTUnwrap(was.endsAt)), Double(range.minutes), accuracy: 0.001)
-        }
+        let hour = try XCTUnwrap(store.inputs.heroWaves[.hour]), was = try XCTUnwrap(start.heroWaves[.hour])
+        XCTAssertEqual(hour.count, was.count)
+        XCTAssertEqual(Array(hour.reads.dropLast()), Array(was.reads.dropFirst()))
+        XCTAssertEqual(Array(hour.saves.dropLast()), Array(was.saves.dropFirst()))
+        XCTAssertEqual(hour.sequence, try XCTUnwrap(was.sequence) + 1)
+        XCTAssertEqual(hour.outgoing, NDWave.Bucket(saves: was.saves[0], reads: was.reads[0]), "the first tick slides")
+        XCTAssertEqual(try XCTUnwrap(hour.endsAt).timeIntervalSince(try XCTUnwrap(was.endsAt)), 60, accuracy: 0.001)
         XCTAssertEqual(store.inputs.menuWave, twin.inputs.menuWave, "deterministic")
         XCTAssertEqual(store.inputs.heroWaves, twin.inputs.heroWaves, "deterministic")
         XCTAssertEqual(store.model, NDModel.make(store.inputs), "through the sample path: the model follows")
         store.tickFixture()
         XCTAssertEqual(store.fixtureTicks, 2)
-        XCTAssertNotEqual(store.inputs.menuWave, twin.inputs.menuWave)
+        XCTAssertEqual(store.inputs.heroWaves[.hour]?.sequence, try XCTUnwrap(was.sequence) + 2)
+    }
+
+    /// Review B1, on the layout model: through one shift the baseline rect never moves; the moving layer holds n + 1
+    /// buckets while it slides and n at rest; at t = 0 it stands exactly one bucket width right, so every bar is where it
+    /// was before the data changed (no hole, no kick), and the outgoing bucket is the one that left.
+    func testShiftSlidesOnePitchOverAStaticBaseline() throws {
+        let t0 = BrainBarDesignFixture.fixedNow
+        for (minutes, count, size) in [(60, 60, NDWaveform.Size.hero), (60, 24, .menu), (180, 60, .hero), (1_440, 60, .hero)] {
+            let width = Double(minutes * 60) / Double(count)
+            let before = NDFixtureTraffic.wave(minutes: minutes, buckets: count, now: t0)
+            let after = NDFixtureTraffic.wave(minutes: minutes, buckets: count, now: t0.addingTimeInterval(width))
+                .linked(after: before, minutes: minutes)
+            let target = try XCTUnwrap(after.sequence)
+            XCTAssertEqual(target, try XCTUnwrap(before.sequence) + 1)
+            XCTAssertEqual(after.outgoing, NDWave.Bucket(saves: before.saves[0], reads: before.reads[0]))
+            for canvas in [CGSize(width: 664, height: 114), CGSize(width: 664, height: 58), CGSize(width: 172, height: 20)] {
+                let (bw, gap) = NDWaveform.layout(width: canvas.width, count: count, size: size)
+                let pitch = bw + gap
+                XCTAssertEqual(NDWaveform.offset(target: target, phase: Double(target - 1), pitch: pitch), pitch, "t = 0: +1 pitch")
+                let mid = NDWaveform.offset(target: target, phase: Double(target) - 0.5, pitch: pitch)
+                XCTAssertEqual(mid, pitch / 2, accuracy: 0.0001)
+                XCTAssertEqual(NDWaveform.offset(target: target, phase: Double(target), pitch: pitch), 0)
+                XCTAssertEqual(NDWaveform.baseline(canvas, nowTick: true), NDWaveform.baseline(canvas, nowTick: true))
+                let atStart = NDWaveform.strip(after, width: canvas.width, size: size, offset: pitch)
+                let during = NDWaveform.strip(after, width: canvas.width, size: size, offset: mid)
+                let rest = NDWaveform.strip(after, width: canvas.width, size: size, offset: 0)
+                let shown = NDWaveform.strip(before, width: canvas.width, size: size, offset: 0)
+                XCTAssertEqual(atStart.count, count + 1)
+                XCTAssertEqual(during.count, count + 1)
+                XCTAssertEqual(rest.count, count)
+                // At t = 0 the strip's first n entries are exactly the bars on screen before the change.
+                for i in 0..<count {
+                    XCTAssertEqual(atStart[i].x, shown[i].x, accuracy: 0.0001, "bar \(i) does not move at t = 0")
+                    XCTAssertEqual(atStart[i].bucket, shown[i].bucket, "bar \(i) is the same bar")
+                }
+            }
+        }
+        // Not one bucket later: drawn in place, no outgoing bucket.
+        let a = NDFixtureTraffic.wave(minutes: 60, buckets: 60, now: t0)
+        XCTAssertNil(NDFixtureTraffic.wave(minutes: 60, buckets: 60, now: t0.addingTimeInterval(180)).linked(after: a, minutes: 60).outgoing)
+        XCTAssertNil(a.linked(after: a, minutes: 60).outgoing)
+        XCTAssertNil(a.linked(after: nil, minutes: 60).outgoing)
+    }
+
+    /// Review B2 in the fixture: across clocks, 1 h <= 3 h <= 24 h for both series, and the 24 h saves equal the Agents sum.
+    func testFixtureTotalsNest() throws {
+        for minutes in [0, 1, 2, 7, 61, 190, 1_441] {
+            var i = BrainBarDesignFixture.inputs(.calm)
+            BrainBarDesignFixture.traffic(&i, at: BrainBarDesignFixture.fixedNow.addingTimeInterval(Double(minutes) * 60 + 17))
+            let h = try XCTUnwrap(i.heroWaves[.hour]), t = try XCTUnwrap(i.heroWaves[.threeHours]), d = try XCTUnwrap(i.heroWaves[.day])
+            XCTAssertLessThanOrEqual(h.savesTotal, t.savesTotal, "\(minutes)")
+            XCTAssertLessThanOrEqual(t.savesTotal, d.savesTotal, "\(minutes)")
+            XCTAssertLessThanOrEqual(h.readsTotal, t.readsTotal, "\(minutes)")
+            XCTAssertLessThanOrEqual(t.readsTotal, d.readsTotal, "\(minutes)")
+            XCTAssertEqual(i.agents.agents.compactMap(\.saves).reduce(0, +), d.savesTotal, "\(minutes)")
+        }
     }
 
     /// Fix 6: every Reconnect a person can click (dropdown row, needs band, Backups row, Settings) reaches the one store
@@ -732,11 +787,13 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         XCTAssertFalse(keepingUnits(report).contains(" "))
     }
 
-    /// Fix 13: a hero bar under 6 pt keeps a 1 pt corner; taller bars are pills.
+    /// Fix 13, superseded by round 2's polish 1: the corner grows with the bar, up to a pill.
     func testShortHeroBarsAreNotBeads() {
-        XCTAssertEqual(NDWaveform.barRadius(height: 5, width: 4, pill: true, corner: 1), 1)
-        XCTAssertEqual(NDWaveform.barRadius(height: 2, width: 4, pill: true, corner: 1), 1)
-        XCTAssertEqual(NDWaveform.barRadius(height: 12, width: 4, pill: true, corner: 1), 2)
+        // Polish 1 (round 2): min(width / 2, height / 4): a square bar gets a small corner, a tall bar a pill.
+        XCTAssertEqual(NDWaveform.barRadius(height: 4, width: 4, pill: true, corner: 1), 1)
+        XCTAssertEqual(NDWaveform.barRadius(height: 2, width: 4, pill: true, corner: 1), 0.5)
+        XCTAssertEqual(NDWaveform.barRadius(height: 40, width: 4, pill: true, corner: 1), 2)
+        XCTAssertEqual(NDWaveform.barRadius(height: 40, width: 4, pill: false, corner: 1), 1, "compact and dropdown: square ends")
     }
 
     /// Fix 14: an area draws the unknown ring only when one of its rows is dashed; otherwise the reason is spoken.
@@ -764,6 +821,29 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         XCTAssertEqual(NDRail.shown(apart, width: 480, past: 36, ahead: 12), apart)
         let noNext: [NDRail.Event] = [.init(hours: -0.05, kind: .ok)]
         XCTAssertEqual(NDRail.shown(noNext, width: 480, past: 36, ahead: 12), noNext)
+    }
+
+    /// Review B3: on the Backups page "Newest copy" and the "Copy on this Mac" lane are both unknown, or both known and
+    /// within an hour of each other, in every fixture, the stale one included.
+    func testNewestCopyFollowsTheLaneOnTheBackupsPage() throws {
+        let units: [String: Double] = ["s": 1, "min": 60, "h": 3600, "d": 86_400]
+        var sawUnknown = false
+        for name in BrainBarDesignFixture.Name.allCases {
+            let store = NDStore(fixture: BrainBarDesignFixture.inputs(name), page: .backups)
+            let page = NDBackupsPage(store: store)
+            let lane = try XCTUnwrap(page.lanes(store.model).first { $0.id == "backup_local" })
+            let fact = page.newestCopyFact(store.model)
+            if lane.number.value == NDModel.Number.unknown.value {
+                sawUnknown = true
+                XCTAssertEqual(fact, "—", name.rawValue)
+                continue
+            }
+            XCTAssertNotEqual(fact, "—", name.rawValue)
+            let age = try XCTUnwrap(Double(lane.number.value)) * (try XCTUnwrap(units[lane.number.unit]))
+            let newest = try XCTUnwrap(store.inputs.newestLocalCopyAt)
+            XCTAssertEqual(store.inputs.capture.now.timeIntervalSince(newest), age, accuracy: 3600, name.rawValue)
+        }
+        XCTAssertTrue(sawUnknown, "the stale fixture is covered")
     }
 
     func testNewestCopyTimeMatchesTheLaneAge() throws {

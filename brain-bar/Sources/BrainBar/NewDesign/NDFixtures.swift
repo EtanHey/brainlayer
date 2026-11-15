@@ -156,12 +156,7 @@ enum BrainBarDesignFixture {
         i.searchable = 0.9946
         i.savesWaiting = 0
         i.watcherHeartbeatAgeS = 48
-        i.menuWave = wave(24, seed: 7, end: now)
-        i.heroWaves = Dictionary(uniqueKeysWithValues: NDRange.allCases.map { ($0, wave(60, seed: 11 + $0.minutes, end: now)) })
-        i.agents = NDAgents(agents: [
-            .init(family: .claude, sessions: 5, saves: 72), .init(family: .codex, sessions: 3, saves: 31),
-            .init(family: .cursor, sessions: 0, saves: 8), .init(family: .gemini, sessions: 0, saves: 0),
-        ])
+        traffic(&i, at: now)
         i.jobs = jobs(nightlyFailing: false)
         i.backupHistory = history()
         i.nightlyLastRun = .ran(now.addingTimeInterval(-5 * 3600))
@@ -171,38 +166,29 @@ enum BrainBarDesignFixture {
         return i
     }
 
-    /// The waveforms one capture tick later (fix 5): each drops its oldest bucket, gains one invented bucket (fixed by the
-    /// tick's number) and ends one bucket width later, the shape a real sample hands the store.
-    static func ticked(_ inputs: NDInputs, step: Int) -> NDInputs {
-        var next = inputs
-        func advance(_ wave: NDWave?, minutes: Int, seed: Int) -> NDWave? {
-            guard var wave, wave.readable, !wave.reads.isEmpty else { return wave }
-            let fresh = self.wave(1, seed: seed &* 7_919 &+ step, end: now)
-            wave.reads = Array(wave.reads.dropFirst()) + fresh.reads
-            wave.saves = Array(wave.saves.dropFirst()) + fresh.saves
-            let width = Double(minutes * 60) / Double(wave.reads.count)
-            wave.endsAt = wave.endsAt.map { $0.addingTimeInterval(width) }
-            return wave
-        }
-        next.menuWave = advance(inputs.menuWave, minutes: 60, seed: 7)
-        for range in NDRange.allCases {
-            next.heroWaves[range] = advance(inputs.heroWaves[range], minutes: range.minutes, seed: 11 &+ range.minutes)
-        }
-        return next
+    /// Review B2: every wave and the Agents column come from one invented half-minute series, so a longer range always
+    /// holds at least what a shorter one does, and the 24 h saves equal the Agents rows' sum.
+    static func traffic(_ i: inout NDInputs, at clock: Date) {
+        i.menuWave = NDFixtureTraffic.wave(minutes: 60, buckets: 24, now: clock)
+        i.heroWaves = Dictionary(uniqueKeysWithValues: NDRange.allCases.map {
+            ($0, NDFixtureTraffic.wave(minutes: $0.minutes, buckets: 60, now: clock))
+        })
+        let day = NDFixtureTraffic.wave(minutes: 1440, buckets: 60, now: clock).savesTotal
+        let claude = day * 62 / 100, codex = day * 28 / 100
+        i.agents = NDAgents(agents: [
+            .init(family: .claude, sessions: 5, saves: claude), .init(family: .codex, sessions: 3, saves: codex),
+            .init(family: .cursor, sessions: 0, saves: day - claude - codex), .init(family: .gemini, sessions: 0, saves: 0),
+        ])
     }
 
-    /// Invented traffic with a fixed seed: steady reads, bursty saves, some empty buckets.
-    static func wave(_ n: Int, seed: Int, end: Date) -> NDWave {
-        var s = UInt32(truncatingIfNeeded: seed &* 2_654_435_761) | 1
-        func next() -> Double { s = s &* 1_664_525 &+ 1_013_904_223; return Double(s) / Double(UInt32.max) }
-        var saves: [Int] = [], reads: [Int] = [], burst = 0
-        for _ in 0..<n {
-            if next() < 0.12 { burst = 3 + Int(next() * 4) }
-            reads.append(Int(14 + next() * 60 * (burst > 0 ? 1.6 : 0.7)))
-            saves.append(next() < 0.5 ? Int(ceil(next() * (burst > 0 ? 5 : 2))) : 0)
-            if burst > 0 { burst -= 1 }
-        }
-        return NDWave(saves: saves, reads: reads, readable: true, endsAt: end)
+    /// One capture tick (fix 5): the fixture clock moves one minute, the 1 h hero's bucket width, and every wave and
+    /// total is read again off the same series. The 1 h hero shifts on every tick; the dropdown's hour (150 s buckets),
+    /// 3 h and 24 h shift when their own bucket boundary passes, and their newest bar grows in between, as live data does.
+    static func ticked(_ inputs: NDInputs, step: Int) -> NDInputs {
+        var next = inputs
+        guard inputs.menuWave?.readable != false, inputs.heroWaves.values.allSatisfy(\.readable) else { return next }
+        traffic(&next, at: now.addingTimeInterval(Double(step) * 60))
+        return next
     }
 
     /// A week of nightly attempts. Each lane's newest attempt sits at the age its row's gauge says (the Drive copy 3 h,
@@ -238,4 +224,49 @@ enum BrainBarDesignFixture {
         ]
     }
 }
+/// The invented traffic behind every fixture wave: counts per half minute, deterministic in the half minute's absolute
+/// index (no seed per range), with bursts of a few minutes. A wave sums it into its buckets on a fixed grid.
+enum NDFixtureTraffic {
+    static let half: Int = 30
+
+    static func unit(_ x: Int, _ salt: UInt64) -> Double {
+        var z = UInt64(bitPattern: Int64(x)) &+ salt &* 0x9E37_79B9_7F4A_7C15
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        z ^= z >> 31
+        return Double(z >> 11) / Double(UInt64(1) << 53)
+    }
+
+    static func counts(_ h: Int) -> NDWave.Bucket {
+        let burst = unit(h >= 0 ? h / 16 : (h - 15) / 16, 1) < 0.18
+        let reads = Int(7 + unit(h, 2) * 30 * (burst ? 1.6 : 0.7))
+        let saves = unit(h, 3) < (burst ? 0.55 : 0.18) ? 1 + Int(unit(h, 4) * (burst ? 2.5 : 1.2)) : 0
+        return NDWave.Bucket(saves: saves, reads: reads)
+    }
+
+    /// `buckets` buckets over `minutes`, on the grid of that bucket width, the newest one partly filled up to `now`.
+    static func wave(minutes: Int, buckets n: Int, now: Date) -> NDWave {
+        let width = minutes * 60 / n
+        let t = now.timeIntervalSinceReferenceDate
+        let end = Int((t / Double(width) - 1e-6).rounded(.up))
+        let filledHalves = Int((t / Double(half) - 1e-6).rounded(.up))
+        var saves: [Int] = [], reads: [Int] = []
+        for k in 0..<n {
+            let start = (end - n + k) * width / half
+            var s = 0, r = 0
+            for h in start..<max(start, min(start + width / half, filledHalves)) {
+                let c = counts(h)
+                s += c.saves
+                r += c.reads
+            }
+            saves.append(s)
+            reads.append(r)
+        }
+        var wave = NDWave(saves: saves, reads: reads, readable: true,
+                          endsAt: Date(timeIntervalSinceReferenceDate: Double(end * width)))
+        wave.sequence = end
+        return wave
+    }
+}
+
 #endif
