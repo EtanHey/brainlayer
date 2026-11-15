@@ -214,6 +214,23 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     private let driveAuth: BrainBarDriveAuthModel
     private var hasPlacedWindow = false
     private var isClosingWindow = false
+#if BRAINBAR_UI
+    /// L6: the content shown follows `BrainBarDesign`, read live. Classic keeps main's hosting controller untouched;
+    /// the new design swaps in its own and swaps back.
+    private let classicContent: NSViewController
+    private var newContent: NSViewController?
+    private(set) var shownDesign: BrainBarDesign = .classic
+    private let runtimeForDesign: BrainBarRuntime
+    private let workspaceForDesign: any BrainBarWorkspaceActing
+    private var designObserver: NSObjectProtocol?
+    var designDefaults: UserDefaults = .standard
+    lazy var newDesignStore: NDStore = {
+        let store = NDStore.shared(for: runtimeForDesign, workspace: workspaceForDesign)
+        store.onOpenWindow = { [weak self] page in self?.showPage(page) }
+        store.onOpenSettings = { [weak self] in self?.showSettings() }
+        return store
+    }()
+#endif
     /// Only used to place the very first window below the menu-bar icon.
     weak var statusItemButton: NSView?
 
@@ -234,6 +251,11 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         hostingController.view.autoresizingMask = [.width, .height]
 
         contentViewControllerForTesting = hostingController
+#if BRAINBAR_UI
+        classicContent = hostingController
+        runtimeForDesign = runtime
+        workspaceForDesign = workspace
+#endif
         self.driveAuth = runtime.driveAuth
         self.frameStore = frameStore
         self.screenFrames = screenFrames
@@ -250,7 +272,57 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         BrainBarSettingsActions.installOpenHandler { [weak self] in
             self?.showSettings()
         }
+#if BRAINBAR_UI
+        applyDesign()
+        designObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil,
+                                                                queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyDesign() }
+        }
+#endif
     }
+
+#if BRAINBAR_UI
+    /// Swaps the window's content to the design `BrainBarDesign` names now. No animation: the switch is a setting.
+    func applyDesign() {
+        let design = BrainBarDesign.current(in: designDefaults)
+        guard design != shownDesign else { return }
+        shownDesign = design
+        let frame = window.frame
+        switch design {
+        case .classic:
+            window.contentViewController = classicContent
+            window.minSize = Self.minSize
+            window.contentMinSize = Self.minSize
+        case .new:
+            let content = newContent ?? {
+                let hosting = NSHostingController(rootView: NDWindowRoot(store: newDesignStore))
+                hosting.sizingOptions = []
+                return hosting
+            }()
+            newContent = content
+            window.contentViewController = content
+            window.minSize = NDGrid.windowMinimum
+            window.contentMinSize = NDGrid.windowMinimum
+            newDesignStore.refresh()
+            newDesignStore.refreshWaves(force: true)
+            newDesignStore.refreshBackupHistory(force: true)
+        }
+        // Keep the user's frame across the swap, never below the design's minimum.
+        let minimum = window.frameRect(forContentRect: NSRect(origin: .zero, size: currentMinSize)).size
+        window.setFrame(NSRect(x: frame.minX, y: frame.maxY - max(frame.height, minimum.height),
+                               width: max(frame.width, minimum.width), height: max(frame.height, minimum.height)), display: false)
+    }
+
+    private var currentMinSize: NSSize { shownDesign == .new ? NDGrid.windowMinimum : Self.minSize }
+
+    /// The new design's pages: open the window on one (motion 2: no window animation).
+    func showPage(_ page: NDPage) {
+        applyDesign()
+        guard shownDesign == .new else { return showDashboard() }
+        newDesignStore.page = page
+        show()
+    }
+#endif
 
     /// The hotkey and `brainbar://toggle`: open the window, or close it when it is open.
     func toggle(anchoredTo anchorView: NSView? = nil) {
@@ -281,17 +353,33 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     }
 
     func showDashboard() {
+#if BRAINBAR_UI
+        if BrainBarDesign.current(in: designDefaults) == .new { return showPage(.overview) }
+#endif
         panelState.selectedTab = .dashboard
         show()
     }
 
     func showSettings() {
+#if BRAINBAR_UI
+        if BrainBarDesign.current(in: designDefaults) == .new {
+            NDSettingsWindowController.show(store: newDesignStore, activationPolicy: activationPolicy)
+            return
+        }
+#endif
         panelState.selectedTab = .settings
         show()
     }
 
 #if BRAINBAR_UI
     func showSettings(section: BrainBarSettingsSection) {
+        if BrainBarDesign.current(in: designDefaults) == .new {
+            switch section {
+            case .jobs: return showPage(.jobs)
+            case .backups: return showPage(.backups)
+            case .advanced: return showSettings()
+            }
+        }
         panelState.settingsNavigation.select(section)
         showSettings()
     }
@@ -313,7 +401,11 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             window.setFrame(restored, display: false)
             return
         }
+#if BRAINBAR_UI
+        window.setContentSize(shownDesign == .new ? NDGrid.windowSize : Self.defaultSize)
+#else
         window.setContentSize(Self.defaultSize)
+#endif
         if let anchorView, let anchorWindow = anchorView.window,
            let screen = anchorWindow.screen ?? NSScreen.screens.first {
             let anchorRect = anchorWindow.convertToScreen(anchorView.convert(anchorView.bounds, to: nil))
@@ -342,7 +434,12 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     /// A real window resizes on both axes, down to the size the dashboard needs.
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        NSSize(width: max(frameSize.width, Self.minSize.width), height: max(frameSize.height, Self.minSize.height))
+#if BRAINBAR_UI
+        let minimum = currentMinSize
+#else
+        let minimum = Self.minSize
+#endif
+        return NSSize(width: max(frameSize.width, minimum.width), height: max(frameSize.height, minimum.height))
     }
 
     /// Places the window as the first show would, without ordering it front (where AppKit would
