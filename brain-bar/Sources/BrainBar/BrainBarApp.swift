@@ -364,8 +364,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct BrainBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    /// The app's one SwiftUI scene owns no window. It used to be `Settings { EmptyView() }`; under the App lifecycle
+    /// `NSApp.delegate` is SwiftUI's own app delegate (ours is only its adaptor), which itself answers AppKit's
+    /// `applicationShouldOpenUntitledFile:` / `applicationOpenUntitledFile:` (asked at launch for the open-application
+    /// event LaunchServices sends, e.g. `open`, Finder, Spotlight) and `showSettingsWindow:` by presenting a scene's
+    /// window; with Settings the only scene, that was an empty "<app> Settings" window. A menu-bar extra that is never
+    /// inserted has no window and no status item, so no route can present an empty window. Settings is reached only
+    /// through the commands below and the status menu, which open the active design's own Settings surface.
     var body: some Scene {
-        Settings {
+        MenuBarExtra("BrainBar", isInserted: .constant(false)) {
             EmptyView()
         }
         .commands {

@@ -693,6 +693,24 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         }
     }
 
+    /// Empty Settings window: the app's SwiftUI scene graph holds no scene with a window (Settings, WindowGroup, Window,
+    /// DocumentGroup), so neither AppKit's launch-time open-untitled request, a reopen, state restoration nor
+    /// `showSettingsWindow:` reaching SwiftUI's own app delegate can present one; its one scene is a menu-bar extra that is
+    /// never inserted (no status item). Both designs.
+    func testTheAppHasNoSceneThatCanPresentAWindow() throws {
+        let scenes = String(describing: BrainBarApp.Body.self)
+        XCTAssertTrue(scenes.contains("MenuBarExtra"), scenes)
+        for windowed in ["Settings<", "SettingsScene", "WindowGroup", "Window<", "DocumentGroup", "UtilityWindow"] {
+            XCTAssertFalse(scenes.contains(windowed), "\(windowed) in \(scenes)")
+        }
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/BrainBar/BrainBarApp.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("MenuBarExtra(\"BrainBar\", isInserted: .constant(false))"), "never inserted: no status item")
+        XCTAssertFalse(source.split(separator: "\n").contains { $0.trimmingCharacters(in: .whitespaces).hasPrefix("Settings {") },
+                       "no SwiftUI Settings scene")
+    }
+
     /// Fix 10: a switched-off job says "off" in Ink 2; its switch's help names the job and the action.
     func testSwitchedOffJobSaysOff() throws {
         var i = BrainBarDesignFixture.inputs(.calm)
