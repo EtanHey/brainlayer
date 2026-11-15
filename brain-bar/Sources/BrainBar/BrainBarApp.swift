@@ -170,7 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runtime: runtime, activationPolicy: windowActivationPolicy, statusBar: SystemBrainBarStatusItemHost())
         self.dashboardPanel = dashboardPanel
         statusPopoverController = status
-        dashboardPanel.showPage(fixture.page)
+        // Opens the fixture's page as before, or what BRAINBAR_DESIGN_OPEN / _TAB / _RANGE / _SCRIPT / _HOLD ask for.
+        NDCaptureDriver.start(status: status, panel: dashboardPanel, fixturePage: fixture.page)
     }
 #endif
 

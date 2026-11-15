@@ -368,7 +368,9 @@ import SwiftUI
     }
 
     func reconnectDrive() {
-        guard !isFixture, let drive = runtime?.driveAuth, !drive.isReconnecting else { return }
+        // A capture fixture starts no real reconnect; a press shows the waiting line it would show.
+        if isFixture { inputs.driveReconnecting = true; return }
+        guard let drive = runtime?.driveAuth, !drive.isReconnecting else { return }
         Task { await drive.reconnect() }
     }
 
