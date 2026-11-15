@@ -10,16 +10,16 @@ import pytest
 from brainlayer.job_alerts import active_alerts, alert_reported_at, report
 
 
-def test_macos_notification_has_bounded_subprocess_timeout(monkeypatch):
+def test_python_notification_is_retired(monkeypatch):
+    import subprocess
+
     from brainlayer import job_alerts
 
     calls = []
     monkeypatch.delenv("BRAINLAYER_TEST_PATH_PROVENANCE", raising=False)
-    monkeypatch.setattr(job_alerts.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
-    job_alerts._notify("fixture")
-    assert calls[0][0][0][0] == "osascript"
-    assert 0 < calls[0][1]["timeout"] <= 8
-    assert calls[0][1]["check"] is True
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    job_alerts._notify("Invented fault")
+    assert calls == []
 
 
 @pytest.fixture(autouse=True)

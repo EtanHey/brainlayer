@@ -34,6 +34,7 @@ enum BrainBarMenuPresenter {
         var handoff = BrainBarMenuPresenter.handoff
         /// D13's line, drawn directly under this row (R22) and never counted.
         var fact: [String]? = nil
+        var faultID: String { "\(thing)-\(worded ? action.rawValue : "generic")" }
     }
 
     private static let checksOf: [Thing: [String]] = [
@@ -68,11 +69,38 @@ enum BrainBarMenuPresenter {
         }
         // X03, X04 (P5 words them): the verdict's checks are Can't tell, except that its reds count (I1),
         // and so do the rows the app reads without the producer (R20).
-        var reds: Set<Thing> = Set((c.verdict?.checks ?? []).filter { $0.state == .red }.map { thing(of: $0.name) })
-        if c.verdict?.dot == .red { reds.insert(.system) }
-        let lines: [Line] = Thing.allCases.filter(reds.contains).map(needs) + appFacts(c)
+        let lines = staleNeeds(c)
         guard !lines.isEmpty else { return checkingState(c) }
         return assemble(c, lines + four.filter { t in !lines.contains { $0.thing == t } }.map(checking), allGood: nil)
+    }
+
+    private static func staleNeeds(_ c: Capture) -> [Line] {
+        var reds: Set<Thing> = Set((c.verdict?.checks ?? []).filter { $0.state == .red }.map { thing(of: $0.name) })
+        if c.verdict?.dot == .red { reds.insert(.system) }
+        return Thing.allCases.filter(reds.contains).map(needs) + appFacts(c)
+    }
+
+    struct NotificationFault: Equatable {
+        var id: String
+        var title: String
+    }
+
+    /// Uses the very same merge keys and row order as the menu. Copy changes do not start an episode.
+    static func notificationFaults(_ c: Capture) -> [NotificationFault] {
+        let fresh = c.verdict != nil && (0...900).contains(c.verdictAwakeAgeS)
+        let lines: [Line]
+        if fresh, let verdict = c.verdict { lines = derive(c, verdict) }
+        else { lines = staleNeeds(c) }
+        var merged = mergedNeeds(lines)
+        let rows = present(c).rows.filter { $0.kind == .needsYou }
+        // The final guard can introduce one generic system row for an inconsistent red verdict.
+        if merged.isEmpty, rows.count == 1 { merged = [needs(.system)] }
+        guard rows.count == merged.count else { return [] }
+        let appIDs = Set(appFacts(c).map(\.faultID))
+        return zip(merged, rows).compactMap { line, row in
+            guard fresh || appIDs.contains(line.faultID), let title = row.strings.first else { return nil }
+            return NotificationFault(id: line.faultID, title: title)
+        }
     }
 
     /// The worst state a check reports under this name, or nil when no check has the name.
@@ -255,6 +283,22 @@ enum BrainBarMenuPresenter {
 
     // MARK: Part 2: merge, count, order, headline
 
+    private static func ordered(_ lines: [Line], _ key: (Line) -> (Int, Int, Int)) -> [Line] {
+        lines.enumerated().sorted {
+            let (a, b) = (key($0.element), key($1.element))
+            return (a.0, a.1, a.2, $0.offset) < (b.0, b.1, b.2, $1.offset)
+        }.map(\.element)
+    }
+
+    private static func mergedNeeds(_ input: [Line]) -> [Line] {
+        var needs: [Line] = []
+        for line in ordered(input.filter { $0.level == .needs }, { ($0.rank.rawValue, $0.priority, 0) })
+            where !needs.contains(where: { $0.faultID == line.faultID }) {
+            needs.append(line)
+        }
+        return ordered(needs) { ($0.rank.rawValue, $0.thing.rawValue, $0.priority) }
+    }
+
     private static func assemble(_ c: Capture, _ input: [Line], allGood: String?) -> P {
         // R17 and M5: one row per thing and level; the first line of a thing at that level speaks.
         func at(_ level: Level) -> [Line] { Thing.allCases.compactMap { t in input.first { $0.thing == t && $0.level == level } } }
@@ -263,22 +307,9 @@ enum BrainBarMenuPresenter {
         func status(_ line: Line, mark: P.Mark?) -> P.Row {
             P.Row(kind: .statusLine, strings: line.strings, mark: mark, state: line.level == .behind ? .behind : .cantTell, spinner: line.spinner)
         }
-        // M2, M3: worded Needs-you rows of one thing and one action merge, the highest class speaking, then severity; R17's
-        // generic rows merge only with each other. Step 6 orders by class, thing, severity. Swift's sort is not stable,
-        // so the input index is the last key.
-        func ordered(_ lines: [Line], _ key: (Line) -> (Int, Int, Int)) -> [Line] {
-            lines.enumerated().sorted {
-                let (a, b) = (key($0.element), key($1.element))
-                return (a.0, a.1, a.2, $0.offset) < (b.0, b.1, b.2, $1.offset)
-            }.map(\.element)
-        }
-        var needs: [Line] = []
-        for line in ordered(input.filter { $0.level == .needs }, { ($0.rank.rawValue, $0.priority, 0) })
-            where !needs.contains(where: { $0.thing == line.thing && $0.worded == line.worded && (!line.worded || $0.action == line.action) }) {
-            needs.append(line)
-        }
+        let needs = mergedNeeds(input)
         if !needs.isEmpty {
-            let rows = ordered(needs) { ($0.rank.rawValue, $0.thing.rawValue, $0.priority) }.flatMap { line in
+            let rows = needs.flatMap { line in
                 [P.Row(kind: .needsYou, strings: line.strings + (line.action == .copyReport ? line.handoff : []), action: action(line.action))]
                     + (line.fact.map { [P.Row(kind: .factLine, strings: $0)] } ?? [])
             }

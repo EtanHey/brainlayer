@@ -1,4 +1,4 @@
-"""Durable, deduplicated backup/maintenance failure notices."""
+"""Durable, deduplicated backup/maintenance alert records for BrainBar."""
 
 from __future__ import annotations
 
@@ -28,19 +28,8 @@ def _times_path(path: Path) -> Path:
 
 
 def _notify(message: str) -> None:
-    if os.environ.get("BRAINLAYER_TEST_PATH_PROVENANCE") == "pytest":
-        return
-    subprocess.run(
-        [
-            "osascript",
-            "-e",
-            'on run argv\n display notification (item 1 of argv) with title "BrainLayer"\nend run',
-            message,
-        ],
-        timeout=8,
-        check=True,
-        capture_output=True,
-    )
+    """BrainBar owns user notifications; report() still persists every alert."""
+    return None
 
 
 @contextmanager
@@ -108,9 +97,10 @@ def report(
 ) -> bool:
     """Set or clear one episode. Return true only when the visible state changes.
 
-    Only a new failure posts a notification, and only when no other active key already
-    carries the identical message (one incident fanned out across keys posts once).
-    Recovery updates the alert file and the health log but never notifies.
+    Only a new failure invokes the optional notification hook, and only when no
+    other active key carries the identical message. The production hook is silent;
+    BrainBar delivers notifications from its presentation. Recovery only updates
+    the alert file and health log.
     """
     destination = path or alert_path()
     with _locked(destination):

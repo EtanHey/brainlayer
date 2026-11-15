@@ -83,6 +83,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             dashboardPanelController: dashboardPanel,
             statusBar: SystemBrainBarStatusItemHost()
         )
+        statusPopoverController?.enableFaultNotifications(BrainBarFaultNotifications(
+            center: BrainBarSystemNotificationCenter { [weak self] in
+                self?.statusPopoverController?.openNotificationDestination()
+            }, defaults: .standard))
 
         let dbPath = BrainBarServer.defaultDBPath()
         NSLog("[BrainBar] Starting UI shell; database at %@", dbPath)
