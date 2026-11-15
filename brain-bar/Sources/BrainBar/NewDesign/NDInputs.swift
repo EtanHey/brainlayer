@@ -21,7 +21,7 @@ struct NDInputs: Sendable {
     var menuWave: NDWave? = nil
     /// The hero waveform, 60 buckets per range.
     var heroWaves: [NDRange: NDWave] = [:]
-    /// Live sessions per agent and saves in the last 24 h; nil members are unknown.
+    /// Live sessions per agent and memories attributed to it in the last 24 h (field `saves`); nil members are unknown.
     var agents: NDAgents = .unknown
     /// The background jobs as launchd and their logs report them; nil when not sampled yet.
     var jobs: [NDJobInput]? = nil

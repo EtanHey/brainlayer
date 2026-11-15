@@ -444,6 +444,9 @@ extension BrainBarMenuPresenter {
         /// state in place of "always on".
         static let onHeader = "On"
         static let running = "running"
+        /// Lead's ruling L5/L7 (approved): the Agents column's caption. It counts every memory attributed to an agent family
+        /// in 24 h (observability emitters), the same noun as the title bar's count, not saves.
+        static let memoriesIn24h = "memories in 24 h"
 
         /// V1's VoiceOver sentence for the waveform.
         static func wave(span minutes: Int, saves: Int, reads: Int) -> String {

@@ -468,12 +468,14 @@ extension NDModel {
         let rows = ctx.i.agents.agents.map { a -> Row in
             let number = a.saves.map { Number(value: NDFormat.integer($0)) } ?? .unknown
             let sessions = a.sessions.map { $0 == 1 ? "1 session now" : "\($0) sessions now" } ?? "sessions not known"
-            let saves = a.saves.map { "\($0) saves in the last 24 hours" } ?? "saves not known"
+            // L5 ruling: the count is every memory attributed to the agent's family in 24 h, not its saves alone.
+            let memories = a.saves.map { "\(NDFormat.integer($0)) memories in the last 24 hours" } ?? "memories not known"
             return Row(id: a.family.rawValue, name: a.family.label, visual: .agent(sessions: a.sessions, saves: a.saves, scale: scale),
-                       number: number, accessibility: "\(a.family.label): \(sessions), \(saves)")
+                       number: number, accessibility: "\(a.family.label): \(sessions), \(memories)")
         }
         let unknown = ctx.i.agents.agents.contains { $0.sessions == nil || $0.saves == nil }
-        return Area(thing: nil, name: "Agents", mark: unknown ? .unknown : .none, rows: rows, limitLine: false, aside: "saves in 24 h")
+        return Area(thing: nil, name: "Agents", mark: unknown ? .unknown : .none, rows: rows, limitLine: false,
+                    aside: BrainBarMenuPresenter.SurfaceSay.memoriesIn24h)
     }
 
     static func backups(_ ctx: Context, _ mark: Mark) -> Area {

@@ -248,7 +248,8 @@ import SwiftUI
         return i
     }
 
-    /// Live sessions from the agent monitor; saves in 24 h from the observability emitters (the only per-agent count).
+    /// Live sessions from the agent monitor; memories in 24 h per family from the observability emitters (every chunk the
+    /// producer attributes to the family by source, sender or source file; the only per-agent count).
     static func agents(_ activity: AgentActivitySnapshot?, _ observability: ObservabilityReadResult?) -> NDAgents {
         var counts: [AgentFamily: Int]? = nil
         if case let .readable(document)? = observability, document.emitters.state == "measured", let rows = document.emitters.byEmitter {

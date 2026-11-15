@@ -167,13 +167,16 @@ enum BrainBarDesignFixture {
     }
 
     /// Review B2: every wave and the Agents column come from one invented half-minute series, so a longer range always
-    /// holds at least what a shorter one does, and the 24 h saves equal the Agents rows' sum.
+    /// holds at least what a shorter one does, and the Agents rows sum to the 24 h saves plus the 24 h reads.
     static func traffic(_ i: inout NDInputs, at clock: Date) {
         i.menuWave = NDFixtureTraffic.wave(minutes: 60, buckets: 24, now: clock)
         i.heroWaves = Dictionary(uniqueKeysWithValues: NDRange.allCases.map {
             ($0, NDFixtureTraffic.wave(minutes: $0.minutes, buckets: 60, now: clock))
         })
-        let day = NDFixtureTraffic.wave(minutes: 1440, buckets: 60, now: clock).savesTotal
+        // L5 ruling: the Agents rows split every memory in 24 h (saved by agents plus read from conversations), as the real
+        // per-family count does; the fixture attributes all of it (the real source can leave some unattributed).
+        let dayWave = NDFixtureTraffic.wave(minutes: 1440, buckets: 60, now: clock)
+        let day = dayWave.savesTotal + dayWave.readsTotal
         let claude = day * 62 / 100, codex = day * 28 / 100
         i.agents = NDAgents(agents: [
             .init(family: .claude, sessions: 5, saves: claude), .init(family: .codex, sessions: 3, saves: codex),

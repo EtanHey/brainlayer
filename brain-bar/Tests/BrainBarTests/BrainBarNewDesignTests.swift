@@ -349,11 +349,23 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
         guard case .unknown? = NDModel.make(i).areas.first(where: { $0.thing == .upkeep })?.rows.first?.visual else { return XCTFail("dashed") }
     }
 
+    func testAgentsColumnCountsMemories() throws {
+        let m = NDModel.make(BrainBarDesignFixture.inputs(.calm))
+        let agents = try XCTUnwrap(m.areas.first { $0.name == "Agents" })
+        XCTAssertEqual(agents.aside, BrainBarMenuPresenter.SurfaceSay.memoriesIn24h)
+        XCTAssertEqual(agents.aside, "memories in 24 h")
+        for row in agents.rows {
+            XCTAssertTrue(row.accessibility.contains("memories"), row.accessibility)
+            XCTAssertFalse(row.accessibility.contains("saves"), row.accessibility)
+        }
+        XCTAssertTrue(agents.rows.contains { $0.number.value.contains(",") }, "thousands separator like the title bar")
+    }
+
     func testMeasuredZeroDrawsNothingAndUnknownIsDashed() {
         var i = BrainBarDesignFixture.inputs(.calm)
         let m = NDModel.make(i)
         let gemini = m.areas.first { $0.name == "Agents" }!.rows.first { $0.id == "gemini" }!
-        // The scale is the busiest agent's saves (the fixture's Agents rows now sum to its 24 h saves, review B2).
+        // The scale is the busiest agent's count (the fixture's Agents rows sum to its 24 h memories, L5).
         XCTAssertEqual(gemini.visual, .agent(sessions: 0, saves: 0, scale: i.agents.agents.compactMap(\.saves).max()!))
         XCTAssertEqual(gemini.number.value, "0")
         i.agents = .unknown
@@ -723,7 +735,8 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         XCTAssertNil(a.linked(after: nil, minutes: 60).outgoing)
     }
 
-    /// Review B2 in the fixture: across clocks, 1 h <= 3 h <= 24 h for both series, and the 24 h saves equal the Agents sum.
+    /// Review B2 in the fixture: across clocks, 1 h <= 3 h <= 24 h for both series, and the Agents rows sum to the 24 h
+    /// saved plus the 24 h read (L5: they count memories). Captioned with the approved noun.
     func testFixtureTotalsNest() throws {
         for minutes in [0, 1, 2, 7, 61, 190, 1_441] {
             var i = BrainBarDesignFixture.inputs(.calm)
@@ -733,7 +746,8 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
             XCTAssertLessThanOrEqual(t.savesTotal, d.savesTotal, "\(minutes)")
             XCTAssertLessThanOrEqual(h.readsTotal, t.readsTotal, "\(minutes)")
             XCTAssertLessThanOrEqual(t.readsTotal, d.readsTotal, "\(minutes)")
-            XCTAssertEqual(i.agents.agents.compactMap(\.saves).reduce(0, +), d.savesTotal, "\(minutes)")
+            // L5 ruling: the Agents rows count memories (saved plus read), every one attributed in the fixture.
+            XCTAssertEqual(i.agents.agents.compactMap(\.saves).reduce(0, +), d.savesTotal + d.readsTotal, "\(minutes)")
         }
     }
 
