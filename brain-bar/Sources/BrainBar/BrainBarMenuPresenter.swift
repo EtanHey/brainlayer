@@ -34,7 +34,7 @@ enum BrainBarMenuPresenter {
         var handoff = BrainBarMenuPresenter.handoff
         /// D13's line, drawn directly under this row (R22) and never counted.
         var fact: [String]? = nil
-        var mergeKey: String { "\(thing)-\(worded ? action.rawValue : "generic")" }
+        var mergeKey: String { [String(describing: thing), worded ? action.rawValue : "generic"].joined(separator: "-") }
         var faultID: String { String(describing: thing) }
         var notificationCauses: Set<String> = []
     }
@@ -122,27 +122,18 @@ enum BrainBarMenuPresenter {
 
     private static func appNotificationCauses(_ c: Capture) -> [Thing: Set<String>] {
         var causes: [Thing: Set<String>] = [:]
-        if let failures = c.maintenanceNightFailures, failures >= 3 { causes[.upkeep] = ["app:maintenance"] }
+        if let failures = c.maintenanceNightFailures, failures >= 3 { causes[.upkeep] = [appNotificationCause("maintenance")] }
         if let w = c.watcher, w.readable, w.fresh {
             for reason in w.alertReasons where reason != "quarantined_record" {
                 if reason == "coverage_drop", w.dbProbeFailed { continue }
                 if reason == "offset_lag", !lagPastLimit(c) { continue }
                 let thing: Thing = ["offset_lag", "coverage_drop", "file_ingestion_failure"].contains(reason) ? .remembering : .system
-                causes[thing, default: []].insert("app:" + reason)
+                causes[thing, default: []].insert(appNotificationCause(reason))
             }
         }
         return causes
     }
 
-    private static func genericNotificationTitle(_ thing: Thing) -> String {
-        switch thing {
-        case .remembering: "Conversation saving needs attention"
-        case .finding: "Memory search needs attention"
-        case .safe: "Backups need attention"
-        case .upkeep: "Upkeep needs attention"
-        case .system: "BrainLayer needs attention"
-        }
-    }
 
     /// Menu merge keys remain untouched; notification episodes group its rows by thing alone.
     static func notificationFaults(_ c: Capture) -> [NotificationFault] {
@@ -167,7 +158,7 @@ enum BrainBarMenuPresenter {
             if fresh {
                 causes.formUnion((c.verdict?.checks ?? []).filter {
                     $0.state == .red && thing(of: $0.name) == line.thing
-                }.map { "check:" + $0.name })
+                }.map { checkNotificationCause($0.name) })
             }
             if let index: Int = faults.firstIndex(where: { $0.id == line.faultID }) {
                 faults[index].pairingCauses.formUnion(titles[line.thing]?.keys.map { $0 } ?? [])
@@ -195,14 +186,14 @@ enum BrainBarMenuPresenter {
         if let failures = c.maintenanceNightFailures, failures >= 3 {  // U03; its second sentence only when saving and backups are proven fine
             var line = worded(.upkeep, [Say.u03(String(failures))]
                 + (provenFine(c).isSuperset(of: [.remembering, .safe]) ? [Say.stillSaved.text] : []), .confirmed)
-            line.notificationCauses = ["app:maintenance"]
+            line.notificationCauses = [appNotificationCause("maintenance")]
             lines.append(line)
         }
         guard let w = c.watcher, w.readable, w.fresh else { return lines }
-        if w.alertReasons.contains("offset_lag"), lagPastLimit(c) { lines.append(needs(.remembering, cause: "app:offset_lag")) }  // R02 escalated
+        if w.alertReasons.contains("offset_lag"), lagPastLimit(c) { lines.append(needs(.remembering, cause: appNotificationCause("offset_lag"))) }  // R02 escalated
         for reason in w.alertReasons where !["offset_lag", "quarantined_record"].contains(reason) {
             if reason == "coverage_drop", w.dbProbeFailed { continue }
-            lines.append(needs(["coverage_drop", "file_ingestion_failure"].contains(reason) ? .remembering : .system, cause: "app:" + reason))
+            lines.append(needs(["coverage_drop", "file_ingestion_failure"].contains(reason) ? .remembering : .system, cause: appNotificationCause(reason)))
         }
         return lines
     }
@@ -217,8 +208,8 @@ enum BrainBarMenuPresenter {
         for name in known where name != "monitor" && !consumed.contains(name) {
             switch worst(v, name) {
             case .green?: break
-            case .red?: lines.append(needs(thing(of: name), cause: "check:" + name))
-            case .amber?: lines.append(calmAmber(name, c, v) ?? needs(thing(of: name), cause: "check:" + name))
+            case .red?: lines.append(needs(thing(of: name), cause: checkNotificationCause(name)))
+            case .amber?: lines.append(calmAmber(name, c, v) ?? needs(thing(of: name), cause: checkNotificationCause(name)))
             case .unknown?, nil: lines.append(checking(thing(of: name)))
             }
         }
@@ -303,14 +294,14 @@ enum BrainBarMenuPresenter {
         var lines: [Line] = [], consumed: Set<String> = []
         if one("integrity")?.state == .red {  // S19
             var line = worded(.safe, [Say.s19.text, Say.s19Memory.text], .custody, priority: 0)
-            line.notificationCauses = ["check:integrity"]
+            line.notificationCauses = [checkNotificationCause("integrity")]
             lines.append(line)
             consumed.insert("integrity")
         }
         if let e = one("embedding"), e.state == .red || (e.state == .amber && within(e)) {  // F07
             let exact = c.keywordCoverage == 1 && searchProven(c) ? " " + Say.exactWords.text : ""
             var line = worded(.finding, [Say.f07.text, Say.f07Since(e.ageS.flatMap(over).map { " " + $0 } ?? "") + exact], .confirmed)
-            if e.state == .red { line.notificationCauses = ["check:embedding"] }
+            if e.state == .red { line.notificationCauses = [checkNotificationCause("embedding")] }
             lines.append(line)
             consumed.insert("embedding")
         }
@@ -342,7 +333,7 @@ enum BrainBarMenuPresenter {
                 s02 = true
             }
         }
-        db?.notificationCauses = Set(dbNames.map { "check:" + $0 })
+        db?.notificationCauses = Set(dbNames.map { checkNotificationCause($0) })
         guard one("drive_auth")?.state == .red else {
             if let db { lines.append(db) }
             return (lines, consumed.union(dbNames))
@@ -362,7 +353,7 @@ enum BrainBarMenuPresenter {
         // D13, R22: a failing transcript backup cannot upload either while Drive is red; a fact line directly under the
         // Drive row, not counted.
         if transcriptsFailing { s13.fact = [missing ? Say.d13Missing.text : Say.d13.text] }  // R26
-        s13.notificationCauses = Set((["drive_auth"] + dbNames + reds.map(\.name) + (transcriptsFailing ? ["transcripts"] : [])).map { "check:" + $0 })
+        s13.notificationCauses = Set((["drive_auth"] + dbNames + reds.map(\.name) + (transcriptsFailing ? ["transcripts"] : [])).map { checkNotificationCause($0) })
         lines.append(s13)
         consumed.formUnion(["drive_auth"] + dbNames + reds.map(\.name) + (transcriptsFailing ? ["transcripts"] : []))
         return (lines, consumed)

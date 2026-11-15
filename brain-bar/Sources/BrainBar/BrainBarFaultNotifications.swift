@@ -270,3 +270,8 @@ final class BrainBarFaultNotifications {
         }
     }
 }
+
+extension BrainBarMenuPresenter {
+    static func appNotificationCause(_ reason: String) -> String { "app:" + reason }
+    static func checkNotificationCause(_ name: String) -> String { "check:" + name }
+}
