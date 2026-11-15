@@ -59,7 +59,7 @@ def running_bundle_matches(app: Path, *, timeout=10) -> bool:
         program = re.search(r"(?m)^\s*program\s*=\s*(.*?)\s*$", state.stdout)
         if state.returncode or not pid or not program or program[1].strip('"') != str(executable):
             return False
-        result = run(["/usr/sbin/lsof", "-a", "-p", pid[1], "-d", "txt", "-F", "Din"], remaining())
+        result = run(["/usr/sbin/lsof", "-b", "-w", "-a", "-p", pid[1], "-d", "txt", "-F", "Din"], remaining())
         if result.returncode:
             return False
         device = inode = None
