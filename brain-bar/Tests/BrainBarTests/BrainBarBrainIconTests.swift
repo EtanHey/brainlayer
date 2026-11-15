@@ -33,8 +33,64 @@ import XCTest
             enrichmentPercent: 50, enrichmentRatePerMinute: 1, databaseSizeBytes: 0,
             recentActivityBuckets: agent, recentAgentWriteBuckets: agent, recentWatcherWriteBuckets: watcher, recentEnrichmentBuckets: Array(repeating: 0, count: 12))
     }
+    func testAbsentPreferenceUsesNewMenuAndBrainWithoutWritingAValue() throws {
+        let d: UserDefaults = defaults()
+        let host: Host = Host()
+        let runtime: BrainBarRuntime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        XCTAssertNil(d.object(forKey: BrainBarNewMenuPreference.key))
+        let controller: BrainBarStatusPopoverController = BrainBarStatusPopoverController(
+            workspace: BrainBarRecordingWorkspace(), runtime: runtime,
+            dashboardPanelController: nil, statusBar: host, menuDefaults: d)
+        defer { controller.stop() }
+        XCTAssertEqual(try XCTUnwrap(host.item.view.assignedImages.first).size, NSSize(width: 22, height: 22))
+        controller.menuNeedsUpdate(controller.contextMenuForTesting)
+        controller.renderStatusIconForTesting(stats: stats(), state: .idle)
+        XCTAssertTrue(BrainBarNewMenuPreference.isEnabled(in: d))
+        XCTAssertEqual(host.item.view.image?.size, NSSize(width: 22, height: 22))
+        XCTAssertFalse(controller.contextMenuForTesting.items.contains { $0.title == "Open Dashboard" })
+        XCTAssertTrue(controller.contextMenuForTesting.items.contains { ($0.representedObject as? BrainBarMenuAction) == .settings })
+        XCTAssertNil(d.object(forKey: BrainBarNewMenuPreference.key), "Reading the default must not migrate stored preferences")
+    }
+
+    func testExplicitFalseUsesPreviousMenuAndExactCharts() throws {
+        try assertStoredPreferenceSelectsMenuAndIcon(false)
+    }
+
+    func testExplicitTrueUsesNewMenuAndBrain() throws {
+        try assertStoredPreferenceSelectsMenuAndIcon(true)
+    }
+
+    private func assertStoredPreferenceSelectsMenuAndIcon(_ enabled: Bool) throws {
+        let d: UserDefaults = defaults()
+        d.set(enabled, forKey: BrainBarNewMenuPreference.key)
+        let host: Host = Host()
+        let runtime: BrainBarRuntime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let controller: BrainBarStatusPopoverController = BrainBarStatusPopoverController(
+            workspace: BrainBarRecordingWorkspace(), runtime: runtime,
+            dashboardPanelController: nil, statusBar: host, menuDefaults: d)
+        defer { controller.stop() }
+        controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []),
+            alertsURL: URL(fileURLWithPath: "/tmp/w89-absent-" + UUID().uuidString))
+        controller.menuNeedsUpdate(controller.contextMenuForTesting)
+        controller.renderStatusIconForTesting(stats: stats(), state: .idle)
+        if enabled {
+            XCTAssertEqual(host.item.view.image?.size, NSSize(width: 22, height: 22))
+            XCTAssertTrue(controller.contextMenuForTesting.items.contains { ($0.representedObject as? BrainBarMenuAction) == .settings })
+            XCTAssertFalse(controller.contextMenuForTesting.items.contains { $0.title == "Open Dashboard" })
+        } else {
+            XCTAssertEqual(controller.contextMenuForTesting.items.map(\.title),
+                ["Nothing needs attention", "Show log", "", "", "Open Dashboard", "Settings…", "", "Restart BrainBar", "", "Quit BrainBar"])
+            let expected: NSImage = BrainBarStatusPopoverController.statusIconImage(
+                stats: stats(), badgeOn: controller.statusDotForTesting, dot: controller.statusVerdictForTesting.dot)
+            XCTAssertEqual(try bitmap(try XCTUnwrap(host.item.view.image)).representation(using: .png, properties: [:]),
+                           try bitmap(expected).representation(using: .png, properties: [:]))
+        }
+        XCTAssertEqual(d.object(forKey: BrainBarNewMenuPreference.key) as? Bool, enabled)
+    }
+
     func testSwitchChangesRealControllerImage() throws {
         let d = defaults(), host = Host(), runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        d.set(false, forKey: BrainBarNewMenuPreference.key)
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
             dashboardPanelController: nil, statusBar: host, menuDefaults: d)
         defer { controller.stop() }
@@ -63,7 +119,8 @@ import XCTest
         d.set(true, forKey: BrainBarNewMenuPreference.key)
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
         XCTAssertEqual(host.item.view.image?.size, NSSize(width: 22, height: 22))
-
+        XCTAssertTrue(controller.contextMenuForTesting.items.contains { ($0.representedObject as? BrainBarMenuAction) == .settings })
+        XCTAssertFalse(controller.contextMenuForTesting.items.contains { $0.title == "Open Dashboard" })
     }
 
     func testOffPathMatchesChartsForAllThreeProofStates() throws {
@@ -72,8 +129,7 @@ import XCTest
             dashboardPanelController: nil, statusBar: host, menuDefaults: d)
         defer { controller.stop() }
         for enabled in [false, true, false] {
-            if enabled { d.set(true, forKey: BrainBarNewMenuPreference.key) }
-            else { d.removeObject(forKey: BrainBarNewMenuPreference.key) }
+            d.set(enabled, forKey: BrainBarNewMenuPreference.key)
             for name in BrainBarMenuIconProof.names {
                 let badged = name == "status-icon-badged"
                 let value = stats(active: name == "status-icon-active")

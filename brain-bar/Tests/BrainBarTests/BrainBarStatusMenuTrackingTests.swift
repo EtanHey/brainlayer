@@ -410,7 +410,7 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
             let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
             controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
                 dashboardPanelController: BrainBarDashboardPanelController(workspace: workspace, runtime: runtime),
-                statusBar: host)
+                statusBar: host, menuDefaults: brainBarLegacyMenuDefaults())
             runtime.install(collector: collector, database: nil, databasePath: root.appendingPathComponent("unused.db").path)
         }
         func pump(until condition: () -> Bool = { true }) {

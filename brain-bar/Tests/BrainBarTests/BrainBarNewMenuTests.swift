@@ -10,9 +10,10 @@ import XCTest
         return UserDefaults(suiteName: name)!
     }
 
-    func testPreferenceIsOffAndReReadsChanges() {
+    func testPreferenceIsOnAndReReadsChanges() {
         let d = defaults()
-        XCTAssertFalse(BrainBarNewMenuPreference.isEnabled(in: d))
+        XCTAssertTrue(BrainBarNewMenuPreference.isEnabled(in: d))
+        XCTAssertNil(d.object(forKey: BrainBarNewMenuPreference.key))
         d.set(true, forKey: BrainBarNewMenuPreference.key)
         XCTAssertTrue(BrainBarNewMenuPreference.isEnabled(in: d))
         d.set(false, forKey: BrainBarNewMenuPreference.key)
@@ -253,8 +254,9 @@ import XCTest
         model.applyHealthBadge(.init(badgeOn: true, reason: "fixture", activeCodes: [],
             healthVerdict: .init(dot: .red, checks: checks, notes: [], evaluatedAt: now)), alerts: nil)
         let d = defaults()
+        d.set(false, forKey: BrainBarNewMenuPreference.key)
         let control = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
-            dashboardPanelController: nil, statusBar: Host(), menuDefaults: defaults())
+            dashboardPanelController: nil, statusBar: Host(), menuDefaults: brainBarLegacyMenuDefaults())
         let switched = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
             dashboardPanelController: nil, statusBar: Host(), menuDefaults: d)
         defer { control.stop(); switched.stop() }
@@ -290,6 +292,7 @@ import XCTest
 
     func testSwitchOffBuildsMainsItemsAndRestoresThemAfterOn() {
         let d = defaults(), host = Host(), workspace = BrainBarRecordingWorkspace()
+        d.set(false, forKey: BrainBarNewMenuPreference.key)
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
             dashboardPanelController: nil, statusBar: host, menuDefaults: d)

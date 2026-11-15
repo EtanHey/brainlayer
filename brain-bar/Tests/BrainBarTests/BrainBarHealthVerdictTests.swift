@@ -320,7 +320,7 @@ final class BrainBarHealthVerdictTests: XCTestCase {
                         databasePath: root.appendingPathComponent("fixture.db").path)
         let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
-            dashboardPanelController: panel, statusBar: TestStatusItemHost())
+            dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { controller.stop() }
         var previousIcon: Data?
         for state in ["red", "amber", "green"] {
