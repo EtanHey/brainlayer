@@ -1,7 +1,7 @@
 {
-  "cases" : [
+  "cases": [
     {
-      "actions" : [
+      "actions": [
         "",
         "",
         "",
@@ -9,7 +9,7 @@
         "quit",
         "restart"
       ],
-      "enabled" : [
+      "enabled": [
         false,
         false,
         false,
@@ -17,12 +17,12 @@
         true,
         true
       ],
-      "hosted" : 2,
-      "iconHeight" : 22,
-      "iconPNG" : "iVBORw0KGgoAAAANSUhEUgAAACwAAAAsCAYAAAAehFoBAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAACygAwAEAAAAAQAAACwAAAAAlkQOpQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAABJ5JREFUWAntl0moHFUUhp\/GASNGoxB1EcxTyMIEI8EJB4gIgqCCAVdBJIoiBNwEMaIIoouI4MKN4ITDQlAQRHTjIgmIEREHHFAjKopxQg2oScDx++rVwdNVt7q6++W1m\/fD33Xuvf855+9b91X1m5lZxOIODOzAkoHRZIPlpK2Fp0Pr7YMZswxcXwEPwIPwf8HldN0J\/4T\/JH5OfFdN47ymdic0d2o4kk6PwGxkktga1lowHE7ls+GrMAx+T3w33ADPh5vhazDWjZ1zbQNUa06sW2sdtPYhwwlU2g6\/g9HI6w7oWglbmZQlmGNurmVte3TVY2k0XIQs70g0+Zr544eUOJU12QVzrRH14qpxe04EE\/2LjmIvE18LV8M+s7+hkX2mrWVNa0cfe45t2lsTO\/s78UY4Ki5EGM2NR4U97GWuOz3W8fA8RdNxzJI2M6lhc+0VffUwEvyL9Rua6K0aF\/MxbK84HnpoPT1aE4jOgidD8WT1Od2P6KkHvQygZHhlUryX4mmFuWf2UvUvGc5vH1+l00bumb1UPkqG9yaHPnamjdwze6l8lAxfnxxemeJphbln9lLsfw2z8VjZTexPwnEx36eEPe0dPvTUiY9ZUfgVPDGpjiJ+Gr4Fd8EH4RpYwiiGzbWGtaxpbXsE7B2vbj0VsZ7Z+FY3NRRnprXQ\/MXcPQ2dwz7D5pgbdeJqjww9xJreWtjCTAjy7oZwE8Ht8H74GQztNuKMYYbVRp41rGVNazehh9DqrYV7mVGwr7XSnvBx8yxUfxCeBgNdhtWoNcfc1iOLuSb0ol5vFfJTwl9XYinM89Vk4+MPxjdCX59Hw82wDzcgUGuOudYYBj3oRYS3AWN75taqb35eHQ+77Gfx8Vpw0jBhvRbHzBxz+6CHuAvhbSDnOEZxy54bWOkeWPAyeEySdB0JNWrDREophs8z63HQk96KeIhZRfLmoqJ\/sstwf+Z\/CnuHDz11wlv7BQzxnQ3lsYwfgG\/Cj+ALML+ZGA59rKk1x1xrWMuaGfaM\/nrpPW7rEf1dJ\/lfbsYmBlEsXx9j\/rBaWNph19TknIitmWFP1\/SglwEcMTCaG\/zCJZp\/0Fh\/hfGj8Af4K7waatC\/+i\/hfbAEd02NeB2+CJfBFdCaGdFTD3rpxSyK+PYbe9QWfarW7621pR12zZpqzRkGe0b\/2aawtMPfIvLVuQSuhZ65Llj4Fuhueya7cAcL58LboDnDYE+hB72MhF2oLPwJ1Pg4KO3wqPn2sqe99dBC1xvtiVq5mqvv+mnBXvYU4WFu1PPpF3kb+k29Nd7KvrOHpMIkO2xte9jLnvbu2kyWyljFtE8DC8h34K3wEhi7QNjCqIatYS1rvgujjz1XwYlwBlnvwygWV3fi4o6K5yS9cQnmxm5GTa\/2sue84Lt\/C\/Tf71z8J8ZXwCZWMvFNTeMmzDE317K2PXp\/Z4x6LqlV4RQ+r4PbYZyxN4h3wANwDbwKLoViP3wJfgj98XMpvAAK32Tb4DPQn5wLCnfpR5h3KceakXkux+aW7g7TC4dllPYxtBv+DN3NT+HDcF1N4z3QNTVqzTF3EYs7cCh24F9dM31+MlN73AAAAABJRU5ErkJggg==",
-      "iconTemplate" : true,
-      "iconWidth" : 22,
-      "keys" : [
+      "hosted": 2,
+      "iconHeight": 22,
+      "iconPNG": "iVBORw0KGgoAAAANSUhEUgAAACwAAAAsCAYAAAAehFoBAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAACygAwAEAAAAAQAAACwAAAAAlkQOpQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAABJ5JREFUWAntl0moHFUUhp/GASNGoxB1EcxTyMIEI8EJB4gIgqCCAVdBJIoiBNwEMaIIoouI4MKN4ITDQlAQRHTjIgmIEREHHFAjKopxQg2oScDx++rVwdNVt7q6++W1m/fD33Xuvf855+9b91X1m5lZxOIODOzAkoHRZIPlpK2Fp0Pr7YMZswxcXwEPwIPwf8HldN0J/4T/JH5OfFdN47ymdic0d2o4kk6PwGxkktga1lowHE7ls+GrMAx+T3w33ADPh5vhazDWjZ1zbQNUa06sW2sdtPYhwwlU2g6/g9HI6w7oWglbmZQlmGNurmVte3TVY2k0XIQs70g0+Zr544eUOJU12QVzrRH14qpxe04EE/2LjmIvE18LV8M+s7+hkX2mrWVNa0cfe45t2lsTO/s78UY4Ki5EGM2NR4U97GWuOz3W8fA8RdNxzJI2M6lhc+0VffUwEvyL9Rua6K0aF/MxbK84HnpoPT1aE4jOgidD8WT1Od2P6KkHvQygZHhlUryX4mmFuWf2UvUvGc5vH1+l00bumb1UPkqG9yaHPnamjdwze6l8lAxfnxxemeJphbln9lLsfw2z8VjZTexPwnEx36eEPe0dPvTUiY9ZUfgVPDGpjiJ+Gr4Fd8EH4RpYwiiGzbWGtaxpbXsE7B2vbj0VsZ7Z+FY3NRRnprXQ/MXcPQ2dwz7D5pgbdeJqjww9xJreWtjCTAjy7oZwE8Ht8H74GQztNuKMYYbVRp41rGVNazehh9DqrYV7mVGwr7XSnvBx8yxUfxCeBgNdhtWoNcfc1iOLuSb0ol5vFfJTwl9XYinM89Vk4+MPxjdCX59Hw82wDzcgUGuOudYYBj3oRYS3AWN75taqb35eHQ+77Gfx8Vpw0jBhvRbHzBxz+6CHuAvhbSDnOEZxy54bWOkeWPAyeEySdB0JNWrDREophs8z63HQk96KeIhZRfLmoqJ/sstwf+Z/CnuHDz11wlv7BQzxnQ3lsYwfgG/Cj+ALML+ZGA59rKk1x1xrWMuaGfaM/nrpPW7rEf1dJ/lfbsYmBlEsXx9j/rBaWNph19TknIitmWFP1/SglwEcMTCaG/zCJZp/0Fh/hfGj8Af4K7waatC/+i/hfbAEd02NeB2+CJfBFdCaGdFTD3rpxSyK+PYbe9QWfarW7621pR12zZpqzRkGe0b/2aawtMPfIvLVuQSuhZ65Llj4Fuhueya7cAcL58LboDnDYE+hB72MhF2oLPwJ1Pg4KO3wqPn2sqe99dBC1xvtiVq5mqvv+mnBXvYU4WFu1PPpF3kb+k29Nd7KvrOHpMIkO2xte9jLnvbu2kyWyljFtE8DC8h34K3wEhi7QNjCqIatYS1rvgujjz1XwYlwBlnvwygWV3fi4o6K5yS9cQnmxm5GTa/2sue84Lt/C/Tf71z8J8ZXwCZWMvFNTeMmzDE317K2PXp/Z4x6LqlV4RQ+r4PbYZyxN4h3wANwDbwKLoViP3wJfgj98XMpvAAK32Tb4DPQn5wLCnfpR5h3KceakXkux+aW7g7TC4dllPYxtBv+DN3NT+HDcF1N4z3QNTVqzTF3EYs7cCh24F9dM31+MlN73AAAAABJRU5ErkJggg==",
+      "iconTemplate": true,
+      "iconWidth": 22,
+      "keys": [
         "",
         "",
         "",
@@ -30,18 +30,18 @@
         "q",
         "q"
       ],
-      "newMenu" : "absent",
-      "titles" : [
+      "newMenu": "absent",
+      "titles": [
         "NSMenuItem",
         "NSMenuItem",
         "",
-        "Settings…",
+        "Settings\u2026",
         "Quit BrainBar",
         "Restart BrainBar"
       ]
     },
     {
-      "actions" : [
+      "actions": [
         "",
         "",
         "",
@@ -53,7 +53,7 @@
         "",
         ""
       ],
-      "enabled" : [
+      "enabled": [
         false,
         true,
         false,
@@ -65,12 +65,12 @@
         false,
         true
       ],
-      "hosted" : 0,
-      "iconHeight" : 14,
-      "iconPNG" : "iVBORw0KGgoAAAANSUhEUgAAADQAAAAcCAYAAAAuh5ywAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAADSgAwAEAAAAAQAAABwAAAAAxiRgwAAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAHVJREFUWAljYBgFoyEwGgKjITAaAqMhMBoCoyEwGgKjITAaAqMhMBoCoyEwGgKjITAaAqMhMOhDgBHmwikL9wiz\/v0jD+MPJfo3M8vDnHiXtyA3s4AIkGfSL5x8A2IPWbBwjwjIU0xD1gM4HD7skhwOfw5dYQDXPhhm+T\/jYQAAAABJRU5ErkJggg==",
-      "iconTemplate" : false,
-      "iconWidth" : 26,
-      "keys" : [
+      "hosted": 0,
+      "iconHeight": 14,
+      "iconPNG": "iVBORw0KGgoAAAANSUhEUgAAADQAAAAcCAYAAAAuh5ywAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAADSgAwAEAAAAAQAAABwAAAAAxiRgwAAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAHVJREFUWAljYBgFoyEwGgKjITAaAqMhMBoCoyEwGgKjITAaAqMhMBoCoyEwGgKjITAaAqMhMOhDgBHmwikL9wiz/v0jD+MPJfo3M8vDnHiXtyA3s4AIkGfSL5x8A2IPWbBwjwjIU0xD1gM4HD7skhwOfw5dYQDXPhhm+T/jYQAAAABJRU5ErkJggg==",
+      "iconTemplate": false,
+      "iconWidth": 26,
+      "keys": [
         "",
         "",
         "",
@@ -82,14 +82,14 @@
         "",
         ""
       ],
-      "newMenu" : "false",
-      "titles" : [
+      "newMenu": "false",
+      "titles": [
         "Nothing needs attention",
         "Show log",
         "",
         "",
         "Open Dashboard",
-        "Settings…",
+        "Settings\u2026",
         "",
         "Restart BrainBar",
         "",
@@ -97,7 +97,7 @@
       ]
     },
     {
-      "actions" : [
+      "actions": [
         "",
         "",
         "",
@@ -105,7 +105,7 @@
         "quit",
         "restart"
       ],
-      "enabled" : [
+      "enabled": [
         false,
         false,
         false,
@@ -113,12 +113,12 @@
         true,
         true
       ],
-      "hosted" : 2,
-      "iconHeight" : 22,
-      "iconPNG" : "iVBORw0KGgoAAAANSUhEUgAAACwAAAAsCAYAAAAehFoBAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAACygAwAEAAAAAQAAACwAAAAAlkQOpQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAABJ5JREFUWAntl0moHFUUhp\/GASNGoxB1EcxTyMIEI8EJB4gIgqCCAVdBJIoiBNwEMaIIoouI4MKN4ITDQlAQRHTjIgmIEREHHFAjKopxQg2oScDx++rVwdNVt7q6++W1m\/fD33Xuvf855+9b91X1m5lZxOIODOzAkoHRZIPlpK2Fp0Pr7YMZswxcXwEPwIPwf8HldN0J\/4T\/JH5OfFdN47ymdic0d2o4kk6PwGxkktga1lowHE7ls+GrMAx+T3w33ADPh5vhazDWjZ1zbQNUa06sW2sdtPYhwwlU2g6\/g9HI6w7oWglbmZQlmGNurmVte3TVY2k0XIQs70g0+Zr544eUOJU12QVzrRH14qpxe04EE\/2LjmIvE18LV8M+s7+hkX2mrWVNa0cfe45t2lsTO\/s78UY4Ki5EGM2NR4U97GWuOz3W8fA8RdNxzJI2M6lhc+0VffUwEvyL9Rua6K0aF\/MxbK84HnpoPT1aE4jOgidD8WT1Od2P6KkHvQygZHhlUryX4mmFuWf2UvUvGc5vH1+l00bumb1UPkqG9yaHPnamjdwze6l8lAxfnxxemeJphbln9lLsfw2z8VjZTexPwnEx36eEPe0dPvTUiY9ZUfgVPDGpjiJ+Gr4Fd8EH4RpYwiiGzbWGtaxpbXsE7B2vbj0VsZ7Z+FY3NRRnprXQ\/MXcPQ2dwz7D5pgbdeJqjww9xJreWtjCTAjy7oZwE8Ht8H74GQztNuKMYYbVRp41rGVNazehh9DqrYV7mVGwr7XSnvBx8yxUfxCeBgNdhtWoNcfc1iOLuSb0ol5vFfJTwl9XYinM89Vk4+MPxjdCX59Hw82wDzcgUGuOudYYBj3oRYS3AWN75taqb35eHQ+77Gfx8Vpw0jBhvRbHzBxz+6CHuAvhbSDnOEZxy54bWOkeWPAyeEySdB0JNWrDREophs8z63HQk96KeIhZRfLmoqJ\/sstwf+Z\/CnuHDz11wlv7BQzxnQ3lsYwfgG\/Cj+ALML+ZGA59rKk1x1xrWMuaGfaM\/nrpPW7rEf1dJ\/lfbsYmBlEsXx9j\/rBaWNph19TknIitmWFP1\/SglwEcMTCaG\/zCJZp\/0Fh\/hfGj8Af4K7waatC\/+i\/hfbAEd02NeB2+CJfBFdCaGdFTD3rpxSyK+PYbe9QWfarW7621pR12zZpqzRkGe0b\/2aawtMPfIvLVuQSuhZ65Llj4Fuhueya7cAcL58LboDnDYE+hB72MhF2oLPwJ1Pg4KO3wqPn2sqe99dBC1xvtiVq5mqvv+mnBXvYU4WFu1PPpF3kb+k29Nd7KvrOHpMIkO2xte9jLnvbu2kyWyljFtE8DC8h34K3wEhi7QNjCqIatYS1rvgujjz1XwYlwBlnvwygWV3fi4o6K5yS9cQnmxm5GTa\/2sue84Lt\/C\/Tf71z8J8ZXwCZWMvFNTeMmzDE317K2PXp\/Z4x6LqlV4RQ+r4PbYZyxN4h3wANwDbwKLoViP3wJfgj98XMpvAAK32Tb4DPQn5wLCnfpR5h3KceakXkux+aW7g7TC4dllPYxtBv+DN3NT+HDcF1N4z3QNTVqzTF3EYs7cCh24F9dM31+MlN73AAAAABJRU5ErkJggg==",
-      "iconTemplate" : true,
-      "iconWidth" : 22,
-      "keys" : [
+      "hosted": 2,
+      "iconHeight": 22,
+      "iconPNG": "iVBORw0KGgoAAAANSUhEUgAAACwAAAAsCAYAAAAehFoBAAAAAXNSR0IArs4c6QAAAGxlWElmTU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAIdpAAQAAAABAAAATgAAAAAAAACQAAAAAQAAAJAAAAABAAKgAgAEAAAAAQAAACygAwAEAAAAAQAAACwAAAAAlkQOpQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAABJ5JREFUWAntl0moHFUUhp/GASNGoxB1EcxTyMIEI8EJB4gIgqCCAVdBJIoiBNwEMaIIoouI4MKN4ITDQlAQRHTjIgmIEREHHFAjKopxQg2oScDx++rVwdNVt7q6++W1m/fD33Xuvf855+9b91X1m5lZxOIODOzAkoHRZIPlpK2Fp0Pr7YMZswxcXwEPwIPwf8HldN0J/4T/JH5OfFdN47ymdic0d2o4kk6PwGxkktga1lowHE7ls+GrMAx+T3w33ADPh5vhazDWjZ1zbQNUa06sW2sdtPYhwwlU2g6/g9HI6w7oWglbmZQlmGNurmVte3TVY2k0XIQs70g0+Zr544eUOJU12QVzrRH14qpxe04EE/2LjmIvE18LV8M+s7+hkX2mrWVNa0cfe45t2lsTO/s78UY4Ki5EGM2NR4U97GWuOz3W8fA8RdNxzJI2M6lhc+0VffUwEvyL9Rua6K0aF/MxbK84HnpoPT1aE4jOgidD8WT1Od2P6KkHvQygZHhlUryX4mmFuWf2UvUvGc5vH1+l00bumb1UPkqG9yaHPnamjdwze6l8lAxfnxxemeJphbln9lLsfw2z8VjZTexPwnEx36eEPe0dPvTUiY9ZUfgVPDGpjiJ+Gr4Fd8EH4RpYwiiGzbWGtaxpbXsE7B2vbj0VsZ7Z+FY3NRRnprXQ/MXcPQ2dwz7D5pgbdeJqjww9xJreWtjCTAjy7oZwE8Ht8H74GQztNuKMYYbVRp41rGVNazehh9DqrYV7mVGwr7XSnvBx8yxUfxCeBgNdhtWoNcfc1iOLuSb0ol5vFfJTwl9XYinM89Vk4+MPxjdCX59Hw82wDzcgUGuOudYYBj3oRYS3AWN75taqb35eHQ+77Gfx8Vpw0jBhvRbHzBxz+6CHuAvhbSDnOEZxy54bWOkeWPAyeEySdB0JNWrDREophs8z63HQk96KeIhZRfLmoqJ/sstwf+Z/CnuHDz11wlv7BQzxnQ3lsYwfgG/Cj+ALML+ZGA59rKk1x1xrWMuaGfaM/nrpPW7rEf1dJ/lfbsYmBlEsXx9j/rBaWNph19TknIitmWFP1/SglwEcMTCaG/zCJZp/0Fh/hfGj8Af4K7waatC/+i/hfbAEd02NeB2+CJfBFdCaGdFTD3rpxSyK+PYbe9QWfarW7621pR12zZpqzRkGe0b/2aawtMPfIvLVuQSuhZ65Llj4Fuhueya7cAcL58LboDnDYE+hB72MhF2oLPwJ1Pg4KO3wqPn2sqe99dBC1xvtiVq5mqvv+mnBXvYU4WFu1PPpF3kb+k29Nd7KvrOHpMIkO2xte9jLnvbu2kyWyljFtE8DC8h34K3wEhi7QNjCqIatYS1rvgujjz1XwYlwBlnvwygWV3fi4o6K5yS9cQnmxm5GTa/2sue84Lt/C/Tf71z8J8ZXwCZWMvFNTeMmzDE317K2PXp/Z4x6LqlV4RQ+r4PbYZyxN4h3wANwDbwKLoViP3wJfgj98XMpvAAK32Tb4DPQn5wLCnfpR5h3KceakXkux+aW7g7TC4dllPYxtBv+DN3NT+HDcF1N4z3QNTVqzTF3EYs7cCh24F9dM31+MlN73AAAAABJRU5ErkJggg==",
+      "iconTemplate": true,
+      "iconWidth": 22,
+      "keys": [
         "",
         "",
         "",
@@ -126,20 +126,22 @@
         "q",
         "q"
       ],
-      "newMenu" : "true",
-      "titles" : [
+      "newMenu": "true",
+      "titles": [
         "NSMenuItem",
         "NSMenuItem",
         "",
-        "Settings…",
+        "Settings\u2026",
         "Quit BrainBar",
         "Restart BrainBar"
       ]
     }
   ],
-  "commit" : "84b0e7a58c034e46cb9080071557e0574db31f3c",
-  "source" : "origin\/main",
-  "windowMinHeight" : 560,
-  "windowMinWidth" : 760,
-  "windowRootType" : "NSHostingController<ModifiedContent<ModifiedContent<BrainBarWindowRootView, _FlexFrameLayout>, _FlexFrameLayout>>"
+  "commit": "84b0e7a58c034e46cb9080071557e0574db31f3c",
+  "rasterEnvironment": "macOS 27, screen scale 2.0, NSAppearanceNameDarkAqua",
+  "rasterEnvironmentNote": "Where the ImageRenderer chart icon (new menu off) was recorded, measured by BrainBarClassicGoldenTests.rasterEnvironment() on the recording machine. Its pixels are compared only there; everything else everywhere.",
+  "source": "origin/main",
+  "windowMinHeight": 560,
+  "windowMinWidth": 760,
+  "windowRootType": "NSHostingController<ModifiedContent<ModifiedContent<BrainBarWindowRootView, _FlexFrameLayout>, _FlexFrameLayout>>"
 }
