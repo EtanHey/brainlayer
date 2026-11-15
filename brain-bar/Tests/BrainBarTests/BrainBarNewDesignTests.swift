@@ -618,6 +618,8 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         XCTAssertTrue(panel.designDefaults === BrainBarDesignFixture.capturePreferences)
         XCTAssertTrue(panel.newDesignStore.preferences === BrainBarDesignFixture.capturePreferences)
         XCTAssertTrue(panel.newDesignStore.isFixture)
+        XCTAssertEqual(BrainBarDesignFixture.capturePreferences.string(forKey: BrainBarDesign.key), BrainBarDesign.new.rawValue,
+                       "fix 4: the capture's Settings shows the design it draws")
         panel.placeWindowForTesting()
         panel.prepareForClose()
         XCTAssertNotNil(BrainBarDesignFixture.capturePreferences.string(forKey: key), "the capture's frame went to its own suite")
@@ -650,6 +652,40 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         XCTAssertLessThan(wall.timeIntervalSince(capture), 60, "a capture's now is its launch minute, not a frozen 08:00")
         XCTAssertGreaterThanOrEqual(wall.timeIntervalSince(capture), 0)
         XCTAssertEqual(BrainBarDesignFixture.makeNow(capturing: false, wall: wall), BrainBarDesignFixture.fixedNow)
+    }
+
+    /// Fix 5: a tick shifts every wave by one invented bucket, keeps its length, moves its end one bucket width, and is
+    /// the same on every run.
+    func testCaptureTickShiftsEveryWaveByOneBucket() throws {
+        let start = BrainBarDesignFixture.inputs(.calm)
+        let store = NDStore(fixture: start), twin = NDStore(fixture: start)
+        store.tickFixture(); twin.tickFixture()
+        let menu = try XCTUnwrap(store.inputs.menuWave), before = try XCTUnwrap(start.menuWave)
+        XCTAssertEqual(menu.reads.count, before.reads.count)
+        XCTAssertEqual(Array(menu.reads.dropLast()), Array(before.reads.dropFirst()))
+        XCTAssertEqual(try XCTUnwrap(menu.endsAt).timeIntervalSince(try XCTUnwrap(before.endsAt)), 150, accuracy: 0.001)
+        for range in NDRange.allCases {
+            let hero = try XCTUnwrap(store.inputs.heroWaves[range]), was = try XCTUnwrap(start.heroWaves[range])
+            XCTAssertEqual(Array(hero.saves.dropLast()), Array(was.saves.dropFirst()))
+            XCTAssertEqual(try XCTUnwrap(hero.endsAt).timeIntervalSince(try XCTUnwrap(was.endsAt)), Double(range.minutes), accuracy: 0.001)
+        }
+        XCTAssertEqual(store.inputs.menuWave, twin.inputs.menuWave, "deterministic")
+        XCTAssertEqual(store.inputs.heroWaves, twin.inputs.heroWaves, "deterministic")
+        XCTAssertEqual(store.model, NDModel.make(store.inputs), "through the sample path: the model follows")
+        store.tickFixture()
+        XCTAssertEqual(store.fixtureTicks, 2)
+        XCTAssertNotEqual(store.inputs.menuWave, twin.inputs.menuWave)
+    }
+
+    /// Fix 6: every Reconnect a person can click (dropdown row, needs band, Backups row, Settings) reaches the one store
+    /// action, and in a capture that shows the waiting line.
+    func testEveryReconnectClickShowsTheWaitingLine() {
+        for press in [{ (s: NDStore) in s.perform(.reconnectDrive) }, { $0.perform(.connectDrive) }, { $0.reconnectDrive() }] {
+            let store = NDStore(fixture: BrainBarDesignFixture.inputs(.oneFault))
+            XCTAssertFalse(store.inputs.driveReconnecting)
+            press(store)
+            XCTAssertTrue(store.inputs.driveReconnecting)
+        }
     }
 
     func testNewestCopyTimeMatchesTheLaneAge() throws {

@@ -322,9 +322,25 @@ import SwiftUI
             var next = self.inputs
             next.menuWave = m.map { Self.wave($0, end: now) } ?? NDWave(saves: [], reads: [], readable: false)
             if wantsHero { next.heroWaves[range] = h.map { Self.wave($0, end: now) } ?? NDWave(saves: [], reads: [], readable: false) }
-            self.inputs = next
-            self.model = NDModel.make(next)
+            self.acceptWaves(next)
         }
+    }
+
+#if DEBUG
+    private(set) var fixtureTicks = 0
+
+    /// Capture mode's live waveform (fix 5): one invented bucket per tick, handed over exactly as a real wave sample is.
+    func tickFixture() {
+        guard isFixture else { return }
+        fixtureTicks += 1
+        acceptWaves(BrainBarDesignFixture.ticked(inputs, step: fixtureTicks))
+    }
+#endif
+
+    /// The one way a wave sample reaches the surfaces, real or invented.
+    private func acceptWaves(_ next: NDInputs) {
+        inputs = next
+        model = NDModel.make(next)
     }
 
     static func wave(_ b: BrainDatabase.PipelineWindowBuckets, end: Date) -> NDWave {

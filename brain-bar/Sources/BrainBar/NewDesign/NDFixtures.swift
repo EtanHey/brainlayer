@@ -51,6 +51,8 @@ enum BrainBarDesignFixture {
         let panel = BrainBarDashboardPanelController(
             workspace: workspace, runtime: runtime, activationPolicy: activationPolicy,
             frameStore: BrainBarWindowFrameStore(defaults: capturePreferences, key: BrainBarDashboardPanelController.frameDefaultsKey))
+        // Fix 4: the capture draws the new design, so its Settings says New (the shipping default stays Classic).
+        capturePreferences.set(BrainBarDesign.new.rawValue, forKey: BrainBarDesign.key)
         panel.designDefaults = capturePreferences
         panel.applyDesign()
         let status = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime, dashboardPanelController: panel,
@@ -167,6 +169,26 @@ enum BrainBarDesignFixture {
         i.newestLocalCopyAt = now.addingTimeInterval(-(4 * 3600 + 2 * 60))
         i.canRevealLocalCopy = true
         return i
+    }
+
+    /// The waveforms one capture tick later (fix 5): each drops its oldest bucket, gains one invented bucket (fixed by the
+    /// tick's number) and ends one bucket width later, the shape a real sample hands the store.
+    static func ticked(_ inputs: NDInputs, step: Int) -> NDInputs {
+        var next = inputs
+        func advance(_ wave: NDWave?, minutes: Int, seed: Int) -> NDWave? {
+            guard var wave, wave.readable, !wave.reads.isEmpty else { return wave }
+            let fresh = self.wave(1, seed: seed &* 7_919 &+ step, end: now)
+            wave.reads = Array(wave.reads.dropFirst()) + fresh.reads
+            wave.saves = Array(wave.saves.dropFirst()) + fresh.saves
+            let width = Double(minutes * 60) / Double(wave.reads.count)
+            wave.endsAt = wave.endsAt.map { $0.addingTimeInterval(width) }
+            return wave
+        }
+        next.menuWave = advance(inputs.menuWave, minutes: 60, seed: 7)
+        for range in NDRange.allCases {
+            next.heroWaves[range] = advance(inputs.heroWaves[range], minutes: range.minutes, seed: 11 &+ range.minutes)
+        }
+        return next
     }
 
     /// Invented traffic with a fixed seed: steady reads, bursty saves, some empty buckets.

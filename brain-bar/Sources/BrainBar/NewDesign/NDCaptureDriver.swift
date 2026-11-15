@@ -15,6 +15,13 @@ import AppKit
         let hold = environment["BRAINBAR_DESIGN_HOLD"].flatMap(Double.init)
         store.page = tab
         if let range { store.range = range }
+        // Fix 5: a live waveform with no sampler; every N seconds one invented bucket arrives through the sample path.
+        if let tick = environment["BRAINBAR_DESIGN_TICK"].flatMap(Double.init), tick > 0 {
+            let timer = Timer(timeInterval: tick, repeats: true) { _ in
+                MainActor.assumeIsolated { store.tickFixture(); log("tick \(store.fixtureTicks)") }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+        }
         guard let open else { return panel.showPage(tab) }  // no switch: capture mode as before
         after(1) {
             switch open {
