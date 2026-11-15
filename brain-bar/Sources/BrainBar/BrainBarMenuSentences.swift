@@ -440,6 +440,10 @@ extension BrainBarMenuPresenter {
         static let off = "off"
         static func turnOff(_ job: String) -> String { "Turn off \(job)" }
         static func turnOn(_ job: String) -> String { "Turn on \(job)" }
+        /// Review polish 5 (lead's copy ruling L7, approved): the Jobs switch column's header, and an always-running job's
+        /// state in place of "always on".
+        static let onHeader = "On"
+        static let running = "running"
 
         /// V1's VoiceOver sentence for the waveform.
         static func wave(span minutes: Int, saves: Int, reads: Int) -> String {

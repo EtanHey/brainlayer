@@ -11,6 +11,13 @@ struct NDPalette: Equatable {
                                   fault: ND.fault, warn: ND.warn, plane: ND.night)
     static let menu = NDPalette(ink: Color(nsColor: .labelColor), ink2: Color(nsColor: .secondaryLabelColor), track: ND.menuTrack,
                                 saves: ND.menuSaves, reads: ND.menuReads, fault: ND.fault, warn: ND.warn, plane: .clear)
+    /// Review polish 2: on a highlighted dropdown row the waveform, the gauge's neutral parts and the number take the
+    /// system's selected text colour (saves 100 %, reads 55 %); fault and warning stay their colours.
+    static let menuSelected: NDPalette = {
+        let selected = Color(nsColor: .alternateSelectedControlTextColor)
+        return NDPalette(ink: selected, ink2: selected, track: selected.opacity(0.4), saves: selected, reads: selected.opacity(0.55),
+                         fault: ND.fault, warn: ND.warn, plane: .clear)
+    }()
     static func == (a: Self, b: Self) -> Bool { true }
 }
 

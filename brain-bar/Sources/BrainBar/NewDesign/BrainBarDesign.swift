@@ -153,7 +153,10 @@ enum NDGrid {
 enum NDMotion {
     static let shift = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.24)
     static let needsBand = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.2)
-    static let waitingFade = Animation.easeOut(duration: 0.15)
+    /// Review polish 4: Reconnect leaves first (opacity to 0 and scale 0.97, 100 ms ease-out), then the waiting line enters
+    /// (opacity 0 to 1, 150 ms, the strong ease-out), so the two never share a frame.
+    static let buttonLeaves = Animation.easeOut(duration: 0.1)
+    static let waitingEnters = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.15).delay(0.1)
     /// One turn of the running mark.
     static let runningPeriod: TimeInterval = 1.6
 }

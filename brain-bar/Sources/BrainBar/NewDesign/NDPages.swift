@@ -7,6 +7,8 @@ struct NDRailAxis: View {
     let ahead: Double
     let numberHeader: String
     var limitHours: Double? = nil
+    /// Review polish 5: the Jobs page names its switch column ("On"), set like the number column's header.
+    var switchHeader: String? = nil
 
     var body: some View {
         HStack(spacing: 0) {
@@ -26,7 +28,8 @@ struct NDRailAxis: View {
             }
             Text(numberHeader).font(NDType.axis).foregroundStyle(ND.ink2)
                 .frame(width: NDGrid.railNumber, height: 18, alignment: .topTrailing)
-            Spacer().frame(width: NDGrid.railSwitch)
+            Text(switchHeader ?? "").font(NDType.axis).foregroundStyle(ND.ink2)
+                .frame(width: NDGrid.railSwitch, height: 18, alignment: .topTrailing)
         }
         .frame(height: 18)
         .accessibilityHidden(true)
@@ -141,13 +144,13 @@ struct NDBackupsPage: View {
         NDFactRow(name: state, nameTone: fault ? .fault : .fine, fact: fact) {
             if fault {
                 let label = missing ? BrainBarMenuPresenter.Say.connect.text : BrainBarMenuPresenter.Say.reconnect.text
-                ZStack(alignment: .trailing) {
-                    NDActionButton(label: label, large: true) { store.reconnectDrive() }.opacity(store.inputs.driveReconnecting ? 0 : 1)
+                NDWaitingSwap(waiting: store.inputs.driveReconnecting) {
+                    NDActionButton(label: label, large: true) { store.reconnectDrive() }
+                } line: {
                     HStack(spacing: 7) {
                         NDMarkView(mark: .running)
                         Text(BrainBarMenuPresenter.SurfaceSay.waitingForBrowser).font(NDType.fact).foregroundStyle(ND.ink2)
                     }
-                    .opacity(store.inputs.driveReconnecting ? 1 : 0)
                 }
             }
         }
@@ -268,7 +271,8 @@ struct NDJobsPage: View {
             NDPageTop(title: "Background jobs", mark: .none, checked: m.checked)
             VStack(spacing: 0) {
                 NDRailAxis(ticks: [("36 h ago", -36), ("24 h ago", -24), ("12 h ago", -12), ("now", 0), ("in 12 h", 12)],
-                           past: Self.past, ahead: Self.ahead, numberHeader: "next run")
+                           past: Self.past, ahead: Self.ahead, numberHeader: "next run",
+                           switchHeader: BrainBarMenuPresenter.SurfaceSay.onHeader)
                 ForEach(lanes(m)) { NDJobLaneView(store: store, lane: $0) }
             }
             .padding(.top, 14)
@@ -321,7 +325,7 @@ struct NDJobsPage: View {
             } else if j.enabled == false {
                 number = NDModel.Number(value: BrainBarMenuPresenter.SurfaceSay.off, secondary: true)  // fix 10: Ink 2
             } else if j.continuous {
-                number = j.loaded == false ? .unknown : NDModel.Number(value: "always on", secondary: true)
+                number = j.loaded == false ? .unknown : NDModel.Number(value: BrainBarMenuPresenter.SurfaceSay.running, secondary: true)
             } else if let next = j.nextRun, j.enabled != false {
                 let a = NDFormat.age(max(0, next.timeIntervalSince(now)))
                 number = NDModel.Number(value: "in " + a.value, unit: a.unit)
@@ -330,7 +334,7 @@ struct NDJobsPage: View {
             }
             let spoken = [name, j.enabled == false ? "off" : nil,
                           streak.map { "failed \($0) nights in a row" },
-                          j.continuous ? (j.loaded == false ? "not running" : "always on") : nil,
+                          j.continuous ? (j.loaded == false ? "not running" : BrainBarMenuPresenter.SurfaceSay.running) : nil,
                           j.lastRun.map { "last ran \(NDFormat.age(now.timeIntervalSince($0)).spoken) ago" + Self.outcomeWords(j.lastOutcome) },
                           j.nextRun.map { "next run in \(NDFormat.age(max(0, $0.timeIntervalSince(now))).spoken)" }]
                 .compactMap { $0 }.joined(separator: ", ")

@@ -28,10 +28,18 @@ struct NDWindowRoot: View {
                 }
                 .padding(.horizontal, NDGrid.pageSide)
                 .padding(.top, NDGrid.pageTop)
-                .padding(.bottom, 24)
+                .padding(.bottom, 28)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .scrollIndicators(.automatic)
+            // Review polish 6: a page cut by a short window fades out over 16 pt instead of showing a sliver of the next
+            // heading; at the bottom of the page the 28 pt inset is under it, so nothing is faded there.
+            .overlay(alignment: .bottom) {
+                LinearGradient(colors: [ND.night.opacity(0), ND.night], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 16)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
         }
         // Under the toolbar, so the plane is the title bar; the toolbar's own safe area is not added again.
         .ignoresSafeArea(.container, edges: .top)
@@ -259,7 +267,6 @@ struct NDPageTop: View {
 
 struct NDNeedsBand: View {
     @ObservedObject var store: NDStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -287,15 +294,14 @@ struct NDNeedsBand: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if let action = fault.action {
-                ZStack(alignment: .trailing) {
-                    NDActionButton(label: action.label, large: true) { store.perform(action.kind) }.opacity(waiting ? 0 : 1)
+                NDWaitingSwap(waiting: waiting) {
+                    NDActionButton(label: action.label, large: true) { store.perform(action.kind) }
+                } line: {
                     HStack(spacing: 7) {
                         NDMarkView(mark: .running)
                         Text(BrainBarMenuPresenter.SurfaceSay.waitingForBrowser).font(NDType.fact).foregroundStyle(ND.ink2)
                     }
-                    .opacity(waiting ? 1 : 0)
                 }
-                .animation(reduceMotion ? nil : NDMotion.waitingFade, value: waiting)
             }
         }
         .padding(.vertical, 9)

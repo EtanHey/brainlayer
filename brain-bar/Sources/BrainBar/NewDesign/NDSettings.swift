@@ -18,8 +18,13 @@ import SwiftUI
         // top of an empty window). Its size is now its content's, measured and fixed before it is ever shown.
         hosting.sizingOptions = []
         let size = Self.contentSize(of: hosting.view)
-        window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable],
+        window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .fullSizeContentView],
                           backing: .buffered, defer: false)
+        // Review polish 3: one material. The 28 pt title bar is transparent over the Night background, with the view's
+        // 1 pt Rule hairline under it, as the main window draws at 52 pt.
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        window.backgroundColor = NDColor.night
         window.contentViewController = hosting
         window.setContentSize(size)
         window.contentMinSize = size
@@ -33,8 +38,11 @@ import SwiftUI
         window.delegate = self
     }
 
-    /// 520 pt wide and as tall as its rows: three 40 pt rows, two 1 pt rules, 14 and 18 pt insets (154 pt).
-    static let contentHeight: CGFloat = 154
+    /// The title bar the content runs under (polish 3), and its hairline.
+    static let titleBar: CGFloat = 28
+    /// 520 pt wide and as tall as its rows under the title bar: 28 pt bar, 1 pt hairline, three 40 pt rows, two 1 pt
+    /// rules, 14 and 18 pt insets (183 pt).
+    static let contentHeight: CGFloat = 183
 
     static func contentSize(of view: NSView) -> NSSize {
         view.frame = NSRect(x: 0, y: 0, width: width, height: contentHeight)
@@ -77,6 +85,19 @@ struct NDSettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            Color.clear.frame(height: NDSettingsWindowController.titleBar)
+                .overlay(alignment: .bottom) { ND.rule.frame(height: 1) }
+            rows
+        }
+        .ignoresSafeArea(.container, edges: .top)
+        .frame(width: NDSettingsWindowController.width)
+        .background(ND.night)
+        .foregroundStyle(ND.ink)
+        .environment(\.ndPalette, .window)
+    }
+
+    private var rows: some View {
+        VStack(spacing: 0) {
             row("Google Drive") {
                 Text(store.model.drive.state).font(NDType.row).foregroundStyle(ND.ink2)
                 Spacer()
@@ -100,10 +121,6 @@ struct NDSettingsView: View {
             }
         }
         .padding(EdgeInsets(top: 14, leading: 24, bottom: 18, trailing: 24))
-        .frame(width: NDSettingsWindowController.width)
-        .background(ND.night)
-        .foregroundStyle(ND.ink)
-        .environment(\.ndPalette, .window)
     }
 
     private func row<Content: View>(_ group: String, @ViewBuilder _ content: () -> Content) -> some View {
@@ -119,14 +136,14 @@ struct NDSettingsView: View {
     /// draws (a stale or duplicated check reads "—"). L8: no Disconnect in this version; Reconnect and Connect are one click.
     @ViewBuilder private var driveAction: some View {
         if let action = store.model.drive.action {
-            if store.inputs.driveReconnecting {
+            NDWaitingSwap(waiting: store.inputs.driveReconnecting) {
+                Button(action.kind == .connectDrive ? "Connect" : "Reconnect") { store.reconnectDrive() }
+                    .buttonStyle(NDLinkButtonStyle())
+            } line: {
                 HStack(spacing: 7) {
                     NDMarkView(mark: .running)
                     Text(BrainBarMenuPresenter.SurfaceSay.waitingForBrowser).font(NDType.fact).foregroundStyle(ND.ink2)
                 }
-            } else {
-                Button(action.kind == .connectDrive ? "Connect" : "Reconnect") { store.reconnectDrive() }
-                    .buttonStyle(NDLinkButtonStyle())
             }
         }
     }

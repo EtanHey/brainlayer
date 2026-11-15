@@ -180,7 +180,6 @@ struct NDMenuFaultRow: View {
     let fault: NDModel.Fault
     @ObservedObject var state: NDMenuRowState
     let perform: (BrainBarMenuPresentation.ActionKind) -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var waiting: Bool {
         store.inputs.driveReconnecting && [.reconnectDrive, .connectDrive].contains(fault.action?.kind)
@@ -199,18 +198,16 @@ struct NDMenuFaultRow: View {
                         .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
                 }
                 if let action = fault.action {
-                    ZStack(alignment: .leading) {
-                        // The waiting line takes the button's place at the button's height (R3): nothing below moves.
+                    // The waiting line takes the button's place at the button's height (R3): nothing below moves.
+                    NDWaitingSwap(waiting: waiting, alignment: .leading) {
                         NDActionButton(label: action.label, keyboardFocus: state.keyboard) { perform(action.kind) }
-                            .opacity(waiting ? 0 : 1)
+                    } line: {
                         HStack(spacing: 7) {
                             NDMarkView(mark: .running)
                             Text(BrainBarMenuPresenter.SurfaceSay.waitingForBrowser).font(NDType.menuFact)
                                 .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                         }
-                        .opacity(waiting ? 1 : 0)
                     }
-                    .animation(reduceMotion ? nil : NDMotion.waitingFade, value: waiting)
                     .padding(.top, 8)
                     if action.kind == .copyReport, store.inputs.copyReportFailed {
                         Text(BrainBarMenuPresenter.SurfaceSay.copyFailed).font(NDType.menuFact)
@@ -242,6 +239,48 @@ struct NDActionButton: View {
                 .opacity(keyboardFocus ? 1 : 0))
             .accessibilityLabel(Text(label))
     }
+}
+
+/// Review polish 4: the button leaves, then the waiting line enters, in the same place and row height; Reduce Motion
+/// swaps them at once.
+struct NDWaitingSwap<Button: View, Line: View>: View {
+    let waiting: Bool
+    var alignment: Alignment = .trailing
+    @ViewBuilder let button: Button
+    @ViewBuilder let line: Line
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack(alignment: alignment) {
+            button
+                .opacity(waiting ? 0 : 1)
+                .scaleEffect(waiting ? 0.97 : 1)
+                .animation(reduceMotion ? nil : NDMotion.buttonLeaves, value: waiting)
+                .allowsHitTesting(!waiting)
+                .accessibilityHidden(waiting)
+            line
+                .opacity(waiting ? 1 : 0)
+                .animation(reduceMotion ? nil : waiting ? NDMotion.waitingEnters : NDMotion.buttonLeaves, value: waiting)
+                .accessibilityHidden(!waiting)
+        }
+    }
+}
+
+/// The system menu's own selection: the `.selection` material, emphasized, 5 pt continuous corners.
+struct NDMenuSelection: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .selection
+        view.isEmphasized = true
+        view.state = .active
+        view.wantsLayer = true
+        view.layer?.cornerRadius = 5
+        view.layer?.cornerCurve = .continuous
+        view.layer?.masksToBounds = true
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
 private struct NDWindowFocus: ViewModifier {
@@ -298,15 +337,17 @@ struct NDMenuAreaRow: View {
                 .tracking(0.15)
                 .foregroundStyle(Color(nsColor: state.highlighted ? .alternateSelectedControlTextColor : .labelColor))
                 .frame(width: NDGrid.menuName, alignment: .leading)
-            visual.frame(width: NDGrid.menuVisual, height: 20)
-            NDNumberText(number: area.number, size: 12, selected: state.highlighted).frame(maxWidth: .infinity, alignment: .trailing)
+            Group {
+                visual.frame(width: NDGrid.menuVisual, height: 20)
+                NDNumberText(number: area.number, size: 12, selected: state.highlighted).frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .environment(\.ndPalette, state.highlighted ? .menuSelected : .menu)
         }
         .padding(.horizontal, 9)
         .frame(height: NDGrid.menuAreaRow)
-        // Fix 7: one menu, one selection: the system's selected-content plate, inset 5 pt and 5 pt round like the system
-        // rows, text in the selected text colour; the marks and gauges keep their own colours.
-        .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color(nsColor: .selectedContentBackgroundColor))
-            .opacity(state.highlighted ? 1 : 0))
+        // Fix 7 and review polish 2: one menu, one blue: the selection material the system rows use, emphasized, inset
+        // 5 pt and 5 pt round like them; text and graphics in the selected text colour while highlighted.
+        .background { if state.highlighted { NDMenuSelection() } }
         .padding(.horizontal, 5)
         .contentShape(Rectangle())
         .onTapGesture(perform: open)

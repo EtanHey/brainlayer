@@ -66,18 +66,14 @@ import SwiftUI
 
     static func settings(name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
         let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm))
-        let view = VStack(spacing: 0) {
-            ZStack {
+        // Polish 3: the view runs under the transparent 28 pt title bar and draws its hairline; the render adds only the
+        // title the system draws there.
+        let view = NDSettingsView(store: store)
+            .overlay(alignment: .top) {
                 Text("BrainBar Settings").font(.system(size: 13, weight: .semibold)).foregroundStyle(ND.ink2)
+                    .frame(height: NDSettingsWindowController.titleBar)
             }
-            .frame(maxWidth: .infinity).frame(height: 28).background(ND.deck)
-            .overlay(alignment: .bottom) { ND.rule.frame(height: 1) }
-            NDSettingsView(store: store)
-        }
-        .frame(width: NDSettingsWindowController.width)
-        // Title 28 + padding 14 and 18 + three 40 pt rows + two 1 pt rules = 182 pt (one constant: the CI toolchain could not
-        // type-check the literal sum in time).
-        let height: CGFloat = 182
+        let height = NDSettingsWindowController.contentHeight
         let size = NSSize(width: NDSettingsWindowController.width, height: height)
         try write(host(view, size: size, appearance: appearance), name: name, in: directory)
         return name
