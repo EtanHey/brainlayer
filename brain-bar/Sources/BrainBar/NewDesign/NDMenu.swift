@@ -7,13 +7,14 @@ import SwiftUI
 /// at the same x in every state (review finding 5). Opening and closing are the system's own, never animated.
 @MainActor final class NDMenuBuilder: NSObject, NSMenuDelegate {
     let store: NDStore
-    let perform: (BrainBarMenuAction) -> Void
-    let openWindow: (NDPage) -> Void
+    let perform: @MainActor (BrainBarMenuAction) -> Void
+    let openWindow: @MainActor (NDPage) -> Void
     private var rowStates: [ObjectIdentifier: NDMenuRowState] = [:]
     /// Ends the menu's tracking before a row's click opens the window.
-    var menuDismiss: (() -> Void)?
+    var menuDismiss: (@MainActor () -> Void)?
 
-    init(store: NDStore, perform: @escaping (BrainBarMenuAction) -> Void, openWindow: @escaping (NDPage) -> Void) {
+    init(store: NDStore, perform: @escaping @MainActor (BrainBarMenuAction) -> Void,
+         openWindow: @escaping @MainActor (NDPage) -> Void) {
         self.store = store
         self.perform = perform
         self.openWindow = openWindow

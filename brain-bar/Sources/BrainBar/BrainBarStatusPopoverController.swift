@@ -100,7 +100,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private lazy var newMenuBuilder: NDMenuBuilder = {
         let builder = NDMenuBuilder(store: newDesignStore, perform: { [weak self] action in self?.performNew(action) },
                                     openWindow: { [weak self] page in
-                                        DispatchQueue.main.async { self?.dashboardPanelController?.showPage(page) }
+                                        // After the menu's tracking ends, as before; a main-actor task, so `self` is
+                                        // never sent across isolation (Swift 6.2 on CI rejected the dispatch closure).
+                                        Task { @MainActor [weak self] in self?.dashboardPanelController?.showPage(page) }
                                     })
         builder.menuDismiss = { [weak self] in self?.contextMenuForTesting.cancelTracking() }
         return builder

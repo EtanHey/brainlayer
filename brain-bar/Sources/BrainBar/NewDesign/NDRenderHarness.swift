@@ -75,7 +75,10 @@ import SwiftUI
             NDSettingsView(store: store)
         }
         .frame(width: NDSettingsWindowController.width)
-        let size = NSSize(width: NDSettingsWindowController.width, height: 28 + 14 + 18 + 3 * 40 + 2)
+        // Title 28 + padding 14 and 18 + three 40 pt rows + two 1 pt rules = 182 pt (one constant: the CI toolchain could not
+        // type-check the literal sum in time).
+        let height: CGFloat = 182
+        let size = NSSize(width: NDSettingsWindowController.width, height: height)
         try write(host(view, size: size, appearance: appearance), name: name, in: directory)
         return name
     }

@@ -20,9 +20,16 @@ enum BrainBarMenuReport {
             row.strings + (row.action.map { [$0.label] } ?? [])
         }
         let checks: [String] = verdict?.checks.map { "\($0.name): \($0.state.rawValue) — \($0.note)" } ?? ["Unavailable"]
-        let report = (["BrainBar report", "Version: \(version)", "Time: \(timestamp)", "", "Menu:"]
-                + words + (extraLines.isEmpty ? [] : ["", "Warnings:"] + extraLines) + ["", "Checks:"] + checks)
-            .joined(separator: "\n") + "\n"
+        // Built in steps: one long `+` chain did not type-check in time on the CI toolchain (Swift 6.2).
+        var lines: [String] = ["BrainBar report", "Version: \(version)", "Time: \(timestamp)", "", "Menu:"]
+        lines += words
+        if !extraLines.isEmpty {
+            lines += ["", "Warnings:"]
+            lines += extraLines
+        }
+        lines += ["", "Checks:"]
+        lines += checks
+        let report: String = lines.joined(separator: "\n") + "\n"
         let scrubbed = SecretScrubber.scrub(report).text
             .replacingOccurrences(of: #"/(Users|home)/[^/\s]+"#, with: "/$1/[user]", options: .regularExpression)
             .replacingOccurrences(of: #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#, with: "[email]", options: .regularExpression)
