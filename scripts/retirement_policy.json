@@ -2677,7 +2677,7 @@
       }
     },
     "6af97d75a3bf8fef459b5629fcda0276fc1a4e0482f29747a743de9640882828": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/job_alerts.py <module>._notify",
+      "non_cloud_purpose": "Local osascript notification only for brainbar-activation failure, when BrainBar may not be running; other job notifications belong to BrainBar. No model or cloud sender.",
       "site": {
         "call_sha256": "114ad7e2890a9936fc01b38f25a9b8c7724c0aa42dd40c389052c067f0118455",
         "kind": "child_process",

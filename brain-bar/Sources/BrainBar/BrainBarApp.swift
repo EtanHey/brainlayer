@@ -1,5 +1,6 @@
 import AppKit
 import BrainBarLifecycle
+import Combine
 import SwiftUI
 
 enum BrainBarAppMenuCommands {
@@ -22,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusPopoverController: BrainBarStatusPopoverController?
     private var collector: StatsCollector?
+    private var faultNotifications: BrainBarFaultNotifications?
     private var dashboardPanel: BrainBarDashboardPanelController?
     private let windowActivationPolicy = BrainBarWindowActivationPolicy()
     private var toggleHotkey: HotkeyManager?
@@ -101,6 +103,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             healthBadgeURL: BadgeStateReader.url(dbPath: dbPath),
             jobAlertsURL: BrainBarJobAlerts.producerURL(dbPath: dbPath, producerLabel: BrainBarJobAlerts.badgeProducerLabel))
         runtime.jobsModel = jobsModel
+        let notifications = BrainBarFaultNotifications(center: BrainBarSystemNotificationCenter { [weak self] in
+            self?.statusPopoverController?.openNotificationDestination()
+        }, defaults: .standard)
+        faultNotifications = notifications
+        // This app-lifetime subscriber is independent of all menu rendering and its feature flag.
+        notifications.observe(changes: jobsModel.objectWillChange.eraseToAnyPublisher()) { [weak jobsModel, weak collector] in
+            guard let jobsModel else { return nil }
+            let alerts: [String: String]?
+            switch jobsModel.liveJobAlertsState {
+            case .readable: alerts = jobsModel.liveJobAlerts?.active
+            case .absent: alerts = [:]
+            case .unread, .unavailable: alerts = nil
+            }
+            return .init(capture: jobsModel.menuCapture(stats: collector?.stats), jobAlerts: alerts)
+        }
         // S5: one app-lifetime sampler feeds the icon, menu, Dashboard, Jobs and Backups, whether or
         // not a window is open; the views no longer start their own readers.
         statusSamplingTask = Task { await jobsModel.monitorStatus() }
@@ -137,6 +154,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        faultNotifications?.stopObserving()
+        faultNotifications = nil
         statusPopoverController?.stop()
         statusPopoverController = nil
         dashboardPanel?.dismiss()

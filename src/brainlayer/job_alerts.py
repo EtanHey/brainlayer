@@ -1,4 +1,4 @@
-"""Durable, deduplicated backup/maintenance failure notices."""
+"""Durable, deduplicated backup/maintenance alert records for BrainBar."""
 
 from __future__ import annotations
 
@@ -27,7 +27,10 @@ def _times_path(path: Path) -> Path:
     return path.with_name(f"{path.stem}.times.json")
 
 
-def _notify(message: str) -> None:
+def _notify(message: str, *, key: str | None = None) -> None:
+    """Only activation failures may notify without a running BrainBar."""
+    if key != "brainbar-activation":
+        return
     if os.environ.get("BRAINLAYER_TEST_PATH_PROVENANCE") == "pytest":
         return
     subprocess.run(
@@ -108,9 +111,10 @@ def report(
 ) -> bool:
     """Set or clear one episode. Return true only when the visible state changes.
 
-    Only a new failure posts a notification, and only when no other active key already
-    carries the identical message (one incident fanned out across keys posts once).
-    Recovery updates the alert file and the health log but never notifies.
+    Only a new failure invokes the optional notification hook, and only when no
+    other active key carries the identical message. Only brainbar-activation uses
+    the production OS hook; BrainBar delivers every other job notification from
+    the alert records. Recovery only updates the alert file and health log.
     """
     destination = path or alert_path()
     with _locked(destination):
@@ -137,7 +141,10 @@ def report(
     if not post:
         return True
     try:
-        notify(message)
+        if notify is _notify:
+            _notify(message, key=key)
+        else:
+            notify(message)
     except (OSError, subprocess.SubprocessError) as exc:
         LOG.warning("macOS notification failed for %s: %s", key, type(exc).__name__)
     return True

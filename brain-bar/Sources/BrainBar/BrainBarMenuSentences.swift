@@ -410,3 +410,16 @@ extension BrainBarMenuPresenter {
         return below(60) == 1 ? "in over a minute" : "in over \(below(60)) minutes"
     }
 }
+
+// Notification-only uncertainty labels live with the wording registry, outside the menu sentence inventory.
+extension BrainBarMenuPresenter {
+    static func genericNotificationTitle(_ thing: Thing) -> String {
+        switch thing {
+        case .remembering: "Conversation saving needs attention"
+        case .finding: "Memory search needs attention"
+        case .safe: "Backups need attention"
+        case .upkeep: "Upkeep needs attention"
+        case .system: "BrainLayer needs attention"
+        }
+    }
+}
