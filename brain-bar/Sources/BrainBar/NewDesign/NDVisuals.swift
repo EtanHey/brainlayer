@@ -78,18 +78,22 @@ struct NDWaveform: View {
         let up = cy - 1, down = h - cy - 1
         let maxSaves = CGFloat(max(wave.saves.max() ?? 0, 4)), maxReads = CGFloat(max(wave.reads.max() ?? 0, 40))
         let minBar: CGFloat = size == .hero ? 2 : 1.5
+        // Pill ends only at the full 104 pt hero (comp 04); shorter heroes and the dropdown draw square-ended bars
+        // (1 pt and 0.5 pt corners), so short bars never turn into beads that read as dots or as the dashed unknown.
+        let pill = size == .hero && h >= 60
+        let corner: CGFloat = size == .hero ? 1 : 0.5
         for index in 0..<n {
             let x = CGFloat(index) * (bw + gap)
             let s = index < wave.saves.count ? wave.saves[index] : 0
             let r = index < wave.reads.count ? wave.reads[index] : 0
             if s > 0 {
                 let bh = max(minBar, CGFloat(s) / maxSaves * up)
-                let radius = size == .hero ? min(bw / 2, bh / 2) : min(0.5, bh / 2)
+                let radius = pill ? min(bw / 2, bh / 2) : min(corner, bh / 2)
                 ctx.fill(Path(roundedRect: CGRect(x: x, y: cy - 0.5 - bh, width: bw, height: bh), cornerRadius: radius), with: .color(palette.saves))
             }
             if r > 0 {
                 let bh = max(minBar, CGFloat(r) / maxReads * down)
-                let radius = size == .hero ? min(bw / 2, bh / 2) : min(0.5, bh / 2)
+                let radius = pill ? min(bw / 2, bh / 2) : min(corner, bh / 2)
                 ctx.fill(Path(roundedRect: CGRect(x: x, y: cy + 0.5, width: bw, height: bh), cornerRadius: radius), with: .color(palette.reads))
             }
         }
@@ -416,7 +420,8 @@ struct NDNumberText: View {
 
     var body: some View {
         if number.value == NDModel.Number.faultMark.value {
-            NDMarkView(mark: .fault)
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous).fill(palette.fault).frame(width: 8, height: 8)
+                .frame(height: 12)
         } else {
             let color: Color = switch number.tone {
             case .fault: palette.fault

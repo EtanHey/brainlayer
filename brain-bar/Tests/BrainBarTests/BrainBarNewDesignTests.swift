@@ -185,6 +185,14 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
             let dash = row.number.value == "—"
             if dashed != dash, !(row.stateWord) { out.append("\(row.name): dashed \(dashed) but number \(row.number.value)") }
             if row.visual == .emptyTrack, i.savesWaiting != 0 { out.append("\(row.name): empty drawn without a measured empty queue") }
+            // Design pre-pass 5a: "none" rests on a fresh, known stores check.
+            if row.visual == .emptyTrack, !(0...900).contains(c.verdictAwakeAgeS) || c.verdict == nil {
+                out.append("\(row.name): none on a stale reading")
+            }
+        }
+        // Design pre-pass 5b: a ring is explained by a dashed row, or says why in its help tag and VoiceOver.
+        for area in m.areas where area.mark == .unknown && !area.rows.contains(where: { $0.visual == .unknown }) && area.unknownReason == nil {
+            out.append("\(area.name): ring with no dashed row and no reason")
         }
         // Remembering's number is the newest conversation's age, a fact apart from its waveform.
         for area in m.menuAreas where area.thing != .remembering && (area.visual == .unknown) != (area.number.value == "—") {
@@ -324,6 +332,22 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
         let unknown = NDModel.make(i).areas.first { $0.name == "Agents" }!
         XCTAssertEqual(unknown.mark, .unknown)
         XCTAssertTrue(unknown.rows.allSatisfy { $0.number.value == "—" })
+    }
+
+    /// Design pre-pass 7: beside "Everything else is fine." the fault drops its own reassurance; 22 words at most.
+    func testOneUpkeepFaultKeepsToTheWordsBudget() {
+        let m = NDModel.make(BrainBarDesignFixture.inputs(.jobsFailedStreak))
+        XCTAssertTrue(m.everythingElse)
+        let shown = m.faults.flatMap(\.shownFacts).joined(separator: " ")
+        XCTAssertFalse(shown.contains("still being saved"), shown)
+        XCTAssertLessThanOrEqual(shown.split(separator: " ").count, 22, shown)
+        XCTAssertTrue(m.faults.flatMap(\.facts).joined(separator: " ").contains("still being saved"), "VoiceOver and the report keep it")
+    }
+
+    func testStaleReadingNeverSaysNone() {
+        let row = NDModel.make(BrainBarDesignFixture.inputs(.checking)).areas.first { $0.thing == .remembering }!.rows.first { $0.id == "stores" }!
+        XCTAssertEqual(row.visual, .unknown)
+        XCTAssertEqual(row.number.value, "—")
     }
 
     func testCheckedLineSaysWhenTheVerdictIsStale() {

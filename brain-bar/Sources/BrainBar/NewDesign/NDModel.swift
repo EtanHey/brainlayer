@@ -89,6 +89,8 @@ struct NDModel: Equatable, Sendable {
         var visual: Visual
         var number: Number
         var accessibility: String
+        /// The ring's reason when the row's own value is known (design pre-pass 5b).
+        var unknownReason: String? = nil
     }
 
     struct Fault: Equatable, Sendable, Identifiable {
@@ -558,7 +560,11 @@ extension NDModel {
         }
         out.append(MenuArea(thing: .upkeep, name: "Upkeep", mark: marks[.upkeep] ?? .none, visual: upkeepVisual,
                             number: nightly?.number ?? .unknown, accessibility: nightly?.accessibility ?? "Upkeep, not known"))
-        return out
+        return out.map { area in
+            var area = area
+            if area.mark == .unknown, area.visual != .unknown { area.unknownReason = unconfirmed }
+            return area
+        }
     }
 
     static func waveAccessibility(_ wave: NDWave?, minutes: Int) -> String {

@@ -65,12 +65,11 @@ struct NDSettingsView: View {
             ND.rule.frame(height: 1)
             row("Design") {
                 Spacer()
-                Picker("Design", selection: $design) {
-                    ForEach(BrainBarDesign.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .fixedSize()
+                NDSegments(titles: BrainBarDesign.allCases.map(\.title),
+                           selection: Binding(get: { BrainBarDesign.allCases.firstIndex { $0.rawValue == design } ?? 0 },
+                                              set: { design = BrainBarDesign.allCases[$0].rawValue }),
+                           accessibilityLabel: "Design", fontSize: 12, padding: 12)
+                    .fixedSize()
             }
             ND.rule.frame(height: 1)
             row("Settings file") {

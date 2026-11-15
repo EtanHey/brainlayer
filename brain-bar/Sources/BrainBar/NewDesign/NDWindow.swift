@@ -66,75 +66,88 @@ struct NDTitleBar: View {
     }
 }
 
-/// The native segmented control. A page with faults carries a small red count after its label, drawn into the segment's
-/// image because AppKit drops custom label colours (SPEC-REVIEW, carry note); the control itself stays native.
-struct NDSegmentedPages: NSViewRepresentable {
-    @ObservedObject var store: NDStore
+/// The native segmented control with its labels drawn by us: Ink 2 when not selected, Ink when selected (AppKit would
+/// draw both in the label colour), and a page with faults carries a small red count after its label. The control, its
+/// selected fill and its keyboard and VoiceOver behaviour stay native.
+struct NDSegments: NSViewRepresentable {
+    let titles: [String]
+    var counts: [Int] = []
+    @Binding var selection: Int
+    var accessibilityLabel: String
+    /// The title bar's segments are 13 pt with 14 pt each side; Settings' Classic / New are 12 pt with 12 pt (comps 04, 06).
+    var fontSize: CGFloat = 13
+    var padding: CGFloat = 14
 
     final class Coordinator: NSObject {
-        var store: NDStore
-        init(store: NDStore) { self.store = store }
+        var selection: Binding<Int>
+        init(selection: Binding<Int>) { self.selection = selection }
         @MainActor @objc func changed(_ sender: NSSegmentedControl) {
-            let page = NDPage.allCases[max(0, min(sender.selectedSegment, NDPage.allCases.count - 1))]
-            if store.page != page { store.page = page }
+            if selection.wrappedValue != sender.selectedSegment { selection.wrappedValue = sender.selectedSegment }
         }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(store: store) }
+    func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
 
     func makeNSView(context: Context) -> NSSegmentedControl {
-        let control = NSSegmentedControl(labels: NDPage.allCases.map(\.title), trackingMode: .selectOne,
+        let control = NSSegmentedControl(labels: titles, trackingMode: .selectOne,
                                          target: context.coordinator, action: #selector(Coordinator.changed(_:)))
         control.segmentStyle = .automatic
         control.controlSize = .regular
-        control.font = .systemFont(ofSize: 13, weight: .medium)
-        control.setAccessibilityLabel("Pages")
+        control.setAccessibilityLabel(accessibilityLabel)
         update(control)
         return control
     }
 
     func updateNSView(_ control: NSSegmentedControl, context: Context) {
-        context.coordinator.store = store
+        context.coordinator.selection = $selection
         update(control)
     }
 
     @MainActor private func update(_ control: NSSegmentedControl) {
-        let counts: [NDPage: Int] = [.backups: store.model.backupsTabCount, .jobs: store.model.jobsTabCount]
-        for (index, page) in NDPage.allCases.enumerated() {
-            let count = counts[page] ?? 0
-            if count > 0 {
-                control.setLabel("", forSegment: index)
-                control.setImage(Self.labelImage(page.title, count: count), forSegment: index)
-                control.setImageScaling(.scaleNone, forSegment: index)
-            } else {
-                control.setImage(nil, forSegment: index)
-                control.setLabel(page.title, forSegment: index)
-            }
-            // 14 pt each side of the label, as the comps draw the segments.
-            let label = count > 0 ? Self.labelImage(page.title, count: count).size.width
-                : ceil(NSAttributedString(string: page.title, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium)]).size().width)
-            control.setWidth(label + 28, forSegment: index)
+        for (index, title) in titles.enumerated() {
+            let count = index < counts.count ? counts[index] : 0
+            let image = Self.labelImage(title, count: count, selected: index == selection, size: fontSize)
+            control.setLabel("", forSegment: index)
+            control.setImage(image, forSegment: index)
+            control.setImageScaling(.scaleNone, forSegment: index)
+            control.setWidth(image.size.width + 2 * padding, forSegment: index)
         }
-        control.selectedSegment = NDPage.allCases.firstIndex(of: store.page) ?? 0
+        control.selectedSegment = selection
     }
 
-    /// "Backups 1": the label in the control's text colour, the count in Fault, Bold 11, 5 pt apart.
-    @MainActor static func labelImage(_ title: String, count: Int) -> NSImage {
-        let label = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium)])
-        let numeral = NSAttributedString(string: String(count), attributes: [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .bold)])
-        let size = NSSize(width: ceil(label.size().width + 5 + numeral.size().width), height: ceil(label.size().height))
-        let image = NSImage(size: size, flipped: false) { rect in
-            NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium),
-                                                           .foregroundColor: NSColor.controlTextColor]).draw(at: .zero)
-            let y = (rect.height - numeral.size().height) / 2
-            NSAttributedString(string: String(count), attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .bold),
-                                                                   .foregroundColor: NDColor.fault]).draw(at: NSPoint(x: label.size().width + 5, y: y))
+
+    /// "Backups 1": the label in Ink (selected) or Ink 2, the count in Fault, Bold 11, 5 pt after it. Drawn at display
+    /// time, so the colours follow the control's appearance.
+    @MainActor static func labelImage(_ title: String, count: Int, selected: Bool, size: CGFloat = 13) -> NSImage {
+        let font = NSFont.systemFont(ofSize: size, weight: .medium)
+        let label = NSAttributedString(string: title, attributes: [.font: font])
+        let countFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .bold)
+        let numeral = NSAttributedString(string: String(count), attributes: [.font: countFont])
+        let width = ceil(label.size().width + (count > 0 ? 5 + numeral.size().width : 0))
+        let image = NSImage(size: NSSize(width: width, height: ceil(label.size().height)), flipped: false) { rect in
+            NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: selected ? NDColor.ink : NDColor.ink2])
+                .draw(at: .zero)
+            if count > 0 {
+                let y = (rect.height - numeral.size().height) / 2
+                NSAttributedString(string: String(count), attributes: [.font: countFont, .foregroundColor: NDColor.fault])
+                    .draw(at: NSPoint(x: label.size().width + 5, y: y))
+            }
             return true
         }
         image.isTemplate = false
-        image.accessibilityDescription = "\(title), \(count == 1 ? "1 thing needs you" : "\(count) things need you")"
+        image.accessibilityDescription = count > 0 ? "\(title), \(count == 1 ? "1 thing needs you" : "\(count) things need you")" : title
         return image
+    }
+}
+
+struct NDSegmentedPages: View {
+    @ObservedObject var store: NDStore
+    var body: some View {
+        NDSegments(titles: NDPage.allCases.map(\.title),
+                   counts: NDPage.allCases.map { [.backups: store.model.backupsTabCount, .jobs: store.model.jobsTabCount][$0] ?? 0 },
+                   selection: Binding(get: { NDPage.allCases.firstIndex(of: store.page) ?? 0 },
+                                      set: { store.page = NDPage.allCases[max(0, min($0, NDPage.allCases.count - 1))] }),
+                   accessibilityLabel: "Pages")
     }
 }
 
@@ -156,7 +169,7 @@ struct NDOverviewPage: View {
                     .padding(.top, 12)
                     .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
             }
-            NDHero(store: store, compact: !m.faults.isEmpty).padding(.top, 14)
+            NDHero(store: store, height: m.faults.isEmpty ? 104 : m.faults.count == 1 ? 80 : 48).padding(.top, 14)
             NDPanel(model: m).padding(.top, 16)
         }
         .animation(reduceMotion ? .easeOut(duration: 0.15) : NDMotion.needsBand, value: m.faults.map(\.title))
@@ -236,7 +249,8 @@ struct NDNeedsBand: View {
 
 struct NDHero: View {
     @ObservedObject var store: NDStore
-    let compact: Bool
+    /// 104 pt calm; 80 pt with one fault; 48 pt with two or more (the needs band takes the room).
+    let height: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shift: CGFloat = 0
     @State private var lastBucket: Int?
@@ -244,10 +258,10 @@ struct NDHero: View {
     var body: some View {
         let wave = store.inputs.heroWaves[store.range]
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center) {
+            HStack(alignment: .center, spacing: 0) {
                 if let wave, wave.readable {
                     total(wave.savesTotal, "saved by agents").accessibilityHidden(true)
-                    total(wave.readsTotal, "read from conversations").padding(.leading, 16).accessibilityHidden(true)
+                    total(wave.readsTotal, "read from conversations").padding(.leading, 14).accessibilityHidden(true)
                 } else {
                     Text("—").font(.system(size: 13, weight: .semibold)).foregroundStyle(ND.ink2)
                 }
@@ -264,11 +278,11 @@ struct NDHero: View {
                     .id(store.range)
                     .transition(.opacity)
             }
-            .frame(height: (compact ? 48 : 104) + 10)
+            .frame(height: height + 10)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(NDModel.waveAccessibility(wave, minutes: store.range.minutes))
             .animation(reduceMotion ? nil : NDMotion.rangeFade, value: store.range)
-            .animation(reduceMotion ? nil : NDMotion.needsBand, value: compact)
+            .animation(reduceMotion ? nil : NDMotion.needsBand, value: height)
             let axis = store.range.axis
             HStack {
                 Text(axis.0)
@@ -364,12 +378,14 @@ struct NDAreaView: View {
             }
             .frame(height: 20)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(area.name + (area.fault ? ", needs you" : area.mark == .unknown ? ", not confirmed" : ""))
+            .accessibilityLabel(area.name + (area.fault ? ", needs you" : area.mark == .unknown ? ", " + (area.unknownReason ?? "not confirmed") : ""))
+            .help(area.unknownReason ?? "")
             .accessibilityAddTraits(.isHeader)
             VStack(spacing: 0) {
                 ForEach(area.rows) { NDPanelRow(row: $0) }
             }
-            .overlay(alignment: .topLeading) {
+            // Under the rows: a state word's Night plate (6 pt leading) masks the line where the word crosses it.
+            .background(alignment: .topLeading) {
                 if area.limitLine {
                     GeometryReader { geo in
                         NDLimitLine()
@@ -403,7 +419,9 @@ struct NDPanelRow: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            name.frame(width: NDGrid.rowName, alignment: .leading)
+            // A name never truncates: one a few points over the 146 pt column takes them from the gauge, whose end (the
+            // limit line) stays put.
+            name.fixedSize().frame(minWidth: NDGrid.rowName, alignment: .leading)
             Spacer().frame(width: NDGrid.rowGap)
             if row.stateWord {
                 Spacer(minLength: 0)

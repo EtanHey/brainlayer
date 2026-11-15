@@ -54,8 +54,9 @@ import SwiftUI
         for area in model.menuAreas {
             let state = NDMenuRowState()
             let item = hosted(NDMenuAreaRow(store: store, area: area, state: state) { [weak self] in self?.openOverview() },
-                              label: "\(area.name), \(area.accessibility)", state: state)
+                              label: "\(area.name), \(area.accessibility)" + (area.unknownReason.map { ", " + $0 } ?? ""), state: state)
             item.title = area.name
+            item.toolTip = area.unknownReason
             item.target = self
             item.action = #selector(openArea)
             item.isEnabled = true
@@ -314,5 +315,5 @@ struct NDMenuAreaRow: View {
 
 /// R28a, for line breaking only: a number stays with the word after it.
 func keepingUnits(_ string: String) -> String {
-    string.replacing(#/(\d%?) /#) { "\($0.1)\u{00A0}" }.replacing(#/\b([A-Z][a-z]{2}) (\d)/#) { "\($0.1)\u{00A0}\($0.2)" }
+    string.replacingOccurrences(of: "to an agent.", with: "to\u{00A0}an\u{00A0}agent.").replacing(#/(\d%?) /#) { "\($0.1)\u{00A0}" }.replacing(#/\b([A-Z][a-z]{2}) (\d)/#) { "\($0.1)\u{00A0}\($0.2)" }
 }

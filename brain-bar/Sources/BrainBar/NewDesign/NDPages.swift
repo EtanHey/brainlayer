@@ -344,9 +344,7 @@ struct NDJobLaneView: View {
         if let enabled = lane.enabled {
             Toggle(lane.name, isOn: Binding(get: { enabled }, set: { store.setJob(lane.job, enabled: $0) }))
                 .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .tint(ND.ink2)
+                .toggleStyle(NDSwitchStyle())
         }
     }
 }
@@ -379,5 +377,29 @@ extension NDFormat {
         }
         f.dateFormat = "MMM d"
         return f.string(from: date) + " at " + time
+    }
+}
+
+/// The Jobs switch as the comps draw it (10, 13): a 26 × 15 pt capsule, Ink 2 when on and Track when off, a 13 pt white
+/// knob. The system switch's on-state read as off in a dark window and near-black in a light one (design pre-pass 3).
+/// It stays a `Toggle`, so VoiceOver reads a switch with its value; Space toggles it when focused.
+struct NDSwitchStyle: ToggleStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        Button { configuration.isOn.toggle() } label: {
+            Capsule(style: .continuous)
+                .fill(configuration.isOn ? ND.ink2 : ND.track)
+                .frame(width: 26, height: 15)
+                .overlay(alignment: configuration.isOn ? .trailing : .leading) {
+                    Circle().fill(Color.white).frame(width: 13, height: 13)
+                        .shadow(color: .black.opacity(0.3), radius: 0.75, y: 0.5)
+                        .padding(1)
+                }
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: configuration.isOn)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityRepresentation { Toggle(isOn: configuration.$isOn) { configuration.label } }
     }
 }
