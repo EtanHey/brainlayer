@@ -40,6 +40,15 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.4] - 2026-11-15
+
+### The activation monitor never hangs on lsof; the new BrainBar menu by default
+
+- fix(ingest): warn when growing transcripts have no recognised records (#1808)
+- Use the brain icon when the new menu is enabled (#1807)
+- feat(brainbar): turn the new menu on by default (#1809)
+- fix(brainbar): activation monitor never hangs on lsof; timeouts are unknown, not refusals (#1811)
+
 ## [1.6.3] - 2026-11-14
 
 ### The new BrainBar menu, behind a switch in Settings

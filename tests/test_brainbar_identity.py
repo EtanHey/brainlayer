@@ -25,6 +25,7 @@ def test_running_identity_binds_mapped_vnode_not_only_path(tmp_path, monkeypatch
     count = []
 
     def run(args, timeout):
+        assert args[:3] == ["/usr/sbin/lsof", "-b", "-w"]
         binary = identity.JOBS[len(count)][1]
         count.append(binary)
         path = binaries / binary

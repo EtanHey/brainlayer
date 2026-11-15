@@ -430,7 +430,14 @@ def test_scan_failures_are_transient_durable_and_recover(monitor, monkeypatch, e
             True,
         ),
         ("BrainBar activation monitor refused: unreadable process table", True),
+        (
+            "BrainBar activation monitor refused: Command '['/usr/sbin/lsof', '-a', '-p', '972', '-d', 'txt', '-F', 'Din']' timed out after 9.8 seconds",
+            True,
+        ),
+        ("BrainBar activation monitor refused: Command '['/bin/launchctl', 'print']' timed out", True),
+        ("BrainBar activation monitor refused: running-bundle inspection deadline exceeded", True),
         ("BrainBar activation failed: blocked", False),
+        ("BrainBar activation was interrupted; run brainlayer brainbar activate", False),
     ],
 )
 def test_successful_scan_clears_only_scan_alerts(monitor, monkeypatch, reason, cleared):
@@ -444,6 +451,28 @@ def test_successful_scan_clears_only_scan_alerts(monitor, monkeypatch, reason, c
         path.unlink()
     worker.tick()
     assert ("brainbar-activation" not in job_alerts.active_alerts()) == cleared
+
+
+@pytest.mark.parametrize("source", ["identity", "launchd", "brew_launchd"])
+@pytest.mark.parametrize("error", [auto.subprocess.TimeoutExpired(["private"], 5), TimeoutError("private")])
+def test_inspection_timeout_is_counted_without_refusal_when_jobs_loaded(monitor, monkeypatch, source, error):
+    worker, _, calls, alerts = monitor
+
+    def fail(*args):
+        raise error
+
+    monkeypatch.setattr(auto, "loaded", lambda *a: SimpleNamespace(returncode=0))
+    if source == "identity":
+        monkeypatch.setattr(auto, "running_bundle_matches", fail)
+    elif source == "launchd":
+        monkeypatch.setattr(auto, "loaded", fail)
+    else:
+        monkeypatch.setattr(auto, "brew_processes", lambda: ["42 brew"])
+        monkeypatch.setattr(auto, "loaded", fail)
+    for count in range(1, 13):
+        worker.tick()
+        assert json.loads(worker.state.with_suffix(".scan.json").read_text()) == {"failures": count}
+    assert not alerts and not calls
 
 
 def test_second_scan_failure_never_launches_and_successful_scan_resets_count(monitor, monkeypatch):
