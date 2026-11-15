@@ -1,9 +1,12 @@
 import AppKit
 
-/// No registration or cached value: an absent key is false, and each open re-reads it.
+/// No registration or cached value: each open re-reads the key, defaulting to the new menu.
 enum BrainBarNewMenuPreference {
     static let key = "BrainBarNewMenuEnabled"
-    static func isEnabled(in defaults: UserDefaults = .standard) -> Bool { defaults.bool(forKey: key) }
+    static let defaultValue: Bool = true
+    static func isEnabled(in defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: key) == nil ? defaultValue : defaults.bool(forKey: key)
+    }
 }
 
 /// The report is limited to presentation words and health-check diagnostics, never source contents.

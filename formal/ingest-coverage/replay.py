@@ -60,9 +60,10 @@ SHAPES = (
     "rewrite_lossy",
     "drift",
     "partial",
+    "growth",
 )
 # faults whose records are consumed and never indexed
-DROPPING = frozenset({"coverage", "rewrite_lossy", "drift"})
+DROPPING = frozenset({"coverage", "rewrite_lossy", "drift", "growth"})
 PAD_RECORDS = 64
 
 
@@ -79,6 +80,19 @@ def _fault(f, ticks=9, after="none"):
 
 
 SCENARIOS: dict[str, dict[str, Any]] = {
+    "growth-changed-body": {"clock": "confirmed", "events": _fault("growth")},
+    "growth-idle": {
+        "clock": "confirmed",
+        "events": _fault("growth")[:-4] + [{**_awake(), "w": False}] * 3 + [_awake()] * 4,
+    },
+    "growth-sleep-reset": {
+        "clock": "confirmed",
+        "events": [_awake()] * 2 + [_awake("growth")] * 2 + _sleep(7) + [_awake("growth")] * 2 + [_awake()] * 4,
+    },
+    "growth-sparse": {
+        "clock": "confirmed",
+        "events": [_awake()] * 2 + [{**_awake("growth"), "w": bool(k % 2)} for k in range(9)] + [_awake()] * 4,
+    },
     **{s: {"clock": "confirmed", "events": _fault(s)} for s in SHAPES},
     "sleep": {"clock": "confirmed", "events": [_awake()] * 2 + _sleep(6) + [_awake()] * 3},
     "sleep-monitor-first": {
@@ -279,6 +293,15 @@ def agent_record(provider: str, text: str, when: datetime, *, drift: bool = Fals
     return {"role": "user", "content": text, "timestamp": ts}  # cursor sessions
 
 
+def changed_body_record(provider: str, text: str) -> dict[str, Any]:
+    """Keep the discriminator; move the body beyond the normaliser's required shape."""
+    if provider == "codex":
+        return {"type": "response_item", "payload": {"kind": "message", "body": text}}
+    if provider == "gemini":
+        return {"type": "USER_INPUT", "content": {"parts": [text]}}
+    return {"type": "assistant", "msg": {"role": "assistant", "content": text}}
+
+
 def _header(provider: str, when: datetime) -> list[dict[str, Any]]:
     if provider != "codex":
         return []
@@ -451,11 +474,13 @@ def run_real(provider: str, trace: dict[str, Any], work: Path) -> list[dict[str,
                 if f == "rewrite_lossy":  # same-length edit of a middle record, before the appended turn
                     edited, _ = _edit_middle_record(path, provider, lines, k, start)
                     pending[edited] = f
-                record = agent_record(provider, text, wall, drift=f == "drift")
+                record = agent_record(provider, text, wall, drift=f in ("drift", "growth"))
+                if f == "growth" and trace["scenario"] == "growth-changed-body":
+                    record = changed_body_record(provider, text)
                 with open(path, "a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(record) + "\n")
+                    handle.write((json.dumps(record) + "\n") * (40 if f == "growth" else 1))
                 lines.append(record)
-                pending[marker] = f if f in ("coverage", "drift") else "none"
+                pending[marker] = f if f in ("coverage", "drift", "growth") else "none"
             polls = f not in ("dead", "stuck")
             monitor_first = asleep and event["o"] == "monitorFirst"
             if polls and not monitor_first:

@@ -1165,7 +1165,7 @@ final class BrainBarSettingsNavigation: ObservableObject {
 }
 
 struct BrainBarSettingsView: View {
-    @AppStorage(BrainBarNewMenuPreference.key) private var newMenuEnabled = false
+    @AppStorage(BrainBarNewMenuPreference.key) private var newMenuEnabled: Bool = BrainBarNewMenuPreference.defaultValue
     @StateObject var viewModel: BrainBarSettingsViewModel
     @StateObject private var navigation = BrainBarSettingsNavigation()
     @Environment(\.brainBarDriveAuth) private var driveAuth
@@ -1365,10 +1365,11 @@ struct BrainBarSettingsView: View {
         case .advanced:
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Text("Try the new menu").font(.system(size: 12, weight: .semibold))
+                    Text("Use the new menu").font(.system(size: 12, weight: .semibold))
                     Spacer()
-                    Toggle("Try the new menu", isOn: $newMenuEnabled)
+                    Toggle("Use the new menu", isOn: $newMenuEnabled)
                         .labelsHidden().toggleStyle(.switch).controlSize(.small)
+                        .help("Turn this off to restore the previous menu and charts icon.")
                 }.padding(.vertical, 7)
                 Divider()
                 sectionHeading("Embedding model")

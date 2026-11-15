@@ -341,7 +341,7 @@ final class BrainBarJobAlertTests: XCTestCase {
         let workspace = BrainBarRecordingWorkspace()
         let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
         let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
-            dashboardPanelController: panel, statusBar: TestStatusItemHost())
+            dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { controller.stop() }
         controller.setBadgeForTesting(quietBadge, alertsURL: try writeAlerts(#"{"backup-upload-abandoned": "\#(reason)"}"#))
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
@@ -735,8 +735,7 @@ final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
         try Data("{}".utf8).write(to: alertsURL)
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
-        let status = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost()
-        )
+        let status = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { status.stop(); windowController.dismiss() }
         status.setBadgeForTesting(
             .init(badgeOn: true, reason: first, activeCodes: ["job_alert_maintenance-light"], activeMessages: [first]),

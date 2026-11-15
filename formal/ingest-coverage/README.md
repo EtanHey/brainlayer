@@ -99,6 +99,8 @@ identity matters only in the replay, where each agent writes its own format.
 | `real-bound-tight` | bound | violated | violated | N = 1 fails for the heartbeat shapes. |
 | `real-bound-tight-alert` | bound | violated | violated | N = 1 fails for a debounced alert: coverage is still green on its 2nd tick. |
 | `finding-real-flapping` | **finding** (open) | violated | violated | A dead watcher restarts into failing writes: one green tick at stall 3 before `coverage_drop` debounces. If it then dies again, recovery hysteresis can read green while still stalled. |
+| `finding-real-growth` | guarantee | pass | pass | At least 200 unknown-format lines in a 31-minute rolling window after 30 minutes without recognition: amber, then red after six new alert snapshots. Abstracted as 40 lines per tick; N = 7. |
+| `before-fix-growth` | history | violated | violated | Disabling the detector keeps high-volume format drift green. |
 | `finding-real-drift` | **finding** (open) | violated | violated | Records no parser takes publish no watcher signal. Green forever. |
 | `finding-real-rewrite-lossy` | **finding** (open) | violated | violated | A same-length edit past the 4 KiB head digest is invisible to the #732 fingerprint; the stall codes cannot see it either. Green forever. |
 | `finding-unconfirmed-short-sleep` | **finding** (minor) | violated | violated | Unconfirmed clock, a 10–15 min lid close, monitor reads before the first poll: amber. |
@@ -128,11 +130,11 @@ real `collect_facts` → `evaluate` path and the real watcher payload.
 Timing caveat: the model has one watcher poll per health tick. Production polls every 30 s, so a
 300 s episode that starts within ~30 s of a health read surfaces one tick later than modelled.
 
-**Open: drift.** A record in a shape no parser takes is read and dropped. For Claude it is counted as
+**Open: low-volume drift.** A record in a shape no parser takes is read and dropped. For Claude it is counted as
 a seen entry and yields no chunk; for the other agents the normaliser drops it. No watcher number
-moves: active entries exclude it, so `coverage_drop` cannot fire. Catching it needs a new detector
-(for example a per-provider "records arrive, nothing is indexed" episode), and that risks false
-alarms during long tool runs. That is a separate decision.
+moves: active entries exclude it, so `coverage_drop` cannot fire. W84 adds the high-volume `growth` shape: per wired provider the tailer counts complete source lines after advancing, and classifies content by the body shape the normaliser needs, before content filtering. Known types with missing or changed bodies are unrecognised. Neutral bookkeeping and blank lines count neither as read nor as recognised, so they cannot mask lost content. A rolling **31-minute** window with >=200 lines, no recognised lines, and at least **30 minutes** of observation publishes `growth_not_indexed:<provider>`. The extra minute retains the boundary poll despite normal 30-second polling jitter. Recognised tool noise clears the window and alarm immediately; idle cannot create a count. The health verdict uses the existing amber / sixth-new-snapshot red rule, then its usual recovery hysteresis.
+
+`source_growth` in the same health snapshot persists samples, start time, and the latched alarm across restarts. Unlike the older in-process stall timers, a crash loop cannot reset this window after a successful health write. Wall timestamps permit restart recovery; clock corrections may delay a new alarm. A missing/unwritable health file remains the existing heartbeat/blind-health failure. First-ingest backfill counts neither way until the initial byte frontier is reached, including across polls and restarts. The alarm clears after six hours without new source lines; lost lines stay lost, and this alarm concerns ongoing loss. This six-hour expiry is tested on the real watcher and lies outside the bounded formal model. Garbage recognised as valid records, low-volume drift, and parse errors before offset advancement are outside this detector (parse errors already have file failure signals). `growth` in the model assumes 40 unknown records per poll; the real replay appends those records for each of the five providers. `growth-changed-body` retains known discriminator types and changes their bodies; its real-code replay fails on 79335d94 for all five providers. Low-volume `drift` remains a separate open finding. The growth guarantee starts when the volume and age condition is met and the published alarm is observed. A monitor-first wake reads a newly crossed threshold on its next read; sparse writes do not have a fixed bound from their first line.
 
 **Open: the lossy rewrite (#1780's 5th finding).** The running tailer's `_verify_anchor` and the
 resume fingerprint compare only the 256 bytes before the offset and a digest of the first 4 KiB. A
@@ -202,6 +204,9 @@ The replay can fail, and each of these is a test:
   (`src/brainlayer/agent_census.py`, below) catches running agents from a fixed list whose
   transcripts land outside the watched roots. It cannot catch an agent that is not on the list. Gemini CLI
   (legacy, deprecated) wrote `~/.gemini/tmp/<hash>/chats/session-*.json`; it is not watched, on purpose.
+- **Per-provider aggregation**: a healthy older client can mask a newer client of the same provider.
+- **A slow unknown trickle** keeps the window start fixed; a later 200-line burst can alarm immediately after that long observation.
+- **Rollback accounting**: source counters are outside tailer snapshots; a retry counts read and recognised lines again before the indexer.
 - **Wrong parsing or content**: a record ingested as the wrong text.
 - **A provider folder deleted within 14 days of its last transcript write alarms until then**: the
   watcher cannot tell removal from loss. A root with no offsets confirmed in the last 14 days that

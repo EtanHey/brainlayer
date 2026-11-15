@@ -346,7 +346,7 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             let workspace = BrainBarRecordingWorkspace()
             let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
             let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
-                dashboardPanelController: panel, statusBar: TestStatusItemHost())
+                dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
             defer { controller.stop() }
             let menu = controller.contextMenuForTesting
             controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []),
@@ -490,7 +490,7 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             let workspace = BrainBarRecordingWorkspace()
             let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
             let menu = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
-                dashboardPanelController: panel, statusBar: TestStatusItemHost())
+                dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
             defer { menu.stop() }
             menu.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []), alertsURL: URL(fileURLWithPath: "/fixture/absent-alerts"))
             menu.menuNeedsUpdate(menu.contextMenuForTesting)

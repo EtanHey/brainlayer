@@ -347,7 +347,7 @@ final class BrainBarStatusSnapshotFix1Tests: XCTestCase {
         let workspace = BrainBarRecordingWorkspace()
         let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
             dashboardPanelController: BrainBarDashboardPanelController(workspace: workspace, runtime: runtime),
-            statusBar: TestStatusItemHost())
+            statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { controller.stop() }
         await model.sampleStatusTick(includeLaunchd: true)
         XCTAssertFalse(controller.statusDotForTesting, "\(model.publishedStatus.issues)")

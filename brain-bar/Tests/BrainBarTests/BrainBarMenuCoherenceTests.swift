@@ -191,7 +191,7 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
             databasePath: directory.appendingPathComponent("fixture.db").path)
         let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
-            dashboardPanelController: panel, statusBar: TestStatusItemHost())
+            dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { controller.stop() }
         var badge = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
         badge.healthVerdict = .init(dot: .green, checks: [], notes: (1...5).map {
