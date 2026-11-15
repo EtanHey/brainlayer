@@ -72,9 +72,16 @@ final class BrainBarFaultNotifications {
     }
 
     private static let deliveredKey = "BrainBarNotificationDeliveredCauses.v2"
+    private static let recentKey = "BrainBarNotificationRecentCauses.v1"
     private let center: any BrainBarFaultNotificationCenter
     private let defaults: UserDefaults
     private let log: (String) -> Void
+    private let clock: (() -> Date)?
+    private var now = Date()
+    private var recent: [String: [String: Double]]
+    private var savedDelivered: [String: [String]]
+    private var savedRecent: [String: [String: Double]]
+    private var errorLoggedAt: [String: Date] = [:]
     private var delivered: [String: Set<String>]
     private var current: [String: BrainBarMenuPresenter.NotificationFault] = [:]
     private var generations: [String: Int] = [:]
@@ -84,11 +91,21 @@ final class BrainBarFaultNotifications {
     private var observationID = UUID()
 
     init(center: any BrainBarFaultNotificationCenter, defaults: UserDefaults,
+         clock: (() -> Date)? = nil,
          log: @escaping (String) -> Void = { NSLog("[BrainBar] %@", $0) }) {
         self.center = center
         self.defaults = defaults
         self.log = log
+        self.clock = clock
         let saved: [String: [String]] = defaults.dictionary(forKey: Self.deliveredKey) as? [String: [String]] ?? [:]
+        savedDelivered = saved
+        let timestamps = defaults.dictionary(forKey: Self.recentKey) as? [String: [String: Double]] ?? [:]
+        savedRecent = timestamps
+        recent = Dictionary(uniqueKeysWithValues: timestamps.keys.sorted().prefix(64).map { id in
+            (id, Dictionary(uniqueKeysWithValues: (timestamps[id] ?? [:]).keys.sorted().prefix(64).map {
+                ($0, timestamps[id]![$0]!)
+            }))
+        })
         delivered = Dictionary(uniqueKeysWithValues: saved.keys.sorted().prefix(64).map {
             ($0, Set((saved[$0] ?? []).prefix(64)))
         })
@@ -119,70 +136,136 @@ final class BrainBarFaultNotifications {
         let saved: [String: [String]] = Dictionary(uniqueKeysWithValues: delivered.keys.sorted().prefix(64).map {
             ($0, Array((delivered[$0] ?? []).sorted().prefix(64)))
         })
-        defaults.set(saved, forKey: Self.deliveredKey)
+        let times = Dictionary(uniqueKeysWithValues: recent.keys.sorted().prefix(64).map { id in
+            (id, Dictionary(uniqueKeysWithValues: recent[id]!.keys.sorted().prefix(64).map { ($0, recent[id]![$0]!) }))
+        })
+        if saved != savedDelivered {
+            defaults.set(saved, forKey: Self.deliveredKey)
+            savedDelivered = saved
+        }
+        if times != savedRecent {
+            defaults.set(times, forKey: Self.recentKey)
+            savedRecent = times
+        }
+    }
+
+    private static func pair(_ jobID: String) -> (thing: String, cause: String)? {
+        switch jobID {
+        case "job:drive-consent": return ("safe", "check:drive_auth")
+        case "job:backup-daily": return ("safe", "check:backup_local")
+        case "job:jsonl-backup": return ("safe", "check:transcripts")
+        case "job:maintenance-light", "job:maintenance-full", "job:maintenance-burn":
+            return ("upkeep", "app:maintenance")
+        default: return nil
+        }
+    }
+
+    private func record(_ id: String, _ causes: Set<String>, at timestamp: Double? = nil) {
+        let added = causes.subtracting(delivered[id] ?? [])
+        guard !added.isEmpty else { return }
+        delivered[id, default: []].formUnion(added)
+        for cause in added { recent[id, default: [:]][cause] = timestamp ?? now.timeIntervalSince1970 }
+    }
+
+    /// Alias receipts refer to a successful banner for this same active incident, never a pending add.
+    private func acknowledgeAliases() {
+        let jobs = current.values.filter { $0.id.hasPrefix("job:") }.sorted { $0.id < $1.id }
+        for job in jobs {
+            if let posted = jobs.first(where: {
+                $0.id != job.id && $0.title == job.title && $0.causes.isSubset(of: delivered[$0.id] ?? [])
+            }) {
+                record(job.id, job.causes, at: recent[posted.id]?.values.min())
+            } else if let pair = Self.pair(job.id), let thing = current[pair.thing],
+                      thing.causes.isSubset(of: delivered[thing.id] ?? []) {
+                record(job.id, job.causes, at: recent[thing.id]?.values.min())
+            }
+            if let pair = Self.pair(job.id), current[pair.thing] != nil,
+               job.causes.isSubset(of: delivered[job.id] ?? []) {
+                record(pair.thing, ["attention", pair.cause], at: recent[job.id]?.values.min())
+            }
+        }
+    }
+
+    private func pendingCauses(_ fault: BrainBarMenuPresenter.NotificationFault) -> Set<String> {
+        if let pair = Self.pair(fault.id), current[pair.thing] != nil { return [] }
+        let cooling = Set((recent[fault.id] ?? [:]).keys)
+        return fault.causes.subtracting(delivered[fault.id] ?? []).subtracting(cooling)
+    }
+
+    private func logFailure(_ kind: String, _ error: Error) {
+        if let last = errorLoggedAt[kind], now.timeIntervalSince(last) < 60 { return }
+        errorLoggedAt[kind] = now
+        log("Fault notification \(kind) failed: \(type(of: error))")
     }
 
     func update(_ capture: BrainBarMenuCapture, jobAlerts: [String: String]? = nil) async {
-        let faults: [BrainBarMenuPresenter.NotificationFault] = BrainBarMenuPresenter.notificationFaults(capture)
-        var next: [String: BrainBarMenuPresenter.NotificationFault] = Dictionary(uniqueKeysWithValues: faults.map { ($0.id, $0) })
+        now = clock?() ?? capture.now
+        recent = recent.compactMapValues { times in
+            let live = times.filter { now.timeIntervalSince1970 - $0.value >= 0 && now.timeIntervalSince1970 - $0.value < 600 }
+            return live.isEmpty ? nil : live
+        }
+        let faults = BrainBarMenuPresenter.notificationFaults(capture)
+        var next = Dictionary(uniqueKeysWithValues: faults.map { ($0.id, $0) })
         if let jobAlerts {
             for (key, message) in jobAlerts {
-                let id: String = "job:" + key
-                next[id] = .init(id: id, title: message, causes: ["job:" + key])
+                guard key != "brainbar-activation",
+                      !(key == "jsonl-retention" && message.hasPrefix("Drive prune interrupted")) else { continue }
+                let id = "job:" + key
+                let cause = key == "drive-consent" ? "message:" + message : id
+                next[id] = .init(id: id, title: message, causes: [cause])
             }
         }
-        let complete: Bool = BrainBarMenuPresenter.notificationCaptureIsComplete(capture)
-        var knownIDs: Set<String> = Set(delivered.keys).union(current.keys)
+        var knownIDs = Set(delivered.keys).union(current.keys)
         if let postingID { knownIDs.insert(postingID) }
         for id in knownIDs {
-            let measured: Bool = id.hasPrefix("job:") ? jobAlerts != nil : complete
+            let measured = id.hasPrefix("job:") ? jobAlerts != nil : BrainBarMenuPresenter.notificationThingIsMeasured(id, capture)
             guard measured else { continue }
-            if let fault: BrainBarMenuPresenter.NotificationFault = next[id] {
-                // Losing a positively absent cause never posts; its later return is a new worsening.
-                if let previous: Set<String> = delivered[id] { delivered[id] = previous.intersection(fault.causes) }
+            if let fault = next[id] {
+                if let previous = delivered[id] { delivered[id] = previous.intersection(fault.causes) }
             } else {
                 delivered.removeValue(forKey: id)
                 generations[id, default: 0] += 1
             }
         }
         current = next
+        acknowledgeAliases()
         persist()
-        guard !delivering, needsDelivery else { return }
+        guard !delivering, current.values.contains(where: { !pendingCauses($0).isEmpty }) else { return }
         delivering = true
         defer { delivering = false }
         do {
-            let authorized: Bool = try await center.authorize()
-            let state: String = authorized ? "authorized" : "denied"
+            let authorized = try await center.authorize()
+            let state = authorized ? "authorized" : "denied"
             if defaults.string(forKey: "BrainBarNotificationAuthorizationState") != state {
                 if !authorized { log("Notifications are not authorized; fault notices remain in the menu.") }
                 defaults.set(state, forKey: "BrainBarNotificationAuthorizationState")
             }
             guard authorized else { return }
             var failed: Set<String> = []
-            while let id: String = current.keys.sorted().first(where: {
-                !failed.contains($0) && !(current[$0]!.causes.subtracting(delivered[$0] ?? [])).isEmpty
-            }), let fault: BrainBarMenuPresenter.NotificationFault = current[id] {
-                let generation: Int = generations[id, default: 0]
+            while true {
+                acknowledgeAliases()
+                persist()
+                guard let id = current.keys.sorted().first(where: {
+                    !failed.contains($0) && !pendingCauses(current[$0]!).isEmpty
+                }), let fault = current[id] else { break }
+                let newCauses = pendingCauses(fault)
+                let generation = generations[id, default: 0]
                 postingID = id
-                defer { postingID = nil }
                 do {
-                    try await center.post(id: id, body: fault.title)
+                    try await center.post(id: id, body: fault.title(for: newCauses))
                     // A recovery while add was in flight must not suppress the next episode.
                     if generations[id, default: 0] == generation {
-                        delivered[id, default: []].formUnion(fault.causes)
+                        record(id, fault.causes)
                         persist()
                     }
                 } catch {
                     failed.insert(id)
-                    log("Fault notification delivery failed: \(type(of: error))")
+                    logFailure("delivery", error)
                 }
+                postingID = nil
             }
         } catch {
-            log("Fault notification authorization failed: \(type(of: error))")
+            logFailure("authorization", error)
         }
-    }
-
-    private var needsDelivery: Bool {
-        current.values.contains { !$0.causes.subtracting(delivered[$0.id] ?? []).isEmpty }
     }
 }

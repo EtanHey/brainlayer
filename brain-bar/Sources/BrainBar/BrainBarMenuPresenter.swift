@@ -36,6 +36,7 @@ enum BrainBarMenuPresenter {
         var fact: [String]? = nil
         var mergeKey: String { "\(thing)-\(worded ? action.rawValue : "generic")" }
         var faultID: String { String(describing: thing) }
+        var notificationCauses: Set<String> = []
     }
 
     private static let checksOf: [Thing: [String]] = [
@@ -49,7 +50,11 @@ enum BrainBarMenuPresenter {
     private static func thing(of name: String) -> Thing { Thing.allCases.first { checksOf[$0]!.contains(name) } ?? .system }
 
     /// R17's generic rows.
-    private static func needs(_ thing: Thing) -> Line { Line(thing: thing, level: .needs, strings: [Say.generic.text], worded: false) }
+    private static func needs(_ thing: Thing, cause: String? = nil) -> Line {
+        var line = Line(thing: thing, level: .needs, strings: [Say.generic.text], worded: false)
+        if let cause { line.notificationCauses.insert(cause) }
+        return line
+    }
     private static func checking(_ thing: Thing) -> Line { Line(thing: thing, level: .cantTell, strings: [Say.checking.text], worded: false) }
     private static func worded(_ thing: Thing, _ strings: [String], _ rank: Rank, priority: Int = 9) -> Line {
         Line(thing: thing, level: .needs, strings: strings, rank: rank, priority: priority)
@@ -78,24 +83,39 @@ enum BrainBarMenuPresenter {
     private static func staleNeeds(_ c: Capture) -> [Line] {
         var reds: Set<Thing> = Set((c.verdict?.checks ?? []).filter { $0.state == .red }.map { thing(of: $0.name) })
         if c.verdict?.dot == .red { reds.insert(.system) }
-        return Thing.allCases.filter(reds.contains).map(needs) + appFacts(c)
+        return Thing.allCases.filter(reds.contains).map { needs($0) } + appFacts(c)
     }
 
     struct NotificationFault: Equatable, Sendable {
         var id: String
         var title: String
         var causes: Set<String> = ["attention"]
+        var causeTitles: [String: String] = [:]
+
+        func title(for newCauses: Set<String>) -> String {
+            if newCauses.contains("attention") { return title }
+            return newCauses.sorted().compactMap { causeTitles[$0] }.first ?? title
+        }
     }
 
-    static func notificationCaptureIsComplete(_ c: Capture) -> Bool {
-        guard let v = c.verdict, v.dot != .unknown, (0...900).contains(c.verdictAwakeAgeS), !c.isChecking, !c.wakeCatchUpPending,
-              c.backupsMeasured, c.maintenanceNightFailures != nil, c.backupDailyFailures != nil,
-              c.jsonlBackupFailures != nil, let w = c.watcher, w.readable, w.fresh, !w.dbProbeFailed else { return false }
-        if w.alertReasons.contains("offset_lag"), c.lagEpisodeStart == nil { return false }
-        return known.allSatisfy { name in
-            let checks: [BrainBarHealthVerdict.Check] = v.checks.filter { $0.name == name }
+    /// Recovery depends only on the thing being recovered, never on another thing's missing input.
+    static func notificationThingIsMeasured(_ id: String, _ c: Capture) -> Bool {
+        guard let t = Thing.allCases.first(where: { String(describing: $0) == id }),
+              let v = c.verdict, v.dot != .unknown, (0...900).contains(c.verdictAwakeAgeS),
+              !c.isChecking, !c.wakeCatchUpPending else { return false }
+        guard checksOf[t]!.allSatisfy({ name in
+            let checks = v.checks.filter { $0.name == name }
             return checks.count == 1 && checks[0].state != .unknown && checks[0].blind != true
-        } && !v.checks.contains { $0.state == .unknown || $0.blind == true }
+        }) else { return false }
+        switch t {
+        case .safe:
+            return c.backupsMeasured && c.backupDailyFailures != nil && c.jsonlBackupFailures != nil
+        case .upkeep: return c.maintenanceNightFailures != nil
+        case .remembering, .system:
+            guard let w = c.watcher, w.readable, w.fresh, !w.dbProbeFailed else { return false }
+            return t != .system || !v.checks.contains { !known.contains($0.name) && ($0.state == .unknown || $0.blind == true) }
+        case .finding: return true
+        }
     }
 
     private static func appNotificationCauses(_ c: Capture) -> [Thing: Set<String>] {
@@ -131,6 +151,12 @@ enum BrainBarMenuPresenter {
         if merged.isEmpty, rows.count == 1 { merged = [needs(.system)] }
         guard rows.count == merged.count else { return [] }
         let app: [Thing: Set<String>] = appNotificationCauses(c)
+        var titles: [Thing: [String: String]] = [:]
+        for source in lines where source.level == .needs {
+            guard let speaking = merged.first(where: { $0.mergeKey == source.mergeKey }) else { continue }
+            let title = speaking.worded ? speaking.strings[0] : genericNotificationTitle(source.thing)
+            for cause in source.notificationCauses { titles[source.thing, default: [:]][cause] = title }
+        }
         var faults: [NotificationFault] = []
         for (line, row) in zip(merged, rows) {
             guard fresh || app[line.thing]?.isEmpty == false, let sentence: String = row.strings.first else { continue }
@@ -143,9 +169,11 @@ enum BrainBarMenuPresenter {
             }
             if let index: Int = faults.firstIndex(where: { $0.id == line.faultID }) {
                 faults[index].causes.formUnion(causes)
+                faults[index].causeTitles.merge(titles[line.thing] ?? [:]) { first, _ in first }
             } else {
                 faults.append(.init(id: line.faultID,
-                    title: sentence == Say.generic.text ? genericNotificationTitle(line.thing) : sentence, causes: causes))
+                    title: sentence == Say.generic.text ? genericNotificationTitle(line.thing) : sentence, causes: causes,
+                    causeTitles: titles[line.thing] ?? [:]))
             }
         }
         return faults
@@ -162,14 +190,16 @@ enum BrainBarMenuPresenter {
     private static func appFacts(_ c: Capture) -> [Line] {
         var lines: [Line] = []
         if let failures = c.maintenanceNightFailures, failures >= 3 {  // U03; its second sentence only when saving and backups are proven fine
-            lines.append(worded(.upkeep, [Say.u03(String(failures))]
-                + (provenFine(c).isSuperset(of: [.remembering, .safe]) ? [Say.stillSaved.text] : []), .confirmed))
+            var line = worded(.upkeep, [Say.u03(String(failures))]
+                + (provenFine(c).isSuperset(of: [.remembering, .safe]) ? [Say.stillSaved.text] : []), .confirmed)
+            line.notificationCauses = ["app:maintenance"]
+            lines.append(line)
         }
         guard let w = c.watcher, w.readable, w.fresh else { return lines }
-        if w.alertReasons.contains("offset_lag"), lagPastLimit(c) { lines.append(needs(.remembering)) }  // R02 escalated
+        if w.alertReasons.contains("offset_lag"), lagPastLimit(c) { lines.append(needs(.remembering, cause: "app:offset_lag")) }  // R02 escalated
         for reason in w.alertReasons where !["offset_lag", "quarantined_record"].contains(reason) {
             if reason == "coverage_drop", w.dbProbeFailed { continue }
-            lines.append(needs(["coverage_drop", "file_ingestion_failure"].contains(reason) ? .remembering : .system))
+            lines.append(needs(["coverage_drop", "file_ingestion_failure"].contains(reason) ? .remembering : .system, cause: "app:" + reason))
         }
         return lines
     }
@@ -184,7 +214,7 @@ enum BrainBarMenuPresenter {
         for name in known where name != "monitor" && !consumed.contains(name) {
             switch worst(v, name) {
             case .green?: break
-            case .red?: lines.append(needs(thing(of: name)))
+            case .red?: lines.append(needs(thing(of: name), cause: "check:" + name))
             case .amber?: lines.append(calmAmber(name, c, v) ?? needs(thing(of: name)))
             case .unknown?, nil: lines.append(checking(thing(of: name)))
             }
@@ -269,12 +299,16 @@ enum BrainBarMenuPresenter {
         func within(_ k: BrainBarHealthVerdict.Check) -> Bool { valid(k.ageS) && k.thresholdS.map { k.ageS! <= $0 } == true }
         var lines: [Line] = [], consumed: Set<String> = []
         if one("integrity")?.state == .red {  // S19
-            lines.append(worded(.safe, [Say.s19.text, Say.s19Memory.text], .custody, priority: 0))
+            var line = worded(.safe, [Say.s19.text, Say.s19Memory.text], .custody, priority: 0)
+            line.notificationCauses = ["check:integrity"]
+            lines.append(line)
             consumed.insert("integrity")
         }
         if let e = one("embedding"), e.state == .red || (e.state == .amber && within(e)) {  // F07
             let exact = c.keywordCoverage == 1 && searchProven(c) ? " " + Say.exactWords.text : ""
-            lines.append(worded(.finding, [Say.f07.text, Say.f07Since(e.ageS.flatMap(over).map { " " + $0 } ?? "") + exact], .confirmed))
+            var line = worded(.finding, [Say.f07.text, Say.f07Since(e.ageS.flatMap(over).map { " " + $0 } ?? "") + exact], .confirmed)
+            if e.state == .red { line.notificationCauses = ["check:embedding"] }
+            lines.append(line)
             consumed.insert("embedding")
         }
         // The database copies: S07, S32, S06 with failures, and S02 (drawn only through M1).
@@ -305,6 +339,7 @@ enum BrainBarMenuPresenter {
                 s02 = true
             }
         }
+        db?.notificationCauses = Set(dbNames.map { "check:" + $0 })
         guard one("drive_auth")?.state == .red else {
             if let db { lines.append(db) }
             return (lines, consumed.union(dbNames))
@@ -324,6 +359,7 @@ enum BrainBarMenuPresenter {
         // D13, R22: a failing transcript backup cannot upload either while Drive is red; a fact line directly under the
         // Drive row, not counted.
         if transcriptsFailing { s13.fact = [missing ? Say.d13Missing.text : Say.d13.text] }  // R26
+        s13.notificationCauses = Set((["drive_auth"] + dbNames + reds.map(\.name) + (transcriptsFailing ? ["transcripts"] : [])).map { "check:" + $0 })
         lines.append(s13)
         consumed.formUnion(["drive_auth"] + dbNames + reds.map(\.name) + (transcriptsFailing ? ["transcripts"] : []))
         return (lines, consumed)
