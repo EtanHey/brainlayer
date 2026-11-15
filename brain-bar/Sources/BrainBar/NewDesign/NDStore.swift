@@ -62,7 +62,7 @@ import SwiftUI
 
     /// A store that holds one invented moment and reads nothing (headless renders, tests, capture mode).
     init(fixture: NDInputs, page: NDPage = .overview, runtime: BrainBarRuntime? = nil,
-         workspace: any BrainBarWorkspaceActing = BrainBarRecordingWorkspace()) {
+         workspace: any BrainBarWorkspaceActing = BrainBarWorkspace()) {
         self.runtime = runtime
         self.workspace = workspace
         isFixture = true
