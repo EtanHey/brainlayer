@@ -71,6 +71,9 @@ struct NDModel: Equatable, Sendable {
         /// the last check did not confirm it): the help tag and VoiceOver say it.
         var unknownReason: String? = nil
         var fault: Bool { mark == .fault }
+        /// Fix 14: the ring is drawn only when a row on this surface is dashed; otherwise the reason is in the help tag
+        /// and VoiceOver, and the mark stays empty.
+        var shownMark: Mark { mark == .unknown && unknownReason != nil ? .none : mark }
     }
 
     /// The dropdown's row for one area: its single visual and number.
@@ -91,6 +94,8 @@ struct NDModel: Equatable, Sendable {
         var accessibility: String
         /// The ring's reason when the row's own value is known (design pre-pass 5b).
         var unknownReason: String? = nil
+        /// Fix 14: as `Area.shownMark`: no ring beside a known value; the reason goes to the help tag and VoiceOver.
+        var shownMark: Mark { mark == .unknown && unknownReason != nil ? .none : mark }
     }
 
     struct Fault: Equatable, Sendable, Identifiable {

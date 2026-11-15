@@ -62,6 +62,11 @@ struct NDWaveform: View {
         return (bar, gap)
     }
 
+    /// Fix 13: a pill end only where the bar is tall enough to read as a bar; under 6 pt a hero bar keeps a 1 pt corner.
+    static func barRadius(height: CGFloat, width: CGFloat, pill: Bool, corner: CGFloat) -> CGFloat {
+        pill && height >= 6 ? min(width / 2, height / 2) : min(corner, height / 2)
+    }
+
     static func draw(_ ctx: GraphicsContext, _ canvas: CGSize, wave: NDWave?, size: Size, palette: NDPalette, nowTick: Bool) {
         let h = canvas.height - (nowTick ? 10 : 0)
         let cy = (h * 0.62).rounded() + 0.5
@@ -88,12 +93,12 @@ struct NDWaveform: View {
             let r = index < wave.reads.count ? wave.reads[index] : 0
             if s > 0 {
                 let bh = max(minBar, CGFloat(s) / maxSaves * up)
-                let radius = pill ? min(bw / 2, bh / 2) : min(corner, bh / 2)
+                let radius = Self.barRadius(height: bh, width: bw, pill: pill, corner: corner)
                 ctx.fill(Path(roundedRect: CGRect(x: x, y: cy - 0.5 - bh, width: bw, height: bh), cornerRadius: radius), with: .color(palette.saves))
             }
             if r > 0 {
                 let bh = max(minBar, CGFloat(r) / maxReads * down)
-                let radius = pill ? min(bw / 2, bh / 2) : min(corner, bh / 2)
+                let radius = Self.barRadius(height: bh, width: bw, pill: pill, corner: corner)
                 ctx.fill(Path(roundedRect: CGRect(x: x, y: cy + 0.5, width: bw, height: bh), cornerRadius: radius), with: .color(palette.reads))
             }
         }
@@ -359,6 +364,14 @@ struct NDRail: View {
 
     private func x(_ h: Double, _ w: CGFloat) -> CGFloat { CGFloat((h + past) / (past + ahead)) * w }
 
+    /// Fix 15: when the last run and the next run both sit within 6 pt of now, the rail draws only the next-run ring
+    /// (the two marks would overprint); the lane's sentence still says both.
+    static func shown(_ events: [Event], width: CGFloat, past: Double, ahead: Double) -> [Event] {
+        func nearNow(_ e: Event) -> Bool { abs(CGFloat(e.hours / (past + ahead)) * width) <= 6 }
+        guard events.contains(where: { $0.kind == .next && nearNow($0) }) else { return events }
+        return events.filter { $0.kind == .next || !nearNow($0) }
+    }
+
     private func draw(_ ctx: GraphicsContext, _ size: CGSize) {
         let w = size.width, mid: CGFloat = 7, nowX = x(0, w)
         ctx.fill(Path(CGRect(x: 0, y: mid - 0.5, width: w, height: 1)), with: .color(ND.rule))
@@ -381,7 +394,7 @@ struct NDRail: View {
             }
             ctx.stroke(p, with: .color(color), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
         }
-        for e in events {
+        for e in Self.shown(events, width: w, past: past, ahead: ahead) {
             if e.hours < -past {
                 chevron(left: true, color: e.kind == .fail ? palette.fault : palette.ink2)
                 if let olderLabel {
@@ -417,6 +430,8 @@ struct NDNumberText: View {
     @Environment(\.ndPalette) private var palette
     let number: NDModel.Number
     var size: CGFloat = 13
+    /// On a highlighted menu row the numeral takes the selected text colour (fix 7).
+    var selected = false
 
     var body: some View {
         if number.value == NDModel.Number.faultMark.value {
@@ -429,8 +444,9 @@ struct NDNumberText: View {
             case .fine: number.secondary ? palette.ink2 : palette.ink
             }
             let unitColor = number.tone == .fault ? palette.fault : palette.ink2
-            (Text(number.value).foregroundColor(color)
-                + Text(number.unit.isEmpty ? "" : "\u{00A0}" + number.unit).foregroundColor(unitColor))
+            let selectedText = Color(nsColor: .alternateSelectedControlTextColor)
+            (Text(number.value).foregroundColor(selected ? selectedText : color)
+                + Text(number.unit.isEmpty ? "" : "\u{00A0}" + number.unit).foregroundColor(selected ? selectedText : unitColor))
                 .font(.system(size: size, weight: number.strong ? .semibold : .regular).monospacedDigit())
                 .lineLimit(1)
                 .fixedSize()

@@ -436,6 +436,10 @@ extension BrainBarMenuPresenter {
         static let driveUploadsHere = "Database and conversation backups upload here."
         /// Design pre-pass 5b: why an area with known values still carries the unknown ring.
         static let unconfirmed = "not confirmed by the last check"
+        /// Review fix 7 (lead's copy ruling L7, approved): a switched-off job's number cell, and its switch's help tags.
+        static let off = "off"
+        static func turnOff(_ job: String) -> String { "Turn off \(job)" }
+        static func turnOn(_ job: String) -> String { "Turn on \(job)" }
 
         /// V1's VoiceOver sentence for the waveform.
         static func wave(span minutes: Int, saves: Int, reads: Int) -> String {

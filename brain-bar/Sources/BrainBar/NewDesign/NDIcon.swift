@@ -1,7 +1,8 @@
 import AppKit
 
 /// The menu-bar brain in four states (L1, comp 01), on #1807's artwork: resting (template), one fault (red with "!"),
-/// several (the same, with a red tabular count beside the glyph, never on it), and no reading yet (the resting glyph,
+/// several (the same, with a tabular count 3 pt beside the glyph, never on it, in the template colour the menu bar gives
+/// it at draw time: white on a dark bar, black on a light one; review fix 8), and no reading yet (the resting glyph,
 /// dimmed by the caller to 45 %). No motion in the menu bar.
 @MainActor enum NDIcon {
     static func image(for model: NDModel) -> NSImage {
@@ -14,7 +15,7 @@ import AppKit
         let width = ceil(NSAttributedString(string: numeral, attributes: [.font: font]).size().width)
         let image = NSImage(size: NSSize(width: 22 + 3 + width, height: 22), flipped: false) { rect in
             brain.draw(in: NSRect(x: 0, y: 0, width: 22, height: 22))
-            let text = NSAttributedString(string: numeral, attributes: [.font: font, .foregroundColor: NDColor.brainRed])
+            let text = NSAttributedString(string: numeral, attributes: [.font: font, .foregroundColor: NSColor.textColor])
             let size = text.size()
             text.draw(at: NSPoint(x: 25, y: (rect.height - size.height) / 2))
             return true

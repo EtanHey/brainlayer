@@ -235,10 +235,20 @@ struct NDActionButton: View {
     var body: some View {
         Button(action: action) { Text(label) }
             .buttonStyle(NDFilledButtonStyle(large: large))
+            // The window's (large) buttons take keyboard focus; a menu row's focus is the menu's highlight, drawn below.
+            .modifier(NDWindowFocus(enabled: large, action: action))
             .overlay(RoundedRectangle(cornerRadius: large ? 9 : 8, style: .continuous)
                 .strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 3).padding(-3)
                 .opacity(keyboardFocus ? 1 : 0))
             .accessibilityLabel(Text(label))
+    }
+}
+
+private struct NDWindowFocus: ViewModifier {
+    let enabled: Bool
+    let action: () -> Void
+    func body(content: Content) -> some View {
+        if enabled { content.ndKeyboardFocus(action: action) } else { content }
     }
 }
 
@@ -281,19 +291,22 @@ struct NDMenuAreaRow: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            NDMarkView(mark: area.mark).frame(width: NDGrid.menuMark)
+            NDMarkView(mark: area.shownMark).frame(width: NDGrid.menuMark)
             Spacer().frame(width: NDGrid.menuMarkGap)
             Text(area.name)
                 .font(area.mark == .fault ? NDType.menuAreaNameStrong : NDType.menuAreaName)
                 .tracking(0.15)
-                .foregroundStyle(Color(nsColor: .labelColor))
+                .foregroundStyle(Color(nsColor: state.highlighted ? .alternateSelectedControlTextColor : .labelColor))
                 .frame(width: NDGrid.menuName, alignment: .leading)
             visual.frame(width: NDGrid.menuVisual, height: 20)
-            NDNumberText(number: area.number, size: 12).frame(maxWidth: .infinity, alignment: .trailing)
+            NDNumberText(number: area.number, size: 12, selected: state.highlighted).frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.horizontal, 9)
         .frame(height: NDGrid.menuAreaRow)
-        .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(ND.menuHighlight).opacity(state.highlighted ? 1 : 0))
+        // Fix 7: one menu, one selection: the system's selected-content plate, inset 5 pt and 5 pt round like the system
+        // rows, text in the selected text colour; the marks and gauges keep their own colours.
+        .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color(nsColor: .selectedContentBackgroundColor))
+            .opacity(state.highlighted ? 1 : 0))
         .padding(.horizontal, 5)
         .contentShape(Rectangle())
         .onTapGesture(perform: open)
@@ -315,6 +328,8 @@ struct NDMenuAreaRow: View {
 }
 
 /// R28a, for line breaking only: a number stays with the word after it.
+/// Fix 11: the report sentence is one unit, so neither "an agent." nor "to an agent." is left alone on a line.
 func keepingUnits(_ string: String) -> String {
-    string.replacingOccurrences(of: "to an agent.", with: "to\u{00A0}an\u{00A0}agent.").replacing(#/(\d%?) /#) { "\($0.1)\u{00A0}" }.replacing(#/\b([A-Z][a-z]{2}) (\d)/#) { "\($0.1)\u{00A0}\($0.2)" }
+    let report = BrainBarMenuPresenter.Say.giveReport.text
+    return string.replacingOccurrences(of: report, with: report.replacingOccurrences(of: " ", with: "\u{00A0}")).replacing(#/(\d%?) /#) { "\($0.1)\u{00A0}" }.replacing(#/\b([A-Z][a-z]{2}) (\d)/#) { "\($0.1)\u{00A0}\($0.2)" }
 }

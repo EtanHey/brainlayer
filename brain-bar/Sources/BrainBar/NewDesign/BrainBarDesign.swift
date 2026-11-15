@@ -79,9 +79,6 @@ enum NDColor {
     static let menuReads = dynamic("menu.reads", dark: rgb(0x7A87A6, alpha: 0.75), light: rgb(0x7C879E))
     static let menuTrack = dynamic("menu.track", dark: NSColor(white: 1, alpha: 0.22), light: NSColor(white: 0, alpha: 0.20),
                                    contrastDark: NSColor(white: 1, alpha: 0.5), contrastLight: NSColor(white: 0, alpha: 0.5))
-    static let menuHighlight = dynamic("menu.highlight", dark: NSColor(white: 1, alpha: 0.08), light: NSColor(white: 0, alpha: 0.06))
-    /// The menu-bar brain's red (system red, as the icon has drawn it since #1807).
-    static let brainRed = dynamic("brain.red", dark: rgb(0xFF453A), light: rgb(0xFF3B30))
 }
 
 /// SwiftUI handles of the same colours.
@@ -102,7 +99,6 @@ enum ND {
     static let menuSaves = Color(nsColor: NDColor.menuSaves)
     static let menuReads = Color(nsColor: NDColor.menuReads)
     static let menuTrack = Color(nsColor: NDColor.menuTrack)
-    static let menuHighlight = Color(nsColor: NDColor.menuHighlight)
 }
 
 /// The type scale (§ 2.3). The system face only; area names in the native Condensed width; figures tabular.
@@ -157,7 +153,6 @@ enum NDGrid {
 enum NDMotion {
     static let shift = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.24)
     static let needsBand = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.2)
-    static let rangeFade = Animation.easeOut(duration: 0.12)
     static let waitingFade = Animation.easeOut(duration: 0.15)
     /// One turn of the running mark.
     static let runningPeriod: TimeInterval = 1.6

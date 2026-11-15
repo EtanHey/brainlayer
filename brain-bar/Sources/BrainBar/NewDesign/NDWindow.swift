@@ -335,13 +335,13 @@ struct NDHero: View {
                     .offset(x: shift)
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
+                    // Fix 9: a range switch is instant: a new identity per range, no cross-fade (two bar sets never share a frame).
                     .id(store.range)
-                    .transition(.opacity)
+                    .transition(.identity)
             }
             .frame(height: height + 10)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(NDModel.waveAccessibility(wave, minutes: store.range.minutes))
-            .animation(reduceMotion ? nil : NDMotion.rangeFade, value: store.range)
             .animation(reduceMotion ? nil : NDMotion.needsBand, value: height)
             let axis = store.range.axis
             HStack {
@@ -393,6 +393,7 @@ struct NDRangeControl: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .ndKeyboardFocus { store.range = range }
                 .accessibilityAddTraits(store.range == range ? .isSelected : [])
             }
         }
@@ -432,7 +433,7 @@ struct NDAreaView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(area.name).font(NDType.areaName).tracking(0.2)
                     .foregroundStyle(area.fault ? ND.fault : ND.ink)
-                    .overlay(alignment: .leading) { NDMarkView(mark: area.mark).offset(x: -20) }
+                    .overlay(alignment: .leading) { NDMarkView(mark: area.shownMark).offset(x: -20) }
                 Spacer()
                 if let aside = area.aside { Text(aside).font(NDType.axis).foregroundStyle(ND.ink2) }
             }

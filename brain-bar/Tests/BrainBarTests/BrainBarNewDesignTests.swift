@@ -688,6 +688,61 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         }
     }
 
+    /// Fix 10: a switched-off job says "off" in Ink 2; its switch's help names the job and the action.
+    func testSwitchedOffJobSaysOff() throws {
+        var i = BrainBarDesignFixture.inputs(.calm)
+        let index = try XCTUnwrap(i.jobs?.firstIndex { !$0.continuous })
+        i.jobs![index].enabled = false
+        let store = NDStore(fixture: i, page: .jobs)
+        let lane = try XCTUnwrap(NDJobsPage(store: store).lanes(store.model).first { $0.job == i.jobs![index].job })
+        XCTAssertEqual(lane.number.value, BrainBarMenuPresenter.SurfaceSay.off)
+        XCTAssertTrue(lane.number.secondary)
+        XCTAssertFalse(lane.events.contains { $0.kind == .next }, "a switched-off job has no next run")
+        XCTAssertEqual(BrainBarMenuPresenter.SurfaceSay.turnOn(lane.name), "Turn on " + lane.name)
+        XCTAssertEqual(BrainBarMenuPresenter.SurfaceSay.turnOff(lane.name), "Turn off " + lane.name)
+    }
+
+    /// Fix 11: the report sentence never breaks, so neither "an agent." nor "to an agent." can stand alone.
+    func testReportSentenceIsOneUnit() {
+        let report = BrainBarMenuPresenter.Say.giveReport.text
+        XCTAssertFalse(keepingUnits("Fact one. " + report).hasSuffix(" " + report.split(separator: " ").suffix(2).joined(separator: " ")))
+        XCTAssertFalse(keepingUnits(report).contains(" "))
+    }
+
+    /// Fix 13: a hero bar under 6 pt keeps a 1 pt corner; taller bars are pills.
+    func testShortHeroBarsAreNotBeads() {
+        XCTAssertEqual(NDWaveform.barRadius(height: 5, width: 4, pill: true, corner: 1), 1)
+        XCTAssertEqual(NDWaveform.barRadius(height: 2, width: 4, pill: true, corner: 1), 1)
+        XCTAssertEqual(NDWaveform.barRadius(height: 12, width: 4, pill: true, corner: 1), 2)
+    }
+
+    /// Fix 14: an area draws the unknown ring only when one of its rows is dashed; otherwise the reason is spoken.
+    func testRingOnlyBesideADashedRow() {
+        for name in BrainBarDesignFixture.Name.allCases {
+            let m = NDModel.make(BrainBarDesignFixture.inputs(name))
+            for area in m.areas {
+                if area.shownMark == .unknown {
+                    XCTAssertTrue(area.rows.contains { $0.visual == .unknown }, "\(name.rawValue) \(area.name)")
+                } else if area.mark == .unknown {
+                    XCTAssertNotNil(area.unknownReason, "\(name.rawValue) \(area.name)")
+                }
+            }
+            for area in m.menuAreas where area.shownMark == .unknown {
+                XCTAssertEqual(area.visual, .unknown, "\(name.rawValue) \(area.name)")
+            }
+        }
+    }
+
+    /// Fix 15: the last run and the next run both within 6 pt of now: only the next-run ring is drawn.
+    func testRailDrawsOnlyTheNextRingBesideNow() {
+        let close: [NDRail.Event] = [.init(hours: -0.05, kind: .ok), .init(hours: 0.05, kind: .next)]
+        XCTAssertEqual(NDRail.shown(close, width: 480, past: 36, ahead: 12), [close[1]])
+        let apart: [NDRail.Event] = [.init(hours: -5, kind: .ok), .init(hours: 0.05, kind: .next)]
+        XCTAssertEqual(NDRail.shown(apart, width: 480, past: 36, ahead: 12), apart)
+        let noNext: [NDRail.Event] = [.init(hours: -0.05, kind: .ok)]
+        XCTAssertEqual(NDRail.shown(noNext, width: 480, past: 36, ahead: 12), noNext)
+    }
+
     func testNewestCopyTimeMatchesTheLaneAge() throws {
         for name in BrainBarDesignFixture.Name.allCases {
             let i = BrainBarDesignFixture.inputs(name)

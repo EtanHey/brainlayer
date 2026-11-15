@@ -209,11 +209,30 @@ struct NDFactRow<Action: View>: View {
     }
 }
 
-struct NDLinkButtonStyle: ButtonStyle {
+/// A link: Lumen text, dimmed while pressed; it takes keyboard focus with the system ring (fix 12).
+struct NDLinkButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.system(size: 13, weight: .medium)).foregroundStyle(ND.lumen)
-            .opacity(configuration.isPressed ? 0.7 : 1)
-            .contentShape(Rectangle())
+        Button(action: configuration.trigger) { configuration.label }
+            .buttonStyle(Pressable())
+            .ndKeyboardFocus(action: configuration.trigger)
+    }
+
+    private struct Pressable: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label.font(.system(size: 13, weight: .medium)).foregroundStyle(ND.lumen)
+                .opacity(configuration.isPressed ? 0.7 : 1)
+                .contentShape(Rectangle())
+        }
+    }
+}
+
+extension View {
+    /// Review fix 9 / brief fix 12: Tab reaches the window's buttons, range control and links with or without Full
+    /// Keyboard Access, the system draws its focus ring, and Space or Return does what a click does.
+    func ndKeyboardFocus(action: @escaping () -> Void) -> some View {
+        focusable(interactions: .activate)
+            .onKeyPress(.space) { action(); return .handled }
+            .onKeyPress(.return) { action(); return .handled }
     }
 }
 
@@ -287,6 +306,8 @@ struct NDJobsPage: View {
             let number: NDModel.Number
             if let streak {
                 number = NDModel.Number(value: String(streak), unit: "nights", tone: .fault, strong: true)  // comp 13
+            } else if j.enabled == false {
+                number = NDModel.Number(value: BrainBarMenuPresenter.SurfaceSay.off, secondary: true)  // fix 10: Ink 2
             } else if j.continuous {
                 number = j.loaded == false ? .unknown : NDModel.Number(value: "always on", secondary: true)
             } else if let next = j.nextRun, j.enabled != false {
@@ -345,6 +366,7 @@ struct NDJobLaneView: View {
             Toggle(lane.name, isOn: Binding(get: { enabled }, set: { store.setJob(lane.job, enabled: $0) }))
                 .labelsHidden()
                 .toggleStyle(NDSwitchStyle())
+                .help(enabled ? BrainBarMenuPresenter.SurfaceSay.turnOff(lane.name) : BrainBarMenuPresenter.SurfaceSay.turnOn(lane.name))
         }
     }
 }
