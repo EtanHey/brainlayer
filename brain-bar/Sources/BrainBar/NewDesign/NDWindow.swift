@@ -6,12 +6,18 @@ import SwiftUI
 /// F4 is a keyboard action (motion 2); switching segments is instant (motion 3).
 struct NDWindowRoot: View {
     @ObservedObject var store: NDStore
-    /// Draws stand-in traffic lights for headless renders only; the real window draws its own.
+    /// The real window keeps its controls in a unified 52 pt toolbar (`NDToolbar`: the traffic lights, the centred
+    /// segmented control and the count share one centre line) and draws only the title bar's plane under it. Headless
+    /// renders have no toolbar, so they draw the same row themselves, with stand-in traffic lights.
     var drawsTrafficLights = false
 
     var body: some View {
         VStack(spacing: 0) {
-            NDTitleBar(store: store, drawsTrafficLights: drawsTrafficLights)
+            if drawsTrafficLights {
+                NDTitleBar(store: store, drawsTrafficLights: true)
+            } else {
+                ND.deck.frame(height: NDGrid.titleBar).overlay(alignment: .bottom) { ND.rule.frame(height: 1) }
+            }
             ScrollView(.vertical) {
                 Group {
                     switch store.page {
@@ -27,10 +33,64 @@ struct NDWindowRoot: View {
             }
             .scrollIndicators(.automatic)
         }
-        .frame(minWidth: NDGrid.windowMinimum.width, minHeight: NDGrid.windowMinimum.height)
+        // Under the toolbar, so the plane is the title bar; the toolbar's own safe area is not added again.
+        .ignoresSafeArea(.container, edges: .top)
         .background(ND.night)
         .foregroundStyle(ND.ink)
         .environment(\.ndPalette, .window)
+    }
+}
+
+/// The window's unified toolbar: the segmented pages control as the centred item and the memory count trailing, both
+/// native toolbar items, so the lights, the control and the count share one 52 pt row and clicks reach the control.
+@MainActor final class NDToolbar: NSObject, NSToolbarDelegate {
+    static let pages = NSToolbarItem.Identifier("brainbar.nd.pages")
+    static let memories = NSToolbarItem.Identifier("brainbar.nd.memories")
+    let toolbar: NSToolbar
+    private let store: NDStore
+
+    init(store: NDStore) {
+        self.store = store
+        toolbar = NSToolbar(identifier: "brainbar.nd.toolbar")
+        super.init()
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = false
+        toolbar.centeredItemIdentifiers = [Self.pages]
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.flexibleSpace, Self.pages, .flexibleSpace, Self.memories]
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarDefaultItemIdentifiers(toolbar)
+    }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
+                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        let item = NSToolbarItem(itemIdentifier: id)
+        switch id {
+        case Self.pages:
+            item.view = NSHostingView(rootView: NDSegmentedPages(store: store).fixedSize().environment(\.ndPalette, .window))
+            item.label = "Pages"
+        case Self.memories:
+            item.view = NSHostingView(rootView: NDMemoriesCount(store: store).fixedSize())
+            item.label = "Memories"
+        default:
+            return nil
+        }
+        return item
+    }
+}
+
+struct NDMemoriesCount: View {
+    @ObservedObject var store: NDStore
+    var body: some View {
+        if let memories = store.model.memories {
+            (Text(memories).foregroundColor(ND.ink).fontWeight(.medium) + Text(" memories").foregroundColor(ND.ink2))
+                .font(.system(size: 12).monospacedDigit())
+        }
     }
 }
 

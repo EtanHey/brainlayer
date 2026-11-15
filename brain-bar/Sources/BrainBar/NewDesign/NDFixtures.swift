@@ -58,8 +58,16 @@ enum BrainBarDesignFixture {
         return (panel, status)
     }
 
-    /// A fixed moment, so every capture of a fixture draws the same picture.
-    static let now: Date = ISO8601DateFormatter().date(from: "2026-11-15T08:00:00+02:00")!
+    /// One "now" every fixture time derives from. Tests and renders use a fixed moment, so they draw the same picture;
+    /// a capture uses its launch time (to the minute) in this Mac's zone, so absolute times on screen ("today at 12:09")
+    /// agree with the menu-bar clock and with the ages beside them (review blocker 3: a frozen 08:00 read as 12 h off).
+    static let now: Date = makeNow(capturing: requested != nil, wall: Date())
+
+    static func makeNow(capturing: Bool, wall: Date) -> Date {
+        capturing ? Date(timeIntervalSinceReferenceDate: (wall.timeIntervalSinceReferenceDate / 60).rounded(.down) * 60) : fixedNow
+    }
+    static let fixedNow: Date = ISO8601DateFormatter().date(from: "2026-11-15T08:00:00+02:00")!
+    static var zone: TimeZone { requested == nil ? TimeZone(secondsFromGMT: 7200)! : .current }
 
     static func check(_ name: String, _ state: BrainBarHealthVerdict.State = .green, age: Double? = nil,
                       limit: Double? = nil, fails: Int? = nil) -> BrainBarHealthVerdict.Check {
@@ -79,7 +87,7 @@ enum BrainBarDesignFixture {
 
     static func capture(_ checks: [BrainBarHealthVerdict.Check], dot: BrainBarHealthVerdict.State = .green,
                         age: TimeInterval = 60) -> BrainBarMenuCapture {
-        var c = BrainBarMenuCapture(now: now, timeZone: TimeZone(secondsFromGMT: 7200)!)
+        var c = BrainBarMenuCapture(now: now, timeZone: zone)
         c.verdict = BrainBarHealthVerdict(dot: dot, checks: checks, notes: [], evaluatedAt: now.addingTimeInterval(-age))
         c.verdictAwakeAgeS = age
         c.maintenanceNightFailures = 0

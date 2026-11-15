@@ -225,6 +225,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     nonisolated(unsafe) private var designObserver: NSObjectProtocol?
     var designDefaults: UserDefaults = .standard
     private var hasNewDesignStore = false
+    private lazy var newDesignToolbar = NDToolbar(store: newDesignStore)
     lazy var newDesignStore: NDStore = {
         hasNewDesignStore = true
         let store = NDStore.shared(for: runtimeForDesign, workspace: workspaceForDesign)
@@ -293,6 +294,10 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         switch design {
         case .classic:
             window.contentViewController = classicContent
+            // Main's chrome: no toolbar, the default style.
+            window.toolbar = nil
+            window.toolbarStyle = .automatic
+            window.titlebarSeparatorStyle = .automatic
             window.minSize = Self.minSize
             window.contentMinSize = Self.minSize
             // F04 and N02: back on Classic, the new design's window work stops and its Settings window closes.
@@ -306,8 +311,14 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             }()
             newContent = content
             window.contentViewController = content
-            window.minSize = NDGrid.windowMinimum
+            // One unified 52 pt row: traffic lights, the centred pages control and the count (review fix 1). The toolbar
+            // first, then the minimums. With the unified toolbar AppKit holds the frame minimum up to 20 pt above
+            // 560 pt (measured 780 × 580 in a headless test); the page scrolls under the toolbar below its content.
+            window.toolbar = newDesignToolbar.toolbar
+            window.toolbarStyle = .unified
+            window.titlebarSeparatorStyle = .none  // the root draws the one hairline at 52 pt
             window.contentMinSize = NDGrid.windowMinimum
+            window.minSize = NDGrid.windowMinimum
             if window.isVisible { newDesignStore.setWindowActive(true) }
         }
         // Keep the user's frame across the swap, never below the design's minimum.

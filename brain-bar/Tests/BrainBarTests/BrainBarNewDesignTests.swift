@@ -134,13 +134,35 @@ import XCTest
         controller.applyDesign()
         let new = try XCTUnwrap(controller.windowForTesting.contentViewController)
         XCTAssertTrue(String(describing: type(of: new)).contains("NDWindowRoot"), String(describing: type(of: new)))
-        XCTAssertEqual(controller.windowForTesting.minSize, NDGrid.windowMinimum)
+        // Review blocker 1: one unified 52 pt row, the pages control centred in the toolbar.
+        XCTAssertEqual(controller.windowForTesting.toolbarStyle, .unified)
+        XCTAssertEqual(controller.windowForTesting.toolbar?.centeredItemIdentifiers, [NDToolbar.pages])
+        // 780 wide; AppKit adds up to 20 pt of unified-toolbar chrome to the 560 pt frame minimum (measured 580).
+        XCTAssertEqual(controller.windowForTesting.minSize.width, NDGrid.windowMinimum.width)
+        XCTAssertGreaterThanOrEqual(controller.windowForTesting.minSize.height, NDGrid.windowMinimum.height)
+        XCTAssertLessThanOrEqual(controller.windowForTesting.minSize.height, NDGrid.windowMinimum.height + 20)
         XCTAssertFalse(controller.isShownForTesting, "a design switch never opens the window")
 
         d.set("classic", forKey: BrainBarDesign.key)
         controller.applyDesign()
         XCTAssertTrue(controller.windowForTesting.contentViewController === classic)
         XCTAssertEqual(controller.windowForTesting.minSize, BrainBarDashboardPanelController.minSize)
+        XCTAssertNil(controller.windowForTesting.toolbar, "Classic's chrome is main's: no toolbar")
+    }
+
+    /// Review blocker 2: Settings is 520 pt wide and as tall as its three rows, fixed before it is shown.
+    func testSettingsWindowIsSizedToItsRows() {
+        _ = defaults()
+        let settings = NDSettingsWindowController(store: NDStore(fixture: BrainBarDesignFixture.inputs(.calm)))
+        let size = settings.window.contentRect(forFrameRect: settings.window.frame).size
+        XCTAssertEqual(size.width, 520)
+        XCTAssertGreaterThanOrEqual(size.height, 130)
+        XCTAssertLessThanOrEqual(size.height, 200)
+        XCTAssertFalse(settings.window.styleMask.contains(.resizable))
+        XCTAssertEqual(settings.window.contentMaxSize, size)
+        XCTAssertEqual(settings.window.identifier?.rawValue, "brainbar.nd.settings")
+        XCTAssertEqual(settings.window.title, "BrainBar Settings")
+        XCTAssertFalse(settings.window.isVisible)
     }
 }
 
@@ -619,6 +641,24 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         let row = NDModel.make(i).areas.first { $0.thing == .safe }!.rows.first { $0.id == "integrity" }!
         XCTAssertEqual(row.number.value, NDModel.Number.faultMark.value)
         XCTAssertTrue(row.accessibility.contains(BrainBarMenuPresenter.Say.s19.text), row.accessibility)
+    }
+
+    /// Review blocker 3: "Newest copy" is now − the lane's age (within an hour), in every fixture.
+    func testCaptureClockIsTheWallClock() {
+        let wall = Date(timeIntervalSinceReferenceDate: 784_000_123)
+        let capture = BrainBarDesignFixture.makeNow(capturing: true, wall: wall)
+        XCTAssertLessThan(wall.timeIntervalSince(capture), 60, "a capture's now is its launch minute, not a frozen 08:00")
+        XCTAssertGreaterThanOrEqual(wall.timeIntervalSince(capture), 0)
+        XCTAssertEqual(BrainBarDesignFixture.makeNow(capturing: false, wall: wall), BrainBarDesignFixture.fixedNow)
+    }
+
+    func testNewestCopyTimeMatchesTheLaneAge() throws {
+        for name in BrainBarDesignFixture.Name.allCases {
+            let i = BrainBarDesignFixture.inputs(name)
+            let local = try XCTUnwrap(i.capture.verdict?.checks.first { $0.name == "backup_local" }?.ageS)
+            let newest = try XCTUnwrap(i.newestLocalCopyAt)
+            XCTAssertEqual(i.capture.now.timeIntervalSince(newest), local, accuracy: 3600, name.rawValue)
+        }
     }
 
     /// Design pre-pass 6: on Backups the newest dot and the number come from the same record (within an hour).

@@ -14,14 +14,34 @@ import SwiftUI
         self.store = store
         // The Design control writes the store's preferences: the app's own, or a capture fixture's separate suite (F06).
         let hosting = NSHostingController(rootView: NDSettingsView(store: store).defaultAppStorage(store.preferences))
-        hosting.sizingOptions = [.preferredContentSize]
-        window = NSWindow(contentViewController: hosting)
+        // Review blocker 2: the window opened larger than its three rows (the first capture shows them as a strip at the
+        // top of an empty window). Its size is now its content's, measured and fixed before it is ever shown.
+        hosting.sizingOptions = []
+        let size = Self.contentSize(of: hosting.view)
+        window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable],
+                          backing: .buffered, defer: false)
+        window.contentViewController = hosting
+        window.setContentSize(size)
+        window.contentMinSize = size
+        window.contentMaxSize = size
         window.title = "BrainBar Settings"
-        window.styleMask = [.titled, .closable]
+        // Its own identity: the app's empty SwiftUI Settings scene window ("<app> Settings") is a different window.
+        window.identifier = NSUserInterfaceItemIdentifier("brainbar.nd.settings")
         window.isReleasedWhenClosed = false
         window.isRestorable = false
         super.init()
         window.delegate = self
+    }
+
+    /// 520 pt wide and as tall as its rows: three 40 pt rows, two 1 pt rules, 14 and 18 pt insets (154 pt).
+    static let contentHeight: CGFloat = 154
+
+    static func contentSize(of view: NSView) -> NSSize {
+        view.frame = NSRect(x: 0, y: 0, width: width, height: contentHeight)
+        view.layoutSubtreeIfNeeded()
+        let fitting = view.fittingSize
+        let height = fitting.height > 0 && fitting.height < 400 ? ceil(fitting.height) : contentHeight
+        return NSSize(width: width, height: height)
     }
 
     /// Opens the one Settings window (the same one on every call), front and key.
