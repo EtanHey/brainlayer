@@ -543,7 +543,9 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         }
         store.setWindowActive(true)
         var didStart = false
-        for _ in 0..<100 where !didStart {  // the read starts off the main actor; yield until it has
+        // The read starts off the main actor; yield until it has (up to 20 s, so a loaded CI runner cannot fail it early;
+        // the wait ends as soon as it starts).
+        for _ in 0..<400 where !didStart {
             try await Task.sleep(for: .milliseconds(50))
             didStart = started.value
         }
@@ -754,7 +756,14 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
             }
         }
         let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
-        XCTAssertEqual(String(describing: type(of: panel.contentViewControllerForTesting)), golden["windowRootType"] as? String)
+        // The root's type, structurally everywhere (main's hosting controller around main's root view); its exact spelling,
+        // which follows the Swift toolchain's type printing, only where the golden was recorded.
+        let rootType = String(describing: type(of: panel.contentViewControllerForTesting))
+        let goldenRootType = try XCTUnwrap(golden["windowRootType"] as? String)
+        XCTAssertTrue(rootType.hasPrefix("NSHostingController<") && rootType.contains("BrainBarWindowRootView"), rootType)
+        XCTAssertEqual(rootType.components(separatedBy: "BrainBarWindowRootView").count,
+                       goldenRootType.components(separatedBy: "BrainBarWindowRootView").count, "one classic root, as on main")
+        if Self.rasterEnvironment() == golden["rasterEnvironment"] as? String { XCTAssertEqual(rootType, goldenRootType) }
         XCTAssertEqual(panel.windowForTesting.minSize.width, golden["windowMinWidth"] as? CGFloat)
         XCTAssertEqual(panel.windowForTesting.minSize.height, golden["windowMinHeight"] as? CGFloat)
     }
