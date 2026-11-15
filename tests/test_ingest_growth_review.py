@@ -228,3 +228,70 @@ def test_backfill_survives_plain_to_archive_representation_change(tmp_path, monk
         any(r.startswith("growth_not_indexed:") for r in json.loads(w.health_path.read_text())["alert_reasons"])
         == new_lines
     )
+
+
+def test_restored_idle_alarm_expires_before_neutral_activity(rig):
+    make, append, poll, source, health, clock = rig
+    w = make("codex")
+    poll(w)
+    append(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "confirmed before restart " * 30}],
+            },
+        }
+    )
+    poll(w, 1)
+    assert w.registry.get(str(source))[0] > 0
+    saved = json.loads(health.read_text())
+    old = clock.time() - 7 * 3600
+    saved["source_growth"]["codex"].update(since=old, last_line_at=old, samples=[], alerting=True)
+    health.write_text(json.dumps(saved))
+    w = make("codex")
+    append({"type": "session_meta", "payload": {"id": "invented"}})
+    state = poll(w)
+    assert "growth_not_indexed:codex" not in state["alert_reasons"]
+    assert state["source_growth"]["codex"]["last_line_at"] == pytest.approx(clock.time(), rel=0, abs=1)
+
+
+@pytest.mark.parametrize("restart", (False, True))
+@pytest.mark.parametrize("extra_lines", (0, 200))
+def test_backfill_survives_plain_archive_plain_with_new_inode(tmp_path, monkeypatch, compress, restart, extra_lines):
+    from tests.test_codex_zst_watcher import watcher
+    from tests.test_codex_zstd_stream import rollout
+
+    clock = _Clock(wm.time)
+    monkeypatch.setattr(wm, "time", clock)
+    history = rollout() + (json.dumps(CHANGED["codex"]) + "\n").encode() * 1000
+    plain = tmp_path / "history.jsonl"
+    plain.write_bytes(history)
+    replacement = tmp_path / "replacement.tmp"
+    replacement.write_bytes(history + (json.dumps(CHANGED["codex"]) + "\n").encode() * extra_lines)
+    assert replacement.stat().st_ino != plain.stat().st_ino
+    w, _ = watcher(tmp_path, monkeypatch, max_lines=100)
+    w.health_path = tmp_path / "health.json"
+    w.poll_once()
+    compress("history.jsonl.zst", history)
+    plain.unlink()
+    w.poll_once()
+    if restart:
+        w.stop()
+        w = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", tmp_path)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: {i["_source_file"]: i["_line_end_offset"] for i in items},
+            health_path=tmp_path / "health.json",
+            batch_size=1,
+            max_lines_per_file=100,
+        )
+    replacement.rename(plain)
+    w.max_lines_per_file = 2000
+    w.poll_once()
+    assert json.loads(w.health_path.read_text())["source_growth"]["codex"]["lines_read"] == extra_lines
+    clock.wall_shift += 1800
+    clock.mono += 1800
+    w.poll_once()
+    assert ("growth_not_indexed:codex" in json.loads(w.health_path.read_text())["alert_reasons"]) == bool(extra_lines)

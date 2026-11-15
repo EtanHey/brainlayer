@@ -1814,6 +1814,8 @@ class JSONLWatcher:
                         if isinstance(k, str)
                         and isinstance(v, dict)
                         and ("compressed" not in v or isinstance(v["compressed"], bool))
+                        and ("frontier_known" not in v or isinstance(v["frontier_known"], bool))
+                        and ("physical_size" not in v or type(v["physical_size"]) is int and v["physical_size"] >= 0)
                         and all(
                             type(v.get(field)) is int and v[field] >= 0 for field in ("frontier", "inode", "generation")
                         )
@@ -2459,14 +2461,21 @@ class JSONLWatcher:
         compressed = self._physical_files.get(filepath, filepath).endswith(".zst")
         if marker and marker["generation"] == generation:
             prior_compressed = marker.get("compressed", compressed)
+            frontier_known = marker.get("frontier_known", not prior_compressed)
             representation_changed = prior_compressed != compressed
-            same_source = marker["inode"] == inode and (current is None or current[1] >= marker["frontier"])
-            if representation_changed and prior_compressed and current is not None:
-                # The decoded archive frontier was unknown. Freeze the equivalent plain snapshot.
-                marker.update(frontier=current[1], inode=inode, compressed=False)
-                prior_compressed = False
+            physical_size = marker.get("physical_size", 0 if prior_compressed else marker["frontier"])
+            same_source = marker["inode"] == inode and (current is None or current[1] >= physical_size)
+            if representation_changed:
+                # An unchanged generation verifies the representation transition. A known decoded
+                # frontier survives both directions, independently of the current physical bytes.
+                if not frontier_known and not compressed and current is not None:
+                    marker["frontier"] = current[1]
+                    frontier_known = True
+                marker.update(inode=inode, compressed=compressed, frontier_known=frontier_known)
+                if current is not None:
+                    marker["physical_size"] = current[1]
             if representation_changed or same_source:
-                return (1 << 63) - 1 if prior_compressed else marker["frontier"]
+                return marker["frontier"] if frontier_known else (1 << 63) - 1
         self._growth_backfill.pop(filepath, None)
         return 0
 
@@ -2481,10 +2490,10 @@ class JSONLWatcher:
                 provider, {"since": now, "last_line_at": now, "samples": [], "alerting": False}
             )
             state["samples"] = [s for s in state["samples"] if now - 1860 <= s[0] <= now]
+            if now - state["last_line_at"] >= 21600:
+                state.update(since=now, samples=[], alerting=False)
             if self._growth_activity.get(provider, 0):
                 state["last_line_at"] = now
-            elif now - state["last_line_at"] >= 21600:
-                state.update(since=now, samples=[], alerting=False)
             if recognised:
                 state.update(since=now, samples=[], alerting=False)
             else:
@@ -2946,6 +2955,8 @@ class JSONLWatcher:
                             {
                                 "frontier": self._current_file_stats.get(filepath, (0, 0, 0))[1],
                                 "compressed": compressed,
+                                "frontier_known": not compressed,
+                                "physical_size": self._current_file_stats.get(filepath, (0, 0, 0))[1],
                                 "inode": source_inode,
                                 "generation": source_generation,
                             },
