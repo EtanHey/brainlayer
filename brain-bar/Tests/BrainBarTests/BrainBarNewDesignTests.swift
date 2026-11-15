@@ -137,10 +137,15 @@ import XCTest
         // Review blocker 1: one unified 52 pt row, the pages control centred in the toolbar.
         XCTAssertEqual(controller.windowForTesting.toolbarStyle, .unified)
         XCTAssertEqual(controller.windowForTesting.toolbar?.centeredItemIdentifiers, [NDToolbar.pages])
-        // 780 wide; AppKit adds up to 20 pt of unified-toolbar chrome to the 560 pt frame minimum (measured 580).
+        // The minimum is 780 wide, exactly. Its height is the design's 560 raised by AppKit for the unified toolbar's
+        // chrome, which differs by OS (580 on macOS 27, 584 on CI's macOS 15), so it is pinned to "never below 560 and
+        // never more than one 52 pt toolbar row above it", for the frame and the content minimum alike.
         XCTAssertEqual(controller.windowForTesting.minSize.width, NDGrid.windowMinimum.width)
+        XCTAssertEqual(controller.windowForTesting.contentMinSize.width, NDGrid.windowMinimum.width)
+        XCTAssertGreaterThanOrEqual(controller.windowForTesting.contentMinSize.height, NDGrid.windowMinimum.height)
+        XCTAssertLessThanOrEqual(controller.windowForTesting.contentMinSize.height, NDGrid.windowMinimum.height + NDGrid.titleBar)
         XCTAssertGreaterThanOrEqual(controller.windowForTesting.minSize.height, NDGrid.windowMinimum.height)
-        XCTAssertLessThanOrEqual(controller.windowForTesting.minSize.height, NDGrid.windowMinimum.height + 20)
+        XCTAssertLessThanOrEqual(controller.windowForTesting.minSize.height, NDGrid.windowMinimum.height + NDGrid.titleBar)
         XCTAssertFalse(controller.isShownForTesting, "a design switch never opens the window")
 
         d.set("classic", forKey: BrainBarDesign.key)
