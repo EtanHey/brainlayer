@@ -360,6 +360,15 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
 #if BRAINBAR_UI
+    func openNotificationDestination() {
+        let button: NSButton? = statusItemForTesting.button
+        BrainBarNotificationClick.perform(hasButton: button != nil, popup: {
+            guard let button, button.window != nil else { return false }
+            NSApp.activate()
+            return contextMenuForTesting.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button)
+        }, settings: { self.openSettings(nil) })
+    }
+
     /// S5: the icon and its tooltip follow the one shared snapshot, refreshed whenever the model
     /// publishes, whether or not the Dashboard is open.
     private func bindStatusModel(_ model: BrainBarSettingsViewModel?) {

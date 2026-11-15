@@ -2366,6 +2366,16 @@
         "target": "import subprocess"
       }
     },
+    "5f96a4fd2dbe22379ea86effc6832216866a27ae2690c1b6458cf60ee68ecd3c": {
+      "non_cloud_purpose": "Local launchd and vnode inspection timeout classification only; references the subprocess.TimeoutExpired exception class without invoking a command, network transport, or cloud model.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.inspect_processes",
+        "path": "src/brainlayer/brainbar_auto_activation.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "60300f756e30ea5cb7b4db67806afb6ffb534797de3a4bff89e23635d13bef3b": {
       "non_cloud_purpose": "Local AF_UNIX peer UID query via libc getpeereid or SO_PEERCRED; no network/cloud endpoint.",
       "site": {
@@ -2667,7 +2677,7 @@
       }
     },
     "6af97d75a3bf8fef459b5629fcda0276fc1a4e0482f29747a743de9640882828": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/job_alerts.py <module>._notify",
+      "non_cloud_purpose": "Local osascript notification only for brainbar-activation failure, when BrainBar may not be running; other job notifications belong to BrainBar. No model or cloud sender.",
       "site": {
         "call_sha256": "114ad7e2890a9936fc01b38f25a9b8c7724c0aa42dd40c389052c067f0118455",
         "kind": "child_process",

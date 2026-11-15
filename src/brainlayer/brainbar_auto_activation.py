@@ -20,6 +20,15 @@ class ProcessScanUnavailable(Exception):
     """Detection is unknown; only the safe exception class name may escape."""
 
 
+def inspect_processes(function, *args):
+    try:
+        return function(*args)
+    except (subprocess.TimeoutExpired, TimeoutError) as exc:
+        error = ProcessScanUnavailable(type(exc).__name__)
+        error.inspection_timeout = True
+        raise error from None
+
+
 def process_table():
     result = subprocess.run(
         ["/bin/ps", "-axo", "pid=,ppid=,comm=,args="], capture_output=True, text=True, check=True, timeout=5
@@ -68,10 +77,12 @@ class AutoActivator:
             except BlockingIOError:
                 return
             failures = self.state.with_suffix(".scan.json")
+            prior = json.loads(failures.read_text()) if failures.exists() else {}
             try:
                 self._tick()
             except ProcessScanUnavailable as exc:
-                prior = json.loads(failures.read_text()) if failures.exists() else {}
+                if not getattr(exc, "inspection_timeout", False):
+                    prior = json.loads(failures.read_text()) if failures.exists() else {}
                 count = min(prior.get("failures", 0) + 1, 12)
                 _atomic_write_json(failures, {"failures": count})
                 if count >= 12:
@@ -105,11 +116,14 @@ class AutoActivator:
             (
                 "BrainBar activation process scan failed for >=12 ticks:",
                 "BrainBar activation monitor refused: Command '['/bin/ps',",
+                "BrainBar activation monitor refused: Command '['/usr/sbin/lsof',",
+                "BrainBar activation monitor refused: Command '['/bin/launchctl',",
+                "BrainBar activation monitor refused: running-bundle inspection deadline exceeded",
                 "BrainBar activation monitor refused: unreadable process table",
             )
         ):
             report("brainbar-activation", None)
-        absent = bool(processes) and all(loaded(label).returncode == 113 for label, _ in JOBS)
+        absent = bool(processes) and all(inspect_processes(loaded, label).returncode == 113 for label, _ in JOBS)
         if not absent:
             if prior:
                 path.unlink()
@@ -153,8 +167,8 @@ class AutoActivator:
         prior = json.loads(self.state.read_text()) if self.state.exists() else {}
         if prior.get("identity") == identity and prior.get("stage") == "ready":
             return
-        states = [loaded(label).returncode for label, _ in JOBS]
-        if all(code == 0 for code in states) and running_bundle_matches(app):
+        states = [inspect_processes(loaded, label).returncode for label, _ in JOBS]
+        if all(code == 0 for code in states) and inspect_processes(running_bundle_matches, app):
             _atomic_write_json(self.state, {"identity": identity, "stage": "ready"})
             report("brainbar-activation", None)
             return
