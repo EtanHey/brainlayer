@@ -222,9 +222,11 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     private(set) var shownDesign: BrainBarDesign = .classic
     private let runtimeForDesign: BrainBarRuntime
     private let workspaceForDesign: any BrainBarWorkspaceActing
-    private var designObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var designObserver: NSObjectProtocol?
     var designDefaults: UserDefaults = .standard
+    private var hasNewDesignStore = false
     lazy var newDesignStore: NDStore = {
+        hasNewDesignStore = true
         let store = NDStore.shared(for: runtimeForDesign, workspace: workspaceForDesign)
         store.onOpenWindow = { [weak self] page in self?.showPage(page) }
         store.onOpenSettings = { [weak self] in self?.showSettings() }
@@ -293,6 +295,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             window.contentViewController = classicContent
             window.minSize = Self.minSize
             window.contentMinSize = Self.minSize
+            // F04 and N02: back on Classic, the new design's window work stops and its Settings window closes.
+            if hasNewDesignStore { newDesignStore.setWindowActive(false) }
+            NDSettingsWindowController.closeIfOpen()
         case .new:
             let content = newContent ?? {
                 let hosting = NSHostingController(rootView: NDWindowRoot(store: newDesignStore))
@@ -303,9 +308,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             window.contentViewController = content
             window.minSize = NDGrid.windowMinimum
             window.contentMinSize = NDGrid.windowMinimum
-            newDesignStore.refresh()
-            newDesignStore.refreshWaves(force: true)
-            newDesignStore.refreshBackupHistory(force: true)
+            if window.isVisible { newDesignStore.setWindowActive(true) }
         }
         // Keep the user's frame across the swap, never below the design's minimum.
         let minimum = window.frameRect(forContentRect: NSRect(origin: .zero, size: currentMinSize)).size
@@ -322,6 +325,10 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         newDesignStore.page = page
         show()
     }
+
+    deinit {
+        if let designObserver { NotificationCenter.default.removeObserver(designObserver) }
+    }
 #endif
 
     /// The hotkey and `brainbar://toggle`: open the window, or close it when it is open.
@@ -335,6 +342,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     func show(anchoredTo anchorView: NSView? = nil) {
         Task { [driveAuth] in await driveAuth.refreshIfStale() }
+#if BRAINBAR_UI
+        if shownDesign == .new { newDesignStore.setWindowActive(true) }
+#endif
         if panelState.selectedTab == .settings { panelState.settingsActivationRevision += 1 }
         if !hasPlacedWindow || isClosingWindow {
             placeWindow(near: anchorView ?? statusItemButton)
@@ -427,6 +437,10 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) { prepareForClose() }
 
     func prepareForClose() {
+#if BRAINBAR_UI
+        // F04: closing the window stops the hero and backup-history reads and cancels one in flight.
+        if hasNewDesignStore { newDesignStore.setWindowActive(false) }
+#endif
         persistFrame()
         // Policy changes and teardown can move a closed window. Keep the last user frame.
         isClosingWindow = true

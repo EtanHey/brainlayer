@@ -9,9 +9,9 @@ enum BrainBarDesignFixture {
 
     enum Name: String, CaseIterable, Sendable {
         case calm
-        /// A fresh verdict with checks it cannot tell yet: "Still checking a few things".
+        /// The verdict is 18 minutes old: nothing it said can be confirmed ("Checking on your memory…").
         case checking
-        /// The verdict is 18 minutes old: nothing it said can be confirmed.
+        /// A fresh verdict with checks it cannot tell yet ("Can't confirm backups yet").
         case cantTell = "cant-tell"
         case oneFault = "one-fault"
         case reconnectWaiting = "reconnect-waiting"
@@ -32,6 +32,30 @@ enum BrainBarDesignFixture {
     /// The fixture this process was asked for, or nil. Only names on the list count.
     static var requested: Name? {
         ProcessInfo.processInfo.environment[environmentKey].flatMap(Name.init(rawValue:))
+    }
+
+    /// F06: a capture keeps its own preferences (window frame, the Design control), in a suite of its own that is emptied
+    /// at launch, so nothing it does reaches the installed app's preferences.
+    static let captureSuiteName = "com.brainlayer.brainbar.design-capture"
+    nonisolated(unsafe) static let capturePreferences: UserDefaults = {
+        let defaults = UserDefaults(suiteName: captureSuiteName)!
+        defaults.removePersistentDomain(forName: captureSuiteName)
+        return defaults
+    }()
+
+    /// The real status item, dropdown and window, wired to the capture's own preferences.
+    @MainActor static func makeCaptureSurfaces(runtime: BrainBarRuntime, activationPolicy: BrainBarWindowActivationPolicy?,
+                                               statusBar: any BrainBarStatusItemHosting)
+        -> (BrainBarDashboardPanelController, BrainBarStatusPopoverController) {
+        let workspace = BrainBarRecordingWorkspace()
+        let panel = BrainBarDashboardPanelController(
+            workspace: workspace, runtime: runtime, activationPolicy: activationPolicy,
+            frameStore: BrainBarWindowFrameStore(defaults: capturePreferences, key: BrainBarDashboardPanelController.frameDefaultsKey))
+        panel.designDefaults = capturePreferences
+        panel.applyDesign()
+        let status = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime, dashboardPanelController: panel,
+                                                     statusBar: statusBar, menuDefaults: capturePreferences)
+        return (panel, status)
     }
 
     /// A fixed moment, so every capture of a fixture draws the same picture.
@@ -75,13 +99,13 @@ enum BrainBarDesignFixture {
         switch name {
         case .calm:
             break
-        case .checking:
+        case .cantTell:
             var checks = calmChecks()
             checks = replacing(checks, check("backup_offsite", .unknown))
             checks = replacing(checks, check("search", .unknown))
             checks = replacing(checks, check("stores", .unknown))
             i.capture = capture(checks, dot: .amber)
-        case .cantTell:
+        case .checking:
             i.capture = capture(calmChecks(), age: 18 * 60)
         case .oneFault, .reconnectWaiting:
             i.capture = capture(replacing(calmChecks(), check("drive_auth", .red)), dot: .red)
@@ -151,17 +175,19 @@ enum BrainBarDesignFixture {
         return NDWave(saves: saves, reads: reads, readable: true, endsAt: end)
     }
 
-    /// A week of nightly attempts at about 03:40, each lane its own minute.
+    /// A week of nightly attempts. Each lane's newest attempt sits at the age its row's gauge says (the Drive copy 3 h,
+    /// the others 4 h; with Drive stalled, the Drive lanes stop at 21 h), so the rail and the number agree.
     static func history(failedDriveDayAgo: Int? = nil, driveStalledAfterDays: Int? = nil) -> NDBackupHistory {
-        func nights(_ minute: Int, fail: Int? = nil, upTo: Int = 0) -> [NDAttempt] {
-            (upTo...6).reversed().map { day in
-                let at = now.addingTimeInterval(-Double(day) * 86_400 - 4 * 3600 - Double(minute) * 60)
-                return NDAttempt(at: at, ok: day != fail)
+        func nights(newestHoursAgo: Double, fail: Int? = nil) -> [NDAttempt] {
+            (0...6).reversed().compactMap { day in
+                let at = now.addingTimeInterval(-Double(day) * 86_400 - newestHoursAgo * 3600)
+                return now.timeIntervalSince(at) <= 144 * 3600 ? NDAttempt(at: at, ok: day != fail) : nil
             }
         }
+        let stalled = driveStalledAfterDays != nil
         return .read(NDBackupLanes(
-            local: nights(2), drive: nights(5, fail: failedDriveDayAgo, upTo: driveStalledAfterDays ?? 0),
-            conversations: nights(8, upTo: driveStalledAfterDays ?? 0), integrity: nights(3)))
+            local: nights(newestHoursAgo: 4), drive: nights(newestHoursAgo: stalled ? 21 : 3, fail: failedDriveDayAgo),
+            conversations: nights(newestHoursAgo: stalled ? 21 : 4), integrity: nights(newestHoursAgo: 4)))
     }
 
     static func jobs(nightlyFailing: Bool) -> [NDJobInput] {
@@ -169,15 +195,16 @@ enum BrainBarDesignFixture {
         return [
             NDJobInput(job: .watch, enabled: true, continuous: true, lastRun: nil, nextRun: nil, loaded: true),
             NDJobInput(job: .hotlane, enabled: true, continuous: true, lastRun: nil, nextRun: nil, loaded: true),
-            NDJobInput(job: .drain, enabled: true, continuous: false, lastRun: at(-0.05), nextRun: at(4 / 60), loaded: true),
-            NDJobInput(job: .walCheckpoint, enabled: true, continuous: false, lastRun: at(-0.4), nextRun: at(9 / 60), loaded: true),
-            NDJobInput(job: .backupDaily, enabled: true, continuous: false, lastRun: at(-4.1), nextRun: at(19), loaded: true),
-            NDJobInput(job: .jsonlBackup, enabled: true, continuous: false, lastRun: at(-4.15), nextRun: at(19), loaded: true),
+            NDJobInput(job: .drain, enabled: true, continuous: false, lastRun: at(-0.05), nextRun: at(4 / 60), loaded: true, lastOutcome: .ok),
+            NDJobInput(job: .walCheckpoint, enabled: true, continuous: false, lastRun: at(-0.4), nextRun: at(9 / 60), loaded: true, lastOutcome: .ok),
+            NDJobInput(job: .backupDaily, enabled: true, continuous: false, lastRun: at(-4.1), nextRun: at(19), loaded: true, lastOutcome: .ok),
+            NDJobInput(job: .jsonlBackup, enabled: true, continuous: false, lastRun: at(-4.15), nextRun: at(19), loaded: true, lastOutcome: .ok),
             NDJobInput(job: .maintenanceNightly, enabled: true, continuous: false,
-                       lastRun: nightlyFailing ? at(-4.5) : at(-5), nextRun: at(19), loaded: true),
-            NDJobInput(job: .maintenanceWeekly, enabled: true, continuous: false, lastRun: at(-96), nextRun: at(72), loaded: true),
-            NDJobInput(job: .decay, enabled: true, continuous: false, lastRun: at(-18), nextRun: at(2), loaded: true),
-            NDJobInput(job: .repairFTS, enabled: true, continuous: false, lastRun: at(-144), nextRun: at(22), loaded: true),
+                       lastRun: nightlyFailing ? at(-4.5) : at(-5), nextRun: at(19), loaded: true,
+                       lastOutcome: nightlyFailing ? .failed : .ok),
+            NDJobInput(job: .maintenanceWeekly, enabled: true, continuous: false, lastRun: at(-96), nextRun: at(72), loaded: true, lastOutcome: .ok),
+            NDJobInput(job: .decay, enabled: true, continuous: false, lastRun: at(-18), nextRun: at(2), loaded: true, lastOutcome: .ok),
+            NDJobInput(job: .repairFTS, enabled: true, continuous: false, lastRun: at(-144), nextRun: at(22), loaded: true, lastOutcome: .ok),
         ]
     }
 }

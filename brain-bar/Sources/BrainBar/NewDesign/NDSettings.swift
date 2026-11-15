@@ -12,7 +12,8 @@ import SwiftUI
 
     init(store: NDStore) {
         self.store = store
-        let hosting = NSHostingController(rootView: NDSettingsView(store: store))
+        // The Design control writes the store's preferences: the app's own, or a capture fixture's separate suite (F06).
+        let hosting = NSHostingController(rootView: NDSettingsView(store: store).defaultAppStorage(store.preferences))
         hosting.sizingOptions = [.preferredContentSize]
         window = NSWindow(contentViewController: hosting)
         window.title = "BrainBar Settings"
@@ -34,6 +35,14 @@ import SwiftUI
         controller.window.makeKeyAndOrderFront(nil)
     }
 
+    /// Switching to Classic closes the new design's Settings window and lets it go (N02).
+    static func closeIfOpen() {
+        current?.window.close()
+        current = nil
+    }
+
+    static var isOpenForTesting: Bool { current != nil }
+
     private var activationPolicy: BrainBarWindowActivationPolicy?
 
     func windowWillClose(_ notification: Notification) {
@@ -49,7 +58,7 @@ struct NDSettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             row("Google Drive") {
-                Text(driveState).font(NDType.row).foregroundStyle(ND.ink2)
+                Text(store.model.drive.state).font(NDType.row).foregroundStyle(ND.ink2)
                 Spacer()
                 driveAction
             }
@@ -87,54 +96,19 @@ struct NDSettingsView: View {
         .frame(minHeight: 40)
     }
 
-    private var drive: BrainBarHealthVerdict.State? {
-        store.inputs.capture.verdict?.checks.first { $0.name == "drive_auth" }?.state
-    }
-
-    private var driveState: String {
-        switch drive {
-        case .green?, .amber?: "Connected"
-        case .red?: store.inputs.capture.driveAuthModel == .missing ? "Not connected" : "Disconnected"
-        default: "—"
-        }
-    }
-
-    /// Reconnect and Connect are one click. Disconnect would ask first (N4), but nothing in BrainLayer can disconnect
-    /// Drive yet, so no Disconnect is drawn: a control without an action is not drawn (L5).
+    /// F01: the state and the action come from the same accepted Backups row and counted fault every other surface
+    /// draws (a stale or duplicated check reads "—"). L8: no Disconnect in this version; Reconnect and Connect are one click.
     @ViewBuilder private var driveAction: some View {
-        if drive == .red {
+        if let action = store.model.drive.action {
             if store.inputs.driveReconnecting {
                 HStack(spacing: 7) {
                     NDMarkView(mark: .running)
                     Text("Waiting for you to approve in your browser…").font(NDType.fact).foregroundStyle(ND.ink2)
                 }
             } else {
-                let missing = store.inputs.capture.driveAuthModel == .missing
-                Button(missing ? "Connect" : "Reconnect") { store.reconnectDrive() }.buttonStyle(NDLinkButtonStyle())
+                Button(action.kind == .connectDrive ? "Connect" : "Reconnect") { store.reconnectDrive() }
+                    .buttonStyle(NDLinkButtonStyle())
             }
-        } else if let disconnect = store.disconnectDrive {
-            Button("Disconnect") { NDDisconnectSheet.confirm(perform: disconnect) }.buttonStyle(NDLinkButtonStyle())
         }
-    }
-}
-
-/// N4: "Disconnect Google Drive?" as a sheet on the key window; Cancel is the default (Return and Escape).
-@MainActor enum NDDisconnectSheet {
-    static func alert() -> NSAlert {
-        let alert = NSAlert()
-        alert.messageText = "Disconnect Google Drive?"
-        alert.informativeText = "Backups stop uploading until you connect it again."
-        let cancel = alert.addButton(withTitle: "Cancel")
-        cancel.keyEquivalent = "\r"
-        let disconnect = alert.addButton(withTitle: "Disconnect")
-        disconnect.hasDestructiveAction = true
-        disconnect.keyEquivalent = ""
-        return alert
-    }
-
-    static func confirm(perform: @escaping () -> Void) {
-        let alert = alert()
-        guard let window = NSApp.keyWindow else { if alert.runModal() == .alertSecondButtonReturn { perform() }; return }
-        alert.beginSheetModal(for: window) { response in if response == .alertSecondButtonReturn { perform() } }
     }
 }

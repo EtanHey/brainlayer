@@ -67,6 +67,9 @@ struct NDModel: Equatable, Sendable {
         /// One limit line joins the gauges' ends (no line for Agents: its bars are amounts).
         var limitLine = true
         var aside: String? = nil
+        /// Why the area carries the dashed ring when none of its rows is dashed (its values are the app's own reads, but
+        /// the last check did not confirm it): the help tag and VoiceOver say it.
+        var unknownReason: String? = nil
         var fault: Bool { mark == .fault }
     }
 
@@ -121,11 +124,26 @@ struct NDModel: Equatable, Sendable {
     var unknownThings: Set<Thing>
     var faultThings: Set<Thing>
     var runningThings: Set<Thing>
+    /// What the surfaces show, as a presentation: the report copies this, runtime warnings included (F03).
+    var shownPresentation: P
+    /// Google Drive for Settings, from the same accepted Backups row every other surface draws (F01).
+    var drive: DriveSetting
+
+    struct DriveSetting: Equatable, Sendable {
+        /// "Connected", "Disconnected", "Not connected", or "—" when the last check cannot say.
+        var state: String
+        /// Reconnect or Connect, offered only while a counted fault says Drive needs it.
+        var action: P.Action?
+    }
+
+    static let unconfirmed = "not confirmed by the last check"
 }
 
 // MARK: - Derivation
 
 extension NDModel {
+    /// The watcher job's name on the Jobs page (copy deck): the gauge is how long ago it last reported.
+    static let readerRow = "Read new conversations"
     static let areaNames: [Thing: String] = [.remembering: "Remembering", .finding: "Finding", .safe: "Backups", .upkeep: "Upkeep"]
     /// The upkeep gauges' drawing scale only (L3): it places the notch and decides nothing.
     static let nightlyScaleS: Double = 36 * 3600
@@ -226,11 +244,25 @@ extension NDModel {
         let detail: String? = headlineMark == .running
             ? p.rows.first(where: { $0.kind == .headlineDetail && $0.state == .behind })?.strings.joined(separator: " ") : nil
 
+        // L4 and the words budget: beside "Everything else is fine." a fault drops its own reassurance (U03's "still
+        // being saved and backed up"); VoiceOver and the report keep every sentence.
+        if everythingElse {
+            for index in faults.indices {
+                faults[index].shownFacts = faults[index].shownFacts.compactMap { string in
+                    let kept = BrainBarMenuPresenter.sentences(string).filter { BrainBarMenuPresenter.entry(for: $0, c)?.0.kind != .reassurance }
+                    return kept.isEmpty ? nil : kept.joined(separator: " ")
+                }
+            }
+        }
         let ctx = Context(i: i, c: c, verdict: freshVerdict, faults: faults, faultThings: faultThings, unknown: unknown)
         let areas = [
             remembering(ctx, mark(.remembering)), finding(ctx, mark(.finding)), agentsArea(ctx),
             backups(ctx, mark(.safe)), upkeep(ctx, mark(.upkeep)),
-        ]
+        ].map { area -> Area in
+            var area = area
+            if area.mark == .unknown, !area.rows.contains(where: { $0.visual == .unknown }) { area.unknownReason = unconfirmed }
+            return area
+        }
         let menuAreas = menu(ctx, areas: areas, marks: Dictionary(uniqueKeysWithValues: BrainBarMenuPresenter.four.map { ($0, mark($0)) }))
 
         let jobsFaults = Set(faults.filter { $0.thing == .upkeep }.map(\.title)).count
@@ -240,7 +272,10 @@ extension NDModel {
             faults: faults, everythingElse: everythingElse, menuAreas: menuAreas, areas: areas,
             checked: checkedLine(c), memories: i.memories.map(NDFormat.integer),
             backupsTabCount: faultThings.contains(.safe) ? max(1, faults.filter { $0.thing == .safe }.count) : 0,
-            jobsTabCount: jobsFaults, unknownThings: unknown, faultThings: faultThings, runningThings: running)
+            jobsTabCount: jobsFaults, unknownThings: unknown, faultThings: faultThings, runningThings: running,
+            shownPresentation: shown(p, headline: headline, count: count, icon: icon, faults: faults,
+                                     extraRows: extraRows, everythingElse: everythingElse),
+            drive: driveSetting(areas, faults))
     }
 
     struct Context {
@@ -302,6 +337,42 @@ extension NDModel {
         }
     }
 
+    /// The presentation as the new surfaces show it: its headline, count and icon, its rows, and a row per runtime warning
+    /// that needs him (F03). "Everything else is fine." goes wherever the surfaces drop it.
+    static func shown(_ p: P, headline: String, count: Int, icon: P.Icon, faults: [Fault], extraRows: Int,
+                      everythingElse: Bool) -> P {
+        var rows = p.rows.filter { everythingElse || $0.kind != .everythingElse }
+        if extraRows > 0 {
+            let extra = faults.suffix(extraRows).map { P.Row(kind: .needsYou, strings: [$0.title] + $0.facts, action: $0.action,
+                                                             mark: .alertCircle, dividerBefore: true) }
+            let at = (rows.lastIndex { $0.kind == .needsYou || $0.kind == .factLine }).map { $0 + 1 }
+                ?? (rows.firstIndex { $0.kind == .headline }.map { $0 + 1 } ?? 0)
+            rows.insert(contentsOf: extra, at: at)
+        }
+        if headline != p.headline {
+            // The shown headline replaced the presenter's (a runtime warning): "All good"'s own detail goes with it.
+            rows = rows.compactMap { row in
+                var row = row
+                if row.kind == .headline { row.strings = [headline]; row.mark = icon == .marked ? .marked : .wait }
+                if row.kind == .headlineDetail, p.headline == Say.allGood.text { return nil }
+                return row
+            }
+        }
+        return P(form: icon == .marked ? .needs : p.form, headline: headline, count: count, icon: icon, rows: rows)
+    }
+
+    static func driveSetting(_ areas: [Area], _ faults: [Fault]) -> DriveSetting {
+        let row = areas.first { $0.thing == .safe }?.rows.first { $0.id == "drive_auth" }
+        let state: String = switch row?.number.value {
+        case "connected"?: "Connected"
+        case "disconnected"?: "Disconnected"
+        case "not connected"?: "Not connected"
+        default: "—"
+        }
+        let action = faults.first { $0.concerns.contains("drive_auth") }?.action
+        return DriveSetting(state: state, action: action.flatMap { [.reconnectDrive, .connectDrive].contains($0.kind) ? $0 : nil })
+    }
+
     static func checkedLine(_ c: BrainBarMenuCapture) -> String? {
         guard let v = c.verdict else { return nil }
         let age = max(0, c.now.timeIntervalSince(v.evaluatedAt))
@@ -328,20 +399,29 @@ extension NDModel {
         return Row(id: id, name: name, visual: .gauge(Gauge(fraction: fraction, tone: tone, concerned: concerned)),
                    number: Number(value: n.value, unit: n.unit),
                    strong: concerned,
-                   accessibility: "\(name), \(n.spoken) old, limit \(NDFormat.age(limit).spoken)")
+                   accessibility: id == "ingest" ? "\(name), last reported \(n.spoken) ago, limit \(NDFormat.age(limit).spoken)"
+                       : "\(name), \(n.spoken) old, limit \(NDFormat.age(limit).spoken)")
     }
 
     static func remembering(_ ctx: Context, _ mark: Mark) -> Area {
-        // New conversations: the ingest check's age; with a stale verdict, the watcher heartbeat the app reads itself (R20).
-        var ingest = gaugeRow(ctx, id: "ingest", name: "New conversations", check: "ingest", areaFault: mark == .fault)
+        // The reader of new conversations: the ingest check's heartbeat age; with a stale verdict, the same heartbeat as the
+        // app reads it itself from watcher-health.json (R20), against the last known limit.
+        // F07: the ingest check's age is the conversation reader's heartbeat (health_verdict.py), not the newest
+        // conversation's age, which the app does not have. The row is named for what it measures.
+        var ingest = gaugeRow(ctx, id: "ingest", name: Self.readerRow, check: "ingest", areaFault: mark == .fault)
         if ingest.visual == .unknown, let age = ctx.i.watcherHeartbeatAgeS, age >= 0,
            let limit = ctx.c.verdict?.checks.first(where: { $0.name == "ingest" })?.thresholdS, limit > 0 {
-            ingest = ageRow(ctx, id: "ingest", name: "New conversations", age: age, limit: limit,
+            ingest = ageRow(ctx, id: "ingest", name: Self.readerRow, age: age, limit: limit,
                             concerned: ctx.concerned("ingest"), areaFault: mark == .fault)
         }
         // Saves waiting: the queue the app reads itself; an empty queue is a measured zero (N7).
         let saves: Row
-        if let depth = ctx.i.savesWaiting, depth == 0 {
+        // Saves waiting rests on the verdict's stores check (§ 4): with no fresh, known check it is unknown, whatever the
+        // app's own queue read says.
+        let stores = ctx.check("stores")
+        if stores == nil || stores?.state == .unknown {
+            saves = Row(id: "stores", name: "Saves waiting", visual: .unknown, number: .unknown, accessibility: "Saves waiting, not known")
+        } else if let depth = ctx.i.savesWaiting, depth == 0 {
             saves = Row(id: "stores", name: "Saves waiting", visual: .emptyTrack, number: Number(value: "none", secondary: true),
                         accessibility: "Saves waiting, none")
         } else if let oldest = ctx.i.oldestSaveQueuedAt, ctx.i.savesWaiting != nil,
@@ -406,9 +486,11 @@ extension NDModel {
             }
             let concerned = ctx.concerned(check) || k.state == .red
             let tone: Tone = k.state == .red ? .fault : k.state == .amber ? .warn : .fine
+            // A failed database check draws the fault square; VoiceOver hears the registry's words for it (N04).
+            let spoken = w == Number.faultMark.value ? Say.s19.text : w
             return Row(id: id, name: name, visual: .none,
                        number: Number(value: w, tone: tone, strong: concerned && tone == .fault, secondary: tone == .fine),
-                       strong: concerned && tone == .fault, stateWord: true, accessibility: "\(name), \(w)")
+                       strong: concerned && tone == .fault, stateWord: true, accessibility: "\(name), \(spoken)")
         }
         let missing = ctx.c.driveAuthModel == .missing
         rows.append(word("drive_auth", "Google Drive", "drive_auth",

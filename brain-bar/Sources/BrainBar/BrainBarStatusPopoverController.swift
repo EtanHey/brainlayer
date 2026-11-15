@@ -87,7 +87,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     /// L6: the new design, behind `BrainBarDesign`. Built on first use, so the classic path never creates it.
     private var shownDesign: BrainBarDesign = .classic
     private var newDesignCancellables: Set<AnyCancellable> = []
+    private var hasNewDesignStore = false
     private lazy var newDesignStore: NDStore = {
+        hasNewDesignStore = true
         let store = dashboardPanelController?.newDesignStore ?? NDStore.shared(for: runtime, workspace: workspace)
         store.$model.receive(on: RunLoop.main).sink { [weak self] _ in
             guard let self, self.design == .new else { return }
@@ -122,19 +124,23 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     /// The brain in the new design's state: the count beside it, and dimmed before the first reading.
     private func renderNewIcon() {
-        guard !isStopped, !isMenuTracking, let button = statusItemForTesting.button else { return }
+        guard !isStopped else { return }
+        // F04: the store samples only while a surface shows the new design.
+        newDesignStore.setIconActive(true)
+        shownDesign = .new
+        guard !isMenuTracking, let button = statusItemForTesting.button else { return }
         let model = newDesignStore.model
         button.image = NDIcon.image(for: model)
         button.alphaValue = NDIcon.noReadingYet(model) ? 0.45 : 1
         button.setAccessibilityLabel("BrainBar — " + model.headline)
         button.toolTip = model.headline
-        shownDesign = .new
     }
 
     /// Back to classic: forget what the new design drew, so the classic path renders as it always has.
     private func leaveNewDesignIfNeeded() {
         guard shownDesign == .new else { return }
         shownDesign = .classic
+        if hasNewDesignStore { newDesignStore.setIconActive(false) }
         lastBrainPresentation = nil
         lastRenderedIcon = nil
         statusItemForTesting.button?.alphaValue = 1
@@ -295,6 +301,10 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         runtimeCancellables.removeAll()
         collectorCancellables.removeAll()
         statusModelCancellables.removeAll()
+#if BRAINBAR_UI
+        newDesignCancellables.removeAll()
+        if hasNewDesignStore { newDesignStore.setIconActive(false) }
+#endif
         statusPublisher.flush()
         badgeReadGeneration = UUID()
         appearanceObservation?.invalidate()

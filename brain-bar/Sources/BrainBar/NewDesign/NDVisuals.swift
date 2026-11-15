@@ -327,7 +327,9 @@ struct NDSavesBar: View {
 /// next run; a band to "now" for an always-on job; chevrons past either end.
 struct NDRail: View {
     struct Event: Equatable {
-        enum Kind: Equatable { case ok, fail, next }
+        /// ok: a finished, verified run. fail: a failed attempt. next: the next run. unknown: a run whose outcome is not
+        /// recorded (or still running): a dashed ring, never a success dot (F02).
+        enum Kind: Equatable { case ok, fail, next, unknown }
         var hours: Double
         var kind: Kind
     }
@@ -395,6 +397,10 @@ struct NDRail: View {
                 ctx.fill(Path(ellipseIn: CGRect(x: cx - 3.5, y: mid - 3.5, width: 7, height: 7)), with: .color(palette.ink))
             case .fail:
                 ctx.fill(Path(ellipseIn: CGRect(x: cx - 3.5, y: mid - 3.5, width: 7, height: 7)), with: .color(palette.fault))
+            case .unknown:
+                let r = CGRect(x: cx - 3.5, y: mid - 3.5, width: 7, height: 7)
+                ctx.fill(Path(ellipseIn: r), with: .color(palette.plane))
+                ctx.stroke(Path(ellipseIn: r), with: .color(palette.ink2), style: StrokeStyle(lineWidth: 1.5, dash: [2.2, 2.2]))
             }
         }
     }

@@ -114,7 +114,12 @@ struct NDJobInput: Equatable, Sendable, Identifiable {
     var lastRun: Date?
     var nextRun: Date?
     var loaded: Bool?
+    /// What the last run recorded (F02): a success dot needs `.ok`.
+    var lastOutcome: NDRunOutcome = .unknown
 }
+
+/// A job's last run as its records show it.
+enum NDRunOutcome: Equatable, Sendable { case ok, failed, running, unknown }
 
 /// One finished run of a job, or none on record, or its log could not be read.
 enum NDRun: Equatable, Sendable {

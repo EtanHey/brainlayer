@@ -149,13 +149,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func launchDesignFixture(_ fixture: BrainBarDesignFixture.Name) {
         NSLog("[BrainBar] Design capture fixture: %@ (no services started)", fixture.rawValue)
         NSApp.setActivationPolicy(.accessory)
-        let workspace = BrainBarRecordingWorkspace()
-        let dashboardPanel = BrainBarDashboardPanelController(
-            workspace: workspace, runtime: runtime, activationPolicy: windowActivationPolicy
-        )
+        let (dashboardPanel, status) = BrainBarDesignFixture.makeCaptureSurfaces(
+            runtime: runtime, activationPolicy: windowActivationPolicy, statusBar: SystemBrainBarStatusItemHost())
         self.dashboardPanel = dashboardPanel
-        statusPopoverController = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
-            dashboardPanelController: dashboardPanel, statusBar: SystemBrainBarStatusItemHost())
+        statusPopoverController = status
         dashboardPanel.showPage(fixture.page)
     }
 #endif

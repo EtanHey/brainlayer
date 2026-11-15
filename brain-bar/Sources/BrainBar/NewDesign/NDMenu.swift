@@ -240,9 +240,10 @@ struct NDActionButton: View {
     }
 }
 
+/// Motion 9: a press scales to 0.97 over 100 ms and releases over 160 ms. The spec keeps it under Reduce Motion (§ 8, row
+/// 9: it is feedback at the pointer, not travel), so the style does not read the setting.
 struct NDFilledButtonStyle: ButtonStyle {
     var large = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

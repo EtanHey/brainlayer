@@ -76,6 +76,10 @@ enum NDBackupHistoryReader {
             guard row["backup_log_provenance"] as? String == "real" else { continue }
             guard let at = BackupLogReader.isoDate(row["attempted_at"]) else { skipped += 1; continue }
             guard now.timeIntervalSince(at) <= windowS else { continue }
+            // N01: a real row that carries none of the lanes' results is damaged, not an empty night.
+            guard row["local_verified"] is Bool || row["uploaded"] is Bool || row["local_integrity"] is String else {
+                skipped += 1; continue
+            }
             let key = (row["backup_invocation_id"] as? String) ?? "line-\(index)"
             if byInvocation[key] == nil { order.append(key) }
             byInvocation[key] = (at, row)
@@ -106,6 +110,7 @@ enum NDBackupHistoryReader {
             guard let at = BackupLogReader.isoDate(row["attempted_at"]) else { skipped += 1; continue }
             guard now.timeIntervalSince(at) <= windowS else { continue }
             if row["status"] as? String == "pending" { continue }
+            guard row["uploaded"] is Bool || row["verified"] is Bool else { skipped += 1; continue }  // N01
             attempts.append(.init(at: at, ok: row["uploaded"] as? Bool == true && row["verified"] as? Bool == true))
         }
         return (skipped == 0 ? attempts : nil, skipped)

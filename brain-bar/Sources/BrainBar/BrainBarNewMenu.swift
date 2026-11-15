@@ -11,15 +11,18 @@ enum BrainBarNewMenuPreference {
 
 /// The report is limited to presentation words and health-check diagnostics, never source contents.
 enum BrainBarMenuReport {
+    /// `extraLines`: warnings a surface shows beyond the presentation (the new design's runtime warnings); the classic
+    /// menu passes none, so its report is unchanged.
     static func text(presentation: BrainBarMenuPresentation, verdict: BrainBarHealthVerdict?,
-                     version: String, now: Date) -> String {
+                     version: String, now: Date, extraLines: [String] = []) -> String {
         let timestamp = ISO8601DateFormatter().string(from: now)
         let words: [String] = presentation.rows.filter { $0.kind != .separator }.flatMap { row -> [String] in
             row.strings + (row.action.map { [$0.label] } ?? [])
         }
         let checks: [String] = verdict?.checks.map { "\($0.name): \($0.state.rawValue) — \($0.note)" } ?? ["Unavailable"]
         let report = (["BrainBar report", "Version: \(version)", "Time: \(timestamp)", "", "Menu:"]
-                + words + ["", "Checks:"] + checks).joined(separator: "\n") + "\n"
+                + words + (extraLines.isEmpty ? [] : ["", "Warnings:"] + extraLines) + ["", "Checks:"] + checks)
+            .joined(separator: "\n") + "\n"
         let scrubbed = SecretScrubber.scrub(report).text
             .replacingOccurrences(of: #"/(Users|home)/[^/\s]+"#, with: "/$1/[user]", options: .regularExpression)
             .replacingOccurrences(of: #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#, with: "[email]", options: .regularExpression)

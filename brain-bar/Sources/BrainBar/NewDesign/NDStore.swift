@@ -21,33 +21,99 @@ import SwiftUI
     private var lastWaveFetch: Date?
     private var lastHistoryRead: Date?
     private var waveGeneration = 0
+    private var historyGeneration = 0
+    private var waveTask: Task<Void, Never>?
+    private var historyTask: Task<Void, Never>?
     private var backupPaths: BrainBarBackupSources.Paths?
-    /// The report the dropdown and the needs band copy: words and check diagnostics only (`BrainBarMenuReport`).
+    /// The report the dropdown and the needs band copy: the shown words (runtime warnings included) and check
+    /// diagnostics only (`BrainBarMenuReport`).
     private(set) var report = ""
     var onOpenWindow: ((NDPage) -> Void)?
     var onOpenSettings: (() -> Void)?
     var pasteboard: () -> NSPasteboard = { .general }
-    /// Disconnecting Google Drive. Nothing in BrainLayer can do it today (no CLI command; deleting the token is a
-    /// credentials door), so this stays nil and no Disconnect is drawn (L5).
-    var disconnectDrive: (() -> Void)? = nil
+    /// Where the new design's own preferences (the Design choice in its Settings) are read and written. A capture
+    /// fixture gives it a separate suite, so a capture never writes the installed app's preferences (F06).
+    var preferences: UserDefaults = .standard
+    /// L2's read, injectable so tests never touch the real logs.
+    var readHistory: @Sendable (BrainBarBackupSources.Paths?, String, Date) -> (NDBackupHistory, BrainBarBackupSources.Paths) = { known, databasePath, now in
+        let paths = known ?? .live(databasePath: databasePath)
+        return (NDBackupHistoryReader.read(databaseLog: paths.databaseLog, conversationLog: paths.archiveLog, now: now), paths)
+    }
     let isFixture: Bool
 
-    private static var stores: [ObjectIdentifier: NDStore] = [:]
+    // MARK: lifecycle (F04)
 
-    /// The store for this runtime (created on first use).
+    /// The status item and dropdown draw the new design: subscriptions and the dropdown's waveform run.
+    private(set) var iconActive = false
+    /// The new window is open: the hero waveform and the backup history are read too.
+    private(set) var windowActive = false
+    private var bound = false
+    /// Work that is running or subscribed now; zero when neither surface is shown (tests read it).
+    var liveWorkCount: Int {
+        cancellables.count + collectorCancellables.count + modelCancellables.count
+            + (waveTask == nil ? 0 : 1) + (historyTask == nil ? 0 : 1)
+    }
+
+    func setIconActive(_ active: Bool) {
+        guard active != iconActive else { return }
+        iconActive = active
+        updateLifecycle()
+        if active { refresh(); refreshWaves(force: true) }
+    }
+
+    func setWindowActive(_ active: Bool) {
+        guard active != windowActive else { return }
+        windowActive = active
+        if !active {
+            historyTask?.cancel(); historyTask = nil
+            historyGeneration += 1
+        }
+        updateLifecycle()
+        if active { refresh(); refreshWaves(force: true); refreshBackupHistory(force: true) }
+    }
+
+    /// Nothing runs unless a surface shows the new design: switching to Classic or closing everything stops every
+    /// subscription and cancels every task in flight.
+    private func updateLifecycle() {
+        let wanted = iconActive || windowActive
+        if wanted, !bound { bind() }
+        if !wanted {
+            cancellables.removeAll(); collectorCancellables.removeAll(); modelCancellables.removeAll()
+            bound = false
+            waveTask?.cancel(); waveTask = nil
+            historyTask?.cancel(); historyTask = nil
+            waveGeneration += 1
+            historyGeneration += 1
+        }
+    }
+
+    private final class WeakStore { weak var store: NDStore? }
+    private static var stores: [ObjectIdentifier: WeakStore] = [:]
+
+    /// The store for this runtime, shared by the status item and the window while either holds it. The registry holds
+    /// it weakly: once both let go, the store and its runtime can go.
     static func shared(for runtime: BrainBarRuntime, workspace: any BrainBarWorkspaceActing = BrainBarWorkspace()) -> NDStore {
-        if let store = stores[ObjectIdentifier(runtime)] { return store }
+        stores = stores.filter { $0.value.store != nil }
+        if let store = stores[ObjectIdentifier(runtime)]?.store, store.runtime === runtime { return store }
         let store: NDStore
 #if DEBUG
         if let fixture = BrainBarDesignFixture.requested {
             store = NDStore(fixture: BrainBarDesignFixture.inputs(fixture), page: fixture.page, runtime: runtime)
-            stores[ObjectIdentifier(runtime)] = store
-            return store
+            store.preferences = BrainBarDesignFixture.capturePreferences
+        } else {
+            store = NDStore(runtime: runtime, workspace: workspace)
         }
-#endif
+#else
         store = NDStore(runtime: runtime, workspace: workspace)
-        stores[ObjectIdentifier(runtime)] = store
+#endif
+        let box = WeakStore()
+        box.store = store
+        stores[ObjectIdentifier(runtime)] = box
         return store
+    }
+
+    static func existing(for runtime: BrainBarRuntime) -> NDStore? {
+        stores[ObjectIdentifier(runtime)]?.store.flatMap { $0.runtime === runtime ? $0 : nil }
     }
 
     init(runtime: BrainBarRuntime, workspace: any BrainBarWorkspaceActing) {
@@ -57,31 +123,53 @@ import SwiftUI
         let first = NDStore.sample(runtime: runtime, previous: nil, now: Date())
         inputs = first
         model = NDModel.make(first)
-        bind()
+        report = Self.reportText(model, verdict: first.capture.verdict, extras: first.extras, now: first.capture.now)
     }
 
     /// A store that holds one invented moment and reads nothing (headless renders, tests, capture mode).
     init(fixture: NDInputs, page: NDPage = .overview, runtime: BrainBarRuntime? = nil,
-         workspace: any BrainBarWorkspaceActing = BrainBarWorkspace()) {
+         workspace: any BrainBarWorkspaceActing = NDStore.inertWorkspace) {
         self.runtime = runtime
         self.workspace = workspace
         isFixture = true
         inputs = fixture
         model = NDModel.make(fixture)
         self.page = page
-        report = BrainBarMenuReport.text(presentation: model.presentation, verdict: fixture.capture.verdict, version: "fixture",
-                                         now: fixture.capture.now)
+        report = Self.reportText(model, verdict: fixture.capture.verdict, extras: fixture.extras, version: "fixture",
+                                 now: fixture.capture.now)
+    }
+
+    /// F03: the report says what the surfaces show, runtime warnings included, through the existing scrubber.
+    static func reportText(_ model: NDModel, verdict: BrainBarHealthVerdict?, extras: [NDExtra],
+                           version: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+                           now: Date) -> String {
+        BrainBarMenuReport.text(presentation: model.shownPresentation, verdict: verdict, version: version, now: now,
+                                extraLines: extras.map { ($0.level == .fault ? "Needs you: " : "Notice: ") + $0.text })
+    }
+
+    /// A fixture store performs no action; DEBUG gives it the recording workspace (tests forbid the real one), Release
+    /// (where no fixture runs) the real one.
+    static var inertWorkspace: any BrainBarWorkspaceActing {
+#if DEBUG
+        BrainBarRecordingWorkspace()
+#else
+        BrainBarWorkspace()
+#endif
     }
 
     func setInputsForTesting(_ inputs: NDInputs) {
         self.inputs = inputs
         model = NDModel.make(inputs)
+        report = Self.reportText(model, verdict: inputs.capture.verdict, extras: inputs.extras, now: inputs.capture.now)
     }
+
+    func setBackupPathsForTesting(_ paths: BrainBarBackupSources.Paths) { backupPaths = paths }
 
     // MARK: sampling
 
     private func bind() {
-        guard let runtime else { return }
+        guard let runtime, !isFixture else { return }
+        bound = true
         runtime.$collector.receive(on: RunLoop.main).sink { [weak self] collector in self?.bindCollector(collector) }
             .store(in: &cancellables)
         runtime.$jobsModel.receive(on: RunLoop.main).sink { [weak self] model in
@@ -108,14 +196,12 @@ import SwiftUI
 
     /// Re-sample the cached inputs (no IO).
     func refresh() {
-        guard !isFixture, let runtime else { return }
+        guard !isFixture, let runtime, iconActive || windowActive else { return }
         let next = Self.sample(runtime: runtime, previous: inputs, now: Date())
         inputs = next
         let model = NDModel.make(next)
         if model != self.model { self.model = model }
-        report = BrainBarMenuReport.text(presentation: model.presentation, verdict: next.capture.verdict,
-            version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
-            now: next.capture.now)
+        report = Self.reportText(model, verdict: next.capture.verdict, extras: next.extras, now: next.capture.now)
     }
 
     static func sample(runtime: BrainBarRuntime, previous: NDInputs?, now: Date) -> NDInputs {
@@ -193,7 +279,21 @@ import SwiftUI
             default: nil
             }
             return NDJobInput(job: job, enabled: model.configReadSucceeded ? model.config.launchdJobs[job]?.enabled : nil,
-                              continuous: o?.isContinuous ?? false, lastRun: o?.lastRunAt, nextRun: o?.nextRunAt, loaded: loaded)
+                              continuous: o?.isContinuous ?? false, lastRun: o?.lastRunAt, nextRun: o?.nextRunAt, loaded: loaded,
+                              lastOutcome: o.map(outcome) ?? .unknown)
+        }
+    }
+
+    /// F02: a run is a success only when a success is recorded: exit status 0, no failure streak, an undamaged
+    /// history. A run in progress is running; a deferral, a missing status or a damaged history is unknown.
+    static func outcome(_ o: BrainLayerLaunchdJobObservation) -> NDRunOutcome {
+        if o.pid != nil || o.loadState == .running { return o.isContinuous ? .unknown : .running }
+        if o.calendarHistoryDamaged == true { return .unknown }
+        if let failures = o.calendarConsecutiveFailures, failures > 0 { return .failed }
+        switch o.lastExitCode {
+        case 0?: return .ok
+        case BrainLayerMaintenanceExit.deferred?, nil: return .unknown
+        default: return .failed
         }
     }
 
@@ -205,20 +305,23 @@ import SwiftUI
     /// The waveforms: the dropdown's hour in 24 buckets and the hero's range in 60, read off the main thread at most every
     /// 15 s (and at once on a range switch).
     func refreshWaves(force: Bool = false) {
-        guard !isFixture, let collector = runtime?.collector else { return }
+        guard !isFixture, iconActive || windowActive, let collector = runtime?.collector else { return }
         let now = Date()
-        if !force, let last = lastWaveFetch, now.timeIntervalSince(last) < 15, inputs.heroWaves[range] != nil { return }
+        if !force, let last = lastWaveFetch, now.timeIntervalSince(last) < 15 { return }
         lastWaveFetch = now
         waveGeneration += 1
+        waveTask?.cancel()
         let generation = waveGeneration, range = range, provider = collector.bucketsProvider
-        Task { [weak self] in
+        let wantsHero = windowActive
+        waveTask = Task { [weak self] in
             async let menu = collector.fetchBuckets(windowMinutes: 60, bucketCount: 24, provider: provider)
-            async let hero = collector.fetchBuckets(windowMinutes: range.minutes, bucketCount: 60, provider: provider)
+            async let hero = wantsHero ? collector.fetchBuckets(windowMinutes: range.minutes, bucketCount: 60, provider: provider) : nil
             let (m, h) = await (menu, hero)
-            guard let self, generation == self.waveGeneration else { return }
+            guard !Task.isCancelled, let self, generation == self.waveGeneration else { return }
+            self.waveTask = nil
             var next = self.inputs
             next.menuWave = m.map { Self.wave($0, end: now) } ?? NDWave(saves: [], reads: [], readable: false)
-            next.heroWaves[range] = h.map { Self.wave($0, end: now) } ?? NDWave(saves: [], reads: [], readable: false)
+            if wantsHero { next.heroWaves[range] = h.map { Self.wave($0, end: now) } ?? NDWave(saves: [], reads: [], readable: false) }
             self.inputs = next
             self.model = NDModel.make(next)
         }
@@ -231,18 +334,21 @@ import SwiftUI
 
     /// A week of backup attempts, read off the main thread at most every 5 minutes (L2).
     func refreshBackupHistory(force: Bool = false) {
-        guard !isFixture, let runtime else { return }
+        guard !isFixture, windowActive, let runtime else { return }
         let now = Date()
         if !force, let last = lastHistoryRead, now.timeIntervalSince(last) < 300 { return }
         lastHistoryRead = now
         let databasePath = runtime.databasePath ?? BrainBarServer.defaultDBPath()
-        let known = backupPaths
-        Task { [weak self] in
-            let (history, paths) = await Task.detached(priority: .utility) { () -> (NDBackupHistory, BrainBarBackupSources.Paths) in
-                let paths = known ?? .live(databasePath: databasePath)
-                return (NDBackupHistoryReader.read(databaseLog: paths.databaseLog, conversationLog: paths.archiveLog, now: now), paths)
-            }.value
-            guard let self else { return }
+        let known = backupPaths, read = readHistory
+        historyGeneration += 1
+        let generation = historyGeneration
+        historyTask?.cancel()
+        historyTask = Task { [weak self] in
+            let reader = Task.detached(priority: .utility) { read(known, databasePath, now) }
+            let (history, paths) = await withTaskCancellationHandler { await reader.value } onCancel: { reader.cancel() }
+            // A read that finishes after the window closed (or after a newer read began) publishes nothing.
+            guard !Task.isCancelled, let self, generation == self.historyGeneration, self.windowActive else { return }
+            self.historyTask = nil
             self.backupPaths = paths
             var next = self.inputs
             next.backupHistory = history

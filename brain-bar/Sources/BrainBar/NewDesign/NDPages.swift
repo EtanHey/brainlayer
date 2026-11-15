@@ -99,10 +99,11 @@ struct NDBackupsPage: View {
             let count = attempts?.count ?? 0, failed = attempts?.filter { !$0.ok }.count ?? 0
             let spoken = attempts == nil ? "\(name): the record could not be read"
                 : "\(name): \(count) \(count == 1 ? "attempt" : "attempts") this week, \(failed) failed"
+            let newest = row.map { ", newest " + ($0.number.value == "—" ? "not known" : $0.number.text) } ?? ""
             return Lane(id: id, name: name, events: events, unknown: attempts == nil,
                         stalledFrom: stalled ? (last ?? -Self.past) : nil,
                         number: (row?.strong ?? false) ? faultNumber(row?.number) : row?.number ?? .unknown,
-                        strong: row?.strong ?? false, accessibility: spoken)
+                        strong: row?.strong ?? false, accessibility: spoken + newest)
         }
         return [
             lane("backup_local", "Copy on this Mac", lanes?.local, next: databaseNext, stalls: false),
@@ -276,7 +277,10 @@ struct NDJobsPage: View {
             var older: String? = nil
             if !j.continuous, let last = j.lastRun {
                 let h = last.timeIntervalSince(now) / 3600
-                events.append(.init(hours: h, kind: fault ? .fail : .ok))
+                // A success dot only for a recorded success (F02); a failure or a counted fault is a Fault dot; anything
+                // else (still running, deferred, no status, a damaged history) is the dashed unknown ring.
+                let kind: NDRail.Event.Kind = fault || j.lastOutcome == .failed ? .fail : j.lastOutcome == .ok ? .ok : .unknown
+                events.append(.init(hours: h, kind: kind))
                 if h < -Self.past { older = "\(NDFormat.ago(-h * 3600))" }
             }
             if !j.continuous, let next = j.nextRun, j.enabled != false { events.append(.init(hours: next.timeIntervalSince(now) / 3600, kind: .next)) }
@@ -294,7 +298,7 @@ struct NDJobsPage: View {
             let spoken = [name, j.enabled == false ? "off" : nil,
                           streak.map { "failed \($0) nights in a row" },
                           j.continuous ? (j.loaded == false ? "not running" : "always on") : nil,
-                          j.lastRun.map { "last ran \(NDFormat.age(now.timeIntervalSince($0)).spoken) ago" },
+                          j.lastRun.map { "last ran \(NDFormat.age(now.timeIntervalSince($0)).spoken) ago" + Self.outcomeWords(j.lastOutcome) },
                           j.nextRun.map { "next run in \(NDFormat.age(max(0, $0.timeIntervalSince(now))).spoken)" }]
                 .compactMap { $0 }.joined(separator: ", ")
             return Lane(job: j.job, name: name, enabled: j.enabled, band: j.continuous && j.loaded != false && j.enabled != false,
@@ -328,7 +332,6 @@ struct NDJobLaneView: View {
                     Spacer()
                     Button(BrainBarMenuPresenter.Say.copyReport.text) { store.copyReport() }.buttonStyle(NDLinkButtonStyle())
                 }
-                .padding(.trailing, NDGrid.railSwitch)
             }
         }
         .padding(.top, lane.fault ? 13 : 0)
@@ -344,6 +347,17 @@ struct NDJobLaneView: View {
                 .toggleStyle(.switch)
                 .controlSize(.mini)
                 .tint(ND.ink2)
+        }
+    }
+}
+
+extension NDJobsPage {
+    static func outcomeWords(_ o: NDRunOutcome) -> String {
+        switch o {
+        case .ok: ""
+        case .failed: ", it failed"
+        case .running: ", still running"
+        case .unknown: ", its result not known"
         }
     }
 }

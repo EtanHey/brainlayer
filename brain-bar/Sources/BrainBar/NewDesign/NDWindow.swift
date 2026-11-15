@@ -246,8 +246,8 @@ struct NDHero: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center) {
                 if let wave, wave.readable {
-                    total(wave.savesTotal, "saved by agents")
-                    total(wave.readsTotal, "read from conversations").padding(.leading, 16)
+                    total(wave.savesTotal, "saved by agents").accessibilityHidden(true)
+                    total(wave.readsTotal, "read from conversations").padding(.leading, 16).accessibilityHidden(true)
                 } else {
                     Text("—").font(.system(size: 13, weight: .semibold)).foregroundStyle(ND.ink2)
                 }
@@ -255,6 +255,7 @@ struct NDHero: View {
                 NDRangeControl(store: store)
             }
             .padding(.bottom, 8)
+            // N03: the waveform and its totals are one element with one sentence; the range control stays three buttons.
             GeometryReader { geo in
                 NDWaveform(wave: wave, size: .hero, nowTick: true)
                     .offset(x: shift)
@@ -264,6 +265,8 @@ struct NDHero: View {
                     .transition(.opacity)
             }
             .frame(height: (compact ? 48 : 104) + 10)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(NDModel.waveAccessibility(wave, minutes: store.range.minutes))
             .animation(reduceMotion ? nil : NDMotion.rangeFade, value: store.range)
             .animation(reduceMotion ? nil : NDMotion.needsBand, value: compact)
             let axis = store.range.axis
@@ -276,11 +279,11 @@ struct NDHero: View {
             }
             .font(NDType.axis).foregroundStyle(ND.ink2)
             .padding(.top, 0)
+            .accessibilityHidden(true)
         }
         .padding(EdgeInsets(top: 12, leading: 16, bottom: 10, trailing: 16))
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(ND.deck))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(NDModel.waveAccessibility(wave, minutes: store.range.minutes))
+        .accessibilityElement(children: .contain)
         .onChange(of: wave?.endsAt) { _, end in shiftIfNewBucket(end) }
     }
 
