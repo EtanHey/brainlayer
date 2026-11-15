@@ -312,8 +312,6 @@ struct NDHero: View {
     /// 104 pt calm; 80 pt with one fault; 48 pt with two or more (the needs band takes the room).
     let height: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var shift: CGFloat = 0
-    @State private var lastBucket: Int?
 
     var body: some View {
         let wave = store.inputs.heroWaves[store.range]
@@ -331,8 +329,8 @@ struct NDHero: View {
             .padding(.bottom, 8)
             // N03: the waveform and its totals are one element with one sentence; the range control stays three buttons.
             GeometryReader { geo in
+                // B1: the waveform slides itself, from its data, in the same transaction as the new bucket.
                 NDWaveform(wave: wave, size: .hero, nowTick: true)
-                    .offset(x: shift)
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
                     // Fix 9: a range switch is instant: a new identity per range, no cross-fade (two bar sets never share a frame).
@@ -358,24 +356,11 @@ struct NDHero: View {
         .padding(EdgeInsets(top: 12, leading: 16, bottom: 10, trailing: 16))
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(ND.deck))
         .accessibilityElement(children: .contain)
-        .onChange(of: wave?.endsAt) { _, end in shiftIfNewBucket(end) }
     }
 
     private func total(_ value: Int, _ label: String) -> some View {
         (Text(NDFormat.integer(value)).font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundColor(ND.ink)
             + Text(" " + label).font(.system(size: 12)).foregroundColor(ND.ink2))
-    }
-
-    /// Motion 5: when the newest bucket is a new one, the bars slide one pitch left over 240 ms (a retargetable
-    /// transition on the offset). Reduce Motion swaps them in place.
-    private func shiftIfNewBucket(_ end: Date?) {
-        guard let end else { return }
-        let width = Double(store.range.minutes * 60) / 60
-        let bucket = Int(end.timeIntervalSinceReferenceDate / width)
-        defer { lastBucket = bucket }
-        guard let lastBucket, bucket == lastBucket + 1, !reduceMotion else { return }
-        shift = 13
-        withAnimation(NDMotion.shift) { shift = 0 }
     }
 }
 

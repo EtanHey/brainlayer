@@ -86,9 +86,41 @@ struct NDWave: Equatable, Sendable {
     var readable = true
     /// When the newest bucket ends; a later end by one bucket width is a shift (motion 5).
     var endsAt: Date? = nil
+    /// The newest bucket's index on the wave's fixed bucket grid (`endsAt` / bucket width), set by `linked(after:)`.
+    var sequence: Int? = nil
+    /// Review B1: the bucket that left on the left edge when this sample is exactly one bucket later than the one it
+    /// replaced. The moving layer keeps it, sliding out under the plot's clip, so no hole opens.
+    var outgoing: Bucket? = nil
+
+    struct Bucket: Equatable, Sendable {
+        var saves: Int
+        var reads: Int
+    }
 
     var savesTotal: Int { saves.reduce(0, +) }
     var readsTotal: Int { reads.reduce(0, +) }
+    var count: Int { max(saves.count, reads.count) }
+
+    /// The bucket grid index of a wave ending at `end` with `count` buckets over `minutes`.
+    static func sequence(endsAt end: Date?, minutes: Int, count: Int) -> Int? {
+        guard let end, count > 0 else { return nil }
+        let width = Double(minutes * 60) / Double(count)
+        return Int((end.timeIntervalSinceReferenceDate / width + 1e-6).rounded(.down))
+    }
+
+    /// This sample as it follows `previous` (the one on screen): its grid index, and the bucket that slid out when it
+    /// is exactly one bucket later with the same bucket count. Any other change (first sample, a gap, a range switch,
+    /// an unreadable read) has no outgoing bucket and is drawn in place.
+    func linked(after previous: NDWave?, minutes: Int) -> NDWave {
+        var next = self
+        next.outgoing = nil
+        next.sequence = Self.sequence(endsAt: endsAt, minutes: minutes, count: count)
+        guard readable, let seq = next.sequence, let previous, previous.readable, previous.count == count,
+              (previous.sequence ?? Self.sequence(endsAt: previous.endsAt, minutes: minutes, count: count)) == seq - 1
+        else { return next }
+        next.outgoing = Bucket(saves: previous.saves.first ?? 0, reads: previous.reads.first ?? 0)
+        return next
+    }
 }
 
 struct NDAgents: Equatable, Sendable {

@@ -42,17 +42,27 @@ struct NDDashed: View {
 
 /// Saves by agents above a 1 pt line (62 % of the height), conversations read below (38 %), newest on the right; each
 /// half scaled to its own maximum (floors: 4 saves, 40 reads). A zero bucket draws nothing.
+///
+/// Review B1: two layers. The baseline (or the dashed unknown) and the now tick are static, across the whole plot. The
+/// bars are a moving strip clipped to the plot: on a one-bucket shift the data arrives with its outgoing bucket, and in
+/// that same transaction the strip stands one bucket width right (where every bar was) and slides to rest by transform
+/// over 240 ms with the strong ease-out; the outgoing bucket leaves under the clip. Reduce Motion: in place.
 struct NDWaveform: View {
     enum Size { case hero, menu }
     @Environment(\.ndPalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let wave: NDWave?
     let size: Size
     var nowTick = false
 
     var body: some View {
-        Canvas { ctx, canvas in
-            Self.draw(ctx, canvas, wave: wave, size: size, palette: palette, nowTick: nowTick)
+        let target = wave?.sequence ?? 0
+        ZStack {
+            Canvas { ctx, canvas in Self.drawStatic(ctx, canvas, wave: wave, size: size, palette: palette, nowTick: nowTick) }
+            NDWaveStrip(phase: Double(target), target: target, wave: wave, size: size, palette: palette, nowTick: nowTick)
+                .clipShape(Rectangle())
         }
+        .animation(wave?.outgoing != nil && !reduceMotion ? NDMotion.shift : nil, value: target)
         .accessibilityHidden(true)
     }
 
@@ -62,49 +72,105 @@ struct NDWaveform: View {
         return (bar, gap)
     }
 
-    /// Fix 13: a pill end only where the bar is tall enough to read as a bar; under 6 pt a hero bar keeps a 1 pt corner.
+    /// Polish 1: a hero bar's corner is min(width / 2, height / 4): a bar as tall as it is wide gets a small corner, a tall
+    /// bar keeps its pill. Compact heroes and the dropdown keep square-ended bars (1 pt and 0.5 pt corners).
     static func barRadius(height: CGFloat, width: CGFloat, pill: Bool, corner: CGFloat) -> CGFloat {
-        pill && height >= 6 ? min(width / 2, height / 2) : min(corner, height / 2)
+        pill ? min(width / 2, height / 4) : min(corner, height / 2)
     }
 
-    static func draw(_ ctx: GraphicsContext, _ canvas: CGSize, wave: NDWave?, size: Size, palette: NDPalette, nowTick: Bool) {
+    /// The plot's height and baseline centre for a canvas.
+    static func plot(_ canvas: CGSize, nowTick: Bool) -> (h: CGFloat, cy: CGFloat) {
         let h = canvas.height - (nowTick ? 10 : 0)
-        let cy = (h * 0.62).rounded() + 0.5
+        return (h, (h * 0.62).rounded() + 0.5)
+    }
+
+    /// The static layer's baseline: the same rect before, during and after a shift.
+    static func baseline(_ canvas: CGSize, nowTick: Bool) -> CGRect {
+        CGRect(x: 0, y: plot(canvas, nowTick: nowTick).cy - 0.5, width: canvas.width, height: 1)
+    }
+
+    static func drawStatic(_ ctx: GraphicsContext, _ canvas: CGSize, wave: NDWave?, size: Size, palette: NDPalette, nowTick: Bool) {
+        let (h, cy) = plot(canvas, nowTick: nowTick)
         guard let wave, wave.readable else {
             var path = Path()
             path.move(to: CGPoint(x: 0, y: cy)); path.addLine(to: CGPoint(x: canvas.width, y: cy))
             ctx.stroke(path, with: .color(palette.ink2), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
             return
         }
-        ctx.fill(Path(CGRect(x: 0, y: cy - 0.5, width: canvas.width, height: 1)), with: .color(palette.track))
-        let n = max(wave.saves.count, wave.reads.count)
-        guard n > 0 else { return }
-        let (bw, gap) = layout(width: canvas.width, count: n, size: size)
-        let up = cy - 1, down = h - cy - 1
-        let maxSaves = CGFloat(max(wave.saves.max() ?? 0, 4)), maxReads = CGFloat(max(wave.reads.max() ?? 0, 40))
-        let minBar: CGFloat = size == .hero ? 2 : 1.5
-        // Pill ends only at the full 104 pt hero (comp 04); shorter heroes and the dropdown draw square-ended bars
-        // (1 pt and 0.5 pt corners), so short bars never turn into beads that read as dots or as the dashed unknown.
-        let pill = size == .hero && h >= 60
-        let corner: CGFloat = size == .hero ? 1 : 0.5
-        for index in 0..<n {
-            let x = CGFloat(index) * (bw + gap)
-            let s = index < wave.saves.count ? wave.saves[index] : 0
-            let r = index < wave.reads.count ? wave.reads[index] : 0
-            if s > 0 {
-                let bh = max(minBar, CGFloat(s) / maxSaves * up)
-                let radius = Self.barRadius(height: bh, width: bw, pill: pill, corner: corner)
-                ctx.fill(Path(roundedRect: CGRect(x: x, y: cy - 0.5 - bh, width: bw, height: bh), cornerRadius: radius), with: .color(palette.saves))
-            }
-            if r > 0 {
-                let bh = max(minBar, CGFloat(r) / maxReads * down)
-                let radius = Self.barRadius(height: bh, width: bw, pill: pill, corner: corner)
-                ctx.fill(Path(roundedRect: CGRect(x: x, y: cy + 0.5, width: bw, height: bh), cornerRadius: radius), with: .color(palette.reads))
-            }
-        }
-        if nowTick {
+        ctx.fill(Path(baseline(canvas, nowTick: nowTick)), with: .color(palette.track))
+        let n = wave.count
+        if nowTick, n > 0 {
+            let (bw, gap) = layout(width: canvas.width, count: n, size: size)
             let x = CGFloat(n - 1) * (bw + gap) + bw / 2 - 0.5
             ctx.fill(Path(CGRect(x: x, y: h + 3, width: 1, height: 6)), with: .color(palette.ink2))
+        }
+    }
+
+    /// The moving strip's offset: one bucket width (the pitch) at the start of a shift, 0 at rest, never outside that.
+    static func offset(target: Int, phase: Double, pitch: CGFloat) -> CGFloat {
+        min(max(CGFloat(Double(target) - phase) * pitch, 0), pitch)
+    }
+
+    /// The strip's buckets and their x at an offset: n at rest, n + 1 while the outgoing bucket is still sliding out.
+    static func strip(_ wave: NDWave, width: CGFloat, size: Size, offset: CGFloat) -> [(x: CGFloat, bucket: NDWave.Bucket)] {
+        let n = wave.count
+        let (bw, gap) = layout(width: width, count: n, size: size)
+        let pitch = bw + gap
+        var out: [(x: CGFloat, bucket: NDWave.Bucket)] = []
+        if offset > 0, let outgoing = wave.outgoing { out.append((offset - pitch, outgoing)) }
+        for i in 0..<n {
+            let bucket = NDWave.Bucket(saves: i < wave.saves.count ? wave.saves[i] : 0, reads: i < wave.reads.count ? wave.reads[i] : 0)
+            out.append((CGFloat(i) * pitch + offset, bucket))
+        }
+        return out
+    }
+}
+
+/// The bars, animatable over the shift's phase (B1). `target` is the wave's grid index; `phase` runs from the last one
+/// to it, so the offset starts at exactly one pitch in the transaction that brings the new bucket.
+struct NDWaveStrip: View, Animatable {
+    var phase: Double
+    let target: Int
+    let wave: NDWave?
+    let size: NDWaveform.Size
+    let palette: NDPalette
+    let nowTick: Bool
+
+    nonisolated var animatableData: Double {
+        get { phase }
+        set { phase = newValue }
+    }
+
+    var body: some View {
+        Canvas { ctx, canvas in draw(ctx, canvas) }
+    }
+
+    private func draw(_ ctx: GraphicsContext, _ canvas: CGSize) {
+        guard let wave, wave.readable, wave.count > 0 else { return }
+        let (h, cy) = NDWaveform.plot(canvas, nowTick: nowTick)
+        let (bw, gap) = NDWaveform.layout(width: canvas.width, count: wave.count, size: size)
+        let offset = NDWaveform.offset(target: target, phase: phase, pitch: bw + gap)
+        let up = cy - 1, down = h - cy - 1
+        // The scale includes the outgoing bucket, so no bar changes height when it slides out.
+        let maxSaves = CGFloat(max(wave.saves.max() ?? 0, wave.outgoing?.saves ?? 0, 4))
+        let maxReads = CGFloat(max(wave.reads.max() ?? 0, wave.outgoing?.reads ?? 0, 40))
+        let minBar: CGFloat = size == .hero ? 2 : 1.5
+        // Pill ends only at the full 104 pt hero (comp 04); shorter heroes and the dropdown draw square-ended bars.
+        let pill = size == .hero && h >= 60
+        let corner: CGFloat = size == .hero ? 1 : 0.5
+        for (x, b) in NDWaveform.strip(wave, width: canvas.width, size: size, offset: offset) {
+            if b.saves > 0 {
+                let bh = max(minBar, CGFloat(b.saves) / maxSaves * up)
+                let radius = NDWaveform.barRadius(height: bh, width: bw, pill: pill, corner: corner)
+                ctx.fill(Path(roundedRect: CGRect(x: x, y: cy - 0.5 - bh, width: bw, height: bh), cornerRadius: radius),
+                         with: .color(palette.saves))
+            }
+            if b.reads > 0 {
+                let bh = max(minBar, CGFloat(b.reads) / maxReads * down)
+                let radius = NDWaveform.barRadius(height: bh, width: bw, pill: pill, corner: corner)
+                ctx.fill(Path(roundedRect: CGRect(x: x, y: cy + 0.5, width: bw, height: bh), cornerRadius: radius),
+                         with: .color(palette.reads))
+            }
         }
     }
 }

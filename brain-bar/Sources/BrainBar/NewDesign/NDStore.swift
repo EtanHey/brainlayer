@@ -337,8 +337,14 @@ import SwiftUI
     }
 #endif
 
-    /// The one way a wave sample reaches the surfaces, real or invented.
-    private func acceptWaves(_ next: NDInputs) {
+    /// The one way a wave sample reaches the surfaces, real or invented. Each wave is linked to the one on screen, so a
+    /// one-bucket shift carries its outgoing bucket and starts its slide in the same transaction as the data (B1).
+    private func acceptWaves(_ sample: NDInputs) {
+        var next = sample
+        next.menuWave = sample.menuWave?.linked(after: inputs.menuWave, minutes: 60)
+        for range in NDRange.allCases {
+            next.heroWaves[range] = sample.heroWaves[range]?.linked(after: inputs.heroWaves[range], minutes: range.minutes)
+        }
         inputs = next
         model = NDModel.make(next)
     }
