@@ -204,7 +204,7 @@ struct NDMenuFaultRow: View {
                             .opacity(waiting ? 0 : 1)
                         HStack(spacing: 7) {
                             NDMarkView(mark: .running)
-                            Text("Waiting for you to approve in your browser…").font(NDType.menuFact)
+                            Text(BrainBarMenuPresenter.SurfaceSay.waitingForBrowser).font(NDType.menuFact)
                                 .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                         }
                         .opacity(waiting ? 1 : 0)
@@ -212,7 +212,7 @@ struct NDMenuFaultRow: View {
                     .animation(reduceMotion ? nil : NDMotion.waitingFade, value: waiting)
                     .padding(.top, 8)
                     if action.kind == .copyReport, store.inputs.copyReportFailed {
-                        Text("Couldn’t copy the report. Try again.").font(NDType.menuFact)
+                        Text(BrainBarMenuPresenter.SurfaceSay.copyFailed).font(NDType.menuFact)
                             .foregroundStyle(Color(nsColor: .secondaryLabelColor)).padding(.top, 4)
                     }
                 }

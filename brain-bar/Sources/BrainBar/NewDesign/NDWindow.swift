@@ -222,7 +222,7 @@ struct NDNeedsBand: View {
                         .lineSpacing(2).fixedSize(horizontal: false, vertical: true)
                 }
                 if fault.action?.kind == .copyReport, store.inputs.copyReportFailed {
-                    Text("Couldn’t copy the report. Try again.").font(NDType.fact).foregroundStyle(ND.ink2)
+                    Text(BrainBarMenuPresenter.SurfaceSay.copyFailed).font(NDType.fact).foregroundStyle(ND.ink2)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -231,7 +231,7 @@ struct NDNeedsBand: View {
                     NDActionButton(label: action.label, large: true) { store.perform(action.kind) }.opacity(waiting ? 0 : 1)
                     HStack(spacing: 7) {
                         NDMarkView(mark: .running)
-                        Text("Waiting for you to approve in your browser…").font(NDType.fact).foregroundStyle(ND.ink2)
+                        Text(BrainBarMenuPresenter.SurfaceSay.waitingForBrowser).font(NDType.fact).foregroundStyle(ND.ink2)
                     }
                     .opacity(waiting ? 1 : 0)
                 }

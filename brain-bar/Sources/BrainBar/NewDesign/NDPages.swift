@@ -132,7 +132,7 @@ struct NDBackupsPage: View {
         default: "—"
         }
         let fact = fault ? (missing ? BrainBarMenuPresenter.Say.s13DetailMissing.text : BrainBarMenuPresenter.Say.s13Detail.text)
-            : state == "Connected" ? "Database and conversation backups upload here." : ""
+            : state == "Connected" ? BrainBarMenuPresenter.SurfaceSay.driveUploadsHere : ""
         NDGroupLabel(title: "Google Drive", fault: fault)
         NDFactRow(name: state, nameTone: fault ? .fault : .fine, fact: fact) {
             if fault {
@@ -141,7 +141,7 @@ struct NDBackupsPage: View {
                     NDActionButton(label: label, large: true) { store.reconnectDrive() }.opacity(store.inputs.driveReconnecting ? 0 : 1)
                     HStack(spacing: 7) {
                         NDMarkView(mark: .running)
-                        Text("Waiting for you to approve in your browser…").font(NDType.fact).foregroundStyle(ND.ink2)
+                        Text(BrainBarMenuPresenter.SurfaceSay.waitingForBrowser).font(NDType.fact).foregroundStyle(ND.ink2)
                     }
                     .opacity(store.inputs.driveReconnecting ? 1 : 0)
                 }

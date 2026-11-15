@@ -632,7 +632,7 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
     }
 }
 
-/// F05: Classic against an oracle recorded from origin/main's own code (an export of `origin/main` a0659721 with a
+/// F05: Classic against an oracle recorded from origin/main's own code (an export of `origin/main` 84b0e7a5 with a
 /// recorder test, `Fixtures/classic-main-golden.json`), never against the code under test: the menu's titles, actions,
 /// enabled states and keys, the icon's size, template flag and pixels, and the window's root type and minimum size.
 @MainActor final class BrainBarClassicGoldenTests: XCTestCase {
@@ -682,6 +682,7 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         NSApplication.shared.setActivationPolicy(.prohibited)
         let golden = try Self.golden()
         XCTAssertEqual(golden["source"] as? String, "origin/main")
+        XCTAssertEqual(golden["commit"] as? String, "84b0e7a58c034e46cb9080071557e0574db31f3c", "re-record when main's classic path moves")
         for expected in try XCTUnwrap(golden["cases"] as? [[String: Any]]) {
             let newMenu = try XCTUnwrap(expected["newMenu"] as? String)
             for design in [nil, "classic"] as [String?] {
@@ -731,5 +732,32 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         XCTAssertEqual(String(describing: type(of: panel.contentViewControllerForTesting)), golden["windowRootType"] as? String)
         XCTAssertEqual(panel.windowForTesting.minSize.width, golden["windowMinWidth"] as? CGFloat)
         XCTAssertEqual(panel.windowForTesting.minSize.height, golden["windowMinHeight"] as? CGFloat)
+    }
+}
+
+/// #1810's rule, applied to the new design: no sentence is written in NewDesign/. Its sentences live with the wording
+/// registry (`BrainBarMenuPresenter.SurfaceSay`, the presenter's `Say`); what stays here are the copy deck's labels and
+/// state words, check names and VoiceOver fragments. A literal is a sentence when it starts with a capital (or an
+/// interpolation), has a space, and ends a sentence ("." or "…") or holds one (". " between words). Comments are skipped, as in `testThePresenterWritesNoWordsOutsideTheRegistry`.
+final class BrainBarNewDesignWordsTests: XCTestCase {
+    func testTheNewDesignWritesNoSentencesOutsideTheRegistry() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/BrainBar/NewDesign")
+        let files = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".swift") }
+        XCTAssertGreaterThanOrEqual(files.count, 12)
+        let literal = try NSRegularExpression(pattern: #""((?:[^"\\\n]|\\.)*)""#)
+        var found: [String] = []
+        for file in files {
+            let code = try String(contentsOf: dir.appendingPathComponent(file), encoding: .utf8).components(separatedBy: "\n")
+                .map { $0.components(separatedBy: "//")[0] }.joined(separator: "\n")
+            for match in literal.matches(in: code, range: NSRange(code.startIndex..., in: code)) {
+                let s = String(code[Range(match.range(at: 1), in: code)!])
+                let words = s.range(of: #"^[A-Z\\(]"#, options: .regularExpression) != nil && s.contains(" ")
+                let sentence = words && (s.range(of: #"[a-z)][.…]$"#, options: .regularExpression) != nil
+                    || s.range(of: #"[a-z]\. [A-Z]"#, options: .regularExpression) != nil)
+                if sentence { found.append("\(file): \(s)") }
+            }
+        }
+        XCTAssertEqual(found, [])
     }
 }

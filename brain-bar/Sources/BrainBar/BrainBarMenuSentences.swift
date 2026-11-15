@@ -423,3 +423,24 @@ extension BrainBarMenuPresenter {
         }
     }
 }
+
+// The new design's surface sentences live with the wording registry, outside the menu sentence inventory (its own
+// labels and state words are the spec's copy deck). `BrainBarNewDesignWordsTests` keeps sentences out of NewDesign/.
+extension BrainBarMenuPresenter {
+    enum SurfaceSay {
+        /// R3: a reconnect in progress.
+        static let waitingForBrowser = "Waiting for you to approve in your browser…"
+        /// R12: a failed copy leaves the button as it was and says so under it.
+        static let copyFailed = "Couldn’t copy the report. Try again."
+        /// Backups page, Google Drive connected (comp 09).
+        static let driveUploadsHere = "Database and conversation backups upload here."
+        /// Design pre-pass 5b: why an area with known values still carries the unknown ring.
+        static let unconfirmed = "not confirmed by the last check"
+
+        /// V1's VoiceOver sentence for the waveform.
+        static func wave(span minutes: Int, saves: Int, reads: Int) -> String {
+            let span = minutes == 60 ? "Last hour" : minutes == 180 ? "Last 3 hours" : "Last 24 hours"
+            return "\(span): \(saves) saved by agents, \(reads) read from conversations."
+        }
+    }
+}

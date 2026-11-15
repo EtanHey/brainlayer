@@ -102,7 +102,7 @@ struct NDSettingsView: View {
             if store.inputs.driveReconnecting {
                 HStack(spacing: 7) {
                     NDMarkView(mark: .running)
-                    Text("Waiting for you to approve in your browser…").font(NDType.fact).foregroundStyle(ND.ink2)
+                    Text(BrainBarMenuPresenter.SurfaceSay.waitingForBrowser).font(NDType.fact).foregroundStyle(ND.ink2)
                 }
             } else {
                 Button(action.kind == .connectDrive ? "Connect" : "Reconnect") { store.reconnectDrive() }

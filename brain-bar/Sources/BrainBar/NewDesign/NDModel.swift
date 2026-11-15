@@ -138,7 +138,7 @@ struct NDModel: Equatable, Sendable {
         var action: P.Action?
     }
 
-    static let unconfirmed = "not confirmed by the last check"
+    static let unconfirmed = BrainBarMenuPresenter.SurfaceSay.unconfirmed
 }
 
 // MARK: - Derivation
@@ -569,8 +569,7 @@ extension NDModel {
 
     static func waveAccessibility(_ wave: NDWave?, minutes: Int) -> String {
         guard let wave, wave.readable else { return "Remembering, not known" }
-        let span = minutes == 60 ? "Last hour" : minutes == 180 ? "Last 3 hours" : "Last 24 hours"
-        return "\(span): \(wave.savesTotal) saved by agents, \(wave.readsTotal) read from conversations."
+        return BrainBarMenuPresenter.SurfaceSay.wave(span: minutes, saves: wave.savesTotal, reads: wave.readsTotal)
     }
 }
 
