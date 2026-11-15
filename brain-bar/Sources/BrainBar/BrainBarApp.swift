@@ -42,6 +42,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+#if DEBUG && BRAINBAR_UI
+        // Capture mode (stage 2): the real status item, dropdown and window, driven by one invented state. It starts no
+        // server, sampler, watcher, hotkey or job, reads no file and writes none, and skips the one-instance check so it
+        // can be captured beside an installed BrainBar.
+        if let fixture = BrainBarDesignFixture.requested {
+            launchDesignFixture(fixture)
+            return
+        }
+#endif
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
@@ -135,6 +144,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dashboardPanel?.prepareForClose()
         return .terminateNow
     }
+
+#if DEBUG && BRAINBAR_UI
+    private func launchDesignFixture(_ fixture: BrainBarDesignFixture.Name) {
+        NSLog("[BrainBar] Design capture fixture: %@ (no services started)", fixture.rawValue)
+        NSApp.setActivationPolicy(.accessory)
+        let workspace = BrainBarRecordingWorkspace()
+        let dashboardPanel = BrainBarDashboardPanelController(
+            workspace: workspace, runtime: runtime, activationPolicy: windowActivationPolicy
+        )
+        self.dashboardPanel = dashboardPanel
+        statusPopoverController = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
+            dashboardPanelController: dashboardPanel, statusBar: SystemBrainBarStatusItemHost())
+        dashboardPanel.showPage(fixture.page)
+    }
+#endif
 
     func applicationWillTerminate(_ notification: Notification) {
         statusPopoverController?.stop()
