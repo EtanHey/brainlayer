@@ -2366,6 +2366,16 @@
         "target": "import subprocess"
       }
     },
+    "5f96a4fd2dbe22379ea86effc6832216866a27ae2690c1b6458cf60ee68ecd3c": {
+      "non_cloud_purpose": "Local launchd and vnode inspection timeout classification only; references the subprocess.TimeoutExpired exception class without invoking a command, network transport, or cloud model.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.inspect_processes",
+        "path": "src/brainlayer/brainbar_auto_activation.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "60300f756e30ea5cb7b4db67806afb6ffb534797de3a4bff89e23635d13bef3b": {
       "non_cloud_purpose": "Local AF_UNIX peer UID query via libc getpeereid or SO_PEERCRED; no network/cloud endpoint.",
       "site": {
