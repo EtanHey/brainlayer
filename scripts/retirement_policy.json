@@ -2666,16 +2666,6 @@
         "target": "subprocess.CompletedProcess"
       }
     },
-    "6af97d75a3bf8fef459b5629fcda0276fc1a4e0482f29747a743de9640882828": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/job_alerts.py <module>._notify",
-      "site": {
-        "call_sha256": "114ad7e2890a9936fc01b38f25a9b8c7724c0aa42dd40c389052c067f0118455",
-        "kind": "child_process",
-        "owner": "<module>._notify",
-        "path": "src/brainlayer/job_alerts.py",
-        "target": "subprocess.run"
-      }
-    },
     "6b1c576a9f79e4d094aae5bdc4a6c7d313149a6ff38e62cc013f477dd140bdcc": {
       "non_cloud_purpose": "Local scheduled maintenance custody and owner-only status; backup keeps its own timeout supervisor in the calendar process group with inherited writer lease. No cloud/model sender.",
       "site": {
