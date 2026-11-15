@@ -151,7 +151,7 @@ final class BrainBarCompactMenuTests: XCTestCase {
             databasePath: directory.appendingPathComponent("fixture.db").path)
         let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
-            dashboardPanelController: panel, statusBar: TestStatusItemHost())
+            dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { controller.stop() }
         var badge = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
         badge.healthVerdict = .init(dot: .amber, checks: Self.m1Checks, notes: Self.m1Notices.enumerated().map {

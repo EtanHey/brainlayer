@@ -177,7 +177,7 @@ final class BrainBarOneStatusTests: XCTestCase {
         let workspace = BrainBarRecordingWorkspace()
         let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
             dashboardPanelController: BrainBarDashboardPanelController(workspace: workspace, runtime: runtime),
-            statusBar: TestStatusItemHost())
+            statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
 
         // Exercise the production renderer without starting collector refreshes or file readers.

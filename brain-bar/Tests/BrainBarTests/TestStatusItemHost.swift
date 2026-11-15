@@ -26,3 +26,20 @@ final class TestStatusItemHost: BrainBarStatusItemHosting {
         removedItems.append(item)
     }
 }
+
+/// Legacy-menu fixtures own a stored opt-out, removed when the controller releases it.
+private final class BrainBarLegacyMenuDefaults: UserDefaults, @unchecked Sendable {
+    private let domainName: String
+
+    init(domainName: String) {
+        self.domainName = domainName
+        super.init(suiteName: domainName)!
+        set(false, forKey: BrainBarNewMenuPreference.key)
+    }
+
+    deinit { removePersistentDomain(forName: domainName) }
+}
+
+func brainBarLegacyMenuDefaults() -> UserDefaults {
+    BrainBarLegacyMenuDefaults(domainName: "BrainBarLegacyMenuTests." + UUID().uuidString)
+}
