@@ -110,7 +110,10 @@ struct NDSegmentedPages: NSViewRepresentable {
                 control.setImage(nil, forSegment: index)
                 control.setLabel(page.title, forSegment: index)
             }
-            control.setWidth(0, forSegment: index)
+            // 14 pt each side of the label, as the comps draw the segments.
+            let label = count > 0 ? Self.labelImage(page.title, count: count).size.width
+                : ceil(NSAttributedString(string: page.title, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium)]).size().width)
+            control.setWidth(label + 28, forSegment: index)
         }
         control.selectedSegment = NDPage.allCases.firstIndex(of: store.page) ?? 0
     }

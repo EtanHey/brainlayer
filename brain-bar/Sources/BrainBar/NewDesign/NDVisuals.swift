@@ -105,14 +105,34 @@ struct NDWaveform: View {
 /// A notch on a track that ends at the limit. The window draws the limit as the area's joined line; the dropdown, where
 /// there is no panel, draws a 1 × 7 pt end tick.
 struct NDGaugeView: View {
-    @Environment(\.ndPalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let visual: NDModel.Visual
     var endTick = false
 
+    /// Motion 6: when the value changes, the notch glides there (240 ms, strong ease-out); Reduce Motion moves it at once.
     var body: some View {
-        Canvas { ctx, size in Self.draw(ctx, size, visual: visual, palette: palette, endTick: endTick) }
+        NDGaugeShape(visual: visual, endTick: endTick)
+            .animation(reduceMotion ? nil : NDMotion.shift, value: visual)
             .frame(height: 12)
             .accessibilityHidden(true)
+    }
+
+    static func tone(_ t: NDModel.Tone, _ p: NDPalette) -> Color { NDGaugeShape.tone(t, p) }
+}
+
+/// The gauge as drawn, animatable over its fraction.
+struct NDGaugeShape: View, Animatable {
+    @Environment(\.ndPalette) private var palette
+    var visual: NDModel.Visual
+    var endTick = false
+
+    nonisolated var animatableData: Double {
+        get { if case let .gauge(g) = visual { return g.fraction }; return 0 }
+        set { if case var .gauge(g) = visual { g.fraction = newValue; visual = .gauge(g) } }
+    }
+
+    var body: some View {
+        Canvas { ctx, size in Self.draw(ctx, size, visual: visual, palette: palette, endTick: endTick) }
     }
 
     static func tone(_ t: NDModel.Tone, _ p: NDPalette) -> Color {
@@ -161,8 +181,20 @@ struct NDGaugeView: View {
 // MARK: V3 fill
 
 struct NDFillBar: View {
-    @Environment(\.ndPalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let share: Double?
+    var body: some View {
+        NDFillShape(share: share).animation(reduceMotion ? nil : NDMotion.shift, value: share)
+    }
+}
+
+struct NDFillShape: View, Animatable {
+    @Environment(\.ndPalette) private var palette
+    var share: Double?
+    nonisolated var animatableData: Double {
+        get { share ?? 0 }
+        set { if share != nil { share = newValue } }
+    }
     var body: some View {
         Canvas { ctx, size in
             guard let share else {
