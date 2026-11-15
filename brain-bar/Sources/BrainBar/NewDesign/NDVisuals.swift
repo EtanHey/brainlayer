@@ -410,8 +410,10 @@ struct NDSavesBar: View {
 struct NDRail: View {
     struct Event: Equatable {
         /// ok: a finished, verified run. fail: a failed attempt. next: the next run. unknown: a run whose outcome is not
-        /// recorded (or still running): a dashed ring, never a success dot (F02).
-        enum Kind: Equatable { case ok, fail, next, unknown }
+        /// recorded (or still running): a dashed ring, never a success dot (F02). unconfirmed: an attempt from the app's own
+        /// log on a row whose newest copy is unknown this moment (review N1): an open 1 pt ring in Ink 3 (Ink 2 at 55 %),
+        /// smaller and fainter than the next-run ring (Ink 2, 1.5 pt, filled with the plane), and always left of now.
+        enum Kind: Equatable { case ok, fail, next, unknown, unconfirmed }
         var hours: Double
         var kind: Kind
     }
@@ -425,6 +427,9 @@ struct NDRail: View {
     var unknown = false
     /// Drive disconnected: a Fault dashed line from the last dot (hours, ≤ 0) to now; no next ring.
     var stalledFrom: Double? = nil
+    /// Review N1: the row's newest copy is unknown, so the line from its first dot (hours, <= 0) to now is the unknown
+    /// stroke (Ink 2, 1.5 pt, 3 / 3 dashes), as the Overview lane draws it.
+    var unconfirmedFrom: Double? = nil
     /// A run beyond the left end: "‹ 4 d".
     var olderLabel: String? = nil
     var nowLine = true
@@ -450,6 +455,10 @@ struct NDRail: View {
         ctx.fill(Path(CGRect(x: 0, y: mid - 0.5, width: w, height: 1)), with: .color(ND.rule))
         if unknown {
             var p = Path(); p.move(to: CGPoint(x: 0, y: mid)); p.addLine(to: CGPoint(x: nowX, y: mid))
+            ctx.stroke(p, with: .color(palette.ink2), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+        }
+        if let from = unconfirmedFrom, stalledFrom == nil {
+            var p = Path(); p.move(to: CGPoint(x: max(0, x(from, w)), y: mid)); p.addLine(to: CGPoint(x: nowX, y: mid))
             ctx.stroke(p, with: .color(palette.ink2), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
         }
         if let from = stalledFrom {
@@ -487,6 +496,10 @@ struct NDRail: View {
                 ctx.fill(Path(ellipseIn: CGRect(x: cx - 3.5, y: mid - 3.5, width: 7, height: 7)), with: .color(palette.ink))
             case .fail:
                 ctx.fill(Path(ellipseIn: CGRect(x: cx - 3.5, y: mid - 3.5, width: 7, height: 7)), with: .color(palette.fault))
+            case .unconfirmed:
+                let r = CGRect(x: cx - 3, y: mid - 3, width: 6, height: 6)
+                ctx.fill(Path(ellipseIn: r), with: .color(palette.plane))
+                ctx.stroke(Path(ellipseIn: r), with: .color(palette.ink2.opacity(0.55)), lineWidth: 1)
             case .unknown:
                 let r = CGRect(x: cx - 3.5, y: mid - 3.5, width: 7, height: 7)
                 ctx.fill(Path(ellipseIn: r), with: .color(palette.plane))

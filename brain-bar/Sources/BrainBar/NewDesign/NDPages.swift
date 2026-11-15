@@ -79,6 +79,8 @@ struct NDBackupsPage: View {
         var events: [NDRail.Event]
         var unknown: Bool
         var stalledFrom: Double?
+        /// Review N1: set when the newest cell is unknown; the rail claims no confirmed copy.
+        var unconfirmedFrom: Double? = nil
         var number: NDModel.Number
         var strong: Bool
         var accessibility: String
@@ -103,10 +105,18 @@ struct NDBackupsPage: View {
             let spoken = attempts == nil ? "\(name): the record could not be read"
                 : "\(name): \(count) \(count == 1 ? "attempt" : "attempts") this week, \(failed) failed"
             let newest = row.map { ", newest " + ($0.number.value == "—" ? "not known" : $0.number.text) } ?? ""
+            let number = (row?.strong ?? false) ? faultNumber(row?.number) : row?.number ?? .unknown
+            // Review N1: when the newest cell is unknown, the attempts keep their places (the log is the app's own read,
+            // L2) but none of them is drawn as a confirmed copy, and the line from the first one to now is dashed.
+            let unconfirmed = number.value == NDModel.Number.unknown.value
+            var unconfirmedFrom: Double? = nil
+            if unconfirmed {
+                events = events.map { $0.kind == .next ? $0 : NDRail.Event(hours: $0.hours, kind: .unconfirmed) }
+                unconfirmedFrom = events.filter { $0.kind != .next }.map(\.hours).min()
+            }
             return Lane(id: id, name: name, events: events, unknown: attempts == nil,
-                        stalledFrom: stalled ? (last ?? -Self.past) : nil,
-                        number: (row?.strong ?? false) ? faultNumber(row?.number) : row?.number ?? .unknown,
-                        strong: row?.strong ?? false, accessibility: spoken + newest)
+                        stalledFrom: stalled ? (last ?? -Self.past) : nil, unconfirmedFrom: unconfirmedFrom,
+                        number: number, strong: row?.strong ?? false, accessibility: spoken + newest)
         }
         return [
             lane("backup_local", "Copy on this Mac", lanes?.local, next: databaseNext, stalls: false),
@@ -183,7 +193,7 @@ struct NDBackupLaneView: View {
         HStack(spacing: 0) {
             Text(lane.name).font(lane.strong ? NDType.rowStrong : NDType.row).frame(width: NDGrid.railName, alignment: .leading)
             NDRail(past: NDBackupsPage.past, ahead: NDBackupsPage.ahead, events: lane.events, unknown: lane.unknown,
-                   stalledFrom: lane.stalledFrom)
+                   stalledFrom: lane.stalledFrom, unconfirmedFrom: lane.unconfirmedFrom)
             NDNumberText(number: lane.number).frame(width: NDGrid.railNumber, alignment: .trailing)
             Spacer().frame(width: NDGrid.railSwitch)
         }

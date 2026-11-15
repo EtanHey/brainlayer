@@ -860,6 +860,32 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         XCTAssertTrue(sawUnknown, "the stale fixture is covered")
     }
 
+    /// Review N1: on the Backups page a row's rail has filled dots (a confirmed copy, or a failed attempt) only if its
+    /// newest cell is known; an unknown newest keeps the attempts' places as not-confirmed rings with a dashed line from
+    /// the first to now. Every fixture, both uncertain states included.
+    func testBackupRailClaimsNoCopyItsNewestCellCallsUnknown() throws {
+        var unknownRows = 0
+        for name in BrainBarDesignFixture.Name.allCases {
+            let store = NDStore(fixture: BrainBarDesignFixture.inputs(name), page: .backups)
+            for lane in NDBackupsPage(store: store).lanes(store.model) {
+                let filled = lane.events.contains { $0.kind == .ok || $0.kind == .fail }
+                let known = lane.number.value != NDModel.Number.unknown.value
+                if !known {
+                    unknownRows += 1
+                    XCTAssertFalse(filled, "\(name.rawValue) \(lane.name)")
+                    let past = lane.events.filter { $0.kind != .next }
+                    XCTAssertTrue(past.allSatisfy { $0.kind == .unconfirmed && $0.hours <= 0 }, "\(name.rawValue) \(lane.name)")
+                    XCTAssertEqual(lane.unconfirmedFrom, past.map(\.hours).min(), "\(name.rawValue) \(lane.name)")
+                } else {
+                    XCTAssertFalse(lane.events.contains { $0.kind == .unconfirmed }, "\(name.rawValue) \(lane.name)")
+                    XCTAssertNil(lane.unconfirmedFrom)
+                }
+                XCTAssertTrue(lane.events.filter { $0.kind == .next }.allSatisfy { $0.hours >= 0 }, "next rings sit right of now")
+            }
+        }
+        XCTAssertGreaterThan(unknownRows, 0, "checking and cant-tell are covered")
+    }
+
     func testNewestCopyTimeMatchesTheLaneAge() throws {
         for name in BrainBarDesignFixture.Name.allCases {
             let i = BrainBarDesignFixture.inputs(name)

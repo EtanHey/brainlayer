@@ -46,7 +46,7 @@ import SwiftUI
                 written.append(try menu(store, name: "menu-\(name.rawValue)-\(suffix)", appearance: appearance, in: directory))
             }
             for page in [NDPage.backups, .jobs] {
-                for name in [BrainBarDesignFixture.Name.calm, .severalFaults] {
+                for name in [BrainBarDesignFixture.Name.calm, .severalFaults, .checking, .cantTell] {
                     let store = NDStore(fixture: BrainBarDesignFixture.inputs(name), page: page)
                     written.append(try window(store, name: "window-\(name.rawValue)-\(page.rawValue)-\(suffix)", appearance: appearance, in: directory))
                 }
