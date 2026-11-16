@@ -4,7 +4,7 @@ import SwiftUI
 /// The standard Settings window (⌘,), 520 pt wide, three rows (DESIGN-SPEC § 6.5). Job switches live on the Jobs page;
 /// nothing here repeats it.
 @MainActor final class NDSettingsWindowController: NSObject, NSWindowDelegate {
-    static let width: CGFloat = 520
+    static let width: CGFloat = 480
     private static var current: NDSettingsWindowController?
 
     let window: NSWindow
@@ -24,12 +24,12 @@ import SwiftUI
         // 1 pt Rule hairline under it, as the main window draws at 52 pt.
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
-        window.backgroundColor = NDColor.night
+        window.backgroundColor = NDColor.bg
         window.contentViewController = hosting
         window.setContentSize(size)
         window.contentMinSize = size
         window.contentMaxSize = size
-        window.title = "BrainBar Settings"
+        window.title = BrainBarMenuPresenter.SurfaceSay.settingsTitle
         // Its own identity: the app's empty SwiftUI Settings scene window ("<app> Settings") is a different window.
         window.identifier = NSUserInterfaceItemIdentifier("brainbar.nd.settings")
         window.isReleasedWhenClosed = false
@@ -38,11 +38,10 @@ import SwiftUI
         window.delegate = self
     }
 
-    /// The title bar the content runs under (polish 3), and its hairline.
+    /// The 28 pt title bar the content runs under, with its hairline.
     static let titleBar: CGFloat = 28
-    /// 520 pt wide and as tall as its rows under the title bar: 28 pt bar, 1 pt hairline, three 40 pt rows, two 1 pt
-    /// rules, 14 and 18 pt insets (183 pt).
-    static let contentHeight: CGFloat = 183
+    /// 480 pt wide and as tall as its form: 28 pt bar, 20 pt inset, three 36 pt rows and two hairlines, the caption, 20 pt.
+    static let contentHeight: CGFloat = 199
 
     static func contentSize(of view: NSView) -> NSSize {
         view.frame = NSRect(x: 0, y: 0, width: width, height: contentHeight)
@@ -82,68 +81,74 @@ struct NDSettingsView: View {
     @ObservedObject var store: NDStore
     @AppStorage(BrainBarDesign.key) private var design: String = BrainBarDesign.defaultValue.rawValue
     var configPath: String = "~/.config/brainlayer/brainlayer.env"
+    private typealias Say = BrainBarMenuPresenter.SurfaceSay
 
     var body: some View {
         VStack(spacing: 0) {
-            Color.clear.frame(height: NDSettingsWindowController.titleBar)
-                .overlay(alignment: .bottom) { ND.rule.frame(height: 1) }
-            rows
+            ND.bar.frame(height: NDSettingsWindowController.titleBar)
+                .overlay(alignment: .bottom) { ND.hair.frame(height: 0.5) }
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(spacing: 0) {
+                    row(Say.stageDrive) {
+                        Text(driveState).font(NDType.body).foregroundStyle(store.model.drive.action != nil ? ND.redText : ND.t2)
+                        Spacer()
+                        driveAction
+                    }
+                    ND.hair.frame(height: 0.5)
+                    row(Say.design) {
+                        Spacer()
+                        NDSegments(titles: BrainBarDesign.allCases.map(\.title),
+                                   selection: Binding(get: { BrainBarDesign.allCases.firstIndex { $0.rawValue == design } ?? 0 },
+                                                      set: { design = BrainBarDesign.allCases[$0].rawValue }),
+                                   accessibilityLabel: Say.design, fontSize: 11, padding: 10, controlSize: .small)
+                            .fixedSize()
+                    }
+                    ND.hair.frame(height: 0.5)
+                    row(Say.settingsFile) {
+                        Spacer()
+                        NDButton(label: Say.showInFinder, small: true) { store.revealSettingsFile() }
+                            .help(configPath)
+                    }
+                }
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(ND.raised))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(ND.hair2, lineWidth: 0.5))
+                Text(Say.classicCaption).font(NDType.caption).foregroundStyle(ND.t3)
+                    .padding(.horizontal, 12).padding(.top, 8)
+            }
+            .padding(20)
         }
         .ignoresSafeArea(.container, edges: .top)
         .frame(width: NDSettingsWindowController.width)
-        .background(ND.night)
-        .foregroundStyle(ND.ink)
+        .background(ND.bg)
+        .foregroundStyle(ND.t1)
         .environment(\.ndPalette, .window)
     }
 
-    private var rows: some View {
-        VStack(spacing: 0) {
-            row("Google Drive") {
-                Text(store.model.drive.state).font(NDType.row).foregroundStyle(ND.ink2)
-                Spacer()
-                driveAction
-            }
-            ND.rule.frame(height: 1)
-            row("Design") {
-                Spacer()
-                NDSegments(titles: BrainBarDesign.allCases.map(\.title),
-                           selection: Binding(get: { BrainBarDesign.allCases.firstIndex { $0.rawValue == design } ?? 0 },
-                                              set: { design = BrainBarDesign.allCases[$0].rawValue }),
-                           accessibilityLabel: "Design", fontSize: 12, padding: 12)
-                    .fixedSize()
-            }
-            ND.rule.frame(height: 1)
-            row("Settings file") {
-                Spacer()
-                Button("Show in Finder") { store.revealSettingsFile() }
-                    .buttonStyle(NDLinkButtonStyle())
-                    .help(configPath)
-            }
-        }
-        .padding(EdgeInsets(top: 14, leading: 24, bottom: 18, trailing: 24))
+    /// "Signed in" / "Signed out" (or "—" when the last check cannot say), from the accepted Backups row (F01).
+    private var driveState: String {
+        let state = store.model.drive.state
+        if store.model.drive.action != nil { return Say.signedOutValue }
+        return state == NDModel.Number.unknown.value ? state : Say.signedIn
     }
 
-    private func row<Content: View>(_ group: String, @ViewBuilder _ content: () -> Content) -> some View {
-        HStack(spacing: 0) {
-            Text(group).font(NDType.settingsGroup).tracking(0.2).frame(width: 132, alignment: .leading)
-                .accessibilityAddTraits(.isHeader)
+    private func row<Content: View>(_ label: String, @ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: 12) {
+            Text(label).font(NDType.body).foregroundStyle(ND.t1).frame(width: 120, alignment: .leading)
             content()
         }
-        .frame(minHeight: 40)
+        .padding(.horizontal, 12)
+        .frame(height: NDGrid.formRow)
     }
 
-    /// F01: the state and the action come from the same accepted Backups row and counted fault every other surface
-    /// draws (a stale or duplicated check reads "—"). L8: no Disconnect in this version; Reconnect and Connect are one click.
+    /// L8: no Disconnect. R1.1 change 26: no Reconnect while signed in; signed out or expired, Reconnect is the window's
+    /// one filled button; one click, then the waiting line.
     @ViewBuilder private var driveAction: some View {
         if let action = store.model.drive.action {
             NDWaitingSwap(waiting: store.inputs.driveReconnecting) {
-                Button(action.kind == .connectDrive ? "Connect" : "Reconnect") { store.reconnectDrive() }
-                    .buttonStyle(NDLinkButtonStyle())
+                NDButton(label: action.kind == .connectDrive ? BrainBarMenuPresenter.Say.connect.text : Say.reconnectShort,
+                         filled: true, small: true) { store.reconnectDrive() }
             } line: {
-                HStack(spacing: 7) {
-                    NDMarkView(mark: .running)
-                    Text(BrainBarMenuPresenter.SurfaceSay.waitingForBrowser).font(NDType.fact).foregroundStyle(ND.ink2)
-                }
+                Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)
             }
         }
     }
