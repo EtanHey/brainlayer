@@ -149,7 +149,8 @@ extension BrainBarMenuPresenter {
 
         static let countOne = S("A1.count.one", .claim, "1 thing needs you") { _, p, _ in countIs(p, "1") }
         static let countMany = S("A1.count.many", .claim, "{N2} things need you") { _, p, v in countIs(p, v[0]) }
-        /// R24: true whenever its row is counted as Needs you (I4), for an amber check or one that cannot be read too.
+        /// R31: neutral wording for red Needs-you rows, amber notices and app facts; only the two app clocks escalate.
+        /// I4 counts Needs-you rows, never notices.
         static let generic = S("R17", .neutral, "Something BrainBar checks needs attention.")
         static let cantFix = S("U12", .neutral, "BrainBar can’t fix this itself.")
         static let giveReport = S("U12.give", .neutral, "Give the report to an agent.")

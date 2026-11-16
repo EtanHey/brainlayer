@@ -13,11 +13,11 @@ enum BrainBarMenuPresenter {
     typealias State = BrainBarHealthVerdict.State
 
     enum Thing: Int, CaseIterable, Sendable { case remembering, finding, safe, upkeep, system }
-    private enum Level { case cantTell, behind, notice, needs }
+    enum Level { case cantTell, behind, notice, needs }
     /// U11: custody-critical before confirmed faults; amber streaks are notices under R31.
-    private enum Rank: Int { case custody, confirmed }
+    enum Rank: Int { case custody, confirmed }
 
-    private struct Line {
+    struct Line {
         var thing: Thing
         var level: Level
         var strings: [String]
@@ -412,13 +412,17 @@ enum BrainBarMenuPresenter {
         return ordered(needs) { ($0.rank.rawValue, $0.thing.rawValue, $0.priority) }
     }
 
-    private static func assemble(_ c: Capture, _ input: [Line], allGood: String?) -> P {
+    /// Internal so tests can exercise line orders not yet emitted by derive. Production enters through present.
+    static func assemble(_ c: Capture, _ input: [Line], allGood: String?) -> P {
         // R17 and M5: one row per thing and level; the first line of a thing at that level speaks.
         func at(_ level: Level) -> [Line] { Thing.allCases.compactMap { t in input.first { $0.thing == t && $0.level == level } } }
         let needs = mergedNeeds(input)
         let behind = at(.behind), cantTell = at(.cantTell)
-        let notices = at(.notice).filter { notice in
-            !needs.contains { $0.thing == notice.thing && $0.strings.first == notice.strings.first }
+        let notices = Thing.allCases.compactMap { thing in
+            input.first { notice in
+                notice.thing == thing && notice.level == .notice
+                    && !needs.contains { $0.thing == notice.thing && $0.strings.first == notice.strings.first }
+            }
         }
         let fine = four.filter { t in !input.contains { $0.thing == t } }
         func status(_ line: Line, mark: P.Mark?) -> P.Row {
@@ -550,8 +554,8 @@ enum BrainBarMenuPresenter {
         if p.form == .calm, p.count == 0, p.icon == .resting, !p.rows.contains(where: { $0.kind == .needsYou }), !holds(p.headline, on: p) {
             p = checkingState(c)
         }
-        // I1, I7 and I4: a red, or a fact the app reads without the producer, always needs him; form, count, icon and the
-        // count headline follow the Needs-you rows drawn.
+        // R31: red checks and the two app-owned clock escalations need attention; other app facts remain notices.
+        // I1, I7 and I4: form, count, icon and count headline follow the Needs-you rows drawn.
         var needsRows = p.rows.filter { $0.kind == .needsYou }
         let red = c.verdict.map { $0.dot == .red || $0.checks.contains { $0.state == .red } } ?? false
         let appFact = !appEscalationCauses(c).isEmpty
