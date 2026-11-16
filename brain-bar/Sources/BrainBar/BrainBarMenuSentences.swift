@@ -448,6 +448,165 @@ extension BrainBarMenuPresenter {
         /// in 24 h (observability emitters), the same noun as the title bar's count, not saves.
         static let memoriesIn24h = "memories in 24 h"
 
+        // MARK: R1 copy deck (DESIGN-SPEC-R1 § 4; approved by L16). Every word the redrawn surfaces draw.
+
+        // Dropdown
+        static let activity = "Activity"
+        static let search = "Search"
+        static let backups = "Backups"
+        static let jobs = "Jobs"
+        static let fine = "fine"
+        static let failed = "failed"
+        static let late = "late"
+        static let openBrainBar = "Open BrainBar"
+        static func ready(_ percent: Int) -> String { "\(percent)\u{00A0}% ready" }
+        static func ago(_ age: String) -> String { "\(age) ago" }
+        static func lastHour(saved: String, read: String) -> String { "Last hour: \(saved) saved by agents, \(read) read" }
+        static func searchable(_ percent: String) -> String { "\(percent)\u{00A0}% of memories are searchable by meaning" }
+        static func thingsNeedYou(_ n: Int) -> String { "\(n) things need you" }
+
+        // Window
+        static let overview = "Overview"
+        static func checkedAgo(_ age: String) -> String { "Checked \(age) ago" }
+        static func nextCheckIn(_ age: String) -> String { "Next check in \(age)" }
+        static func lastCheckedAgo(_ age: String) -> String { "Last checked \(age) ago" }
+        static let savedByAgents = "saved by agents"
+        static let readFromConversations = "read from conversations"
+        static let ownScale = "Each half has its own scale"
+        static let saved = "saved"
+        static let readWord = "read"
+        static let now = "now"
+        static let pipeline = "Pipeline"
+        static let goesIn = "Goes in"
+        static let keptSafe = "Kept safe"
+        static let comesOut = "Comes out"
+        static let stageRead = "Read"
+        static let stageQueue = "Save queue"
+        static let stageMemory = "Memory"
+        static let stageMac = "Copy on this Mac"
+        static let stageDrive = "Google Drive"
+        static let stageMeaning = "By meaning"
+        static let byWordsNotChecked = "by words, not checked"
+        static let savedByAgentsInput = "Saved by agents"
+        static let answersToAgents = "Answers to agents"
+        static func minutesAgoAxis(_ n: Int) -> String { "\(n)\u{00A0}min ago" }
+        static func hoursAgoAxis(_ n: Int) -> String { "\(n)\u{00A0}h ago" }
+        static func readout(saved: Int) -> String { "\(saved)" }
+
+        // Break phrases
+        static let notBeingRead = "not being read"
+        static let signedOut = "signed out"
+        static func waiting(_ age: String) -> String { "waiting \(age)" }
+        static func behind(_ age: String) -> String { "\(age) behind" }
+        static func failedNights(_ n: Int) -> String { "failed \(n) nights" }
+        static func notConfirmedSince(_ time: String) -> String { "Not confirmed since \(time)" }
+
+        // Fault headlines and details (the pipeline's seven states)
+        static func agentNotRead(_ agent: String) -> String { "\(agent)\u{2019}s sessions aren\u{2019}t being read" }
+        static let agentNotReadDetail = "Its new work isn\u{2019}t reaching memory. BrainBar can\u{2019}t fix this itself."
+        static let readerNotReading = "New conversations aren\u{2019}t being read"
+        static let driveSignedOut = "Google Drive is signed out"
+        static let savesStuck = "Saves are stuck in the queue"
+        static func savesWaited(_ count: Int?, _ age: String) -> String {
+            count.map { "\($0) saves have waited \(age) and aren\u{2019}t in memory yet." }
+                ?? "Saves have waited \(age) and aren\u{2019}t in memory yet."
+        }
+        static func meaningBehind(_ age: String) -> String { "Search by meaning is \(age) behind" }
+        static let meaningBehindDetail = "New memories are found by words until it catches up."
+        static func nightlyFailed(_ n: Int) -> String { "Nightly check-up failed \(n) nights in a row" }
+        static func nightlyFailedShort(_ n: Int) -> String { "Nightly check-up failed \(n) nights" }
+        static let notConfirmed = "Not confirmed"
+        static func lastCheckWas(_ age: String) -> String { "The last check was \(age) ago, so this may be out of date." }
+
+        // Backups
+        static let backupsDetail = "Copies of your memory, on this Mac and in Google Drive."
+        static let copied = "copied"
+        static let nextRun = "next run"
+        static let lateLine = "a copy older than this line is late"
+        static let notUploadingSince = "not uploading since"
+        static let lateAfter36h = "late after 36\u{00A0}h"
+        static func daysAgoAxis(_ n: Int) -> String { "\(n)\u{00A0}d ago" }
+        static func inHoursAxis(_ n: Int) -> String { "in \(n)\u{00A0}h" }
+        static let newest = "Newest"
+        static let next = "Next"
+        static let laneMac = "Copy on this Mac"
+        static let laneDrive = "Copy in Google Drive"
+        static let laneConversations = "Conversations in Drive"
+        static let laneCheck = "Database check"
+        static let passed = "passed"
+        static let signedIn = "Signed in"
+        static let signedOutValue = "Signed out"
+        static let newestCopyOnMac = "Newest copy on this Mac"
+        static func todayAt(_ hhmm: String) -> String { "Today at \(hhmm)" }
+        static let showInFinder = "Show in Finder"
+        static let roomForBackups = "Room for backups"
+        static let enough = "Enough", tight = "Tight", full = "Full"
+
+        // Jobs
+        static let jobsDetail = "The scheduled work that keeps memory read, searchable and backed up."
+        static let ran = "ran"
+        static let runsAllTheTime = "runs all the time"
+        static let everyFewMinutes = "every few minutes"
+        static let outsideTimeline = "outside the timeline"
+        static let lastRun = "Last run"
+        static let nextRunHead = "Next run"
+        static func inAge(_ age: String) -> String { "in \(age)" }
+        static let jobNames: [BrainLayerLaunchdJob: String] = [
+            .watch: "Read new conversations", .hotlane: "Keep search ready", .drain: "Save waiting memories",
+            .walCheckpoint: "Tidy up storage", .backupDaily: "Back up the database", .jsonlBackup: "Back up conversations",
+            .maintenanceNightly: "Nightly check-up", .maintenanceWeekly: "Weekly deep clean", .decay: "Fade old memories",
+            .repairFTS: "Repair word search",
+        ]
+        static let jobHelp: [BrainLayerLaunchdJob: String] = [
+            .watch: "Reads what your agents write, as they write it.",
+            .hotlane: "Keeps search by meaning loaded.",
+            .drain: "Writes saves that had to wait. Every few minutes.",
+            .walCheckpoint: "Folds the write log into the database. Every few minutes.",
+            .backupDaily: "Copies memory to this Mac, then to Google Drive. Nightly at 03:15.",
+            .jsonlBackup: "Copies your agents\u{2019} conversations to Google Drive. Nightly.",
+            .maintenanceNightly: "Checks memory can still save, and tidies the log. Nightly at 04:00.",
+            .maintenanceWeekly: "Compacts the database. Sundays at 04:00.",
+            .decay: "Lowers the weight of memories nobody uses.",
+            .repairFTS: "Rebuilds the word index. Weekly.",
+        ]
+
+        // Station popovers
+        static let databaseCopy = "Database copy"
+        static let conversationsCopy = "Conversations copy"
+        static let account = "Account"
+        static let openBackups = "Open Backups"
+        static let openJobs = "Open Jobs"
+        static let searchByWordsNotChecked = "Search by words: not checked yet"
+        static func running(_ n: Int) -> String { "\(n) running" }
+
+        // R1.1 (CHANGES-R1.1.md; approved with the revision): status lines, line words, the stale state, dropdown details.
+        static let conversationsCopiedAsTheyAre = "conversations, copied as they are"
+        static let byWordsNotConfirmed = "by words, not confirmed"
+        static let everyPipeNotConfirmed = "every pipe: not confirmed"
+        static let delayed = "delayed"
+        static let stopped = "stopped"
+        static let empty = "empty"
+        static let working = "working"
+        static func percentReady(_ p: Int) -> String { "\(p)% ready" }
+        static func nightlyAgo(_ age: String) -> String { "nightly \(age) ago" }
+        static func notCheckedSince(_ day: String) -> String { "Memory hasn\u{2019}t been checked since \(day)." }
+        static func nothingUploadedFor(_ age: String) -> String { "Nothing has uploaded for \(age)." }
+        static func nothingKnownBroken(_ age: String) -> String {
+            "Nothing is known to be broken, but nothing has been checked for \(age)."
+        }
+        static let waitingForNextCheck = "Waiting for the next check"
+        static let lateIfLeftOfLine = "late if the newest copy is left of this line"
+        static func more(_ n: Int) -> String { "\(n) more" }
+        static func plusMore(_ n: Int) -> String { "+\(n) more" }
+        static func perBucket(_ value: String, minutes: Int) -> String { minutes == 1 ? "\(value) / min" : "\(value) / \(minutes) min" }
+
+        // Settings
+        static let settingsTitle = "BrainBar Settings"
+        static let reconnectShort = "Reconnect"
+        static let design = "Design"
+        static let settingsFile = "Settings file"
+        static let classicCaption = "Classic is the BrainBar you had before. You can switch back at any time."
+
         /// V1's VoiceOver sentence for the waveform.
         static func wave(span minutes: Int, saves: Int, reads: Int) -> String {
             let span = minutes == 60 ? "Last hour" : minutes == 180 ? "Last 3 hours" : "Last 24 hours"
