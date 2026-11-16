@@ -61,34 +61,43 @@ struct NDWaveform: View {
     let wave: NDWave?
     let size: Size
     var nowTick = false
+    /// The bucket under the pointer (H2): that pair at 100 %, every other bar at 32 %, a 1 pt line marks it.
+    var hover: Int? = nil
 
     var body: some View {
         let target = wave?.sequence ?? 0
         ZStack {
-            Canvas { ctx, canvas in Self.drawStatic(ctx, canvas, wave: wave, size: size, palette: palette, nowTick: nowTick) }
-            NDWaveStrip(phase: Double(target), target: target, wave: wave, size: size, palette: palette, nowTick: nowTick)
+            Canvas { ctx, canvas in
+                Self.drawStatic(ctx, canvas, wave: wave, size: size, palette: palette, nowTick: nowTick, hover: hover)
+            }
+            NDWaveStrip(phase: Double(target), target: target, wave: wave, size: size, palette: palette, nowTick: nowTick,
+                        hover: hover)
                 .clipShape(Rectangle())
         }
         .animation(wave?.outgoing != nil && !reduceMotion ? NDMotion.shift : nil, value: target)
         .accessibilityHidden(true)
     }
 
+    /// R1 geometry (§ 3.1): the window's 6 pt bars, the dropdown's 3 pt bars, each centred in its pitch.
     static func layout(width: CGFloat, count: Int, size: Size) -> (bar: CGFloat, gap: CGFloat) {
-        let gap: CGFloat = size == .hero ? 7 : 2
-        let bar = max(1, (width - CGFloat(max(count - 1, 0)) * gap) / CGFloat(max(count, 1)))
-        return (bar, gap)
+        let pitch = width / CGFloat(max(count, 1))
+        let bar = min(size == .hero ? 6 : 3, pitch)
+        return (bar, pitch - bar)
     }
 
-    /// Polish 1: a hero bar's corner is min(width / 2, height / 4): a bar as tall as it is wide gets a small corner, a tall
-    /// bar keeps its pill. Compact heroes and the dropdown keep square-ended bars (1 pt and 0.5 pt corners).
+    /// 2 pt corners on the window's bars, 1 pt in the dropdown, never more than half a bar.
     static func barRadius(height: CGFloat, width: CGFloat, pill: Bool, corner: CGFloat) -> CGFloat {
-        pill ? min(width / 2, height / 4) : min(corner, height / 2)
+        min(corner, height / 2, width / 2)
     }
 
-    /// The plot's height and baseline centre for a canvas.
+    /// The halves: saves above the baseline (62 pt, dropdown 10), reads below (44 pt, dropdown 6).
+    static func halves(_ size: Size) -> (up: CGFloat, down: CGFloat) { size == .hero ? (62, 44) : (10, 6) }
+
+    /// The plot's height and baseline centre for a canvas (the 8 pt under the window's plot hold the now tick).
     static func plot(_ canvas: CGSize, nowTick: Bool) -> (h: CGFloat, cy: CGFloat) {
-        let h = canvas.height - (nowTick ? 10 : 0)
-        return (h, (h * 0.62).rounded() + 0.5)
+        let h = canvas.height - (nowTick ? 8 : 0)
+        let up = h >= 100 ? 62 : (h * 10 / 18).rounded()
+        return (h, up + (h >= 100 ? 1 : 0.5))
     }
 
     /// The static layer's baseline: the same rect before, during and after a shift.
@@ -96,20 +105,27 @@ struct NDWaveform: View {
         CGRect(x: 0, y: plot(canvas, nowTick: nowTick).cy - 0.5, width: canvas.width, height: 1)
     }
 
-    static func drawStatic(_ ctx: GraphicsContext, _ canvas: CGSize, wave: NDWave?, size: Size, palette: NDPalette, nowTick: Bool) {
+    static func drawStatic(_ ctx: GraphicsContext, _ canvas: CGSize, wave: NDWave?, size: Size, palette: NDPalette, nowTick: Bool,
+                           hover: Int? = nil) {
         let (h, cy) = plot(canvas, nowTick: nowTick)
         guard let wave, wave.readable else {
+            // Unknown: the baseline dashed, no bars.
             var path = Path()
             path.move(to: CGPoint(x: 0, y: cy)); path.addLine(to: CGPoint(x: canvas.width, y: cy))
-            ctx.stroke(path, with: .color(palette.ink2), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+            ctx.stroke(path, with: .color(palette.ink2), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
             return
         }
         ctx.fill(Path(baseline(canvas, nowTick: nowTick)), with: .color(palette.track))
         let n = wave.count
-        if nowTick, n > 0 {
-            let (bw, gap) = layout(width: canvas.width, count: n, size: size)
-            let x = CGFloat(n - 1) * (bw + gap) + bw / 2 - 0.5
-            ctx.fill(Path(CGRect(x: x, y: h + 3, width: 1, height: 6)), with: .color(palette.ink2))
+        guard n > 0 else { return }
+        let pitch = canvas.width / CGFloat(n)
+        if nowTick {
+            let x = CGFloat(n - 1) * pitch + pitch / 2 - 0.5
+            ctx.fill(Path(CGRect(x: x, y: h + 3, width: 1, height: 5)), with: .color(ND.t3))
+        }
+        if let hover, hover < n {
+            let x = CGFloat(hover) * pitch + pitch / 2 - 0.5
+            ctx.fill(Path(CGRect(x: x, y: 0, width: 1, height: h)), with: .color(ND.t2.opacity(0.45)))
         }
     }
 
@@ -118,16 +134,16 @@ struct NDWaveform: View {
         min(max(CGFloat(Double(target) - phase) * pitch, 0), pitch)
     }
 
-    /// The strip's buckets and their x at an offset: n at rest, n + 1 while the outgoing bucket is still sliding out.
+    /// The strip's bars and their left x at an offset: n at rest, n + 1 while the outgoing bucket is still sliding out.
     static func strip(_ wave: NDWave, width: CGFloat, size: Size, offset: CGFloat) -> [(x: CGFloat, bucket: NDWave.Bucket)] {
         let n = wave.count
         let (bw, gap) = layout(width: width, count: n, size: size)
-        let pitch = bw + gap
+        let pitch = bw + gap, inset = gap / 2
         var out: [(x: CGFloat, bucket: NDWave.Bucket)] = []
-        if offset > 0, let outgoing = wave.outgoing { out.append((offset - pitch, outgoing)) }
+        if offset > 0, let outgoing = wave.outgoing { out.append((offset - pitch + inset, outgoing)) }
         for i in 0..<n {
             let bucket = NDWave.Bucket(saves: i < wave.saves.count ? wave.saves[i] : 0, reads: i < wave.reads.count ? wave.reads[i] : 0)
-            out.append((CGFloat(i) * pitch + offset, bucket))
+            out.append((CGFloat(i) * pitch + inset + offset, bucket))
         }
         return out
     }
@@ -142,6 +158,7 @@ struct NDWaveStrip: View, Animatable {
     let size: NDWaveform.Size
     let palette: NDPalette
     let nowTick: Bool
+    var hover: Int? = nil
 
     nonisolated var animatableData: Double {
         get { phase }
@@ -154,29 +171,31 @@ struct NDWaveStrip: View, Animatable {
 
     private func draw(_ ctx: GraphicsContext, _ canvas: CGSize) {
         guard let wave, wave.readable, wave.count > 0 else { return }
-        let (h, cy) = NDWaveform.plot(canvas, nowTick: nowTick)
+        let (_, cy) = NDWaveform.plot(canvas, nowTick: nowTick)
+        let (up, down) = NDWaveform.halves(size)
         let (bw, gap) = NDWaveform.layout(width: canvas.width, count: wave.count, size: size)
         let offset = NDWaveform.offset(target: target, phase: phase, pitch: bw + gap)
-        let up = cy - 1, down = h - cy - 1
-        // The scale includes the outgoing bucket, so no bar changes height when it slides out.
-        let maxSaves = CGFloat(max(wave.saves.max() ?? 0, wave.outgoing?.saves ?? 0, 4))
-        let maxReads = CGFloat(max(wave.reads.max() ?? 0, wave.outgoing?.reads ?? 0, 40))
+        // Each half to its own maximum; the scale includes the outgoing bucket, so no bar changes height as it leaves.
+        let maxSaves = CGFloat(max(wave.saves.max() ?? 0, wave.outgoing?.saves ?? 0, 1))
+        let maxReads = CGFloat(max(wave.reads.max() ?? 0, wave.outgoing?.reads ?? 0, 1))
         let minBar: CGFloat = size == .hero ? 2 : 1.5
-        // Pill ends only at the full 104 pt hero (comp 04); shorter heroes and the dropdown draw square-ended bars.
-        let pill = size == .hero && h >= 60
-        let corner: CGFloat = size == .hero ? 1 : 0.5
-        for (x, b) in NDWaveform.strip(wave, width: canvas.width, size: size, offset: offset) {
+        let corner: CGFloat = size == .hero ? 2 : 1
+        let first = offset > 0 && wave.outgoing != nil ? -1 : 0
+        for (k, item) in NDWaveform.strip(wave, width: canvas.width, size: size, offset: offset).enumerated() {
+            let (x, b) = item
+            let index = k + first
+            let alpha: Double = hover.map { $0 == index ? 1 : 0.32 } ?? 1
             if b.saves > 0 {
                 let bh = max(minBar, CGFloat(b.saves) / maxSaves * up)
-                let radius = NDWaveform.barRadius(height: bh, width: bw, pill: pill, corner: corner)
+                let radius = NDWaveform.barRadius(height: bh, width: bw, pill: false, corner: corner)
                 ctx.fill(Path(roundedRect: CGRect(x: x, y: cy - 0.5 - bh, width: bw, height: bh), cornerRadius: radius),
-                         with: .color(palette.saves))
+                         with: .color(palette.saves.opacity(alpha)))
             }
             if b.reads > 0 {
                 let bh = max(minBar, CGFloat(b.reads) / maxReads * down)
-                let radius = NDWaveform.barRadius(height: bh, width: bw, pill: pill, corner: corner)
+                let radius = NDWaveform.barRadius(height: bh, width: bw, pill: false, corner: corner)
                 ctx.fill(Path(roundedRect: CGRect(x: x, y: cy + 0.5, width: bw, height: bh), cornerRadius: radius),
-                         with: .color(palette.reads))
+                         with: .color(palette.reads.opacity(alpha)))
             }
         }
     }
@@ -423,6 +442,8 @@ struct NDRail: View {
     var events: [Event] = []
     /// An always-on job: an Ink 2 band up to now.
     var band = false
+    /// A job that runs every few minutes: a dotted band up to now (R1 legend "every few minutes").
+    var dotted = false
     /// The log could not be read: the dashed line to now.
     var unknown = false
     /// Drive disconnected: a Fault dashed line from the last dot (hours, ≤ 0) to now; no next ring.
@@ -452,7 +473,7 @@ struct NDRail: View {
 
     private func draw(_ ctx: GraphicsContext, _ size: CGSize) {
         let w = size.width, mid: CGFloat = 7, nowX = x(0, w)
-        ctx.fill(Path(CGRect(x: 0, y: mid - 0.5, width: w, height: 1)), with: .color(ND.rule))
+        ctx.fill(Path(CGRect(x: 0, y: mid - 0.5, width: w, height: 1)), with: .color(ND.hair2))
         if unknown {
             var p = Path(); p.move(to: CGPoint(x: 0, y: mid)); p.addLine(to: CGPoint(x: nowX, y: mid))
             ctx.stroke(p, with: .color(palette.ink2), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
@@ -466,6 +487,13 @@ struct NDRail: View {
             ctx.stroke(p, with: .color(palette.fault), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
         }
         if band { ctx.fill(Path(roundedRect: CGRect(x: 0, y: mid - 1, width: nowX, height: 2), cornerRadius: 1), with: .color(palette.ink2)) }
+        if dotted {
+            var x: CGFloat = 1
+            while x < nowX - 2 {
+                ctx.fill(Path(ellipseIn: CGRect(x: x - 1, y: mid - 1, width: 2, height: 2)), with: .color(palette.ink2))
+                x += 4
+            }
+        }
         if nowLine { ctx.fill(Path(CGRect(x: nowX - 0.5, y: 0, width: 1, height: 14)), with: .color(palette.ink2.opacity(0.6))) }
         func chevron(left: Bool, color: Color) {
             var p = Path()
@@ -480,7 +508,9 @@ struct NDRail: View {
             if e.hours < -past {
                 chevron(left: true, color: e.kind == .fail ? palette.fault : palette.ink2)
                 if let olderLabel {
-                    ctx.draw(Text(olderLabel).font(.system(size: 10)).foregroundColor(palette.ink2),
+                    let failed = e.kind == .fail
+                    ctx.draw(Text(olderLabel).font(.system(size: 11, weight: failed ? .semibold : .regular))
+                        .foregroundColor(failed ? ND.redText : palette.ink2),
                              at: CGPoint(x: 10, y: mid), anchor: .leading)
                 }
                 continue

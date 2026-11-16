@@ -11,7 +11,7 @@ import AppKit
         let brain = BrainBarBrainIcon.image(for: presentation)
         guard model.icon == .marked, model.count > 1 else { return brain }
         let numeral = model.count > 99 ? "99+" : String(model.count)
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .bold)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
         let width = ceil(NSAttributedString(string: numeral, attributes: [.font: font]).size().width)
         let image = NSImage(size: NSSize(width: 22 + 3 + width, height: 22), flipped: false) { rect in
             brain.draw(in: NSRect(x: 0, y: 0, width: 22, height: 22))

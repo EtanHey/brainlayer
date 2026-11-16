@@ -1,22 +1,22 @@
 import AppKit
 import SwiftUI
 
-/// The new window (DESIGN-SPEC § 6.3, 6.4): a fixed 52 pt title bar with the native segmented control, then one page.
-/// The page scrolls under the title bar when it must (three or more faults, or a small window). No window animation:
-/// F4 is a keyboard action (motion 2); switching segments is instant (motion 3).
+private typealias Say = BrainBarMenuPresenter.SurfaceSay
+
+/// The window (DESIGN-SPEC-R1 § 2.3 to 2.6): a unified 52 pt title bar holding only the centred tabs, one page, and a
+/// 28 pt footer that says when it was checked. Each page takes its own height (L17); nothing animates on a tab switch.
 struct NDWindowRoot: View {
     @ObservedObject var store: NDStore
-    /// The real window keeps its controls in a unified 52 pt toolbar (`NDToolbar`: the traffic lights, the centred
-    /// segmented control and the count share one centre line) and draws only the title bar's plane under it. Headless
-    /// renders have no toolbar, so they draw the same row themselves, with stand-in traffic lights.
+    /// Headless renders have no toolbar, so they draw the same row themselves, with stand-in traffic lights.
     var drawsTrafficLights = false
 
     var body: some View {
+        let r1 = store.r1
         VStack(spacing: 0) {
             if drawsTrafficLights {
                 NDTitleBar(store: store, drawsTrafficLights: true)
             } else {
-                ND.deck.frame(height: NDGrid.titleBar).overlay(alignment: .bottom) { ND.rule.frame(height: 1) }
+                ND.bar.frame(height: NDGrid.titleBar).overlay(alignment: .bottom) { ND.hair.frame(height: 0.5) }
             }
             ScrollView(.vertical) {
                 Group {
@@ -28,32 +28,48 @@ struct NDWindowRoot: View {
                 }
                 .padding(.horizontal, NDGrid.pageSide)
                 .padding(.top, NDGrid.pageTop)
-                .padding(.bottom, 28)
+                .padding(.bottom, 24)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .scrollIndicators(.automatic)
-            // Review polish 6: a page cut by a short window fades out over 16 pt instead of showing a sliver of the next
-            // heading; at the bottom of the page the 28 pt inset is under it, so nothing is faded there.
+            // A page longer than its view scrolls under a 28 pt fade with the system scroller (two or more faults).
             .overlay(alignment: .bottom) {
-                LinearGradient(colors: [ND.night.opacity(0), ND.night], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 16)
+                LinearGradient(colors: [ND.bg.opacity(0), ND.bg], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 28)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
+            NDFooter(left: r1.footerLeft, right: r1.footerRight)
         }
-        // Under the toolbar, so the plane is the title bar; the toolbar's own safe area is not added again.
         .ignoresSafeArea(.container, edges: .top)
-        .background(ND.night)
-        .foregroundStyle(ND.ink)
+        .background(ND.bg)
+        .foregroundStyle(ND.t1)
         .environment(\.ndPalette, .window)
     }
 }
 
-/// The window's unified toolbar: the segmented pages control as the centred item and the memory count trailing, both
-/// native toolbar items, so the lights, the control and the count share one 52 pt row and clicks reach the control.
+/// "Checked 1 min ago" · "Next check in 4 min" (finding 8); stale: "Last checked 2 h ago" alone.
+struct NDFooter: View {
+    let left: String
+    let right: String?
+    var body: some View {
+        HStack {
+            Text(left)
+            Spacer()
+            if let right { Text(right) }
+        }
+        .font(NDType.captionNumber)
+        .foregroundStyle(ND.t3)
+        .padding(.horizontal, NDGrid.pageSide)
+        .frame(height: NDGrid.footer)
+        .background(ND.bar)
+        .overlay(alignment: .top) { ND.hair.frame(height: 0.5) }
+    }
+}
+
+/// The window's unified toolbar: only the centred tabs (the memory count moved into the Memory hub, § 2.3).
 @MainActor final class NDToolbar: NSObject, NSToolbarDelegate {
     static let pages = NSToolbarItem.Identifier("brainbar.nd.pages")
-    static let memories = NSToolbarItem.Identifier("brainbar.nd.memories")
     let toolbar: NSToolbar
     private let store: NDStore
 
@@ -68,7 +84,7 @@ struct NDWindowRoot: View {
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, Self.pages, .flexibleSpace, Self.memories]
+        [.flexibleSpace, Self.pages, .flexibleSpace]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -77,32 +93,15 @@ struct NDWindowRoot: View {
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        guard id == Self.pages else { return nil }
         let item = NSToolbarItem(itemIdentifier: id)
-        switch id {
-        case Self.pages:
-            item.view = NSHostingView(rootView: NDSegmentedPages(store: store).fixedSize().environment(\.ndPalette, .window))
-            item.label = "Pages"
-        case Self.memories:
-            item.view = NSHostingView(rootView: NDMemoriesCount(store: store).fixedSize())
-            item.label = "Memories"
-        default:
-            return nil
-        }
+        item.view = NSHostingView(rootView: NDSegmentedPages(store: store).fixedSize().environment(\.ndPalette, .window))
+        item.label = "Pages"
         return item
     }
 }
 
-struct NDMemoriesCount: View {
-    @ObservedObject var store: NDStore
-    var body: some View {
-        if let memories = store.model.memories {
-            (Text(memories).foregroundColor(ND.ink).fontWeight(.medium) + Text(" memories").foregroundColor(ND.ink2))
-                .font(.system(size: 12).monospacedDigit())
-        }
-    }
-}
-
-// MARK: - Title bar
+// MARK: - Title bar (headless renders only)
 
 struct NDTitleBar: View {
     @ObservedObject var store: NDStore
@@ -117,34 +116,28 @@ struct NDTitleBar: View {
                         Circle().fill(Color(nsColor: NDColor.rgb(0xFEBC2E))).frame(width: 12, height: 12)
                         Circle().fill(Color(nsColor: NDColor.rgb(0x28C840))).frame(width: 12, height: 12)
                     }
-                    .padding(.leading, 18)
+                    .padding(.leading, 20)
                 }
                 Spacer()
-                if let memories = store.model.memories {
-                    (Text(memories).foregroundColor(ND.ink).fontWeight(.medium) + Text(" memories").foregroundColor(ND.ink2))
-                        .font(.system(size: 12).monospacedDigit())
-                        .padding(.trailing, 18)
-                }
             }
             NDSegmentedPages(store: store).fixedSize()
         }
         .frame(height: NDGrid.titleBar)
-        .background(ND.deck)
-        .overlay(alignment: .bottom) { ND.rule.frame(height: 1) }
+        .background(ND.bar)
+        .overlay(alignment: .bottom) { ND.hair.frame(height: 0.5) }
     }
 }
 
-/// The native segmented control with its labels drawn by us: Ink 2 when not selected, Ink when selected (AppKit would
-/// draw both in the label colour), and a page with faults carries a small red count after its label. The control, its
-/// selected fill and its keyboard and VoiceOver behaviour stay native.
+/// The native segmented control with its labels drawn by us (t1 Medium selected, t2 otherwise), and a page with faults
+/// carries a 16 pt red-tint count pill after its label. Selection, keyboard and VoiceOver stay native.
 struct NDSegments: NSViewRepresentable {
     let titles: [String]
     var counts: [Int] = []
     @Binding var selection: Int
     var accessibilityLabel: String
-    /// The title bar's segments are 13 pt with 14 pt each side; Settings' Classic / New are 12 pt with 12 pt (comps 04, 06).
     var fontSize: CGFloat = 13
     var padding: CGFloat = 14
+    var controlSize: NSControl.ControlSize = .regular
 
     final class Coordinator: NSObject {
         var selection: Binding<Int>
@@ -160,7 +153,7 @@ struct NDSegments: NSViewRepresentable {
         let control = NSSegmentedControl(labels: titles, trackingMode: .selectOne,
                                          target: context.coordinator, action: #selector(Coordinator.changed(_:)))
         control.segmentStyle = .automatic
-        control.controlSize = .regular
+        control.controlSize = controlSize
         control.setAccessibilityLabel(accessibilityLabel)
         update(control)
         return control
@@ -183,27 +176,33 @@ struct NDSegments: NSViewRepresentable {
         control.selectedSegment = selection
     }
 
-
-    /// "Backups 1": the label in Ink (selected) or Ink 2, the count in Fault, Bold 11, 5 pt after it. Drawn at display
-    /// time, so the colours follow the control's appearance.
+    /// "Backups ⓵": the label, then a 16 pt pill in red tint with the count in red text, 6 pt after it. Drawn at
+    /// display time, so the colours follow the control's appearance.
     @MainActor static func labelImage(_ title: String, count: Int, selected: Bool, size: CGFloat = 13) -> NSImage {
-        let font = NSFont.systemFont(ofSize: size, weight: .medium)
+        let font = NSFont.systemFont(ofSize: size, weight: selected ? .medium : .regular)
         let label = NSAttributedString(string: title, attributes: [.font: font])
-        let countFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .bold)
+        let countFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
         let numeral = NSAttributedString(string: String(count), attributes: [.font: countFont])
-        let width = ceil(label.size().width + (count > 0 ? 5 + numeral.size().width : 0))
-        let image = NSImage(size: NSSize(width: width, height: ceil(label.size().height)), flipped: false) { rect in
-            NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: selected ? NDColor.ink : NDColor.ink2])
-                .draw(at: .zero)
+        let pill = max(16, ceil(numeral.size().width) + 8)
+        let width = ceil(label.size().width + (count > 0 ? 6 + pill : 0))
+        let height = max(16, ceil(label.size().height))
+        let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { rect in
+            let y = (rect.height - label.size().height) / 2
+            NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: selected ? NDColor.t1 : NDColor.t2])
+                .draw(at: NSPoint(x: 0, y: y))
             if count > 0 {
-                let y = (rect.height - numeral.size().height) / 2
-                NSAttributedString(string: String(count), attributes: [.font: countFont, .foregroundColor: NDColor.fault])
-                    .draw(at: NSPoint(x: label.size().width + 5, y: y))
+                let box = NSRect(x: label.size().width + 6, y: (rect.height - 16) / 2, width: pill, height: 16)
+                NDColor.red.setFill()
+                NSBezierPath(roundedRect: box, xRadius: 8, yRadius: 8).fill()
+                NSAttributedString(string: String(count), attributes: [.font: countFont, .foregroundColor: NSColor.white])
+                    .draw(at: NSPoint(x: box.midX - numeral.size().width / 2, y: box.midY - numeral.size().height / 2))
             }
             return true
         }
         image.isTemplate = false
-        image.accessibilityDescription = count > 0 ? "\(title), \(count == 1 ? "1 thing needs you" : "\(count) things need you")" : title
+        image.accessibilityDescription = count > 0
+            ? "\(title), \(count == 1 ? BrainBarMenuPresenter.Say.countOne.text : BrainBarMenuPresenter.SurfaceSay.thingsNeedYou(count))"
+            : title
         return image
     }
 }
@@ -226,292 +225,329 @@ struct NDOverviewPage: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let m = store.model
+        let r1 = store.r1
         VStack(alignment: .leading, spacing: 0) {
-            NDPageTop(title: m.headline, mark: m.headlineMark, checked: m.checked, large: true)
-            if let detail = m.headlineDetail {
-                Text(detail).font(NDType.fact).foregroundStyle(ND.ink2).padding(.top, 2)
+            NDHeadline(store: store, r1: r1)
+            NDActivitySection(store: store).padding(.top, 24)
+            HStack {
+                Text(BrainBarMenuPresenter.SurfaceSay.pipeline).font(NDType.bodyStrong).foregroundStyle(ND.t1)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
             }
-            if !m.faults.isEmpty {
-                NDNeedsBand(store: store)
-                    .padding(.top, 12)
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
-            }
-            NDHero(store: store, height: m.faults.isEmpty ? 104 : m.faults.count == 1 ? 80 : 48).padding(.top, 14)
-            NDPanel(model: m).padding(.top, 16)
+            .frame(height: 22)
+            .padding(.top, 30)
+            NDPipelineChart(state: r1.pipeline, memories: store.model.memories, popover: { station in
+                AnyView(NDStationDetails(store: store, station: station))
+            })
+            .padding(.top, 10)
+            .animation(reduceMotion ? nil : NDMotion.breakAppears, value: r1.pipeline)
         }
-        .animation(reduceMotion ? .easeOut(duration: 0.15) : NDMotion.needsBand, value: m.faults.map(\.title))
+        .animation(reduceMotion ? .easeOut(duration: 0.15) : NDMotion.needsBand, value: r1.items.map(\.id))
     }
 }
 
-/// The page's first line: the headline (or page title) with its mark hanging 20 pt into the margin, and when it was checked.
+/// A page's first line on Backups and Jobs: the title (17 Semibold) and its detail (13, t2).
 struct NDPageTop: View {
     let title: String
-    let mark: NDModel.Mark
-    let checked: String?
-    var large = false
+    var detail: String? = nil
 
     var body: some View {
-        HStack(alignment: .center) {
-            Text(title)
-                .font(large ? NDType.headline : NDType.pageTitle)
-                .tracking(large ? -0.4 : 0)
-                .overlay(alignment: .leading) { NDMarkView(mark: mark).offset(x: -20) }
-            Spacer(minLength: 16)
-            if let checked { Text(checked).font(NDType.caption).foregroundStyle(ND.ink2) }
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(NDType.title).tracking(-0.25).foregroundStyle(ND.t1).frame(height: 22)
+            if let detail { Text(detail).font(NDType.body).foregroundStyle(ND.t2) }
         }
-        .frame(minHeight: 34)
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
-struct NDNeedsBand: View {
+/// The Overview's first lines (§ 2.3): "All good" alone; one fault: symbol and title, the action right-aligned on the
+/// title line, the detail under it; two or more: "N things need you" and one 24 pt line per fault. Not confirmed: the
+/// question mark in t2 and its detail, no button. The symbol sits inside the text column.
+struct NDHeadline: View {
     @ObservedObject var store: NDStore
+    let r1: NDR1
 
     var body: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(store.model.faults.enumerated()), id: \.element.id) { index, fault in
-                if index > 0 { ND.rule.frame(height: 1) }
-                row(fault)
-            }
-        }
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(ND.deck))
-    }
-
-    private func row(_ fault: NDModel.Fault) -> some View {
-        let waiting = store.inputs.driveReconnecting && [.reconnectDrive, .connectDrive].contains(fault.action?.kind)
-        return HStack(alignment: .center, spacing: 12) {
-            NDMarkView(mark: .fault)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(keepingUnits(fault.title)).font(NDType.faultTitle)
-                if !fault.shownFacts.isEmpty {
-                    Text(keepingUnits(fault.shownFacts.joined(separator: " "))).font(NDType.fact).foregroundStyle(ND.ink2)
-                        .lineSpacing(2).fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 8) {
+                if let symbol = r1.headlineSymbol {
+                    Image(systemName: symbol).font(.system(size: 15, weight: .regular)).foregroundStyle(tone(r1.headlineTone))
+                        .frame(width: 16, height: 22)
                 }
-                if fault.action?.kind == .copyReport, store.inputs.copyReportFailed {
-                    Text(BrainBarMenuPresenter.SurfaceSay.copyFailed).font(NDType.fact).foregroundStyle(ND.ink2)
+                Text(r1.headline).font(NDType.title).tracking(-0.25).foregroundStyle(ND.t1)
+                Spacer(minLength: 16)
+                if r1.items.count == 1, let action = r1.items[0].action {
+                    actionButton(action, filled: NDButtonPolicy.filled(action))
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            if let action = fault.action {
-                NDWaitingSwap(waiting: waiting) {
-                    NDActionButton(label: action.label, large: true) { store.perform(action.kind) }
-                } line: {
-                    HStack(spacing: 7) {
-                        NDMarkView(mark: .running)
-                        Text(BrainBarMenuPresenter.SurfaceSay.waitingForBrowser).font(NDType.fact).foregroundStyle(ND.ink2)
+            .frame(minHeight: 22)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            if r1.items.count == 1, let detail = r1.items[0].detail, !detail.isEmpty {
+                Text(keepingUnits(detail)).font(NDType.body).foregroundStyle(ND.t2).padding(.leading, 24).padding(.top, 2)
+            } else if let detail = r1.unconfirmedDetail, r1.items.isEmpty {
+                Text(detail).font(NDType.body).foregroundStyle(ND.t2).padding(.leading, 24).padding(.top, 2)
+            }
+            if r1.items.count > 1 {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(r1.items) { item in
+                        HStack(spacing: 8) {
+                            Image(systemName: item.severity == .red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
+                                .font(.system(size: 13)).foregroundStyle(item.severity == .red ? ND.red : ND.orange)
+                                .frame(width: 16)
+                            Text(item.title).font(NDType.body).foregroundStyle(ND.t1).lineLimit(1)
+                            Spacer(minLength: 12)
+                            if let action = item.action { actionButton(action, filled: NDButtonPolicy.filled(action)) }
+                        }
+                        .frame(height: NDGrid.row)
                     }
                 }
+                .padding(.top, 6)
             }
         }
-        .padding(.vertical, 9)
-        .padding(.horizontal, 16)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(([fault.title] + fault.facts).joined(separator: " "))
+    }
+
+    private func tone(_ t: NDModel.Tone) -> Color {
+        switch t {
+        case .fault: ND.red
+        case .warn: ND.orange
+        case .fine: ND.t2
+        }
+    }
+
+    @ViewBuilder private func actionButton(_ action: BrainBarMenuPresentation.Action, filled: Bool) -> some View {
+        let waiting = store.inputs.driveReconnecting && [.reconnectDrive, .connectDrive].contains(action.kind)
+        NDWaitingSwap(waiting: waiting) {
+            NDButton(label: action.label, filled: filled) { store.perform(action.kind) }
+        } line: {
+            Text(BrainBarMenuPresenter.SurfaceSay.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)
+        }
     }
 }
 
-// MARK: Hero waveform
+// MARK: - Activity (§ 3.1)
 
-struct NDHero: View {
+struct NDActivitySection: View {
     @ObservedObject var store: NDStore
-    /// 104 pt calm; 80 pt with one fault; 48 pt with two or more (the needs band takes the room).
-    let height: CGFloat
+    @State private var hover: Int?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    static let gutter: CGFloat = 52
+    static let plotWidth: CGFloat = 800
+    static let plotHeight: CGFloat = 112
 
     var body: some View {
         let wave = store.inputs.heroWaves[store.range]
+        let known = wave?.readable == true
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center, spacing: 0) {
-                if let wave, wave.readable {
-                    total(wave.savesTotal, "saved by agents").accessibilityHidden(true)
-                    total(wave.readsTotal, "read from conversations").padding(.leading, 14).accessibilityHidden(true)
-                } else {
-                    Text("—").font(.system(size: 13, weight: .semibold)).foregroundStyle(ND.ink2)
-                }
+            HStack {
+                Text(Say.activity).font(NDType.bodyStrong).foregroundStyle(ND.t1).accessibilityAddTraits(.isHeader)
                 Spacer()
                 NDRangeControl(store: store)
             }
-            .padding(.bottom, 8)
-            // N03: the waveform and its totals are one element with one sentence; the range control stays three buttons.
-            GeometryReader { geo in
-                // B1: the waveform slides itself, from its data, in the same transaction as the new bucket.
-                NDWaveform(wave: wave, size: .hero, nowTick: true)
-                    .frame(width: geo.size.width, height: geo.size.height)
-                    .clipped()
-                    // Fix 9: a range switch is instant: a new identity per range, no cross-fade (two bar sets never share a frame).
-                    .id(store.range)
-                    .transition(.identity)
+            .frame(height: 22)
+            HStack(spacing: 20) {
+                legend(color: ND.saved, value: known ? wave.map { NDFormat.integer($0.savesTotal) } : nil, words: Say.savedByAgents)
+                legend(color: ND.read, value: known ? wave.map { NDFormat.integer($0.readsTotal) } : nil, words: Say.readFromConversations)
+                Spacer()
+                Text(Say.ownScale).font(NDType.caption).foregroundStyle(ND.t3)
             }
-            .frame(height: height + 10)
+            .frame(height: 18)
+            .padding(.top, 6)
+            .accessibilityElement(children: .combine)
+            ZStack(alignment: .topLeading) {
+                // R1.1 change 30: each half's maximum at the gutter's outer ends, so the size reads without hovering.
+                if let wave, wave.readable, wave.count > 0 {
+                    let bucket = max(1, store.range.minutes / max(wave.count, 1))
+                    Text(Say.perBucket(NDFormat.integer(wave.saves.max() ?? 0), minutes: bucket))
+                        .font(NDType.captionNumber).foregroundStyle(ND.t3)
+                        .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 5)
+                    Text(Say.perBucket(NDFormat.integer(wave.reads.max() ?? 0), minutes: bucket))
+                        .font(NDType.captionNumber).foregroundStyle(ND.t3)
+                        .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 106)
+                }
+                // "saved" just above the baseline, "read" just below it, in the series' text colours (H1).
+                Text(Say.saved).font(NDType.captionMedium).foregroundStyle(ND.savedText)
+                    .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 53)
+                Text(Say.readWord).font(NDType.captionMedium).foregroundStyle(ND.readText)
+                    .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 72)
+                NDWaveform(wave: wave, size: .hero, nowTick: true, hover: hover)
+                    .frame(width: Self.plotWidth, height: Self.plotHeight + 8)
+                    .offset(x: Self.gutter)
+                    .id(store.range)
+                    .transition(reduceMotion ? .identity : .opacity)
+                    .onContinuousHover(coordinateSpace: .local) { phase in
+                        switch phase {
+                        case let .active(p): hover = Self.bucket(at: p.x, count: wave?.count ?? 0)
+                        case .ended: hover = nil
+                        }
+                    }
+                if let hover, let wave, wave.readable, hover < wave.count {
+                    NDActivityReadout(wave: wave, index: hover, minutes: store.range.minutes, now: store.inputs.capture.now,
+                                      zone: store.inputs.capture.timeZone)
+                        .fixedSize()
+                        .alignmentGuide(.leading) { d in
+                            let x = Self.gutter + Self.center(hover, count: wave.count)
+                            // Change 31: in the right 40 % of the plot the readout opens to the left of the line.
+                            let right = Self.center(hover, count: wave.count) < Self.plotWidth * 0.6
+                            return -(right ? x + 12 : x - 12 - d.width)
+                        }
+                        .alignmentGuide(.top) { _ in 6 }
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(width: Self.gutter + Self.plotWidth, height: Self.plotHeight + 8, alignment: .topLeading)
+            .padding(.top, 14)
+            .animation(reduceMotion ? nil : NDMotion.rangeFade, value: store.range)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(NDModel.waveAccessibility(wave, minutes: store.range.minutes))
-            .animation(reduceMotion ? nil : NDMotion.needsBand, value: height)
             let axis = store.range.axis
-            HStack {
-                Text(axis.0)
-                Spacer()
+            ZStack {
+                HStack {
+                    Text(axis.0)
+                    Spacer()
+                    Text(axis.2)
+                }
                 Text(axis.1)
-                Spacer()
-                Text(axis.2)
             }
-            .font(NDType.axis).foregroundStyle(ND.ink2)
-            .padding(.top, 0)
+            .padding(.leading, Self.gutter)
+            .font(NDType.captionNumber)
+            .foregroundStyle(ND.t3)
+            .frame(height: 14)
+            .padding(.top, 4)
             .accessibilityHidden(true)
         }
-        .padding(EdgeInsets(top: 12, leading: 16, bottom: 10, trailing: 16))
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(ND.deck))
-        .accessibilityElement(children: .contain)
     }
 
-    private func total(_ value: Int, _ label: String) -> some View {
-        (Text(NDFormat.integer(value)).font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundColor(ND.ink)
-            + Text(" " + label).font(.system(size: 12)).foregroundColor(ND.ink2))
+    static func center(_ index: Int, count: Int) -> CGFloat {
+        let pitch = plotWidth / CGFloat(max(count, 1))
+        return CGFloat(index) * pitch + pitch / 2
+    }
+
+    /// The bucket under the pointer: the pair whose pitch holds it; outside the plot, none.
+    static func bucket(at x: CGFloat, count: Int) -> Int? {
+        guard count > 0, x >= 0, x < plotWidth else { return nil }
+        return min(count - 1, Int(x / (plotWidth / CGFloat(count))))
+    }
+
+    private func legend(color: Color, value: String?, words: String) -> some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8)
+            Text(value ?? NDModel.Number.unknown.value).font(NDType.numberStrong).foregroundStyle(ND.t1)
+            Text(words).font(NDType.body).foregroundStyle(ND.t2)
+        }
     }
 }
 
+/// The hover readout (H2): the bucket's time range, then each half's count and words. An overlay, not a tooltip, so it
+/// appears with no delay and moves in place.
+struct NDActivityReadout: View {
+    let wave: NDWave
+    let index: Int
+    let minutes: Int
+    let now: Date
+    let zone: TimeZone
+
+    var body: some View {
+        let width = Double(minutes * 60) / Double(max(wave.count, 1))
+        let end = (wave.endsAt ?? now).addingTimeInterval(-Double(wave.count - 1 - index) * width)
+        let start = end.addingTimeInterval(-width)
+        VStack(alignment: .leading, spacing: 0) {
+            Text(Self.clock(start, zone) + " to " + Self.clock(end, zone)).font(NDType.captionNumber).foregroundStyle(ND.t2)
+                .padding(.bottom, 3)
+            row(ND.saved, index < wave.saves.count ? wave.saves[index] : 0, Say.savedByAgents)
+            row(ND.read, index < wave.reads.count ? wave.reads[index] : 0, Say.readWord)
+        }
+        .padding(.horizontal, 9).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(ND.pop)
+            .shadow(color: .black.opacity(0.28), radius: 9, y: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(ND.hair2, lineWidth: 0.5))
+    }
+
+    private func row(_ color: Color, _ value: Int, _ words: String) -> some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8)
+            Text(NDFormat.integer(value)).font(NDType.numberStrong).foregroundStyle(ND.t1)
+            Text(words).font(NDType.body).foregroundStyle(ND.t2)
+        }
+        .frame(height: 18)
+    }
+
+    static func clock(_ date: Date, _ zone: TimeZone) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = zone
+        f.dateFormat = "HH:mm"
+        return f.string(from: date)
+    }
+}
+
+/// The range switch (1 h, 3 h, 24 h): the system's small segmented control.
 struct NDRangeControl: View {
     @ObservedObject var store: NDStore
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(NDRange.allCases) { range in
-                Button { store.range = range } label: {
-                    Text(range.label).font(.system(size: 11, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(store.range == range ? ND.ink : ND.ink2)
-                        .padding(.horizontal, 9).padding(.vertical, 2)
-                        .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(store.range == range ? ND.chip : .clear))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .ndKeyboardFocus { store.range = range }
-                .accessibilityAddTraits(store.range == range ? .isSelected : [])
-            }
-        }
-        .padding(2)
-        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(ND.rule))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Range")
+        NDSegments(titles: NDRange.allCases.map(\.label),
+                   selection: Binding(get: { NDRange.allCases.firstIndex(of: store.range) ?? 0 },
+                                      set: { store.range = NDRange.allCases[max(0, min($0, NDRange.allCases.count - 1))] }),
+                   accessibilityLabel: "Range", fontSize: 11, padding: 10, controlSize: .small)
+            .fixedSize()
     }
 }
 
-// MARK: The instrument panel
+// MARK: - Buttons (§ 3.3)
 
-struct NDPanel: View {
-    let model: NDModel
+/// The filled button (Reconnect only, R1.1 change 23) or a bordered one: 24 pt (22 small), 6 pt corners; hover and press
+/// tints, never a scale (change 22).
+struct NDButton: View {
+    let label: String
+    var filled = false
+    var small = false
+    let action: () -> Void
+
     var body: some View {
-        let left = model.areas.filter { ["Remembering", "Finding", "Agents"].contains($0.name) }
-        let right = model.areas.filter { ["Backups", "Upkeep"].contains($0.name) }
-        HStack(alignment: .top, spacing: NDGrid.columnGutter) {
-            column(left)
-            column(right)
-        }
-    }
-
-    private func column(_ areas: [NDModel.Area]) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            ForEach(areas) { NDAreaView(area: $0) }
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        Button(action: action) { Text(label) }
+            .buttonStyle(NDButtonStyle(filled: filled, small: small))
+            .ndKeyboardFocus(action: action)
+            .accessibilityLabel(Text(label))
     }
 }
 
-struct NDAreaView: View {
-    let area: NDModel.Area
+struct NDButtonStyle: ButtonStyle {
+    var filled = false
+    var small = false
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(area.name).font(NDType.areaName).tracking(0.2)
-                    .foregroundStyle(area.fault ? ND.fault : ND.ink)
-                    .overlay(alignment: .leading) { NDMarkView(mark: area.shownMark).offset(x: -20) }
-                Spacer()
-                if let aside = area.aside { Text(aside).font(NDType.axis).foregroundStyle(ND.ink2) }
-            }
-            .frame(height: 20)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(area.name + (area.fault ? ", needs you" : area.mark == .unknown ? ", " + (area.unknownReason ?? "not confirmed") : ""))
-            .help(area.unknownReason ?? "")
-            .accessibilityAddTraits(.isHeader)
-            VStack(spacing: 0) {
-                ForEach(area.rows) { NDPanelRow(row: $0) }
-            }
-            // Under the rows: a state word's Night plate (6 pt leading) masks the line where the word crosses it.
-            .background(alignment: .topLeading) {
-                if area.limitLine {
-                    GeometryReader { geo in
-                        NDLimitLine()
-                            .frame(width: 7, height: max(0, geo.size.height - 6))
-                            .position(x: geo.size.width - NDGrid.rowNumber - NDGrid.rowLane, y: geo.size.height / 2)
+    func makeBody(configuration: Configuration) -> some View {
+        NDButtonBody(configuration: configuration, filled: filled, small: small)
+    }
+
+    private struct NDButtonBody: View {
+        let configuration: Configuration
+        let filled: Bool
+        let small: Bool
+        @State private var hovering = false
+
+        var body: some View {
+            let pressed = configuration.isPressed
+            let fill: Color = filled ? (pressed ? ND.accentPressed : hovering ? ND.accentHover : ND.accent)
+                : (pressed ? ND.buttonPressed : hovering ? ND.buttonHover : ND.button)
+            configuration.label
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(filled ? Color.white : ND.t1)
+                .lineLimit(1)
+                .padding(.horizontal, small ? 10 : 12)
+                .frame(height: small ? 22 : 24)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(fill))
+                .overlay {
+                    // R1.1 change 22: hover adds a 0.5 pt inner highlight (filled) or a 0.5 pt t3 inner stroke (bordered);
+                    // nothing scales, the size never changes.
+                    if filled {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Color.white.opacity(hovering ? 0.25 : 0), lineWidth: 0.5)
+                    } else {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(hovering ? ND.t3 : ND.hair2, lineWidth: 0.5)
                     }
-                    .allowsHitTesting(false)
                 }
-            }
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .onHover { hovering = $0 }
         }
-    }
-}
-
-/// One area's limit: a 1 pt Track line through every row's limit, capped 3 pt at both ends (N1).
-struct NDLimitLine: View {
-    var body: some View {
-        GeometryReader { geo in
-            Canvas { ctx, size in
-                ctx.fill(Path(CGRect(x: 3, y: 0, width: 1, height: size.height)), with: .color(ND.track))
-                ctx.fill(Path(CGRect(x: 0, y: 0, width: 7, height: 1)), with: .color(ND.track))
-                ctx.fill(Path(CGRect(x: 0, y: size.height - 1, width: 7, height: 1)), with: .color(ND.track))
-            }
-            .frame(width: 7, height: geo.size.height)
-        }
-        .accessibilityHidden(true)
-    }
-}
-
-struct NDPanelRow: View {
-    let row: NDModel.Row
-
-    var body: some View {
-        HStack(spacing: 0) {
-            // A name never truncates: one a few points over the 146 pt column takes them from the gauge, whose end (the
-            // limit line) stays put.
-            name.fixedSize().frame(minWidth: NDGrid.rowName, alignment: .leading)
-            Spacer().frame(width: NDGrid.rowGap)
-            if row.stateWord {
-                Spacer(minLength: 0)
-                NDNumberText(number: row.number)
-                    .padding(.leading, 6)
-                    .background(ND.night)  // masks the limit line where the word crosses it
-            } else {
-                visual.frame(maxWidth: .infinity)
-                lane.frame(width: NDGrid.rowLane, alignment: .center)
-                NDNumberText(number: row.number).frame(width: NDGrid.rowNumber, alignment: .trailing)
-            }
-        }
-        .frame(height: NDGrid.rowPitch)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(row.accessibility)
-    }
-
-    @ViewBuilder private var name: some View {
-        if case let .agent(sessions, _, _) = row.visual {
-            HStack(spacing: 8) {
-                Text(row.name).font(NDType.row)
-                NDSessionDots(sessions: sessions)
-            }
-        } else {
-            Text(row.name).font(row.strong ? NDType.rowStrong : NDType.row).lineLimit(1)
-        }
-    }
-
-    @ViewBuilder private var visual: some View {
-        switch row.visual {
-        case .gauge, .emptyTrack, .unknown, .streak: NDGaugeView(visual: row.visual)
-        case let .fill(share): NDFillBar(share: share)
-        case let .agent(_, saves, scale): NDSavesBar(saves: saves, scale: scale)
-        case .none: Color.clear
-        }
-    }
-
-    @ViewBuilder private var lane: some View {
-        if case let .streak(n) = row.visual { NDStreakDots(count: n).padding(.leading, 4) } else { Color.clear }
     }
 }

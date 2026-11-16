@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 /// Installed by the UI shell only. Render harnesses keep their own activation policy.
 @MainActor
@@ -300,6 +301,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             window.titlebarSeparatorStyle = .automatic
             window.minSize = Self.minSize
             window.contentMinSize = Self.minSize
+            window.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            pageObserver = nil
             // F04 and N02: back on Classic, the new design's window work stops and its Settings window closes.
             if hasNewDesignStore { newDesignStore.setWindowActive(false) }
             NDSettingsWindowController.closeIfOpen()
@@ -317,9 +321,15 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             window.toolbar = newDesignToolbar.toolbar
             window.toolbarStyle = .unified
             window.titlebarSeparatorStyle = .none  // the root draws the one hairline at 52 pt
-            window.contentMinSize = NDGrid.windowMinimum
-            window.minSize = NDGrid.windowMinimum
+            // L17: the window takes each page's own height, width 900, and snaps on a tab switch with the top edge fixed.
+            fitPage(newDesignStore.page)
+            if pageObserver == nil {
+                pageObserver = newDesignStore.$page.removeDuplicates().dropFirst().sink { [weak self] page in
+                    MainActor.assumeIsolated { self?.fitPage(page) }
+                }
+            }
             if window.isVisible { newDesignStore.setWindowActive(true) }
+            return
         }
         // Keep the user's frame across the swap, never below the design's minimum.
         let minimum = window.frameRect(forContentRect: NSRect(origin: .zero, size: currentMinSize)).size
@@ -328,6 +338,21 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     }
 
     private var currentMinSize: NSSize { shownDesign == .new ? NDGrid.windowMinimum : Self.minSize }
+
+    nonisolated(unsafe) private var pageObserver: AnyCancellable?
+
+    /// The page's size, exactly (min = max), keeping the window's top-left corner; never animated (motion 2).
+    func fitPage(_ page: NDPage) {
+        let size = NSSize(width: NDGrid.windowWidth, height: NDGrid.windowHeight(page))
+        let frameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
+        window.contentMinSize = size
+        window.contentMaxSize = size
+        window.minSize = frameSize
+        window.maxSize = frameSize
+        let top = window.frame.maxY
+        window.setFrame(NSRect(x: window.frame.minX, y: top - frameSize.height, width: frameSize.width, height: frameSize.height),
+                        display: window.isVisible, animate: false)
+    }
 
     /// The new design's pages: open the window on one (motion 2: no window animation).
     func showPage(_ page: NDPage) {
