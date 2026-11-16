@@ -65,6 +65,87 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         return c
     }
 
+    // Reported 2026-11-16: the producer has noticed lag once, with no attention items.
+    private func lagCapture(state: BrainBarHealthVerdict.State = .amber, age: TimeInterval = 300) -> BrainBarMenuCapture {
+        var c = capture("ingest", state: state)
+        c.verdict = .init(dot: state == .red ? .red : .amber, checks: c.verdict!.checks.map { k in
+            k.name == "ingest" ? .init(name: k.name, state: k.state,
+                note: "watcher reports offset_lag (1 checks in a row)", unknownTicks: 0, blind: false) : k
+        }, notes: [], evaluatedAt: c.now)
+        c.watcher = .init(alertReasons: ["offset_lag"])
+        c.lagEpisodeStart = c.now.addingTimeInterval(-age)
+        return c
+    }
+
+    func testReportedAmberLagDoesNotNeedYouOrNotify() async {
+        let c = lagCapture()
+        let p = BrainBarMenuPresenter.present(c)
+        XCTAssertEqual(p.headline, BrainBarMenuPresenter.Say.r02Headline.text)
+        XCTAssertEqual(p.form, .calm)
+        XCTAssertFalse(p.rows.contains { $0.kind == .needsYou })
+        XCTAssertEqual(p.icon, .resting)
+        XCTAssertEqual(p.count, 0)
+        let report = BrainBarMenuReport.text(presentation: p, verdict: c.verdict, version: "test", now: c.now)
+        XCTAssertTrue(report.contains(BrainBarMenuPresenter.Say.r02Headline.text))
+        XCTAssertFalse(report.contains(BrainBarMenuPresenter.Say.cantFix.text))
+        XCTAssertTrue(BrainBarMenuPresenter.notificationFaults(c).isEmpty)
+        let center = Center()
+        await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c)
+        XCTAssertTrue(center.posts.isEmpty)
+        XCTAssertEqual(center.requests, 0)
+    }
+
+    func testLagBoundaryAndUncertainEvidence() {
+        for age in [300.0, 1800.0] {
+            XCTAssertEqual(BrainBarMenuPresenter.present(lagCapture(age: age)).form, .calm)
+        }
+        for state in [BrainBarHealthVerdict.State.green, .amber, .red, .unknown] {
+            let c = lagCapture(state: state)
+            XCTAssertEqual(BrainBarMenuPresenter.Say.catchingUp(c), state == .green || state == .amber)
+        }
+        var c = lagCapture()
+        c.watcher?.dbProbeFailed = true
+        XCTAssertFalse(BrainBarMenuPresenter.Say.catchingUp(c))
+        c = lagCapture()
+        c.watcher?.fresh = false
+        XCTAssertFalse(BrainBarMenuPresenter.Say.catchingUp(c))
+    }
+
+    func testClassicAmberLagHasNoAttentionItems() {
+        var input = BrainBarStatusSnapshotTests.healthy()
+        let c = lagCapture()
+        input.now = c.now
+        input.badge?.healthVerdict = c.verdict
+        let status = BrainBarStatusSnapshot.derive(input)
+        XCTAssertEqual(status.verdict.dot, .amber)
+        XCTAssertEqual(status.verdict.attentionRowCount, 0)
+        XCTAssertEqual(status.dashboardStatus.headline, "Check soon")
+    }
+
+    func testLagRedAndThirtyMinuteEscalationStillNeedYou() async {
+        for c in [lagCapture(state: .red), lagCapture(age: 1801)] {
+            let p = BrainBarMenuPresenter.present(c)
+            XCTAssertEqual(p.form, .needs)
+            XCTAssertEqual(p.icon, .marked)
+            XCTAssertEqual(p.count, 1)
+            let center = Center()
+            await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c)
+            XCTAssertEqual(center.posts.count, 1)
+        }
+    }
+
+    func testAmberIngestWithoutLagKeepsR24Attention() {
+        var c = lagCapture()
+        c.watcher = .init()
+        c.verdict = .init(dot: .amber, checks: c.verdict!.checks.map { k in
+            k.name == "ingest" ? .init(name: k.name, state: k.state,
+                note: "an agent BrainLayer does not index is running", unknownTicks: 0, blind: false) : k
+        }, notes: [], evaluatedAt: c.now)
+        let p = BrainBarMenuPresenter.present(c)
+        XCTAssertEqual(p.form, .needs)
+        XCTAssertEqual(p.rows.first { $0.kind == .needsYou }?.strings.first, BrainBarMenuPresenter.Say.generic.text)
+    }
+
     func testNewSameGoneAndReturned() async {
         let clock = Box()
         let center = Center()

@@ -83,13 +83,8 @@ extension BrainBarMenuPresenter {
                 k.name == "embedding" && (k.state == .red || (k.state == .amber && valid(k.ageS) && k.thresholdS.map { k.ageS! <= $0 } == true)) && ok(k)
             } == true
         }
-        /// R02's truth: a readable, fresh watcher with a working probe reports lag, `ingest` is present and green, and the
-        /// episode is not past the 30-minute limit (R24 escalates it).
-        static func catchingUp(_ c: Capture) -> Bool {
-            let ingest = c.verdict?.checks.filter { $0.name == "ingest" } ?? []
-            return c.watcher.map { $0.readable && $0.fresh && !$0.dbProbeFailed && $0.alertReasons.contains("offset_lag") } == true && !lagPastLimit(c)
-                && !ingest.isEmpty && ingest.allSatisfy { $0.state == .green }
-        }
+        /// R02: green or amber ingest lag under the app's escalation limit is being handled.
+        static func catchingUp(_ c: Capture) -> Bool { ingestLagDisposition(c) == .catchingUp }
         private static func behind(_ noun: String, _ c: Capture) -> Bool {
             noun == behindNoun[.remembering] ? catchingUp(c) : noun == behindNoun[.safe] && runningUpload(c) != nil
         }

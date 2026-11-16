@@ -1032,10 +1032,10 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             }
             return left
         }
-        /// R02: lag on a readable, fresh watcher file whose probe works, `ingest` green, the episode not past 30 minutes.
+        /// R02: lag on a readable, fresh watcher file whose probe works, `ingest` green or amber, the episode not past 30 minutes.
         var catchingUp: Bool {
             c.watcher.map { $0.readable && $0.fresh && !$0.dbProbeFailed && $0.alertReasons.contains("offset_lag") } == true
-                && c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } != true && every("ingest") { $0.state == .green }
+                && c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } != true && every("ingest") { $0.state == .green || $0.state == .amber }
         }
         /// A time the words can name (Foundation's own range; NaN is in no range).
         func nameable(_ d: Date) -> Bool { Self.nameable(d) }

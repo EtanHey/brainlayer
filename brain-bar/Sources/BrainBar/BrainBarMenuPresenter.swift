@@ -126,7 +126,7 @@ enum BrainBarMenuPresenter {
         if let w = c.watcher, w.readable, w.fresh {
             for reason in w.alertReasons where reason != "quarantined_record" {
                 if reason == "coverage_drop", w.dbProbeFailed { continue }
-                if reason == "offset_lag", !lagPastLimit(c) { continue }
+                if reason == "offset_lag", ingestLagDisposition(c) != .escalated { continue }
                 let thing: Thing = ["offset_lag", "coverage_drop", "file_ingestion_failure"].contains(reason) ? .remembering : .system
                 causes[thing, default: []].insert(appNotificationCause(reason))
             }
@@ -190,7 +190,7 @@ enum BrainBarMenuPresenter {
             lines.append(line)
         }
         guard let w = c.watcher, w.readable, w.fresh else { return lines }
-        if w.alertReasons.contains("offset_lag"), lagPastLimit(c) { lines.append(needs(.remembering, cause: appNotificationCause("offset_lag"))) }  // R02 escalated
+        if ingestLagDisposition(c) == .escalated { lines.append(needs(.remembering, cause: appNotificationCause("offset_lag"))) }  // R02 escalated
         for reason in w.alertReasons where !["offset_lag", "quarantined_record"].contains(reason) {
             if reason == "coverage_drop", w.dbProbeFailed { continue }
             lines.append(needs(["coverage_drop", "file_ingestion_failure"].contains(reason) ? .remembering : .system, cause: appNotificationCause(reason)))
@@ -199,6 +199,19 @@ enum BrainBarMenuPresenter {
     }
 
     static func lagPastLimit(_ c: Capture) -> Bool { c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } == true }
+
+    enum IngestLagDisposition { case unconfirmed, catchingUp, escalated }
+
+    /// One lag policy for rows, sentence truth, guard and notification causes. Red ingest still derives its
+    /// own Needs-you row; the app's independent clock escalates even without a usable verdict (R20).
+    static func ingestLagDisposition(_ c: Capture) -> IngestLagDisposition {
+        guard let w = c.watcher, w.readable, w.fresh, w.alertReasons.contains("offset_lag") else { return .unconfirmed }
+        if lagPastLimit(c) { return .escalated }
+        let ingest = c.verdict?.checks.filter { $0.name == "ingest" } ?? []
+        guard !w.dbProbeFailed, !ingest.isEmpty,
+              ingest.allSatisfy({ $0.state == .green || $0.state == .amber }) else { return .unconfirmed }
+        return .catchingUp
+    }
 
     // MARK: Part 1 rows from one fresh verdict
 
@@ -209,7 +222,9 @@ enum BrainBarMenuPresenter {
             switch worst(v, name) {
             case .green?: break
             case .red?: lines.append(needs(thing(of: name), cause: checkNotificationCause(name)))
-            case .amber?: lines.append(calmAmber(name, c, v) ?? needs(thing(of: name), cause: checkNotificationCause(name)))
+            case .amber?:
+                if name == "ingest", ingestLagDisposition(c) == .catchingUp { break }
+                lines.append(calmAmber(name, c, v) ?? needs(thing(of: name), cause: checkNotificationCause(name)))
             case .unknown?, nil: lines.append(checking(thing(of: name)))
             }
         }
@@ -225,7 +240,7 @@ enum BrainBarMenuPresenter {
             lines.append(checking(.safe))
         }
         if let w = c.watcher, w.readable, w.fresh, !w.dbProbeFailed {
-            if w.alertReasons.contains("offset_lag"), worst(v, "ingest") == .green, !lagPastLimit(c) {  // R02, under 30 min
+            if ingestLagDisposition(c) == .catchingUp {  // R02, under 30 min
                 lines.append(Line(thing: .remembering, level: .behind, strings: [Say.r02.text], headline: Say.r02Headline.text, spinner: true))
             }
         } else {
@@ -518,7 +533,7 @@ enum BrainBarMenuPresenter {
         let w = c.watcher.flatMap { $0.readable && $0.fresh ? $0 : nil }
         let appFact = c.maintenanceNightFailures.map { $0 >= 3 } == true
             || w?.alertReasons.contains { !["offset_lag", "quarantined_record"].contains($0) && !($0 == "coverage_drop" && w?.dbProbeFailed == true) } == true
-            || (w?.alertReasons.contains("offset_lag") == true && c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } == true)
+            || (ingestLagDisposition(c) == .escalated)
         if needsRows.isEmpty, red || appFact || p.form == .needs || p.count != 0 || p.icon == .marked {
             needsRows = [P.Row(kind: .needsYou, strings: needs(.system).strings + handoff, action: copyReport)]
         }
