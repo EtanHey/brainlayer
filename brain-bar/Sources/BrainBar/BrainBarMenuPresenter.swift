@@ -209,12 +209,6 @@ enum BrainBarMenuPresenter {
         return causes
     }
 
-    /// Context codes are already on the verdict wire. watcher_stalled alone cannot distinguish lag from
-    /// another stall; the watcher supplies those notices separately. Every other context remains visible.
-    private static func ingestHasOtherCause(_ c: Capture) -> Bool {
-        (c.verdict?.checks ?? []).contains { $0.name == "ingest" && ($0.contextCodes ?? []).contains { $0 != "watcher_stalled" } }
-    }
-
     // MARK: Part 1 rows from one fresh verdict
 
     private static func derive(_ c: Capture, _ v: BrainBarHealthVerdict) -> [Line] {
@@ -225,7 +219,7 @@ enum BrainBarMenuPresenter {
             case .green?: break
             case .red?: lines.append(needs(thing(of: name), cause: checkNotificationCause(name)))
             case .amber?:
-                if name == "ingest", ingestLagDisposition(c) == .catchingUp, !ingestHasOtherCause(c) { break }
+                if name == "ingest", ingestLagDisposition(c) == .catchingUp { break }
                 lines.append(calmAmber(name, c, v) ?? needs(thing(of: name), cause: checkNotificationCause(name)))
             case .unknown?, nil: lines.append(checking(thing(of: name)))
             }

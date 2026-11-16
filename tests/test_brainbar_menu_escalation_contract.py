@@ -21,13 +21,17 @@ def function(source, name):
 def assert_one_escalation_source(presenter, sentences):
     outside = presenter.replace(function(presenter, "appEscalationCauses"), "")
     outside = outside.replace(function(outside, "lagPastLimit"), "")
-    assert not re.search(r"maintenanceNightFailures[^\n]*>=\s*3|==\s*\.escalated|>\s*1800", outside + sentences)
+    assert not re.search(r"maintenanceNightFailures[^\n]*>=\s*3|==\s*\.escalated|>\s*1800", outside + sentences), (
+        "R31: an escalation threshold is decided outside appEscalationCauses: move it there"
+    )
     for name in ("classify", "finalGuard", "appFacts"):
-        assert "appEscalationCauses(c)" in function(presenter, name)
+        assert "appEscalationCauses(c)" in function(presenter, name), (
+            f"R31: {name} must call appEscalationCauses(c): use the shared escalation decision"
+        )
     assert (
         "appEscalationCauses(c)"
         in sentences.split("static let checkSoon", 1)[1].split("static let checkingMemory", 1)[0]
-    )
+    ), "R31: checkSoon must call appEscalationCauses(c): use the shared escalation decision"
 
 
 def test_escalation_policy_has_one_source_and_rejects_a_fourth_site():

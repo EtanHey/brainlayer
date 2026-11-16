@@ -95,6 +95,24 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertEqual(center.requests, 0)
     }
 
+    func testReportedAmberLagWithIncompleteCensusStaysCalm() async {
+        var c = lagCapture()
+        c.verdict = .init(dot: .amber, checks: c.verdict!.checks.map { check in
+            var check = check
+            if check.name == "ingest" { check.contextCodes = ["agent_census_incomplete"] }
+            return check
+        }, notes: [], evaluatedAt: c.now)
+        let p = BrainBarMenuPresenter.present(c)
+        XCTAssertEqual(p.headline, BrainBarMenuPresenter.Say.r02Headline.text)
+        XCTAssertEqual(p.count, 0)
+        XCTAssertEqual(p.icon, .resting)
+        XCTAssertFalse(p.rows.contains { $0.kind == .needsYou })
+        XCTAssertFalse(p.rows.contains { $0.state == .notice })
+        let center = Center()
+        await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c)
+        XCTAssertTrue(center.posts.isEmpty)
+    }
+
     func testLagBoundaryAndUncertainEvidence() {
         for age in [300.0, 1800.0] {
             XCTAssertEqual(BrainBarMenuPresenter.present(lagCapture(age: age)).form, .calm)
