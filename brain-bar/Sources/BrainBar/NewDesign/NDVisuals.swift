@@ -6,19 +6,23 @@ import SwiftUI
 /// The colours a visual draws with, so the same form serves the window (its own planes) and the dropdown (the system
 /// menu material).
 struct NDPalette: Equatable {
+    /// D7.5: which palette this is. Equality compares it, so a view handed another palette redraws (the selected
+    /// dropdown row's bars used to keep their muted colours on the blue selection, because every palette compared equal).
+    var id: String = "window"
     var ink: Color, ink2: Color, track: Color, saves: Color, reads: Color, fault: Color, warn: Color, plane: Color
-    static let window = NDPalette(ink: ND.ink, ink2: ND.ink2, track: ND.track, saves: ND.lumenGraphic, reads: ND.tide,
+    static let window = NDPalette(id: "window", ink: ND.ink, ink2: ND.ink2, track: ND.track, saves: ND.lumenGraphic, reads: ND.tide,
                                   fault: ND.fault, warn: ND.warn, plane: ND.night)
-    static let menu = NDPalette(ink: Color(nsColor: .labelColor), ink2: Color(nsColor: .secondaryLabelColor), track: ND.menuTrack,
+    static let menu = NDPalette(id: "menu", ink: Color(nsColor: .labelColor), ink2: Color(nsColor: .secondaryLabelColor), track: ND.menuTrack,
                                 saves: ND.menuSaves, reads: ND.menuReads, fault: ND.fault, warn: ND.warn, plane: .clear)
     /// Review polish 2: on a highlighted dropdown row the waveform, the gauge's neutral parts and the number take the
     /// system's selected text colour (saves 100 %, reads 55 %); fault and warning stay their colours.
     static let menuSelected: NDPalette = {
         let selected = Color(nsColor: .alternateSelectedControlTextColor)
-        return NDPalette(ink: selected, ink2: selected, track: selected.opacity(0.4), saves: selected, reads: selected.opacity(0.55),
+        return NDPalette(id: "menu.selected", ink: selected, ink2: selected, track: selected.opacity(0.4), saves: selected,
+                         reads: selected.opacity(0.6),
                          fault: ND.fault, warn: ND.warn, plane: .clear)
     }()
-    static func == (a: Self, b: Self) -> Bool { true }
+    static func == (a: Self, b: Self) -> Bool { a.id == b.id }
 }
 
 private struct NDPaletteKey: EnvironmentKey { static let defaultValue = NDPalette.window }

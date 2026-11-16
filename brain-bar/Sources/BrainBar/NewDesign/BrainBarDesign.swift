@@ -75,7 +75,8 @@ enum NDColor {
     static let focus = dynamic("focus", dark: rgb(0x4D8DFF), light: rgb(0x1F5FD6))
     static let saved = dynamic("saved", dark: rgb(0xA995FF), light: rgb(0x7356DA))
     static let savedText = dynamic("saved.t", dark: rgb(0xB6A6FF), light: rgb(0x6446CC))
-    static let read = dynamic("read", dark: rgb(0x6B7385), light: rgb(0x80889B))
+    /// D8.3: dark read bars 15 % lighter (#6B7385 → #7D8597; on bg 3.61 → 4.64:1).
+    static let read = dynamic("read", dark: rgb(0x7D8597), light: rgb(0x80889B))
     static let readText = dynamic("read.t", dark: rgb(0x9AA1B3), light: rgb(0x5F677A))
     static let red = dynamic("red", dark: rgb(0xFF453A), light: rgb(0xFF3B30))
     static let redText = dynamic("red.t", dark: rgb(0xFF6961), light: rgb(0xD70015))
@@ -239,6 +240,9 @@ enum NDMotion {
     static let breakAppears = Animation.easeOut(duration: 0.2)
     static let popoverOpens = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.16)
     static let buttonLeaves = Animation.easeOut(duration: 0.1)
-    static let waitingEnters = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.15).delay(0.1)
+    /// D8.2: the waiting line starts at 40 % of the button's 100 ms fade (§ 3.4 #10: a 150 ms cross-fade), so no empty
+    /// frame falls between the button leaving and the line arriving.
+    static let waitingDelay: Double = 0.04
+    static let waitingEnters = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.15).delay(waitingDelay)
     static let runningPeriod: TimeInterval = 1.6
 }

@@ -21,9 +21,9 @@ struct NDWindowRoot: View {
             ScrollView(.vertical) {
                 Group {
                     switch store.page {
-                    case .overview: NDOverviewPage(store: store)
-                    case .backups: NDBackupsPage(store: store)
-                    case .jobs: NDJobsPage(store: store)
+                    case .overview: NDOverviewPage(store: store).onAppear { drawn(.overview) }
+                    case .backups: NDBackupsPage(store: store).onAppear { drawn(.backups) }
+                    case .jobs: NDJobsPage(store: store).onAppear { drawn(.jobs) }
                     }
                 }
                 .padding(.horizontal, NDGrid.pageSide)
@@ -45,6 +45,15 @@ struct NDWindowRoot: View {
         .background(ND.bg)
         .foregroundStyle(ND.t1)
         .environment(\.ndPalette, .window)
+    }
+}
+
+extension NDWindowRoot {
+    /// The page this root last drew (D1's test reads it; nothing else does).
+    func drawn(_ page: NDPage) {
+#if DEBUG
+        store.drawnPageForTesting = page
+#endif
     }
 }
 
@@ -211,7 +220,7 @@ struct NDSegmentedPages: View {
     @ObservedObject var store: NDStore
     var body: some View {
         NDSegments(titles: NDPage.allCases.map(\.title),
-                   counts: NDPage.allCases.map { [.backups: store.model.backupsTabCount, .jobs: store.model.jobsTabCount][$0] ?? 0 },
+                   counts: NDPage.allCases.map { [.backups: store.r1.backupsBadge, .jobs: store.r1.jobsBadge][$0] ?? 0 },
                    selection: Binding(get: { NDPage.allCases.firstIndex(of: store.page) ?? 0 },
                                       set: { store.page = NDPage.allCases[max(0, min($0, NDPage.allCases.count - 1))] }),
                    accessibilityLabel: "Pages")
@@ -290,16 +299,21 @@ struct NDHeadline: View {
                 Text(detail).font(NDType.body).foregroundStyle(ND.t2).padding(.leading, 24).padding(.top, 2)
             }
             if r1.items.count > 1 {
-                VStack(alignment: .leading, spacing: 0) {
+                // D7.1: each fault its own row (48 pt at least, 8 pt apart): its title, its one line of consequence (as the
+                // dropdown says it), and its button; one mark per surface (§ 2.2, § 7), rows in the text column.
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(r1.items) { item in
-                        // One mark per surface for the faults (§ 2.2, § 7: titles carry no mark of their own); the rows sit
-                        // in the headline's text column.
-                        HStack(spacing: 8) {
-                            Text(item.title).font(NDType.body).foregroundStyle(ND.t1).lineLimit(1)
+                        HStack(alignment: .center, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title).font(NDType.bodyStrong).foregroundStyle(ND.t1).lineLimit(1)
+                                if let line = item.menuDetail ?? item.detail, !line.isEmpty {
+                                    Text(keepingUnits(line)).font(NDType.body).foregroundStyle(ND.t2).lineLimit(1)
+                                }
+                            }
                             Spacer(minLength: 12)
                             if let action = item.action { actionButton(action, filled: NDButtonPolicy.filled(action)) }
                         }
-                        .frame(height: NDGrid.row)
+                        .frame(minHeight: 48)
                         .padding(.leading, 24)
                     }
                 }
@@ -331,6 +345,14 @@ struct NDHeadline: View {
 struct NDActivitySection: View {
     @ObservedObject var store: NDStore
     @State private var hover: Int?
+    /// The plot's frame in the section, reported as laid out (D8.1's test).
+    var reportPlotFrame: ((CGRect) -> Void)? = nil
+
+    init(store: NDStore, hover: Int? = nil, reportPlotFrame: ((CGRect) -> Void)? = nil) {
+        self.store = store
+        _hover = State(initialValue: hover)
+        self.reportPlotFrame = reportPlotFrame
+    }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     static let gutter: CGFloat = 52
     static let plotWidth: CGFloat = 800
@@ -359,10 +381,10 @@ struct NDActivitySection: View {
                 // R1.1 change 30: each half's maximum at the gutter's outer ends, so the size reads without hovering.
                 if let wave, wave.readable, wave.count > 0 {
                     let bucket = max(1, store.range.minutes / max(wave.count, 1))
-                    Text(Say.perBucket(NDFormat.integer(wave.saves.max() ?? 0), minutes: bucket))
+                    Text(Say.upTo(NDFormat.integer(wave.saves.max() ?? 0), minutes: bucket))
                         .font(NDType.captionNumber).foregroundStyle(ND.t3)
                         .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 5)
-                    Text(Say.perBucket(NDFormat.integer(wave.reads.max() ?? 0), minutes: bucket))
+                    Text(Say.upTo(NDFormat.integer(wave.reads.max() ?? 0), minutes: bucket))
                         .font(NDType.captionNumber).foregroundStyle(ND.t3)
                         .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 106)
                 }
@@ -373,6 +395,9 @@ struct NDActivitySection: View {
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 72)
                 NDWaveform(wave: wave, size: .hero, nowTick: true, hover: hover)
                     .frame(width: Self.plotWidth, height: Self.plotHeight + 8)
+                    .background(GeometryReader { g in
+                        Color.clear.onAppear { reportPlotFrame?(g.frame(in: .named("activity"))) }
+                    })
                     .offset(x: Self.gutter)
                     .id(store.range)
                     .transition(reduceMotion ? .identity : .opacity)
@@ -382,6 +407,10 @@ struct NDActivitySection: View {
                         case .ended: hover = nil
                         }
                     }
+            }
+            .frame(width: Self.gutter + Self.plotWidth, height: Self.plotHeight + 8, alignment: .topLeading)
+            // D8.1: the readout is an overlay: it takes no layout space, so the plot never moves when it appears.
+            .overlay(alignment: .topLeading) {
                 if let hover, let wave, wave.readable, hover < wave.count {
                     NDActivityReadout(wave: wave, index: hover, minutes: store.range.minutes, now: store.inputs.capture.now,
                                       zone: store.inputs.capture.timeZone)
@@ -396,7 +425,6 @@ struct NDActivitySection: View {
                         .allowsHitTesting(false)
                 }
             }
-            .frame(width: Self.gutter + Self.plotWidth, height: Self.plotHeight + 8, alignment: .topLeading)
             .padding(.top, 14)
             .animation(reduceMotion ? nil : NDMotion.rangeFade, value: store.range)
             .accessibilityElement(children: .ignore)
@@ -417,6 +445,7 @@ struct NDActivitySection: View {
             .padding(.top, 4)
             .accessibilityHidden(true)
         }
+        .coordinateSpace(name: "activity")
     }
 
     static func center(_ index: Int, count: Int) -> CGFloat {
@@ -525,9 +554,11 @@ struct NDButtonStyle: ButtonStyle {
         let filled: Bool
         let small: Bool
         @State private var hovering = false
+        /// D8.2: while the button leaves for the waiting line it keeps its pressed look: no rest frame after the press.
+        @Environment(\.ndHeldPressed) private var held
 
         var body: some View {
-            let pressed = configuration.isPressed
+            let pressed = configuration.isPressed || held
             let fill: Color = filled ? (pressed ? ND.accentPressed : hovering ? ND.accentHover : ND.accent)
                 : (pressed ? ND.buttonPressed : hovering ? ND.buttonHover : ND.button)
             configuration.label
