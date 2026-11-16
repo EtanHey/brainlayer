@@ -358,12 +358,18 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     private(set) var fittedFrameSize: NSSize?
     private var lastHeadlineKey: String?
 
+    /// Tests set the screen's visible height, so the L25 cap never depends on the machine running them.
+    var visibleHeightOverride: CGFloat?
+    /// The visible height the L25 cap is computed from: the window's screen, else the main screen.
+    var fitScreenHeight: CGFloat? {
+        visibleHeightOverride ?? window.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height
+    }
+
     /// The page's size, exactly (min = max), keeping the window's top-left corner; never animated (motion 2).
     func fitPage(_ page: NDPage) {
-        // L17: the page's own height, from its laid-out content (a fault headline makes the Overview taller), never
-        // below the spec's page height; capped at the screen, past which the page scrolls under its fade (§ 2.3).
-        let screen = window.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height
-        let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.window(newDesignStore, page: page, screen: screen))
+        // R1.2 change 22 and L25: the page's own height, from its laid-out content, capped at the screen's visible height
+        // minus 40 pt, past which the page scrolls under its fade and the footer stays.
+        let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.window(newDesignStore, page: page, screen: fitScreenHeight))
         let frameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
         // Content limits only: AppKit keeps one pair of size limits, and setting `minSize`/`maxSize` clears these.
         window.contentMinSize = size

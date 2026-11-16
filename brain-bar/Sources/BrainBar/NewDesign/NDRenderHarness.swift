@@ -53,6 +53,12 @@ import SwiftUI
             }
             written.append(try settings(name: "settings-\(suffix)", appearance: appearance, in: directory))
             written.append(try icons(name: "icons-\(suffix)", appearance: appearance, in: directory))
+            // R1.3 comp 37: the three hover states (Memory's explanation; the Jobs and Drive faults with their actions).
+            for (fixture, station) in [(BrainBarDesignFixture.Name.calm, NDStation.memory), (.twoFaults, .jobs), (.twoFaults, .drive)] {
+                let store = NDStore(fixture: BrainBarDesignFixture.inputs(fixture), page: .overview)
+                written.append(try hover(store, station: station, name: "hover-\(station.rawValue)-\(fixture.rawValue)-\(suffix)",
+                                         appearance: appearance, in: directory))
+            }
         }
         return written
     }
@@ -62,6 +68,24 @@ import SwiftUI
         // L17: each page at its own height.
         let size = size ?? NSSize(width: NDGrid.windowWidth, height: NDPageHeight.window(store, page: store.page, screen: nil))
         let view = NDWindowRoot(store: store, drawsTrafficLights: true).frame(width: size.width, height: size.height)
+        try write(host(view, size: size, appearance: appearance), name: name, in: directory)
+        return name
+    }
+
+    /// The Pipeline surface with one station hovered and its popover drawn where AppKit opens it (popovers are their own
+    /// windows, so the harness draws the content at the layout's frame instead).
+    static func hover(_ store: NDStore, station: NDStation, name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
+        let r1 = store.r1
+        let chart = NDPipelineChart(state: r1.pipeline, memories: store.model.memories, items: r1.stationItems, interactive: false,
+                                    popover: { s in AnyView(NDStationPopover(store: store, station: s)) }, previewHover: station)
+        let size = NSSize(width: NDGrid.windowWidth, height: 660)
+        let view = ZStack(alignment: .topLeading) {
+            ND.bg
+            NDCard(padding: EdgeInsets(top: 16, leading: 16, bottom: 12, trailing: 16)) { chart }
+                .frame(width: NDGrid.windowWidth - 2 * NDGrid.pageSide)
+                .offset(x: NDGrid.pageSide, y: 150)
+        }
+        .frame(width: size.width, height: size.height)
         try write(host(view, size: size, appearance: appearance), name: name, in: directory)
         return name
     }
@@ -83,14 +107,14 @@ import SwiftUI
 
     /// The brain in its four states, real size and 4x, on a strip of the menu bar's colour.
     static func icons(name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
-        // R1.2 change 10 (L23): rest, one red, two red, amber ("Check soon"), not confirmed.
-        let images: [NSImage] = [BrainBarDesignFixture.Name.calm, .driveSignedOut, .twoFaults, .backupLate, .notConfirmed].map { name in
+        // R1.3 change 12 (L23): rest, one red, two red, amber ("Check soon"), catching up (resting), not confirmed.
+        let images: [NSImage] = [BrainBarDesignFixture.Name.calm, .driveSignedOut, .twoFaults, .backupLate, .meaningBehind, .notConfirmed].map { name in
             let inputs = BrainBarDesignFixture.inputs(name)
             let model = NDModel.make(inputs)
             return NDIcon.image(for: model, NDR1.make(inputs, model))
         }
         let dark = appearance == .darkAqua
-        let size = NSSize(width: 5 * 120, height: 140)
+        let size = NSSize(width: 6 * 120, height: 140)
         let rep = try bitmap(size)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)

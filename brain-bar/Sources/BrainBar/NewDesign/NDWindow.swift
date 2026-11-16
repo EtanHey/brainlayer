@@ -242,9 +242,9 @@ struct NDOverviewPage: View {
             NDActivitySection(store: store).padding(.top, 20)
             NDBlockHeading(title: Say.pipeline).padding(.top, 20)
             NDCard(padding: EdgeInsets(top: 16, leading: 16, bottom: 14, trailing: 16)) {
-                NDPipelineChart(state: r1.pipeline, memories: store.model.memories, popover: { station in
-                    AnyView(NDStationDetails(store: store, station: station))
-                })
+                NDPipelineChart(state: r1.pipeline, memories: store.model.memories, items: r1.stationItems,
+                                waiting: store.inputs.driveReconnecting, perform: { store.perform($0) },
+                                popover: { station in AnyView(NDStationPopover(store: store, station: station)) })
             }
             .animation(reduceMotion ? nil : NDMotion.breakAppears, value: r1.pipeline)
         }
@@ -320,9 +320,9 @@ struct NDHeadline: View {
     @ObservedObject var store: NDStore
     let r1: NDR1
 
-    /// The headline as at 6d779bc1 (R1.2 changes 4 to 7 skipped by the lead for revision 1.3): one item names itself with
-    /// its detail and button; more: the title and one row per item (its title, one line, its button). R1.2 change 8 and
-    /// L24: one amber notice gives its line under the title; not confirmed, the question mark, title and detail.
+    /// L27: one line. The mark and "2 things need you", or the single fault's own sentence; each problem is carried by
+    /// its station (its treatment, its popover, its action at rest). Amber and not confirmed keep their line under the
+    /// title (R1.2 change 8, L24).
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 8) {
@@ -331,37 +331,13 @@ struct NDHeadline: View {
                         .frame(width: 16, height: 22)
                 }
                 Text(r1.headline).font(NDType.title).tracking(-0.25).foregroundStyle(ND.t1)
-                Spacer(minLength: 16)
-                if r1.items.count == 1, let action = r1.items[0].action {
-                    actionButton(action, filled: NDButtonPolicy.filled(action))
-                }
+                Spacer(minLength: 0)
             }
             .frame(minHeight: 22)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
-            if let detail = r1.headlineDetail ?? (r1.items.count == 1 ? r1.items[0].detail : nil), !detail.isEmpty {
+            if let detail = r1.headlineDetail, !detail.isEmpty {
                 Text(keepingUnits(detail)).font(NDType.body).foregroundStyle(ND.t2).padding(.leading, 24).padding(.top, 2)
-            }
-            if r1.items.count > 1 {
-                // D7.1: each item its own row (48 pt at least, 8 pt apart): its title, its one line of consequence (as the
-                // dropdown says it), and its button; one mark per surface (§ 2.2, § 7), rows in the text column.
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(r1.items) { item in
-                        HStack(alignment: .center, spacing: 8) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.title).font(NDType.bodyStrong).foregroundStyle(ND.t1).lineLimit(1)
-                                if let line = item.menuDetail ?? item.detail, !line.isEmpty {
-                                    Text(keepingUnits(line)).font(NDType.body).foregroundStyle(ND.t2).lineLimit(1)
-                                }
-                            }
-                            Spacer(minLength: 12)
-                            if let action = item.action { actionButton(action, filled: NDButtonPolicy.filled(action)) }
-                        }
-                        .frame(minHeight: 48)
-                        .padding(.leading, 24)
-                    }
-                }
-                .padding(.top, 6)
             }
         }
     }
@@ -371,15 +347,6 @@ struct NDHeadline: View {
         case .fault: ND.red
         case .warn: ND.orange
         case .fine: ND.t2
-        }
-    }
-
-    @ViewBuilder private func actionButton(_ action: BrainBarMenuPresentation.Action, filled: Bool) -> some View {
-        let waiting = store.inputs.driveReconnecting && [.reconnectDrive, .connectDrive].contains(action.kind)
-        NDWaitingSwap(waiting: waiting) {
-            NDButton(label: action.label, filled: filled) { store.perform(action.kind) }
-        } line: {
-            Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)
         }
     }
 }
@@ -575,28 +542,34 @@ struct NDButton: View {
     let label: String
     var filled = false
     var small = false
+    /// R1.3 change 16: the action under a station (20 pt high, 10 pt sides, 13 pt).
+    var compact = false
+    /// The spoken name when the visible one leans on what stands beside it ("Reconnect" under Google Drive).
+    var accessibility: String? = nil
     let action: () -> Void
 
     var body: some View {
         Button(action: action) { Text(label) }
-            .buttonStyle(NDButtonStyle(filled: filled, small: small))
+            .buttonStyle(NDButtonStyle(filled: filled, small: small, compact: compact))
             .ndKeyboardFocus(action: action)
-            .accessibilityLabel(Text(label))
+            .accessibilityLabel(Text(accessibility ?? label))
     }
 }
 
 struct NDButtonStyle: ButtonStyle {
     var filled = false
     var small = false
+    var compact = false
 
     func makeBody(configuration: Configuration) -> some View {
-        NDButtonBody(configuration: configuration, filled: filled, small: small)
+        NDButtonBody(configuration: configuration, filled: filled, small: small, compact: compact)
     }
 
     private struct NDButtonBody: View {
         let configuration: Configuration
         let filled: Bool
         let small: Bool
+        var compact = false
         @State private var hovering = false
         /// D8.2: while the button leaves for the waiting line it keeps its pressed look: no rest frame after the press.
         @Environment(\.ndHeldPressed) private var held
@@ -609,8 +582,8 @@ struct NDButtonStyle: ButtonStyle {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(filled ? Color.white : ND.t1)
                 .lineLimit(1)
-                .padding(.horizontal, small ? 10 : 12)
-                .frame(height: small ? 22 : 24)
+                .padding(.horizontal, small || compact ? 10 : 12)
+                .frame(height: compact ? 20 : small ? 22 : 24)
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(fill))
                 .overlay {
                     // R1.1 change 22: hover adds a 0.5 pt inner highlight (filled) or a 0.5 pt t3 inner stroke (bordered);

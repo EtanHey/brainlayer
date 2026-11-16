@@ -32,7 +32,16 @@ struct NDR1: Equatable, Sendable {
         var catchingUp: Bool { severity == .orange && (id == "meaning" || id == "reader") }
         /// The page that owns it (the dropdown's row values turn red when concerned).
         var concerns: Set<String>
+        /// R1.3: the station that carries it on the loop (its treatment, its popover, its action at rest).
+        var station: NDStation? = nil
     }
+
+    /// The station a check belongs to on the loop.
+    static let stationForCheck: [String: NDStation] = [
+        "ingest": .read, "stores": .queue, "embedding": .search, "search": .search, "backup_local": .mac, "integrity": .mac,
+        "disk": .mac, "backup_offsite": .drive, "transcripts": .drive, "drive_auth": .drive,
+        "maintenanceNightly": .jobs, "nightly": .jobs, "weekly": .jobs,
+    ]
 
     struct MenuRow: Equatable, Sendable, Identifiable {
         enum Kind: String, Sendable { case activity, search, backups, jobs }
@@ -62,6 +71,15 @@ struct NDR1: Equatable, Sendable {
     var footerRight: String?
     var calm: Bool { items.isEmpty && unconfirmedSince == nil }
     var redCount: Int { items.filter { $0.severity == .red }.count }
+    /// R1.3: each station's item (red before amber), for its action at rest and its popover.
+    var stationItems: [NDStation: Item] {
+        var out: [NDStation: Item] = [:]
+        for item in items.sorted(by: { ($0.severity == .red ? 0 : 1) < ($1.severity == .red ? 0 : 1) }) {
+            guard let station = item.station, out[station] == nil else { continue }
+            out[station] = item
+        }
+        return out
+    }
     /// L23: the amber dot on the icon iff an amber notice that is not catching up, and nothing red.
     var amberDot: Bool { redCount == 0 && items.contains { $0.severity == .orange && !$0.catchingUp } }
     /// Tab badges (D6): red items only, by the page that owns them.
@@ -84,7 +102,7 @@ struct NDR1: Equatable, Sendable {
 
         if !pipeline.allUnconfirmed {
             // Google Drive refuses: one cause, two connections (c10, c11).
-            if pipeline.faultStations.contains(.drive) {
+            if check("drive_auth")?.state == .red {
                 let action = m.faults.first { $0.action.map { [.reconnectDrive, .connectDrive].contains($0.kind) } == true }?.action
                     ?? P.Action(kind: .reconnectDrive, label: BrainBarMenuPresenter.Say.reconnect.text)
                 items.append(Item(id: "drive", severity: .red, title: Say.driveSignedOut,
@@ -92,7 +110,7 @@ struct NDR1: Equatable, Sendable {
                                       : BrainBarMenuPresenter.Say.s13Detail.text,
                                   action: action, strip: Strip(from: Say.stageMac, to: Say.stageDrive, side: .target, severity: .red),
                                   menuDetail: driveAges(verdict).min().map { Say.lastDriveUpload(NDFormat.ageText($0)) },
-                                  concerns: ["drive_auth", "backup_offsite", "transcripts"]))
+                                  concerns: ["drive_auth", "backup_offsite", "transcripts"], station: .drive))
                 covered.formUnion(["drive_auth", "backup_offsite", "transcripts"])
             }
             // One agent's sessions not read, or the reader itself.
@@ -101,13 +119,14 @@ struct NDR1: Equatable, Sendable {
                 if let first = agents.first {
                     items.append(Item(id: "agent", severity: sev, title: Say.agentNotRead(first.label), detail: Say.agentNotReadDetail,
                                       action: sev == .red ? copyReport : nil, strip: Strip(from: first.label, to: Say.stageRead, side: .source, severity: sev),
-                                      concerns: ["ingest"]))
+                                      concerns: ["ingest"], station: .agents))
                 } else {
                     // D6: amber is late, not stopped: "Catching up on new conversations", no "needs you", no button.
                     items.append(Item(id: "reader", severity: sev,
                                       title: sev == .red ? Say.readerNotReading : BrainBarMenuPresenter.Say.r02Headline.text,
                                       detail: sev == .red ? BrainBarMenuPresenter.Say.cantFix.text : nil, action: sev == .red ? copyReport : nil,
-                                      strip: Strip(from: Say.goesIn, to: Say.stageRead, side: .target, severity: sev), concerns: ["ingest"]))
+                                      strip: Strip(from: Say.yourAgents, to: Say.stageRead, side: .target, severity: sev), concerns: ["ingest"],
+                                      station: .read))
                 }
                 covered.insert("ingest")
             }
@@ -116,7 +135,8 @@ struct NDR1: Equatable, Sendable {
                 let age = NDFormat.ageText(max(0, c.now.timeIntervalSince(queued)))
                 items.append(Item(id: "saves", severity: sev, title: Say.savesStuck,
                                   detail: Say.savesWaited(i.savesWaiting.flatMap { $0 > 0 ? $0 : nil }, age), action: sev == .red ? copyReport : nil,
-                                  strip: Strip(from: Say.stageQueue, to: Say.stageMemory, side: .target, severity: sev), concerns: ["stores"]))
+                                  strip: Strip(from: Say.stageQueue, to: Say.stageMemory, side: .target, severity: sev), concerns: ["stores"],
+                                  station: .queue))
                 covered.insert("stores")
             }
             // The nightly check-up failing (c12, source).
@@ -127,7 +147,7 @@ struct NDR1: Equatable, Sendable {
                                   strip: Strip(from: Say.jobs, to: Say.stageMemory, side: .source, severity: .red),
                                   menuTitle: Say.nightlyFailedShort(nights),
                                   menuDetail: lastNightly(i).map { Say.notCheckedSinceShort(weekday($0, c)) },
-                                  concerns: ["maintenanceNightly", "nightly"]))
+                                  concerns: ["maintenanceNightly", "nightly"], station: .jobs))
                 covered.formUnion(["maintenanceNightly", "nightly"])
             }
         }
@@ -145,15 +165,18 @@ struct NDR1: Equatable, Sendable {
             let concerned = (verdict?.checks ?? []).filter { f.concerns.contains($0.name) }
             let red = concerned.isEmpty || concerned.contains { $0.state == .red }
             let action = red ? f.action : f.action.flatMap { NDButtonPolicy.filled($0) ? $0 : nil }
+            let station = (!f.jobs.isEmpty || f.thing == .upkeep) ? NDStation.jobs
+                : f.concerns.sorted().compactMap { stationForCheck[$0] }.first
             items.append(Item(id: "p." + f.title, severity: red ? .red : .orange, title: f.title, detail: f.shownFacts.joined(separator: " "),
-                              action: action, strip: nil, concerns: f.concerns))
+                              action: action, strip: nil, concerns: f.concerns, station: station))
         }
         // Search by meaning behind (orange, late) or stalled (red): no button, there is nothing to do.
         if !pipeline.allUnconfirmed, let embedding = check("embedding"), let s = sev(embedding) {
             let age = NDFormat.ageText(max(0, embedding.ageS ?? 0))
             items.append(Item(id: "meaning", severity: s, title: s == .red ? Say.meaningBehind(age) : Say.meaningCatchingUp,
                               detail: Say.meaningBehindDetail, action: nil,
-                              strip: Strip(from: Say.stageMemory, to: Say.stageMeaning, side: .target, severity: s), concerns: ["embedding"]))
+                              strip: Strip(from: Say.stageMemory, to: Say.search, side: .target, severity: s), concerns: ["embedding"],
+                              station: .search))
         }
         // One filled button per surface: the first item's action; the copy-report button is never the filled one when a
         // reconnect exists (kept as data: the views read `filledActionIndex`).
@@ -177,11 +200,11 @@ struct NDR1: Equatable, Sendable {
                 detail = unconfirmedDetail
             }
         } else if red > 0 {
-            // One red item names itself; more items: "N things need you" (red items only), then one row per item.
-            if items.count == 1, let only = items.first {
+            // L27: one line. The single fault's own sentence, or "N things need you"; each problem is carried by its station.
+            if red == 1, let only = items.first(where: { $0.severity == .red }) {
                 headline = only.title
             } else {
-                headline = red == 1 ? BrainBarMenuPresenter.Say.countOne.text : Say.thingsNeedYou(red)
+                headline = Say.thingsNeedYou(red)
             }
             symbol = "exclamationmark.circle.fill"
             tone = .fault
@@ -284,20 +307,27 @@ struct NDR1: Equatable, Sendable {
         let percent = i.searchable.map { Int(($0 * 100).rounded(.down)) }
         var searchValue = percent.map { Say.percentReady($0) } ?? NDModel.Number.unknown.value
         var searchTone: NDModel.Tone = .fine
-        switch worst([.meaning, .search]) {
+        switch worst([.search]) {
         case .fine: break
         case .notConfirmed: searchValue = NDModel.Number.unknown.value
-        case let .issue(words, sev):
-            searchValue = words ?? (sev == .red ? Say.failed : Say.late)
+        case let .issue(_, sev):
+            // R1.2 change 9: the row says how far behind ("2 h behind"); the station says "by meaning 2 h behind".
+            let embedding = checks.first { $0.name == "embedding" && $0.state != .green }
+            if let age = embedding?.ageS, age.isFinite, age >= 0 {
+                searchValue = Say.behind(NDFormat.ageText(age))
+            } else {
+                searchValue = sev == .red ? Say.failed : Say.late
+            }
             searchTone = tone(sev)
         }
         let searchHelp = i.searchable.map { Say.searchable(String(format: "%.1f", $0 * 100)) }
         // Backups: the oldest of the three newest copies, so the number is the one closest to late.
         let copyNames = ["backup_local", "backup_offsite", "transcripts"]
         let ages = copyNames.compactMap { name in checks.first { $0.name == name }?.ageS }.filter { $0.isFinite && $0 >= 0 }
-        let backupsConcerned = items.contains { !$0.concerns.isDisjoint(with: Set(copyNames + ["drive_auth", "integrity", "disk"])) }
+        // L29: one treatment: a red concerned item makes the row red; an amber one makes it amber.
+        let concerned = items.filter { !$0.concerns.isDisjoint(with: Set(copyNames + ["drive_auth", "integrity", "disk"])) }
         var backupsValue: String
-        var backupsTone: NDModel.Tone = backupsConcerned ? .fault : .fine
+        var backupsTone: NDModel.Tone = concerned.contains { $0.severity == .red } ? .fault : concerned.isEmpty ? .fine : .warn
         if fresh, ages.count == copyNames.count, let oldest = ages.max() {
             backupsValue = Say.ago(NDFormat.ageText(oldest))
         } else {

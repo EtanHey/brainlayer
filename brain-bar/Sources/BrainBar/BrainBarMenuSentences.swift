@@ -471,7 +471,7 @@ extension BrainBarMenuPresenter {
         static func nextCheckIn(_ age: String) -> String { "Next check in \(age)" }
         static func lastCheckedAgo(_ age: String) -> String { "Last checked \(age) ago" }
         static let savedByAgents = "saved by agents"
-        static let readFromConversations = "read from conversations"
+        static let readFromConversations = "read from agents\u{2019} sessions"
         static let saved = "saved"
         static let readWord = "read"
         static let now = "now"
@@ -624,6 +624,28 @@ extension BrainBarMenuPresenter {
         static func plusMore(_ n: Int) -> String { "+\(n) more" }
         static func perBucket(_ value: String, minutes: Int) -> String { minutes == 1 ? "\(value) / min" : "\(value) / \(minutes) min" }
 
+        // Revision 1.3 (L32, L33): the loop's lanes, the short action names, the fault popovers' conditional lines, and the
+        // eight station explanations (CHANGES-R1.3 § F, each sentence true of BrainLayer as written).
+        static let lanesSessions = "sessions"
+        static let lanesSaves = "saves"
+        static let sessionFilesCopied = "session files, copied as they are"
+        static let answersToAgentsLane = "answers to agents"
+        static let yourAgents = "Your agents"
+        static func byMeaningBehind(_ age: String) -> String { "by meaning \(age) behind" }
+        static let copyReportShort = "Copy report"
+        static func lastGoodRun(_ day: String, _ time: String) -> String { "Last good run: \(day), \(time)." }
+        static let memoryStillSaves = "Memory still saves and answers searches; it hasn\u{2019}t been checked or tidied since."
+        static let notCheckedOrTidiedSince = "It hasn\u{2019}t been checked or tidied since."
+        static let macCopyStillMade = "The copy on this Mac is still made every night."
+        static let explainAgents = "Your coding agents. BrainBar reads the session files they write, and takes the memories they save. Search answers go back to them."
+        static let explainRead = "Watches the agents\u{2019} session files as they grow, keeps what matters and turns it into memories."
+        static let explainQueue = "Holds memories an agent has saved until they are written. It is normally empty; a save that waits too long shows here."
+        static let explainMemory = "The database every memory lives in. Everything else reads from it or copies it."
+        static let explainSearch = "Finds memories two ways: by meaning, and by matching words. Agents ask it, and the answers go back to them."
+        static let explainMac = "Every night, a checked copy of the database is saved on this Mac."
+        static let explainDrive = "The copy on this Mac is uploaded to your Google Drive, and the agents\u{2019} session files are copied there too. If Drive is signed out, both stop."
+        static let explainJobs = "Read memory, check it and tidy it in place: a light check-up every night and a deep clean that compacts the whole database every week. They add no new memories."
+
         // Settings
         static let settingsTitle = "BrainBar Settings"
         static let reconnectShort = "Reconnect"
@@ -634,7 +656,7 @@ extension BrainBarMenuPresenter {
         /// V1's VoiceOver sentence for the waveform.
         static func wave(span minutes: Int, saves: Int, reads: Int) -> String {
             let span = minutes == 60 ? "Last hour" : minutes == 180 ? "Last 3 hours" : "Last 24 hours"
-            return "\(span): \(saves) saved by agents, \(reads) read from conversations."
+            return "\(span): \(saves) saved by agents, \(reads) read from agents\u{2019} sessions."
         }
     }
 }

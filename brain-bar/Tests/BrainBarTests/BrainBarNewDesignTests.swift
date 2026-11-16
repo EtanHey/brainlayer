@@ -159,13 +159,50 @@ import SwiftUI
             XCTAssertEqual(store.page, page)
             XCTAssertEqual(store.drawnPageForTesting, page, "the window root drew the page the tab names")
             XCTAssertEqual(control.selectedSegment, index, "the selected segment names the same page")
-            let height = NDPageHeight.window(store, page: page, screen: nil)
+            // L25: the page's height, capped the way the controller caps it (the runner's screen is small: 644 pt).
+            let height = NDPageHeight.window(store, page: page, screen: controller.fitScreenHeight)
             let held = controller.windowWillResize(window, to: NSSize(width: 1200, height: 300)).height
             for measured in [window.frame.height, held] {
                 XCTAssertGreaterThanOrEqual(measured, height - 0.5, "\(page): the height follows the same page")
                 XCTAssertLessThanOrEqual(measured, height + NDGrid.titleBar, "\(page)")
             }
         }
+    }
+
+    /// L25 on a small screen, injected so no machine decides it: the window is held at the cap (visible height minus 40),
+    /// the page scrolls inside it, and the footer stays at the window's bottom edge.
+    func testASmallScreenCapsTheWindowThePageScrollsTheFooterStays() throws {
+        let d = defaults()
+        d.set("new", forKey: BrainBarDesign.key)
+        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
+        controller.visibleHeightOverride = 600
+        controller.designDefaults = d
+        controller.applyDesign()
+        controller.fitPage(.overview)
+        let store = controller.newDesignStore
+        let cap: CGFloat = 600 - 40
+        let page = ceil(NDPageHeight.content(store, page: .overview) + NDPageHeight.chrome)
+        XCTAssertGreaterThan(page, cap, "the Overview is taller than this screen allows")
+        XCTAssertEqual(NDPageHeight.window(store, page: .overview, screen: controller.fitScreenHeight), cap)
+        let window = controller.windowForTesting
+        let held = controller.windowWillResize(window, to: NSSize(width: 1200, height: 900)).height
+        for measured in [window.frame.height, held] {
+            XCTAssertGreaterThanOrEqual(measured, cap - 0.5, "held at the cap")
+            XCTAssertLessThanOrEqual(measured, cap + NDGrid.titleBar, "never the full page")
+        }
+        // The window root at the capped size: the page's scroll view ends where the footer begins, and its content is
+        // longer than it (it scrolls); the footer keeps the last 28 pt.
+        let host = NSHostingView(rootView: NDWindowRoot(store: store))
+        host.frame = NSRect(x: 0, y: 0, width: NDGrid.windowWidth, height: cap)
+        host.layoutSubtreeIfNeeded()
+        func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(scrollViews) }
+        let scroll = try XCTUnwrap(scrollViews(host).max { $0.frame.height < $1.frame.height }, "the page sits in a scroll view")
+        let frame = scroll.convert(scroll.bounds, to: host)
+        let bottomGap = host.isFlipped ? cap - frame.maxY : frame.minY
+        XCTAssertEqual(bottomGap, NDGrid.footer, accuracy: 1, "the footer stays below the scrolling page")
+        XCTAssertEqual(frame.height, cap - NDGrid.titleBar - NDGrid.footer, accuracy: 1)
+        // The scroll view's document is laid out lazily off screen, so the page's own measured height says it scrolls.
+        XCTAssertGreaterThan(NDPageHeight.content(store, page: .overview) + NDGrid.pageTop + 20, frame.height + 1, "the page scrolls")
     }
 
     /// The window: classic keeps main's hosting controller and root type; new swaps in its own and swaps back.
@@ -194,8 +231,7 @@ import SwiftUI
         let window = controller.windowForTesting
         func holds(_ page: NDPage, _ line: UInt = #line) {
             // R1.2 change 22 and L25: the page's measured height, capped at the screen's visible height minus 40 pt.
-            let h = NDPageHeight.window(controller.newDesignStore, page: page,
-                                        screen: window.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height)
+            let h = NDPageHeight.window(controller.newDesignStore, page: page, screen: controller.fitScreenHeight)
             let held = controller.windowWillResize(window, to: NSSize(width: 1400, height: 200))
             XCTAssertEqual(held.width, 900, "not resizable: the delegate holds the page size", line: line)
             XCTAssertGreaterThanOrEqual(held.height, h, line: line)
@@ -1170,77 +1206,81 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
 
     private func pipeline(_ name: Fixture.Name) -> NDPipelineState { NDPipelineState.make(Fixture.inputs(name)) }
 
-    /// § 3.2's seven states and the others, each drawn from its own facts.
+    /// R1.3: every state on the loop, each drawn from its own facts, in one treatment per station.
     func testEachFixtureDrawsItsState() throws {
         let calm = pipeline(.calm)
-        XCTAssertTrue(calm.breaks.isEmpty)
-        XCTAssertTrue(calm.faultStations.isEmpty)
-        XCTAssertTrue(calm.quiet.isEmpty)
+        XCTAssertTrue(calm.faults.isEmpty && calm.notices.isEmpty && calm.agentFaults.isEmpty)
         XCTAssertFalse(calm.allUnconfirmed)
+        XCTAssertTrue(NDPipe.allCases.allSatisfy { calm.look($0) == .flowing }, "L6: calm stays calm")
         XCTAssertEqual(calm.status[.read]?.text, Say.lastRead(NDFormat.ageText(48)))
         XCTAssertEqual(calm.status[.queue]?.text, Say.empty)
         XCTAssertEqual(calm.status[.mac]?.text, Say.lastBackup(NDFormat.ageText(4 * 3600)))
         XCTAssertEqual(calm.status[.drive]?.text, Say.lastBackup(NDFormat.ageText(4 * 3600)), "the older of the two Drive copies")
         XCTAssertEqual(calm.status[.jobs]?.text, Say.lastCheckUp(NDFormat.ageText(5 * 3600)))
-        XCTAssertEqual(calm.status[.meaning]?.text, Say.percentReady(99))
         XCTAssertEqual(calm.status[.search]?.text, Say.working)
         XCTAssertTrue(calm.status.values.allSatisfy { $0.severity == nil })
 
         let agent = pipeline(.agentNotRead)
-        XCTAssertEqual(agent.breaks, [.agentCursor: .init(side: .source, severity: .red)])
-        XCTAssertEqual(agent.redAgents, [.cursor])
-        XCTAssertEqual(agent.phrases.map(\.text), [Say.notBeingRead])
+        XCTAssertEqual(agent.agentFaults, [.cursor: .red])
+        XCTAssertEqual(agent.treatment(.agents), .fault)
+        XCTAssertTrue(NDPipe.allCases.allSatisfy { agent.look($0) == .flowing }, "an agent's fault is its row, no pipe breaks")
 
         for name in [Fixture.Name.driveSignedOut, .reconnectWaiting] {
             let drive = pipeline(name)
-            XCTAssertEqual(drive.faultStations, [.drive], name.rawValue)
-            XCTAssertEqual(drive.stationPipes, [.macDrive, .conversationsCopy], name.rawValue)
-            XCTAssertTrue(drive.breaks.isEmpty, "one cause, drawn on the station")
+            XCTAssertEqual(drive.faults, [.drive], name.rawValue)
+            XCTAssertEqual(drive.look(.macDrive), .breakIn, "Drive refuses what arrives")
+            XCTAssertEqual(drive.look(.rail), .breakIn)
             XCTAssertEqual(drive.status[.drive], .init(text: Say.signedOut, severity: .red))
             XCTAssertEqual(drive.status[.mac]?.severity, nil, "the Mac copy is still fresh")
         }
 
         let saves = pipeline(.savesStuck)
-        XCTAssertEqual(saves.breaks, [.queueMemory: .init(side: .target, severity: .red)])
+        XCTAssertEqual(saves.faults, [.queue])
+        XCTAssertEqual(saves.look(.queueMemory), .breakOut, "the pipe out of the faulty stage carries the break")
         XCTAssertEqual(saves.status[.queue], .init(text: Say.waiting(NDFormat.ageText(2 * 3600)), severity: .red))
 
         let meaning = pipeline(.meaningBehind)
-        XCTAssertEqual(meaning.breaks, [.memoryMeaning: .init(side: .target, severity: .orange)])
-        XCTAssertEqual(meaning.quiet, [.meaningSearch: .orange], "downstream: delayed")
-        XCTAssertEqual(meaning.status[.meaning], .init(text: Say.behind(NDFormat.ageText(2 * 3600)), severity: .orange))
-        XCTAssertEqual(meaning.status[.search]?.text, Say.working, "search still works by words")
+        XCTAssertEqual(meaning.notices, [.search])
+        XCTAssertEqual(meaning.look(.memorySearch), .notice, "the amber stretch into Search")
+        XCTAssertEqual(meaning.look(.answers), .flowing, "the return to the agents stays solid")
+        XCTAssertEqual(meaning.status[.search], .init(text: Say.byMeaningBehind(NDFormat.ageText(2 * 3600)), severity: .orange))
 
         let nightly = pipeline(.nightlyFailing)
-        XCTAssertEqual(nightly.breaks, [.jobsMemory: .init(side: .source, severity: .red)])
+        XCTAssertEqual(nightly.faults, [.jobs])
+        XCTAssertEqual(nightly.look(.jobsMemory), .breakOut)
         XCTAssertEqual(nightly.status[.jobs], .init(text: Say.nightlyFailedShort(3), severity: .red), "the status names the job")
 
         let stale = pipeline(.notConfirmed)
         XCTAssertTrue(stale.allUnconfirmed)
         XCTAssertNotNil(stale.unconfirmedSince)
-        XCTAssertTrue(stale.breaks.isEmpty && stale.faultStations.isEmpty, "no red, no marks")
-        XCTAssertFalse(stale.status.isEmpty, "status lines keep their last known values (faded)")
+        XCTAssertTrue(NDStation.allCases.allSatisfy { stale.treatment($0) == .notConfirmed })
+        XCTAssertTrue(NDPipe.allCases.allSatisfy { stale.look($0) == .dashed }, "every pipe dashed")
+        XCTAssertFalse(stale.status.isEmpty, "status lines keep their last known values")
 
         let two = pipeline(.twoFaults)
-        XCTAssertEqual(two.faultStations, [.drive])
-        XCTAssertEqual(Set(two.breaks.keys), [.jobsMemory])
+        XCTAssertEqual(two.faults, [.drive, .jobs])
+
+        let late = pipeline(.backupLate)
+        XCTAssertEqual(late.notices, [.mac])
+        XCTAssertEqual(late.look(.memoryMac), .notice)
 
         XCTAssertEqual(pipeline(.backupsFailedUpload), calm, "a failed upload last week is history, not a break now")
     }
 
-    /// Every check the chart can draw, from the verdict's facts alone: red on a calm verdict draws on its own pipes.
+    /// Every check the chart can draw, from the verdict's facts alone: red on a calm verdict marks only its own station.
     func testEachRedCheckBreaksItsOwnConnection() {
         let expected: [String: (NDPipelineState) -> Bool] = [
-            "ingest": { $0.breaks[.junctionRead]?.side == .target && $0.status[.read]?.severity == .red },
-            "stores": { $0.breaks[.inSaves]?.side == .source },
-            "embedding": { $0.breaks[.memoryMeaning]?.side == .target && $0.quiet[.meaningSearch] == .red },
-            "search": { $0.breaks[.out]?.side == .source },
-            "backup_local": { $0.breaks[.memoryMac]?.side == .target },
-            "backup_offsite": { $0.breaks[.macDrive]?.side == .target },
-            "transcripts": { $0.breaks[.conversationsCopy]?.side == .target },
-            "drive_auth": { $0.faultStations.contains(.drive) && $0.stationPipes == [.macDrive, .conversationsCopy] },
-            "integrity": { $0.faultStations == [.mac] && $0.breaks.isEmpty },
-            "disk": { $0.faultStations == [.mac] && $0.breaks.isEmpty },
-            "monitor": { $0.allUnconfirmed && $0.breaks.isEmpty },
+            "ingest": { $0.faults == [.read] && $0.look(.readMemory) == .breakOut && $0.status[.read]?.severity == .red },
+            "stores": { $0.faults == [.queue] && $0.look(.queueMemory) == .breakOut },
+            "embedding": { $0.faults == [.search] && $0.look(.memorySearch) == .breakIn && $0.look(.answers) == .flowing },
+            "search": { $0.faults == [.search] && $0.look(.answers) == .breakOut },
+            "backup_local": { $0.faults == [.mac] && $0.look(.macDrive) == .breakOut },
+            "backup_offsite": { $0.faults == [.drive] && $0.look(.macDrive) == .breakIn },
+            "transcripts": { $0.faults == [.drive] && $0.look(.rail) == .breakIn },
+            "drive_auth": { $0.faults == [.drive] && $0.look(.macDrive) == .breakIn && $0.look(.rail) == .breakIn },
+            "integrity": { $0.faults == [.mac] },
+            "disk": { $0.faults == [.mac] },
+            "monitor": { $0.allUnconfirmed && $0.faults.isEmpty },
         ]
         XCTAssertEqual(Set(expected.keys), Set(NDPipelineGraph.checks.keys))
         for (name, holds) in expected {
@@ -1248,18 +1288,14 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             i.capture = Fixture.capture(Fixture.replacing(Fixture.calmChecks(), Fixture.check(name, .red, age: 2 * 3600, limit: 3600)), dot: .red)
             let drawn = NDPipelineState.make(i)
             XCTAssertTrue(holds(drawn), "\(name): \(drawn)")
-            // Only its own pipes: nothing else breaks.
-            let own = Set(NDPipelineGraph.pipes(for: name))
-            XCTAssertTrue(Set(drawn.breaks.keys).isSubset(of: own), "\(name) broke \(drawn.breaks.keys) outside \(own)")
         }
         // A check that cannot say: its pipes are drawn "not confirmed", nothing breaks.
         var unknown = Fixture.inputs(.calm)
         unknown.capture = Fixture.capture(Fixture.replacing(Fixture.calmChecks(), Fixture.check("backup_offsite", .unknown)))
         let drawn = NDPipelineState.make(unknown)
         XCTAssertEqual(drawn.unconfirmed, [.macDrive])
-        XCTAssertTrue(drawn.breaks.isEmpty)
-        // The word path is never broken and never "flowing": nothing checks it.
-        XCTAssertEqual(NDPipelineChart.stroke(for: .words, in: .calm), .unguarded)
+        XCTAssertEqual(drawn.look(.macDrive), .dashed)
+        XCTAssertTrue(drawn.faults.isEmpty)
     }
 
     /// Headlines, details and the one filled button (R1.1 change 23: Reconnect only; the report is always bordered).
@@ -1333,7 +1369,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         }
         let calm = NDPageHeight.window(NDStore(fixture: Fixture.inputs(.calm), page: .overview), page: .overview, screen: nil)
         let twoFaults = NDPageHeight.window(NDStore(fixture: Fixture.inputs(.twoFaults), page: .overview), page: .overview, screen: nil)
-        XCTAssertGreaterThan(twoFaults, calm, "two Problems rows are taller, so the window is")
+        XCTAssertEqual(twoFaults, calm, "L27: the headline is one line, so two problems do not make the Overview taller")
         // L25: capped at the screen's visible height minus 40 pt; past it, the page scrolls and the footer stays.
         XCTAssertEqual(NDPageHeight.window(NDStore(fixture: three, page: .overview), page: .overview, screen: 720), 680)
         print("Overview heights: " + heights.joined(separator: ", "))
@@ -1343,13 +1379,13 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     /// day a fifth family appears, so the "+N more" list is built then.
     func testAgentFamiliesStayWithinTheChartsList() {
         XCTAssertLessThanOrEqual(AgentFamily.allCases.count, 5, "a fifth agent family: build change 17a (+N more)")
-        XCTAssertEqual(NDPipelineLayout.agents.count, AgentFamily.allCases.count)
+        XCTAssertEqual(NDPipelineLayout.agentRows.count, AgentFamily.allCases.count)
     }
 
     /// D2 (real screen, round 1): one state, one truth. For every fixture, no dropdown row shows a fine value for an area
     /// whose stages read late, broken or not confirmed on the Overview (the same `condition` rule).
     func testDropdownRowsNeverClaimFineWhereTheOverviewDoesNot() {
-        let stagesOf: [NDR1.MenuRow.Kind: [NDStation]] = [.search: [.meaning, .search], .backups: [.mac, .drive], .jobs: [.jobs]]
+        let stagesOf: [NDR1.MenuRow.Kind: [NDStation]] = [.search: [.search], .backups: [.mac, .drive], .jobs: [.jobs]]
         var checkedNotFine = 0
         for name in Fixture.Name.allCases {
             let i = Fixture.inputs(name)
@@ -1386,27 +1422,35 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertTrue(NDIcon.dimmed(m, NDR1.make(unread, m)), "no reading yet")
     }
 
-    /// D4: every popover opens below its station, so none covers the Activity chart above the pipeline; none covers a
-    /// station it shares a pipe with, except the hub's over Jobs (directly under it; every edge of the hub has a neighbour).
-    func testStationPopoversOpenBelowAndClearTheirNeighbours() {
-        let neighbours: [NDStation: Set<NDStation>] = [
-            .read: [.memory], .queue: [.memory], .mac: [.memory, .drive], .drive: [.mac],
-            .meaning: [.memory, .search], .search: [.meaning], .jobs: [.memory],
-        ]
-        let i = Fixture.inputs(.calm)
-        let m = NDModel.make(i)
-        for station in NDStation.allCases {
-            XCTAssertEqual(NDStationButton.arrowEdge(station), .bottom, "\(station)")
-            let rows = CGFloat(NDStationDetails.lines(station, m, i).count)
-            let height = 12 + 22 + rows * 24 + (NDStationDetails.page(station) == nil ? 0 : 32) + 12
-            let anchor = station == .memory ? CGPoint(x: NDPipelineLayout.hub.midX, y: NDPipelineLayout.hub.maxY)
-                : CGPoint(x: NDPipelineLayout.point(station).x, y: NDPipelineLayout.point(station).y + 13)
-            let x = min(max(anchor.x - 138, 12), NDPipelineLayout.size.width - 12 - 276)
-            let rect = CGRect(x: x, y: anchor.y + 10, width: 276, height: height)
-            XCTAssertGreaterThan(rect.minY, 0, "\(station) never reaches the Activity chart above the pipeline")
-            for other in neighbours[station] ?? [] where other != .memory {
-                let p = NDPipelineLayout.point(other)
-                XCTAssertFalse(rect.intersects(CGRect(x: p.x - 13, y: p.y - 13, width: 26, height: 26)), "\(station) covers \(other)")
+    /// R1.3.1 L2: no popover covers its own station, another station's name or status, or a lane label, for all eight
+    /// stations, in every fixture, at the default window size (the frames NSPopover gives: centred on the anchor, on its
+    /// side, at the content's measured size).
+    func testPopoversNeverCoverTheirStationNamesOrLaneLabels() {
+        let lanes = NDPipelineLayout.laneLabelRects()
+        for name in Fixture.Name.allCases {
+            let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
+            let r1 = store.r1
+            for station in NDStation.allCases {
+                let item = r1.stationItems[station]
+                let spec = NDPipelineLayout.popover(station, actions: NDPipelineChart.actionStations(r1.stationItems))
+                let size = NDStationPopover.measure(AnyView(NDStationPopover(store: store, station: station)), width: spec.width)
+                let frame = NDPipelineLayout.popoverFrame(spec, height: size.height)
+                let where_ = "\(name.rawValue) \(station)"
+                XCTAssertFalse(frame.intersects(NDPipelineLayout.hitRect(station).insetBy(dx: 4, dy: 4)), "\(where_) covers its station")
+                for other in NDStation.allCases where other != station {
+                    for rect in NDPipelineLayout.labelRects(other, r1.pipeline) {
+                        XCTAssertFalse(frame.intersects(rect), "\(where_) covers \(other)'s words")
+                    }
+                    if let action = r1.stationItems[other]?.action {
+                        let button = NDPipelineLayout.actionFrame(other, width: NDPipelineChart.actionWidth(action))
+                        XCTAssertFalse(frame.intersects(button), "\(where_) covers \(other)'s action")
+                    }
+                }
+                if let action = item?.action {
+                    let own = NDPipelineLayout.actionFrame(station, width: NDPipelineChart.actionWidth(action))
+                    XCTAssertFalse(frame.intersects(own), "\(where_) covers its own action")
+                }
+                for (label, rect) in lanes { XCTAssertFalse(frame.intersects(rect), "\(where_) covers \"\(label)\"") }
             }
         }
     }
@@ -1477,12 +1521,12 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertTrue(lr.items.allSatisfy { $0.action == nil }, "no report button for a lag")
     }
 
-    /// D7: rows of their own in the two-fault headline; timed statuses; the selected palette redraws; one capture clock.
+    /// D7 (as amended by L27): the two-fault headline is one line; timed statuses; the selected palette redraws; one capture clock.
     func testCouncilRoundOneFixes() throws {
         let two = NDStore(fixture: Fixture.inputs(.twoFaults))
         let size = NSHostingController(rootView: NDHeadline(store: two, r1: two.r1).frame(width: 852))
             .sizeThatFits(in: CGSize(width: 852, height: 1000))
-        XCTAssertGreaterThanOrEqual(size.height, 22 + 6 + 2 * 48 + 8, "each fault a 48 pt row, 8 pt apart")
+        XCTAssertEqual(size.height, 22, accuracy: 1, "L27 withdrew D7.1's rows: the two-fault headline is one 22 pt line")
         XCTAssertEqual(two.r1.items.map(\.menuDetail), [Say.lastDriveUpload(NDFormat.ageText(27 * 3600)),
                                                         Say.notCheckedSinceShort("Thursday")])
         XCTAssertNotEqual(NDPalette.menu, NDPalette.menuSelected, "a selected row's chart redraws in the selected colours")
@@ -1631,6 +1675,185 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertNotNil(drive.help)
         XCTAssertTrue(NDBackupsPage.legend(lanes).contains(Say.failedThenRetried))
         XCTAssertEqual(store.r1.headline, BrainBarMenuPresenter.Say.allGood.text)
+    }
+
+    /// R1.3 change 9 and L29: a fault station draws its ring, its badge and its red name together, every station that can
+    /// fault; the same treatment drives the dropdown rows and the icon's count.
+    func testOneFaultTreatmentOnStationsRowsAndIcon() {
+        let fault = NDPipelineChart.marks(.fault)
+        XCTAssertNotNil(fault.ring)
+        XCTAssertNotNil(fault.badge)
+        XCTAssertTrue(fault.nameRed)
+        XCTAssertEqual(fault.statusTone, .fault)
+        let notice = NDPipelineChart.marks(.notice)
+        XCTAssertNotNil(notice.ring)
+        XCTAssertEqual(notice.badge, "exclamationmark.triangle.fill")
+        XCTAssertFalse(notice.nameRed, "a notice is not stopped: the name stays t1")
+        let stale = NDPipelineChart.marks(.notConfirmed)
+        XCTAssertTrue(stale.ringDashed)
+        XCTAssertNil(stale.badge)
+        XCTAssertEqual(NDPipelineChart.marks(.calm), .init())
+        let stagesOf: [NDR1.MenuRow.Kind: [NDStation]] = [.search: [.search], .backups: [.mac, .drive], .jobs: [.jobs]]
+        for name in Fixture.Name.allCases {
+            let i = Fixture.inputs(name)
+            let m = NDModel.make(i)
+            let r1 = NDR1.make(i, m)
+            let p = r1.pipeline
+            // Every red item stands on a red station (or an agent's row), and every red station carries one.
+            let redStations = Set(r1.items.filter { $0.severity == .red }.compactMap(\.station))
+            let drawn = p.faults.union(p.treatment(.agents) == .fault ? [.agents] : [])
+            XCTAssertEqual(redStations, drawn, name.rawValue)
+            XCTAssertEqual(r1.redCount, p.faultCount, "\(name.rawValue): the headline and icon count what the chart draws")
+            if p.faultCount > 0 {
+                XCTAssertEqual(NDIcon.state(m, r1), .red(p.faultCount), name.rawValue)
+            } else {
+                XCTAssertNotEqual(NDIcon.state(m, r1), .red(0), name.rawValue)
+            }
+            for row in r1.menuRows where row.kind != .activity {
+                let anyFault = (stagesOf[row.kind] ?? []).contains { p.treatment($0) == .fault }
+                if anyFault { XCTAssertEqual(row.tone, .fault, "\(name.rawValue) \(row.label)") }
+                if row.tone == .fault, !anyFault {
+                    XCTAssertTrue(r1.items.contains { $0.severity == .red }, "\(name.rawValue) \(row.label): red only beside a red item")
+                }
+            }
+        }
+    }
+
+    /// R1.3 change 16, L28: at most one filled button on the page, under Google Drive when it is signed out; every fault
+    /// action exists at rest, in the key loop right after its station.
+    func testEveryFaultActionIsAtRestInTheKeyLoop() {
+        for name in Fixture.Name.allCases {
+            let i = Fixture.inputs(name)
+            let r1 = NDR1.make(i, NDModel.make(i))
+            let controls = NDPipelineChart.controls(r1.stationItems)
+            let actions = controls.compactMap(\.action)
+            XCTAssertLessThanOrEqual(actions.filter(NDButtonPolicy.filled).count, 1, name.rawValue)
+            for item in r1.items where item.action != nil {
+                XCTAssertNotNil(item.station, "\(name.rawValue): \(item.title) has a station to carry its action")
+                XCTAssertTrue(actions.contains(item.action!) || r1.stationItems[item.station!]?.id != item.id,
+                              "\(name.rawValue): \(item.title)'s action is reachable at rest")
+            }
+            for (index, control) in controls.enumerated() where control.action != nil {
+                XCTAssertGreaterThan(index, 0)
+                XCTAssertEqual(controls[index - 1].station, control.station, "\(name.rawValue): Tab reaches the station, then its action")
+                XCTAssertNil(controls[index - 1].action)
+            }
+        }
+        let drive = NDR1.make(Fixture.inputs(.driveSignedOut), NDModel.make(Fixture.inputs(.driveSignedOut)))
+        let filled = NDPipelineChart.controls(drive.stationItems).first { $0.action.map(NDButtonPolicy.filled) == true }
+        XCTAssertEqual(filled?.station, .drive, "the one filled button sits under Google Drive")
+        XCTAssertEqual(NDPipelineChart.controls([:]).map(\.station), NDPipelineChart.order)
+    }
+
+    /// L32: inside the window an action has one name, at the station and in its popover; the dropdown keeps the long one.
+    func testAnActionHasOneNameInTheWindow() throws {
+        let two = NDR1.make(Fixture.inputs(.twoFaults), NDModel.make(Fixture.inputs(.twoFaults)))
+        let reconnect = try XCTUnwrap(two.stationItems[.drive]?.action)
+        let report = try XCTUnwrap(two.stationItems[.jobs]?.action)
+        XCTAssertEqual(NDPipelineChart.shortLabel(reconnect), Say.reconnectShort)
+        XCTAssertEqual(NDPipelineChart.shortLabel(report), Say.copyReportShort)
+        XCTAssertEqual(reconnect.label, BrainBarMenuPresenter.Say.reconnect.text, "the dropdown and the spoken name keep the long form")
+        XCTAssertEqual(report.label, BrainBarMenuPresenter.Say.copyReport.text)
+        // The station's button and the popover's button are built from the same function, so they cannot differ.
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDPipelineChart.swift"), encoding: .utf8)
+        XCTAssertEqual(source.components(separatedBy: "NDButton(label: Self.shortLabel(action)").count - 1, 1)
+        XCTAssertEqual(source.components(separatedBy: "NDButton(label: NDPipelineChart.shortLabel(action)").count - 1, 1)
+        XCTAssertFalse(source.contains("NDButton(label: action.label"))
+    }
+
+    /// L33, one test per conditional sentence, both ways.
+    func testLastGoodRunOnlyWhenTheLogSaysWhen() throws {
+        var i = Fixture.inputs(.nightlyFailing)
+        let item = try XCTUnwrap(NDR1.make(i, NDModel.make(i)).stationItems[.jobs])
+        XCTAssertTrue(NDStationPopover.faultLines(.jobs, item: item, i).first?.hasPrefix("Last good run: ") == true)
+        i.nightlyLastRun = .unread
+        XCTAssertFalse(NDStationPopover.faultLines(.jobs, item: item, i).contains { $0.hasPrefix("Last good run") }, "left out, never guessed")
+    }
+
+    func testMemoryStillSavesOnlyWhileSavingAndSearchAreGreen() throws {
+        var i = Fixture.inputs(.nightlyFailing)
+        let item = try XCTUnwrap(NDR1.make(i, NDModel.make(i)).stationItems[.jobs])
+        XCTAssertTrue(NDStationPopover.faultLines(.jobs, item: item, i).contains(Say.memoryStillSaves))
+        for name in ["stores", "search"] {
+            i = Fixture.inputs(.nightlyFailing)
+            i.capture.verdict = BrainBarHealthVerdict(dot: .amber, checks: Fixture.replacing(i.capture.verdict!.checks,
+                                                                                               Fixture.check(name, .amber, age: 7200, limit: 3600)),
+                                                      notes: [], evaluatedAt: i.capture.verdict!.evaluatedAt)
+            let lines = NDStationPopover.faultLines(.jobs, item: item, i)
+            XCTAssertFalse(lines.contains(Say.memoryStillSaves), name)
+            XCTAssertTrue(lines.contains(Say.notCheckedOrTidiedSince), name)
+        }
+    }
+
+    func testMacCopyStillMadeOnlyWhileTheLocalCopyIsGreen() throws {
+        var i = Fixture.inputs(.driveSignedOut)
+        let item = try XCTUnwrap(NDR1.make(i, NDModel.make(i)).stationItems[.drive])
+        XCTAssertEqual(NDStationPopover.faultLines(.drive, item: item, i),
+                       [Say.lastDriveUpload(NDFormat.ageText(27 * 3600)), Say.macCopyStillMade])
+        i.capture.verdict = BrainBarHealthVerdict(dot: .red, checks: Fixture.replacing(i.capture.verdict!.checks,
+                                                                                         Fixture.check("backup_local", .amber, age: 40 * 3600, limit: 36 * 3600)),
+                                                  notes: [], evaluatedAt: i.capture.verdict!.evaluatedAt)
+        XCTAssertFalse(NDStationPopover.faultLines(.drive, item: item, i).contains(Say.macCopyStillMade))
+    }
+
+    func testByMeaningBehindOnlyFromTheEmbeddingChecksAge() {
+        XCTAssertEqual(pipeline(.meaningBehind).status[.search]?.text, Say.byMeaningBehind(NDFormat.ageText(2 * 3600)))
+        var i = Fixture.inputs(.meaningBehind)
+        i.capture.verdict = BrainBarHealthVerdict(dot: .amber, checks: Fixture.replacing(i.capture.verdict!.checks,
+                                                                                           Fixture.check("embedding", .amber, age: nil, limit: 3600)),
+                                                  notes: [], evaluatedAt: i.capture.verdict!.evaluatedAt)
+        let drawn = NDPipelineState.make(i)
+        XCTAssertEqual(drawn.treatment(.search), .notice)
+        XCTAssertFalse(drawn.status[.search]?.text.hasPrefix("by meaning") == true, "no age read, no age said")
+    }
+
+    /// R1.3.1 L5: no station moves between states; the Kept-safe frame never grows (its actions sit under it).
+    func testStationsDoNotMoveBetweenStates() {
+        let expected: [NDStation: CGPoint] = [
+            .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 580, y: 248),
+            .mac: CGPoint(x: 630, y: 64), .drive: CGPoint(x: 760, y: 64), .jobs: CGPoint(x: 450, y: 186),
+        ]
+        XCTAssertEqual(NDPipelineLayout.stations, expected)
+        for name in Fixture.Name.allCases {
+            let p = pipeline(name)
+            for (station, point) in expected {
+                for rect in NDPipelineLayout.labelRects(station, p) {
+                    XCTAssertEqual(rect.midX, point.x, accuracy: 0.5, "\(name.rawValue) \(station): its words stay centred on it")
+                }
+            }
+        }
+        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 561, y: 38, width: 269, height: 80))
+    }
+
+    /// Lead (1.3 brief): inside Kept safe, 16 pt between the two stations' text blocks and 12 pt from any text to the frame,
+    /// at their widest statuses.
+    func testKeptSafeTextKeepsItsSpacing() {
+        let L = NDPipelineLayout.self
+        let widest = L.textWidth(Say.lastBackup(NDFormat.ageText(27 * 3600)), size: 11, weight: .semibold)
+        func block(_ s: NDStation) -> ClosedRange<CGFloat> {
+            let half = max(widest, L.textWidth(L.name(s), size: 13, weight: .semibold)) / 2
+            return (L.point(s).x - half)...(L.point(s).x + half)
+        }
+        XCTAssertGreaterThanOrEqual(block(.drive).lowerBound - block(.mac).upperBound, 16)
+        XCTAssertGreaterThanOrEqual(block(.mac).lowerBound - L.keptSafe.minX, 12)
+        XCTAssertGreaterThanOrEqual(L.keptSafe.maxX - block(.drive).upperBound, 12)
+        XCTAssertLessThanOrEqual(L.keptSafe.maxX, L.drawWidth, "the drawing reaches it")
+        // The frame stays clear of the Memory-to-Search lane, which turns down at Search's x.
+        XCTAssertGreaterThan(L.keptSafe.maxY, 0)
+        XCTAssertLessThan(L.keptSafe.maxY, L.ySaves)
+    }
+
+    /// L27: the headline is one line; no problem lines or buttons under it.
+    func testHeadlineIsOneLine() {
+        for name in Fixture.Name.allCases {
+            let i = Fixture.inputs(name)
+            let r1 = NDR1.make(i, NDModel.make(i))
+            guard r1.redCount > 0 else { continue }
+            XCTAssertNil(r1.headlineDetail, name.rawValue)
+            let red = r1.items.filter { $0.severity == .red }
+            XCTAssertEqual(r1.headline, red.count == 1 ? red[0].title : Say.thingsNeedYou(red.count), name.rawValue)
+        }
     }
 
     /// § 3.1 hover: the pointer's bucket is the pitch that holds it; outside the plot there is none.

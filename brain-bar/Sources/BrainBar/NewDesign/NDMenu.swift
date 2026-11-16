@@ -326,7 +326,9 @@ struct NDMenuAreaRow: View {
         let text = Color(nsColor: selected ? .alternateSelectedControlTextColor : .labelColor)
         let secondary = Color(nsColor: selected ? .alternateSelectedControlTextColor : .secondaryLabelColor)
         HStack(spacing: 8) {
-            Image(systemName: Self.symbols[row.kind] ?? "circle").font(.system(size: 13)).foregroundStyle(secondary)
+            // R1.3 change 12: the row's symbol takes the station's treatment: red for a fault, amber for a notice.
+            Image(systemName: Self.symbols[row.kind] ?? "circle").font(.system(size: 13))
+                .foregroundStyle(selected ? secondary : row.tone == .fault ? ND.red : row.tone == .warn ? ND.orange : secondary)
                 .frame(width: 16)
             Text(row.label).font(NDType.body).foregroundStyle(text)
             Spacer(minLength: 8)

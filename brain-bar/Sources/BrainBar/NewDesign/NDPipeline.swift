@@ -1,45 +1,33 @@
 import Foundation
 
-// MARK: - The graph (L18: provisional, declared once, from PIPELINE-GRAPH-DRAFT.md)
+// MARK: - The graph (L18: provisional, declared once; R1.3: the loop)
 
-/// One drawn pipe of the pipeline chart. A connection of the draft is drawn as one pipe, or several (c1 is four agent
-/// stubs and the junction into Read). Swapping in BrainLayer's own graph file later changes `NDPipelineGraph`, not this
-/// drawing's grammar.
+/// One drawn pipe of the loop (R1.3 changes 1 to 6, R1.3.1 L1 to L5). The agents' group sends sessions to Read and saves
+/// to the Save queue; Memory feeds Search, whose answers return to the agents; the copies and Jobs hang off Memory.
 enum NDPipe: String, CaseIterable, Sendable {
-    case agentClaude = "a_claude", agentCodex = "a_codex", agentCursor = "a_cursor", agentGemini = "a_gemini"
-    case junctionRead = "j_read"
-    case conversationsCopy = "rail"
+    case sessions
     case readMemory = "read_mem"
-    case inSaves = "in_saves"
-    case queueMemory = "q_mem"
+    case saves
+    case queueMemory = "queue_mem"
+    case memorySearch = "mem_search"
+    case answers
     case memoryMac = "mem_mac"
     case macDrive = "mac_drive"
-    case memoryMeaning = "mem_meaning"
-    case meaningSearch = "meaning_search"
-    case words
-    case out
-    case jobsMemory = "jobs_mem"
-
-    static func agent(_ family: AgentFamily) -> NDPipe {
-        switch family {
-        case .claude: .agentClaude
-        case .codex: .agentCodex
-        case .cursor: .agentCursor
-        case .gemini: .agentGemini
-        }
-    }
+    case rail
+    case jobsMemory = "jobs"
 }
 
-/// The eight stages on screen (Memory is the hub).
+/// The eight things you can point at (R1.3): the agents' group, six stations and the Memory hub. Search is one stage;
+/// the word index is not drawn (its missing check is a row in Search's details).
 enum NDStation: String, CaseIterable, Sendable, Identifiable {
-    case read, queue, memory, mac, drive, meaning, search, jobs
+    case agents, read, queue, memory, jobs, search, mac, drive
     var id: String { rawValue }
 }
 
 enum NDBreakSide: String, Sendable { case source, target }
 enum NDSeverity: Sendable { case red, orange }
 
-/// The draft's graph: which connection each check guards, and on which side a break is drawn.
+/// The draft's graph: which connection each check guards.
 enum NDPipelineGraph {
     struct Connection: Sendable {
         let id: String
@@ -48,24 +36,24 @@ enum NDPipelineGraph {
         let pipes: [NDPipe]
     }
 
-    /// c1 to c12 of the draft. c6 (the word index) has no check: it is drawn dashed, "by words, not checked", always.
+    /// c1 to c12 of the draft, redrawn as the loop. c6 (Memory to the word index) has no check and no drawn pipe: Search
+    /// is one stage. c7 and c8 (Search, then the answers to the agents) are one drawn return.
     static let connections: [Connection] = [
-        Connection(id: "c1", from: "Agents' sessions", to: "Read",
-                   pipes: [.agentClaude, .agentCodex, .agentCursor, .agentGemini, .junctionRead]),
+        Connection(id: "c1", from: "Agents' sessions", to: "Read", pipes: [.sessions]),
         Connection(id: "c2", from: "Read", to: "Memory", pipes: [.readMemory]),
-        Connection(id: "c3", from: "Agent tools", to: "Save queue", pipes: [.inSaves]),
+        Connection(id: "c3", from: "Agent tools", to: "Save queue", pipes: [.saves]),
         Connection(id: "c4", from: "Save queue", to: "Memory", pipes: [.queueMemory]),
-        Connection(id: "c5", from: "Memory", to: "Meaning index", pipes: [.memoryMeaning]),
-        Connection(id: "c6", from: "Memory", to: "Word index", pipes: [.words]),
-        Connection(id: "c7", from: "Meaning index", to: "Search", pipes: [.meaningSearch]),
-        Connection(id: "c8", from: "Search", to: "Answers to agents", pipes: [.out]),
+        Connection(id: "c5", from: "Memory", to: "Search (by meaning)", pipes: [.memorySearch]),
+        Connection(id: "c6", from: "Memory", to: "Search (by words)", pipes: []),
+        Connection(id: "c7", from: "Search", to: "Answers", pipes: [.answers]),
+        Connection(id: "c8", from: "Answers", to: "Your agents", pipes: [.answers]),
         Connection(id: "c9", from: "Memory", to: "Copy on this Mac", pipes: [.memoryMac]),
         Connection(id: "c10", from: "Copy on this Mac", to: "Copy in Google Drive", pipes: [.macDrive]),
-        Connection(id: "c11", from: "Agents' sessions", to: "Conversations in Google Drive", pipes: [.conversationsCopy]),
+        Connection(id: "c11", from: "Agents' sessions", to: "Session files in Google Drive", pipes: [.rail]),
         Connection(id: "c12", from: "Jobs", to: "Memory", pipes: [.jobsMemory]),
     ]
 
-    /// What a check guards: connections (by id), a stage (`s10`), or nothing because it is the observer.
+    /// What a check guards: connections (by id), a stage, or nothing because it is the observer.
     enum Guard: Equatable, Sendable {
         case connections([String])
         case station(NDStation)
@@ -91,50 +79,48 @@ enum NDPipelineGraph {
     /// streaks (`maintenanceNightFailures`).
     static let factGuards: [String: String] = ["c12": "job alerts (maintenanceNightFailures)"]
 
-    /// Connections no check guards today (draft "what it cannot show yet"): drawn dashed and labelled.
+    /// Connections no check guards today (draft "what it cannot show yet"): not drawn; said in Search's details.
     static let unguarded: Set<String> = ["c6"]
 
     static func connection(_ id: String) -> Connection? { connections.first { $0.id == id } }
     static func pipes(for check: String) -> [NDPipe] {
         guard case let .connections(ids)? = checks[check] else { return [] }
-        return ids.compactMap(connection).flatMap(\.pipes)
+        return Array(Set(ids.compactMap(connection).flatMap(\.pipes))).sorted { $0.rawValue < $1.rawValue }
     }
+
+    /// Which stage each pipe leaves and reaches (`nil` is the agents' group or the hub, which never break a pipe).
+    static let ends: [NDPipe: (from: NDStation, to: NDStation)] = [
+        .sessions: (.agents, .read), .readMemory: (.read, .memory), .saves: (.agents, .queue), .queueMemory: (.queue, .memory),
+        .memorySearch: (.memory, .search), .answers: (.search, .agents), .memoryMac: (.memory, .mac), .macDrive: (.mac, .drive),
+        .rail: (.agents, .drive), .jobsMemory: (.jobs, .memory),
+    ]
 }
 
-// MARK: - The drawn state, derived from the verdict's facts (L5)
+// MARK: - The drawn state, derived from the verdict's facts (L5; R1.3 changes 9 to 12)
 
 struct NDPipelineState: Equatable, Sendable {
-    struct Break: Equatable, Sendable {
-        var side: NDBreakSide
-        var severity: NDSeverity
-    }
-    /// A station's one status line (R1.1 change 2): caption `t2`; in a fault Semibold `red-t` or `orange-t`.
+    /// A station's one status line: caption `t2`; under a fault red Semibold, under a notice amber Semibold.
     struct Status: Equatable, Sendable {
         var text: String
         var severity: NDSeverity? = nil
     }
-    /// A phrase that is not a station's (the agents' "not being read", under the agent list).
-    struct Phrase: Equatable, Sendable {
-        enum Anchor: Sendable { case start, middle, end }
-        var text: String
-        var x: CGFloat
-        var y: CGFloat
-        var anchor: Anchor
-        var severity: NDSeverity
-    }
 
-    var breaks: [NDPipe: Break] = [:]
-    /// Downstream of a break: solid at 28 % (change 8), with "delayed" or "stopped" set in the line when it is long enough.
-    var quiet: [NDPipe: NDSeverity] = [:]
-    /// Not confirmed: the check guarding it cannot say this moment (dashed, the only meaning of a dash).
+    /// One look per station, the same on the chart, in the dropdown rows and in the icon (L29).
+    enum Treatment: Equatable, Sendable { case calm, fault, notice, notConfirmed }
+
+    /// Red stations: ring, badge, red name and status, and the break on the pipe out of the stage (change 9).
+    var faults: Set<NDStation> = []
+    /// Amber stations: ring, triangle badge, amber status, and an amber stretch on the pipe into the stage (change 10).
+    var notices: Set<NDStation> = []
+    /// Stations whose fault is drawn where the pipe arrives (Google Drive, which nothing leaves; Search when only its
+    /// meaning index is stalled, because answers still flow by words).
+    var arrivalBreaks: Set<NDStation> = []
+    /// An agent whose sessions are not read: its row in the group is the station (badge left of the name).
+    var agentFaults: [AgentFamily: NDSeverity] = [:]
+    /// Not confirmed for one check (its pipes dashed).
     var unconfirmed: Set<NDPipe> = []
-    /// The stage itself refuses (red ring, symbol and name), and the pipes into it end in red.
-    var faultStations: Set<NDStation> = []
-    var stationPipes: Set<NDPipe> = []
-    var redAgents: Set<AgentFamily> = []
     var status: [NDStation: Status] = [:]
-    var phrases: [Phrase] = []
-    /// The observer is stale: every pipe dashed, no red, no marks; status lines at their last values, faded.
+    /// The observer is stale: every pipe and ring dashed, one caption (change 11).
     var allUnconfirmed = false
     var unconfirmedSince: Date?
     /// "14:02": the last confirmed evaluation's time, in the capture's zone (never the render time; R1.2 change 12).
@@ -142,40 +128,58 @@ struct NDPipelineState: Equatable, Sendable {
 
     static let calm = NDPipelineState()
 
-    /// How a stage reads on the Overview: flowing, not confirmed, or late / broken (with its status words).
+    func treatment(_ station: NDStation) -> Treatment {
+        if allUnconfirmed { return .notConfirmed }
+        if station == .agents {
+            if agentFaults.values.contains(.red) { return .fault }
+            return agentFaults.isEmpty ? .calm : .notice
+        }
+        if faults.contains(station) { return .fault }
+        if notices.contains(station) { return .notice }
+        return .calm
+    }
+
+    /// The red things on the chart (stations and agent rows): the icon's count and the headline's count follow it.
+    var faultCount: Int { faults.count + agentFaults.values.filter { $0 == .red }.count }
+
+    /// How a stage reads for the dropdown rows: the same treatment, plus a dash where one check cannot say.
     enum Condition: Equatable, Sendable {
         case fine
         case notConfirmed
         case issue(String?, NDSeverity)
     }
 
-    /// The pipes that arrive at a stage, or (for Search and Jobs) leave it where their break is drawn at the stage.
-    static let pipesAt: [NDStation: [NDPipe]] = [
-        .read: [.junctionRead, .agentClaude, .agentCodex, .agentCursor, .agentGemini], .queue: [.inSaves],
-        .memory: [.readMemory, .queueMemory], .mac: [.memoryMac], .drive: [.macDrive, .conversationsCopy],
-        .meaning: [.memoryMeaning], .search: [.meaningSearch, .out], .jobs: [.jobsMemory],
-    ]
-
-    /// D2: the one rule both the Overview's stations and the dropdown's rows follow.
     func condition(_ station: NDStation) -> Condition {
-        if allUnconfirmed { return .notConfirmed }
-        let pipes = Self.pipesAt[station] ?? []
-        if faultStations.contains(station) { return .issue(status[station]?.text, .red) }
-        if let sev = status[station]?.severity { return .issue(status[station]?.text, sev) }
-        let broken = pipes.compactMap { breaks[$0]?.severity } + pipes.compactMap { quiet[$0] }
-        if let worst = broken.contains(.red) ? NDSeverity.red : broken.first { return .issue(nil, worst) }
-        if pipes.contains(where: unconfirmed.contains) { return .notConfirmed }
-        return .fine
+        switch treatment(station) {
+        case .notConfirmed: return .notConfirmed
+        case .fault: return .issue(status[station]?.text, .red)
+        case .notice: return .issue(status[station]?.text, .orange)
+        case .calm:
+            let touching = NDPipelineGraph.ends.filter { $0.value.to == station || $0.value.from == station }.map(\.key)
+            return touching.contains(where: unconfirmed.contains) ? .notConfirmed : .fine
+        }
     }
 
-    func isBroken(_ pipe: NDPipe) -> Bool { breaks[pipe] != nil || stationPipes.contains(pipe) }
+    /// How one pipe is drawn (change 9 to 11): the break out of a red stage, the break into a stage that refuses what
+    /// arrives, an amber stretch into a stage with a notice, dashed when not confirmed, otherwise flowing.
+    enum PipeLook: Equatable, Sendable { case flowing, dashed, breakOut, breakIn, notice }
+
+    func look(_ pipe: NDPipe) -> PipeLook {
+        if allUnconfirmed { return .dashed }
+        guard let ends = NDPipelineGraph.ends[pipe] else { return .flowing }
+        if faults.contains(ends.from), !arrivalBreaks.contains(ends.from) { return .breakOut }
+        if faults.contains(ends.to), arrivalBreaks.contains(ends.to) { return .breakIn }
+        if notices.contains(ends.to) { return .notice }
+        if unconfirmed.contains(pipe) { return .dashed }
+        return .flowing
+    }
 }
 
 extension NDPipelineState {
     typealias Say = BrainBarMenuPresenter.SurfaceSay
 
     /// The chart for a moment: the verdict's checks mapped through `NDPipelineGraph`, plus the presenter facts the
-    /// draft names (`maintenanceNightFailures`, the pending saves). It never draws a break the checks cannot tell apart.
+    /// draft names (`maintenanceNightFailures`, the pending saves). It never draws a fault the checks cannot tell apart.
     static func make(_ i: NDInputs) -> NDPipelineState {
         let c = i.capture
         var s = NDPipelineState()
@@ -200,90 +204,90 @@ extension NDPipelineState {
             default: nil
             }
         }
+        func mark(_ station: NDStation, _ sev: NDSeverity) {
+            if sev == .red { s.faults.insert(station) } else { s.notices.insert(station) }
+        }
         for k in verdict.checks where k.state == .unknown {
-            for pipe in NDPipelineGraph.pipes(for: k.name) where pipe != .words { s.unconfirmed.insert(pipe) }
+            for pipe in NDPipelineGraph.pipes(for: k.name) { s.unconfirmed.insert(pipe) }
         }
 
-        // c10 and c11: Drive refuses (one cause, two connections), drawn on the station; its status says so.
+        // c10 and c11: Drive refuses (one cause, two connections); its status says so.
         let driveRefuses = check("drive_auth")?.state == .red
         if driveRefuses {
-            s.faultStations.insert(.drive)
-            s.stationPipes.formUnion([.macDrive, .conversationsCopy])
+            s.faults.insert(.drive)
             s.status[.drive] = Status(text: Say.signedOut, severity: .red)
         }
 
-        // c1: one agent's sessions not read (source, per agent), or the reader itself stalled (junction → Read, target).
+        // c1: one agent's sessions not read (its row in the group), or the reader itself stalled (the Read station).
         if let ingest = check("ingest"), let sev = severity(ingest) {
             let agents = agentCodes(ingest)
             if agents.isEmpty {
-                s.breaks[.junctionRead] = Break(side: .target, severity: sev)
+                mark(.read, sev)
                 // D6: amber is late, not stopped: the last-read time in amber; red says it is not being read.
                 s.status[.read] = sev == .red ? Status(text: Say.notBeingRead, severity: .red)
                     : s.status[.read].map { Status(text: $0.text, severity: .orange) }
             } else {
-                for family in agents {
-                    s.breaks[NDPipe.agent(family)] = Break(side: .source, severity: sev)
-                    s.quiet[NDPipe.agent(family)] = sev
-                    s.redAgents.insert(family)
-                }
-                s.phrases.append(Phrase(text: Say.notBeingRead, x: 0, y: 116, anchor: .start, severity: sev))
+                for family in agents { s.agentFaults[family] = sev }
             }
         }
 
-        // c3 / c4: a save that does not round-trip breaks the way in; saves waiting break the way into Memory.
+        // c3 / c4: saves that do not reach memory.
         if let stores = check("stores"), let sev = severity(stores) {
+            mark(.queue, sev)
             if let queued = i.oldestSaveQueuedAt {
-                s.breaks[.queueMemory] = Break(side: .target, severity: sev)
                 s.status[.queue] = Status(text: Say.waiting(NDFormat.ageText(max(0, c.now.timeIntervalSince(queued)))), severity: sev)
-            } else {
-                s.breaks[.inSaves] = Break(side: .source, severity: sev)
-                s.quiet[.inSaves] = sev
+            } else if let text = s.status[.queue]?.text {
+                s.status[.queue] = Status(text: text, severity: sev)
             }
         }
 
-        // c5: search by meaning behind (orange, late) or stalled (red); the onward pipe is downstream ("delayed" / "stopped").
+        // c5: search by meaning behind (a notice) or stalled (a fault drawn where Memory's pipe arrives, since answers still
+        // flow by words). The status is the embedding check's own backlog age (L33).
         if let embedding = check("embedding"), let sev = severity(embedding) {
-            s.breaks[.memoryMeaning] = Break(side: .target, severity: sev)
-            s.quiet[.meaningSearch] = sev
+            mark(.search, sev)
+            if sev == .red { s.arrivalBreaks.insert(.search) }
             if let age = embedding.ageS, age.isFinite, age >= 0 {
-                s.status[.meaning] = Status(text: Say.behind(NDFormat.ageText(age)), severity: sev)
+                s.status[.search] = Status(text: Say.byMeaningBehind(NDFormat.ageText(age)), severity: sev)
             }
         }
 
-        // c7 / c8: one canary for both; drawn on the way out of Search.
+        // c7 / c8: one canary for both; a red one breaks the answers out of Search.
         if let search = check("search"), let sev = severity(search) {
-            s.breaks[.out] = Break(side: .source, severity: sev)
-            s.quiet[.out] = sev
-            s.status[.search] = nil
+            mark(.search, sev)
+            if sev == .red {
+                s.arrivalBreaks.remove(.search)
+                if s.status[.search]?.severity == nil { s.status[.search] = nil }
+            }
         }
 
-        // c9: the copy on this Mac is late; integrity and disk are states of that copy (a station ring, not a break).
+        // c9: the copy on this Mac is late; integrity and disk are states of that copy.
         if let local = check("backup_local"), let sev = severity(local) {
-            s.breaks[.memoryMac] = Break(side: .target, severity: sev)
+            mark(.mac, sev)
             if let text = s.status[.mac]?.text { s.status[.mac] = Status(text: text, severity: sev) }
         }
         if check("integrity")?.state == .red || check("disk")?.state == .red {
-            s.faultStations.insert(.mac)
+            s.faults.insert(.mac)
+            if let text = s.status[.mac]?.text { s.status[.mac] = Status(text: text, severity: .red) }
         }
         if !driveRefuses {
-            if let offsite = check("backup_offsite"), let sev = severity(offsite) {
-                s.breaks[.macDrive] = Break(side: .target, severity: sev)
-                if let text = s.status[.drive]?.text { s.status[.drive] = Status(text: text, severity: sev) }
-            }
-            if let transcripts = check("transcripts"), let sev = severity(transcripts) {
-                s.breaks[.conversationsCopy] = Break(side: .target, severity: sev)
+            for name in ["backup_offsite", "transcripts"] {
+                if let k = check(name), let sev = severity(k) {
+                    mark(.drive, sev)
+                    if let text = s.status[.drive]?.text { s.status[.drive] = Status(text: text, severity: s.faults.contains(.drive) ? .red : sev) }
+                }
             }
         }
+        s.arrivalBreaks.insert(.drive)
 
         // c12: a scheduled job failing; the Jobs status names it (change 13).
         if let nights = c.maintenanceNightFailures, nights >= 3 {
-            s.breaks[.jobsMemory] = Break(side: .source, severity: .red)
-            s.quiet[.jobsMemory] = .red
+            s.faults.insert(.jobs)
             s.status[.jobs] = Status(text: Say.nightlyFailedShort(nights), severity: .red)
         }
-        s.unconfirmed.subtract(s.breaks.keys)
-        s.unconfirmed.subtract(s.stationPipes)
-        s.unconfirmed.subtract(s.quiet.keys)
+        // A fault outranks a notice on the same station.
+        s.notices.subtract(s.faults)
+        for station in s.faults { if let text = s.status[station]?.text { s.status[station] = Status(text: text, severity: .red) } }
+        for (pipe, _) in NDPipelineGraph.ends where s.look(pipe) != .dashed { s.unconfirmed.remove(pipe) }
         return s
     }
 
@@ -306,7 +310,6 @@ extension NDPipelineState {
         if let mac = age("backup_local") { out[.mac] = Status(text: Say.lastBackup(NDFormat.ageText(mac))) }
         let drive = [age("backup_offsite"), age("transcripts")].compactMap { $0 }
         if drive.count == 2, let older = drive.max() { out[.drive] = Status(text: Say.lastBackup(NDFormat.ageText(older))) }
-        if let share = i.searchable { out[.meaning] = Status(text: Say.percentReady(Int((share * 100).rounded(.down)))) }
         if checks.first(where: { $0.name == "search" })?.state == .green { out[.search] = Status(text: Say.working) }
         if case let .ran(at) = i.nightlyLastRun {
             out[.jobs] = Status(text: Say.lastCheckUp(NDFormat.ageText(max(0, c.now.timeIntervalSince(at)))))
