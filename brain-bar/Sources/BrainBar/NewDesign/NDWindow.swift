@@ -26,6 +26,9 @@ struct NDWindowRoot: View {
                     case .jobs: NDJobsPage(store: store).onAppear { drawn(.jobs) }
                     }
                 }
+                // R1.8 item 1: the page cross-fades when the controller swaps it (opacity only).
+                .id(store.shownPage)
+                .transition(.opacity)
                 .padding(.horizontal, NDGrid.pageSide)
                 .padding(.top, NDGrid.pageTop)
                 .padding(.bottom, 20)
@@ -370,25 +373,14 @@ struct NDActivitySection: View {
     }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.ndPreviewHover) private var previewHover
-    /// R1.7 item 7: the wave on screen while the pointer rests on the chart, and where the pointer last was.
-    @State private var heldWave: NDWave?
-    @State private var lastPointer: CGPoint?
 
-    /// R1.7 item 7: while the pointer rests on the chart, new data waits: the bars and the readout keep the minute under
-    /// it; the pointer moving or leaving lets the newest data in.
-    static func shownWave(live: NDWave?, held: NDWave?, hovering: Bool) -> NDWave? { hovering ? (held ?? live) : live }
-
-    /// The wave to hold after a pointer event: the newest when the pointer moved, the held one when it did not.
-    static func held(after point: CGPoint, last: CGPoint?, held: NDWave?, live: NDWave?) -> NDWave? {
-        point == last ? (held ?? live) : live
-    }
     static let gutter: CGFloat = 52
     /// R1.2: the chart is 820 wide inside its surface: a 52 pt gutter and a 768 pt plot.
     static let plotWidth: CGFloat = 768
     static let plotHeight: CGFloat = 112
 
     var body: some View {
-        let wave = Self.shownWave(live: store.inputs.heroWaves[store.range], held: heldWave, hovering: hover != nil)
+        let wave = store.inputs.heroWaves[store.range]
         let cut = Self.noDataFraction(store, wave: wave)
         // R1.6 item 6: not confirmed, the totals say "—".
         let known = wave?.readable == true && cut == nil
@@ -440,20 +432,19 @@ struct NDActivitySection: View {
                     .contentShape(Rectangle())
                     .onContinuousHover(coordinateSpace: .local) { phase in
                         switch phase {
+                        // R1.8 item 2: while the pointer is inside the chart its data waits at the store.
                         case let .active(p):
-                            let live = store.inputs.heroWaves[store.range]
-                            heldWave = Self.held(after: p, last: lastPointer, held: heldWave, live: live)
-                            lastPointer = p
-                            hover = Self.bucket(at: p.x, count: heldWave?.count ?? 0)
+                            store.holdChart(true)
+                            hover = Self.bucket(at: p.x, count: wave?.count ?? 0)
                         case .ended:
                             hover = nil
-                            heldWave = nil
-                            lastPointer = nil
+                            store.holdChart(false)
                         }
                     }
                     .background(GeometryReader { g in
                         Color.clear.onAppear { reportPlotFrame?(g.frame(in: .named("activity"))) }
                     })
+                    .onDisappear { store.holdChart(false) }
                     .padding(.leading, Self.gutter)
                     .id(store.range)
                     .transition(reduceMotion ? .identity : .asymmetric(insertion: .opacity.animation(NDMotion.rangeIn),
@@ -560,13 +551,18 @@ struct NDActivityReadout: View {
     let now: Date
     let zone: TimeZone
 
-    var body: some View {
+    /// The hovered column's minutes ("08:07 to 08:08").
+    static func span(_ wave: NDWave, index: Int, minutes: Int, now: Date, zone: TimeZone) -> String {
         let width = Double(minutes * 60) / Double(max(wave.count, 1))
         let end = (wave.endsAt ?? now).addingTimeInterval(-Double(wave.count - 1 - index) * width)
         let start = end.addingTimeInterval(-width)
+        return clock(start, zone) + " to " + clock(end, zone)
+    }
+
+    var body: some View {
         // R1.6 item 9: its lines describe the hovered column only.
         VStack(alignment: .leading, spacing: 0) {
-            Text(Self.clock(start, zone) + " to " + Self.clock(end, zone)).font(NDType.captionNumber).foregroundStyle(ND.t2)
+            Text(Self.span(wave, index: index, minutes: minutes, now: now, zone: zone)).font(NDType.captionNumber).foregroundStyle(ND.t2)
                 .padding(.bottom, 3)
             row(ND.saved, index < wave.saves.count ? wave.saves[index] : 0, Say.savedByAgents)
             row(ND.read, index < wave.reads.count ? wave.reads[index] : 0, Say.readWord)
@@ -649,13 +645,22 @@ struct NDButton: View {
     var compact = false
     /// The spoken name when the visible one leans on what stands beside it ("Reconnect" under Google Drive).
     var accessibility: String? = nil
+    /// R1.8 item 3: in the dropdown the menu's own row highlight is the keyboard's position, so the button takes no focus
+    /// (it opened with a focus halo drawn on it).
+    var takesFocus = true
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) { Text(label) }
+        // R1.8 item 4: one keyboard stop per button: the button itself is not a stop, the focusable wrapper is (it draws
+        // the system ring). Before, Full Keyboard Access made both stops, and one of them showed nothing.
+        let button = Button(action: action) { Text(label) }
             .buttonStyle(NDButtonStyle(filled: filled, small: small, compact: compact))
-            .ndKeyboardFocus(action: action)
-            .accessibilityLabel(Text(accessibility ?? label))
+            .focusable(false)
+        if takesFocus {
+            button.ndKeyboardFocus(action: action).accessibilityLabel(Text(accessibility ?? label))
+        } else {
+            button.focusEffectDisabled().accessibilityLabel(Text(accessibility ?? label))
+        }
     }
 }
 

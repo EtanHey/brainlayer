@@ -287,12 +287,17 @@ enum NDMotion {
     static let runningPeriod: TimeInterval = 1.6
 }
 
-/// R2 item 3: the order of a page switch, so no page is ever drawn clipped. A taller page waits for the window to grow;
-/// a shorter one appears first, then the window shrinks; without animation both change together.
+/// R1.8 item 1: a page switch shows the new page first, in both directions, so the tab and the page always agree: the
+/// page cross-fades in 120 ms (ease-out, opacity only), and the window's height moves 200 ms on the strong ease-out curve
+/// with its top edge fixed (a growing window reveals the new page's foot as it opens). Without animation (Reduce Motion,
+/// or no visible window) both change together. 1.6's "frame first" kept the old page up through every growing resize.
 enum NDPageSwitch: Equatable {
-    case frameThenPage, pageThenFrame, together
+    case pageThenFrame, together
     static func order(from current: CGFloat, to target: CGFloat, animates: Bool) -> NDPageSwitch {
         guard animates, abs(current - target) > 0.5 else { return .together }
-        return target > current ? .frameThenPage : .pageThenFrame
+        return .pageThenFrame
     }
+    static let crossfade: Double = 0.12
+    /// cubic-bezier(0.23, 1, 0.32, 1).
+    static let curve: (Float, Float, Float, Float) = (0.23, 1, 0.32, 1)
 }

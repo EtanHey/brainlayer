@@ -365,9 +365,34 @@ import SwiftUI
     }
 #endif
 
+    /// R1.8 item 2: while the pointer is inside the Activity chart, the chart's waves wait here (the newest of each range),
+    /// so its bars, its readout's minute and its totals stay as they are; the pointer leaving lets them in. Held at the
+    /// data, not in the view, so nothing reaches the chart to redraw it while the pointer rests.
+    private(set) var chartHeld = false
+    private var heldHeroWaves: [NDRange: NDWave] = [:]
+
+    func holdChart(_ held: Bool) {
+        guard held != chartHeld else { return }
+        chartHeld = held
+        guard !held, !heldHeroWaves.isEmpty else { return }
+        var next = inputs
+        for (range, wave) in heldHeroWaves { next.heroWaves[range] = wave.linked(after: inputs.heroWaves[range], minutes: range.minutes) }
+        heldHeroWaves = [:]
+        inputs = next
+        model = NDModel.make(next)
+    }
+
     /// The one way a wave sample reaches the surfaces, real or invented. Each wave is linked to the one on screen, so a
     /// one-bucket shift carries its outgoing bucket and starts its slide in the same transaction as the data (B1).
     private func acceptWaves(_ sample: NDInputs) {
+        if chartHeld {
+            // The dropdown's hour keeps flowing; the chart's ranges wait for the pointer to leave.
+            for (range, wave) in sample.heroWaves { heldHeroWaves[range] = wave }
+            var next = inputs
+            next.menuWave = sample.menuWave?.linked(after: inputs.menuWave, minutes: 60)
+            inputs = next
+            return
+        }
         var next = sample
         next.menuWave = sample.menuWave?.linked(after: inputs.menuWave, minutes: 60)
         for range in NDRange.allCases {

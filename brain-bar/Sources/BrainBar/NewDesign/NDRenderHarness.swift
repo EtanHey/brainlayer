@@ -59,7 +59,7 @@ import SwiftUI
             written.append(try wordsSheet(name: "hovers-words-\(suffix)", appearance: appearance, in: directory))
             // R1.3 comp 37: the three hover states (Memory's explanation; the Jobs and Drive faults with their actions).
             for (fixture, station) in [(BrainBarDesignFixture.Name.calm, NDStation.memory), (.twoFaults, .jobs), (.twoFaults, .drive),
-                                       (.agentNotRead, .agents), (.calm, .search)] {
+                                       (.agentNotRead, .agents), (.calm, .search), (.reconnectWaiting, .drive)] {
                 let store = NDStore(fixture: BrainBarDesignFixture.inputs(fixture), page: .overview)
                 written.append(try hover(store, station: station, name: "hover-\(station.rawValue)-\(fixture.rawValue)-\(suffix)",
                                          appearance: appearance, in: directory))
@@ -127,24 +127,20 @@ import SwiftUI
         return name
     }
 
-    /// R1.6 item 3: five frames of a page switch side by side (0, 50, 100, 150, 200 ms): the window's height on the
-    /// controller's ease-out curve, its top edge fixed, and the page it draws in the order `NDPageSwitch` gives.
+    /// R1.6 item 3 / R1.8 item 1: five frames of a page switch side by side (0, 50, 100, 150, 200 ms): the window's height
+    /// on the controller's curve, its top edge fixed, and the page it draws (the new one from the first frame).
     static func pageSwitch(from: NDPage, to: NDPage, name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
         let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: from)
         let start = NDPageHeight.window(store, page: from, screen: nil)
         let end = NDPageHeight.window(store, page: to, screen: nil)
-        let order = NDPageSwitch.order(from: start, to: end, animates: true)
         let times: [Double] = [0, 0.25, 0.5, 0.75, 1]
         let gap: CGFloat = 24
         let tall = max(start, end)
         let size = NSSize(width: CGFloat(times.count) * (NDGrid.windowWidth + gap) + gap, height: tall + 2 * gap)
         let frames: [AnyView] = times.map { t in
             let height = start + (end - start) * easeOut(t)
-            let page: NDPage
-            switch order {
-            case .pageThenFrame, .together: page = to
-            case .frameThenPage: page = t >= 1 ? to : from
-            }
+            // R1.8 item 1: the new page from the first frame, in both directions.
+            let page = to
             let frameStore = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: page)
             return AnyView(NDWindowRoot(store: frameStore, drawsTrafficLights: true)
                 .frame(width: NDGrid.windowWidth, height: NDPageHeight.window(frameStore, page: page, screen: nil), alignment: .top)
@@ -163,10 +159,12 @@ import SwiftUI
         return name
     }
 
-    /// Core Animation's ease-out, cubic-bezier(0, 0, 0.58, 1), at time t.
+    /// The page switch's curve, cubic-bezier(0.23, 1, 0.32, 1), at time t.
     static func easeOut(_ t: Double) -> Double {
-        func x(_ u: Double) -> Double { 3 * (1 - u) * u * u * 0.58 + u * u * u }
-        func y(_ u: Double) -> Double { 3 * (1 - u) * (1 - u) * u * 0 + 3 * (1 - u) * u * u + u * u * u }
+        let c = NDPageSwitch.curve
+        let (x1, y1, x2, y2) = (Double(c.0), Double(c.1), Double(c.2), Double(c.3))
+        func x(_ u: Double) -> Double { 3 * (1 - u) * (1 - u) * u * x1 + 3 * (1 - u) * u * u * x2 + u * u * u }
+        func y(_ u: Double) -> Double { 3 * (1 - u) * (1 - u) * u * y1 + 3 * (1 - u) * u * u * y2 + u * u * u }
         var lo = 0.0, hi = 1.0
         for _ in 0..<40 { let mid = (lo + hi) / 2; if x(mid) < t { lo = mid } else { hi = mid } }
         return y((lo + hi) / 2)

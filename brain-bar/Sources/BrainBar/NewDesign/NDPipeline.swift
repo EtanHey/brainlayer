@@ -292,8 +292,9 @@ extension NDPipelineState {
         // c12: a scheduled job failing; the Jobs status names it (change 13).
         if let nights = c.maintenanceNightFailures, nights >= 3 {
             s.faults.insert(.jobs)
-            // R2 item 10: the fault said once, short, on the secondary line ("failed 3 nights").
-            s.status[.jobs] = Status(text: Say.failedNights(nights), severity: .red)
+            // R2 item 10: the fault said once, short, on the secondary line. R1.8 item 5: it names the job that failed
+            // (the station's name lists two): "Nightly check-up failed 3 nights".
+            s.status[.jobs] = Status(text: Say.nightlyFailedShort(nights), severity: .red)
         }
         // A fault outranks a notice on the same station.
         s.notices.subtract(s.faults)

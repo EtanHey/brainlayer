@@ -42,11 +42,8 @@ struct NDStationPanelBody: View {
             }
             if let action = model.action {
                 ND.hair2.frame(height: 0.5).padding(.horizontal, -14).padding(.top, 12)
-                HStack {
-                    Spacer()
-                    actionButton(action)
-                }
-                .padding(.top, 10)
+                actionButton(action)
+                    .padding(.top, 10)
             }
         }
         .padding(.horizontal, 14)
@@ -67,6 +64,16 @@ struct NDStationPanelBody: View {
         }
     }
 
+    /// R1.8 item 6: the line that replaces Reconnect while the browser asks: a 12 pt spinner, then the words.
+    static var waitingLine: some View {
+        HStack(alignment: .center, spacing: 6) {
+            ProgressView().progressViewStyle(.circular).controlSize(.mini).frame(width: 12, height: 12)
+            Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     @ViewBuilder private var mark: some View {
         switch model.mark {
         case .fault: Image(systemName: "exclamationmark.circle.fill").font(.system(size: 13)).foregroundStyle(ND.red)
@@ -77,15 +84,23 @@ struct NDStationPanelBody: View {
 
     @ViewBuilder private func actionButton(_ action: BrainBarMenuPresentation.Action) -> some View {
         if action.kind == .copyReport {
-            NDCopyReportButton(label: NDPipelineChart.shortLabel(action), spoken: action.label) { perform(action.kind) }
-                .focused($actionFocused)
-        } else {
-            NDWaitingSwap(waiting: waiting && [.reconnectDrive, .connectDrive].contains(action.kind)) {
-                NDButton(label: NDPipelineChart.shortLabel(action), filled: NDButtonPolicy.filled(action), small: true,
-                         accessibility: action.label) { perform(action.kind) }
+            HStack {
+                Spacer()
+                NDCopyReportButton(label: NDPipelineChart.shortLabel(action), spoken: action.label) { perform(action.kind) }
                     .focused($actionFocused)
+            }
+        } else {
+            // R1.8 item 6: the waiting line takes the whole footer, left-aligned, 13 pt secondary, a small spinner first;
+            // one line where it fits (it wrapped into two right-aligned lines in the button's corner).
+            NDWaitingSwap(waiting: waiting && [.reconnectDrive, .connectDrive].contains(action.kind), alignment: .leading) {
+                HStack {
+                    Spacer()
+                    NDButton(label: NDPipelineChart.shortLabel(action), filled: NDButtonPolicy.filled(action), small: true,
+                             accessibility: action.label) { perform(action.kind) }
+                        .focused($actionFocused)
+                }
             } line: {
-                Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)
+                Self.waitingLine
             }
         }
     }
@@ -139,6 +154,7 @@ struct NDCopyReportButton: View {
             }
         }
         .buttonStyle(NDButtonStyle(small: true))
+        .focusable(false)  // R1.8 item 4: one stop, the wrapper's
         .ndKeyboardFocus { action() }
         .accessibilityLabel(Text(copied ? Say.copiedLabel : spoken))
     }

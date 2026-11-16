@@ -409,11 +409,11 @@ struct NDStationButton: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        Button { open(pinned: true, focusAction: false) } label: {
-            Color.clear.contentShape(shape)
-        }
-        .buttonStyle(.plain)
-        .contentShape(shape)
+        // R1.8 item 4: one keyboard stop per station. It was a Button inside a focusable wrapper: with Full Keyboard
+        // Access the inner button was a second stop that drew no ring (every other Tab looked like nothing happened).
+        Color.clear
+            .contentShape(shape)
+            .onTapGesture { open(pinned: true, focusAction: false) }
         // R1.5 change 4: Tab reaches every station; a 3 pt ring in the system focus colour shows where focus is.
         .focusable(interactions: .activate)
         .focused($focused)
@@ -436,6 +436,7 @@ struct NDStationButton: View {
         }
         .accessibilityLabel(spoken ?? NDPipelineLayout.name(station))
         .accessibilityAddTraits(.isButton)
+        .accessibilityAction { open(pinned: true, focusAction: false) }
     }
 
     /// R1.5 change 4, the station's own key handling: Return or Space opens the panel with focus on its action; Escape

@@ -26,6 +26,46 @@ import SwiftUI
         return UserDefaults(suiteName: name)!
     }
 
+    /// R1.8 item 1, on the window controller's real switch path (a tab click stores the page; the store hands it to the
+    /// controller, which swaps the page and moves the window; the window is never shown): from the first frame the new
+    /// page is the one drawn, in both directions, while the height moves to the page's own; it is never the old page
+    /// during a resize. Sampled frame by frame through the animation.
+    func testR18PageSwitchShowsTheNewPageFirstOnTheRealPath() throws {
+        let d = defaults()
+        d.set("new", forKey: BrainBarDesign.key)
+        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
+        controller.designDefaults = d
+        controller.applyDesign()
+        let store = controller.newDesignStore
+        let window = controller.windowForTesting
+        store.page = .backups
+        XCTAssertEqual(store.shownPage, .backups)
+        controller.animatesPageSwitchForTesting = true
+        for (to, grows) in [(NDPage.overview, true), (.backups, false), (.jobs, true)] {
+            let before = window.frame.height
+            store.page = to  // what a click on the tab does
+            var frames: [(height: CGFloat, page: NDPage)] = [(window.frame.height, store.shownPage)]
+            for _ in 0..<16 {
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.025))
+                frames.append((window.frame.height, store.shownPage))
+            }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+            let after = window.frame.height
+            XCTAssertEqual(grows, after > before, "\(to): the window grows or shrinks to the page")
+            XCTAssertEqual(frames.first?.page, to, "\(to): the new page from the first frame")
+            XCTAssertEqual(frames.first?.height ?? 0, before, accuracy: 0.5, "\(to): ...before the window has moved")
+            XCTAssertTrue(frames.contains { abs($0.height - before) > 0.5 && abs($0.height - after) > 0.5 },
+                          "\(to): sampled mid-resize: \(frames.map(\.height))")
+            XCTAssertTrue(frames.allSatisfy { $0.page == to }, "\(to): never the old page during the resize: \(frames.map(\.page))")
+            let heights = frames.map(\.height) + [after]
+            XCTAssertTrue(zip(heights, heights.dropFirst()).allSatisfy { grows ? $1 >= $0 - 0.5 : $1 <= $0 + 0.5 },
+                          "\(to): the height moves one way: \(heights)")
+        }
+        XCTAssertEqual(NDPageSwitch.order(from: 500, to: 800, animates: true), .pageThenFrame)
+        XCTAssertEqual(NDPageSwitch.order(from: 800, to: 500, animates: true), .pageThenFrame)
+        XCTAssertEqual(NDPageSwitch.order(from: 500, to: 800, animates: false), .together, "Reduce Motion: at once")
+    }
+
     private func stats() -> DashboardStats {
         DashboardStats(chunkCount: 1, enrichedChunkCount: 1, pendingEnrichmentCount: 0, enrichmentPercent: 50,
                        enrichmentRatePerMinute: 1, databaseSizeBytes: 0, recentActivityBuckets: Array(repeating: 0, count: 12),
@@ -1249,7 +1289,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let nightly = pipeline(.nightlyFailing)
         XCTAssertEqual(nightly.faults, [.jobs])
         XCTAssertEqual(nightly.look(.jobsMemory), .faint)
-        XCTAssertEqual(nightly.status[.jobs], .init(text: Say.failedNights(3), severity: .red), "R1.6 item 10: the short line, red")
+        XCTAssertEqual(nightly.status[.jobs], .init(text: Say.nightlyFailedShort(3), severity: .red), "R1.8 item 5: it names the job")
 
         let stale = pipeline(.notConfirmed)
         XCTAssertTrue(stale.allUnconfirmed)
@@ -2157,7 +2197,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertTrue(NDPipelineChart.controls(store.r1.stationItems).allSatisfy { $0.action == nil })
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDStationPanel.swift"), encoding: .utf8)
-        XCTAssertTrue(source.contains("NDWaitingSwap(waiting: waiting && [.reconnectDrive, .connectDrive].contains(action.kind))"))
+        XCTAssertTrue(source.contains("NDWaitingSwap(waiting: waiting && [.reconnectDrive, .connectDrive].contains(action.kind), alignment: .leading)"))
     }
 
     // MARK: Round 2a decisions (R2A-DECISIONS.md, "Taken"), one test each
@@ -2282,7 +2322,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/BrainBarDashboardPanelController.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("NDMotion.pageResize(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)"))
-        XCTAssertTrue(source.contains("CAMediaTimingFunction(name: .easeOut)"), "R1.6 item 3: 200 ms ease-out")
+        XCTAssertTrue(source.contains("CAMediaTimingFunction(controlPoints: c.0, c.1, c.2, c.3)"), "R1.8 item 1: the strong ease-out")
         XCTAssertTrue(source.contains("y: top - frameSize.height"), "the top edge stays")
     }
 
@@ -2595,7 +2635,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     /// page follows; shrinking, the page goes first; Reduce Motion swaps both at once. The store keeps the page shown
     /// apart from the page chosen, so the controller can hold it.
     func testR16PageSwitchesNeverDrawAClippedPage() {
-        XCTAssertEqual(NDPageSwitch.order(from: 500, to: 800, animates: true), .frameThenPage)
+        XCTAssertEqual(NDPageSwitch.order(from: 500, to: 800, animates: true), .pageThenFrame, "R1.8 item 1: the page first")
         XCTAssertEqual(NDPageSwitch.order(from: 800, to: 500, animates: true), .pageThenFrame)
         XCTAssertEqual(NDPageSwitch.order(from: 500, to: 800, animates: false), .together, "Reduce Motion: at once")
         XCTAssertEqual(NDPageSwitch.order(from: 600, to: 600.2, animates: true), .together)
@@ -2689,7 +2729,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(marks.statusTone, .fault)
         let failing = Fixture.inputs(.nightlyFailing)
         let p = NDPipelineState.make(failing)
-        XCTAssertEqual(p.status[.jobs], .init(text: Say.failedNights(3), severity: .red))
+        XCTAssertEqual(p.status[.jobs], .init(text: Say.nightlyFailedShort(3), severity: .red), "R1.8 item 5 names the job")
         let r1 = NDR1.make(failing, NDModel.make(failing))
         let item = try XCTUnwrap(r1.stationItems[.jobs])
         XCTAssertEqual(NDStationPopover.faultTitle(.jobs, item, failing), Say.failedInARow(3))
@@ -2711,6 +2751,111 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let row = try XCTUnwrap(NDR1.make(i, NDModel.make(i)).menuRows.first { $0.kind == .search })
         XCTAssertTrue(row.value.hasSuffix("% searchable by meaning"), row.value)
         XCTAssertEqual(Say.searchableByMeaning(99), "99% searchable by meaning")
+    }
+
+    // MARK: Revision 1.8 (R4-DECISIONS "Taken")
+
+    /// R1.8 item 2, on the live data path (`tickFixture` hands a sample over exactly as a real one is) and the live chart
+    /// view: while the pointer is inside the chart (its hover holds the store), arriving data waits: the bars, the
+    /// readout's minute and counts, and the totals stay; the dropdown's hour keeps flowing; the pointer leaving lets the
+    /// newest in.
+    func testR18RestingPointerHoldsTheChartOnTheLivePath() throws {
+        let store = NDStore(fixture: Fixture.inputs(.calm), page: .overview)
+        let column = 20
+        let before = try XCTUnwrap(store.inputs.heroWaves[.hour])
+        let span = NDActivityReadout.span(before, index: column, minutes: 60, now: store.inputs.capture.now, zone: store.inputs.capture.timeZone)
+        func readoutFrame() -> CGRect? {
+            var frame: CGRect?
+            let host = NSHostingView(rootView: NDActivitySection(store: store, hover: column, reportReadoutFrame: { frame = $0 }).frame(width: 852))
+            host.frame = NSRect(x: 0, y: 0, width: 852, height: 220)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+            host.layoutSubtreeIfNeeded()
+            return frame
+        }
+        let frameBefore = try XCTUnwrap(readoutFrame())
+        let menuBefore = store.inputs.menuWave
+        store.holdChart(true)  // the chart's hover, pointer inside
+        store.tickFixture()
+        store.tickFixture()
+        let held = try XCTUnwrap(store.inputs.heroWaves[.hour])
+        XCTAssertEqual(held, before, "no bar moves under the resting pointer")
+        XCTAssertEqual(held.savesTotal, before.savesTotal, "the totals hold")
+        XCTAssertEqual(NDActivityReadout.span(held, index: column, minutes: 60, now: store.inputs.capture.now,
+                                              zone: store.inputs.capture.timeZone), span, "the readout keeps its minute")
+        XCTAssertEqual(try XCTUnwrap(readoutFrame()), frameBefore, "and its place")
+        XCTAssertNotEqual(store.inputs.menuWave, menuBefore, "the dropdown's hour keeps flowing")
+        store.holdChart(false)  // the pointer leaves
+        XCTAssertNotEqual(store.inputs.heroWaves[.hour], before, "leaving lets the newest in")
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDWindow.swift"), encoding: .utf8)
+        let hover = try XCTUnwrap(source.range(of: ".onContinuousHover(coordinateSpace: .local) { phase in\n                        switch phase {\n                        // R1.8 item 2"))
+        let tail = source[hover.upperBound...].prefix(400)
+        XCTAssertTrue(tail.contains("store.holdChart(true)") && tail.contains("store.holdChart(false)"), "the chart's hover holds and releases")
+    }
+
+    /// R1.8 item 3: the dropdown's buttons take no focus, so none opens with a halo; the menu's highlight (from a key)
+    /// draws the ring.
+    func testR18NoFocusHaloWhenTheDropdownOpens() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign")
+        let menu = try String(contentsOf: dir.appendingPathComponent("NDMenu.swift"), encoding: .utf8)
+        XCTAssertTrue(menu.contains("NDButton(label: action.label, filled: filled, small: true, takesFocus: false)"))
+        XCTAssertTrue(menu.contains(".opacity(state.keyboard ? 1 : 0)"), "the ring only after a key")
+        let window = try String(contentsOf: dir.appendingPathComponent("NDWindow.swift"), encoding: .utf8)
+        XCTAssertTrue(window.contains("button.focusEffectDisabled().accessibilityLabel"), "a focus-less button is no stop and draws no halo")
+    }
+
+    /// R1.8 item 4: one keyboard stop per station and per panel action, each drawing its ring: a station is no longer a
+    /// Button inside a focusable wrapper (with Full Keyboard Access the inner button was a stop that drew nothing).
+    func testR18EveryKeyboardStopShowsItsFocus() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign")
+        let chart = try String(contentsOf: dir.appendingPathComponent("NDPipelineChart.swift"), encoding: .utf8)
+        let a = try XCTUnwrap(chart.range(of: "struct NDStationButton: View {"))
+        let b = try XCTUnwrap(chart.range(of: "    /// R1.5 change 4, the station's own key handling"))
+        let station = chart[a.lowerBound..<b.lowerBound]
+        XCTAssertFalse(station.contains("Button {"), "a station is one stop, not a button inside a stop")
+        XCTAssertTrue(station.contains(".focusable(interactions: .activate)") && station.contains("if focused {"), "and draws its ring")
+        let window = try String(contentsOf: dir.appendingPathComponent("NDWindow.swift"), encoding: .utf8)
+        XCTAssertTrue(window.contains(".buttonStyle(NDButtonStyle(filled: filled, small: small, compact: compact))\n            .focusable(false)"))
+        let panel = try String(contentsOf: dir.appendingPathComponent("NDStationPanel.swift"), encoding: .utf8)
+        XCTAssertTrue(panel.contains(".focusable(false)  // R1.8 item 4"), "Copy report: one stop")
+    }
+
+    /// R1.8 item 5: the Jobs fault line names the job that failed.
+    func testR18JobsFaultLineNamesItsJob() {
+        XCTAssertEqual(pipeline(.nightlyFailing).status[.jobs], .init(text: Say.nightlyFailedShort(3), severity: .red))
+        XCTAssertEqual(Say.nightlyFailedShort(3), "Nightly check-up failed 3 nights")
+        XCTAssertFalse(NDPipelineChart.marks(.fault).nameRed, "still only the short line is red")
+    }
+
+    /// R1.8 item 6: the waiting line after Reconnect runs across the panel's footer from its left, 13 pt secondary, with a
+    /// 12 pt spinner first; at the panel's width it takes at most two lines.
+    func testR18WaitingLineFitsTheFooter() throws {
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDStationPanel.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("contains(action.kind), alignment: .leading)"), "left-aligned across the footer")
+        XCTAssertTrue(source.contains("ProgressView().progressViewStyle(.circular).controlSize(.mini).frame(width: 12, height: 12)"))
+        XCTAssertTrue(source.contains("Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)"))
+        let host = NSHostingView(rootView: NDStationPanelBody.waitingLine.frame(width: 288 - 28))
+        let height = host.fittingSize.height
+        let line = ceil(NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: 13)))
+        XCTAssertLessThanOrEqual(height, 2 * line + 1, "at most two lines across the footer")
+    }
+
+    /// R1.8 item 7: the dark dropdown over a white desktop, measured again (round-4 captures of 1.7): our primary 3.90 : 1,
+    /// secondary 3.13 : 1; the system's own vibrant label on the same material 3.30 : 1, under our primary, so vibrant
+    /// colours would lower it. The material (grey 129) caps any colour at 3.95 : 1. No second surface.
+    func testR18DarkDropdownOverWhiteIsMeasured() throws {
+        let measured = (ours: 3.90, oursSecondary: 3.13, systemVibrant: 3.30)
+        XCTAssertGreaterThan(measured.ours, measured.systemVibrant, "the vibrant label is lower than ours")
+        let cap = Self.contrast(.white, desktop: 255, dark: true)
+        XCTAssertEqual(Self.contrast(NDColor.menuText1, desktop: 255, dark: true), cap, accuracy: 0.01, "primary at the material's limit")
+        XCTAssertEqual(measured.ours, cap, accuracy: 0.1, "the model agrees with the capture")
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDMenu.swift"), encoding: .utf8)
+        XCTAssertFalse(source.contains("menuBacking"), "no second surface")
     }
 
     // MARK: Revision 1.7 (R3-DECISIONS "Taken")
@@ -2836,20 +2981,6 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testR17ALateDriveCopyLooksLate() {
         XCTAssertEqual(pipeline(.backupLate).status[.drive]?.severity, .orange)
         XCTAssertNil(pipeline(.calm).status[.drive]?.severity)
-    }
-
-    /// R1.7 item 7: data arriving under a resting pointer waits: the chart keeps the wave (and so the readout's minute and
-    /// the totals) it showed; moving or leaving lets the newest in.
-    func testR17TheHoveredBarStaysUnderARestingPointer() throws {
-        let i = Fixture.inputs(.calm)
-        let old = try XCTUnwrap(i.heroWaves[.hour])
-        var new = old
-        new.saves = Array(old.saves.dropFirst()) + [9]
-        let p = CGPoint(x: 300, y: 40)
-        XCTAssertEqual(NDActivitySection.shownWave(live: new, held: old, hovering: true), old, "resting: the same minute")
-        XCTAssertEqual(NDActivitySection.shownWave(live: new, held: old, hovering: false), new, "left: the newest")
-        XCTAssertEqual(NDActivitySection.held(after: p, last: p, held: old, live: new), old, "no movement: held")
-        XCTAssertEqual(NDActivitySection.held(after: CGPoint(x: 301, y: 40), last: p, held: old, live: new), new, "moved: the newest")
     }
 
     /// R1.7 item 8: no stray tick above "now": the strip under the plot is empty.
