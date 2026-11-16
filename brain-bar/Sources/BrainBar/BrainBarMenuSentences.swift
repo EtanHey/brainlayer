@@ -83,13 +83,8 @@ extension BrainBarMenuPresenter {
                 k.name == "embedding" && (k.state == .red || (k.state == .amber && valid(k.ageS) && k.thresholdS.map { k.ageS! <= $0 } == true)) && ok(k)
             } == true
         }
-        /// R02's truth: a readable, fresh watcher with a working probe reports lag, `ingest` is present and green, and the
-        /// episode is not past the 30-minute limit (R24 escalates it).
-        static func catchingUp(_ c: Capture) -> Bool {
-            let ingest = c.verdict?.checks.filter { $0.name == "ingest" } ?? []
-            return c.watcher.map { $0.readable && $0.fresh && !$0.dbProbeFailed && $0.alertReasons.contains("offset_lag") } == true && !lagPastLimit(c)
-                && !ingest.isEmpty && ingest.allSatisfy { $0.state == .green }
-        }
+        /// R02: green or amber ingest lag under the app's escalation limit is being handled.
+        static func catchingUp(_ c: Capture) -> Bool { ingestLagDisposition(c) == .catchingUp }
         private static func behind(_ noun: String, _ c: Capture) -> Bool {
             noun == behindNoun[.remembering] ? catchingUp(c) : noun == behindNoun[.safe] && runningUpload(c) != nil
         }
@@ -117,6 +112,10 @@ extension BrainBarMenuPresenter {
         /// P2c (R2-B2): the headline is not proof on its own; All good itself is proven, as the oracle proves it.
         static let backedUp = S("S01", .claim, "Backed up to Google Drive {at}.") { c, p, v in
             allGoodProven(c) && p.headline == allGood.text && allGoodDate(c).map { at($0, c) } == v[0]
+        }
+        static let checkSoon = S("R31", .claim, "Check soon") { c, p, _ in
+            p.count == 0 && appEscalationCauses(c).isEmpty && (c.verdict?.checks.contains { $0.state.uiKind == .notice } == true
+                || c.watcher.map { w in w.readable && w.fresh && w.alertReasons.contains { !["offset_lag", "quarantined_record"].contains($0) && !($0 == "coverage_drop" && w.dbProbeFailed) } } == true)
         }
         static let checkingMemory = S("X01", .neutral, "Checking on your memory…")
         static let checkingSleep = S("X02", .claim, "Checking after sleep…") { c, _, _ in c.wakeCatchUpPending }
@@ -150,13 +149,15 @@ extension BrainBarMenuPresenter {
 
         static let countOne = S("A1.count.one", .claim, "1 thing needs you") { _, p, _ in countIs(p, "1") }
         static let countMany = S("A1.count.many", .claim, "{N2} things need you") { _, p, v in countIs(p, v[0]) }
-        /// R24: true whenever its row is counted as Needs you (I4), for an amber check or one that cannot be read too.
+        /// R31: neutral wording for red Needs-you rows, amber notices and app facts; only the two app clocks escalate.
+        /// I4 counts Needs-you rows, never notices.
         static let generic = S("R17", .neutral, "Something BrainBar checks needs attention.")
         static let cantFix = S("U12", .neutral, "BrainBar can’t fix this itself.")
         static let giveReport = S("U12.give", .neutral, "Give the report to an agent.")
         static let ifNotFinished = S("D10", .neutral, "If this backup doesn’t finish, BrainBar can’t fix it itself.")
         static let u03 = S("U03", .claim, "Nightly upkeep failed {N3} nights in a row", .upkeep) { c, _, v in
-            c.maintenanceNightFailures.map { $0 >= 3 && String($0) == v[0] } == true
+            appEscalationCauses(c).contains(appNotificationCause("maintenance"))
+                && c.maintenanceNightFailures.map { String($0) == v[0] } == true
         }
         static let stillSaved = S("U03.stillSaved", .reassurance, "Your memory is still being saved and backed up, as of the last checks.") { c, p, v in
             reassuranceCoverage("U03.stillSaved", v, p, c).map { $0.isSubset(of: provenFine(c)) } == true
@@ -223,7 +224,7 @@ extension BrainBarMenuPresenter {
             allGood, backedUp, checkingMemory, checkingSleep, notConfirmed, lastBackup, r02Headline, r02, s03Headline, s03, s03Started, s03StartedOn,
             s03Progress, s03ProgressEta, catchingTwo, catchingFew, f02, checking, cantConfirmBackups, stillChecking, stillCheckingFew,
             fineIs, fineAre, everythingElse, countOne, countMany, generic, cantFix, giveReport, ifNotFinished, u03, stillSaved, s19,
-            s19Memory, f07, f07Since, exactWords, noRecord, nothingInDrive, s32, s32Progress, s32On, s32ProgressOn, s06, s06Newest, s06Confirmed, r15, s13,
+            checkSoon, s19Memory, f07, f07Since, exactWords, noRecord, nothingInDrive, s32, s32Progress, s32On, s32ProgressOn, s06, s06Newest, s06Confirmed, r15, s13,
             s13Missing, s13Detail, s13DetailMissing, d13, d13Missing, reconnect, connect, copyReport, storage, settings, quit, restart,
         ]
         static let exact = Dictionary(uniqueKeysWithValues: all.filter { !$0.template.contains("{") }.map { ($0.template, $0) })
