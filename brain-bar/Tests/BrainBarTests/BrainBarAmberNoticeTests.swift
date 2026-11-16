@@ -99,6 +99,11 @@ final class BrainBarAmberNoticeTests: XCTestCase {
         c.watcher?.alertReasons = ["offset_lag"]
         c.lagEpisodeStart = c.now.addingTimeInterval(-1801)
         assertOneGenericSentence(c)
+        let p = BrainBarMenuPresenter.present(c)
+        XCTAssertEqual(p.rows.filter { $0.kind == .needsYou }.count, 1)
+        XCTAssertEqual(p.rows.first { $0.kind == .needsYou }?.strings.first, BrainBarMenuPresenter.Say.generic.text)
+        XCTAssertEqual(p.count, 1)
+        XCTAssertEqual(p.icon, .marked)
     }
     func testNoDuplicateAtRedIngestStall() {
         var c = capture("ingest", .red)
@@ -120,6 +125,22 @@ final class BrainBarAmberNoticeTests: XCTestCase {
         let rows = BrainBarMenuPresenter.present(c).rows
         XCTAssertEqual(rows.first { $0.kind == .needsYou }?.strings.first, BrainBarMenuPresenter.Say.s19.text)
         XCTAssertEqual(rows.first { $0.state == .notice }?.strings.first, BrainBarMenuPresenter.Say.s06("2"))
+    }
+
+    func testLaterWordedNoticeSurvivesEarlierGenericDuplicate() {
+        typealias Presenter = BrainBarMenuPresenter
+        let generic = Presenter.Say.generic.text
+        let worded = Presenter.Say.r02.text
+        let p = Presenter.assemble(capture("stores", .red), [
+            .init(thing: .remembering, level: .needs, strings: [generic], worded: false),
+            .init(thing: .remembering, level: .notice, strings: [generic], worded: false),
+            .init(thing: .remembering, level: .notice, strings: [worded]),
+        ], allGood: nil)
+        XCTAssertEqual(p.rows.filter { $0.kind == .needsYou }.count, 1)
+        XCTAssertEqual(p.rows.filter { $0.kind == .statusLine }.map(\.strings), [[worded]])
+        XCTAssertEqual(p.rows.filter { $0.strings.first == generic }.count, 1)
+        XCTAssertEqual(p.count, 1)
+        XCTAssertEqual(p.icon, .marked)
     }
 
     func testVisualNoticeHeadlineUsesNoticeMark() {
