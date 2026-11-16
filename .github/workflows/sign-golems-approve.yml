@@ -1,0 +1,191 @@
+name: Sign Golems approval helper
+on:
+  workflow_dispatch:
+    inputs:
+      golems_sha:
+        description: Full reviewed 40-hex EtanHey/golems commit SHA
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: sign-golems-approve-${{ inputs.golems_sha }}
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.input.outputs.sha }}
+      signing_environment: ${{ steps.signing_environment.outputs.name }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Resolve optional signing environment and validate deployment policy
+        id: signing_environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNING_ENV: ${{ vars.GOLEMS_APPROVE_SIGNING_ENV }}
+        run: |
+          set -euo pipefail
+          name="$(python3 scripts/golems_approve_release.py environment-name "$SIGNING_ENV")"
+          python3 scripts/golems_approve_release.py environment "$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - name: Validate exact source SHA and pinned profile
+        id: input
+        env:
+          GOLEMS_SHA: ${{ inputs.golems_sha }}
+        run: |
+          set -euo pipefail
+          sha="$(python3 scripts/golems_approve_release.py sha "$GOLEMS_SHA")"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          python3 scripts/golems_approve_release.py profile .github/signing/golems-approve/Golems_Approve_Developer_ID.provisionprofile
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: EtanHey/golems
+          ref: master
+          fetch-depth: 0
+          path: golems
+          persist-credentials: false
+      - name: Require committed signing files before building
+        env:
+          GOLEMS_SHA: ${{ steps.input.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/golems_approve_release.py merged-sha golems "$GOLEMS_SHA"
+          git -C golems checkout --detach "$GOLEMS_SHA"
+          test "$(git -C golems rev-parse HEAD)" = "$GOLEMS_SHA"
+          git -C golems ls-files --error-unmatch native/golems-approve/GolemsApprove.entitlements native/golems-approve/Info.plist >/dev/null
+          python3 scripts/golems_approve_release.py source golems/native/golems-approve
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90
+        with:
+          xcode-version: latest-stable
+      - name: Build without signing credentials
+        run: |
+          set -euo pipefail
+          swift build --package-path golems/native/golems-approve --scratch-path .build.noindex/golems-approve -c release
+          bin_dir="$(swift build --package-path golems/native/golems-approve --scratch-path .build.noindex/golems-approve -c release --show-bin-path)"
+          mkdir payload
+          cp "$bin_dir/golems-approve" payload/
+          cp golems/native/golems-approve/Info.plist golems/native/golems-approve/GolemsApprove.entitlements payload/
+          xcodebuild -version > payload/toolchain.txt
+          swift --version >> payload/toolchain.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: unsigned-helper
+          path: payload/
+          if-no-files-found: error
+          retention-days: 1
+  sign:
+    if: needs.build.outputs.signing_environment == ''
+    needs: build
+    permissions:
+      contents: read
+      actions: read
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps: &signing_steps
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: unsigned-helper
+          path: payload
+      - name: Recheck optional signing environment before reading signing secrets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNING_ENV: ${{ needs.build.outputs.signing_environment }}
+        run: python3 scripts/golems_approve_release.py environment "$SIGNING_ENV"
+      - name: Sign and notarize with selected credentials
+        env:
+          BRAINBAR_DEVELOPER_ID_APPLICATION: ${{ secrets.BRAINBAR_DEVELOPER_ID_APPLICATION }}
+          BRAINBAR_DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.BRAINBAR_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          BRAINBAR_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.BRAINBAR_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          BRAINBAR_NOTARY_APPLE_ID: ${{ secrets.BRAINBAR_NOTARY_APPLE_ID }}
+          BRAINBAR_NOTARY_PASSWORD: ${{ secrets.BRAINBAR_NOTARY_PASSWORD }}
+          BRAINBAR_NOTARY_TEAM_ID: ${{ secrets.BRAINBAR_NOTARY_TEAM_ID }}
+        run: bash scripts/sign-golems-approve.sh
+      - name: Always delete temporary signing material
+        if: always()
+        run: |
+          set -euo pipefail
+          keychain_path="$RUNNER_TEMP/golems-approve-signing.keychain-db"
+          cert_path="$RUNNER_TEMP/golems-approve-developer-id.p12"
+          if [[ -e "$keychain_path" ]]; then security delete-keychain "$keychain_path" >/dev/null 2>&1; fi
+          if [[ -e "$cert_path" ]]; then /bin/rm -f "$cert_path"; fi
+          test ! -e "$keychain_path"
+          test ! -e "$cert_path"
+      - name: Verify and launch after credential cleanup, then package
+        run: |
+          set -euo pipefail
+          app="$PWD/dist/GolemsApprove.app"
+          codesign --verify --deep --strict "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=4 "$app"
+          python3 scripts/golems_approve_release.py verify "$app"
+          codesign -d -r- "$app" > dist/requirement.txt 2>&1
+          grep -F 'PPN23G925Y' dist/requirement.txt
+          printf '\nBuild toolchain (from isolated build runner):\n' >> dist/requirement.txt
+          cat payload/toolchain.txt >> dist/requirement.txt
+          ditto -c -k --keepParent "$app" dist/GolemsApprove.zip
+          mkdir "$RUNNER_TEMP/golems-approve-zip-verify"
+          ditto -x -k dist/GolemsApprove.zip "$RUNNER_TEMP/golems-approve-zip-verify"
+          packaged="$RUNNER_TEMP/golems-approve-zip-verify/GolemsApprove.app"
+          python3 scripts/golems_approve_release.py verify "$packaged"
+          xcrun stapler validate "$packaged"
+          spctl --assess --type execute --verbose=4 "$packaged"
+          cd dist
+          shasum -a 256 GolemsApprove.zip requirement.txt > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: signed-helper
+          path: |
+            dist/GolemsApprove.zip
+            dist/SHA256SUMS
+            dist/requirement.txt
+          if-no-files-found: error
+          retention-days: 7
+  sign_environment:
+    if: needs.build.outputs.signing_environment != ''
+    needs: build
+    environment: ${{ needs.build.outputs.signing_environment }}
+    permissions:
+      contents: read
+      actions: read
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps: *signing_steps
+  publish:
+    if: >-
+      !cancelled() && needs.build.result == 'success' &&
+      ((needs.sign.result == 'success' && needs.sign_environment.result == 'skipped') ||
+       (needs.sign.result == 'skipped' && needs.sign_environment.result == 'success'))
+    needs: [build, sign, sign_environment]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: signed-helper
+          path: release
+      - name: Publish prerelease (existing release refuses)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GOLEMS_SHA: ${{ needs.build.outputs.sha }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum --check SHA256SUMS
+          tag="golems-approve-${GOLEMS_SHA:0:12}"
+          gh release create "$tag" GolemsApprove.zip SHA256SUMS requirement.txt \
+            --target "$GITHUB_SHA" --prerelease --title "$tag" \
+            --notes "Signed and notarized Golems approval helper. Source: EtanHey/golems@$GOLEMS_SHA. SHA256SUMS is a download convenience; enrolment must verify codesign -R and the pinned embedded profile hash."

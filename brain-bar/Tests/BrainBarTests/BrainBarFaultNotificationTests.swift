@@ -65,6 +65,117 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         return c
     }
 
+    // Reported 2026-11-16: the producer has noticed lag once, with no attention items.
+    private func lagCapture(state: BrainBarHealthVerdict.State = .amber, age: TimeInterval = 300) -> BrainBarMenuCapture {
+        var c = capture("ingest", state: state)
+        c.verdict = .init(dot: state == .red ? .red : .amber, checks: c.verdict!.checks.map { k in
+            k.name == "ingest" ? .init(name: k.name, state: k.state,
+                note: "watcher reports offset_lag (1 checks in a row)", unknownTicks: 0, blind: false) : k
+        }, notes: [], evaluatedAt: c.now)
+        c.watcher = .init(alertReasons: ["offset_lag"])
+        c.lagEpisodeStart = c.now.addingTimeInterval(-age)
+        return c
+    }
+
+    func testReportedAmberLagDoesNotNeedYouOrNotify() async {
+        let c = lagCapture()
+        let p = BrainBarMenuPresenter.present(c)
+        XCTAssertEqual(p.headline, BrainBarMenuPresenter.Say.r02Headline.text)
+        XCTAssertEqual(p.form, .calm)
+        XCTAssertFalse(p.rows.contains { $0.kind == .needsYou })
+        XCTAssertEqual(p.icon, .resting)
+        XCTAssertEqual(p.count, 0)
+        let report = BrainBarMenuReport.text(presentation: p, verdict: c.verdict, version: "test", now: c.now)
+        XCTAssertTrue(report.contains(BrainBarMenuPresenter.Say.r02Headline.text))
+        XCTAssertFalse(report.contains(BrainBarMenuPresenter.Say.cantFix.text))
+        XCTAssertTrue(BrainBarMenuPresenter.notificationFaults(c).isEmpty)
+        let center = Center()
+        await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c)
+        XCTAssertTrue(center.posts.isEmpty)
+        XCTAssertEqual(center.requests, 0)
+    }
+
+    func testReportedAmberLagWithIncompleteCensusStaysCalm() async {
+        var c = lagCapture()
+        c.verdict = .init(dot: .amber, checks: c.verdict!.checks.map { check in
+            var check = check
+            if check.name == "ingest" { check.contextCodes = ["agent_census_incomplete"] }
+            return check
+        }, notes: [], evaluatedAt: c.now)
+        let p = BrainBarMenuPresenter.present(c)
+        XCTAssertEqual(p.headline, BrainBarMenuPresenter.Say.r02Headline.text)
+        XCTAssertEqual(p.count, 0)
+        XCTAssertEqual(p.icon, .resting)
+        XCTAssertFalse(p.rows.contains { $0.kind == .needsYou })
+        XCTAssertFalse(p.rows.contains { $0.state == .notice })
+        let center = Center()
+        await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c)
+        XCTAssertTrue(center.posts.isEmpty)
+    }
+
+    func testStaleAmberVerdictDoesNotSuppressCurrentPairedJob() async {
+        for (age, expected) in [(901.0, 1), (100.0, 0)] {
+            var c = capture("backup_local", state: .amber)
+            c.verdictAwakeAgeS = age
+            let center = Center()
+            await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c,
+                jobAlerts: ["backup-daily": "Invented current backup failure"])
+            XCTAssertEqual(center.posts.count, expected, "verdict awake age \(age)")
+        }
+    }
+
+    func testLagBoundaryAndUncertainEvidence() {
+        for age in [300.0, 1800.0] {
+            XCTAssertEqual(BrainBarMenuPresenter.present(lagCapture(age: age)).form, .calm)
+        }
+        for state in [BrainBarHealthVerdict.State.green, .amber, .red, .unknown] {
+            let c = lagCapture(state: state)
+            XCTAssertEqual(BrainBarMenuPresenter.Say.catchingUp(c), state == .green || state == .amber)
+        }
+        var c = lagCapture()
+        c.watcher?.dbProbeFailed = true
+        XCTAssertFalse(BrainBarMenuPresenter.Say.catchingUp(c))
+        c = lagCapture()
+        c.watcher?.fresh = false
+        XCTAssertFalse(BrainBarMenuPresenter.Say.catchingUp(c))
+    }
+
+    func testClassicAmberLagHasNoAttentionItems() {
+        var input = BrainBarStatusSnapshotTests.healthy()
+        let c = lagCapture()
+        input.now = c.now
+        input.badge?.healthVerdict = c.verdict
+        let status = BrainBarStatusSnapshot.derive(input)
+        XCTAssertEqual(status.verdict.dot, .amber)
+        XCTAssertEqual(status.verdict.attentionRowCount, 0)
+        XCTAssertEqual(status.dashboardStatus.headline, "Check soon")
+    }
+
+    func testLagRedAndThirtyMinuteEscalationStillNeedYou() async {
+        for c in [lagCapture(state: .red), lagCapture(age: 1801)] {
+            let p = BrainBarMenuPresenter.present(c)
+            XCTAssertEqual(p.form, .needs)
+            XCTAssertEqual(p.icon, .marked)
+            XCTAssertEqual(p.count, 1)
+            XCTAssertEqual(p.rows.filter { $0.strings.first == BrainBarMenuPresenter.Say.generic.text }.count, 1)
+            let center = Center()
+            await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c)
+            XCTAssertEqual(center.posts.count, 1)
+        }
+    }
+
+    func testAmberIngestWithoutLagIsR31Notice() {
+        var c = lagCapture()
+        c.watcher = .init()
+        c.verdict = .init(dot: .amber, checks: c.verdict!.checks.map { k in
+            k.name == "ingest" ? .init(name: k.name, state: k.state,
+                note: "an agent BrainLayer does not index is running", unknownTicks: 0, blind: false) : k
+        }, notes: [], evaluatedAt: c.now)
+        let p = BrainBarMenuPresenter.present(c)
+        XCTAssertEqual(p.form, .calm)
+        XCTAssertEqual(p.rows.first { $0.state == .notice }?.strings.first, BrainBarMenuPresenter.Say.generic.text)
+    }
+
     func testNewSameGoneAndReturned() async {
         let clock = Box()
         let center = Center()
@@ -278,7 +389,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertEqual(center.posts.first?.1, "Memory search needs attention")
     }
 
-    func testAppKnownWatcherUnknownGapDoesNotRearm() async {
+    func testWatcherNoticeUnknownGapNeverNotifies() async {
         let center = Center()
         let observed = BrainBarFaultNotifications(center: center, defaults: defaults())
         var c = capture()
@@ -288,7 +399,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         missing.watcher = nil
         await observed.update(missing)
         await observed.update(c)
-        XCTAssertEqual(center.posts.count, 1)
+        XCTAssertEqual(center.posts.count, 0)
     }
 
     func testAppKnownHistoryUnknownGapDoesNotRearm() async {
@@ -304,7 +415,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertEqual(center.posts.count, 1)
     }
 
-    func testLosingCauseDoesNotPostAndReturningCauseDoes() async {
+    func testWatcherNoticeDoesNotAddACauseToAnExistingRedFault() async {
         let clock = Box()
         let center = Center()
         let subject = BrainBarFaultNotifications(center: center, defaults: defaults(), clock: { clock.now })
@@ -312,17 +423,17 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         await subject.update(c)
         c.watcher?.alertReasons = ["file_ingestion_failure"]
         await subject.update(c)
-        XCTAssertEqual(center.posts.count, 2)
+        XCTAssertEqual(center.posts.count, 1)
         c.watcher?.alertReasons = []
         await subject.update(c)
-        XCTAssertEqual(center.posts.count, 2)
+        XCTAssertEqual(center.posts.count, 1)
         c.watcher?.alertReasons = ["file_ingestion_failure"]
         await subject.update(c)
-        XCTAssertEqual(center.posts.count, 2)
+        XCTAssertEqual(center.posts.count, 1)
         c.now = c.now.addingTimeInterval(601)
         clock.now = clock.now.addingTimeInterval(601)
         await subject.update(c)
-        XCTAssertEqual(center.posts.count, 3)
+        XCTAssertEqual(center.posts.count, 1)
     }
 
     func testAuthorizationErrorRemainsPending() async {
@@ -463,7 +574,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
             }, notes: [], evaluatedAt: c.now)
             await subject.update(c)
         }
-        XCTAssertEqual(center.posts.count, 1)
+        XCTAssertEqual(center.posts.count, 0)
     }
 
     func testRound2RecoveredThingRearmsWhileOtherThingRemainsUnknown() async {
@@ -570,7 +681,8 @@ final class BrainBarFaultNotificationTests: XCTestCase {
                 }, notes: [], evaluatedAt: c.now)
                 await subject.update(c, jobAlerts: [:])
                 XCTAssertEqual(center.posts.count, 2, key)
-                XCTAssertEqual(center.posts.last?.1, "Backups need attention")
+                if state == .red { XCTAssertEqual(center.posts.last?.1, "Backups need attention") }
+                else { XCTAssertEqual(center.posts.last?.1, BrainBarMenuPresenter.notificationFaults(c).first?.title) }
             }
         }
         }

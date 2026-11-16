@@ -49,7 +49,7 @@ final class BrainBarMenuPresentationTests: XCTestCase {
                   evaluatedAt: v.evaluatedAt)
         }
         func titles(_ c: BrainBarMenuCapture) -> [String] {
-            BrainBarMenuPresenter.present(c).rows.filter { [.needsYou, .factLine].contains($0.kind) }.compactMap(\.strings.first)
+            BrainBarMenuPresenter.present(c).rows.filter { [.needsYou, .factLine].contains($0.kind) || $0.state == .notice }.compactMap(\.strings.first)
         }
         let generic = "Something BrainBar checks needs attention."
         var s11b = try capture("S11b")
@@ -121,6 +121,27 @@ final class BrainBarMenuPresentationTests: XCTestCase {
             row.keyEquivalent = r["key_equivalent"] as? String
             row.optionAlternate = ((r["option_alternate"] as? [String: Any])?["strings"] as? [[String: Any]])?.first?["text"] as? String
             return row
+        }
+        // R31 supersedes the frozen fixture's amber Needs-you rows; every other byte stays checked.
+        let id = c["id"] as! String
+        if ["S5", "S9", "S12"].contains(id) {
+            var revised = rows
+            let amberTitle = id == "S5" ? "The last 2 backups didn’t finish" : "Search by meaning isn’t catching up"
+            let notices = revised.filter { $0.strings.first == amberTitle }.map { row -> P.Row in
+                P.Row(kind: .statusLine, strings: Array(row.strings.dropLast(2)), state: .notice)
+            }
+            revised.removeAll { $0.strings.first == amberTitle }
+            if id == "S12" {
+                let index = revised.firstIndex { $0.kind == .everythingElse }!
+                revised.insert(contentsOf: notices, at: index)
+                revised[0].strings = ["2 things need you"]
+                if let first = revised.firstIndex(where: { $0.kind == .needsYou }) { revised[first].dividerBefore = false }
+                return .init(form: .needs, headline: "2 things need you", count: 2, icon: .marked, rows: revised)
+            }
+            let fine = id == "S5" ? "Saving, search and upkeep are fine." : "Saving, backups and upkeep are fine."
+            return .init(form: .calm, headline: "Check soon", count: 0, icon: .resting, rows:
+                [P.Row(kind: .headline, strings: ["Check soon"], mark: .notice), P.Row(kind: .separator)] + notices
+                + [P.Row(kind: .everythingElse, strings: [fine], mark: .ok)] + Array(rows.suffix(3)))
         }
         return .init(form: P.Form(rawValue: c["form"] as! String)!, headline: c["headline"] as! String,
                      count: c["count"] as! Int, icon: P.Icon(rawValue: c["icon"] as! String)!, rows: rows)

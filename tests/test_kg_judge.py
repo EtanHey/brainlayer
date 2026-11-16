@@ -367,6 +367,7 @@ def test_git_shellout_tests_scrub_inherited_git_env():
         "test_doctor.py",
         "test_git_env_containment.py",
         "test_git_learning.py",
+        "test_golems_approve_release.py",  # Registered with _clean_git_env; validated below.
         "test_health_relay.py",
         "test_kg_judge.py",
         "test_maintenance_code_freshness.py",
