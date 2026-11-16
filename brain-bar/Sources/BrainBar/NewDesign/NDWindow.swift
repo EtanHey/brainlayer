@@ -370,13 +370,25 @@ struct NDActivitySection: View {
     }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.ndPreviewHover) private var previewHover
+    /// R1.7 item 7: the wave on screen while the pointer rests on the chart, and where the pointer last was.
+    @State private var heldWave: NDWave?
+    @State private var lastPointer: CGPoint?
+
+    /// R1.7 item 7: while the pointer rests on the chart, new data waits: the bars and the readout keep the minute under
+    /// it; the pointer moving or leaving lets the newest data in.
+    static func shownWave(live: NDWave?, held: NDWave?, hovering: Bool) -> NDWave? { hovering ? (held ?? live) : live }
+
+    /// The wave to hold after a pointer event: the newest when the pointer moved, the held one when it did not.
+    static func held(after point: CGPoint, last: CGPoint?, held: NDWave?, live: NDWave?) -> NDWave? {
+        point == last ? (held ?? live) : live
+    }
     static let gutter: CGFloat = 52
     /// R1.2: the chart is 820 wide inside its surface: a 52 pt gutter and a 768 pt plot.
     static let plotWidth: CGFloat = 768
     static let plotHeight: CGFloat = 112
 
     var body: some View {
-        let wave = store.inputs.heroWaves[store.range]
+        let wave = Self.shownWave(live: store.inputs.heroWaves[store.range], held: heldWave, hovering: hover != nil)
         let cut = Self.noDataFraction(store, wave: wave)
         // R1.6 item 6: not confirmed, the totals say "—".
         let known = wave?.readable == true && cut == nil
@@ -388,9 +400,9 @@ struct NDActivitySection: View {
 
     /// R1.6 item 6: where the last confirmed check falls on the range, 0 to 1 from the left; nil while the state is
     /// confirmed.
-    static func noDataFraction(_ store: NDStore, wave: NDWave?) -> CGFloat? {
+    static func noDataFraction(_ store: NDStore, wave: NDWave?, minutes: Int? = nil) -> CGFloat? {
         guard store.r1.unconfirmedSince != nil, let at = store.inputs.capture.verdict?.evaluatedAt else { return nil }
-        let span = Double(store.range.minutes * 60)
+        let span = Double((minutes ?? store.range.minutes) * 60)
         let end = wave?.endsAt ?? store.inputs.capture.now
         return CGFloat(min(1, max(0, (at.timeIntervalSince(end) + span) / span)))
     }
@@ -428,8 +440,15 @@ struct NDActivitySection: View {
                     .contentShape(Rectangle())
                     .onContinuousHover(coordinateSpace: .local) { phase in
                         switch phase {
-                        case let .active(p): hover = Self.bucket(at: p.x, count: wave?.count ?? 0)
-                        case .ended: hover = nil
+                        case let .active(p):
+                            let live = store.inputs.heroWaves[store.range]
+                            heldWave = Self.held(after: p, last: lastPointer, held: heldWave, live: live)
+                            lastPointer = p
+                            hover = Self.bucket(at: p.x, count: heldWave?.count ?? 0)
+                        case .ended:
+                            hover = nil
+                            heldWave = nil
+                            lastPointer = nil
                         }
                     }
                     .background(GeometryReader { g in

@@ -253,16 +253,18 @@ enum NDPipelineLayout {
     static func panelSide(_ s: NDStation, hasAction: Bool) -> (edge: Edge, width: CGFloat, slide: CGFloat) {
         // R1.5 change 2: one card for every station, 288 wide.
         switch s {
-        // 1.5.1: below the group (above it sits the "Pipeline" heading), its body past the window's left edge (L39).
-        case .agents: (.bottom, 288, -150)
+        // R1.7 item 2: right of the agents' column, arrow pointing left, above Read's words (never over a label, never
+        // past the window's left edge).
+        case .agents: (.trailing, 288, 0)
         case .read: (.top, 288, 0)
         case .memory: (.top, 288, 0)
         case .mac: (.top, 288, 0)
         case .drive: (.top, 288, -60)
         case .search: (.trailing, 288, 0)
-        // Save queue's slides left of the Jobs name; Jobs' slides left of Search's circle and words.
+        // Save queue's slides left of the Jobs name. R1.7 item 3: Jobs' opens beside its station (right of its words),
+        // under the Kept-safe frame and above the footer, not down over the loop line.
         case .queue: (.bottom, 288, -64)
-        case .jobs: (.bottom, 288, -77)
+        case .jobs: (.trailing, 288, 0)
         }
     }
 
@@ -296,6 +298,17 @@ enum NDPipelineLayout {
             // The agents' arrow sits left of the answers line rising into the group's bottom edge at its centre.
             tip = CGPoint(x: s == .agents ? own.minX + 10 : own.midX, y: anchor.maxY)
             body = CGRect(x: tip.x - w / 2 + side.slide, y: tip.y + a, width: w, height: height)
+        case .trailing where s == .agents:
+            // The arrow at the column's first icon; the body ends 4 pt above Read's words and rises from there.
+            tip = CGPoint(x: anchor.maxX, y: point(.read).y - 8)
+            let ceiling = (labelRects(.read, state).first?.minY ?? (point(.read).y + ringRadius)) - 4
+            body = CGRect(x: tip.x + a, y: ceiling - height, width: w, height: height)
+        case .trailing where s == .jobs:
+            // Just below the copies' words, the arrow at the station's height.
+            // The body starts where the loop line meets Search's circle, so it never lies on that line.
+            tip = CGPoint(x: max(anchor.maxX, point(.search).x - ringRadius - 2 - a), y: own.midY)
+            let words = (labelRects(.mac, state) + labelRects(.drive, state)).map(\.maxY).max() ?? keptSafe.maxY
+            body = CGRect(x: tip.x + a, y: words + 4, width: w, height: height)
         case .trailing:
             tip = CGPoint(x: anchor.maxX, y: own.midY)
             body = CGRect(x: tip.x + a, y: tip.y - height / 2 + side.slide, width: w, height: height)

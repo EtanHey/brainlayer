@@ -166,10 +166,7 @@ struct NDWaveform: View {
         let n = wave.count
         guard n > 0 else { return }
         let pitch = canvas.width / CGFloat(n)
-        if nowTick {
-            let x = CGFloat(n - 1) * pitch + pitch / 2 - 0.5
-            ctx.fill(Path(CGRect(x: x, y: h + 3, width: 1, height: 5)), with: .color(ND.t3))
-        }
+        // R1.7 item 8: no tick above "now" (it read as a dropped glyph); the 8 pt under the plot stays as spacing.
         if let hover, hover < n {
             let x = CGFloat(hover) * pitch + pitch / 2 - 0.5
             ctx.fill(Path(CGRect(x: x, y: 0, width: 1, height: h)), with: .color(ND.t2.opacity(0.45)))

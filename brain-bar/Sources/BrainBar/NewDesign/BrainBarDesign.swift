@@ -114,11 +114,11 @@ enum NDColor {
     static let menuSaves = saved
     static let menuReads = read
     static let menuTrack = hair2
-    /// R1.6 item 13: the dropdown's glass composites to mid-grey over a white or black desktop (measured on the round-2
-    /// captures), where the system's label colours fall under 4.5 : 1. The hosted rows draw this backing at
-    /// `NDMenuBacking.opacity`, and their secondary words take a solid grey that holds 4.5 : 1 over it.
-    static let menuBacking = dynamic("menu.back", dark: rgb(0x242426), light: rgb(0xF4F4F6))
-    static let menuText2 = dynamic("menu.t2", dark: rgb(0xA6A6AA), light: rgb(0x5E5E66))
+    /// R1.7 item 1: the dropdown's words sit straight on the system menu material, which composites to grey 128 (dark)
+    /// and 135 (light) over a white or black desktop (round-2 captures). Light words are near black, so they hold
+    /// 4.5 : 1 everywhere; dark words are white, the most the material allows (3.95 : 1 over a white desktop).
+    static let menuText1 = dynamic("menu.t1", dark: rgb(0xFFFFFF), light: rgb(0x000000))
+    static let menuText2 = dynamic("menu.t2", dark: rgb(0xE6E6EA), light: rgb(0x1E1E21))
 }
 
 /// SwiftUI handles of the same colours.
@@ -173,17 +173,16 @@ enum ND {
     static let menuSaves = saved
     static let menuReads = read
     static let menuTrack = hair2
-    static let menuBacking = Color(nsColor: NDColor.menuBacking)
+    static let menuText1 = Color(nsColor: NDColor.menuText1)
     static let menuText2 = Color(nsColor: NDColor.menuText2)
 }
 
-/// R1.6 item 13: the dropdown's backing, and the material it sits on as measured (round-2 captures, macOS 27, native 2x):
-/// over a white desktop the dark glass composites to grey 128 and the light glass to 250; over a black desktop to 44
-/// and 135. As a tint over the desktop that is dark 65.6 at 0.671 and light 246 at 0.549 (sRGB, 0 to 255).
-enum NDMenuBacking {
-    static let opacity: CGFloat = 0.9
-    static let materialDark = (tint: CGFloat(65.6), alpha: CGFloat(0.671))
-    static let materialLight = (tint: CGFloat(246), alpha: CGFloat(0.549))
+/// The system menu material as measured (round-2 captures, macOS 27, native 2x): over a white desktop the dark glass
+/// composites to grey 128 and the light glass to 250; over a black desktop to 44 and 135. As a tint over the desktop
+/// that is dark 65.6 at 0.671 and light 246 at 0.549 (sRGB, 0 to 255). R1.7 item 1: the rows draw no backing on it.
+enum NDMenuMaterial {
+    static let dark = (tint: CGFloat(65.6), alpha: CGFloat(0.671))
+    static let light = (tint: CGFloat(246), alpha: CGFloat(0.549))
 }
 
 /// R1 type (§ 1.2): one face, three sizes, no condensed width; figures tabular on every number.
@@ -192,6 +191,10 @@ enum NDType {
     static let body = Font.system(size: 13)
     static let bodyMedium = Font.system(size: 13, weight: .medium)
     static let bodyStrong = Font.system(size: 13, weight: .semibold)
+    /// R1.7 item 10: a hover panel's body and its rows' values.
+    static let panelBodySize: CGFloat = 12
+    static let panelBody = Font.system(size: 12)
+    static let panelValue = Font.system(size: 12, weight: .semibold).monospacedDigit()
     static let caption = Font.system(size: 11)
     static let captionMedium = Font.system(size: 11, weight: .medium)
     static let captionStrong = Font.system(size: 11, weight: .semibold)

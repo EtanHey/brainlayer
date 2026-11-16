@@ -18,22 +18,24 @@ struct NDStationPanelBody: View {
                 Text(model.title).font(NDType.bodyStrong).foregroundStyle(ND.t1).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.bottom, 6)
-            ForEach(Array(model.lines.enumerated()), id: \.offset) { index, line in
-                Text(keepingUnits(line)).font(NDType.body).foregroundStyle(index == 0 && model.firstLineStrong ? ND.t1 : ND.t2)
+            ForEach(Array(Self.paragraphs(model.lines).enumerated()), id: \.offset) { index, line in
+                // R1.7 item 10: body 12 pt in the secondary colour, at most two lines a paragraph.
+                Text(keepingUnits(line)).font(NDType.panelBody).foregroundStyle(ND.t2)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, index == 0 ? 0 : 4)
             }
             if !model.rows.isEmpty {
                 VStack(spacing: 0) {
                     ForEach(model.rows) { line in
                         HStack {
-                            Text(line.label).font(NDType.body).foregroundStyle(ND.t2).fixedSize(horizontal: false, vertical: true)
+                            Text(line.label).font(NDType.panelBody).foregroundStyle(ND.t2).fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: line.value.isEmpty ? 0 : 12)
                             if !line.value.isEmpty {
-                                Text(line.value).font(NDType.number)
+                                // R1.7 item 10: the value in primary semibold (a fault or a notice keeps its colour).
+                                Text(line.value).font(NDType.panelValue)
                                     .foregroundStyle(line.tone == .fault ? ND.redText : line.tone == .warn ? ND.orangeText : ND.t1)
                             }
                         }
-                        .frame(minHeight: NDGrid.row)
+                        .frame(minHeight: Self.rowHeight)
                     }
                 }
                 .padding(.top, 8)
@@ -50,6 +52,19 @@ struct NDStationPanelBody: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .onAppear { if focusAction, model.action != nil { actionFocused = true } }
+    }
+
+    /// R1.7 item 10: a row at 12 pt is 18 pt high.
+    static let rowHeight: CGFloat = 18
+
+    /// R1.7 item 10: one paragraph per sentence, so a paragraph runs to at most two lines (the words are the deck's).
+    static func paragraphs(_ lines: [String]) -> [String] {
+        lines.flatMap { line in
+            line.split(separator: ". ", omittingEmptySubsequences: true).enumerated().map { index, part in
+                let parts = line.components(separatedBy: ". ").count
+                return index < parts - 1 ? String(part) + "." : String(part)
+            }
+        }
     }
 
     @ViewBuilder private var mark: some View {

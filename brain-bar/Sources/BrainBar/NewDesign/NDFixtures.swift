@@ -89,8 +89,8 @@ enum BrainBarDesignFixture {
     static func calmChecks() -> [BrainBarHealthVerdict.Check] {
         [
             check("ingest", age: 48, limit: 900), check("stores", age: 0, limit: 1800), check("search", fails: 0),
-            check("embedding", age: 420, limit: 3600), check("backup_local", age: 4 * 3600, limit: 36 * 3600),
-            check("backup_offsite", age: 3 * 3600, limit: 36 * 3600), check("transcripts", age: 4 * 3600, limit: 36 * 3600),
+            check("embedding", age: 420, limit: 3600), check("backup_local", age: 4 * 3600, limit: 54 * 3600),
+            check("backup_offsite", age: 3 * 3600, limit: 54 * 3600), check("transcripts", age: 4 * 3600, limit: 54 * 3600),
             check("drive_auth"), check("integrity"), check("disk"), check("monitor"),
         ]
     }
@@ -152,8 +152,8 @@ enum BrainBarDesignFixture {
             i.backupHistory = history(failedDriveDayAgo: 3, retried: true)
         case .backupLate:
             // R2 item 4: Drive's database copy is the Mac copy it uploads, so it is as old: the upload of the 30 h copy.
-            i.capture = capture(replacing(replacing(calmChecks(), check("backup_local", .amber, age: 30 * 3600, limit: 36 * 3600)),
-                                          check("backup_offsite", age: 30 * 3600, limit: 36 * 3600)), dot: .amber)
+            i.capture = capture(replacing(replacing(calmChecks(), check("backup_local", .amber, age: 30 * 3600, limit: 54 * 3600)),
+                                          check("backup_offsite", age: 30 * 3600, limit: 54 * 3600)), dot: .amber)
             i.newestLocalCopyAt = now.addingTimeInterval(-30 * 3600)
             i.localCopiesKept = 2  // a missed night: two copies on this Mac
             i.backupHistory = history(localNewestHoursAgo: 30, driveNewestHoursAgo: 30)
@@ -165,8 +165,8 @@ enum BrainBarDesignFixture {
         var c = c
         let checks = (c.verdict?.checks ?? []).map { k -> BrainBarHealthVerdict.Check in
             switch k.name {
-            case "backup_offsite": check(k.name, age: database * 3600, limit: 36 * 3600)
-            case "transcripts": check(k.name, age: conversations * 3600, limit: 36 * 3600)
+            case "backup_offsite": check(k.name, age: database * 3600, limit: 54 * 3600)
+            case "transcripts": check(k.name, age: conversations * 3600, limit: 54 * 3600)
             default: k
             }
         }

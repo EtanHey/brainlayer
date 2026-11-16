@@ -37,13 +37,13 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
         let headline = NDMenuHeadline.text(r1)
         let hadRed = store.inputs.capture.verdict?.checks.contains { $0.state == .red } == true
         menu.addItem(hosted(NDMenuHeadline(r1: r1, lastVerdictHadRed: hadRed), label: headline))
-        menu.addItem(separator())
+        menu.addItem(.separator())
         // R1.2 change 9 and L24: blocks when something is red or two or more amber notices; a single amber state says
         // itself in the headline and its line.
         let blocks = r1.showsProblemRows ? r1.items : []
         let filled = NDMenuFaultBlock.filledIndex(blocks)
         for (index, item) in blocks.enumerated() {
-            if index > 0 { menu.addItem(separator()) }
+            if index > 0 { menu.addItem(.separator()) }
             let state = NDMenuRowState()
             let row = hosted(NDMenuFaultBlock(store: store, item: item, filled: index == filled, state: state) { [weak self] kind in
                 self?.perform(.row(kind))
@@ -57,7 +57,7 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
             }
             menu.addItem(row)
         }
-        if !blocks.isEmpty { menu.addItem(separator()) }
+        if !blocks.isEmpty { menu.addItem(.separator()) }
         // R1.2 change 12: not confirmed: "Last known at 14:02" once, above the rows that show their last-known values.
         if let at = r1.pipeline.lastKnownAt {
             menu.addItem(hosted(NDMenuCaption(text: Say.lastKnownAt(at)), label: Say.lastKnownAt(at)))
@@ -134,16 +134,6 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
         return item
     }
 
-    /// R1.6 item 13: a separator between hosted rows draws the backing too, so the backed rows read as one surface.
-    private func separator() -> NSMenuItem {
-        let item = NSMenuItem()
-        let host = NDMenuRowHost(NDMenuSeparator(), label: "")
-        host.setAccessibilityElement(false)
-        item.view = host
-        item.isEnabled = false
-        return item
-    }
-
     private func standard(_ title: String, key: String, action: BrainBarMenuAction, symbol: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: #selector(performItem), keyEquivalent: key)
         item.keyEquivalentModifierMask = .command
@@ -152,16 +142,6 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
         item.image = Self.symbol(symbol)
         item.isEnabled = true
         return item
-    }
-}
-
-/// R1.6 item 13: the system separator's line, drawn in a hosted row so the backing runs under it.
-struct NDMenuSeparator: View {
-    static let height: CGFloat = 11
-    var body: some View {
-        Color(nsColor: .separatorColor).frame(height: 1).padding(.horizontal, 16)
-            .frame(height: Self.height)
-            .accessibilityHidden(true)
     }
 }
 
@@ -174,10 +154,8 @@ struct NDMenuSeparator: View {
 /// A hosted row: sized to its view at the menu's width, one accessibility element that reads the row's words.
 final class NDMenuRowHost: NSView {
     init<V: View>(_ view: V, label: String) {
-        // R1.6 item 13: each hosted row draws the backing across the menu's width, so its words hold 4.5 : 1 over any
-        // desktop.
-        let hosting = NSHostingView(rootView: view.frame(width: NDGrid.menuWidth, alignment: .leading)
-            .background(ND.menuBacking.opacity(NDMenuBacking.opacity)))
+        // R1.7 item 1: one material: the rows sit on the system menu's own material, with no backing of their own.
+        let hosting = NSHostingView(rootView: view.frame(width: NDGrid.menuWidth, alignment: .leading))
         let height = ceil(hosting.fittingSize.height)
         super.init(frame: NSRect(x: 0, y: 0, width: NDGrid.menuWidth, height: height))
         hosting.frame = bounds
@@ -224,7 +202,7 @@ struct NDMenuHeadline: View {
                 Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(ND.menuText2)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(Self.text(r1)).font(NDType.title).tracking(-0.25).foregroundStyle(Color(nsColor: .labelColor))
+                Text(Self.text(r1)).font(NDType.title).tracking(-0.25).foregroundStyle(ND.menuText1)
                 if let line = Self.detail(r1, lastVerdictHadRed: lastVerdictHadRed) {
                     Text(keepingUnits(line)).font(NDType.body).foregroundStyle(ND.menuText2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -264,7 +242,7 @@ struct NDMenuFaultBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(item.menuTitle ?? item.title).font(NDType.bodyStrong).foregroundStyle(Color(nsColor: .labelColor))
+            Text(item.menuTitle ?? item.title).font(NDType.bodyStrong).foregroundStyle(ND.menuText1)
                 .fixedSize(horizontal: false, vertical: true)
             // R1.1 change 28: one line of words under the title (the strips are gone).
             if let detail = item.menuDetail ?? item.detail, !detail.isEmpty {
@@ -341,12 +319,13 @@ struct NDMenuAreaRow: View {
     @ObservedObject var state: NDMenuRowState
     let open: () -> Void
 
-    static let symbols: [NDR1.MenuRow.Kind: String] = [.activity: "chart.bar", .search: "magnifyingglass", .backups: "externaldrive",
+    /// R1.7 item 9: Activity's symbol reads at 1:1 (the outlined bars read as "000").
+    static let symbols: [NDR1.MenuRow.Kind: String] = [.activity: "waveform.path.ecg", .search: "magnifyingglass", .backups: "externaldrive",
                                                        .jobs: "clock"]
 
     var body: some View {
         let selected = state.highlighted
-        let text = Color(nsColor: selected ? .alternateSelectedControlTextColor : .labelColor)
+        let text = selected ? Color(nsColor: .alternateSelectedControlTextColor) : ND.menuText1
         let secondary = selected ? Color(nsColor: .alternateSelectedControlTextColor) : ND.menuText2
         HStack(spacing: 8) {
             // R1.3 change 12: the row's symbol takes the station's treatment: red for a fault, amber for a notice.
@@ -356,13 +335,17 @@ struct NDMenuAreaRow: View {
             Text(row.label).font(NDType.body).foregroundStyle(text)
             Spacer(minLength: 8)
             if row.kind == .activity {
-                NDWaveform(wave: store.inputs.menuWave, size: .menu)
+                // R1.7 item 5: not confirmed, the sparkline is hatched after the last confirmed check, as the window's.
+                NDWaveform(wave: store.inputs.menuWave, size: .menu,
+                           noDataFrom: NDActivitySection.noDataFraction(store, wave: store.inputs.menuWave, minutes: 60))
                     .frame(width: 128, height: 18)
                     .environment(\.ndPalette, selected ? .menuSelected : .menu)
             } else {
+                // R1.7 item 1: on the system material red and orange words cannot hold 4.5 : 1; a concerned value is
+                // primary semibold, and the row's symbol carries the colour.
                 Text(row.value)
                     .font(row.tone == .fine ? NDType.number : NDType.numberStrong)
-                    .foregroundStyle(selected ? secondary : row.tone == .fault ? ND.redText : row.tone == .warn ? ND.orangeText : secondary)
+                    .foregroundStyle(selected ? secondary : row.tone == .fine ? secondary : text)
             }
         }
         .padding(.horizontal, 14)

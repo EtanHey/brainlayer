@@ -280,6 +280,13 @@ extension NDPipelineState {
                 }
             }
         }
+        // R1.7 item 6: a late Drive copy looks late: when the database copy on Drive is as old as the late copy on this
+        // Mac (it uploads that copy), Drive's line takes the amber tint too. Its tint only; no ring of its own.
+        if let local = check("backup_local"), severity(local) == .orange, let localAge = local.ageS,
+           let db = check("backup_offsite")?.ageS, db >= localAge, s.status[.drive]?.severity == nil,
+           let text = s.status[.drive]?.text {
+            s.status[.drive] = Status(text: text, severity: .orange)
+        }
         s.arrivalBreaks.insert(.drive)
 
         // c12: a scheduled job failing; the Jobs status names it (change 13).
@@ -295,8 +302,8 @@ extension NDPipelineState {
         return s
     }
 
-    /// R2A item 6: under "values last known at {time}" no relative age: the reader's last read and the Mac copy as clock
-    /// times; every other status a dash, as the dropdown shows.
+    /// R2A item 6: under "values last known at {time}" no relative age: the reader's last read as a clock time; every
+    /// other status a dash, as the dropdown shows. R1.7 item 5: the copy on this Mac says "—" like the others.
     static func lastKnownLines(_ i: NDInputs, _ lines: [NDStation: Status], at evaluated: Date) -> [NDStation: Status] {
         let c = i.capture
         var out: [NDStation: Status] = [:]
@@ -306,9 +313,6 @@ extension NDPipelineState {
         if let heartbeat = i.watcherHeartbeatAgeS, heartbeat >= 0 {
             let read = c.now.addingTimeInterval(-heartbeat)
             if read <= evaluated { out[.read] = Status(text: Say.readAt(NDR1.hhmm(read, c))) }
-        }
-        if let mac = c.verdict?.checks.first(where: { $0.name == "backup_local" })?.ageS, mac.isFinite, mac >= 0 {
-            out[.mac] = Status(text: Say.backupAt(NDR1.hhmm(evaluated.addingTimeInterval(-mac), c)))
         }
         return out
     }

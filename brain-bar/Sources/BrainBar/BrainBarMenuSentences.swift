@@ -524,7 +524,7 @@ extension BrainBarMenuPresenter {
         static let nextRun = "next run"
         static let lateLine = "a copy older than this line is late"
         static let notUploadingSince = "not uploading since"
-        static let lateAfter36h = "late after 36\u{00A0}h"
+        static func lateAfter(_ age: String) -> String { "late after \(age)" }
         static func daysAgoAxis(_ n: Int) -> String { "\(n)\u{00A0}d ago" }
         static func inHoursAxis(_ n: Int) -> String { "in \(n)\u{00A0}h" }
         static let newest = "Newest"

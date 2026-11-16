@@ -46,6 +46,9 @@ struct NDInputs: Sendable {
 /// copy (`prune_local_compressed_snapshots`). A test reads the Python file and fails if the two disagree.
 enum NDBackupFacts {
     static let keepNewest = 3
+    /// R1.7 item 4: a copy is late after this many hours: `backup_local_amber_s` in health_verdict.py, the threshold that
+    /// turns the check amber (a test ties the two).
+    static let lateAfterHours: Double = 30
 }
 
 enum NDPage: String, CaseIterable, Sendable, Identifiable {

@@ -257,6 +257,9 @@ struct NDR1: Equatable, Sendable {
             if pipeline.allUnconfirmed {
                 left = Say.waitingForNextCheck
                 _ = age
+                // R1.7 item 5: when the next check is still due (known), the footer says when.
+                let next = at.addingTimeInterval(300).timeIntervalSince(c.now)
+                if next > 0 { right = Say.nextStatusCheck(NDFormat.ageText(max(60, next))) }
             } else {
                 // R1.2 change 14: "status" check, so it never collides with the nightly check-up.
                 left = Say.statusChecked(age)

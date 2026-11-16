@@ -88,7 +88,9 @@ struct NDBackupsPage: View {
     @ObservedObject var store: NDStore
     static let past: Double = 144
     static let ahead: Double = 24
-    static let limit: Double = -36
+    /// R1.7 item 4: the "late after" line is the check's own amber threshold (health_verdict.py), the same one that
+    /// makes the copy on this Mac amber.
+    static let limit: Double = -NDBackupFacts.lateAfterHours
     static let symbolColumn: CGFloat = 24
     static let nameColumn: CGFloat = 196
     static let valueColumn: CGFloat = 84
@@ -129,7 +131,7 @@ struct NDBackupsPage: View {
                     }
                     .frame(height: 18)
                     
-                    NDRailAxis(ticks: [(Say.daysAgoAxis(6), -144), (Say.daysAgoAxis(3), -72), (Say.lateAfter36h, -36), (Say.now, 0),
+                    NDRailAxis(ticks: [(Say.daysAgoAxis(6), -144), (Say.daysAgoAxis(3), -72), (Say.lateAfter(NDFormat.ageText(NDBackupFacts.lateAfterHours * 3600)), Self.limit), (Say.now, 0),
                                        (Say.inHoursAxis(24), 24)],
                                past: Self.past, ahead: Self.ahead, leading: Self.symbolColumn + Self.nameColumn,
                                heads: [(Say.newest, Self.valueColumn), (Say.next, Self.valueColumn)])
@@ -156,7 +158,7 @@ struct NDBackupsPage: View {
         return words
     }
 
-    /// "a copy older than this line is late": one line through every lane, at 36 h.
+    /// "a copy older than this line is late": one line through every lane, at the amber threshold.
     private var limitLine: some View {
         GeometryReader { geo in
             let railWidth = geo.size.width - Self.symbolColumn - Self.nameColumn - 2 * Self.valueColumn
