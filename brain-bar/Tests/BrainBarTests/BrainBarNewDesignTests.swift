@@ -2169,7 +2169,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             for station in NDStation.allCases {
                 let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
                 let where_ = "\(name.rawValue) \(station)"
-                XCTAssertGreaterThanOrEqual(panel.outer.minX, L.windowInside.minX - 0.01, where_)
+                // 1.5.1: the agents' panel opens below the group and passes the window's left edge (L39).
+                if station != .agents { XCTAssertGreaterThanOrEqual(panel.outer.minX, L.windowInside.minX - 0.01, where_) }
                 XCTAssertLessThanOrEqual(panel.outer.maxX, L.windowInside.maxX + 0.01, where_)
                 if ![.queue, .jobs].contains(station) {
                     XCTAssertLessThanOrEqual(panel.outer.maxY, L.windowInside.maxY + 0.01, where_)
@@ -2470,6 +2471,46 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertLessThan(card.r, 1)
         XCTAssertGreaterThan(ratio(NDColor.card, on: NDColor.bg), 1.16)
         _ = plane
+    }
+
+    // MARK: 1.5.1 (the real screen on the M4)
+
+    /// 1.5.1 (1): a failing provider's own icon opens the agents' fault panel (the same panel, with Copy report); with
+    /// nothing wrong, no icon opens a panel and the group's hover keeps its explanation.
+    func testAFailingProviderIconOpensItsFaultPanel() throws {
+        for name in Fixture.Name.allCases {
+            XCTAssertEqual(NDPipelineChart.faultTriggers(pipeline(name)), name == .agentNotRead ? [.cursor] : [], name.rawValue)
+        }
+        let store = NDStore(fixture: Fixture.inputs(.agentNotRead), page: .overview)
+        let fault = NDStationPopover.model(.agents, item: store.r1.stationItems[.agents], store.inputs, store.model, store.r1.pipeline)
+        XCTAssertEqual(fault.title, Say.agentNotRead("Cursor"))
+        XCTAssertEqual(fault.action?.kind, .copyReport)
+        let calm = NDStore(fixture: Fixture.inputs(.calm), page: .overview)
+        let explain = NDStationPopover.model(.agents, item: calm.r1.stationItems[.agents], calm.inputs, calm.model, calm.r1.pipeline)
+        XCTAssertEqual(explain.title, Say.yourAgents)
+        XCTAssertNil(explain.action)
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDPipelineChart.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("content: { popover(.agents) }, layout: { content in panel(.agents, content: content) })"),
+                      "the icon opens the same panel as the group")
+    }
+
+    /// 1.5.1 (2, 3): no panel covers the "Pipeline" block heading or the footer's lines, for every station in every
+    /// fixture at the default window size.
+    func testNoPanelCoversTheHeadingOrTheFooter() {
+        let L = NDPipelineLayout.self
+        for name in Fixture.Name.allCases {
+            let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
+            let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
+            for station in NDStation.allCases {
+                let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
+                let where_ = "\(name.rawValue) \(station)"
+                XCTAssertFalse(panel.outer.intersects(L.pipelineHeading), "\(where_) covers the Pipeline heading")
+                for (index, text) in L.footerTexts.enumerated() {
+                    XCTAssertFalse(panel.outer.intersects(text), "\(where_) covers the footer's \(index == 0 ? "left" : "right") line")
+                }
+            }
+        }
     }
 
     /// § 3.1 hover: the pointer's bucket is the pitch that holds it; outside the plot there is none.

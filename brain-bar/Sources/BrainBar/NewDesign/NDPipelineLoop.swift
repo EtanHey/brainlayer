@@ -211,6 +211,20 @@ enum NDPipelineLayout {
     }
 
     static let arrowLength: CGFloat = 10
+    /// 1.5.1: what lies outside the chart's surface that no panel may cover: the "Pipeline" block heading above it and the
+    /// footer's two lines below it, in chart coordinates (surface padding 16 / 12, heading row 22 + 8, page padding 20,
+    /// footer 28, page sides 24).
+    static var footerTop: CGFloat { size.height + 12 + 20 }
+    static var pipelineHeading: CGRect {
+        let w = textWidth(Say.pipeline, size: 13, weight: .semibold)
+        return CGRect(x: -16 + 2, y: -16 - 8 - 22, width: w, height: 22)
+    }
+    static var footerTexts: [CGRect] {
+        let left = [Say.statusChecked("59 min"), Say.waitingForNextCheck].map { textWidth($0, size: 11) }.max() ?? 0
+        let right = textWidth(Say.nextStatusCheck("59 min"), size: 11)
+        let y = footerTop + 7
+        return [CGRect(x: -16, y: y, width: left, height: 14), CGRect(x: size.width + 16 - right, y: y, width: right, height: 14)]
+    }
     /// R2A item 1: a panel keeps 12 pt inside the window's content edge. In chart coordinates the window runs 40 pt past
     /// each side of the chart (page side 24, surface padding 16) and 60 pt below it (surface 12, page 20, footer 28).
     static let windowInside = (minX: CGFloat(-28), maxX: CGFloat(848), maxY: CGFloat(282 + 60 - 12))
@@ -231,7 +245,8 @@ enum NDPipelineLayout {
     static func panelSide(_ s: NDStation, hasAction: Bool) -> (edge: Edge, width: CGFloat, slide: CGFloat) {
         // R1.5 change 2: one card for every station, 288 wide.
         switch s {
-        case .agents: (.top, 288, 120)
+        // 1.5.1: below the group (above it sits the "Pipeline" heading), its body past the window's left edge (L39).
+        case .agents: (.bottom, 288, -150)
         case .read: (.top, 288, 0)
         case .memory: (.top, 288, 0)
         case .mac: (.top, 288, 0)
@@ -270,7 +285,8 @@ enum NDPipelineLayout {
             tip = CGPoint(x: own.midX, y: anchor.minY)
             body = CGRect(x: tip.x - w / 2 + side.slide, y: tip.y - a - height, width: w, height: height)
         case .bottom:
-            tip = CGPoint(x: own.midX, y: anchor.maxY)
+            // The agents' arrow sits left of the answers line rising into the group's bottom edge at its centre.
+            tip = CGPoint(x: s == .agents ? own.minX + 10 : own.midX, y: anchor.maxY)
             body = CGRect(x: tip.x - w / 2 + side.slide, y: tip.y + a, width: w, height: height)
         case .trailing:
             tip = CGPoint(x: anchor.maxX, y: own.midY)
@@ -279,13 +295,14 @@ enum NDPipelineLayout {
             tip = CGPoint(x: anchor.minX, y: own.midY)
             body = CGRect(x: tip.x - a - w, y: tip.y - height / 2 + side.slide, width: w, height: height)
         }
-        // Inside the window (R2A item 1), then the arrow never leaves the body's straight edge.
+        // Inside the window's sides (R2A item 1; the agents' panel passes the left edge, L39), above the footer for a side
+        // panel (1.5.1), then the arrow never leaves the body's straight edge.
         switch side.edge {
         case .top, .bottom:
-            body.origin.x = min(max(body.minX, windowInside.minX), windowInside.maxX - w)
+            if s != .agents { body.origin.x = min(max(body.minX, windowInside.minX), windowInside.maxX - w) }
             body.origin.x = min(max(body.minX, tip.x - w + arrowInset), tip.x - arrowInset)
         case .leading, .trailing:
-            body.origin.y = min(body.minY, windowInside.maxY - height)
+            body.origin.y = min(body.minY, footerTop - 4 - height)
             body.origin.y = min(max(body.minY, tip.y - height + arrowInset), tip.y - arrowInset)
         }
         let arrowBox: CGRect = switch side.edge {

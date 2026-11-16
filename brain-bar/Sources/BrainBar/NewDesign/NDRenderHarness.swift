@@ -58,7 +58,8 @@ import SwiftUI
             // R1.4 comp 45: where the words went, each in the hover that now carries it.
             written.append(try wordsSheet(name: "hovers-words-\(suffix)", appearance: appearance, in: directory))
             // R1.3 comp 37: the three hover states (Memory's explanation; the Jobs and Drive faults with their actions).
-            for (fixture, station) in [(BrainBarDesignFixture.Name.calm, NDStation.memory), (.twoFaults, .jobs), (.twoFaults, .drive)] {
+            for (fixture, station) in [(BrainBarDesignFixture.Name.calm, NDStation.memory), (.twoFaults, .jobs), (.twoFaults, .drive),
+                                       (.agentNotRead, .agents), (.calm, .search)] {
                 let store = NDStore(fixture: BrainBarDesignFixture.inputs(fixture), page: .overview)
                 written.append(try hover(store, station: station, name: "hover-\(station.rawValue)-\(fixture.rawValue)-\(suffix)",
                                          appearance: appearance, in: directory))
@@ -82,12 +83,14 @@ import SwiftUI
         let r1 = store.r1
         let chart = NDPipelineChart(state: r1.pipeline, memories: store.model.memories, items: r1.stationItems, interactive: false,
                                     popover: { s in AnyView(NDStationPopover(store: store, station: s)) }, previewHover: station)
-        let size = NSSize(width: NDGrid.windowWidth, height: 660)
+        // 260 pt of room on the left: the agents' panel opens past the window's left edge (L39).
+        let margin: CGFloat = 260
+        let size = NSSize(width: NDGrid.windowWidth + margin, height: 660)
         let view = ZStack(alignment: .topLeading) {
             ND.bg
             NDCard(padding: EdgeInsets(top: 16, leading: 16, bottom: 12, trailing: 16)) { chart }
                 .frame(width: NDGrid.windowWidth - 2 * NDGrid.pageSide)
-                .offset(x: NDGrid.pageSide, y: 150)
+                .offset(x: margin + NDGrid.pageSide, y: 150)
         }
         .frame(width: size.width, height: size.height)
         try write(host(view, size: size, appearance: appearance), name: name, in: directory)
