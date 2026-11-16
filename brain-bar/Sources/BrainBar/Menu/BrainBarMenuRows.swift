@@ -31,6 +31,18 @@ struct BrainBarMenuAccessibility: Equatable, Sendable {
     @Published var keyboardFocused = false
 }
 
+/// Shared row tokens: neutral status text, with amber reserved for the notice mark.
+/// Opaque colors keep their measured contrast on both flat menu backgrounds.
+enum BrainBarMenuPalette {
+    static func statusText(dark: Bool, increaseContrast: Bool = false) -> NSColor {
+        if increaseContrast { return dark ? .white : .black }
+        return NSColor(srgbRed: dark ? 0.68 : 0.36, green: dark ? 0.68 : 0.36, blue: dark ? 0.70 : 0.38, alpha: 1)
+    }
+    static func notice(dark: Bool) -> NSColor {
+        NSColor(srgbRed: dark ? 0.95 : 0.63, green: dark ? 0.65 : 0.36, blue: dark ? 0.20 : 0, alpha: 1)
+    }
+}
+
 struct BrainBarMenuRowView: View {
     typealias P = BrainBarMenuPresentation
     let row: P.Row
@@ -40,7 +52,11 @@ struct BrainBarMenuRowView: View {
     @ObservedObject var focus: BrainBarMenuRowFocus
     let perform: (P.ActionKind) -> Void
 
-    private var secondary: Color { accessibility.increaseContrast ? .primary : .secondary }
+    @Environment(\.colorScheme) private var colorScheme
+    private var noticeColor: Color { Color(nsColor: BrainBarMenuPalette.notice(dark: colorScheme == .dark)) }
+    private var secondary: Color {
+        Color(nsColor: BrainBarMenuPalette.statusText(dark: colorScheme == .dark, increaseContrast: accessibility.increaseContrast))
+    }
     private var lastInBlock: Bool { next == nil || next == .separator }
 
     /// One path for every kind: whatever field the value carries is drawn, whatever the row's kind (strings, mark,
@@ -84,7 +100,7 @@ struct BrainBarMenuRowView: View {
     private var gutterHeight: CGFloat {
         switch row.mark {
         case _ where row.kind == .headline: 26
-        case .ok?, .busy?, .wait?: 20
+        case .ok?, .busy?, .wait?, .notice?: 20
         default: 16
         }
     }
@@ -94,6 +110,8 @@ struct BrainBarMenuRowView: View {
     @ViewBuilder private var gutter: some View {
         if let mark = row.mark {
             BrainBarMenuMark(mark: mark, size: gutterHeight, accessibility: accessibility)
+        } else if row.state == .notice {
+            Image(systemName: "circle.fill").font(.system(size: 8)).foregroundStyle(noticeColor)
         } else if row.spinner || (row.state == .behind && row.kind != .headlineDetail) {
             spinner
         } else if row.state == .cantTell, row.kind != .headlineDetail {
@@ -156,6 +174,7 @@ struct BrainBarMenuRowView: View {
 /// A2's signs (ok, busy, wait), A1's headline disc (marked), and A1's row marks. Shape and glyph carry the state as
 /// well as the colour; Increase Contrast adds a ring. The busy arrows turn while shown (R28c), still under Reduce Motion.
 struct BrainBarMenuMark: View {
+    @Environment(\.colorScheme) private var colorScheme
     let mark: BrainBarMenuPresentation.Mark
     let size: CGFloat
     let accessibility: BrainBarMenuAccessibility
@@ -165,6 +184,10 @@ struct BrainBarMenuMark: View {
         case .ok: disc(.systemGreen, Image(systemName: "checkmark"))
         case .busy: disc(.systemBlue, Image(systemName: "arrow.triangle.2.circlepath"), turning: !accessibility.reduceMotion)
         case .wait: disc(.systemGray, Image(systemName: "ellipsis"))
+        case .notice:
+            Circle().fill(Color(nsColor: BrainBarMenuPalette.notice(dark: colorScheme == .dark)))
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.55), lineWidth: accessibility.increaseContrast ? 1 : 0))
+                .frame(width: size, height: size)
         case .marked: disc(.systemRed, Image(systemName: "exclamationmark"))
         case .alertCircle:
             Image(systemName: "exclamationmark.circle.fill").font(.system(size: 15))

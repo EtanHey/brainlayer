@@ -573,7 +573,7 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
                 default: .health
                 }
                 return BrainBarStatusIssue(id: "verdict.\(check.name)", component: component,
-                    severity: verdict.dot == .red && check.state == .red ? .attention : .notice, text: check.text)
+                    severity: check.state.uiKind == .attention ? .attention : .notice, text: check.text)
             }
             let notes = verdict.notes.map { note -> BrainBarStatusIssue in
                 let label = note.message.split(separator: ":", maxSplits: 1).first.map(String.init)
