@@ -182,6 +182,16 @@
         "target": "import subprocess"
       }
     },
+    "0ce1685ff2d27f4076683cba27d56b195536959f7f13b099e092631af9fa6749": {
+      "non_cloud_purpose": "Local Git shallow-checkout inspection for the dispatch-only Golems approval-helper build; bounded rev-parse with explicit argv. No model provider or conversation payload.",
+      "site": {
+        "call_sha256": "41aae9e68c89e5f2c42a5cfb3314f164e5e3a5620411d1db14deea8daaea0f3f",
+        "kind": "child_process",
+        "owner": "<module>.merged_sha",
+        "path": "scripts/golems_approve_release.py",
+        "target": "subprocess.run"
+      }
+    },
     "0d7e89af6f62a00ebad507484b106a79557fd3caef904abc09e8c79b916aa1ef": {
       "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.rpc self.send.",
       "site": {
@@ -1756,6 +1766,16 @@
         "target": "subprocess.Popen"
       }
     },
+    "46bdc12c95f027deda4f3f1b9b99062bd7fbd5678dd4476b9541dbf4621fabd9": {
+      "non_cloud_purpose": "Local codesign entitlement dump from the staged approval-helper bundle, compared with the pinned committed entitlement dictionary. No network or model sender.",
+      "site": {
+        "call_sha256": "e7e3c261ea9af5f62dae7d9ad84535f7b6e5e87a79dd83f89269910e2f61b389",
+        "kind": "child_process",
+        "owner": "<module>.verify",
+        "path": "scripts/golems_approve_release.py",
+        "target": "subprocess.run"
+      }
+    },
     "46ff106c7cfc7ab02276fb891215559d06247aa5b5016dffc538f66709177a4d": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/timestamp_iso.py <module>._detect_git_sha",
       "site": {
@@ -3302,6 +3322,16 @@
         "target": "subprocess.check_output"
       }
     },
+    "8266deb3a7c5b3cea76b7ba1a8ad507de1924276b29a4f8968d2f90d17bcc588": {
+      "non_cloud_purpose": "Stdlib subprocess binding for individually classified Git admission, GitHub deployment-policy reads, codesign verification and bounded helper refusal probe. No LLM/provider SDK or enrichment producer.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/golems_approve_release.py",
+        "target": "import subprocess"
+      }
+    },
     "826c4e569d07b33e6100eed4108c04d56c5c751b6ea3f01723a47575a4697243": {
       "non_cloud_purpose": "S22 read-only pinned /bin/ps sampling of an explicitly named installed hotlane PID for CPU audit and live producer identity; argv only, no shell or cloud sender.",
       "site": {
@@ -3530,6 +3560,16 @@
         "owner": "<module>._collect_db_sections",
         "path": "src/brainlayer/observability_surface.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "8a5242861e32f922db7c2d91be5868e738c1ed38fc6e5ae32a57eb8e68a74ea4": {
+      "non_cloud_purpose": "Local Git merge-base ancestry admission against freshly fetched golems master before exact-SHA checkout or build; bounded explicit argv, no model API or memory payload.",
+      "site": {
+        "call_sha256": "f54a1ae4adf2c529fa97b0d8c6e44aaf90267218f251cbf1494c46dcf24e27c5",
+        "kind": "child_process",
+        "owner": "<module>.merged_sha",
+        "path": "scripts/golems_approve_release.py",
+        "target": "subprocess.run"
       }
     },
     "8aca0d2aa5e8b625bc7b27ac73b9458ecd2708ebe98ee630e0c34670f9acb445": {
@@ -3907,6 +3947,16 @@
         "kind": "child_process",
         "owner": "<module>.find_heavy_ml_processes",
         "path": "src/brainlayer/reembed_backfill.py",
+        "target": "subprocess.run"
+      }
+    },
+    "9867bb4669c9c9072d5bd2f59d8b01b36e2c1f21b6877f57a961af3d3ba5283d": {
+      "non_cloud_purpose": "Bounded Git fetch of official EtanHey/golems master through the workflow-created origin, optionally unshallowing history. GitHub source retrieval only, not a cloud model or enrichment sender.",
+      "site": {
+        "call_sha256": "7a576b2cedb9e44f108396183cb5cfcc29f8089f57ecb8a9c13d7c080a84f1ce",
+        "kind": "child_process",
+        "owner": "<module>.merged_sha",
+        "path": "scripts/golems_approve_release.py",
         "target": "subprocess.run"
       }
     },
@@ -4426,6 +4476,16 @@
         "owner": "<module>._drive_put_with_deadline.perform",
         "path": "src/brainlayer/backup_daily.py",
         "target": "outcome.put"
+      }
+    },
+    "adfbc9aef2b3742c85c1f48124befa24754d854fe419a221e4de1d9e18c27536": {
+      "non_cloud_purpose": "Bounded launch of the signed approval helper with --ci-no-keychain-probe and empty stdin on the isolated signing runner after credential cleanup. Expected refusal before keychain/prompt; not enrolment, approval, model inference or a memory sender.",
+      "site": {
+        "call_sha256": "da26090d554a6ccc13c279b174427aa22456456da11f6f19b9d3088e0ecffb2b",
+        "kind": "child_process",
+        "owner": "<module>.verify",
+        "path": "scripts/golems_approve_release.py",
+        "target": "subprocess.run"
       }
     },
     "ae24bb8b2d63840b8ef6b219fa41d7bb9925743a9cd137c207a0822add866e6d": {
@@ -5408,6 +5468,16 @@
         "target": "urllib.error.URLError"
       }
     },
+    "c95609689dce070d7cb2b7d9e314c66e4d5363acb74997304831b333e66c2883": {
+      "non_cloud_purpose": "GET-only GitHub API metadata reads for the selected existing signing environment and its deployment branch/tag policy; paginated bounded argv, no secret-value read or settings mutation, no model endpoint or conversation payload.",
+      "site": {
+        "call_sha256": "e912d11ba2e26755980ac5cf4f0244713e5da549fd37c8a02fae0d61a589c12b",
+        "kind": "child_process",
+        "owner": "<module>.environment_ready.get",
+        "path": "scripts/golems_approve_release.py",
+        "target": "subprocess.run"
+      }
+    },
     "c9be6ca583916b8f68108e8a702dcf053ed8e58484f9d3d9c55845080ff6a294": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/ci_ratchet_table.py <module>._git subprocess.SubprocessError.",
       "site": {
@@ -5725,6 +5795,16 @@
         "kind": "child_process",
         "owner": "<module>.taxonomy_git_sha",
         "path": "src/brainlayer/tag_normalization.py",
+        "target": "subprocess.run"
+      }
+    },
+    "da2bbd808639c373e4dfbd206fdb73e0c819f76216bef0acfe61847a3d5c0b43": {
+      "non_cloud_purpose": "Local strict/deep codesign verification of the approval-helper bundle against its committed Team and identifier requirement. No network or model sender.",
+      "site": {
+        "call_sha256": "037b46953d3be566e5421602d0bc9a27efff138141c0208880310756fc3aa823",
+        "kind": "child_process",
+        "owner": "<module>.verify",
+        "path": "scripts/golems_approve_release.py",
         "target": "subprocess.run"
       }
     },
