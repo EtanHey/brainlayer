@@ -12,8 +12,10 @@ enum NDPipelineLayout {
     static let size = CGSize(width: 820, height: 306)
     static let drawWidth: CGFloat = 832
     static let yTop: CGFloat = 64, ySaves: CGFloat = 134, yAnswers: CGFloat = 272, yRail: CGFloat = 18
-    /// The Memory-to-Search lane's level: 8 pt below the grown Kept-safe frame.
-    static let ySearchLane: CGFloat = 162
+    /// The Memory-to-Search lane: it leaves the box's bottom edge at x 484 (its straight part ends at 488) and runs at
+    /// y 185, 31 pt below the grown Kept-safe frame and 21 pt right of Jobs' hover ring.
+    static let ySearchLane: CGFloat = 185
+    static let searchLaneX: CGFloat = 484
     static let stationRadius: CGFloat = 13
     /// The fault ring's radius (R1.4 change 16).
     static let ringRadius: CGFloat = 15.5
@@ -92,10 +94,12 @@ enum NDPipelineLayout {
         out.append(Connection(pipe: .queueMemory, line: NDPolyline(points: [queue, CGPoint(x: hub.minX - g, y: ySaves)]).trimmed(start: e)))
         // R2A item 5: the Kept-safe frame grows under its actions, so the Memory-to-Search lane leaves the box's bottom
         // edge and runs below the grown frame (route the lines around the button, never the button around the lines).
-        out.append(Connection(pipe: .memorySearch, line: NDPolyline(points: [CGPoint(x: hub.maxX - 14, y: hub.maxY + g),
-                                                                              CGPoint(x: hub.maxX - 14, y: ySearchLane),
+        // 1.4.1: one clean route: down from a point on the box's bottom edge, along under the grown frame and right of
+        // Jobs, then down into Search's top, both turns at the lines' common 10 pt radius (no stub, no kink).
+        out.append(Connection(pipe: .memorySearch, line: NDPolyline(points: [CGPoint(x: searchLaneX, y: hub.maxY + g),
+                                                                              CGPoint(x: searchLaneX, y: ySearchLane),
                                                                               CGPoint(x: search.x, y: ySearchLane), search]).trimmed(end: e),
-                              corner: 8))
+                              corner: 10))
         out.append(Connection(pipe: .answers, line: NDPolyline(points: [search, CGPoint(x: ax, y: yAnswers),
                                                                          CGPoint(x: ax, y: agentsFrame.maxY + g)]).trimmed(start: e), corner: 12))
         out.append(Connection(pipe: .memoryMac, line: NDPolyline(points: [CGPoint(x: hub.maxX + g, y: yTop), mac]).trimmed(end: e)))
@@ -168,6 +172,37 @@ enum NDPipelineLayout {
         let width = min(lineWidth, waitingWidth)
         let lines = ceil(lineWidth / waitingWidth)
         return CGRect(x: button.maxX - width, y: button.minY, width: width, height: max(button.height, lines * 14 + 2))
+    }
+
+    /// L39: a panel may pass the window's bottom edge but stays inside the screen's visible frame (`limit`, in chart
+    /// coordinates). The body slides along its edge and, if the screen is too short, gives up height (its content
+    /// scrolls); the arrow stays on the station.
+    static func fitted(_ panel: Panel, within limit: CGRect) -> Panel {
+        var p = panel
+        let w = p.body.width
+        switch p.edge {
+        case .top, .bottom:
+            p.body.origin.x = min(max(p.body.minX, limit.minX), limit.maxX - w)
+            p.body.origin.x = min(max(p.body.minX, p.tip.x - w + arrowInset), p.tip.x - arrowInset)
+            // At least one scrolling line of body (32 pt), however short the screen.
+            if p.edge == .bottom, p.body.maxY > limit.maxY { p.body.size.height = max(32, limit.maxY - p.body.minY) }
+            if p.edge == .top, p.body.minY < limit.minY {
+                let bottom = p.body.maxY
+                p.body.origin.y = limit.minY
+                p.body.size.height = max(32, bottom - limit.minY)
+            }
+        case .leading, .trailing:
+            p.body.origin.y = min(max(p.body.minY, limit.minY), limit.maxY - p.body.height)
+            p.body.origin.y = min(max(p.body.minY, p.tip.y - p.body.height + arrowInset), p.tip.y - arrowInset)
+        }
+        let arrowBox: CGRect = switch p.edge {
+        case .top: CGRect(x: p.tip.x - arrowHalfWidth, y: p.tip.y - arrowLength, width: 2 * arrowHalfWidth, height: arrowLength)
+        case .bottom: CGRect(x: p.tip.x - arrowHalfWidth, y: p.tip.y, width: 2 * arrowHalfWidth, height: arrowLength)
+        case .trailing: CGRect(x: p.tip.x, y: p.tip.y - arrowHalfWidth, width: arrowLength, height: 2 * arrowHalfWidth)
+        case .leading: CGRect(x: p.tip.x - arrowLength, y: p.tip.y - arrowHalfWidth, width: arrowLength, height: 2 * arrowHalfWidth)
+        }
+        p.outer = p.body.union(arrowBox)
+        return p
     }
 
     // MARK: hover panels (L2, and the lead's 1.4 rule: every arrow on its own station)

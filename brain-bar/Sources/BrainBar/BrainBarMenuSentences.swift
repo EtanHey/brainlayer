@@ -652,6 +652,10 @@ extension BrainBarMenuPresenter {
         static func busiestMinute(_ span: String, saved: String, read: String) -> String {
             "Busiest minute \(span): \(saved) saved, \(read) read"
         }
+        /// L39: on 3 h and 24 h a bar spans 3 or 24 minutes, and the readout says so.
+        static func busiestMinutes(_ span: Int, saved: String, read: String) -> String {
+            "Busiest \(span) minutes: \(saved) saved, \(read) read"
+        }
         static let thisHour = "this hour"
         static let theseThreeHours = "these 3 hours"
         static let today = "today"

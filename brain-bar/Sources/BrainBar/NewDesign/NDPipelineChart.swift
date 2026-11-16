@@ -476,6 +476,12 @@ struct NDStationButton: View {
     func show(_ station: NDStation, layout: NDPipelineLayout.Panel, content: AnyView, pinned: Bool) {
         guard let view = anchorView, let window = view.window else { return }
         hide()
+        // L39: inside the screen's visible frame (the window's own edge may be passed).
+        var layout = layout
+        if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {
+            let limit = view.convert(window.convertFromScreen(visible), from: nil)
+            layout = NDPipelineLayout.fitted(layout, within: limit)
+        }
         let rect = window.convertToScreen(view.convert(layout.outer, to: nil))
         let p = NSPanel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         p.isOpaque = false
@@ -551,8 +557,11 @@ struct NDPanelChrome: View {
                 .fill(ND.pop)
             NDPanelShape(body: body, tip: tip, edge: layout.edge)
                 .stroke(ND.hair2, lineWidth: 0.5)
-            content
+            // A body the screen made shorter than its content scrolls (L39); otherwise it is exactly its content.
+            ScrollView(.vertical) { content }
+                .scrollIndicators(.automatic)
                 .frame(width: body.width, height: body.height, alignment: .topLeading)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .offset(x: body.minX, y: body.minY)
         }
         .frame(width: o.width, height: o.height, alignment: .topLeading)

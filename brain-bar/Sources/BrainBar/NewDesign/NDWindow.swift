@@ -520,12 +520,17 @@ struct NDActivityReadout: View {
         .frame(height: 18)
     }
 
-    /// R1.4 changes 11 and 12 (L38): "Busiest minute this hour: 6 saved, 67 read", the range's real maxima. Said only where
-    /// a bucket is one minute (the 1 h range): on 3 h and 24 h a bucket is 3 or 24 minutes, and "minute" would not be true.
+    /// R1.4 changes 11 and 12 (L38, L39): the range's real maxima. "Busiest minute this hour: 6 saved, 67 read" where a bar
+    /// is one minute; "Busiest 3 minutes: …" and "Busiest 24 minutes: …" where a bar spans 3 or 24 minutes.
     static func busiest(_ wave: NDWave, minutes: Int) -> String? {
-        guard wave.count > 0, minutes / wave.count == 1, minutes % wave.count == 0 else { return nil }
-        let span = minutes == 60 ? Say.thisHour : minutes == 180 ? Say.theseThreeHours : Say.today
-        return Say.busiestMinute(span, saved: NDFormat.integer(wave.saves.max() ?? 0), read: NDFormat.integer(wave.reads.max() ?? 0))
+        guard wave.count > 0, minutes % wave.count == 0 else { return nil }
+        let span = minutes / wave.count
+        let saved = NDFormat.integer(wave.saves.max() ?? 0), read = NDFormat.integer(wave.reads.max() ?? 0)
+        guard span > 1 else {
+            let words = minutes == 60 ? Say.thisHour : minutes == 180 ? Say.theseThreeHours : Say.today
+            return Say.busiestMinute(words, saved: saved, read: read)
+        }
+        return Say.busiestMinutes(span, saved: saved, read: read)
     }
 
     static func clock(_ date: Date, _ zone: TimeZone) -> String {

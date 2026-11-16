@@ -2003,8 +2003,14 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let wave = try XCTUnwrap(i.heroWaves[.hour])
         XCTAssertEqual(NDActivityReadout.busiest(wave, minutes: 60),
                        Say.busiestMinute(Say.thisHour, saved: NDFormat.integer(wave.saves.max()!), read: NDFormat.integer(wave.reads.max()!)))
+        // L39: on 3 h and 24 h the readout names the bar's real span.
         let three = try XCTUnwrap(i.heroWaves[.threeHours])
-        XCTAssertNil(NDActivityReadout.busiest(three, minutes: 180), "a 3 minute bucket is not a minute: said only where true")
+        XCTAssertEqual(NDActivityReadout.busiest(three, minutes: 180),
+                       Say.busiestMinutes(3, saved: NDFormat.integer(three.saves.max()!), read: NDFormat.integer(three.reads.max()!)))
+        let day = try XCTUnwrap(i.heroWaves[.day])
+        XCTAssertEqual(NDActivityReadout.busiest(day, minutes: 1440),
+                       Say.busiestMinutes(24, saved: NDFormat.integer(day.saves.max()!), read: NDFormat.integer(day.reads.max()!)))
+        XCTAssertEqual(Say.busiestMinutes(24, saved: "9", read: "120"), "Busiest 24 minutes: 9 saved, 120 read")
     }
 
     /// R1.4 changes 5 to 15: the chart at rest draws none of the moved words.
@@ -2308,6 +2314,102 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(r1(.meaningBehind).headline, Say.meaningCatchingUp)
         XCTAssertEqual(r1(.twoFaults).headline, Say.thingsNeedYou(2))
         XCTAssertNil(r1(.twoFaults).headlineDetail, "no list under the count")
+    }
+
+    // MARK: 1.4.1 polish (L39)
+
+    /// L39: on a small screen every panel stays inside the screen's visible frame, its arrow still on its station; a body
+    /// the screen shortens scrolls.
+    func testPanelsStayInsideASmallScreen() {
+        let L = NDPipelineLayout.self
+        // A screen whose visible frame ends 10 pt below the chart and starts 200 pt above it, in chart coordinates.
+        let screen = CGRect(x: -60, y: -200, width: 940, height: L.size.height + 210)
+        for name in Fixture.Name.allCases {
+            let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
+            let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
+            for station in NDStation.allCases {
+                let natural = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
+                let fitted = L.fitted(natural, within: screen)
+                let where_ = "\(name.rawValue) \(station)"
+                XCTAssertTrue(screen.insetBy(dx: -0.5, dy: -0.5).contains(fitted.outer), "\(where_): inside the screen")
+                XCTAssertEqual(fitted.tip, natural.tip, "\(where_): the arrow stays on its station")
+                switch fitted.edge {
+                case .top, .bottom:
+                    XCTAssertTrue((fitted.body.minX + L.arrowInset - 0.01...fitted.body.maxX - L.arrowInset + 0.01).contains(fitted.tip.x), where_)
+                case .leading, .trailing:
+                    XCTAssertTrue((fitted.body.minY + L.arrowInset - 0.01...fitted.body.maxY - L.arrowInset + 0.01).contains(fitted.tip.y), where_)
+                }
+            }
+        }
+        // On a roomy screen nothing changes.
+        let store = NDStore(fixture: Fixture.inputs(.twoFaults), page: .overview)
+        let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
+        let jobs = chart.panel(.jobs, content: AnyView(NDStationPopover(store: store, station: .jobs)))
+        XCTAssertEqual(L.fitted(jobs, within: CGRect(x: -500, y: -800, width: 2000, height: 2000)), jobs)
+    }
+
+    /// 1.4.1: the Memory-to-Search line is one clean route: down from a point on the box's bottom edge (no corner stub),
+    /// along, and down into Search, every turn at the lines' common 10 pt radius, clear of Jobs and the grown frame.
+    func testMemoryToSearchIsOneCleanRoute() {
+        let L = NDPipelineLayout.self
+        let line = L.connections.first { $0.pipe == .memorySearch }!
+        XCTAssertEqual(line.corner, 10)
+        let p = line.line.points
+        XCTAssertEqual(p.count, 4, "down, along, down: two turns (see the build log on one)")
+        XCTAssertEqual(p[0].y, L.hub.maxY + L.edgeGap, accuracy: 0.01, "it leaves the bottom edge")
+        XCTAssertTrue(((L.hub.minX + 12)...(L.hub.maxX - 12)).contains(p[0].x), "on the edge's straight part, not its corner")
+        XCTAssertEqual(p[0].x, p[1].x)
+        XCTAssertGreaterThanOrEqual(p[1].y - p[0].y, 2 * line.corner, "its first leg is no stub")
+        XCTAssertEqual(p[1].y, p[2].y)
+        XCTAssertEqual(p[2].x, L.point(.search).x)
+        XCTAssertGreaterThanOrEqual(p[1].x - (L.point(.jobs).x + L.lineEnd), 8, "clear of Jobs' hover ring")
+        XCTAssertGreaterThanOrEqual(p[1].y - L.keptFrame(grown: true).maxY, 8, "below the grown frame")
+    }
+
+    /// 1.4.1 (3): the Pipeline block's height is set by its lowest station (Search's name under the answers lane), so it
+    /// cannot lose height without moving a station.
+    func testPipelineBlockHeightIsSetByItsLowestStation() {
+        let L = NDPipelineLayout.self
+        let search = L.labelRects(.search, .calm).map(\.maxY).max() ?? 0
+        XCTAssertGreaterThan(search, L.size.height - 4, "Search's name reaches the chart's bottom")
+        XCTAssertLessThanOrEqual(search, L.size.height + 0.5)
+    }
+
+    /// CI on e89086d2: every fixture is a pure function of its own pinned clock and zone. Built under two process time
+    /// zones, each fixture's headline, items and icon state are identical. (The runner's backup-late failure was not
+    /// the zone: CI tests the merge with main, whose R31 presenter makes an amber check a notice; the window now derives
+    /// amber notices from the verdict, see the next test.)
+    func testEveryFixtureIsTheSameInEveryTimeZone() throws {
+        let original = NSTimeZone.default
+        defer { NSTimeZone.default = original }
+        func snapshot() -> [String] {
+            Fixture.Name.allCases.map { name in
+                let i = Fixture.inputs(name)
+                let m = NDModel.make(i)
+                let r1 = NDR1.make(i, m)
+                return "\(name.rawValue)|\(r1.headline)|\(r1.items.map(\.title))|\(NDIcon.state(m, r1))|\(r1.pipeline.status.mapValues(\.text).sorted { $0.key.rawValue < $1.key.rawValue })"
+            }
+        }
+        NSTimeZone.default = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let utc = snapshot()
+        NSTimeZone.default = try XCTUnwrap(TimeZone(identifier: "Asia/Jerusalem"))
+        let jerusalem = snapshot()
+        NSTimeZone.default = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let la = snapshot()
+        XCTAssertEqual(utc, jerusalem)
+        XCTAssertEqual(utc, la)
+    }
+
+    /// CI on e89086d2 (cause): an amber copy is a notice on the window whatever the presenter calls it. backup-late's notice
+    /// comes from the verdict's amber backup_local check, so it holds on main's R31 presenter, which lists no fault for it.
+    func testAmberNoticesComeFromTheVerdictNotThePresenter() {
+        let i = Fixture.inputs(.backupLate)
+        let r1 = NDR1.make(i, NDModel.make(i))
+        let notice = r1.items.first { $0.station == .mac }
+        XCTAssertEqual(notice?.id, "notice.mac", "derived from the verdict, not a presenter fault")
+        XCTAssertEqual(notice?.severity, .orange)
+        XCTAssertEqual(r1.items.filter { $0.station == .mac }.count, 1, "said once")
+        XCTAssertEqual(r1.headline, Say.stationSays(Say.stageMac, Say.lastBackup(NDFormat.ageText(30 * 3600))))
     }
 
     /// § 3.1 hover: the pointer's bucket is the pitch that holds it; outside the plot there is none.
