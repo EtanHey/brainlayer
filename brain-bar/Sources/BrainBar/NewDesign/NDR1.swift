@@ -210,15 +210,17 @@ struct NDR1: Equatable, Sendable {
             tone = .fault
             rows = true
         } else if items.count == 1, let only = items.first {
-            // Amber only, one: a catching-up state names itself; any other notice is "Check soon" with its sentence.
+            // Amber only, one: a catching-up state names itself; R2A item 9: any other notice says what it is,
+            // "{station}: {its status}" from the station's approved words (else its own title), with no line under it.
             symbol = "exclamationmark.triangle.fill"
             tone = .warn
             if only.catchingUp {
                 headline = only.title
                 detail = only.detail
+            } else if let station = only.station, let status = pipeline.status[station]?.text {
+                headline = Say.stationSays(NDPipelineLayout.name(station), status)
             } else {
-                headline = Say.checkSoon
-                detail = only.title
+                headline = only.title
             }
         } else if items.count > 1 {
             headline = Say.checkSoon

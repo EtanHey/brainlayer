@@ -243,6 +243,15 @@ enum NDMotion {
     static let needsBand = Animation.easeOut(duration: 0.2)
     static let headlineLeaves = Animation.easeOut(duration: 0.15)
     static let rangeFade = Animation.easeInOut(duration: 0.12)
+    /// R2A item 4: a range switch never draws two charts at once: the old bars leave over 100 ms, then the new arrive
+    /// over 150 ms on the strong ease-out.
+    static let rangeOutDuration: Double = 0.1
+    static let rangeOut = Animation.easeOut(duration: rangeOutDuration)
+    static let rangeIn = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.15).delay(rangeOutDuration)
+    /// R2A item 7: the window's height change on a page switch: 200 ms ease-in-out, top edge fixed; none under Reduce
+    /// Motion.
+    static let pageResizeDuration: Double = 0.2
+    static func pageResize(reduceMotion: Bool) -> Double? { reduceMotion ? nil : pageResizeDuration }
     static let breakAppears = Animation.easeOut(duration: 0.2)
     static let popoverOpens = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.16)
     /// R1.2 change 24: the pressed button fades over 160 ms ease-out, holding its pressed colour.

@@ -664,6 +664,13 @@ extension BrainBarMenuPresenter {
         static let answersLine = "What Search finds goes back to the agent that asked."
         static let agentsLine = "Claude, Codex, Cursor and Antigravity."
         static let keptSafeLine = "A copy on this Mac every night, and a copy in your Google Drive."
+        // Round 2a decisions (R2A-DECISIONS.md, taken 3, 6, 8, 9).
+        static func lastUpload(_ age: String) -> String { "last upload \(age) ago" }
+        static func readAt(_ time: String) -> String { "read at \(time)" }
+        static func backupAt(_ time: String) -> String { "backup at \(time)" }
+        static func memoriesCount(_ n: String) -> String { "\(n) \(memoriesWord)" }
+        static let memoriesWord = "memories"
+        static func stationSays(_ station: String, _ status: String) -> String { "\(station): \(status)" }
 
         // Settings
         static let settingsTitle = "BrainBar Settings"

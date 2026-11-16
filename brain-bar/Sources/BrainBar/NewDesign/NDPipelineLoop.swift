@@ -8,9 +8,12 @@ enum NDPipelineLayout {
 
     /// 820 × 270 inside its surface (R1.4 change 19). The drawing may run 12 pt into the surface's right padding: the
     /// Kept-safe frame keeps 12 pt between its edge and any text (lead, 1.3 build brief).
-    static let size = CGSize(width: 820, height: 270)
+    /// R2A item 5: the answers lane runs below Jobs' action (route the lines around the button), so 820 × 306.
+    static let size = CGSize(width: 820, height: 306)
     static let drawWidth: CGFloat = 832
-    static let yTop: CGFloat = 64, ySaves: CGFloat = 134, yAnswers: CGFloat = 236, yRail: CGFloat = 18
+    static let yTop: CGFloat = 64, ySaves: CGFloat = 134, yAnswers: CGFloat = 272, yRail: CGFloat = 18
+    /// The Memory-to-Search lane's level: 8 pt below the grown Kept-safe frame.
+    static let ySearchLane: CGFloat = 162
     static let stationRadius: CGFloat = 13
     /// The fault ring's radius (R1.4 change 16).
     static let ringRadius: CGFloat = 15.5
@@ -32,7 +35,7 @@ enum NDPipelineLayout {
     static let keptSafe = CGRect(x: 561, y: 38, width: 269, height: 80)
 
     static let stations: [NDStation: CGPoint] = [
-        .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 580, y: 236),
+        .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 580, y: 272),
         .mac: CGPoint(x: 630, y: 64), .drive: CGPoint(x: 760, y: 64), .jobs: CGPoint(x: 450, y: 186),
     ]
     static let symbols: [NDStation: String] = [
@@ -87,8 +90,12 @@ enum NDPipelineLayout {
         out.append(Connection(pipe: .readMemory, line: NDPolyline(points: [read, CGPoint(x: hub.minX - g, y: yTop)]).trimmed(start: e)))
         out.append(Connection(pipe: .saves, line: NDPolyline(points: [CGPoint(x: agentsFrame.maxX + g, y: ySaves), queue]).trimmed(end: e)))
         out.append(Connection(pipe: .queueMemory, line: NDPolyline(points: [queue, CGPoint(x: hub.minX - g, y: ySaves)]).trimmed(start: e)))
-        out.append(Connection(pipe: .memorySearch, line: NDPolyline(points: [CGPoint(x: hub.maxX + g, y: ySaves), CGPoint(x: search.x, y: ySaves),
-                                                                              search]).trimmed(end: e), corner: 12))
+        // R2A item 5: the Kept-safe frame grows under its actions, so the Memory-to-Search lane leaves the box's bottom
+        // edge and runs below the grown frame (route the lines around the button, never the button around the lines).
+        out.append(Connection(pipe: .memorySearch, line: NDPolyline(points: [CGPoint(x: hub.maxX - 14, y: hub.maxY + g),
+                                                                              CGPoint(x: hub.maxX - 14, y: ySearchLane),
+                                                                              CGPoint(x: search.x, y: ySearchLane), search]).trimmed(end: e),
+                              corner: 8))
         out.append(Connection(pipe: .answers, line: NDPolyline(points: [search, CGPoint(x: ax, y: yAnswers),
                                                                          CGPoint(x: ax, y: agentsFrame.maxY + g)]).trimmed(start: e), corner: 12))
         out.append(Connection(pipe: .memoryMac, line: NDPolyline(points: [CGPoint(x: hub.maxX + g, y: yTop), mac]).trimmed(end: e)))
@@ -108,7 +115,7 @@ enum NDPipelineLayout {
         case .readMemory: (.station(.read), .frame(hub))
         case .saves: (.frame(agentsFrame), .station(.queue))
         case .queueMemory: (.station(.queue), .frame(hub))
-        case .memorySearch: (.frame(hub), .station(.search))
+        case .memorySearch: (.frame(hub), .station(.search))  // leaves the box's bottom edge
         case .answers: (.station(.search), .frame(agentsFrame))
         case .memoryMac: (.frame(hub), .station(.mac))
         case .macDrive: (.station(.mac), .station(.drive))
@@ -131,17 +138,25 @@ enum NDPipelineLayout {
     /// The action's frame for a button of `width` (20 pt high). Under the status line, or on a free side where a lane
     /// runs below: Jobs on its left (L3), Read and Search on their right. Google Drive's and the Mac's sit just under the
     /// Kept-safe frame, which no longer grows: the lead's wider frame would otherwise grow into the Memory-to-Search lane.
-    static func actionFrame(_ s: NDStation, width: CGFloat) -> CGRect {
+    static func actionFrame(_ s: NDStation, width: CGFloat, hasStatus: Bool = true) -> CGRect {
         let p = point(s)
         switch s {
-        case .drive, .mac: return CGRect(x: p.x - width / 2, y: keptSafe.maxY + 8, width: width, height: 20)
-        case .queue: return CGRect(x: p.x - width / 2, y: p.y + 51, width: width, height: 20)
-        case .jobs: return CGRect(x: p.x - 31 - width, y: p.y - 10, width: width, height: 20)
+        // Exceptions, each forced: Read's would land on Save queue's circle 70 pt below, so it sits right of the status;
+        // the agents have no status line and the answers rise into their frame's centre, so theirs sits right of that line.
         case .read: return CGRect(x: p.x + 50, y: p.y + 33, width: width, height: 20)
-        case .search: return CGRect(x: p.x + lineEnd + 8, y: p.y - 10, width: width, height: 20)
         case .agents: return CGRect(x: agentsFrame.midX + 8, y: agentsFrame.maxY + 10, width: width, height: 20)
         case .memory: return CGRect(x: p.x - width / 2, y: hub.maxY + 6, width: width, height: 20)
+        // R2A item 5: centred under the station's status line (or its name, when it has none), 6 pt below, 20 pt high.
+        default: return CGRect(x: p.x - width / 2, y: p.y + (hasStatus ? 46 : 33) + 6, width: width, height: 20)
         }
+    }
+
+    /// The Kept-safe frame: it hugs its two stations, and grows to hold an action (and the waiting line that replaces
+    /// Reconnect) under either copy, so its edge never runs through a button.
+    static func keptFrame(grown: Bool) -> CGRect {
+        guard grown else { return keptSafe }
+        let bottom = point(.drive).y + 46 + 6 + 30 + 8
+        return CGRect(x: keptSafe.minX, y: keptSafe.minY, width: keptSafe.width, height: bottom - keptSafe.minY)
     }
 
     /// Council r2a finding 4: the waiting line's own area, right-aligned to Reconnect's right edge under Google Drive,
@@ -149,7 +164,7 @@ enum NDPipelineLayout {
     /// It wraps at `waitingWidth` so it never reaches the Memory-to-Search lane that turns down at Search's x.
     static let waitingWidth: CGFloat = 200
     static func waitingArea(buttonWidth: CGFloat, lineWidth: CGFloat) -> CGRect {
-        let button = actionFrame(.drive, width: buttonWidth)
+        let button = actionFrame(.drive, width: buttonWidth, hasStatus: true)
         let width = min(lineWidth, waitingWidth)
         let lines = ceil(lineWidth / waitingWidth)
         return CGRect(x: button.maxX - width, y: button.minY, width: width, height: max(button.height, lines * 14 + 2))
@@ -169,6 +184,9 @@ enum NDPipelineLayout {
     }
 
     static let arrowLength: CGFloat = 10
+    /// R2A item 1: a panel keeps 12 pt inside the window's content edge. In chart coordinates the window runs 40 pt past
+    /// each side of the chart (page side 24, surface padding 16) and 60 pt below it (surface 12, page 20, footer 28).
+    static let windowInside = (minX: CGFloat(-28), maxX: CGFloat(848), maxY: CGFloat(306 + 60 - 12))
     static let arrowHalfWidth: CGFloat = 9
     /// The arrow keeps at least this far from the body's ends (its corner radius plus the arrow's half width).
     static let arrowInset: CGFloat = 18
@@ -190,8 +208,8 @@ enum NDPipelineLayout {
         case .memory: (.top, 208, 0)
         case .mac: (.top, 220, 0)
         case .drive: (.top, 220, -34)
-        // Search opens below its name: to its right the Kept-safe actions sit, and above it run Jobs' words.
-        case .search: (.bottom, 214, 0)
+        // Search opens to its right, beside its own words, inside the window (R2A item 1).
+        case .search: (.trailing, 214, 0)
         // Between an agent's action (left) and Jobs' action (right).
         case .queue: (.bottom, 180, 0)
         case .jobs: (.bottom, 230, -48)
@@ -203,15 +221,21 @@ enum NDPipelineLayout {
         let side = panelSide(s, hasAction: actions.contains(s))
         let own = circle(s)
         var anchor = own
+        if side.edge == .trailing || side.edge == .leading {
+            // Beside the station's words as well as its circle, so the body never covers them.
+            for r in labelRects(s, state) { anchor = anchor.union(CGRect(x: r.minX, y: own.minY, width: r.width, height: own.height)) }
+        }
         if side.edge == .bottom {
             // Below the station's own words (and its action, when it sits under them), never over them.
             for r in labelRects(s, state) { anchor = anchor.union(r) }
             if actions.contains(s), let w = actionWidths[s] {
-                let f = actionFrame(s, width: w)
+                let f = actionFrame(s, width: w, hasStatus: state.status[s] != nil)
                 if f.minY >= own.maxY { anchor = anchor.union(f) }
             }
         }
-        let a = arrowLength, w = side.width
+        let a = arrowLength
+        var w = side.width
+        if side.edge == .trailing { w = min(w, windowInside.maxX - (anchor.maxX + a)) }
         let tip: CGPoint
         var body: CGRect
         switch side.edge {
@@ -228,11 +252,13 @@ enum NDPipelineLayout {
             tip = CGPoint(x: anchor.minX, y: own.midY)
             body = CGRect(x: tip.x - a - w, y: tip.y - height / 2 + side.slide, width: w, height: height)
         }
-        // The arrow never leaves the body's straight edge.
+        // Inside the window (R2A item 1), then the arrow never leaves the body's straight edge.
         switch side.edge {
         case .top, .bottom:
+            body.origin.x = min(max(body.minX, windowInside.minX), windowInside.maxX - w)
             body.origin.x = min(max(body.minX, tip.x - w + arrowInset), tip.x - arrowInset)
         case .leading, .trailing:
+            body.origin.y = min(body.minY, windowInside.maxY - height)
             body.origin.y = min(max(body.minY, tip.y - height + arrowInset), tip.y - arrowInset)
         }
         let arrowBox: CGRect = switch side.edge {

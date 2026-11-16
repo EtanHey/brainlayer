@@ -411,7 +411,8 @@ struct NDActivitySection: View {
                     })
                     .padding(.leading, Self.gutter)
                     .id(store.range)
-                    .transition(reduceMotion ? .identity : .opacity)
+                    .transition(reduceMotion ? .identity : .asymmetric(insertion: .opacity.animation(NDMotion.rangeIn),
+                                                                        removal: .opacity.animation(NDMotion.rangeOut)))
             }
             .frame(width: Self.gutter + Self.plotWidth, height: Self.plotHeight + 8, alignment: .topLeading)
             // D8.1: the readout is an overlay: it takes no layout space, so the plot never moves when it appears.
@@ -420,18 +421,12 @@ struct NDActivitySection: View {
                     NDActivityReadout(wave: wave, index: hover, minutes: store.range.minutes, now: store.inputs.capture.now,
                                       zone: store.inputs.capture.timeZone)
                         .fixedSize()
-                        .alignmentGuide(.leading) { d in
-                            let x = Self.gutter + Self.center(hover, count: wave.count)
-                            // Change 31: in the right 40 % of the plot the readout opens to the left of the line.
-                            let right = Self.center(hover, count: wave.count) < Self.plotWidth * 0.6
-                            return -(right ? x + 12 : x - 12 - d.width)
-                        }
+                        .alignmentGuide(.leading) { d in -Self.readoutX(hover, count: wave.count, width: d.width) }
                         .alignmentGuide(.top) { _ in 6 }
                         .allowsHitTesting(false)
                 }
             }
             .padding(.top, 14)
-            .animation(reduceMotion ? nil : NDMotion.rangeFade, value: store.range)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(NDModel.waveAccessibility(wave, minutes: store.range.minutes))
             let axis = store.range.axis
@@ -448,9 +443,19 @@ struct NDActivitySection: View {
             .foregroundStyle(ND.t3)
             .frame(height: 14)
             .padding(.top, 4)
+            // R2A item 4: the axis words swap at once, never crossfading two texts.
+            .transaction { $0.animation = nil }
             .accessibilityHidden(true)
         }
         .coordinateSpace(name: "activity")
+    }
+
+    /// R2A item 2: the readout sits beside the hovered column, 12 pt right of it, flipping to its left in the chart's
+    /// right third; never over the pointer, which is on the column. In the section's coordinates (gutter, then plot).
+    static func readoutX(_ index: Int, count: Int, width: CGFloat) -> CGFloat {
+        let c = center(index, count: count)
+        let x = gutter + c
+        return c < plotWidth * 2 / 3 ? x + 12 : x - 12 - width
     }
 
     static func center(_ index: Int, count: Int) -> CGFloat {

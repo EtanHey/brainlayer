@@ -192,6 +192,7 @@ extension NDPipelineState {
             s.allUnconfirmed = true
             s.unconfirmedSince = verdict.evaluatedAt
             s.lastKnownAt = NDR1.hhmm(verdict.evaluatedAt, c)
+            s.status = lastKnownLines(i, s.status, at: verdict.evaluatedAt)
             return s
         }
         func check(_ name: String) -> BrainBarHealthVerdict.Check? { verdict.checks.first { $0.name == name } }
@@ -292,6 +293,24 @@ extension NDPipelineState {
         return s
     }
 
+    /// R2A item 6: under "values last known at {time}" no relative age: the reader's last read and the Mac copy as clock
+    /// times; every other status a dash, as the dropdown shows.
+    static func lastKnownLines(_ i: NDInputs, _ lines: [NDStation: Status], at evaluated: Date) -> [NDStation: Status] {
+        let c = i.capture
+        var out: [NDStation: Status] = [:]
+        for station in lines.keys { out[station] = Status(text: NDModel.Number.unknown.value) }
+        // The reader's heartbeat is read live, not from the stale verdict: a time later than the caption's would
+        // contradict "values last known at", so it shows only when it is not after the last confirmed check.
+        if let heartbeat = i.watcherHeartbeatAgeS, heartbeat >= 0 {
+            let read = c.now.addingTimeInterval(-heartbeat)
+            if read <= evaluated { out[.read] = Status(text: Say.readAt(NDR1.hhmm(read, c))) }
+        }
+        if let mac = c.verdict?.checks.first(where: { $0.name == "backup_local" })?.ageS, mac.isFinite, mac >= 0 {
+            out[.mac] = Status(text: Say.backupAt(NDR1.hhmm(evaluated.addingTimeInterval(-mac), c)))
+        }
+        return out
+    }
+
     /// The calm status lines (change 2, sources § 5). No measured value means no line.
     static func statusLines(_ i: NDInputs) -> [NDStation: Status] {
         let c = i.capture
@@ -310,7 +329,9 @@ extension NDPipelineState {
         if let mac = age("backup_local") { out[.mac] = Status(text: Say.lastBackup(NDFormat.ageText(mac))) }
         // Council r2a finding 2: one measure for Drive everywhere: the newest Drive upload of either kind (R1.2 change
         // 11, "Last Drive upload" and "Drive … ago"); the Backups page shows each copy, and this is the newer of the two.
-        if let newest = NDR1.driveNewest(c.verdict) { out[.drive] = Status(text: Say.lastBackup(NDFormat.ageText(newest))) }
+        // R2A item 3: Drive's status names what it measures: an upload. (The copy it uploads is the Mac's, whose age the
+        // Mac station shows; one age per copy.)
+        if let newest = NDR1.driveNewest(c.verdict) { out[.drive] = Status(text: Say.lastUpload(NDFormat.ageText(newest))) }
         if case let .ran(at) = i.nightlyLastRun {
             out[.jobs] = Status(text: Say.lastCheckUp(NDFormat.ageText(max(0, c.now.timeIntervalSince(at)))))
         }

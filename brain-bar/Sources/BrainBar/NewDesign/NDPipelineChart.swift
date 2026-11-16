@@ -54,6 +54,9 @@ struct NDPipelineChart: View {
         LineHover(title: Say.keptSafe, line: Say.keptSafeLine, rects: [NDPipelineLayout.keptSafe], edge: .top),
     ]
 
+    /// The Kept-safe frame grows when either copy shows its action.
+    var keptGrown: Bool { !Self.actionStations(items).isDisjoint(with: [.mac, .drive]) }
+
     static func actionStations(_ items: [NDStation: NDR1.Item]) -> Set<NDStation> {
         Set(items.filter { $0.value.action != nil }.keys)
     }
@@ -75,7 +78,7 @@ struct NDPipelineChart: View {
     var body: some View {
         let shownHover = previewHover ?? hovered
         ZStack(alignment: .topLeading) {
-            Canvas { ctx, _ in Self.draw(ctx, state: state, memories: memories, hovered: shownHover) }
+            Canvas { ctx, _ in Self.draw(ctx, state: state, memories: memories, hovered: shownHover, keptGrown: keptGrown) }
                 .frame(width: NDPipelineLayout.drawWidth, height: NDPipelineLayout.size.height)
                 .allowsHitTesting(false)
             // R1.4 changes 5, 8 and 9: the words that left the chart, on the things they name.
@@ -117,7 +120,8 @@ struct NDPipelineChart: View {
     func panel(_ s: NDStation, content: AnyView) -> NDPipelineLayout.Panel {
         let actions = Self.actionStations(items)
         let widths = items.compactMapValues { $0.action.map(Self.actionWidth) }
-        let width = NDPipelineLayout.panelSide(s, hasAction: actions.contains(s)).width
+        // The width first (a side panel narrows to stay inside the window), then the height the content needs at it.
+        let width = NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: 100).body.width
         let height = NDStationPopover.measure(content, width: width).height
         return NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: height)
     }
@@ -134,7 +138,7 @@ struct NDPipelineChart: View {
     }
 
     @ViewBuilder private func actionButton(_ s: NDStation, _ action: BrainBarMenuPresentation.Action) -> some View {
-        let frame = NDPipelineLayout.actionFrame(s, width: Self.actionWidth(action))
+        let frame = NDPipelineLayout.actionFrame(s, width: Self.actionWidth(action), hasStatus: state.status[s] != nil)
         let isReconnect = [.reconnectDrive, .connectDrive].contains(action.kind)
         // R1.2 change 24: the waiting line is right-aligned to the button's right edge.
         // Council r2a finding 4: the line takes its own area under Google Drive, wrapping right-aligned at 200 pt so it
@@ -220,8 +224,8 @@ struct NDPipelineChart: View {
         put(ctx, text(words, size: 11, color: ND.t3, weight: .medium), x: frame.minX + inset, baseline: frame.minY + 4, size: 11, anchor: .start)
     }
 
-    static func draw(_ ctx: GraphicsContext, state: NDPipelineState, memories: String?, hovered: NDStation? = nil) {
-        drawPipes(ctx, state: state)
+    static func draw(_ ctx: GraphicsContext, state: NDPipelineState, memories: String?, hovered: NDStation? = nil, keptGrown: Bool = false) {
+        drawPipes(ctx, state: state, keptGrown: keptGrown)
         drawAgents(ctx, state: state, hovered: hovered)
         drawHub(ctx, state: state, memories: memories, hovered: hovered)
         drawStations(ctx, state: state, hovered: hovered)
@@ -233,10 +237,10 @@ struct NDPipelineChart: View {
 
     /// R1.4 changes 16 and 17: every pipe whole, from line end to line end; the pipe after a faulty stage at 28 %; no
     /// stub, no gap, no switch; the arrow tip on the line's end point.
-    static func drawPipes(_ ctx: GraphicsContext, state: NDPipelineState) {
+    static func drawPipes(_ ctx: GraphicsContext, state: NDPipelineState, keptGrown: Bool = false) {
         typealias L = NDPipelineLayout
         let dash: [CGFloat] = state.allUnconfirmed ? [2, 2] : []
-        ctx.stroke(Path(roundedRect: L.keptSafe, cornerRadius: 12, style: .continuous), with: .color(ND.hair2),
+        ctx.stroke(Path(roundedRect: L.keptFrame(grown: keptGrown), cornerRadius: 12, style: .continuous), with: .color(ND.hair2),
                    style: StrokeStyle(lineWidth: 1, dash: dash))
         for c in L.connections {
             let s: NDPipeStroke = switch state.look(c.pipe) {
@@ -293,8 +297,15 @@ struct NDPipelineChart: View {
         }
         symbol(ctx, "brain", at: CGPoint(x: hub.midX, y: hub.minY + 27), size: 18, color: ND.t2)
         put(ctx, text(Say.stageMemory, size: 13, color: ND.t1, weight: .semibold), x: hub.midX, baseline: hub.minY + 57, size: 13, anchor: .middle)
-        put(ctx, text(memories ?? NDModel.Number.unknown.value, size: 11, color: ND.t2, mono: true), x: hub.midX, baseline: hub.minY + 72,
-            size: 11, anchor: .middle)
+        // R2A item 8: the count carries its unit ("297,412 memories"), on two lines when one would crowd the box.
+        let count = memories ?? NDModel.Number.unknown.value
+        let words = Say.memoriesCount(count)
+        if NDPipelineLayout.textWidth(words, size: 11) <= hub.width - 16 {
+            put(ctx, text(words, size: 11, color: ND.t2, mono: true), x: hub.midX, baseline: hub.minY + 72, size: 11, anchor: .middle)
+        } else {
+            put(ctx, text(count, size: 11, color: ND.t2, mono: true), x: hub.midX, baseline: hub.minY + 72, size: 11, anchor: .middle)
+            put(ctx, text(Say.memoriesWord, size: 11, color: ND.t2), x: hub.midX, baseline: hub.minY + 86, size: 11, anchor: .middle)
+        }
     }
 
     /// R1.4 change 18 (b): a Mac with an arrow down into its screen, drawn on a 16 pt grid at 14 pt, as comp 41 draws it.
@@ -626,11 +637,10 @@ struct NDStationPopover: View {
 
     var body: some View {
         let item = store.r1.stationItems[station]
-        let width = NDPipelineLayout.panelSide(station, hasAction: item?.action != nil).width
         Self.content(station: station, item: item, faultLines: Self.faultLines(station, item: item, store.inputs),
                      rows: Self.rows(station, store.inputs, store.model),
                      waiting: store.inputs.driveReconnecting) { store.perform($0) }
-            .frame(width: width, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder static func content(station: NDStation, item: NDR1.Item?, faultLines: [String], rows: [Line], waiting: Bool,
@@ -733,7 +743,7 @@ struct NDStationPopover: View {
             if i.capture.verdict?.checks.first(where: { $0.name == "search" })?.state == .green {
                 out.append(Line(label: Say.lastCheck, value: Say.working))
             }
-            out.append(Line(label: Say.searchByWordsNoCheck, value: ""))
+            out.append(Line(label: Say.searchByWordsNotChecked, value: ""))
             return out
         default:
             return []

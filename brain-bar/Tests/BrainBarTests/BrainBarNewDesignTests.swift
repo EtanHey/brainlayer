@@ -1215,7 +1215,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(calm.status[.read]?.text, Say.lastRead(NDFormat.ageText(48)))
         XCTAssertNil(calm.status[.queue], "R1.4 change 13: \"empty\" lives in the Save queue popover")
         XCTAssertEqual(calm.status[.mac]?.text, Say.lastBackup(NDFormat.ageText(4 * 3600)))
-        XCTAssertEqual(calm.status[.drive]?.text, Say.lastBackup(NDFormat.ageText(3 * 3600)), "Drive's newest copy of either kind")
+        XCTAssertEqual(calm.status[.drive]?.text, Say.lastUpload(NDFormat.ageText(3 * 3600)), "Drive's newest upload of either kind")
         XCTAssertEqual(calm.status[.jobs]?.text, Say.lastCheckUp(NDFormat.ageText(5 * 3600)))
         XCTAssertNil(calm.status[.search], "R1.4 change 14: \"working\" lives in the Search popover")
         XCTAssertTrue(calm.status.values.allSatisfy { $0.severity == nil })
@@ -1650,8 +1650,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let two = NDR1.make(Fixture.inputs(.twoFaults), NDModel.make(Fixture.inputs(.twoFaults)))
         XCTAssertEqual(two.headline, Say.thingsNeedYou(2))
         let late = NDR1.make(Fixture.inputs(.backupLate), NDModel.make(Fixture.inputs(.backupLate)))
-        XCTAssertEqual(late.headline, Say.checkSoon, "L24")
-        XCTAssertEqual(late.headlineDetail, late.items.first?.title)
+        XCTAssertEqual(late.headline, Say.stationSays(Say.stageMac, Say.lastBackup(NDFormat.ageText(30 * 3600))), "R2A item 9")
+        XCTAssertNil(late.headlineDetail)
         XCTAssertFalse(late.showsProblemRows)
         let behind = NDR1.make(Fixture.inputs(.meaningBehind), NDModel.make(Fixture.inputs(.meaningBehind)))
         XCTAssertEqual(behind.headline, Say.meaningCatchingUp)
@@ -1838,7 +1838,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     /// R1.3.1 L5: no station moves between states; the Kept-safe frame never grows (its actions sit under it).
     func testStationsDoNotMoveBetweenStates() {
         let expected: [NDStation: CGPoint] = [
-            .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 580, y: 236),
+            .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 580, y: 272),
             .mac: CGPoint(x: 630, y: 64), .drive: CGPoint(x: 760, y: 64), .jobs: CGPoint(x: 450, y: 186),
         ]
         XCTAssertEqual(NDPipelineLayout.stations, expected)
@@ -1995,7 +1995,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let rows = NDStationPopover.rows(.search, i, NDModel.make(i))
         XCTAssertEqual(rows.first?.label, Say.lastCheck)
         XCTAssertEqual(rows.first?.value, Say.working)
-        XCTAssertTrue(rows.contains { $0.label == Say.searchByWordsNoCheck })
+        XCTAssertTrue(rows.contains { $0.label == Say.searchByWordsNotChecked }, "R2A item 1: \"not checked yet\", in full")
     }
 
     func testScaleMaximaAreInTheReadout() throws {
@@ -2137,7 +2137,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             guard !r1.pipeline.allUnconfirmed, let newest = NDR1.driveNewest(store.inputs.capture.verdict) else { continue }
             let measure = NDFormat.ageText(newest)
             if r1.pipeline.treatment(.drive) != .fault {
-                XCTAssertEqual(r1.pipeline.status[.drive]?.text, Say.lastBackup(measure), "\(name.rawValue): the station")
+                XCTAssertEqual(r1.pipeline.status[.drive]?.text, Say.lastUpload(measure), "\(name.rawValue): the station")
             }
             let lanes = NDBackupsPage(store: store).lanes(store.model)
             let driveLanes = lanes.filter { ["backup_offsite", "transcripts"].contains($0.id) }.map { plain($0.number.text) }
@@ -2171,8 +2171,143 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(distance(area, c.line.points[i - 1], c.line.points[i]), 8, "\(c.pipe)")
             }
         }
-        XCTAssertGreaterThan(area.minY, NDPipelineLayout.keptSafe.maxY, "under the Kept-safe frame, where the button was")
+        let grown = NDPipelineLayout.keptFrame(grown: true)
+        XCTAssertTrue(grown.insetBy(dx: 0, dy: 0).contains(area), "inside the grown Kept-safe frame, where the button was")
+        XCTAssertGreaterThanOrEqual(grown.maxY - area.maxY, 8)
         XCTAssertEqual(area.maxX, NDPipelineLayout.actionFrame(.drive, width: NDPipelineChart.actionWidth(action)).maxX, accuracy: 0.01)
+    }
+
+    // MARK: Round 2a decisions (R2A-DECISIONS.md, "Taken"), one test each
+
+    /// R2A 1: a panel keeps 12 pt inside the window's content edge. Save queue's and Jobs' panels open below their words
+    /// and are the exception at the bottom edge only (no side has room without covering a neighbour; see the build log).
+    func testR2A1PanelsStayInsideTheWindow() {
+        let L = NDPipelineLayout.self
+        for name in Fixture.Name.allCases {
+            let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
+            let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
+            for station in NDStation.allCases {
+                let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
+                let where_ = "\(name.rawValue) \(station)"
+                XCTAssertGreaterThanOrEqual(panel.outer.minX, L.windowInside.minX - 0.01, where_)
+                XCTAssertLessThanOrEqual(panel.outer.maxX, L.windowInside.maxX + 0.01, where_)
+                if ![.queue, .jobs].contains(station) {
+                    XCTAssertLessThanOrEqual(panel.outer.maxY, L.windowInside.maxY + 0.01, where_)
+                }
+            }
+        }
+    }
+
+    /// R2A 2: the readout sits 12 pt beside the hovered column, flipping left in the chart's right third, never over the
+    /// pointer (which is on the column).
+    func testR2A2ReadoutSitsBesideTheHoveredColumn() {
+        let count = 60, width: CGFloat = 150
+        for bin in [0, 20, 39, 40, 59] {
+            let column = NDActivitySection.gutter + NDActivitySection.center(bin, count: count)
+            let x = NDActivitySection.readoutX(bin, count: count, width: width)
+            let inRightThird = NDActivitySection.center(bin, count: count) >= NDActivitySection.plotWidth * 2 / 3
+            XCTAssertEqual(inRightThird ? column - (x + width) : x - column, 12, accuracy: 0.01, "bin \(bin)")
+            XCTAssertFalse((x...(x + width)).contains(column), "bin \(bin): never over the pointer")
+        }
+    }
+
+    /// R2A 3: Drive's status names what it measures (an upload); in backup-late the Mac copy's age stays the Mac's.
+    func testR2A3DriveNamesWhatItMeasures() {
+        let late = pipeline(.backupLate)
+        XCTAssertEqual(late.status[.mac], .init(text: Say.lastBackup(NDFormat.ageText(30 * 3600)), severity: .orange))
+        XCTAssertTrue(late.status[.drive]?.text.hasPrefix("last upload ") == true, "Drive does not claim a fresh backup")
+        XCTAssertFalse(late.status[.drive]?.text.contains("backup") == true)
+    }
+
+    /// R2A 4: no crossfade draws two texts at once: the range switch's old bars leave before the new arrive, the axis
+    /// words swap at once, and Reconnect leaves before its waiting line arrives (tested above).
+    func testR2A4NoCrossfadeDrawsTwoTexts() throws {
+        XCTAssertEqual(NDMotion.rangeOutDuration, 0.1, accuracy: 0.0001)
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDWindow.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains(".asymmetric(insertion: .opacity.animation(NDMotion.rangeIn)"))
+        XCTAssertTrue(source.contains("removal: .opacity.animation(NDMotion.rangeOut)"))
+        XCTAssertTrue(source.contains(".transaction { $0.animation = nil }"), "the axis words swap with no crossfade")
+        let design = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/BrainBarDesign.swift"), encoding: .utf8)
+        XCTAssertTrue(design.contains("duration: 0.15).delay(rangeOutDuration)"), "in after out")
+        XCTAssertGreaterThanOrEqual(NDMotion.waitingDelay, NDMotion.buttonLeavesDuration)
+    }
+
+    /// R2A 5: every station action sits centred under its station's status line, 6 pt below, 20 pt high (Read and the
+    /// agents are the two forced exceptions); the Kept-safe frame grows around its actions and no lane crosses it.
+    func testR2A5ActionsSitCentredUnderTheirStatus() {
+        let L = NDPipelineLayout.self
+        for name in Fixture.Name.allCases {
+            let r1 = NDR1.make(Fixture.inputs(name), NDModel.make(Fixture.inputs(name)))
+            for (station, item) in r1.stationItems {
+                guard let action = item.action, ![.read, .agents].contains(station) else { continue }
+                let f = L.actionFrame(station, width: NDPipelineChart.actionWidth(action), hasStatus: r1.pipeline.status[station] != nil)
+                let words = L.labelRects(station, r1.pipeline)
+                XCTAssertEqual(f.midX, L.point(station).x, accuracy: 0.01, "\(name.rawValue) \(station): centred")
+                XCTAssertEqual(f.minY, (words.last?.maxY ?? 0) + 6, accuracy: 0.5, "\(name.rawValue) \(station): 6 pt under its status")
+                XCTAssertEqual(f.height, 20)
+            }
+        }
+        let grown = L.keptFrame(grown: true)
+        let button = L.actionFrame(.drive, width: 85)
+        XCTAssertGreaterThanOrEqual(grown.maxY - button.maxY, 8, "the frame holds its button")
+        for c in L.connections where c.pipe != .memoryMac && c.pipe != .macDrive && c.pipe != .rail {
+            XCTAssertFalse(c.line.points.contains { grown.insetBy(dx: -8, dy: -8).contains($0) && !L.keptSafe.contains($0) },
+                           "\(c.pipe) runs clear of the grown frame")
+        }
+        // The answers lane runs at least 8 pt clear of Jobs' action under its status.
+        let jobsButton = L.actionFrame(.jobs, width: 92)
+        XCTAssertGreaterThanOrEqual(L.yAnswers - jobsButton.maxY, 8, "the answers lane passes below Jobs' action")
+        let lane = L.connections.first { $0.pipe == .memorySearch }!.line
+        XCTAssertGreaterThanOrEqual(lane.points[1].y - grown.maxY, 8, "the Memory-to-Search lane runs 8 pt below it")
+    }
+
+    /// R2A 6: "not confirmed" shows no relative ages: clock times for the last read and the Mac copy, a dash elsewhere.
+    func testR2A6NotConfirmedShowsNoRelativeAges() {
+        let stale = pipeline(.notConfirmed)
+        XCTAssertTrue(stale.allUnconfirmed)
+        for (station, status) in stale.status {
+            XCTAssertFalse(status.text.hasSuffix(" ago"), "\(station): \(status.text)")
+        }
+        // The fixture's reader read 48 s ago, after the 06:00 check: no time later than the caption's, so a dash.
+        XCTAssertEqual(stale.status[.read]?.text, NDModel.Number.unknown.value)
+        var older = Fixture.inputs(.notConfirmed)
+        older.watcherHeartbeatAgeS = 3 * 3600
+        XCTAssertTrue(NDPipelineState.make(older).status[.read]?.text.hasPrefix("read at ") == true, "a read before the check: its time")
+        XCTAssertTrue(stale.status[.mac]?.text.hasPrefix("backup at ") == true)
+        XCTAssertEqual(stale.status[.drive]?.text, NDModel.Number.unknown.value)
+        XCTAssertEqual(stale.status[.jobs]?.text, NDModel.Number.unknown.value)
+    }
+
+    /// R2A 7: the window's height change on a page switch animates 200 ms ease-in-out, and not at all under Reduce Motion.
+    func testR2A7PageSwitchHeightAnimates() throws {
+        XCTAssertEqual(NDMotion.pageResize(reduceMotion: false), 0.2)
+        XCTAssertNil(NDMotion.pageResize(reduceMotion: true))
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/BrainBarDashboardPanelController.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("NDMotion.pageResize(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)"))
+        XCTAssertTrue(source.contains("CAMediaTimingFunction(name: .easeInEaseOut)"))
+        XCTAssertTrue(source.contains("y: top - frameSize.height"), "the top edge stays")
+    }
+
+    /// R2A 8: Memory carries its unit.
+    func testR2A8MemoryCarriesItsUnit() throws {
+        XCTAssertEqual(Say.memoriesCount("297,412"), "297,412 memories")
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDPipelineChart.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("Say.memoriesCount(count)"))
+    }
+
+    /// R2A 9: a single fault says what it is in the headline: red, its own sentence; amber with no worded sentence,
+    /// "{station}: {its status}"; catching up keeps its title; two or more keep the count.
+    func testR2A9ASingleFaultSaysWhatItIs() {
+        func r1(_ name: Fixture.Name) -> NDR1 { NDR1.make(Fixture.inputs(name), NDModel.make(Fixture.inputs(name))) }
+        XCTAssertEqual(r1(.driveSignedOut).headline, Say.driveSignedOut)
+        XCTAssertEqual(r1(.backupLate).headline, "Copy on this Mac: last backup 30\u{00A0}h ago")
+        XCTAssertEqual(r1(.meaningBehind).headline, Say.meaningCatchingUp)
+        XCTAssertEqual(r1(.twoFaults).headline, Say.thingsNeedYou(2))
+        XCTAssertNil(r1(.twoFaults).headlineDetail, "no list under the count")
     }
 
     /// § 3.1 hover: the pointer's bucket is the pitch that holds it; outside the plot there is none.

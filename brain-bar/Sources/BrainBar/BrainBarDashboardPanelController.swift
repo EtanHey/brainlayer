@@ -365,19 +365,39 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         visibleHeightOverride ?? window.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height
     }
 
-    /// The page's size, exactly (min = max), keeping the window's top-left corner; never animated (motion 2).
+    /// The page's size, exactly (min = max), keeping the window's top-left corner. R2A item 7: a shown window's height
+    /// change animates over 200 ms ease-in-out (none under Reduce Motion, none while hidden).
     func fitPage(_ page: NDPage) {
         // R1.2 change 22 and L25: the page's own height, from its laid-out content, capped at the screen's visible height
         // minus 40 pt, past which the page scrolls under its fade and the footer stays.
         let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.window(newDesignStore, page: page, screen: fitScreenHeight))
         let frameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
-        // Content limits only: AppKit keeps one pair of size limits, and setting `minSize`/`maxSize` clears these.
-        window.contentMinSize = size
-        window.contentMaxSize = size
         fittedFrameSize = frameSize
         let top = window.frame.maxY
-        window.setFrame(NSRect(x: window.frame.minX, y: top - frameSize.height, width: frameSize.width, height: frameSize.height),
-                        display: window.isVisible, animate: false)
+        let target = NSRect(x: window.frame.minX, y: top - frameSize.height, width: frameSize.width, height: frameSize.height)
+        let duration = NDMotion.pageResize(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        guard window.isVisible, let duration, abs(window.frame.height - target.height) > 0.5 else {
+            // Content limits only: AppKit keeps one pair of size limits, and setting `minSize`/`maxSize` clears these.
+            window.contentMinSize = size
+            window.contentMaxSize = size
+            window.setFrame(target, display: window.isVisible, animate: false)
+            return
+        }
+        // While it moves, the limits span both heights; at the end they are the page's size exactly.
+        let current = window.contentRect(forFrameRect: window.frame).size
+        window.contentMinSize = NSSize(width: size.width, height: min(current.height, size.height))
+        window.contentMaxSize = NSSize(width: size.width, height: max(current.height, size.height))
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            window.animator().setFrame(target, display: true)
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.fittedFrameSize == frameSize else { return }
+                self.window.contentMinSize = size
+                self.window.contentMaxSize = size
+            }
+        })
     }
 
     /// The new design's pages: open the window on one (motion 2: no window animation).
