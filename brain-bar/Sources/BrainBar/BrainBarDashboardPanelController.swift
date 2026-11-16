@@ -302,9 +302,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             window.minSize = Self.minSize
             window.contentMinSize = Self.minSize
             window.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-            window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
             pageObserver = nil
             headlineObserver = nil
+            fittedFrameSize = nil
             // F04 and N02: back on Classic, the new design's window work stops and its Settings window closes.
             if hasNewDesignStore { newDesignStore.setWindowActive(false) }
             NDSettingsWindowController.closeIfOpen()
@@ -325,8 +325,10 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             // L17: the window takes each page's own height, width 900, and snaps on a tab switch with the top edge fixed.
             fitPage(newDesignStore.page)
             if pageObserver == nil {
-                pageObserver = newDesignStore.$page.removeDuplicates().dropFirst().sink { [weak self] page in
-                    MainActor.assumeIsolated { self?.fitPage(page) }
+                // D1: after the page is stored (didSet), never from `$page` (willSet).
+                newDesignStore.pageDidChange = { [weak self] page in self?.fitPage(page) }
+                pageObserver = AnyCancellable { [weak store = newDesignStore] in
+                    MainActor.assumeIsolated { store?.pageDidChange = nil }
                 }
                 // A headline that gains or loses a fault line changes the page's height: refit when what it says changes.
                 headlineObserver = newDesignStore.$model.map { _ in () }.receive(on: RunLoop.main).sink { [weak self] in
@@ -352,6 +354,8 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     nonisolated(unsafe) private var pageObserver: AnyCancellable?
     nonisolated(unsafe) private var headlineObserver: AnyCancellable?
+    /// The frame `fitPage` last chose; `windowWillResize` returns it in the new design.
+    private(set) var fittedFrameSize: NSSize?
     private var lastHeadlineKey: String?
 
     /// The page's size, exactly (min = max), keeping the window's top-left corner; never animated (motion 2).
@@ -361,10 +365,10 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         let screen = window.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height
         let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.window(newDesignStore, page: page, screen: screen))
         let frameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
+        // Content limits only: AppKit keeps one pair of size limits, and setting `minSize`/`maxSize` clears these.
         window.contentMinSize = size
         window.contentMaxSize = size
-        window.minSize = frameSize
-        window.maxSize = frameSize
+        fittedFrameSize = frameSize
         let top = window.frame.maxY
         window.setFrame(NSRect(x: window.frame.minX, y: top - frameSize.height, width: frameSize.width, height: frameSize.height),
                         display: window.isVisible, animate: false)
@@ -501,6 +505,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     /// A real window resizes on both axes, down to the size the dashboard needs.
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
 #if BRAINBAR_UI
+        // L17: the new design's window is the page's size; the delegate holds it even if AppKit's layout clears the
+        // content limits (it keeps one pair of size limits, and the toolbar's own layout can reset it).
+        if shownDesign == .new, let fitted = fittedFrameSize { return fitted }
         let minimum = currentMinSize
 #else
         let minimum = Self.minSize

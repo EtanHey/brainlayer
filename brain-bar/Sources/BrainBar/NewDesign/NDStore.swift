@@ -13,7 +13,19 @@ import SwiftUI
     @Published var range: NDRange = .hour {
         didSet { if range != oldValue { refreshWaves() } }
     }
-    @Published var page: NDPage = .overview
+    /// The one "current page": the tabs read it, the window root draws it, the window's height follows it.
+    /// D1 (real screen, round 1): the window resize used to run from `$page`, which publishes in willSet, so the resize's
+    /// layout pass drew the old page and the old selected segment at the new height. Followers now run here, after the
+    /// value is stored, so the page, the segment and the height change together.
+    @Published var page: NDPage = .overview {
+        didSet { if page != oldValue { pageDidChange?(page) } }
+    }
+    /// Called after `page` holds its new value (the window's refit).
+    var pageDidChange: (@MainActor (NDPage) -> Void)?
+#if DEBUG
+    /// The page the window root last drew (its `onAppear`), for the D1 test.
+    var drawnPageForTesting: NDPage?
+#endif
 
     let runtime: BrainBarRuntime?
     private let workspace: any BrainBarWorkspaceActing
