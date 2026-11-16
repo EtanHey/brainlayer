@@ -27,9 +27,10 @@ import SwiftUI
     }
 
     /// R1.8 item 1, on the window controller's real switch path (a tab click stores the page; the store hands it to the
-    /// controller, which swaps the page and moves the window; the window is never shown): from the first frame the new
-    /// page is the one drawn, in both directions, while the height moves to the page's own; it is never the old page
-    /// during a resize. Sampled frame by frame through the animation.
+    /// controller, which swaps the page and moves the window; the window is never shown). The frame animation goes
+    /// through the controller's seam, so the test steps it frame by frame itself (a headless runner never advances
+    /// AppKit's): the sequence is "new page first, then the height", in both directions, and no frame of the resize
+    /// draws the old page.
     func testR18PageSwitchShowsTheNewPageFirstOnTheRealPath() throws {
         let d = defaults()
         d.set("new", forKey: BrainBarDesign.key)
@@ -41,23 +42,35 @@ import SwiftUI
         store.page = .backups
         XCTAssertEqual(store.shownPage, .backups)
         controller.animatesPageSwitchForTesting = true
+        var started: (target: NSRect, duration: Double, curve: CAMediaTimingFunction, page: NDPage, height: CGFloat, finish: () -> Void)?
+        controller.pageFrameAnimatorForTesting = { target, duration, curve, finish in
+            started = (target, duration, curve, store.shownPage, window.frame.height, finish)
+        }
         for (to, grows) in [(NDPage.overview, true), (.backups, false), (.jobs, true)] {
-            let before = window.frame.height
+            started = nil
+            let before = window.frame
             store.page = to  // what a click on the tab does
-            var frames: [(height: CGFloat, page: NDPage)] = [(window.frame.height, store.shownPage)]
-            for _ in 0..<16 {
-                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.025))
-                frames.append((window.frame.height, store.shownPage))
+            let animation = try XCTUnwrap(started, "\(to): the height animates")
+            XCTAssertEqual(animation.page, to, "\(to): the new page is drawn before the height starts to move")
+            XCTAssertEqual(animation.height, before.height, accuracy: 0.5, "\(to): ...while the window is still at its old height")
+            XCTAssertEqual(grows, animation.target.height > before.height, "\(to): then the window grows or shrinks to the page")
+            XCTAssertEqual(animation.duration, NDMotion.pageResizeDuration, accuracy: 0.0001)
+            var points = [Float](repeating: 0, count: 4)
+            animation.curve.getControlPoint(at: 1, values: &points[0])
+            animation.curve.getControlPoint(at: 2, values: &points[2])
+            XCTAssertEqual(points, [0.23, 1, 0.32, 1], "the strong ease-out")
+            // Step the resize frame by frame: every frame draws the new page, and the height moves one way.
+            var heights: [CGFloat] = []
+            for step in 0...8 {
+                let t = Double(step) / 8
+                let h = before.height + (animation.target.height - before.height) * NDRenderHarness.easeOut(t)
+                window.setFrame(NSRect(x: before.minX, y: before.maxY - h, width: animation.target.width, height: h), display: false)
+                heights.append(window.frame.height)
+                XCTAssertEqual(store.shownPage, to, "\(to): frame \(step) draws the new page")
             }
-            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
-            let after = window.frame.height
-            XCTAssertEqual(grows, after > before, "\(to): the window grows or shrinks to the page")
-            XCTAssertEqual(frames.first?.page, to, "\(to): the new page from the first frame")
-            XCTAssertEqual(frames.first?.height ?? 0, before, accuracy: 0.5, "\(to): ...before the window has moved")
-            XCTAssertTrue(frames.contains { abs($0.height - before) > 0.5 && abs($0.height - after) > 0.5 },
-                          "\(to): sampled mid-resize: \(frames.map(\.height))")
-            XCTAssertTrue(frames.allSatisfy { $0.page == to }, "\(to): never the old page during the resize: \(frames.map(\.page))")
-            let heights = frames.map(\.height) + [after]
+            animation.finish()
+            XCTAssertEqual(window.frame.height, animation.target.height, accuracy: 0.5, "\(to): it ends at the page's height")
+            XCTAssertEqual(window.frame.maxY, before.maxY, accuracy: 0.5, "\(to): the top edge stays")
             XCTAssertTrue(zip(heights, heights.dropFirst()).allSatisfy { grows ? $1 >= $0 - 0.5 : $1 <= $0 + 0.5 },
                           "\(to): the height moves one way: \(heights)")
         }

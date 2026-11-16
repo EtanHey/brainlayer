@@ -370,6 +370,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     /// has grown, a shorter one before it shrinks; under Reduce Motion (or hidden) both change at once.
     /// Tests only: run a page switch as a visible window would (the window itself is never shown).
     var animatesPageSwitchForTesting: Bool?
+    /// Tests only: the window-frame animation of a page switch (target, duration, curve, completion). A headless runner
+    /// never advances AppKit's animation, so a test steps the frames itself through this seam.
+    var pageFrameAnimatorForTesting: ((NSRect, Double, CAMediaTimingFunction, @escaping () -> Void) -> Void)?
 
     func fitPage(_ page: NDPage) {
         // R1.2 change 22 and L25: the page's own height, from its laid-out content, capped at the screen's visible height
@@ -396,18 +399,21 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         let current = window.contentRect(forFrameRect: window.frame).size
         window.contentMinSize = NSSize(width: size.width, height: min(current.height, size.height))
         window.contentMaxSize = NSSize(width: size.width, height: max(current.height, size.height))
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = duration
-            let c = NDPageSwitch.curve
-            context.timingFunction = CAMediaTimingFunction(controlPoints: c.0, c.1, c.2, c.3)
-            window.animator().setFrame(target, display: true)
-        }, completionHandler: { [weak self] in
+        let c = NDPageSwitch.curve
+        let curve = CAMediaTimingFunction(controlPoints: c.0, c.1, c.2, c.3)
+        let finish: () -> Void = { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.fittedFrameSize == frameSize else { return }
                 self.window.contentMinSize = size
                 self.window.contentMaxSize = size
             }
-        })
+        }
+        if let animator = pageFrameAnimatorForTesting { return animator(target, duration, curve, finish) }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = duration
+            context.timingFunction = curve
+            window.animator().setFrame(target, display: true)
+        }, completionHandler: finish)
     }
 
     /// The new design's pages: open the window on one (motion 2: no window animation).
