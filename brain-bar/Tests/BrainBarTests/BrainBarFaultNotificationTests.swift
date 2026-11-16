@@ -385,7 +385,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertEqual(center.posts.count, 1)
     }
 
-    func testLosingCauseDoesNotPostAndReturningCauseDoes() async {
+    func testWatcherNoticeDoesNotAddACauseToAnExistingRedFault() async {
         let clock = Box()
         let center = Center()
         let subject = BrainBarFaultNotifications(center: center, defaults: defaults(), clock: { clock.now })
@@ -393,17 +393,17 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         await subject.update(c)
         c.watcher?.alertReasons = ["file_ingestion_failure"]
         await subject.update(c)
-        XCTAssertEqual(center.posts.count, 2)
+        XCTAssertEqual(center.posts.count, 1)
         c.watcher?.alertReasons = []
         await subject.update(c)
-        XCTAssertEqual(center.posts.count, 2)
+        XCTAssertEqual(center.posts.count, 1)
         c.watcher?.alertReasons = ["file_ingestion_failure"]
         await subject.update(c)
-        XCTAssertEqual(center.posts.count, 2)
+        XCTAssertEqual(center.posts.count, 1)
         c.now = c.now.addingTimeInterval(601)
         clock.now = clock.now.addingTimeInterval(601)
         await subject.update(c)
-        XCTAssertEqual(center.posts.count, 3)
+        XCTAssertEqual(center.posts.count, 1)
     }
 
     func testAuthorizationErrorRemainsPending() async {

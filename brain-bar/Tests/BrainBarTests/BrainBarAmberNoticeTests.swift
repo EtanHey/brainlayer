@@ -106,6 +106,17 @@ final class BrainBarAmberNoticeTests: XCTestCase {
         XCTAssertEqual(BrainBarStatusSnapshot.derive(input).verdict.attentionRowCount, 0, "Receipt inputs lack the menu capture's streak")
     }
 
+    func testAmberWatcherNoticeDoesNotWorsenRedSiblingInSameThing() async {
+        let center = Center()
+        let observed = subject(center)
+        var c = capture("stores", .red, amber: "ingest")
+        await observed.update(c)
+        c.watcher?.alertReasons = ["file_ingestion_failure"]
+        await observed.update(c)
+        XCTAssertEqual(center.posts, 1)
+        XCTAssertFalse(BrainBarMenuPresenter.notificationFaults(c).flatMap { $0.causes }.contains("app:file_ingestion_failure"))
+    }
+
     func testPairedJobCannotPromoteAnAmberCheck() async {
         for (job, check) in [("drive-consent", "drive_auth"), ("backup-daily", "backup_local"), ("jsonl-backup", "transcripts")] {
             let center = Center()

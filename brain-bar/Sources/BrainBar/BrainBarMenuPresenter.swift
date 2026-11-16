@@ -120,21 +120,6 @@ enum BrainBarMenuPresenter {
         }
     }
 
-    private static func appNotificationCauses(_ c: Capture) -> [Thing: Set<String>] {
-        var causes: [Thing: Set<String>] = [:]
-        if let failures = c.maintenanceNightFailures, failures >= 3 { causes[.upkeep] = [appNotificationCause("maintenance")] }
-        if let w = c.watcher, w.readable, w.fresh {
-            for reason in w.alertReasons where reason != "quarantined_record" {
-                if reason == "coverage_drop", w.dbProbeFailed { continue }
-                if reason == "offset_lag", ingestLagDisposition(c) != .escalated { continue }
-                let thing: Thing = ["offset_lag", "coverage_drop", "file_ingestion_failure"].contains(reason) ? .remembering : .system
-                causes[thing, default: []].insert(appNotificationCause(reason))
-            }
-        }
-        return causes
-    }
-
-
     /// Menu merge keys remain untouched; notification episodes group its rows by thing alone.
     static func notificationFaults(_ c: Capture) -> [NotificationFault] {
         let fresh: Bool = c.verdict != nil && (0...900).contains(c.verdictAwakeAgeS)
@@ -143,7 +128,9 @@ enum BrainBarMenuPresenter {
         let rows: [P.Row] = present(c).rows.filter { $0.kind == .needsYou }
         if merged.isEmpty, rows.count == 1 { merged = [needs(.system)] }
         guard rows.count == merged.count else { return [] }
-        let app: [Thing: Set<String>] = appNotificationCauses(c)
+        let app: [Thing: Set<String>] = lines.filter { $0.level == .needs }.reduce(into: [:]) { causes, line in
+            causes[line.thing, default: []].formUnion(line.notificationCauses.filter { $0.hasPrefix("app:") })
+        }
         var titles: [Thing: [String: String]] = [:]
         for source in lines where source.level == .needs {
             guard let speaking = merged.first(where: { $0.mergeKey == source.mergeKey }) else { continue }
