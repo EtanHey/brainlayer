@@ -304,6 +304,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             window.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
             window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
             pageObserver = nil
+            headlineObserver = nil
             // F04 and N02: back on Classic, the new design's window work stops and its Settings window closes.
             if hasNewDesignStore { newDesignStore.setWindowActive(false) }
             NDSettingsWindowController.closeIfOpen()
@@ -327,6 +328,16 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
                 pageObserver = newDesignStore.$page.removeDuplicates().dropFirst().sink { [weak self] page in
                     MainActor.assumeIsolated { self?.fitPage(page) }
                 }
+                // A headline that gains or loses a fault line changes the page's height: refit when what it says changes.
+                headlineObserver = newDesignStore.$model.map { _ in () }.receive(on: RunLoop.main).sink { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        let key = NDPageHeight.key(self.newDesignStore)
+                        guard key != self.lastHeadlineKey else { return }
+                        self.lastHeadlineKey = key
+                        self.fitPage(self.newDesignStore.page)
+                    }
+                }
             }
             if window.isVisible { newDesignStore.setWindowActive(true) }
             return
@@ -340,10 +351,15 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     private var currentMinSize: NSSize { shownDesign == .new ? NDGrid.windowMinimum : Self.minSize }
 
     nonisolated(unsafe) private var pageObserver: AnyCancellable?
+    nonisolated(unsafe) private var headlineObserver: AnyCancellable?
+    private var lastHeadlineKey: String?
 
     /// The page's size, exactly (min = max), keeping the window's top-left corner; never animated (motion 2).
     func fitPage(_ page: NDPage) {
-        let size = NSSize(width: NDGrid.windowWidth, height: NDGrid.windowHeight(page))
+        // L17: the page's own height, from its laid-out content (a fault headline makes the Overview taller), never
+        // below the spec's page height; capped at the screen, past which the page scrolls under its fade (§ 2.3).
+        let screen = window.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height
+        let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.window(newDesignStore, page: page, screen: screen))
         let frameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
         window.contentMinSize = size
         window.contentMaxSize = size

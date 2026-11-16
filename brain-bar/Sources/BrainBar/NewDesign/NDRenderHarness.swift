@@ -60,7 +60,7 @@ import SwiftUI
     static func window(_ store: NDStore, name: String, appearance: NSAppearance.Name, size: NSSize? = nil,
                        in directory: URL) throws -> String {
         // L17: each page at its own height.
-        let size = size ?? NSSize(width: NDGrid.windowWidth, height: NDGrid.windowHeight(store.page))
+        let size = size ?? NSSize(width: NDGrid.windowWidth, height: NDPageHeight.window(store, page: store.page, screen: nil))
         let view = NDWindowRoot(store: store, drawsTrafficLights: true).frame(width: size.width, height: size.height)
         try write(host(view, size: size, appearance: appearance), name: name, in: directory)
         return name

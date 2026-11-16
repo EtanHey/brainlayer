@@ -292,15 +292,15 @@ struct NDHeadline: View {
             if r1.items.count > 1 {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(r1.items) { item in
+                        // One mark per surface for the faults (§ 2.2, § 7: titles carry no mark of their own); the rows sit
+                        // in the headline's text column.
                         HStack(spacing: 8) {
-                            Image(systemName: item.severity == .red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
-                                .font(.system(size: 13)).foregroundStyle(item.severity == .red ? ND.red : ND.orange)
-                                .frame(width: 16)
                             Text(item.title).font(NDType.body).foregroundStyle(ND.t1).lineLimit(1)
                             Spacer(minLength: 12)
                             if let action = item.action { actionButton(action, filled: NDButtonPolicy.filled(action)) }
                         }
                         .frame(height: NDGrid.row)
+                        .padding(.leading, 24)
                     }
                 }
                 .padding(.top, 6)
@@ -549,5 +549,39 @@ struct NDButtonStyle: ButtonStyle {
                 .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .onHover { hovering = $0 }
         }
+    }
+}
+
+// MARK: - Page height (L17)
+
+/// The window's height for a page: the title bar, the page's laid-out content with its insets, and the footer; never
+/// below the spec's page height (Overview 716, Backups 480, Jobs 512), capped at the screen. A two-fault headline is
+/// two 24 pt rows taller than the calm one, so the Overview grows with it; past the screen the page scrolls (§ 2.3).
+@MainActor enum NDPageHeight {
+    static let chrome: CGFloat = NDGrid.titleBar + NDGrid.pageTop + 24 + NDGrid.footer
+
+    /// The page's content height at the page width (852 pt), as SwiftUI lays it out.
+    static func content(_ store: NDStore, page: NDPage) -> CGFloat {
+        let width = NDGrid.windowWidth - 2 * NDGrid.pageSide
+        let view: AnyView = switch page {
+        case .overview: AnyView(NDOverviewPage(store: store))
+        case .backups: AnyView(NDBackupsPage(store: store))
+        case .jobs: AnyView(NDJobsPage(store: store))
+        }
+        let hosting = NSHostingController(rootView: view.frame(width: width).environment(\.ndPalette, .window))
+        return ceil(hosting.sizeThatFits(in: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)).height)
+    }
+
+    static func window(_ store: NDStore, page: NDPage, screen: CGFloat?) -> CGFloat {
+        let needed = max(NDGrid.windowHeight(page), content(store, page: page) + chrome)
+        guard let screen, screen > 0 else { return needed }
+        return min(needed, max(NDGrid.windowHeight(page), screen))
+    }
+
+    /// What decides the page's height: the page and the headline's lines.
+    static func key(_ store: NDStore) -> String {
+        let r1 = store.r1
+        let parts: [String] = [store.page.rawValue, r1.headline, r1.unconfirmedDetail ?? ""] + r1.items.map(\.id)
+        return parts.joined(separator: "|")
     }
 }

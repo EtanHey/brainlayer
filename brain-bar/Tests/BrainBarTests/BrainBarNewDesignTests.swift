@@ -1245,6 +1245,44 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(two.menuRows[3].value, Say.failed)
     }
 
+    /// L17 and the clip defect: in every fixture, on every page, and in a constructed three-fault state, the laid-out
+    /// content ends at least the bottom inset (24 pt) above the footer, and the window is never below the spec's height.
+    func testNoPageIsClippedUnderTheFooter() throws {
+        var three = Fixture.inputs(.twoFaults)
+        three.capture.verdict = BrainBarHealthVerdict(
+            dot: .red, checks: Fixture.replacing(three.capture.verdict!.checks, Fixture.check("stores", .red, age: 7200, limit: 1800)),
+            notes: [], evaluatedAt: three.capture.verdict!.evaluatedAt)
+        three.savesWaiting = 38
+        three.oldestSaveQueuedAt = Fixture.fixedNow.addingTimeInterval(-7200)
+        var cases: [(String, NDInputs)] = Fixture.Name.allCases.map { ($0.rawValue, Fixture.inputs($0)) }
+        cases.append(("three-faults", three))
+        var heights: [String] = []
+        for (name, inputs) in cases {
+            for page in NDPage.allCases {
+                let store = NDStore(fixture: inputs, page: page)
+                let window = NDPageHeight.window(store, page: page, screen: nil)
+                let content = NDPageHeight.content(store, page: page)
+                XCTAssertGreaterThanOrEqual(window, NDGrid.windowHeight(page), "\(name) \(page)")
+                // title bar 52 + top inset 20 + content + bottom inset 24 + footer 28
+                XCTAssertLessThanOrEqual(NDGrid.titleBar + NDGrid.pageTop + content + 24 + NDGrid.footer, window + 0.5, "\(name) \(page)")
+                if page == .overview { heights.append("\(name) \(Int(window))") }
+            }
+        }
+        XCTAssertEqual(NDPageHeight.window(NDStore(fixture: Fixture.inputs(.calm), page: .overview), page: .overview, screen: nil), 716)
+        let twoFaults = NDPageHeight.window(NDStore(fixture: Fixture.inputs(.twoFaults), page: .overview), page: .overview, screen: nil)
+        XCTAssertGreaterThan(twoFaults, 716, "the two-fault headline is taller, so the window is")
+        // Capped at the screen: past it, the page scrolls under its fade (§ 2.3).
+        XCTAssertEqual(NDPageHeight.window(NDStore(fixture: three, page: .overview), page: .overview, screen: 720), 720)
+        print("Overview heights: " + heights.joined(separator: ", "))
+    }
+
+    /// Ruling on change 17: more than five agents cannot occur while there are four agent families; this fails loudly the
+    /// day a fifth family appears, so the "+N more" list is built then.
+    func testAgentFamiliesStayWithinTheChartsList() {
+        XCTAssertLessThanOrEqual(AgentFamily.allCases.count, 5, "a fifth agent family: build change 17a (+N more)")
+        XCTAssertEqual(NDPipelineLayout.agents.count, AgentFamily.allCases.count)
+    }
+
     /// § 3.1 hover: the pointer's bucket is the pitch that holds it; outside the plot there is none.
     func testActivityHoverPicksTheBucketUnderThePointer() {
         XCTAssertEqual(NDActivitySection.bucket(at: 0, count: 60), 0)
