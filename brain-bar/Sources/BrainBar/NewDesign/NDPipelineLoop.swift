@@ -144,6 +144,17 @@ enum NDPipelineLayout {
         }
     }
 
+    /// Council r2a finding 4: the waiting line's own area, right-aligned to Reconnect's right edge under Google Drive,
+    /// in the place the button leaves (8 pt under the Kept-safe frame), clear of every connector.
+    /// It wraps at `waitingWidth` so it never reaches the Memory-to-Search lane that turns down at Search's x.
+    static let waitingWidth: CGFloat = 200
+    static func waitingArea(buttonWidth: CGFloat, lineWidth: CGFloat) -> CGRect {
+        let button = actionFrame(.drive, width: buttonWidth)
+        let width = min(lineWidth, waitingWidth)
+        let lines = ceil(lineWidth / waitingWidth)
+        return CGRect(x: button.maxX - width, y: button.minY, width: width, height: max(button.height, lines * 14 + 2))
+    }
+
     // MARK: hover panels (L2, and the lead's 1.4 rule: every arrow on its own station)
 
     /// A station's hover panel: the edge it opens on, the rect its arrow points at, the arrow's tip, the body, and the

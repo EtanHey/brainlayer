@@ -366,7 +366,7 @@ struct NDWaitingSwap<Button: View, Line: View>: View {
                 .environment(\.ndHeldPressed, waiting)
                 .opacity(waiting ? 0 : 1)
                 .scaleEffect(waiting ? 0.97 : 1)
-                .animation(reduceMotion ? nil : NDMotion.buttonLeaves, value: waiting)
+                .animation(reduceMotion ? nil : waiting ? NDMotion.buttonLeaves : NDMotion.buttonReturns, value: waiting)
                 .allowsHitTesting(!waiting)
                 .accessibilityHidden(waiting)
             line

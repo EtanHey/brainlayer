@@ -137,13 +137,18 @@ struct NDPipelineChart: View {
         let frame = NDPipelineLayout.actionFrame(s, width: Self.actionWidth(action))
         let isReconnect = [.reconnectDrive, .connectDrive].contains(action.kind)
         // R1.2 change 24: the waiting line is right-aligned to the button's right edge.
-        NDWaitingSwap(waiting: waiting && isReconnect, alignment: .trailing) {
+        // Council r2a finding 4: the line takes its own area under Google Drive, wrapping right-aligned at 200 pt so it
+        // stays clear of every connector; it overflows the button's frame downward, never across a lane.
+        NDWaitingSwap(waiting: waiting && isReconnect, alignment: .topTrailing) {
             NDButton(label: Self.shortLabel(action), filled: NDButtonPolicy.filled(action), compact: true,
                      accessibility: action.label) { perform(action.kind) }
         } line: {
-            Text(Say.waitingForBrowser).font(NDType.caption).foregroundStyle(ND.t2).fixedSize()
+            Text(Say.waitingForBrowser).font(NDType.caption).foregroundStyle(ND.t2).multilineTextAlignment(.trailing)
+                .frame(maxWidth: NDPipelineLayout.waitingWidth, alignment: .trailing)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: NDPipelineLayout.waitingWidth, alignment: .trailing)
         }
-        .frame(width: frame.width, height: frame.height, alignment: .trailing)
+        .frame(width: frame.width, height: frame.height, alignment: .topTrailing)
         .position(x: frame.midX, y: frame.midY)
     }
 

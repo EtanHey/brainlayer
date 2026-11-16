@@ -1215,7 +1215,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(calm.status[.read]?.text, Say.lastRead(NDFormat.ageText(48)))
         XCTAssertNil(calm.status[.queue], "R1.4 change 13: \"empty\" lives in the Save queue popover")
         XCTAssertEqual(calm.status[.mac]?.text, Say.lastBackup(NDFormat.ageText(4 * 3600)))
-        XCTAssertEqual(calm.status[.drive]?.text, Say.lastBackup(NDFormat.ageText(4 * 3600)), "the older of the two Drive copies")
+        XCTAssertEqual(calm.status[.drive]?.text, Say.lastBackup(NDFormat.ageText(3 * 3600)), "Drive's newest copy of either kind")
         XCTAssertEqual(calm.status[.jobs]?.text, Say.lastCheckUp(NDFormat.ageText(5 * 3600)))
         XCTAssertNil(calm.status[.search], "R1.4 change 14: \"working\" lives in the Search popover")
         XCTAssertTrue(calm.status.values.allSatisfy { $0.severity == nil })
@@ -1584,12 +1584,11 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(Say.upTo("83", minutes: 3), "up to 83 / 3 min")
     }
 
-    /// D8.2 and D8.3: the waiting line starts inside the button's 100 ms fade (no empty frame); the dark read bars are the
-    /// lifted #7D8597 (4.64:1 on bg, recorded in the build log).
-    func testReconnectSwapHasNoGapAndReadBarsAreLifted() {
-        XCTAssertLessThan(NDMotion.waitingDelay, 0.1, "the line arrives before the button has gone")
-        // R1.2 change 24: the line fades in from 64 ms, 40 % of the button's 160 ms fade.
-        XCTAssertEqual(NDMotion.waitingDelay, 0.064, accuracy: 0.0001)
+    /// Council r2a finding 4: the Reconnect hand-off never shows both: the line starts when the button's fade has ended,
+    /// and the button comes back only after the line has gone. The dark read bars are #8189A0 (R1.2 change 21).
+    func testReconnectSwapHasNoOverlapAndReadBarsAreLifted() {
+        XCTAssertGreaterThanOrEqual(NDMotion.waitingDelay, NDMotion.buttonLeavesDuration, "the line waits for the button to go")
+        XCTAssertEqual(NDMotion.buttonLeavesDuration, 0.16, accuracy: 0.0001)
         let dark = NDColor.read.usingColorSpace(.sRGB).flatMap { _ in
             NSAppearance(named: .darkAqua).map { appearance -> NSColor? in
                 var resolved: NSColor?
@@ -2026,6 +2025,154 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             let texts = pipeline(name).status.values.map(\.text)
             XCTAssertFalse(texts.contains(Say.empty) || texts.contains(Say.working), name.rawValue)
         }
+    }
+
+    /// Capture R7 (2): no popover line truncates. For every station in every fixture, each line of the panel is measured
+    /// at its font; the panel's laid-out height holds every line at the number of wrapped lines its width needs.
+    func testNoPopoverLineTruncates() throws {
+        func width(_ s: String, _ size: CGFloat, _ weight: NSFont.Weight) -> CGFloat {
+            ceil(NSAttributedString(string: s, attributes: [.font: NSFont.systemFont(ofSize: size, weight: weight)]).size().width)
+        }
+        for name in Fixture.Name.allCases {
+            let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
+            let r1 = store.r1
+            for station in NDStation.allCases {
+                let item = r1.stationItems[station]
+                let panelWidth = NDPipelineLayout.panelSide(station, hasAction: item?.action != nil).width
+                let available = panelWidth - 28
+                var lines: [(String, CGFloat, NSFont.Weight)] = []
+                if let item {
+                    lines.append((item.title, 13, .semibold))
+                    lines += NDStationPopover.faultLines(station, item: item, store.inputs).map { ($0, 13, .regular) }
+                } else {
+                    lines.append((NDPipelineLayout.name(station), 13, .semibold))
+                    if station == .agents { lines.append((Say.agentsLine, 13, .regular)) }
+                    lines.append((NDStationPopover.explanation(station), 13, .regular))
+                    for row in NDStationPopover.rows(station, store.inputs, store.model) {
+                        lines.append(((row.value.isEmpty ? row.label : row.label + "   " + row.value), 13, .regular))
+                    }
+                }
+                let needed = lines.reduce(CGFloat(0)) { sum, line in
+                    sum + ceil(width(line.0, line.1, line.2) / available) * 15
+                }
+                let measured = NDStationPopover.measure(AnyView(NDStationPopover(store: store, station: station)), width: panelWidth).height
+                XCTAssertGreaterThanOrEqual(measured - 24, needed, "\(name.rawValue) \(station): every line fits, wrapped")
+            }
+        }
+        // No popover text is limited to one line or a fixed height.
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDPipelineChart.swift"), encoding: .utf8)
+        let popover = try XCTUnwrap(source.components(separatedBy: "// MARK: - A line's or a frame's hover").last)
+        XCTAssertFalse(popover.contains(".lineLimit("), "a popover line may wrap, never truncate")
+        XCTAssertFalse(popover.contains(".frame(height: NDGrid.row)"), "rows grow with their text")
+    }
+
+    /// Capture R7 (3): with full keyboard navigation on, Tab walks each station and then its action. SwiftUI's focus
+    /// order is the view order, which `controls` gives; every control is focusable by Tab (`ndKeyboardFocus`). (A real
+    /// `nextValidKeyView` walk needs a key window on screen, which these tests may not open; SwiftUI controls are not
+    /// separate NSViews in that chain.)
+    func testTabOrderIsEachStationThenItsAction() throws {
+        let two = NDR1.make(Fixture.inputs(.twoFaults), NDModel.make(Fixture.inputs(.twoFaults)))
+        let order = NDPipelineChart.controls(two.stationItems).map { $0.action == nil ? $0.station.rawValue : $0.station.rawValue + "+action" }
+        XCTAssertEqual(order, ["agents", "read", "queue", "memory", "jobs", "jobs+action", "search", "mac", "drive", "drive+action"])
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDPipelineChart.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("ForEach(Self.controls(items))"), "the view lays the controls out in that order")
+        XCTAssertTrue(source.contains(".ndKeyboardFocus { pin() }"), "a station takes focus")
+        let window = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDWindow.swift"), encoding: .utf8)
+        XCTAssertTrue(window.contains(".ndKeyboardFocus(action: action)"), "an action button takes focus")
+    }
+
+    /// Capture R7 (3): every action is reachable from the dropdown by keyboard: an enabled menu item with its action, in
+    /// the order the arrow keys walk.
+    func testEveryActionIsReachableFromTheDropdownByKeyboard() {
+        for name in Fixture.Name.allCases {
+            let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
+            var performed: [BrainBarMenuAction] = []
+            let builder = NDMenuBuilder(store: store, perform: { performed.append($0) }, openWindow: { _ in })
+            let menu = builder.build()
+            let reachable = menu.items.filter { $0.isEnabled && $0.action != nil && $0.target != nil }
+            for item in store.r1.items {
+                guard let action = item.action, store.r1.showsProblemRows else { continue }
+                XCTAssertTrue(reachable.contains { ($0.representedObject as? BrainBarMenuAction) == .row(action.kind) },
+                              "\(name.rawValue): \(action.label) is a keyboard-reachable menu item")
+            }
+        }
+        let two = NDStore(fixture: Fixture.inputs(.twoFaults), page: .overview)
+        let titles = NDMenuBuilder(store: two, perform: { _ in }, openWindow: { _ in }).build().items
+            .filter { $0.isEnabled && $0.action != nil }.map(\.title)
+        XCTAssertEqual(Array(titles.prefix(6)), [BrainBarMenuPresenter.Say.reconnect.text, BrainBarMenuPresenter.Say.copyReport.text,
+                                                 Say.activity, Say.search, Say.backups, Say.jobs])
+    }
+
+    /// Council r2a finding 3: the hover reads the plot's own coordinates, the origin the rule is drawn from. A pointer at
+    /// the drawn rule of the first, a middle and the last bin selects that bin, and so does one up to half a bin away.
+    func testChartHoverSelectsTheBinUnderThePointer() throws {
+        let count = 60
+        let pitch = NDActivitySection.plotWidth / CGFloat(count)
+        for bin in [0, 30, count - 1] {
+            let rule = NDActivitySection.gutter + NDActivitySection.center(bin, count: count)
+            for dx in [0, -0.45 * pitch, 0.45 * pitch] {
+                XCTAssertEqual(NDActivitySection.hoverIndex(atChartX: rule + dx, count: count), bin, "bin \(bin), \(dx) pt")
+            }
+        }
+        XCTAssertNil(NDActivitySection.hoverIndex(atChartX: NDActivitySection.gutter - 1, count: count), "the gutter selects nothing")
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDWindow.swift"), encoding: .utf8)
+        let hover = try XCTUnwrap(source.range(of: ".onContinuousHover(coordinateSpace: .local)"))
+        let place = try XCTUnwrap(source.range(of: ".padding(.leading, Self.gutter)\n                    .id(store.range)"))
+        XCTAssertLessThan(hover.lowerBound, place.lowerBound, "the hover sits on the plot, before it is placed beside the gutter")
+        XCTAssertFalse(source.contains(".offset(x: Self.gutter)"), "no offset that moves the drawing but not the hit area")
+    }
+
+    /// Council r2a finding 2: one number for one fact. Drive's last backup is its newest copy of either kind: the Overview
+    /// station, the dropdown and the Backups page agree in every fixture.
+    func testDriveSaysOneNumberOnEverySurface() {
+        func plain(_ s: String) -> String { s.replacingOccurrences(of: "\u{00A0}", with: " ") }
+        var compared = 0
+        for name in Fixture.Name.allCases {
+            let store = NDStore(fixture: Fixture.inputs(name), page: .backups)
+            let r1 = store.r1
+            guard !r1.pipeline.allUnconfirmed, let newest = NDR1.driveNewest(store.inputs.capture.verdict) else { continue }
+            let measure = NDFormat.ageText(newest)
+            if r1.pipeline.treatment(.drive) != .fault {
+                XCTAssertEqual(r1.pipeline.status[.drive]?.text, Say.lastBackup(measure), "\(name.rawValue): the station")
+            }
+            let lanes = NDBackupsPage(store: store).lanes(store.model)
+            let driveLanes = lanes.filter { ["backup_offsite", "transcripts"].contains($0.id) }.map { plain($0.number.text) }
+            XCTAssertTrue(driveLanes.contains(plain(measure)), "\(name.rawValue): the Backups page shows the same copy (\(driveLanes))")
+            let row = r1.menuRows.first { $0.kind == .backups }!
+            if row.tone == .fine {
+                let mac = store.inputs.capture.verdict?.checks.first { $0.name == "backup_local" }?.ageS ?? 0
+                XCTAssertEqual(row.value, Say.ago(NDFormat.ageText(max(mac, newest))), "\(name.rawValue): the Mac's or Drive's number")
+            } else if r1.pipeline.condition(.drive) != .fine {
+                XCTAssertEqual(row.value, Say.driveAgo(measure), "\(name.rawValue): the dropdown names the same Drive age")
+            }
+            compared += 1
+        }
+        XCTAssertGreaterThan(compared, 5)
+    }
+
+    /// Council r2a finding 4: the waiting line has its own place under Google Drive, at least 8 pt from every connector.
+    func testWaitingLineIsClearOfEveryConnector() throws {
+        let two = NDR1.make(Fixture.inputs(.driveSignedOut), NDModel.make(Fixture.inputs(.driveSignedOut)))
+        let action = try XCTUnwrap(two.stationItems[.drive]?.action)
+        let line = ceil(NSAttributedString(string: Say.waitingForBrowser, attributes: [.font: NSFont.systemFont(ofSize: 11)]).size().width)
+        let area = NDPipelineLayout.waitingArea(buttonWidth: NDPipelineChart.actionWidth(action), lineWidth: line)
+        func distance(_ r: CGRect, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+            // The smallest distance between the segment a-b (horizontal or vertical) and the rect.
+            let minX = min(a.x, b.x), maxX = max(a.x, b.x), minY = min(a.y, b.y), maxY = max(a.y, b.y)
+            let dx = max(0, max(r.minX - maxX, minX - r.maxX)), dy = max(0, max(r.minY - maxY, minY - r.maxY))
+            return hypot(dx, dy)
+        }
+        for c in NDPipelineLayout.connections {
+            for i in 1..<c.line.points.count {
+                XCTAssertGreaterThanOrEqual(distance(area, c.line.points[i - 1], c.line.points[i]), 8, "\(c.pipe)")
+            }
+        }
+        XCTAssertGreaterThan(area.minY, NDPipelineLayout.keptSafe.maxY, "under the Kept-safe frame, where the button was")
+        XCTAssertEqual(area.maxX, NDPipelineLayout.actionFrame(.drive, width: NDPipelineChart.actionWidth(action)).maxX, accuracy: 0.01)
     }
 
     /// § 3.1 hover: the pointer's bucket is the pitch that holds it; outside the plot there is none.

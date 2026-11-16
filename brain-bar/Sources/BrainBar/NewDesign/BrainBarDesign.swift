@@ -245,11 +245,13 @@ enum NDMotion {
     static let rangeFade = Animation.easeInOut(duration: 0.12)
     static let breakAppears = Animation.easeOut(duration: 0.2)
     static let popoverOpens = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.16)
-    /// R1.2 change 24: the pressed button fades over 160 ms ease-out in its pressed colour; the line from 64 ms over 160 ms.
+    /// R1.2 change 24: the pressed button fades over 160 ms ease-out, holding its pressed colour.
     static let buttonLeaves = Animation.easeOut(duration: 0.16)
-    /// D8.2: the waiting line starts at 40 % of the button's 100 ms fade (§ 3.4 #10: a 150 ms cross-fade), so no empty
-    /// frame falls between the button leaving and the line arriving.
-    static let waitingDelay: Double = 0.064
+    /// Council r2a finding 4: no overlap. The waiting line starts when the button has gone (and the button comes back
+    /// only after the line has gone), so the two are never visible at once.
+    static let buttonLeavesDuration: Double = 0.16
+    static let waitingDelay: Double = buttonLeavesDuration
+    static let buttonReturns = Animation.easeOut(duration: 0.16).delay(buttonLeavesDuration)
     static let waitingEnters = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.16).delay(waitingDelay)
     static let runningPeriod: TimeInterval = 1.6
 }

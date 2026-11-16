@@ -395,20 +395,23 @@ struct NDActivitySection: View {
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 53)
                 Text(Say.readWord).font(NDType.captionMedium).foregroundStyle(ND.readText)
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 72)
+                // Council r2a finding 3: the hover reads the pointer in the plot's own coordinates, the same origin the
+                // rule is drawn from (before, an offset moved the drawing but not the hit area, 52 pt apart).
                 NDWaveform(wave: wave, size: .hero, nowTick: true, hover: hover)
                     .frame(width: Self.plotWidth, height: Self.plotHeight + 8)
-                    .background(GeometryReader { g in
-                        Color.clear.onAppear { reportPlotFrame?(g.frame(in: .named("activity"))) }
-                    })
-                    .offset(x: Self.gutter)
-                    .id(store.range)
-                    .transition(reduceMotion ? .identity : .opacity)
+                    .contentShape(Rectangle())
                     .onContinuousHover(coordinateSpace: .local) { phase in
                         switch phase {
                         case let .active(p): hover = Self.bucket(at: p.x, count: wave?.count ?? 0)
                         case .ended: hover = nil
                         }
                     }
+                    .background(GeometryReader { g in
+                        Color.clear.onAppear { reportPlotFrame?(g.frame(in: .named("activity"))) }
+                    })
+                    .padding(.leading, Self.gutter)
+                    .id(store.range)
+                    .transition(reduceMotion ? .identity : .opacity)
             }
             .frame(width: Self.gutter + Self.plotWidth, height: Self.plotHeight + 8, alignment: .topLeading)
             // D8.1: the readout is an overlay: it takes no layout space, so the plot never moves when it appears.
@@ -454,6 +457,10 @@ struct NDActivitySection: View {
         let pitch = plotWidth / CGFloat(max(count, 1))
         return CGFloat(index) * pitch + pitch / 2
     }
+
+    /// The bucket under a pointer given in the chart row's coordinates (the gutter, then the plot): what the hover
+    /// selects, through the same origin the rule is drawn from.
+    static func hoverIndex(atChartX x: CGFloat, count: Int) -> Int? { bucket(at: x - gutter, count: count) }
 
     /// The bucket under the pointer: the pair whose pitch holds it; outside the plot, none.
     static func bucket(at x: CGFloat, count: Int) -> Int? {

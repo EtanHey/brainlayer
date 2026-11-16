@@ -247,6 +247,9 @@ struct NDR1: Equatable, Sendable {
                     menuRows: menuRows(i, m, items: items, pipeline: pipeline), footerLeft: left, footerRight: right)
     }
 
+    /// A destination's last backup: Drive's is its newest copy of either kind (measured ones only).
+    static func driveNewest(_ verdict: BrainBarHealthVerdict?) -> Double? { driveAges(verdict).min() }
+
     /// The Drive copies' ages (database and conversations), measured ones only.
     static func driveAges(_ verdict: BrainBarHealthVerdict?) -> [Double] {
         (verdict?.checks ?? []).filter { ["backup_offsite", "transcripts"].contains($0.name) }
@@ -328,8 +331,10 @@ struct NDR1: Equatable, Sendable {
         let concerned = items.filter { !$0.concerns.isDisjoint(with: Set(copyNames + ["drive_auth", "integrity", "disk"])) }
         var backupsValue: String
         var backupsTone: NDModel.Tone = concerned.contains { $0.severity == .red } ? .fault : concerned.isEmpty ? .fine : .warn
-        if fresh, ages.count == copyNames.count, let oldest = ages.max() {
-            backupsValue = Say.ago(NDFormat.ageText(oldest))
+        // The area row says the older of the two destinations' last backups: the Mac's or Drive's number, never a third.
+        let mac = checks.first { $0.name == "backup_local" }?.ageS.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        if fresh, ages.count == copyNames.count, let mac, let drive = driveNewest(c.verdict) {
+            backupsValue = Say.ago(NDFormat.ageText(max(mac, drive)))
         } else {
             backupsValue = NDModel.Number.unknown.value
         }

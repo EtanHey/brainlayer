@@ -308,8 +308,9 @@ extension NDPipelineState {
             }
         }
         if let mac = age("backup_local") { out[.mac] = Status(text: Say.lastBackup(NDFormat.ageText(mac))) }
-        let drive = [age("backup_offsite"), age("transcripts")].compactMap { $0 }
-        if drive.count == 2, let older = drive.max() { out[.drive] = Status(text: Say.lastBackup(NDFormat.ageText(older))) }
+        // Council r2a finding 2: one measure for Drive everywhere: the newest Drive upload of either kind (R1.2 change
+        // 11, "Last Drive upload" and "Drive … ago"); the Backups page shows each copy, and this is the newer of the two.
+        if let newest = NDR1.driveNewest(c.verdict) { out[.drive] = Status(text: Say.lastBackup(NDFormat.ageText(newest))) }
         if case let .ran(at) = i.nightlyLastRun {
             out[.jobs] = Status(text: Say.lastCheckUp(NDFormat.ageText(max(0, c.now.timeIntervalSince(at)))))
         }
