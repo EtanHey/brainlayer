@@ -53,6 +53,8 @@ import SwiftUI
             }
             written.append(try settings(name: "settings-\(suffix)", appearance: appearance, in: directory))
             written.append(try icons(name: "icons-\(suffix)", appearance: appearance, in: directory))
+            // R1.5 comp 51: the station panels, the Copy report click state.
+            written.append(try panelsSheet(name: "panels-\(suffix)", appearance: appearance, in: directory))
             // R1.4 comp 45: where the words went, each in the hover that now carries it.
             written.append(try wordsSheet(name: "hovers-words-\(suffix)", appearance: appearance, in: directory))
             // R1.3 comp 37: the three hover states (Memory's explanation; the Jobs and Drive faults with their actions).
@@ -86,6 +88,39 @@ import SwiftUI
             NDCard(padding: EdgeInsets(top: 16, leading: 16, bottom: 12, trailing: 16)) { chart }
                 .frame(width: NDGrid.windowWidth - 2 * NDGrid.pageSide)
                 .offset(x: NDGrid.pageSide, y: 150)
+        }
+        .frame(width: size.width, height: size.height)
+        try write(host(view, size: size, appearance: appearance), name: name, in: directory)
+        return name
+    }
+
+    /// Comp 51's sheet: Drive with Reconnect; a failing job at rest and "Copied"; a failing agent; Copy on this Mac; the
+    /// jobs list; each as its panel card draws it (288 wide, radius 8).
+    static func panelsSheet(name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
+        func panel(_ fixture: BrainBarDesignFixture.Name, _ station: NDStation, copied: Bool = false) -> AnyView {
+            let store = NDStore(fixture: BrainBarDesignFixture.inputs(fixture), page: .overview)
+            return AnyView(NDStationPopover(store: store, station: station)
+                .environment(\.ndPreviewCopied, copied)
+                .frame(width: 288)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(ND.pop)
+                    .shadow(color: .black.opacity(0.18), radius: 12, y: 8).shadow(color: .black.opacity(0.10), radius: 1.5, y: 1))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(ND.hair2, lineWidth: 0.5)))
+        }
+        let cards: [AnyView] = [
+            panel(.twoFaults, .drive), panel(.twoFaults, .jobs), panel(.twoFaults, .jobs, copied: true),
+            panel(.agentNotRead, .agents), panel(.calm, .mac), panel(.calm, .jobs),
+        ]
+        let size = NSSize(width: 980, height: 620)
+        let view = ZStack(alignment: .topLeading) {
+            ND.bg
+            VStack(alignment: .leading, spacing: 28) {
+                ForEach(0..<2, id: \.self) { row in
+                    HStack(alignment: .top, spacing: 28) {
+                        ForEach(0..<3, id: \.self) { col in cards[row * 3 + col] }
+                    }
+                }
+            }
+            .padding(28)
         }
         .frame(width: size.width, height: size.height)
         try write(host(view, size: size, appearance: appearance), name: name, in: directory)

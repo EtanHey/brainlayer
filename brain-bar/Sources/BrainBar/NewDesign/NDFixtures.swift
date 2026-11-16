@@ -153,6 +153,7 @@ enum BrainBarDesignFixture {
         case .backupLate:
             i.capture = capture(replacing(calmChecks(), check("backup_local", .amber, age: 30 * 3600, limit: 36 * 3600)), dot: .amber)
             i.newestLocalCopyAt = now.addingTimeInterval(-30 * 3600)
+            i.localCopiesKept = 2  // a missed night: two copies on this Mac
             i.backupHistory = history(localNewestHoursAgo: 30)
         }
         return i
@@ -185,6 +186,7 @@ enum BrainBarDesignFixture {
         i.nightlyLastRun = .ran(now.addingTimeInterval(-5 * 3600))
         i.weeklyLastRun = .ran(now.addingTimeInterval(-4 * 86_400))
         i.newestLocalCopyAt = now.addingTimeInterval(-(4 * 3600 + 2 * 60))
+        i.localCopiesKept = 3
         i.canRevealLocalCopy = true
         return i
     }

@@ -226,10 +226,11 @@ extension NDPipelineState {
                 s.status[.read] = sev == .red ? Status(text: Say.notBeingRead, severity: .red)
                     : s.status[.read].map { Status(text: $0.text, severity: .orange) }
             } else {
-                // R1.4 change 3 (L38): only the providers the check names; Read's status names them.
+                // R1.4 change 3 (L38): only the providers the check names; Read's status names them. R1.5 change 6 (L41):
+                // in plain words, the normal status colour: the fault is marked once, on the agent's icon.
                 for family in agents { s.agentFaults[family] = sev }
                 let names = agents.map(NDProvider.name).joined(separator: ", ")
-                s.status[.read] = Status(text: Say.providerNotRead(names), severity: sev)
+                s.status[.read] = Status(text: Say.providerNotRead(names))
             }
         }
 
@@ -326,7 +327,10 @@ extension NDPipelineState {
                 out[.queue] = Status(text: Say.waiting(NDFormat.ageText(max(0, c.now.timeIntervalSince(queued)))))
             }
         }
-        if let mac = age("backup_local") { out[.mac] = Status(text: Say.lastBackup(NDFormat.ageText(mac))) }
+        // R1.5 change 8 (L45): "{n} kept, newest {t} ago", n the copies actually found; without a count, the newest's age.
+        if let mac = age("backup_local") {
+            out[.mac] = Status(text: i.localCopiesKept.map { Say.keptNewest($0, NDFormat.ageText(mac)) } ?? Say.lastBackup(NDFormat.ageText(mac)))
+        }
         // Council r2a finding 2: one measure for Drive everywhere: the newest Drive upload of either kind (R1.2 change
         // 11, "Last Drive upload" and "Drive … ago"); the Backups page shows each copy, and this is the newer of the two.
         // R2A item 3: Drive's status names what it measures: an upload. (The copy it uploads is the Mac's, whose age the

@@ -255,6 +255,12 @@ import SwiftUI
                 if case let .ran(observed) = i.weeklyLastRun, observed >= at {} else { i.weeklyLastRun = .ran(at) }
             }
             i.canRevealLocalCopy = model.backupSchedules.contains { $0.localCopy != nil }
+            // R1.5 change 8: the copies actually there, counted in the newest copy's folder (read only).
+            if let newest = model.backupSchedules.compactMap(\.localCopy).first(where: { $0.lastPathComponent.contains(".db") }) {
+                let names = (try? FileManager.default.contentsOfDirectory(atPath: newest.deletingLastPathComponent().path)) ?? []
+                let kept = BackupLocalFiles.compressedSnapshots(in: names).count
+                i.localCopiesKept = kept > 0 ? kept : nil
+            }
         }
         if let v = capture.verdict, let age = v.checks.first(where: { $0.name == "backup_local" })?.ageS, age.isFinite, age >= 0 {
             i.newestLocalCopyAt = v.evaluatedAt.addingTimeInterval(-age)

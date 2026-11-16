@@ -677,6 +677,27 @@ extension BrainBarMenuPresenter {
         static let memoriesWord = "memories"
         static func stationSays(_ station: String, _ status: String) -> String { "\(station): \(status)" }
 
+        // Revision 1.5 (L45): the Jobs name, the copies' truth, the panel rows, the copy click, the agent panel.
+        static let jobsStationName = "Nightly check-up, weekly clean"
+        static let jobsPanelTitle = "Jobs that work on memory"
+        static let jobsPanelLine = "They read memory, check it and tidy it in place. They add no new memories."
+        static func keptNewest(_ n: Int, _ age: String) -> String { "\(n) kept, newest \(age) ago" }
+        static func macKeepsNewest(_ keep: String) -> String {
+            "Every night a checked copy of the database is saved on this Mac. It keeps the \(keep) newest."
+        }
+        static let macOlderRemoved = "An older copy is removed only after Google Drive holds a checked copy of it."
+        static let keptRow = "Kept"
+        static let newestRow = "Newest"
+        static let copiedLabel = "Copied"
+        static func othersStillRead(_ others: String) -> String {
+            "Its new work isn\u{2019}t reaching memory. \(others) are still read."
+        }
+        /// The keep setting as a word ("three"), for the copy panel's sentence.
+        static func countWord(_ n: Int) -> String {
+            ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"].indices.contains(n)
+                ? ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"][n] : "\(n)"
+        }
+
         // Settings
         static let settingsTitle = "BrainBar Settings"
         static let reconnectShort = "Reconnect"

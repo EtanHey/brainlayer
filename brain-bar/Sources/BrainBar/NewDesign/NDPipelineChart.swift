@@ -31,13 +31,10 @@ struct NDPipelineChart: View {
         var id: String { action == nil ? station.rawValue : station.rawValue + ".action" }
     }
 
-    /// The controls in the key loop, in order: what the view lays out, and what the tests check.
+    /// The controls in the key loop, in order: the stations only. R1.5 (L40): no action is on the chart at rest; each
+    /// fault's action is in its station's panel (Return or Space opens it with focus on the action) and in the dropdown.
     static func controls(_ items: [NDStation: NDR1.Item]) -> [Control] {
-        order.flatMap { s -> [Control] in
-            var out = [Control(station: s, action: nil)]
-            if let action = items[s]?.action { out.append(Control(station: s, action: action)) }
-            return out
-        }
+        order.map { Control(station: $0, action: nil) }
     }
 
     struct LineHover {
@@ -54,8 +51,8 @@ struct NDPipelineChart: View {
         LineHover(title: Say.keptSafe, line: Say.keptSafeLine, rects: [NDPipelineLayout.keptSafe], edge: .top),
     ]
 
-    /// The Kept-safe frame grows when either copy shows its action.
-    var keptGrown: Bool { !Self.actionStations(items).isDisjoint(with: [.mac, .drive]) }
+    /// R1.5: the Kept-safe frame no longer grows (no actions on the chart).
+    var keptGrown: Bool { false }
 
     static func actionStations(_ items: [NDStation: NDR1.Item]) -> Set<NDStation> {
         Set(items.filter { $0.value.action != nil }.keys)
@@ -89,13 +86,7 @@ struct NDPipelineChart: View {
                         .position(x: rect.midX, y: rect.midY)
                 }
             }
-            ForEach(Self.controls(items)) { control in
-                if let action = control.action {
-                    actionButton(control.station, action)
-                } else {
-                    station(control.station)
-                }
-            }
+            ForEach(Self.controls(items)) { control in station(control.station) }
             // R1.4 change 2: each provider icon's hover and spoken name is its name.
             ForEach(NDPipelineLayout.agentRows, id: \.0.rawValue) { family, _ in
                 let c = NDPipelineLayout.iconCentre(family)
@@ -118,8 +109,8 @@ struct NDPipelineChart: View {
 
     /// The station's panel at its content's measured height.
     func panel(_ s: NDStation, content: AnyView) -> NDPipelineLayout.Panel {
-        let actions = Self.actionStations(items)
-        let widths = items.compactMapValues { $0.action.map(Self.actionWidth) }
+        let actions: Set<NDStation> = []  // R1.5: no action sits on the chart, so none for a panel to clear
+        let widths: [NDStation: CGFloat] = [:]
         // The width first (a side panel narrows to stay inside the window), then the height the content needs at it.
         let width = NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: 100).body.width
         let height = NDStationPopover.measure(content, width: width).height
@@ -135,25 +126,6 @@ struct NDPipelineChart: View {
                         content: { popover(s) }, layout: { content in panel(s, content: content) })
             .frame(width: frame.width, height: frame.height)
             .position(x: frame.midX, y: frame.midY)
-    }
-
-    @ViewBuilder private func actionButton(_ s: NDStation, _ action: BrainBarMenuPresentation.Action) -> some View {
-        let frame = NDPipelineLayout.actionFrame(s, width: Self.actionWidth(action), hasStatus: state.status[s] != nil)
-        let isReconnect = [.reconnectDrive, .connectDrive].contains(action.kind)
-        // R1.2 change 24: the waiting line is right-aligned to the button's right edge.
-        // Council r2a finding 4: the line takes its own area under Google Drive, wrapping right-aligned at 200 pt so it
-        // stays clear of every connector; it overflows the button's frame downward, never across a lane.
-        NDWaitingSwap(waiting: waiting && isReconnect, alignment: .topTrailing) {
-            NDButton(label: Self.shortLabel(action), filled: NDButtonPolicy.filled(action), compact: true,
-                     accessibility: action.label) { perform(action.kind) }
-        } line: {
-            Text(Say.waitingForBrowser).font(NDType.caption).foregroundStyle(ND.t2).multilineTextAlignment(.trailing)
-                .frame(maxWidth: NDPipelineLayout.waitingWidth, alignment: .trailing)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(width: NDPipelineLayout.waitingWidth, alignment: .trailing)
-        }
-        .frame(width: frame.width, height: frame.height, alignment: .topTrailing)
-        .position(x: frame.midX, y: frame.midY)
     }
 
     /// The render harness's hover: the same panel chrome the window shows, at the frame the layout gives it.
@@ -393,9 +365,11 @@ struct NDPipelineChart: View {
 struct NDStationHitShape: Shape {
     let circle: CGRect
     let label: CGRect?
+    /// A station's ring is a circle; the agents' group and the Memory box are rounded rectangles.
+    var round: Bool? = nil
     func path(in rect: CGRect) -> Path {
         var p = Path()
-        if label == nil { p.addRoundedRect(in: circle, cornerSize: CGSize(width: 12, height: 12)) } else { p.addEllipse(in: circle) }
+        if round ?? (label != nil) { p.addEllipse(in: circle) } else { p.addRoundedRect(in: circle, cornerSize: CGSize(width: 12, height: 12)) }
         if let label { p.addRect(label) }
         return p
     }
@@ -413,14 +387,27 @@ struct NDStationButton: View {
     var content: () -> AnyView?
     var layout: (AnyView) -> NDPipelineLayout.Panel
     @State private var overStation = false
+    @FocusState private var focused: Bool
 
     var body: some View {
-        Button { pin() } label: {
+        Button { open(pinned: true, focusAction: false) } label: {
             Color.clear.contentShape(shape)
         }
         .buttonStyle(.plain)
         .contentShape(shape)
-        .ndKeyboardFocus { pin() }
+        // R1.5 change 4: Tab reaches every station; a 3 pt ring in the system focus colour shows where focus is.
+        .focusable(interactions: .activate)
+        .focused($focused)
+        .focusEffectDisabled()
+        .overlay {
+            if focused {
+                NDStationHitShape(circle: shape.circle.insetBy(dx: -4.5, dy: -4.5), label: nil, round: shape.label != nil)
+                    .stroke(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 3)
+            }
+        }
+        .onKeyPress(keys: [.return, .space, .escape]) { press in
+            Self.handle(press.key, station: station, presenter: presenter) { open(pinned: true, focusAction: true) } ? .handled : .ignored
+        }
         .onContinuousHover(coordinateSpace: .local) { phase in
             guard interactive else { return }
             switch phase {
@@ -432,19 +419,31 @@ struct NDStationButton: View {
         .accessibilityAddTraits(.isButton)
     }
 
+    /// R1.5 change 4, the station's own key handling: Return or Space opens the panel with focus on its action; Escape
+    /// closes it and leaves focus on the station.
+    @discardableResult
+    static func handle(_ key: KeyEquivalent, station: NDStation, presenter: NDPanelPresenter, open: () -> Void) -> Bool {
+        switch key {
+        case .return, .space:
+            open()
+            return true
+        case .escape:
+            guard presenter.shown == station else { return false }
+            presenter.escape()
+            return true
+        default:
+            return false
+        }
+    }
+
     private func changed() {
         hovered = overStation ? station : (hovered == station ? nil : hovered)
-        presenter.pointer(station, over: overStation, open: open)
+        presenter.pointer(station, over: overStation) { pinned in open(pinned: pinned, focusAction: false) }
     }
 
-    private func open(pinned: Bool) {
-        guard let view = content() else { return }
-        presenter.show(station, layout: layout(view), content: view, pinned: pinned)
-    }
-
-    private func pin() {
-        guard interactive else { return }
-        open(pinned: true)
+    private func open(pinned: Bool, focusAction: Bool) {
+        guard interactive || focusAction, let view = content() else { return }
+        presenter.show(station, layout: layout(view), content: view, pinned: pinned, focusAction: focusAction)
     }
 }
 
@@ -454,7 +453,10 @@ struct NDStationButton: View {
 @MainActor final class NDPanelPresenter: ObservableObject {
     weak var anchorView: NSView?
     private var panel: NSPanel?
-    private(set) var shown: NDStation?
+    @Published private(set) var shown: NDStation?
+    /// R1.5 change 4: where keyboard focus belongs: the open panel's action, or back on the station after Escape.
+    enum FocusTarget: Equatable { case action(NDStation), station(NDStation) }
+    @Published private(set) var focusTarget: FocusTarget?
     private var pinned = false
     private var overStation = false
     private var overPanel = false
@@ -473,9 +475,12 @@ struct NDStationButton: View {
         }
     }
 
-    func show(_ station: NDStation, layout: NDPipelineLayout.Panel, content: AnyView, pinned: Bool) {
-        guard let view = anchorView, let window = view.window else { return }
+    func show(_ station: NDStation, layout: NDPipelineLayout.Panel, content: AnyView, pinned: Bool, focusAction: Bool = false) {
         hide()
+        shown = station
+        self.pinned = pinned
+        focusTarget = focusAction ? .action(station) : nil
+        guard let view = anchorView, let window = view.window else { return }
         // L39: inside the screen's visible frame (the window's own edge may be passed).
         var layout = layout
         if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {
@@ -483,26 +488,26 @@ struct NDStationButton: View {
             layout = NDPipelineLayout.fitted(layout, within: limit)
         }
         let rect = window.convertToScreen(view.convert(layout.outer, to: nil))
-        let p = NSPanel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let p = NDKeyPanel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = true
         p.isReleasedWhenClosed = false
-        p.becomesKeyOnlyIfNeeded = true
+        p.becomesKeyOnlyIfNeeded = !focusAction
         p.appearance = window.effectiveAppearance
         let root = NDPanelChrome(layout: layout, content: content)
+            .environment(\.ndPanelFocusAction, focusAction)
             .onHover { [weak self] inside in self?.overPanel = inside }
         p.contentView = NSHostingView(rootView: root)
         window.addChildWindow(p, ordered: .above)
+        if focusAction { p.makeKey() }
         panel = p
-        shown = station
-        self.pinned = pinned
         // Esc closes it; a click outside a pinned panel closes it. (The monitors run on the main thread.)
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let isEscape = event.keyCode == 53
             let handled = MainActor.assumeIsolated { () -> Bool in
                 guard isEscape, let self, self.panel != nil else { return false }
-                self.hide()
+                self.escape()
                 return true
             }
             return handled ? nil : event
@@ -516,6 +521,15 @@ struct NDStationButton: View {
         } as Any)
     }
 
+    /// Escape: the panel closes and keyboard focus goes back to its station (the chart's window becomes key again).
+    func escape() {
+        let station = shown
+        let parent = panel?.parent
+        hide()
+        if let station { focusTarget = .station(station) }
+        parent?.makeKey()
+    }
+
     func hide() {
         pending?.cancel()
         for m in monitors { NSEvent.removeMonitor(m) }
@@ -526,8 +540,23 @@ struct NDStationButton: View {
         }
         panel = nil
         shown = nil
+        focusTarget = nil
         pinned = false
         overPanel = false
+    }
+}
+
+/// A borderless panel that can take keyboard focus when it is opened from the keyboard (R1.5 change 4).
+final class NDKeyPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
+private struct NDPanelFocusActionKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    /// The panel was opened from the keyboard: its action takes focus.
+    var ndPanelFocusAction: Bool {
+        get { self[NDPanelFocusActionKey.self] }
+        set { self[NDPanelFocusActionKey.self] = newValue }
     }
 }
 
@@ -561,7 +590,7 @@ struct NDPanelChrome: View {
             ScrollView(.vertical) { content }
                 .scrollIndicators(.automatic)
                 .frame(width: body.width, height: body.height, alignment: .topLeading)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .offset(x: body.minX, y: body.minY)
         }
         .frame(width: o.width, height: o.height, alignment: .topLeading)
@@ -574,7 +603,7 @@ struct NDPanelShape: Shape {
     let edge: Edge
 
     func path(in rect: CGRect) -> Path {
-        var p = Path(roundedRect: body, cornerRadius: 10, style: .continuous)
+        var p = Path(roundedRect: body, cornerRadius: 8, style: .continuous)  // R1.5 change 2: radius 8
         let w = NDPipelineLayout.arrowHalfWidth
         var arrow = Path()
         switch edge {
@@ -637,71 +666,64 @@ struct NDStationPopover: View {
     @ObservedObject var store: NDStore
     let station: NDStation
 
-    struct Line: Identifiable {
+    struct Line: Identifiable, Equatable {
         var id: String { label }
         var label: String
         var value: String
         var tone: NDModel.Tone = .fine
     }
 
+    /// What a panel says (R1.5 change 2): its mark, title, lines (the first in `t1` under a fault), rows and action.
+    struct Model: Equatable {
+        enum Mark: Equatable { case fault, notice, symbol(String) }
+        var mark: Mark
+        var title: String
+        var lines: [String]
+        var firstLineStrong: Bool
+        var rows: [Line]
+        var action: BrainBarMenuPresentation.Action?
+    }
+
     var body: some View {
-        let item = store.r1.stationItems[station]
-        Self.content(station: station, item: item, faultLines: Self.faultLines(station, item: item, store.inputs),
-                     rows: Self.rows(station, store.inputs, store.model),
-                     waiting: store.inputs.driveReconnecting) { store.perform($0) }
+        NDStationPanelBody(model: Self.model(station, item: store.r1.stationItems[station], store.inputs, store.model, store.r1.pipeline),
+                           waiting: store.inputs.driveReconnecting) { store.perform($0) }
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder static func content(station: NDStation, item: NDR1.Item?, faultLines: [String], rows: [Line], waiting: Bool,
-                                     perform: @escaping (BrainBarMenuPresentation.ActionKind) -> Void) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let item {
-                Text(item.title).font(NDType.bodyStrong).foregroundStyle(ND.t1).fixedSize(horizontal: false, vertical: true)
-                    .padding(.bottom, 6)
-                ForEach(Array(faultLines.enumerated()), id: \.offset) { index, line in
-                    Text(keepingUnits(line)).font(NDType.body).foregroundStyle(index == 0 ? ND.t1 : ND.t2)
-                        .fixedSize(horizontal: false, vertical: true).padding(.top, index == 0 ? 0 : 4)
-                }
-                if let action = item.action {
-                    HStack {
-                        Spacer()
-                        NDWaitingSwap(waiting: waiting && [.reconnectDrive, .connectDrive].contains(action.kind)) {
-                            NDButton(label: NDPipelineChart.shortLabel(action), filled: NDButtonPolicy.filled(action), small: true,
-                                     accessibility: action.label) { perform(action.kind) }
-                        } line: {
-                            Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)
-                        }
-                    }
-                    .padding(.top, 10)
-                }
-            } else {
-                Text(NDPipelineLayout.name(station)).font(NDType.bodyStrong).foregroundStyle(ND.t1).padding(.bottom, 6)
-                if station == .agents {
-                    // R1.4 change 10: the group's hover names the four providers, then what BrainBar does with them.
-                    Text(Say.agentsLine).font(NDType.body).foregroundStyle(ND.t2).fixedSize(horizontal: false, vertical: true)
-                        .padding(.bottom, 4)
-                }
-                Text(explanation(station)).font(NDType.body).foregroundStyle(ND.t2).fixedSize(horizontal: false, vertical: true)
-                if !rows.isEmpty {
-                    VStack(spacing: 0) {
-                        ForEach(rows) { line in
-                            HStack {
-                                Text(line.label).font(NDType.body).foregroundStyle(ND.t2).fixedSize(horizontal: false, vertical: true)
-                                Spacer(minLength: line.value.isEmpty ? 0 : 12)
-                                if !line.value.isEmpty {
-                                    Text(line.value).font(NDType.number)
-                                        .foregroundStyle(line.tone == .fault ? ND.redText : line.tone == .warn ? ND.orangeText : ND.t1)
-                                }
-                            }
-                            .frame(minHeight: NDGrid.row)
-                        }
-                    }
-                    .padding(.top, 8)
-                }
-            }
+    static func model(_ station: NDStation, item: NDR1.Item?, _ i: NDInputs, _ m: NDModel, _ p: NDPipelineState) -> Model {
+        let symbol = station == .memory ? "brain" : (NDPipelineLayout.symbols[station] ?? "circle")
+        let ownLines = lines(station, i, p)
+        let ownRows = rows(station, i, m)
+        guard let item else {
+            return Model(mark: .symbol(symbol), title: title(station), lines: ownLines, firstLineStrong: false, rows: ownRows, action: nil)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        let fault = faultLines(station, item: item, i, p)
+        // A notice the station says in its own words (backup-late): its title, then what the station is and does.
+        let showOwn = fault.isEmpty
+        return Model(mark: item.severity == .red ? .fault : .notice, title: item.title,
+                     lines: showOwn ? ownLines : fault, firstLineStrong: !showOwn,
+                     rows: showOwn ? ownRows : [], action: item.action)
+    }
+
+    static func title(_ station: NDStation) -> String {
+        station == .jobs ? Say.jobsPanelTitle : NDPipelineLayout.name(station)
+    }
+
+    /// A station's own lines: its explanation (§ F), the providers for the agents, the copies' truth for the Mac (L42),
+    /// what the jobs do for Jobs.
+    static func lines(_ station: NDStation, _ i: NDInputs, _ p: NDPipelineState) -> [String] {
+        switch station {
+        case .agents: [Say.agentsLine, Say.explainAgents]
+        case .mac: [Say.macKeepsNewest(Say.countWord(NDBackupFacts.keepNewest)), Say.macOlderRemoved]
+        case .jobs: [Say.jobsPanelLine]
+        default: [explanation(station)]
+        }
+    }
+
+    /// "Claude, Codex and Antigravity".
+    static func list(_ names: [String]) -> String {
+        guard names.count > 1 else { return names.first ?? "" }
+        return names.dropLast().joined(separator: ", ") + " and " + names.last!
     }
 
     /// The eight station explanations, as written in CHANGES-R1.3 § F.
@@ -719,7 +741,7 @@ struct NDStationPopover: View {
     }
 
     /// A fault's lines under its title (change 17), each only under its condition (L33); otherwise the item's own detail.
-    static func faultLines(_ station: NDStation, item: NDR1.Item?, _ i: NDInputs) -> [String] {
+    static func faultLines(_ station: NDStation, item: NDR1.Item?, _ i: NDInputs, _ p: NDPipelineState? = nil) -> [String] {
         guard let item else { return [] }
         let checks = i.capture.verdict?.checks ?? []
         func green(_ name: String) -> Bool { checks.first { $0.name == name }?.state == .green }
@@ -731,6 +753,11 @@ struct NDStationPopover: View {
             }
             out.append(green("stores") && green("search") ? Say.memoryStillSaves : Say.notCheckedOrTidiedSince)
             return out
+        case (.agents, "agent"):
+            // L45: "{others} are still read": the providers no check names; left out when there are none.
+            let named = Set((p ?? NDPipelineState.make(i)).agentFaults.keys)
+            let others = NDPipelineLayout.agentRows.map(\.0).filter { !named.contains($0) }.map(NDProvider.name)
+            return others.isEmpty ? [Say.agentNotReadDetail] : [Say.othersStillRead(list(others))]
         case (.drive, "drive"):
             var out: [String] = []
             if let newest = NDR1.driveAges(i.capture.verdict).min() { out.append(Say.lastDriveUpload(NDFormat.ageText(newest))) }
@@ -747,6 +774,27 @@ struct NDStationPopover: View {
         switch station {
         case .queue:
             return i.savesWaiting == 0 ? [Line(label: Say.waitingRow, value: Say.none)] : []
+        case .mac:
+            // R1.5 change 8: Kept (the copies actually found) and Newest.
+            var out: [Line] = []
+            if let kept = i.localCopiesKept { out.append(Line(label: Say.keptRow, value: "\(kept)")) }
+            if let at = i.newestLocalCopyAt {
+                out.append(Line(label: Say.newestRow, value: Say.ago(NDFormat.ageText(max(0, i.capture.now.timeIntervalSince(at))))))
+            }
+            return out
+        case .jobs:
+            // R1.5 change 7: every job that works on memory, from the Jobs page, with its last run.
+            let jobs: [BrainLayerLaunchdJob] = [.maintenanceNightly, .maintenanceWeekly, .walCheckpoint, .decay, .repairFTS]
+            return jobs.map { job in
+                let last: Date?
+                switch job {
+                case .maintenanceNightly: if case let .ran(at) = i.nightlyLastRun { last = at } else { last = nil }
+                case .maintenanceWeekly: if case let .ran(at) = i.weeklyLastRun { last = at } else { last = nil }
+                default: last = i.jobs?.first { $0.job == job }?.lastRun
+                }
+                let value = last.map { Say.ago(NDFormat.ageText(max(0, i.capture.now.timeIntervalSince($0)))) } ?? NDModel.Number.unknown.value
+                return Line(label: Say.jobNames[job.rawValue] ?? job.title, value: value)
+            }
         case .search:
             var out: [Line] = []
             if i.capture.verdict?.checks.first(where: { $0.name == "search" })?.state == .green {

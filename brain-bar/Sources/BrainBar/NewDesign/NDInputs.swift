@@ -34,9 +34,18 @@ struct NDInputs: Sendable {
     var driveReconnecting = false
     /// The newest local copy, for the Backups page's "Newest copy" and Show in Finder.
     var newestLocalCopyAt: Date? = nil
+    /// R1.5 change 8 (L45): the REAL number of compressed database copies found on this Mac (not the keep setting).
+    var localCopiesKept: Int? = nil
     var canRevealLocalCopy = false
     /// A copy of the report failed: the copy row says so until it goes (R12).
     var copyReportFailed = false
+}
+
+/// R1.5 (L42, L45): what the backup does with the copies on this Mac, from `src/brainlayer/backup_daily.py`. It keeps the
+/// newest `DEFAULT_LOCAL_COMPRESSED_KEEP` compressed copies and removes an older one only when Google Drive holds a checked
+/// copy (`prune_local_compressed_snapshots`). A test reads the Python file and fails if the two disagree.
+enum NDBackupFacts {
+    static let keepNewest = 3
 }
 
 enum NDPage: String, CaseIterable, Sendable, Identifiable {
