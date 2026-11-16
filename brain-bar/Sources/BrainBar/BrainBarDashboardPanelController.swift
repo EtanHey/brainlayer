@@ -370,6 +370,8 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     /// has grown, a shorter one before it shrinks; under Reduce Motion (or hidden) both change at once.
     /// Tests only: run a page switch as a visible window would (the window itself is never shown).
     var animatesPageSwitchForTesting: Bool?
+    /// Tests only: the Reduce Motion setting a page switch reads (a CI runner's session has it on).
+    var reduceMotionForTesting: Bool?
     /// Tests only: the window-frame animation of a page switch (target, duration, curve, completion). A headless runner
     /// never advances AppKit's animation, so a test steps the frames itself through this seam.
     var pageFrameAnimatorForTesting: ((NSRect, Double, CAMediaTimingFunction, @escaping () -> Void) -> Void)?
@@ -382,7 +384,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         fittedFrameSize = frameSize
         let top = window.frame.maxY
         let target = NSRect(x: window.frame.minX, y: top - frameSize.height, width: frameSize.width, height: frameSize.height)
-        let duration = NDMotion.pageResize(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        let duration = NDMotion.pageResize(reduceMotion: reduceMotionForTesting ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         let order = NDPageSwitch.order(from: window.frame.height, to: target.height,
                                        animates: (animatesPageSwitchForTesting ?? window.isVisible) && duration != nil)
         guard order != .together, let duration else {

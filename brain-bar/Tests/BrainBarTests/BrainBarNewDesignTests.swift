@@ -35,6 +35,11 @@ import SwiftUI
         let d = defaults()
         d.set("new", forKey: BrainBarDesign.key)
         let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
+        // Every input the switch reads is set here, never taken from the machine: a screen tall enough for every page
+        // (no L25 cap evens the heights out), Reduce Motion off (a CI runner's session has it on), and a window that
+        // counts as visible (it is never shown).
+        controller.visibleHeightOverride = 2000
+        controller.reduceMotionForTesting = false
         controller.designDefaults = d
         controller.applyDesign()
         let store = controller.newDesignStore
@@ -74,6 +79,14 @@ import SwiftUI
             XCTAssertTrue(zip(heights, heights.dropFirst()).allSatisfy { grows ? $1 >= $0 - 0.5 : $1 <= $0 + 0.5 },
                           "\(to): the height moves one way: \(heights)")
         }
+        // Reduce Motion on: no animation; the page and the height change together, in the same call.
+        controller.reduceMotionForTesting = true
+        started = nil
+        store.page = .overview
+        XCTAssertNil(started, "Reduce Motion: nothing animates")
+        XCTAssertEqual(store.shownPage, .overview)
+        XCTAssertEqual(window.contentRect(forFrameRect: window.frame).height,
+                       NDPageHeight.window(store, page: .overview, screen: controller.fitScreenHeight), accuracy: 0.5, "and the height at once")
         XCTAssertEqual(NDPageSwitch.order(from: 500, to: 800, animates: true), .pageThenFrame)
         XCTAssertEqual(NDPageSwitch.order(from: 800, to: 500, animates: true), .pageThenFrame)
         XCTAssertEqual(NDPageSwitch.order(from: 500, to: 800, animates: false), .together, "Reduce Motion: at once")
@@ -2334,7 +2347,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertNil(NDMotion.pageResize(reduceMotion: true))
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/BrainBarDashboardPanelController.swift"), encoding: .utf8)
-        XCTAssertTrue(source.contains("NDMotion.pageResize(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)"))
+        XCTAssertTrue(source.contains("NDMotion.pageResize(reduceMotion: reduceMotionForTesting ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)"),
+                      "the system's Reduce Motion, unless a test sets it")
         XCTAssertTrue(source.contains("CAMediaTimingFunction(controlPoints: c.0, c.1, c.2, c.3)"), "R1.8 item 1: the strong ease-out")
         XCTAssertTrue(source.contains("y: top - frameSize.height"), "the top edge stays")
     }
