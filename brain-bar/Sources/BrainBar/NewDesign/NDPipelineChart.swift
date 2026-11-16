@@ -51,6 +51,11 @@ struct NDPipelineChart: View {
         LineHover(title: Say.keptSafe, line: Say.keptSafeLine, rects: [NDPipelineLayout.keptSafe], edge: .top),
     ]
 
+    /// 1.5.1: the providers whose icon opens the agents' fault panel: exactly the ones a check names.
+    static func faultTriggers(_ state: NDPipelineState) -> [AgentFamily] {
+        state.allUnconfirmed ? [] : NDPipelineLayout.agentRows.map(\.0).filter { state.agentFaults[$0] != nil }
+    }
+
     /// R1.5: the Kept-safe frame no longer grows (no actions on the chart).
     var keptGrown: Bool { false }
 
@@ -87,14 +92,25 @@ struct NDPipelineChart: View {
                 }
             }
             ForEach(Self.controls(items)) { control in station(control.station) }
-            // R1.4 change 2: each provider icon's hover and spoken name is its name.
+            // R1.4 change 2: each provider icon's hover and spoken name is its name. 1.5.1: a provider a check names opens the
+            // agents' fault panel itself (the same panel, with Copy report), not only a tooltip.
             ForEach(NDPipelineLayout.agentRows, id: \.0.rawValue) { family, _ in
                 let c = NDPipelineLayout.iconCentre(family)
-                Color.clear.frame(width: 22, height: 22).contentShape(Rectangle())
-                    .help(NDProvider.name(family))
-                    .accessibilityElement()
-                    .accessibilityLabel(NDProvider.name(family))
-                    .position(c)
+                if Self.faultTriggers(state).contains(family) {
+                    let ring = CGRect(x: c.x - 12, y: c.y - 12, width: 24, height: 24)
+                    NDStationButton(station: .agents, interactive: interactive, hovered: $hovered, presenter: panels,
+                                    shape: NDStationHitShape(circle: CGRect(origin: .zero, size: ring.size), label: nil, round: true),
+                                    spoken: NDProvider.name(family),
+                                    content: { popover(.agents) }, layout: { content in panel(.agents, content: content) })
+                        .frame(width: ring.width, height: ring.height)
+                        .position(c)
+                } else {
+                    Color.clear.frame(width: 22, height: 22).contentShape(Rectangle())
+                        .help(NDProvider.name(family))
+                        .accessibilityElement()
+                        .accessibilityLabel(NDProvider.name(family))
+                        .position(c)
+                }
             }
             if let previewHover { preview(previewHover) }
         }
@@ -384,6 +400,8 @@ struct NDStationButton: View {
     @Binding var hovered: NDStation?
     @ObservedObject var presenter: NDPanelPresenter
     let shape: NDStationHitShape
+    /// The spoken name, when it is not the station's (a failing provider's icon names the provider).
+    var spoken: String? = nil
     var content: () -> AnyView?
     var layout: (AnyView) -> NDPipelineLayout.Panel
     @State private var overStation = false
@@ -415,7 +433,7 @@ struct NDStationButton: View {
             case .ended: if overStation { overStation = false; changed() }
             }
         }
-        .accessibilityLabel(NDPipelineLayout.name(station))
+        .accessibilityLabel(spoken ?? NDPipelineLayout.name(station))
         .accessibilityAddTraits(.isButton)
     }
 
