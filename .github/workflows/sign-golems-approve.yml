@@ -176,7 +176,7 @@ jobs:
         with:
           name: signed-helper
           path: release
-      - name: Publish prerelease (existing release refuses)
+      - name: Create prerelease (may reuse an existing tag)
         env:
           GH_TOKEN: ${{ github.token }}
           GOLEMS_SHA: ${{ needs.build.outputs.sha }}

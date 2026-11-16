@@ -6108,6 +6108,16 @@
         "target": "subprocess.run"
       }
     },
+    "e927a0456e517fa5c92181e8f0b145e8251042c20ab0088e79c88b035bde3b5b": {
+      "non_cloud_purpose": "Local Git rev-parse --verify commit peeling after the fresh source fetch; equality with the supplied SHA rejects annotated tags, blobs and trees before ancestry/build admission. Explicit bounded argv; no network or model sender.",
+      "site": {
+        "call_sha256": "b7aa0c13d5fad0194e903b76d91a44837130a1c80a72c20496dd20d461fb4811",
+        "kind": "child_process",
+        "owner": "<module>.merged_sha",
+        "path": "scripts/golems_approve_release.py",
+        "target": "subprocess.run"
+      }
+    },
     "e99e49be5ae8608284a32a6996ca8c6f830a95fc18d4d96051a562828dc9689e": {
       "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.send self.sock.sendall.",
       "site": {
