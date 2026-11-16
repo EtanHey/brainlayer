@@ -164,8 +164,7 @@ def test_publish_requires_exactly_one_successful_signing_job():
     )
 
 
-@pytest.fixture
-def golems_history(tmp_path):
+def _make_golems_history(tmp_path):
     upstream = tmp_path / "upstream"
     clone = tmp_path / "clone"
 
@@ -202,6 +201,11 @@ def golems_history(tmp_path):
     )
     unmerged = git(clone, "rev-parse", "HEAD")
     return upstream, clone, merged, unmerged, git
+
+
+@pytest.fixture
+def golems_history(tmp_path):
+    return _make_golems_history(tmp_path)
 
 
 def test_unmerged_golems_sha_refuses(golems_history):
@@ -383,8 +387,36 @@ def test_git_fixture_and_admission_ignore_inherited_git_env(tmp_path, monkeypatc
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.bare")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
-    _, clone, merged, unmerged, git = golems_history.__wrapped__(tmp_path)
+    _, clone, merged, unmerged, git = _make_golems_history(tmp_path)
     assert git(clone, "rev-parse", "HEAD") == unmerged
     assert run("merged-sha", clone, merged).returncode == 0
     assert not poisoned.exists()
     assert not (tmp_path / "parent-index").exists()
+
+
+@pytest.mark.parametrize("kind", ["annotated-tag", "tree", "blob"])
+def test_merged_sha_requires_an_actual_commit_object(golems_history, kind):
+    _, clone, merged, _, git = golems_history
+    if kind == "annotated-tag":
+        git(
+            clone,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.com",
+            "tag",
+            "-a",
+            "object-ref",
+            "-m",
+            "fixture",
+            merged,
+        )
+        candidate = git(clone, "rev-parse", "refs/tags/object-ref")
+    elif kind == "tree":
+        candidate = git(clone, "rev-parse", merged + "^{tree}")
+    else:
+        (clone / "blob.txt").write_text("fixture object\n")
+        candidate = git(clone, "hash-object", "-w", "blob.txt")
+    result = run("merged-sha", clone, candidate)
+    assert result.returncode != 0
+    assert "golems_sha must name a commit object" in result.stderr

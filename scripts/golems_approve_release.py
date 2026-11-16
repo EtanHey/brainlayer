@@ -53,6 +53,14 @@ def merged_sha(root, value):
     fetched = subprocess.run(command, capture_output=True, timeout=120)
     if fetched.returncode:
         refuse("cannot freshly fetch EtanHey/golems master")
+    peeled = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", value + "^{commit}"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if peeled.returncode or peeled.stdout.strip() != value:
+        refuse("golems_sha must name a commit object, not a tag or another object")
     result = subprocess.run(
         ["git", "-C", str(root), "merge-base", "--is-ancestor", value, "refs/remotes/origin/master"],
         capture_output=True,

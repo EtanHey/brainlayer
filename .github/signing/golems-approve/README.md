@@ -40,6 +40,8 @@ Publishing requires the chosen job to succeed and the other job to be skipped.
 Neither this workflow nor its admission check adds a release approval click.
 The workflow remains manual dispatch from brainlayer `main`; allowing `v*` in
 an environment's policy does not add a tag trigger to this workflow.
+Named mode protects only as far as creation of `v*` tags is restricted, for
+example by a tag ruleset.
 
 In both modes, the workflow still requires a golems commit already in master,
 the pinned profile, exact committed entitlements and Info.plist, signing,
