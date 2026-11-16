@@ -1129,7 +1129,11 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         },
         "X02": { f, _ in f.c.wakeCatchUpPending },
         "S4": { f, v in f.c.lastKnownBackupAt.map { $0 <= f.c.now && f.nameable($0) && f.dayWords($0) == v[0] } == true },
-        "R31": { f, _ in f.p.count == 0 && (f.c.verdict?.checks.contains { $0.state == .amber } == true
+        "R31": { f, _ in f.p.count == 0
+            && f.c.maintenanceNightFailures.map({ $0 >= 3 }) != true
+            && !(f.c.watcher.map { $0.readable && $0.fresh && $0.alertReasons.contains("offset_lag") } == true
+                 && f.c.lagEpisodeStart.map { f.c.now.timeIntervalSince($0) > 1800 } == true)
+            && (f.c.verdict?.checks.contains { $0.state == .amber } == true
             || f.c.watcher.map { w in w.readable && w.fresh && w.alertReasons.contains { !["offset_lag", "quarantined_record"].contains($0) && !($0 == "coverage_drop" && w.dbProbeFailed) } } == true) },
         "R02.headline": { f, _ in f.catchingUp },
         "R02": { f, _ in f.catchingUp },

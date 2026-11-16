@@ -128,6 +128,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
             XCTAssertEqual(p.form, .needs)
             XCTAssertEqual(p.icon, .marked)
             XCTAssertEqual(p.count, 1)
+            XCTAssertEqual(p.rows.filter { $0.strings.first == BrainBarMenuPresenter.Say.generic.text }.count, 1)
             let center = Center()
             await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c)
             XCTAssertEqual(center.posts.count, 1)

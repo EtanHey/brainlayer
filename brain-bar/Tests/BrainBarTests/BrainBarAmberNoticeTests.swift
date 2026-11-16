@@ -81,14 +81,65 @@ final class BrainBarAmberNoticeTests: XCTestCase {
                         titles[name] ?? BrainBarMenuPresenter.Say.generic.text, name)
                 }
             }
-            let other = name == "disk" ? "stores" : "disk"
+            let other = ["backup_local", "backup_offsite", "transcripts", "drive_auth", "integrity", "disk"].contains(name) ? "stores" : "disk"
             let p = BrainBarMenuPresenter.present(capture(name, .red, amber: other))
             XCTAssertEqual(p.count, 1, name)
             let rows = p.rows.filter { $0.kind == .needsYou || $0.kind == .statusLine }
             XCTAssertEqual(rows.first?.kind, .needsYou, name)
-            XCTAssertTrue(rows.dropFirst().contains { $0.kind == .statusLine }, name)
+            XCTAssertEqual(rows.dropFirst().first?.state, .notice, name)
+            XCTAssertEqual(rows.dropFirst().first?.strings.first, BrainBarMenuPresenter.Say.generic.text, other)
         }
     }
+    private func assertOneGenericSentence(_ c: BrainBarMenuCapture) {
+        let p = BrainBarMenuPresenter.present(c)
+        XCTAssertEqual(p.rows.filter { $0.strings.first == BrainBarMenuPresenter.Say.generic.text }.count, 1)
+    }
+    func testNoDuplicateAtAmberLagTimeEscalation() {
+        var c = capture("ingest", .amber)
+        c.watcher?.alertReasons = ["offset_lag"]
+        c.lagEpisodeStart = c.now.addingTimeInterval(-1801)
+        assertOneGenericSentence(c)
+    }
+    func testNoDuplicateAtRedIngestStall() {
+        var c = capture("ingest", .red)
+        c.watcher?.alertReasons = ["file_ingestion_failure"]
+        assertOneGenericSentence(c)
+    }
+    func testNoDuplicateAtRedBackupAmberTranscripts() {
+        assertOneGenericSentence(capture("backup_offsite", .red, amber: "transcripts"))
+    }
+
+    func testDifferentAmberSentenceInSameThingStays() {
+        var c = capture("integrity", .red, amber: "backup_local")
+        c.backupDailyFailures = 2
+        c.verdict = .init(dot: .red, checks: c.verdict!.checks.map { check in
+            var check = check
+            if check.name == "backup_local" { check.ageS = 10; check.thresholdS = 20 }
+            return check
+        }, notes: [], evaluatedAt: c.now)
+        let rows = BrainBarMenuPresenter.present(c).rows
+        XCTAssertEqual(rows.first { $0.kind == .needsYou }?.strings.first, BrainBarMenuPresenter.Say.s19.text)
+        XCTAssertEqual(rows.first { $0.state == .notice }?.strings.first, BrainBarMenuPresenter.Say.s06("2"))
+    }
+
+    func testLagKeepsTypedNonLagIngestContextVisible() {
+        for otherCause in [false, true] {
+            var c = capture("ingest", .amber)
+            c.watcher?.alertReasons = ["offset_lag"]
+            c.lagEpisodeStart = c.now.addingTimeInterval(-300)
+            c.verdict = .init(dot: .amber, checks: c.verdict!.checks.map { check in
+                var check = check
+                if check.name == "ingest" { check.contextCodes = [otherCause ? "unindexed_agent_running" : "watcher_stalled"] }
+                return check
+            }, notes: [], evaluatedAt: c.now)
+            let p = BrainBarMenuPresenter.present(c)
+            XCTAssertEqual(p.rows.contains { $0.state == .notice && $0.strings.first == BrainBarMenuPresenter.Say.generic.text }, otherCause)
+            XCTAssertTrue(p.rows.contains { $0.strings.contains(BrainBarMenuPresenter.Say.r02.text) }
+                || p.headline == BrainBarMenuPresenter.Say.r02Headline.text)
+            XCTAssertEqual(p.count, 0)
+        }
+    }
+
     func testCountParityBoundaryForMergedRowsAndAppOnlyClocks() {
         var c = capture("backup_local", .red)
         c.verdict = .init(dot: .red, checks: c.verdict!.checks.map {
@@ -114,6 +165,7 @@ final class BrainBarAmberNoticeTests: XCTestCase {
         c.watcher?.alertReasons = ["file_ingestion_failure"]
         await observed.update(c)
         XCTAssertEqual(center.posts, 1)
+        assertOneGenericSentence(c)
         XCTAssertFalse(BrainBarMenuPresenter.notificationFaults(c).flatMap { $0.causes }.contains("app:file_ingestion_failure"))
     }
 

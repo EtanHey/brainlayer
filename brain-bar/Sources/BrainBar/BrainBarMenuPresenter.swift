@@ -14,8 +14,8 @@ enum BrainBarMenuPresenter {
 
     enum Thing: Int, CaseIterable, Sendable { case remembering, finding, safe, upkeep, system }
     private enum Level { case cantTell, behind, notice, needs }
-    /// U11: custody-critical, then confirmed, then escalated.
-    private enum Rank: Int { case custody, confirmed, escalated }
+    /// U11: custody-critical before confirmed faults; amber streaks are notices under R31.
+    private enum Rank: Int { case custody, confirmed }
 
     private struct Line {
         var thing: Thing
@@ -129,7 +129,7 @@ enum BrainBarMenuPresenter {
         if merged.isEmpty, rows.count == 1 { merged = [needs(.system)] }
         guard rows.count == merged.count else { return [] }
         let app: [Thing: Set<String>] = lines.filter { $0.level == .needs }.reduce(into: [:]) { causes, line in
-            causes[line.thing, default: []].formUnion(line.notificationCauses.filter { $0.hasPrefix("app:") })
+            causes[line.thing, default: []].formUnion(line.notificationCauses.intersection(appEscalationCauses(c)))
         }
         var titles: [Thing: [String: String]] = [:]
         for source in lines where source.level == .needs {
@@ -166,18 +166,19 @@ enum BrainBarMenuPresenter {
         return [State.red, .amber, .unknown, .green].first(where: states.contains)
     }
 
-    /// R20: Needs-you rows whose facts the app reads without the producer, so they count whatever the verdict's state.
-    /// A failed database probe makes only `coverage_drop` unprovable (R24); other alerts still count (R09, X10).
+    /// R31 narrows R20 to app time escalations; other readable watcher alerts become notices in classify.
+    /// A failed database probe makes only coverage_drop unprovable.
     private static func appFacts(_ c: Capture) -> [Line] {
         var lines: [Line] = []
-        if let failures = c.maintenanceNightFailures, failures >= 3 {  // U03; its second sentence only when saving and backups are proven fine
+        let escalations = appEscalationCauses(c)
+        if let failures = c.maintenanceNightFailures, escalations.contains(appNotificationCause("maintenance")) {  // U03; its second sentence only when saving and backups are proven fine
             var line = worded(.upkeep, [Say.u03(String(failures))]
                 + (provenFine(c).isSuperset(of: [.remembering, .safe]) ? [Say.stillSaved.text] : []), .confirmed)
             line.notificationCauses = [appNotificationCause("maintenance")]
             lines.append(line)
         }
         guard let w = c.watcher, w.readable, w.fresh else { return lines }
-        if ingestLagDisposition(c) == .escalated { lines.append(needs(.remembering, cause: appNotificationCause("offset_lag"))) }  // R02 escalated
+        if escalations.contains(appNotificationCause("offset_lag")) { lines.append(needs(.remembering, cause: appNotificationCause("offset_lag"))) }  // R02 escalated
         for reason in w.alertReasons where !["offset_lag", "quarantined_record"].contains(reason) {
             if reason == "coverage_drop", w.dbProbeFailed { continue }
             lines.append(needs(["coverage_drop", "file_ingestion_failure"].contains(reason) ? .remembering : .system, cause: appNotificationCause(reason)))
@@ -200,6 +201,20 @@ enum BrainBarMenuPresenter {
         return .catchingUp
     }
 
+    /// R31 narrows R20 to these two app-owned clocks. Row severity, guard and sentence truth share this list.
+    static func appEscalationCauses(_ c: Capture) -> Set<String> {
+        var causes: Set<String> = []
+        if c.maintenanceNightFailures.map({ $0 >= 3 }) == true { causes.insert(appNotificationCause("maintenance")) }
+        if ingestLagDisposition(c) == .escalated { causes.insert(appNotificationCause("offset_lag")) }
+        return causes
+    }
+
+    /// Context codes are already on the verdict wire. watcher_stalled alone cannot distinguish lag from
+    /// another stall; the watcher supplies those notices separately. Every other context remains visible.
+    private static func ingestHasOtherCause(_ c: Capture) -> Bool {
+        (c.verdict?.checks ?? []).contains { $0.name == "ingest" && ($0.contextCodes ?? []).contains { $0 != "watcher_stalled" } }
+    }
+
     // MARK: Part 1 rows from one fresh verdict
 
     private static func derive(_ c: Capture, _ v: BrainBarHealthVerdict) -> [Line] {
@@ -210,7 +225,7 @@ enum BrainBarMenuPresenter {
             case .green?: break
             case .red?: lines.append(needs(thing(of: name), cause: checkNotificationCause(name)))
             case .amber?:
-                if name == "ingest", ingestLagDisposition(c) == .catchingUp { break }
+                if name == "ingest", ingestLagDisposition(c) == .catchingUp, !ingestHasOtherCause(c) { break }
                 lines.append(calmAmber(name, c, v) ?? needs(thing(of: name), cause: checkNotificationCause(name)))
             case .unknown?, nil: lines.append(checking(thing(of: name)))
             }
@@ -248,8 +263,7 @@ enum BrainBarMenuPresenter {
             let red = (c.verdict?.checks ?? []).contains {
                 $0.state.uiKind == .attention && line.notificationCauses.contains(checkNotificationCause($0.name))
             }
-            let timed = line.notificationCauses.contains(appNotificationCause("maintenance"))
-                || (line.notificationCauses.contains(appNotificationCause("offset_lag")) && ingestLagDisposition(c) == .escalated)
+            let timed = !line.notificationCauses.isDisjoint(with: appEscalationCauses(c))
             // A synthetic red-dot/stale-red row has no per-check cause and retains its conservative fault.
             if red || timed || (line.notificationCauses.isEmpty && c.verdict.map { $0.dot == .red || $0.checks.contains { $0.state.uiKind == .attention } } == true) { return line }
             var notice = line
@@ -261,7 +275,7 @@ enum BrainBarMenuPresenter {
     }
 
     /// The two amber rows that do not need him in P1: S03 (a backup to Drive is running) and F02 (search unconfirmed
-    /// for under 15 minutes). Every other amber is a generic Needs-you row until its family is derived.
+    /// for under 15 minutes). Other amber candidates become notices in classify.
     private static func calmAmber(_ name: String, _ c: Capture, _ v: BrainBarHealthVerdict) -> Line? {
         switch name {
         case "backup_offsite" where worst(v, "backup_local") == .green:
@@ -351,7 +365,7 @@ enum BrainBarMenuPresenter {
                     c.backupsMeasured ? Say.s06Newest($0) : Say.s06Confirmed($0)
                 }
                 db = worded(.safe, [Say.s06(String(failures))] + (newest.map { [$0] } ?? []),
-                            local.state == .red ? .custody : reds.isEmpty ? .escalated : .confirmed, priority: 3)
+                            local.state == .red ? .custody : .confirmed, priority: 3)
                 dbNames = faults.map(\.name)
             } else if faults.isEmpty, c.backupDailyFailures == 1, c.backupDailyNextRunAt.map({ $0 > c.now }) == true {
                 s02 = true
@@ -404,12 +418,15 @@ enum BrainBarMenuPresenter {
     private static func assemble(_ c: Capture, _ input: [Line], allGood: String?) -> P {
         // R17 and M5: one row per thing and level; the first line of a thing at that level speaks.
         func at(_ level: Level) -> [Line] { Thing.allCases.compactMap { t in input.first { $0.thing == t && $0.level == level } } }
-        let behind = at(.behind), cantTell = at(.cantTell), notices = at(.notice)
+        let needs = mergedNeeds(input)
+        let behind = at(.behind), cantTell = at(.cantTell)
+        let notices = at(.notice).filter { notice in
+            !needs.contains { $0.thing == notice.thing && $0.strings.first == notice.strings.first }
+        }
         let fine = four.filter { t in !input.contains { $0.thing == t } }
         func status(_ line: Line, mark: P.Mark?) -> P.Row {
             P.Row(kind: .statusLine, strings: line.strings, mark: line.level == .notice ? nil : mark, state: line.level == .notice ? .notice : line.level == .behind ? .behind : .cantTell, spinner: line.spinner)
         }
-        let needs = mergedNeeds(input)
         if !needs.isEmpty {
             let rows = needs.flatMap { line in
                 [P.Row(kind: .needsYou, strings: line.strings + (line.action == .copyReport ? line.handoff : []), action: action(line.action))]
@@ -540,8 +557,7 @@ enum BrainBarMenuPresenter {
         // count headline follow the Needs-you rows drawn.
         var needsRows = p.rows.filter { $0.kind == .needsYou }
         let red = c.verdict.map { $0.dot == .red || $0.checks.contains { $0.state == .red } } ?? false
-        let appFact = c.maintenanceNightFailures.map { $0 >= 3 } == true
-            || (ingestLagDisposition(c) == .escalated)
+        let appFact = !appEscalationCauses(c).isEmpty
         if needsRows.isEmpty, red || appFact || p.form == .needs || p.count != 0 || p.icon == .marked {
             needsRows = [P.Row(kind: .needsYou, strings: needs(.system).strings + handoff, action: copyReport)]
         }

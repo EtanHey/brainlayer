@@ -114,7 +114,7 @@ extension BrainBarMenuPresenter {
             allGoodProven(c) && p.headline == allGood.text && allGoodDate(c).map { at($0, c) } == v[0]
         }
         static let checkSoon = S("R31", .claim, "Check soon") { c, p, _ in
-            p.count == 0 && (c.verdict?.checks.contains { $0.state.uiKind == .notice } == true
+            p.count == 0 && appEscalationCauses(c).isEmpty && (c.verdict?.checks.contains { $0.state.uiKind == .notice } == true
                 || c.watcher.map { w in w.readable && w.fresh && w.alertReasons.contains { !["offset_lag", "quarantined_record"].contains($0) && !($0 == "coverage_drop" && w.dbProbeFailed) } } == true)
         }
         static let checkingMemory = S("X01", .neutral, "Checking on your memory…")
@@ -155,7 +155,8 @@ extension BrainBarMenuPresenter {
         static let giveReport = S("U12.give", .neutral, "Give the report to an agent.")
         static let ifNotFinished = S("D10", .neutral, "If this backup doesn’t finish, BrainBar can’t fix it itself.")
         static let u03 = S("U03", .claim, "Nightly upkeep failed {N3} nights in a row", .upkeep) { c, _, v in
-            c.maintenanceNightFailures.map { $0 >= 3 && String($0) == v[0] } == true
+            appEscalationCauses(c).contains(appNotificationCause("maintenance"))
+                && c.maintenanceNightFailures.map { String($0) == v[0] } == true
         }
         static let stillSaved = S("U03.stillSaved", .reassurance, "Your memory is still being saved and backed up, as of the last checks.") { c, p, v in
             reassuranceCoverage("U03.stillSaved", v, p, c).map { $0.isSubset(of: provenFine(c)) } == true
