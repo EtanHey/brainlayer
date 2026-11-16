@@ -1,8 +1,7 @@
 # Golems approval helper signing
 
 `sign-golems-approve.yml` is manual dispatch only, from brainlayer `main`.
-The lead supplies a reviewed full EtanHey/golems commit SHA. Before building, the
-Actions checks out only fixed `master` with full history. The runner then freshly
+The lead supplies a reviewed full EtanHey/golems commit SHA. Actions checks out only fixed `master` with full history. The runner then freshly
 fetches `origin/master` and requires the supplied SHA
 to be an ancestor of (or equal to) master before locally checking out that exact
 commit. No Actions checkout consumes the caller SHA. Fetch failure refuses; a stale tracking
@@ -19,41 +18,50 @@ application/team/access-group entitlement dictionary, with no runtime relaxation
 A different profile requires a reviewed pin update. No GitHub secret is created
 or changed by this workflow.
 
-## Owner prerequisite: protected developer-id environment (HOLD)
+## Optional signing environment
 
-The owner must create `developer-id` in EtanHey/brainlayer, set EtanHey as the sole
-required reviewer, prevent self-review, and allow only deployment **branch** `main`
-(no tags or wildcard branches). A run initiated as EtanHey cannot be self-approved;
-the owner/lead must account for the initiating identity when arranging the later run.
-Move all six BRAINBAR Developer ID/notary secrets listed in
-`scripts/golems_approve_release.py` into that environment, then remove their
-repository-scoped copies so another agent-written workflow cannot obtain them.
-This lane creates no environment, changes no settings, and reads/writes no secrets.
-`brainbar-release.yml` is unchanged; the lead owns its separate migration PR after
-the owner step. Coordinate that migration before the next BrainBar release.
+The signing-secrets decision is still open. The repository variable
+`GOLEMS_APPROVE_SIGNING_ENV` is the only switch:
 
-**Until the owner removes repository-scoped signing authority, the enclave gives
-no protection against an agent with brainlayer write access.** Declaring an
-environment cannot retract authority exposed to other repository workflows.
-GitHub also falls back to repository secrets with the same names: a nonempty value
-is not evidence of its scope. The metadata gate verifies protections, not secret
-placement/removal; the owner/lead must confirm that custody change separately.
+- Unset or empty: the signing job has no environment and uses the existing
+  repository-level BRAINBAR secrets, as today. No environment is required or
+  created, and no environment metadata API is called.
+- Set to an existing environment name: the signing job runs in that environment.
+  Admission requires exactly deployment branch `main` and tag pattern `v*`, with
+  the correct branch/tag types and no extra patterns. Missing environment,
+  unreadable policy or a different policy refuses before scheduling signing.
+  The selected policy is checked again before reading signing credentials.
 
-Before the signing job is scheduled (avoiding implicit creation of an unprotected
-environment), the build job uses read-only GitHub API metadata to require the named
-environment, sole owner review, self-review prevention and exactly the main branch
-policy. Missing/unknown protection, API failure or denied metadata access refuses
-by the `developer-id` name. The protected sign job declares `environment:
-developer-id`, rechecks metadata after its approval wait, and refuses missing
-secrets by name before import or signing, without printing values.
-[GitHub's environment API](https://docs.github.com/en/rest/deployments/environments)
-and [branch-policy API](https://docs.github.com/en/rest/deployments/branch-policies)
-are read with the workflow's `actions: read` token; no administration permission
-or new credential is requested. Actual owner protections/approval remain a hosted
-qualification gate, not something local tests prove.
+Names use letters, digits, dots, dashes or underscores, start with a letter or
+digit, and are at most 255 characters. The switch is resolved once on the build
+runner; the chosen signing job and subsequent check use that captured value.
+The two signing jobs are mutually exclusive and share the same signing steps.
+Publishing requires the chosen job to succeed and the other job to be skipped.
+Neither this workflow nor its admission check adds a release approval click.
+The workflow remains manual dispatch from brainlayer `main`; allowing `v*` in
+an environment's policy does not add a tag trigger to this workflow.
+
+In both modes, the workflow still requires a golems commit already in master,
+the pinned profile, exact committed entitlements and Info.plist, signing,
+notarization, cleanup, and final verification. The named mode adds deployment-ref
+restrictions for this job. It does not prove secret placement or remove signing
+credentials available at repository scope: GitHub can fall back to repository
+secrets with the same names. Repository-level signing credentials remain usable
+by other workflows with access, so this switch alone does not provide signing-key
+custody against a repository writer. Enrolment's signature/profile checks are
+separate from that still-open custody decision.
+
+No environment, repository variable, secret or setting is created or changed by
+this workflow or this PR. There is no instruction to move secrets now.
+`brainbar-release.yml` remains unchanged. Named-mode metadata uses GET-only
+[environment](https://docs.github.com/en/rest/deployments/environments) and
+[deployment-policy](https://docs.github.com/en/rest/deployments/branch-policies)
+API calls with `actions: read`; no administration permission or new credential
+is needed. Actual hosted policy enforcement and signing remain qualification
+gates, not something local tests prove.
 
 Build runs without signing secrets on a separate macOS runner. Signing uses the
-six BRAINBAR Developer ID/notary secrets resolved under `developer-id` and the existing BrainBar
+six existing BRAINBAR Developer ID/notary secrets in the selected mode and the BrainBar
 release pattern: decode the PKCS#12 only into RUNNER_TEMP, import into a temporary
 keychain, sign with hardened runtime/timestamp, notarize, and staple. Passwords,
 identity and notary credentials never go into GITHUB_ENV, outputs, repository,

@@ -21,14 +21,21 @@ jobs:
       actions: read
     outputs:
       sha: ${{ steps.input.outputs.sha }}
+      signing_environment: ${{ steps.signing_environment.outputs.name }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Require owner-protected developer-id environment before scheduling signing
+      - name: Resolve optional signing environment and validate deployment policy
+        id: signing_environment
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/golems_approve_release.py environment
+          SIGNING_ENV: ${{ vars.GOLEMS_APPROVE_SIGNING_ENV }}
+        run: |
+          set -euo pipefail
+          name="$(python3 scripts/golems_approve_release.py environment-name "$SIGNING_ENV")"
+          python3 scripts/golems_approve_release.py environment "$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
       - name: Validate exact source SHA and pinned profile
         id: input
         env:
@@ -75,14 +82,14 @@ jobs:
           if-no-files-found: error
           retention-days: 1
   sign:
+    if: needs.build.outputs.signing_environment == ''
     needs: build
-    environment: developer-id
     permissions:
       contents: read
       actions: read
     runs-on: macos-15
     timeout-minutes: 30
-    steps:
+    steps: &signing_steps
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
@@ -90,11 +97,12 @@ jobs:
         with:
           name: unsigned-helper
           path: payload
-      - name: Recheck developer-id protection after approval, before reading signing secrets
+      - name: Recheck optional signing environment before reading signing secrets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/golems_approve_release.py environment
-      - name: Sign and notarize with developer-id environment credentials
+          SIGNING_ENV: ${{ needs.build.outputs.signing_environment }}
+        run: python3 scripts/golems_approve_release.py environment "$SIGNING_ENV"
+      - name: Sign and notarize with selected credentials
         env:
           BRAINBAR_DEVELOPER_ID_APPLICATION: ${{ secrets.BRAINBAR_DEVELOPER_ID_APPLICATION }}
           BRAINBAR_DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.BRAINBAR_DEVELOPER_ID_CERTIFICATE_BASE64 }}
@@ -143,8 +151,22 @@ jobs:
             dist/requirement.txt
           if-no-files-found: error
           retention-days: 7
+  sign_environment:
+    if: needs.build.outputs.signing_environment != ''
+    needs: build
+    environment: ${{ needs.build.outputs.signing_environment }}
+    permissions:
+      contents: read
+      actions: read
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps: *signing_steps
   publish:
-    needs: [build, sign]
+    if: >-
+      !cancelled() && needs.build.result == 'success' &&
+      ((needs.sign.result == 'success' && needs.sign_environment.result == 'skipped') ||
+       (needs.sign.result == 'skipped' && needs.sign_environment.result == 'success'))
+    needs: [build, sign, sign_environment]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

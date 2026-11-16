@@ -62,46 +62,51 @@ def merged_sha(root, value):
         refuse("golems_sha is not an ancestor of freshly fetched EtanHey/golems master")
 
 
-def environment_policy(metadata, policies):
-    if metadata.get("name") != "developer-id":
-        refuse("developer-id environment missing")
-    required = [r for r in metadata.get("protection_rules", []) if r.get("type") == "required_reviewers"]
-    expected_reviewers = [("User", "etanhey")]
-    if len(required) != 1 or required[0].get("prevent_self_review") is not True:
-        refuse("developer-id requires owner review with self-review prevented")
-    reviewers = [
-        (r.get("type"), r.get("reviewer", {}).get("login", "").lower()) for r in required[0].get("reviewers", [])
-    ]
-    if reviewers != expected_reviewers:
-        refuse("developer-id requires EtanHey as the sole reviewer")
+def environment_name(value):
+    if value and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}", value):
+        refuse(
+            "GOLEMS_APPROVE_SIGNING_ENV must be empty or an environment name using letters, digits, dots, dashes or underscores"
+        )
+    return value
+
+
+def environment_policy(selected, metadata, policies):
+    if metadata.get("name", "").casefold() != selected.casefold():
+        refuse(f"signing environment {selected} missing")
     if metadata.get("deployment_branch_policy") != {"protected_branches": False, "custom_branch_policies": True}:
-        refuse("developer-id requires a main-only deployment branch policy")
-    if [(p.get("name"), p.get("type")) for p in policies] != [("main", "branch")]:
-        refuse("developer-id deployment branches must be main only (no tags)")
+        refuse(f"signing environment {selected} requires deployment branch main and tags v* only")
+    actual = [(p.get("name"), p.get("type")) for p in policies]
+    if len(actual) != 2 or set(actual) != {("main", "branch"), ("v*", "tag")}:
+        refuse(f"signing environment {selected} requires deployment branch main and tags v* only")
 
 
-def environment_ready():
-    # GET only. Never auto-create an environment or read secret values.
-    endpoint = "repos/EtanHey/brainlayer/environments/developer-id"
+def environment_ready(selected):
+    selected = environment_name(selected)
+    if not selected:
+        return  # Repository-level secrets: no environment API or deployment object.
+    # GET only. Never create an environment or read secret values.
+    endpoint = "repos/EtanHey/brainlayer/environments/" + selected
 
     def get(path):
-        response = subprocess.run(["gh", "api", "--paginate", "--slurp", path], capture_output=True, timeout=60)
+        response = subprocess.run(
+            ["gh", "api", "--method", "GET", "--paginate", "--slurp", path], capture_output=True, timeout=60
+        )
         if response.returncode:
-            refuse("developer-id protected environment unavailable; owner setup or metadata access required")
+            refuse(f"signing environment {selected} unavailable; existing environment or metadata access required")
         try:
             return json.loads(response.stdout)
         except (ValueError, TypeError):
-            refuse("developer-id environment metadata unreadable")
+            refuse(f"signing environment {selected} metadata unreadable")
 
     try:
         metadata_pages = get(endpoint)
         policy_pages = get(endpoint + "/deployment-branch-policies?per_page=100")
         if len(metadata_pages) != 1:
-            refuse("developer-id environment metadata ambiguous")
+            refuse(f"signing environment {selected} metadata ambiguous")
         policies = [p for page in policy_pages for p in page["branch_policies"]]
-        environment_policy(metadata_pages[0], policies)
+        environment_policy(selected, metadata_pages[0], policies)
     except (KeyError, TypeError, AttributeError):
-        refuse("developer-id environment metadata incomplete")
+        refuse(f"signing environment {selected} metadata incomplete")
 
 
 def profile(path):
@@ -135,7 +140,7 @@ def secrets():
     # Report names only, never values or subprocess errors carrying arguments.
     missing = [name for name in SECRETS if not os.environ.get(name)]
     if missing:
-        refuse("developer-id missing required secrets: " + ", ".join(missing))
+        refuse("missing required secrets: " + ", ".join(missing))
     if os.environ["BRAINBAR_NOTARY_TEAM_ID"] != TEAM:
         refuse("notary team does not match pinned profile team")
 
@@ -173,8 +178,10 @@ if __name__ == "__main__":
         print(sha(sys.argv[2]))
     elif mode == "merged-sha":
         merged_sha(sys.argv[2], sys.argv[3])
+    elif mode == "environment-name":
+        print(environment_name(sys.argv[2]))
     elif mode == "environment":
-        environment_ready()
+        environment_ready(sys.argv[2])
     elif mode == "profile":
         profile(sys.argv[2])
     elif mode == "source":
