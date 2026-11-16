@@ -1669,9 +1669,11 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(Int((c.blueComponent * 255).rounded()), 0xA0)
     }
 
-    /// L23 over every fixture: the red icon iff something is red; the amber dot iff an amber notice that is not a catching-
-    /// up state and nothing red; the "?" badge iff not confirmed (or no reading yet); otherwise the resting brain.
+    /// L47 (replacing L23) over every fixture: the red icon iff something is red; the "?" badge iff not confirmed (or no
+    /// reading yet); the amber dot whenever any check is amber and none is red, the catching-up states included;
+    /// otherwise the resting brain.
     func testIconPredicateOverEveryFixture() {
+        var dotted: [String] = []
         for name in Fixture.Name.allCases {
             let i = Fixture.inputs(name)
             let m = NDModel.make(i)
@@ -1681,8 +1683,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 XCTAssertEqual(state, .red(r1.redCount), name.rawValue)
             } else if r1.pipeline.allUnconfirmed {
                 XCTAssertEqual(state, .unconfirmed, name.rawValue)
-            } else if r1.items.contains(where: { $0.severity == .orange && !$0.catchingUp }) {
+            } else if i.capture.verdict?.checks.contains(where: { $0.state == .amber }) == true
+                        || r1.items.contains(where: { $0.severity == .orange }) {
                 XCTAssertEqual(state, .amber, name.rawValue)
+                dotted.append(name.rawValue)
             } else {
                 XCTAssertEqual(state, .rest, name.rawValue)
             }
@@ -1692,8 +1696,16 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             let m = NDModel.make(i)
             return NDIcon.state(m, NDR1.make(i, m))
         }
-        XCTAssertEqual(state(.meaningBehind), .rest, "catching up keeps the resting brain")
-        XCTAssertEqual(state(.backupLate), .amber, "a late copy: Check soon, the amber dot")
+        XCTAssertEqual(dotted, ["meaning-behind", "backup-late"], "the fixtures with the dot")
+        XCTAssertEqual(state(.meaningBehind), .amber, "L47: catching up on search by meaning carries the dot")
+        XCTAssertEqual(state(.backupLate), .amber, "a late copy: the amber dot")
+        // The other catching-up state: new conversations (an amber ingest lag under 30 min).
+        var lag = Fixture.inputs(.calm)
+        lag.capture = Fixture.capture(Fixture.replacing(Fixture.calmChecks(), Fixture.check("ingest", .amber, age: 1200, limit: 900)), dot: .amber)
+        let lagModel = NDModel.make(lag)
+        let lagR1 = NDR1.make(lag, lagModel)
+        XCTAssertTrue(lagR1.items.contains { $0.catchingUp }, "it is the catching-up state")
+        XCTAssertEqual(NDIcon.state(lagModel, lagR1), .amber, "L47: catching up on new conversations carries the dot")
         XCTAssertEqual(state(.notConfirmed), .unconfirmed)
         XCTAssertEqual(state(.twoFaults), .red(2))
     }

@@ -7,12 +7,12 @@ import AppKit
 @MainActor enum NDIcon {
     /// D6 (L20 rewritten): the fault brain and its count are for red items only; an amber (late) state keeps the resting
     /// brain, and the icon agrees with the pipeline (a red station iff the fault icon).
-    /// R1.2 change 10 with L23: five states, one predicate.
+    /// R1.2 change 10; L47 (replacing L23): one predicate for the dot.
     enum State: Equatable {
         case rest
         /// One or more red items (the count beside the brain from two).
         case red(Int)
-        /// An amber notice that is not a catching-up state, and nothing red ("Check soon").
+        /// L47: any check amber (catching up included), and nothing red.
         case amber
         /// No reading yet, or nothing confirmed: the brain at 45 % with a "?" badge.
         case unconfirmed

@@ -27,8 +27,8 @@ struct NDR1: Equatable, Sendable {
         var menuTitle: String? = nil
         /// The dropdown's one line under the title (R1.1 change 28; the strips are gone).
         var menuDetail: String? = nil
-        /// An amber state the app is handling itself (catching up on conversations or search by meaning): L23 keeps
-        /// the resting icon for these.
+        /// An amber state the app is handling itself (catching up on conversations or search by meaning). L47 gives it
+        /// the icon's amber dot like any amber state (L23 kept the resting icon for it).
         var catchingUp: Bool { severity == .orange && (id == "meaning" || id == "reader") }
         /// The page that owns it (the dropdown's row values turn red when concerned).
         var concerns: Set<String>
@@ -69,6 +69,8 @@ struct NDR1: Equatable, Sendable {
     var menuRows: [MenuRow]
     var footerLeft: String
     var footerRight: String?
+    /// L47: a check in the verdict is amber.
+    var amberCheck = false
     var calm: Bool { items.isEmpty && unconfirmedSince == nil }
     var redCount: Int { items.filter { $0.severity == .red }.count }
     /// R1.3: each station's item (red before amber), for its action at rest and its popover.
@@ -80,8 +82,9 @@ struct NDR1: Equatable, Sendable {
         }
         return out
     }
-    /// L23: the amber dot on the icon iff an amber notice that is not catching up, and nothing red.
-    var amberDot: Bool { redCount == 0 && items.contains { $0.severity == .orange && !$0.catchingUp } }
+    /// L47 (replaces L23): the amber dot on the icon whenever any check is amber and none is red, the catching-up states
+    /// (new conversations, search by meaning) included.
+    var amberDot: Bool { redCount == 0 && (amberCheck || items.contains { $0.severity == .orange }) }
     /// Tab badges (D6): red items only, by the page that owns them.
     var backupsBadge: Int {
         items.filter { $0.severity == .red && !$0.concerns.isDisjoint(with: NDR1.backupChecks) }.count
@@ -270,7 +273,8 @@ struct NDR1: Equatable, Sendable {
 
         return NDR1(pipeline: pipeline, headline: headline, headlineSymbol: symbol, headlineTone: tone, headlineDetail: detail,
                     showsProblemRows: rows, items: items, unconfirmedSince: unconfirmedSince, unconfirmedDetail: unconfirmedDetail,
-                    menuRows: menuRows(i, m, items: items, pipeline: pipeline), footerLeft: left, footerRight: right)
+                    menuRows: menuRows(i, m, items: items, pipeline: pipeline), footerLeft: left, footerRight: right,
+                    amberCheck: verdict?.checks.contains { $0.state == .amber } == true)
     }
 
     /// A destination's last backup: Drive's is its newest copy of either kind (measured ones only).

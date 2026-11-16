@@ -260,7 +260,7 @@ import SwiftUI
 
     /// The brain in its four states, real size and 4x, on a strip of the menu bar's colour.
     static func icons(name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
-        // R1.3 change 12 (L23): rest, one red, two red, amber ("Check soon"), catching up (resting), not confirmed.
+        // R1.3 change 12 with L47: rest, one red, two red, amber (a late copy), catching up (amber too), not confirmed.
         let images: [NSImage] = [BrainBarDesignFixture.Name.calm, .driveSignedOut, .twoFaults, .backupLate, .meaningBehind, .notConfirmed].map { name in
             let inputs = BrainBarDesignFixture.inputs(name)
             let model = NDModel.make(inputs)
