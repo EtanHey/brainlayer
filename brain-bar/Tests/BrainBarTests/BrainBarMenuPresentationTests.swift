@@ -140,7 +140,7 @@ final class BrainBarMenuPresentationTests: XCTestCase {
             }
             let fine = id == "S5" ? "Saving, search and upkeep are fine." : "Saving, backups and upkeep are fine."
             return .init(form: .calm, headline: "Check soon", count: 0, icon: .resting, rows:
-                [P.Row(kind: .headline, strings: ["Check soon"], mark: .wait), P.Row(kind: .separator)] + notices
+                [P.Row(kind: .headline, strings: ["Check soon"], mark: .notice), P.Row(kind: .separator)] + notices
                 + [P.Row(kind: .everythingElse, strings: [fine], mark: .ok)] + Array(rows.suffix(3)))
         }
         return .init(form: P.Form(rawValue: c["form"] as! String)!, headline: c["headline"] as! String,

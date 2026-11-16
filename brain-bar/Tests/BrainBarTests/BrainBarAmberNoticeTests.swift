@@ -122,6 +122,13 @@ final class BrainBarAmberNoticeTests: XCTestCase {
         XCTAssertEqual(rows.first { $0.state == .notice }?.strings.first, BrainBarMenuPresenter.Say.s06("2"))
     }
 
+    func testVisualNoticeHeadlineUsesNoticeMark() {
+        let p = BrainBarMenuPresenter.present(capture("backup_local", .amber))
+        XCTAssertEqual(p.headline, "Check soon")
+        XCTAssertEqual(p.rows.first { $0.kind == .headline }?.mark?.rawValue, "notice")
+        XCTAssertNotEqual(p.rows.first { $0.kind == .headline }?.mark, .wait)
+    }
+
     func testCountParityBoundaryForMergedRowsAndAppOnlyClocks() {
         var c = capture("backup_local", .red)
         c.verdict = .init(dot: .red, checks: c.verdict!.checks.map {

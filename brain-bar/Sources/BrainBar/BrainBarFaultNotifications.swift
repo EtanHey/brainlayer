@@ -213,7 +213,7 @@ final class BrainBarFaultNotifications {
                       !(key == "jsonl-retention" && message.hasPrefix("Drive prune interrupted")) else { continue }
                 let id = "job:" + key
                 // R31: a paired job cannot promote its amber check back into a fault banner.
-                if let pair = Self.pair(id), capture.verdict?.checks.contains(where: {
+                if let pair = Self.pair(id), BrainBarMenuPresenter.verdictIsFresh(capture), capture.verdict?.checks.contains(where: {
                     $0.state.uiKind == .notice && pair.cause == BrainBarMenuPresenter.checkNotificationCause($0.name)
                 }) == true, !faults.contains(where: { $0.pairingCauses.contains(pair.cause) }) { continue }
                 let cause = key == "drive-consent" ? "message:" + message : id

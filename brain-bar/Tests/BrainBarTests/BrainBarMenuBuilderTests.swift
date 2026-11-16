@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SwiftUI
 import Vision
 import XCTest
@@ -203,7 +204,11 @@ import XCTest
             let rows = presentation.rows.filter { $0.kind != .separator && !Self.isStandardRow($0) }
             for (row, item) in zip(rows, builder.build(presentation).items.filter { $0.view != nil }) {
                 let rep = try Self.render(BrainBarMenuRenderHarness.rowView(item, metrics: metrics))
-                if let mark = row.mark, mark != .checkmark {
+                if row.mark == .notice {
+                    XCTAssertGreaterThan(Self.ink(rep, x: 16...42), 20, "Notice mark is a solid amber disc")
+                    XCTAssertEqual(Self.white(rep, x: 16...42), 0, "Notice has no loading glyph")
+                    seen.insert("notice")
+                } else if let mark = row.mark, mark != .checkmark {
                     XCTAssertGreaterThan(Self.white(rep, x: 16...42), 12, "\(id): the \(mark) mark draws its symbol")
                     seen.insert(mark.rawValue)
                 } else if row.mark == .checkmark || (row.mark == nil && !row.spinner && row.state == .cantTell && row.kind != .headlineDetail) {
@@ -212,7 +217,7 @@ import XCTest
                 }
             }
         }
-        XCTAssertEqual(seen, ["ok", "busy", "wait", "marked", "alert-circle", "checkmark", "ellipsis"])
+        XCTAssertEqual(seen, ["ok", "busy", "wait", "notice", "marked", "alert-circle", "checkmark", "ellipsis"])
     }
 
     /// Codex round 2 (R2-B2): the line-breaking transform keeps every character; it only turns a space into U+00A0.
@@ -227,6 +232,54 @@ import XCTest
         XCTAssertEqual(BrainBarMenuRowView.keepingNumbersWithUnits("is 21 hours old."), "is 21\u{00A0}hours old.")
         XCTAssertEqual(BrainBarMenuRowView.keepingNumbersWithUnits("40% done"), "40%\u{00A0}done")
         XCTAssertEqual(BrainBarMenuRowView.accessibilityName(of: .init(kind: .copyReport, label: "Open 2 folders")), "Open 2 folders")
+    }
+
+    func testVisualNoticeContrastMeetsMinimums() {
+        func luminance(_ c: NSColor) -> Double {
+            let c = c.usingColorSpace(.sRGB)!
+            func linear(_ v: CGFloat) -> Double { let v = Double(v); return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+            return 0.2126 * linear(c.redComponent) + 0.7152 * linear(c.greenComponent) + 0.0722 * linear(c.blueComponent)
+        }
+        for dark in [false, true] {
+            let bg = NSColor(srgbRed: dark ? 0.122 : 0.925, green: dark ? 0.122 : 0.925, blue: dark ? 0.129 : 0.933, alpha: 1)
+            func contrast(_ c: NSColor) -> Double { let a = luminance(c), b = luminance(bg); return (max(a, b) + 0.05) / (min(a, b) + 0.05) }
+            XCTAssertGreaterThanOrEqual(contrast(BrainBarMenuPalette.statusText(dark: dark)), 4.5)
+            XCTAssertGreaterThanOrEqual(contrast(BrainBarMenuPalette.notice(dark: dark)), 3)
+        }
+    }
+
+    func testVisualNoticeTextMatchesStatusTextInBothAppearances() throws {
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            func render(_ state: P.RowState) throws -> NSBitmapImageRep {
+                let row = P.Row(kind: .statusLine, strings: ["Saving, search and upkeep are fine."], state: state)
+                let view = NSHostingView(rootView: BrainBarMenuRowView(row: row, previous: nil, next: nil,
+                    accessibility: .init(reduceMotion: true), focus: BrainBarMenuRowFocus()) { _ in })
+                view.appearance = NSAppearance(named: appearance)
+                view.frame = NSRect(origin: .zero, size: view.fittingSize)
+                view.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+                return try BrainBarMenuRenderHarness.rowBitmap(view)
+            }
+            func pixels(_ rep: NSBitmapImageRep, _ x: Range<Int>) -> (String, String) {
+                var data = Data(), colors: [String: Int] = [:]
+                for y in 0..<rep.pixelsHigh { for x in x {
+                    let c = rep.colorAt(x: x, y: y)!.usingColorSpace(.sRGB)!
+                    let rgba = [c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent].map { UInt8(max(0, min(255, ($0 * 255).rounded()))) }
+                    data.append(contentsOf: rgba)
+                    if c.alphaComponent > 0.25 {
+                        let key = rgba.prefix(3).map(String.init).joined(separator: ",")
+                        colors[key, default: 0] += 1
+                    }
+                } }
+                return (SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), colors.max { $0.value < $1.value }?.key ?? "empty")
+            }
+            let notice = try render(.notice), status = try render(.cantTell)
+            XCTAssertEqual(notice.pixelsHigh, status.pixelsHigh)
+            let text = pixels(notice, 104..<648), other = pixels(status, 104..<648)
+            XCTAssertEqual(text.0, other.0, "Notice and status text must draw identically in \(appearance)")
+            XCTAssertNotEqual(text.1, "empty")
+            XCTAssertNotEqual(text.1, pixels(notice, 32..<84).1, "Text must not use the amber mark color")
+        }
     }
 
     /// Nothing is wired: every item only records what it asks for.

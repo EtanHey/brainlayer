@@ -61,13 +61,16 @@ enum BrainBarMenuPresenter {
     }
     private static let handoff = [Say.cantFix.text, Say.giveReport.text]
 
+    /// One freshness boundary for presentation and notification suppression; stale amber is never current evidence.
+    static func verdictIsFresh(_ c: Capture) -> Bool { c.verdict != nil && (0...900).contains(c.verdictAwakeAgeS) }
+
     /// The only entry point. It is total over its capture type: no input traps, and the guard runs last on every path.
     static func present(_ c: Capture) -> P { finalGuard(c, derived(c)) }
 
     /// What the presenter says before its guard. Internal only as the seam for the property test (round 1 of #1790): every
     /// sentence it says is registered for `c`, which `present`'s output alone cannot show, as the guard drops one that is not.
     static func derived(_ c: Capture) -> P {
-        if let v = c.verdict, (0...900).contains(c.verdictAwakeAgeS) {
+        if let v = c.verdict, verdictIsFresh(c) {
             let lines = derive(c, v)
             if !c.isChecking, !c.wakeCatchUpPending { return assemble(c, lines, allGood: allGoodDetail(c, v)) }
             // R19: with a fresh verdict, checking never calms; every Needs-you row stays (X01: a decodable verdict ends it).
@@ -103,7 +106,7 @@ enum BrainBarMenuPresenter {
     /// Recovery depends only on the thing being recovered, never on another thing's missing input.
     static func notificationThingIsMeasured(_ id: String, _ c: Capture) -> Bool {
         guard let t = Thing.allCases.first(where: { String(describing: $0) == id }),
-              let v = c.verdict, v.dot != .unknown, (0...900).contains(c.verdictAwakeAgeS),
+              let v = c.verdict, v.dot != .unknown, verdictIsFresh(c),
               !c.isChecking, !c.wakeCatchUpPending else { return false }
         guard checksOf[t]!.allSatisfy({ name in
             let checks = v.checks.filter { $0.name == name }
@@ -122,7 +125,7 @@ enum BrainBarMenuPresenter {
 
     /// Menu merge keys remain untouched; notification episodes group its rows by thing alone.
     static func notificationFaults(_ c: Capture) -> [NotificationFault] {
-        let fresh: Bool = c.verdict != nil && (0...900).contains(c.verdictAwakeAgeS)
+        let fresh: Bool = verdictIsFresh(c)
         let lines: [Line] = fresh ? derive(c, c.verdict!) : staleNeeds(c)
         var merged: [Line] = mergedNeeds(lines)
         let rows: [P.Row] = present(c).rows.filter { $0.kind == .needsYou }
@@ -436,7 +439,7 @@ enum BrainBarMenuPresenter {
         let mark: P.Mark
         let folded = behind.count == 1 && behind[0].headline != nil ? behind[0] : nil
         switch behind.count {
-        case _ where !notices.isEmpty: (headline, mark) = (Say.checkSoon.text, .wait)
+        case _ where !notices.isEmpty: (headline, mark) = (Say.checkSoon.text, .notice)
         case 1 where folded != nil: (headline, mark) = (folded?.headline ?? "", .busy)
         case 2: (headline, mark) = (Say.catchingTwo(Say.joined(behind.compactMap { nouns[$0.thing] })), .busy)
         case 3...: (headline, mark) = (Say.catchingFew.text, .busy)
@@ -613,7 +616,7 @@ enum BrainBarMenuPresenter {
 
     /// F07's exact-words sentence needs search itself proven, beyond the coverage figure (stricter than the truth table).
     static func searchProven(_ c: Capture) -> Bool {
-        guard let v = c.verdict, (0...900).contains(c.verdictAwakeAgeS), !c.isChecking, !c.wakeCatchUpPending else { return false }
+        guard let v = c.verdict, verdictIsFresh(c), !c.isChecking, !c.wakeCatchUpPending else { return false }
         return allGreen(v, ["monitor", "search"])
     }
 
@@ -624,7 +627,7 @@ enum BrainBarMenuPresenter {
     /// A thing is proven fine only under a fresh verdict, with no checking flag, the monitor green, and all of its own
     /// checks present and green (plus, for saving, a clean watcher file; for backups, a measured, sane observation).
     static func provenFine(_ c: Capture) -> Set<Thing> {
-        guard let v = c.verdict, (0...900).contains(c.verdictAwakeAgeS), !c.isChecking, !c.wakeCatchUpPending,
+        guard let v = c.verdict, verdictIsFresh(c), !c.isChecking, !c.wakeCatchUpPending,
               allGreen(v, ["monitor"]) else { return [] }
         var fine = Set(four.filter { allGreen(v, checksOf[$0]!) })
         let w = c.watcher

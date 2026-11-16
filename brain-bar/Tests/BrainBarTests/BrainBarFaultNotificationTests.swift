@@ -113,6 +113,17 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertTrue(center.posts.isEmpty)
     }
 
+    func testStaleAmberVerdictDoesNotSuppressCurrentPairedJob() async {
+        for (age, expected) in [(901.0, 1), (100.0, 0)] {
+            var c = capture("backup_local", state: .amber)
+            c.verdictAwakeAgeS = age
+            let center = Center()
+            await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c,
+                jobAlerts: ["backup-daily": "Invented current backup failure"])
+            XCTAssertEqual(center.posts.count, expected, "verdict awake age \(age)")
+        }
+    }
+
     func testLagBoundaryAndUncertainEvidence() {
         for age in [300.0, 1800.0] {
             XCTAssertEqual(BrainBarMenuPresenter.present(lagCapture(age: age)).form, .calm)
