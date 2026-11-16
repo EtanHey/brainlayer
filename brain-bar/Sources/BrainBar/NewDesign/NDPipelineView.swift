@@ -193,7 +193,8 @@ struct NDPipelineChart: View {
             Canvas { ctx, _ in Self.draw(ctx, state: state, memories: memories, hovered: hovered) }
                 .frame(width: NDPipelineLayout.size.width, height: NDPipelineLayout.size.height)
             ForEach(NDStation.allCases.filter { $0 != .memory }) { station in
-                NDStationButton(station: station, interactive: interactive, hovered: $hovered, popover: { popover(station) })
+                NDStationButton(station: station, interactive: interactive, hovered: $hovered,
+                                fault: state.faultStations.contains(station) && !state.allUnconfirmed, popover: { popover(station) })
                     .position(NDPipelineLayout.point(station))
             }
             NDStationButton(station: .memory, interactive: interactive, hovered: $hovered, hubSize: NDPipelineLayout.hub.size,
@@ -323,7 +324,12 @@ struct NDPipelineChart: View {
         put(ctx, text(memories ?? NDModel.Number.unknown.value, size: 11, color: ND.t2, mono: true), x: hub.midX, baseline: hub.minY + 99,
             size: 11, anchor: .middle)
         // Stations, their names (t1) and status lines.
-        let faded = state.allUnconfirmed ? 0.5 : 1
+        // D7.4: stale values stay readable (secondary text, not faded); "last known" says it once, above the stations.
+        let faded = 1.0
+        if state.allUnconfirmed {
+            put(ctx, text(Say.lastKnown, size: 11, color: ND.t3, weight: .medium), x: L.point(.read).x, baseline: L.yTop - 22,
+                size: 11, anchor: .middle)
+        }
         for station in NDStation.allCases where station != .memory {
             let p = L.point(station)
             let fault = state.faultStations.contains(station) && !state.allUnconfirmed
@@ -404,19 +410,24 @@ struct NDPipelineChart: View {
     }
 }
 
-/// A station's hit area (change 15): pointer over draws a 1.5 pt `t2` ring at r 19.5, outside the 1.5 pt red fault ring
-/// (r 16.5), and the station's fill becomes `raised`; keyboard focus is the system's ring. A click opens the details in
-/// a popover on the side with free space (change 16): top-lane stations above, bottom-lane stations and Jobs below.
+/// A station's hit area (change 15, D7.6): pointer over draws one 1.5 pt `t2` ring 3 pt out (r 16.5) and the fill becomes
+/// `raised`; a red station keeps its fault ring as its one ring; keyboard focus is the system's ring. A click opens the details in
+/// a popover below the station (D4).
 struct NDStationButton: View {
     let station: NDStation
     var interactive = true
     @Binding var hovered: NDStation?
+    /// A red station already has its ring: hover adds none (D7.6), only the raised fill.
+    var fault = false
     var hubSize: CGSize? = nil
     var popover: () -> AnyView?
     @State private var hovering = false
     @State private var open = false
 
-    private var opensAbove: Bool { [.read, .mac, .drive].contains(station) }
+    /// D4 (real screen, round 1): every popover opens below its station, so none covers the Activity chart or the upper
+    /// route; below the bottom lane there is only the footer and the window edge. Only the hub's covers a neighbour (Jobs,
+    /// directly under it) while it is open: every edge of the hub has a pipeline neighbour, and below costs least.
+    static func arrowEdge(_ station: NDStation) -> Edge { .bottom }
 
     var body: some View {
         let size = hubSize ?? CGSize(width: 40, height: 40)
@@ -427,7 +438,7 @@ struct NDStationButton: View {
                         RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(ND.t2, lineWidth: 1.5)
                             .frame(width: hubSize.width + 7, height: hubSize.height + 7)
                     } else {
-                        Circle().stroke(ND.t2, lineWidth: 1.5).frame(width: 39, height: 39)
+                        if !fault { Circle().stroke(ND.t2, lineWidth: 1.5).frame(width: 33, height: 33) }
                     }
                 }
                 Color.clear.frame(width: size.width, height: size.height).contentShape(Rectangle())
@@ -438,7 +449,7 @@ struct NDStationButton: View {
             hovering = interactive && inside
             if interactive { hovered = inside ? station : (hovered == station ? nil : hovered) }
         }
-        .popover(isPresented: $open, arrowEdge: opensAbove ? .top : .bottom) {
+        .popover(isPresented: $open, arrowEdge: Self.arrowEdge(station)) {
             popover() ?? AnyView(EmptyView())
         }
         .accessibilityLabel(NDPipelineLayout.name(station))

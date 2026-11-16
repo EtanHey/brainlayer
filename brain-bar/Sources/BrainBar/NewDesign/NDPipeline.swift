@@ -140,6 +140,32 @@ struct NDPipelineState: Equatable, Sendable {
 
     static let calm = NDPipelineState()
 
+    /// How a stage reads on the Overview: flowing, not confirmed, or late / broken (with its status words).
+    enum Condition: Equatable, Sendable {
+        case fine
+        case notConfirmed
+        case issue(String?, NDSeverity)
+    }
+
+    /// The pipes that arrive at a stage, or (for Search and Jobs) leave it where their break is drawn at the stage.
+    static let pipesAt: [NDStation: [NDPipe]] = [
+        .read: [.junctionRead, .agentClaude, .agentCodex, .agentCursor, .agentGemini], .queue: [.inSaves],
+        .memory: [.readMemory, .queueMemory], .mac: [.memoryMac], .drive: [.macDrive, .conversationsCopy],
+        .meaning: [.memoryMeaning], .search: [.meaningSearch, .out], .jobs: [.jobsMemory],
+    ]
+
+    /// D2: the one rule both the Overview's stations and the dropdown's rows follow.
+    func condition(_ station: NDStation) -> Condition {
+        if allUnconfirmed { return .notConfirmed }
+        let pipes = Self.pipesAt[station] ?? []
+        if faultStations.contains(station) { return .issue(status[station]?.text, .red) }
+        if let sev = status[station]?.severity { return .issue(status[station]?.text, sev) }
+        let broken = pipes.compactMap { breaks[$0]?.severity } + pipes.compactMap { quiet[$0] }
+        if let worst = broken.contains(.red) ? NDSeverity.red : broken.first { return .issue(nil, worst) }
+        if pipes.contains(where: unconfirmed.contains) { return .notConfirmed }
+        return .fine
+    }
+
     func isBroken(_ pipe: NDPipe) -> Bool { breaks[pipe] != nil || stationPipes.contains(pipe) }
 }
 
@@ -188,7 +214,9 @@ extension NDPipelineState {
             let agents = agentCodes(ingest)
             if agents.isEmpty {
                 s.breaks[.junctionRead] = Break(side: .target, severity: sev)
-                s.status[.read] = Status(text: Say.notBeingRead, severity: sev)
+                // D6: amber is late, not stopped: the last-read time in amber; red says it is not being read.
+                s.status[.read] = sev == .red ? Status(text: Say.notBeingRead, severity: .red)
+                    : s.status[.read].map { Status(text: $0.text, severity: .orange) }
             } else {
                 for family in agents {
                     s.breaks[NDPipe.agent(family)] = Break(side: .source, severity: sev)
@@ -263,7 +291,7 @@ extension NDPipelineState {
         func age(_ name: String) -> Double? { checks.first { $0.name == name }?.ageS.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } }
         var out: [NDStation: Status] = [:]
         if let heartbeat = i.watcherHeartbeatAgeS, heartbeat >= 0 {
-            out[.read] = Status(text: Say.ago(NDFormat.ageText(heartbeat)))
+            out[.read] = Status(text: Say.lastRead(NDFormat.ageText(heartbeat)))
         }
         if let waiting = i.savesWaiting {
             if waiting == 0 {
@@ -272,13 +300,13 @@ extension NDPipelineState {
                 out[.queue] = Status(text: Say.waiting(NDFormat.ageText(max(0, c.now.timeIntervalSince(queued)))))
             }
         }
-        if let mac = age("backup_local") { out[.mac] = Status(text: Say.ago(NDFormat.ageText(mac))) }
+        if let mac = age("backup_local") { out[.mac] = Status(text: Say.lastBackup(NDFormat.ageText(mac))) }
         let drive = [age("backup_offsite"), age("transcripts")].compactMap { $0 }
-        if drive.count == 2, let older = drive.max() { out[.drive] = Status(text: Say.ago(NDFormat.ageText(older))) }
+        if drive.count == 2, let older = drive.max() { out[.drive] = Status(text: Say.lastBackup(NDFormat.ageText(older))) }
         if let share = i.searchable { out[.meaning] = Status(text: Say.percentReady(Int((share * 100).rounded(.down)))) }
         if checks.first(where: { $0.name == "search" })?.state == .green { out[.search] = Status(text: Say.working) }
         if case let .ran(at) = i.nightlyLastRun {
-            out[.jobs] = Status(text: Say.nightlyAgo(NDFormat.ageText(max(0, c.now.timeIntervalSince(at)))))
+            out[.jobs] = Status(text: Say.lastCheckUp(NDFormat.ageText(max(0, c.now.timeIntervalSince(at)))))
         }
         return out
     }

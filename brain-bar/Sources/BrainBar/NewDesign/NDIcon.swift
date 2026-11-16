@@ -5,6 +5,20 @@ import AppKit
 /// it at draw time: white on a dark bar, black on a light one; review fix 8), and no reading yet (the resting glyph,
 /// dimmed by the caller to 45 %). No motion in the menu bar.
 @MainActor enum NDIcon {
+    /// D6 (L20 rewritten): the fault brain and its count are for red items only; an amber (late) state keeps the resting
+    /// brain, and the icon agrees with the pipeline (a red station iff the fault icon).
+    static func image(for model: NDModel, _ r1: NDR1) -> NSImage {
+        image(for: marked(model, r1))
+    }
+
+    static func marked(_ model: NDModel, _ r1: NDR1) -> NDModel {
+        var m = model
+        let red = r1.redCount
+        m.icon = red > 0 ? .marked : (model.icon == .marked ? .resting : model.icon)
+        m.count = red
+        return m
+    }
+
     static func image(for model: NDModel) -> NSImage {
         let presentation = BrainBarMenuPresentation(form: model.icon == .marked ? .needs : .calm, headline: model.headline,
                                                     count: model.count, icon: model.icon, rows: [])
@@ -23,6 +37,13 @@ import AppKit
         image.isTemplate = false
         image.accessibilityDescription = "BrainBar — " + model.headline
         return image
+    }
+
+    /// D3 (real screen, round 1; comp 01's "no reading yet" glyph): the resting brain at 45 % whenever nothing is
+    /// confirmed, before the first verdict and whenever the checker is stale (every pipe "not confirmed"), so the icon
+    /// is never calmer than the checks (L20). A fault brain stays a fault brain.
+    static func dimmed(_ model: NDModel, _ r1: NDR1) -> Bool {
+        noReadingYet(model) || (model.icon != .marked && r1.pipeline.allUnconfirmed)
     }
 
     /// "No reading yet": no verdict has been read since launch. It lasts seconds, before the first verdict.

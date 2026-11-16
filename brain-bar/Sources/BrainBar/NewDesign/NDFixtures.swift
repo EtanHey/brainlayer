@@ -67,8 +67,12 @@ enum BrainBarDesignFixture {
     /// agree with the menu-bar clock and with the ages beside them (review blocker 3: a frozen 08:00 read as 12 h off).
     static let now: Date = makeNow(capturing: requested != nil, wall: Date())
 
-    static func makeNow(capturing: Bool, wall: Date) -> Date {
-        capturing ? Date(timeIntervalSinceReferenceDate: (wall.timeIntervalSinceReferenceDate / 60).rounded(.down) * 60) : fixedNow
+    static func makeNow(capturing: Bool, wall: Date,
+                        pinned: String? = ProcessInfo.processInfo.environment["BRAINBAR_DESIGN_NOW"]) -> Date {
+        guard capturing else { return fixedNow }
+        // D7.7: `BRAINBAR_DESIGN_NOW=<ISO 8601>` pins every launch of a capture pass to one moment.
+        let start = pinned.flatMap { ISO8601DateFormatter().date(from: $0) } ?? wall
+        return Date(timeIntervalSinceReferenceDate: (start.timeIntervalSinceReferenceDate / 60).rounded(.down) * 60)
     }
     static let fixedNow: Date = ISO8601DateFormatter().date(from: "2026-11-15T08:00:00+02:00")!
     static var zone: TimeZone { requested == nil ? TimeZone(secondsFromGMT: 7200)! : .current }

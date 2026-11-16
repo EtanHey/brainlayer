@@ -167,15 +167,17 @@ final class NDMenuRowHost: NSView {
 struct NDMenuHeadline: View {
     let r1: NDR1
 
+    /// D6: "needs you" and its count are for red items only; amber alone says what is late, as the window does.
     static func text(_ r1: NDR1) -> String {
-        if r1.items.isEmpty { return r1.headline }
-        return r1.items.count == 1 ? BrainBarMenuPresenter.Say.countOne.text : Say.thingsNeedYou(r1.items.count)
+        let red = r1.redCount
+        if red == 0 { return r1.headline }
+        return red == 1 ? BrainBarMenuPresenter.Say.countOne.text : Say.thingsNeedYou(red)
     }
 
     var body: some View {
         HStack(spacing: 8) {
             if !r1.items.isEmpty {
-                let red = r1.items.contains { $0.severity == .red }
+                let red = r1.redCount > 0
                 Image(systemName: red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.system(size: 15)).foregroundStyle(red ? ND.red : ND.orange)
             } else if let symbol = r1.headlineSymbol {
@@ -326,6 +328,7 @@ struct NDWaitingSwap<Button: View, Line: View>: View {
     var body: some View {
         ZStack(alignment: alignment) {
             button
+                .environment(\.ndHeldPressed, waiting)
                 .opacity(waiting ? 0 : 1)
                 .scaleEffect(waiting ? 0.97 : 1)
                 .animation(reduceMotion ? nil : NDMotion.buttonLeaves, value: waiting)
@@ -336,6 +339,15 @@ struct NDWaitingSwap<Button: View, Line: View>: View {
                 .animation(reduceMotion ? nil : waiting ? NDMotion.waitingEnters : NDMotion.buttonLeaves, value: waiting)
                 .accessibilityHidden(!waiting)
         }
+    }
+}
+
+private struct NDHeldPressedKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    /// A button that is leaving because its action started keeps its pressed look (D8.2).
+    var ndHeldPressed: Bool {
+        get { self[NDHeldPressedKey.self] }
+        set { self[NDHeldPressedKey.self] = newValue }
     }
 }
 

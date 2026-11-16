@@ -132,10 +132,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         shownDesign = .new
         guard !isMenuTracking, let button = statusItemForTesting.button else { return }
         let model = newDesignStore.model
-        button.image = NDIcon.image(for: model)
-        button.alphaValue = NDIcon.noReadingYet(model) ? 0.45 : 1
-        button.setAccessibilityLabel("BrainBar — " + model.headline)
-        button.toolTip = model.headline
+        let r1 = newDesignStore.r1
+        button.image = NDIcon.image(for: model, r1)
+        button.alphaValue = NDIcon.dimmed(model, r1) ? 0.45 : 1
+        button.setAccessibilityLabel("BrainBar — " + r1.headline)
+        button.toolTip = r1.headline
     }
 
     /// Back to classic: forget what the new design drew, so the classic path renders as it always has.

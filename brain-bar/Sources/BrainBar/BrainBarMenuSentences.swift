@@ -595,6 +595,16 @@ extension BrainBarMenuPresenter {
             "Nothing is known to be broken, but nothing has been checked for \(age)."
         }
         static let waitingForNextCheck = "Waiting for the next check"
+        // Real-screen round 1 (D6, D7; lead rulings L16/L20 rewritten).
+        static let meaningCatchingUp = "Search by meaning is catching up"
+        static func lastRead(_ age: String) -> String { "last read \(age) ago" }
+        static func lastBackup(_ age: String) -> String { "last backup \(age) ago" }
+        static func lastCheckUp(_ age: String) -> String { "last check-up \(age) ago" }
+        static func driveAgo(_ age: String) -> String { "Drive \(age) ago" }
+        static func macAgo(_ age: String) -> String { "Mac \(age) ago" }
+        static let lastKnown = "last known"
+        /// D8.3: each half's scale, said as a scale ("up to 4/min"), not a bare number that reads like an axis floor.
+        static func upTo(_ value: String, minutes: Int) -> String { minutes == 1 ? "up to \(value)/min" : "up to \(value)/\(minutes) min" }
         static let lateIfLeftOfLine = "late if the newest copy is left of this line"
         static func more(_ n: Int) -> String { "\(n) more" }
         static func plusMore(_ n: Int) -> String { "+\(n) more" }

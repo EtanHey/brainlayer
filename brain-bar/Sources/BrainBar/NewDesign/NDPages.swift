@@ -101,8 +101,9 @@ struct NDBackupsPage: View {
         let r1 = store.r1
         let lanes = lanes(m)
         let fault = r1.items.first { !$0.concerns.isDisjoint(with: Self.pageChecks) }
-        let failed = lanes.contains { $0.events.contains { $0.kind == .fail } }
-        let stalled = lanes.contains { $0.stalledFrom != nil }
+        let legend = Self.legend(lanes)
+        let failed = legend.contains(Say.failed)
+        let stalled = legend.contains(Say.notUploadingSince)
         VStack(alignment: .leading, spacing: 0) {
             NDPageTop(title: Say.backups, detail: fault == nil ? Say.backupsDetail : nil)
             if let fault { NDPageFault(store: store, item: fault).padding(.top, 14) }
@@ -136,6 +137,15 @@ struct NDBackupsPage: View {
             ND.hair.frame(height: 0.5).padding(.top, 20)
             details(m).padding(.top, 14)
         }
+    }
+
+    /// The legend's words: always copied, next run and the late line; "failed" whenever a red dot is drawn (so a past
+    /// failure under "All good" is said in words), and "not uploading since" whenever a red dashed line is.
+    static func legend(_ lanes: [Lane]) -> [String] {
+        var words = [Say.copied, Say.nextRun, Say.lateIfLeftOfLine]
+        if lanes.contains(where: { $0.events.contains { $0.kind == .fail } }) { words.append(Say.failed) }
+        if lanes.contains(where: { $0.stalledFrom != nil }) { words.append(Say.notUploadingSince) }
+        return words
     }
 
     /// "a copy older than this line is late": one line through every lane, at 36 h.
