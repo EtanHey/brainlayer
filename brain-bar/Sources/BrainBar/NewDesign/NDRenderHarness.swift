@@ -46,7 +46,7 @@ import SwiftUI
                 written.append(try menu(store, name: "menu-\(name.rawValue)-\(suffix)", appearance: appearance, in: directory))
             }
             for page in [NDPage.backups, .jobs] {
-                for name in [BrainBarDesignFixture.Name.calm, .severalFaults, .checking, .cantTell] {
+                for name in [BrainBarDesignFixture.Name.calm, .driveSignedOut, .nightlyFailing, .twoFaults, .notConfirmed] {
                     let store = NDStore(fixture: BrainBarDesignFixture.inputs(name), page: page)
                     written.append(try window(store, name: "window-\(name.rawValue)-\(page.rawValue)-\(suffix)", appearance: appearance, in: directory))
                 }
@@ -57,8 +57,10 @@ import SwiftUI
         return written
     }
 
-    static func window(_ store: NDStore, name: String, appearance: NSAppearance.Name, size: NSSize = NDGrid.windowSize,
+    static func window(_ store: NDStore, name: String, appearance: NSAppearance.Name, size: NSSize? = nil,
                        in directory: URL) throws -> String {
+        // L17: each page at its own height.
+        let size = size ?? NSSize(width: NDGrid.windowWidth, height: NDGrid.windowHeight(store.page))
         let view = NDWindowRoot(store: store, drawsTrafficLights: true).frame(width: size.width, height: size.height)
         try write(host(view, size: size, appearance: appearance), name: name, in: directory)
         return name
@@ -70,7 +72,7 @@ import SwiftUI
         // title the system draws there.
         let view = NDSettingsView(store: store)
             .overlay(alignment: .top) {
-                Text("BrainBar Settings").font(.system(size: 13, weight: .semibold)).foregroundStyle(ND.ink2)
+                Text(BrainBarMenuPresenter.SurfaceSay.settingsTitle).font(.system(size: 13, weight: .semibold)).foregroundStyle(ND.t2)
                     .frame(height: NDSettingsWindowController.titleBar)
             }
         let height = NDSettingsWindowController.contentHeight
@@ -81,7 +83,7 @@ import SwiftUI
 
     /// The brain in its four states, real size and 4x, on a strip of the menu bar's colour.
     static func icons(name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
-        let models = [BrainBarDesignFixture.Name.calm, .oneFault, .severalFaults].map { NDModel.make(BrainBarDesignFixture.inputs($0)) }
+        let models = [BrainBarDesignFixture.Name.calm, .driveSignedOut, .twoFaults].map { NDModel.make(BrainBarDesignFixture.inputs($0)) }
         var unread = BrainBarDesignFixture.inputs(.calm)
         unread.capture.verdict = nil
         unread.capture.isChecking = true
@@ -204,7 +206,7 @@ import SwiftUI
         override func draw(_ dirtyRect: NSRect) {
             let font = NSFont.menuFont(ofSize: 0)
             let title = NSAttributedString(string: item.title, attributes: [.font: font, .foregroundColor: NSColor.labelColor])
-            let key = NSAttributedString(string: "⌘" + item.keyEquivalent.uppercased(),
+            let key = NSAttributedString(string: item.keyEquivalent.isEmpty ? "" : "⌘" + item.keyEquivalent.uppercased(),
                                          attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor])
             let y = (bounds.height - title.size().height) / 2
             title.draw(at: NSPoint(x: NDGrid.menuInset, y: y))

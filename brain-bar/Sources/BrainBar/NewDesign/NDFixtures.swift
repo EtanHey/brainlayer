@@ -7,23 +7,25 @@ import Foundation
 enum BrainBarDesignFixture {
     static let environmentKey = "BRAINBAR_DESIGN_FIXTURE"
 
+    /// The states the design is judged in (DESIGN-SPEC-R1 § 3.2's seven, comp 03's two faults, the Reconnect waiting
+    /// line, and a failed upload on Backups). Earlier names: checking → not-confirmed, one-fault → drive-signed-out,
+    /// several-faults → two-faults, jobs-failed-streak → nightly-failing; cant-tell is gone.
     enum Name: String, CaseIterable, Sendable {
         case calm
-        /// The verdict is 18 minutes old: nothing it said can be confirmed ("Checking on your memory…").
-        case checking
-        /// A fresh verdict with checks it cannot tell yet ("Can't confirm backups yet").
-        case cantTell = "cant-tell"
-        case oneFault = "one-fault"
+        case agentNotRead = "agent-not-read"
+        case driveSignedOut = "drive-signed-out"
+        case savesStuck = "saves-stuck"
+        case meaningBehind = "meaning-behind"
+        case nightlyFailing = "nightly-failing"
+        case notConfirmed = "not-confirmed"
+        case twoFaults = "two-faults"
         case reconnectWaiting = "reconnect-waiting"
-        case severalFaults = "several-faults"
         case backupsFailedUpload = "backups-failed-upload"
-        case jobsFailedStreak = "jobs-failed-streak"
 
         /// The window page the fixture opens on.
         var page: NDPage {
             switch self {
             case .backupsFailedUpload: .backups
-            case .jobsFailedStreak: .jobs
             default: .overview
             }
         }
@@ -109,45 +111,55 @@ enum BrainBarDesignFixture {
         switch name {
         case .calm:
             break
-        case .cantTell:
-            var checks = calmChecks()
-            checks = replacing(checks, check("backup_offsite", .unknown))
-            checks = replacing(checks, check("search", .unknown))
-            checks = replacing(checks, check("stores", .unknown))
-            i.capture = capture(checks, dot: .amber)
-        case .checking:
-            i.capture = capture(calmChecks(), age: 18 * 60)
-        case .oneFault, .reconnectWaiting:
+        case .agentNotRead:
+            var ingest = check("ingest", .red, age: 48, limit: 900)
+            ingest.contextCodes = ["growth_not_indexed:cursor"]
+            i.capture = capture(replacing(calmChecks(), ingest), dot: .red)
+        case .driveSignedOut, .reconnectWaiting:
             i.capture = capture(replacing(calmChecks(), check("drive_auth", .red)), dot: .red)
             i.capture.driveAuthModel = .invalid
-            i.capture = withDriveAge(i.capture, hours: 21)
+            i.capture = withDriveAge(i.capture, database: 27, conversations: 28)
             i.driveReconnecting = name == .reconnectWaiting
             i.backupHistory = history(driveStalledAfterDays: 1)
-        case .severalFaults:
-            i.capture = capture(replacing(calmChecks(), check("drive_auth", .red)), dot: .red)
-            i.capture.driveAuthModel = .invalid
-            i.capture.maintenanceNightFailures = 3
-            i.capture = withDriveAge(i.capture, hours: 21)
-            i.backupHistory = history(driveStalledAfterDays: 1)
-            i.nightlyLastRun = .ran(now.addingTimeInterval(-3 * 86_400 - 4 * 3600))
-        case .backupsFailedUpload:
-            i.backupHistory = history(failedDriveDayAgo: 3)
-        case .jobsFailedStreak:
+        case .savesStuck:
+            i.capture = capture(replacing(calmChecks(), check("stores", .red, age: 2 * 3600, limit: 1800)), dot: .red)
+            i.savesWaiting = 38
+            i.oldestSaveQueuedAt = now.addingTimeInterval(-2 * 3600)
+        case .meaningBehind:
+            i.capture = capture(replacing(calmChecks(), check("embedding", .amber, age: 2 * 3600, limit: 3600)), dot: .amber)
+        case .nightlyFailing:
             i.capture.maintenanceNightFailures = 3
             i.nightlyLastRun = .ran(now.addingTimeInterval(-3 * 86_400 - 4 * 3600))
             i.jobs = jobs(nightlyFailing: true)
+        case .notConfirmed:
+            i.capture = capture(calmChecks(), age: 2 * 3600)
+        case .twoFaults:
+            i.capture = capture(replacing(calmChecks(), check("drive_auth", .red)), dot: .red)
+            i.capture.driveAuthModel = .invalid
+            i.capture.maintenanceNightFailures = 3
+            i.capture = withDriveAge(i.capture, database: 27, conversations: 28)
+            i.backupHistory = history(driveStalledAfterDays: 1)
+            i.nightlyLastRun = .ran(now.addingTimeInterval(-3 * 86_400 - 4 * 3600))
+            i.jobs = jobs(nightlyFailing: true)
+        case .backupsFailedUpload:
+            i.backupHistory = history(failedDriveDayAgo: 3)
         }
         return i
     }
 
-    private static func withDriveAge(_ c: BrainBarMenuCapture, hours: Double) -> BrainBarMenuCapture {
+    private static func withDriveAge(_ c: BrainBarMenuCapture, database: Double, conversations: Double) -> BrainBarMenuCapture {
         var c = c
         let checks = (c.verdict?.checks ?? []).map { k -> BrainBarHealthVerdict.Check in
-            ["backup_offsite", "transcripts"].contains(k.name) ? check(k.name, age: hours * 3600, limit: 36 * 3600) : k
+            switch k.name {
+            case "backup_offsite": check(k.name, age: database * 3600, limit: 36 * 3600)
+            case "transcripts": check(k.name, age: conversations * 3600, limit: 36 * 3600)
+            default: k
+            }
         }
         c.verdict = BrainBarHealthVerdict(dot: c.verdict?.dot ?? .red, checks: checks, notes: [], evaluatedAt: c.verdict?.evaluatedAt ?? now)
         return c
     }
+
 
     /// Everything else a calm moment holds: the numbers on the comps, invented.
     static func base() -> NDInputs {
@@ -205,8 +217,8 @@ enum BrainBarDesignFixture {
         }
         let stalled = driveStalledAfterDays != nil
         return .read(NDBackupLanes(
-            local: nights(newestHoursAgo: 4), drive: nights(newestHoursAgo: stalled ? 21 : 3, fail: failedDriveDayAgo),
-            conversations: nights(newestHoursAgo: stalled ? 21 : 4), integrity: nights(newestHoursAgo: 4)))
+            local: nights(newestHoursAgo: 4), drive: nights(newestHoursAgo: stalled ? 27 : 3, fail: failedDriveDayAgo),
+            conversations: nights(newestHoursAgo: stalled ? 28 : 4), integrity: nights(newestHoursAgo: 4)))
     }
 
     static func jobs(nightlyFailing: Bool) -> [NDJobInput] {

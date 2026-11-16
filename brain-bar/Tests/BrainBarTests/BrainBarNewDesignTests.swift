@@ -137,15 +137,26 @@ import XCTest
         // Review blocker 1: one unified 52 pt row, the pages control centred in the toolbar.
         XCTAssertEqual(controller.windowForTesting.toolbarStyle, .unified)
         XCTAssertEqual(controller.windowForTesting.toolbar?.centeredItemIdentifiers, [NDToolbar.pages])
-        // The minimum is 780 wide, exactly. Its height is the design's 560 raised by AppKit for the unified toolbar's
-        // chrome, which differs by OS (580 on macOS 27, 584 on CI's macOS 15), so it is pinned to "never below 560 and
-        // never more than one 52 pt toolbar row above it", for the frame and the content minimum alike.
-        XCTAssertEqual(controller.windowForTesting.minSize.width, NDGrid.windowMinimum.width)
-        XCTAssertEqual(controller.windowForTesting.contentMinSize.width, NDGrid.windowMinimum.width)
-        XCTAssertGreaterThanOrEqual(controller.windowForTesting.contentMinSize.height, NDGrid.windowMinimum.height)
-        XCTAssertLessThanOrEqual(controller.windowForTesting.contentMinSize.height, NDGrid.windowMinimum.height + NDGrid.titleBar)
-        XCTAssertGreaterThanOrEqual(controller.windowForTesting.minSize.height, NDGrid.windowMinimum.height)
-        XCTAssertLessThanOrEqual(controller.windowForTesting.minSize.height, NDGrid.windowMinimum.height + NDGrid.titleBar)
+        // L17: the window is 900 wide and takes the page's own height (Overview 716, R1.1), min = max; a tab switch snaps
+        // it to the next page's height with the top edge fixed.
+        // AppKit may add the unified toolbar's chrome to a content size it holds (20 pt on macOS 27 headless, 24 on CI's
+        // macOS 15, 0 measured on the capture Mac's macOS 26), so heights are pinned to [page, page + one 52 pt row].
+        let window = controller.windowForTesting
+        func holds(_ page: NDPage, _ line: UInt = #line) {
+            let h = NDGrid.windowHeight(page)
+            XCTAssertEqual(window.contentMinSize.width, 900, line: line)
+            XCTAssertEqual(window.contentMaxSize, window.contentMinSize, "not resizable: min = max", line: line)
+            XCTAssertGreaterThanOrEqual(window.contentMinSize.height, h, line: line)
+            XCTAssertLessThanOrEqual(window.contentMinSize.height, h + NDGrid.titleBar, line: line)
+        }
+        holds(.overview)
+        let top = window.frame.maxY
+        controller.fitPage(.backups)
+        holds(.backups)
+        XCTAssertEqual(window.frame.maxY, top, accuracy: 0.5, "the top edge stays")
+        controller.fitPage(.jobs)
+        holds(.jobs)
+        controller.fitPage(.overview)
         XCTAssertFalse(controller.isShownForTesting, "a design switch never opens the window")
 
         d.set("classic", forKey: BrainBarDesign.key)
@@ -160,7 +171,7 @@ import XCTest
         _ = defaults()
         let settings = NDSettingsWindowController(store: NDStore(fixture: BrainBarDesignFixture.inputs(.calm)))
         let size = settings.window.contentRect(forFrameRect: settings.window.frame).size
-        XCTAssertEqual(size.width, 520)
+        XCTAssertEqual(size.width, 480)
         XCTAssertGreaterThanOrEqual(size.height, 130)
         XCTAssertLessThanOrEqual(size.height, 200)
         XCTAssertFalse(settings.window.styleMask.contains(.resizable))
@@ -300,7 +311,7 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
 
     /// L4: the Drive fault drops the Drive copy's age where a gauge shows it; VoiceOver and the report keep it.
     func testDriveFaultDropsTheAgeTheGaugeShows() {
-        var c = BrainBarDesignFixture.inputs(.oneFault).capture
+        var c = BrainBarDesignFixture.inputs(.driveSignedOut).capture
         c.backupDailyFailures = 2  // the Drive row absorbs a failing database copy and says its age (R15)
         let checks = (c.verdict?.checks ?? []).map { k -> BrainBarHealthVerdict.Check in
             k.name == "backup_offsite" ? BrainBarDesignFixture.check("backup_offsite", .red, age: 21 * 3600, limit: 18 * 3600) : k
@@ -315,7 +326,7 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
     }
 
     func testConcernedRowsTurnFaultAndTheDropdownShowsTheConcernedCopy() {
-        let m = NDModel.make(BrainBarDesignFixture.inputs(.oneFault))
+        let m = NDModel.make(BrainBarDesignFixture.inputs(.driveSignedOut))
         let rows = m.areas.first { $0.thing == .safe }!.rows
         guard case let .gauge(g)? = rows.first(where: { $0.id == "backup_offsite" })?.visual else { return XCTFail("gauge") }
         XCTAssertTrue(g.concerned)
@@ -323,12 +334,12 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
         guard case let .gauge(local)? = rows.first(where: { $0.id == "backup_local" })?.visual else { return XCTFail("gauge") }
         XCTAssertFalse(local.concerned)
         XCTAssertEqual(local.tone, .fine)
-        XCTAssertEqual(m.menuAreas.first { $0.thing == .safe }?.number.text, "21\u{00A0}h")
+        XCTAssertEqual(m.menuAreas.first { $0.thing == .safe }?.number.text, "27\u{00A0}h")
         XCTAssertEqual(m.backupsTabCount, 1)
     }
 
     func testUpkeepFailingIsOneFormOneString() {
-        let m = NDModel.make(BrainBarDesignFixture.inputs(.severalFaults))
+        let m = NDModel.make(BrainBarDesignFixture.inputs(.twoFaults))
         XCTAssertEqual(m.menuAreas.first { $0.thing == .upkeep }?.visual, .streak(3))
         XCTAssertEqual(m.menuAreas.first { $0.thing == .upkeep }?.number.text, "3\u{00A0}nights")
         XCTAssertEqual(m.areas.first { $0.thing == .upkeep }?.rows.first?.number.text, "3\u{00A0}nights")
@@ -376,7 +387,7 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
 
     /// Design pre-pass 7: beside "Everything else is fine." the fault drops its own reassurance; 22 words at most.
     func testOneUpkeepFaultKeepsToTheWordsBudget() {
-        let m = NDModel.make(BrainBarDesignFixture.inputs(.jobsFailedStreak))
+        let m = NDModel.make(BrainBarDesignFixture.inputs(.nightlyFailing))
         XCTAssertTrue(m.everythingElse)
         let shown = m.faults.flatMap(\.shownFacts).joined(separator: " ")
         XCTAssertFalse(shown.contains("still being saved"), shown)
@@ -385,20 +396,20 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
     }
 
     func testStaleReadingNeverSaysNone() {
-        let row = NDModel.make(BrainBarDesignFixture.inputs(.checking)).areas.first { $0.thing == .remembering }!.rows.first { $0.id == "stores" }!
+        let row = NDModel.make(BrainBarDesignFixture.inputs(.notConfirmed)).areas.first { $0.thing == .remembering }!.rows.first { $0.id == "stores" }!
         XCTAssertEqual(row.visual, .unknown)
         XCTAssertEqual(row.number.value, "—")
     }
 
     func testCheckedLineSaysWhenTheVerdictIsStale() {
         XCTAssertEqual(NDModel.make(BrainBarDesignFixture.inputs(.calm)).checked, "Checked 1 min ago")
-        XCTAssertEqual(NDModel.make(BrainBarDesignFixture.inputs(.checking)).checked, "Last checked 18 min ago")
+        XCTAssertEqual(NDModel.make(BrainBarDesignFixture.inputs(.notConfirmed)).checked, "Last checked 2 h ago")
     }
 
     func testFixtureNamesAreTheCaptureList() {
         XCTAssertEqual(BrainBarDesignFixture.Name.allCases.map(\.rawValue),
-                       ["calm", "checking", "cant-tell", "one-fault", "reconnect-waiting", "several-faults",
-                        "backups-failed-upload", "jobs-failed-streak"])
+                       ["calm", "agent-not-read", "drive-signed-out", "saves-stuck", "meaning-behind", "nightly-failing",
+                        "not-confirmed", "two-faults", "reconnect-waiting", "backups-failed-upload"])
     }
 }
 
@@ -505,8 +516,8 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
     /// duplicated name is not read, and Reconnect appears only with the counted Drive fault.
     func testSettingsDriveComesFromTheAcceptedRow() {
         XCTAssertEqual(NDModel.make(BrainBarDesignFixture.inputs(.calm)).drive, .init(state: "Connected", action: nil))
-        XCTAssertEqual(NDModel.make(BrainBarDesignFixture.inputs(.checking)).drive.state, "—", "18 minutes old: not current")
-        let fault = NDModel.make(BrainBarDesignFixture.inputs(.oneFault)).drive
+        XCTAssertEqual(NDModel.make(BrainBarDesignFixture.inputs(.notConfirmed)).drive.state, "—", "18 minutes old: not current")
+        let fault = NDModel.make(BrainBarDesignFixture.inputs(.driveSignedOut)).drive
         XCTAssertEqual(fault.state, "Disconnected")
         XCTAssertEqual(fault.action?.kind, .reconnectDrive)
         var twice = BrainBarDesignFixture.inputs(.calm)
@@ -755,7 +766,7 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
     /// action, and in a capture that shows the waiting line.
     func testEveryReconnectClickShowsTheWaitingLine() {
         for press in [{ (s: NDStore) in s.perform(.reconnectDrive) }, { $0.perform(.connectDrive) }, { $0.reconnectDrive() }] {
-            let store = NDStore(fixture: BrainBarDesignFixture.inputs(.oneFault))
+            let store = NDStore(fixture: BrainBarDesignFixture.inputs(.driveSignedOut))
             XCTAssertFalse(store.inputs.driveReconnecting)
             press(store)
             XCTAssertTrue(store.inputs.driveReconnecting)
@@ -801,13 +812,13 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         XCTAssertFalse(keepingUnits(report).contains(" "))
     }
 
-    /// Fix 13, superseded by round 2's polish 1: the corner grows with the bar, up to a pill.
+    /// R1 § 3.1: 6 pt bars with 2 pt corners in the window, 3 pt bars with 1 pt in the dropdown; never more than half a bar.
     func testShortHeroBarsAreNotBeads() {
-        // Polish 1 (round 2): min(width / 2, height / 4): a square bar gets a small corner, a tall bar a pill.
-        XCTAssertEqual(NDWaveform.barRadius(height: 4, width: 4, pill: true, corner: 1), 1)
-        XCTAssertEqual(NDWaveform.barRadius(height: 2, width: 4, pill: true, corner: 1), 0.5)
-        XCTAssertEqual(NDWaveform.barRadius(height: 40, width: 4, pill: true, corner: 1), 2)
-        XCTAssertEqual(NDWaveform.barRadius(height: 40, width: 4, pill: false, corner: 1), 1, "compact and dropdown: square ends")
+        XCTAssertEqual(NDWaveform.barRadius(height: 40, width: 6, pill: false, corner: 2), 2)
+        XCTAssertEqual(NDWaveform.barRadius(height: 2, width: 6, pill: false, corner: 2), 1, "a 2 pt bar is not a bead")
+        XCTAssertEqual(NDWaveform.barRadius(height: 9, width: 3, pill: false, corner: 1), 1)
+        XCTAssertEqual(NDWaveform.layout(width: 800, count: 60, size: .hero).bar, 6)
+        XCTAssertEqual(NDWaveform.layout(width: 128, count: 24, size: .menu).bar, 3)
     }
 
     /// Fix 14: an area draws the unknown ring only when one of its rows is dashed; otherwise the reason is spoken.
@@ -1067,5 +1078,180 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             }
         }
         XCTAssertEqual(found, [])
+    }
+}
+
+/// Round 1 (DESIGN-SPEC-R1 with revision 1.1): the pipeline graph, the drawn state of every fixture from its verdict
+/// facts, the headline and button rules, and the dropdown's words.
+@MainActor final class BrainBarNewDesignR1Tests: XCTestCase {
+    typealias Say = BrainBarMenuPresenter.SurfaceSay
+    typealias Fixture = BrainBarDesignFixture
+
+    /// L18: every health check maps to connections, a stage, or the observer; every mapping names a connection that
+    /// exists; every connection is guarded by a check or listed as a known gap.
+    func testEveryHealthCheckMapsInTheGraph() {
+        let checks = Set(BrainBarHealthVerdict.Check.labels.keys)
+        XCTAssertFalse(checks.isEmpty)
+        for name in checks { XCTAssertNotNil(NDPipelineGraph.checks[name], "\(name) maps to nothing") }
+        let ids = Set(NDPipelineGraph.connections.map(\.id))
+        var guarded: Set<String> = []
+        for (name, rule) in NDPipelineGraph.checks {
+            if case let .connections(list) = rule {
+                for id in list { XCTAssertTrue(ids.contains(id), "\(name) names \(id), which is not a connection") }
+                guarded.formUnion(list)
+            }
+        }
+        XCTAssertEqual(ids.subtracting(guarded).subtracting(NDPipelineGraph.factGuards.keys), NDPipelineGraph.unguarded,
+                       "a connection with no check is guarded by a named fact or is a listed gap")
+        XCTAssertEqual(Set(NDPipelineGraph.connections.flatMap(\.pipes)), Set(NDPipe.allCases), "every drawn pipe belongs to a connection")
+        XCTAssertEqual(NDPipelineGraph.checks["monitor"], .observer)
+    }
+
+    private func pipeline(_ name: Fixture.Name) -> NDPipelineState { NDPipelineState.make(Fixture.inputs(name)) }
+
+    /// § 3.2's seven states and the others, each drawn from its own facts.
+    func testEachFixtureDrawsItsState() throws {
+        let calm = pipeline(.calm)
+        XCTAssertTrue(calm.breaks.isEmpty)
+        XCTAssertTrue(calm.faultStations.isEmpty)
+        XCTAssertTrue(calm.quiet.isEmpty)
+        XCTAssertFalse(calm.allUnconfirmed)
+        XCTAssertEqual(calm.status[.read]?.text, Say.ago(NDFormat.ageText(48)))
+        XCTAssertEqual(calm.status[.queue]?.text, Say.empty)
+        XCTAssertEqual(calm.status[.mac]?.text, Say.ago(NDFormat.ageText(4 * 3600)))
+        XCTAssertEqual(calm.status[.drive]?.text, Say.ago(NDFormat.ageText(4 * 3600)), "the older of the two Drive copies")
+        XCTAssertEqual(calm.status[.meaning]?.text, Say.percentReady(99))
+        XCTAssertEqual(calm.status[.search]?.text, Say.working)
+        XCTAssertTrue(calm.status.values.allSatisfy { $0.severity == nil })
+
+        let agent = pipeline(.agentNotRead)
+        XCTAssertEqual(agent.breaks, [.agentCursor: .init(side: .source, severity: .red)])
+        XCTAssertEqual(agent.redAgents, [.cursor])
+        XCTAssertEqual(agent.phrases.map(\.text), [Say.notBeingRead])
+
+        for name in [Fixture.Name.driveSignedOut, .reconnectWaiting] {
+            let drive = pipeline(name)
+            XCTAssertEqual(drive.faultStations, [.drive], name.rawValue)
+            XCTAssertEqual(drive.stationPipes, [.macDrive, .conversationsCopy], name.rawValue)
+            XCTAssertTrue(drive.breaks.isEmpty, "one cause, drawn on the station")
+            XCTAssertEqual(drive.status[.drive], .init(text: Say.signedOut, severity: .red))
+            XCTAssertEqual(drive.status[.mac]?.severity, nil, "the Mac copy is still fresh")
+        }
+
+        let saves = pipeline(.savesStuck)
+        XCTAssertEqual(saves.breaks, [.queueMemory: .init(side: .target, severity: .red)])
+        XCTAssertEqual(saves.status[.queue], .init(text: Say.waiting(NDFormat.ageText(2 * 3600)), severity: .red))
+
+        let meaning = pipeline(.meaningBehind)
+        XCTAssertEqual(meaning.breaks, [.memoryMeaning: .init(side: .target, severity: .orange)])
+        XCTAssertEqual(meaning.quiet, [.meaningSearch: .orange], "downstream: delayed")
+        XCTAssertEqual(meaning.status[.meaning], .init(text: Say.behind(NDFormat.ageText(2 * 3600)), severity: .orange))
+        XCTAssertEqual(meaning.status[.search]?.text, Say.working, "search still works by words")
+
+        let nightly = pipeline(.nightlyFailing)
+        XCTAssertEqual(nightly.breaks, [.jobsMemory: .init(side: .source, severity: .red)])
+        XCTAssertEqual(nightly.status[.jobs], .init(text: Say.nightlyFailedShort(3), severity: .red), "the status names the job")
+
+        let stale = pipeline(.notConfirmed)
+        XCTAssertTrue(stale.allUnconfirmed)
+        XCTAssertNotNil(stale.unconfirmedSince)
+        XCTAssertTrue(stale.breaks.isEmpty && stale.faultStations.isEmpty, "no red, no marks")
+        XCTAssertFalse(stale.status.isEmpty, "status lines keep their last known values (faded)")
+
+        let two = pipeline(.twoFaults)
+        XCTAssertEqual(two.faultStations, [.drive])
+        XCTAssertEqual(Set(two.breaks.keys), [.jobsMemory])
+
+        XCTAssertEqual(pipeline(.backupsFailedUpload), calm, "a failed upload last week is history, not a break now")
+    }
+
+    /// Every check the chart can draw, from the verdict's facts alone: red on a calm verdict draws on its own pipes.
+    func testEachRedCheckBreaksItsOwnConnection() {
+        let expected: [String: (NDPipelineState) -> Bool] = [
+            "ingest": { $0.breaks[.junctionRead]?.side == .target && $0.status[.read]?.severity == .red },
+            "stores": { $0.breaks[.inSaves]?.side == .source },
+            "embedding": { $0.breaks[.memoryMeaning]?.side == .target && $0.quiet[.meaningSearch] == .red },
+            "search": { $0.breaks[.out]?.side == .source },
+            "backup_local": { $0.breaks[.memoryMac]?.side == .target },
+            "backup_offsite": { $0.breaks[.macDrive]?.side == .target },
+            "transcripts": { $0.breaks[.conversationsCopy]?.side == .target },
+            "drive_auth": { $0.faultStations.contains(.drive) && $0.stationPipes == [.macDrive, .conversationsCopy] },
+            "integrity": { $0.faultStations == [.mac] && $0.breaks.isEmpty },
+            "disk": { $0.faultStations == [.mac] && $0.breaks.isEmpty },
+            "monitor": { $0.allUnconfirmed && $0.breaks.isEmpty },
+        ]
+        XCTAssertEqual(Set(expected.keys), Set(NDPipelineGraph.checks.keys))
+        for (name, holds) in expected {
+            var i = Fixture.inputs(.calm)
+            i.capture = Fixture.capture(Fixture.replacing(Fixture.calmChecks(), Fixture.check(name, .red, age: 2 * 3600, limit: 3600)), dot: .red)
+            let drawn = NDPipelineState.make(i)
+            XCTAssertTrue(holds(drawn), "\(name): \(drawn)")
+            // Only its own pipes: nothing else breaks.
+            let own = Set(NDPipelineGraph.pipes(for: name))
+            XCTAssertTrue(Set(drawn.breaks.keys).isSubset(of: own), "\(name) broke \(drawn.breaks.keys) outside \(own)")
+        }
+        // A check that cannot say: its pipes are drawn "not confirmed", nothing breaks.
+        var unknown = Fixture.inputs(.calm)
+        unknown.capture = Fixture.capture(Fixture.replacing(Fixture.calmChecks(), Fixture.check("backup_offsite", .unknown)))
+        let drawn = NDPipelineState.make(unknown)
+        XCTAssertEqual(drawn.unconfirmed, [.macDrive])
+        XCTAssertTrue(drawn.breaks.isEmpty)
+        // The word path is never broken and never "flowing": nothing checks it.
+        XCTAssertEqual(NDPipelineChart.stroke(for: .words, in: .calm), .unguarded)
+    }
+
+    /// Headlines, details and the one filled button (R1.1 change 23: Reconnect only; the report is always bordered).
+    func testHeadlinesAndTheOneFilledButton() {
+        func r1(_ name: Fixture.Name) -> NDR1 {
+            let i = Fixture.inputs(name)
+            return NDR1.make(i, NDModel.make(i))
+        }
+        XCTAssertEqual(r1(.calm).headline, BrainBarMenuPresenter.Say.allGood.text)
+        XCTAssertTrue(r1(.calm).items.isEmpty)
+        XCTAssertEqual(r1(.agentNotRead).headline, Say.agentNotRead("Cursor"))
+        XCTAssertEqual(r1(.driveSignedOut).headline, Say.driveSignedOut)
+        XCTAssertEqual(r1(.savesStuck).items.first?.detail, Say.savesWaited(38, NDFormat.ageText(2 * 3600)))
+        XCTAssertEqual(r1(.meaningBehind).headline, Say.meaningBehind(NDFormat.ageText(2 * 3600)))
+        XCTAssertEqual(r1(.meaningBehind).items.map(\.severity), [.orange], "late, not stopped: one orange item, no presenter echo")
+        XCTAssertNil(r1(.meaningBehind).items.first?.action, "nothing to do")
+        XCTAssertEqual(r1(.nightlyFailing).items.first?.detail, Say.notCheckedSince("Thursday"))
+        XCTAssertEqual(r1(.notConfirmed).headline, Say.notConfirmedSince("06:00"))
+        XCTAssertEqual(r1(.notConfirmed).footerLeft, Say.waitingForNextCheck)
+        XCTAssertNil(r1(.notConfirmed).footerRight)
+        XCTAssertEqual(r1(.twoFaults).headline, Say.thingsNeedYou(2))
+        XCTAssertEqual(r1(.twoFaults).items.map(\.id), ["drive", "nightly"])
+        for name in Fixture.Name.allCases {
+            for item in r1(name).items {
+                guard let action = item.action else { continue }
+                XCTAssertEqual(NDButtonPolicy.filled(action), [.reconnectDrive, .connectDrive].contains(action.kind), name.rawValue)
+            }
+        }
+        XCTAssertEqual(r1(.twoFaults).items.first?.menuDetail, Say.nothingUploadedFor(NDFormat.ageText(27 * 3600)))
+        XCTAssertEqual(r1(.twoFaults).items.last?.menuTitle, Say.nightlyFailedShort(3))
+    }
+
+    /// § 4.1: the calm dropdown says what it must in 9 words (a number with its unit counts as nothing).
+    func testCalmDropdownIsNineWords() throws {
+        let i = Fixture.inputs(.calm)
+        let r1 = NDR1.make(i, NDModel.make(i))
+        let words = ([NDMenuHeadline.text(r1)] + r1.menuRows.flatMap { [$0.label, $0.value] }).joined(separator: " ")
+        let stripped = words.replacing(#/\d+(?:[.,]\d+)?\s?(?:%|h|min|s|d)?/#, with: "")
+        let count = stripped.split(whereSeparator: { $0 == " " || $0 == "\u{00A0}" }).count
+        XCTAssertEqual(count, 9, stripped)
+        XCTAssertEqual(r1.menuRows.map(\.value), ["", Say.percentReady(99), Say.ago(NDFormat.ageText(4 * 3600)), Say.fine])
+        let two = NDR1.make(Fixture.inputs(.twoFaults), NDModel.make(Fixture.inputs(.twoFaults)))
+        XCTAssertEqual(two.menuRows.map(\.value)[2], Say.ago(NDFormat.ageText(28 * 3600)), "the oldest of the three copies")
+        XCTAssertEqual(two.menuRows[2].tone, .fault)
+        XCTAssertEqual(two.menuRows[3].value, Say.failed)
+    }
+
+    /// § 3.1 hover: the pointer's bucket is the pitch that holds it; outside the plot there is none.
+    func testActivityHoverPicksTheBucketUnderThePointer() {
+        XCTAssertEqual(NDActivitySection.bucket(at: 0, count: 60), 0)
+        XCTAssertEqual(NDActivitySection.bucket(at: 13.4, count: 60), 1)
+        XCTAssertEqual(NDActivitySection.bucket(at: 799.9, count: 60), 59)
+        XCTAssertNil(NDActivitySection.bucket(at: -1, count: 60))
+        XCTAssertNil(NDActivitySection.bucket(at: 800, count: 60))
+        XCTAssertNil(NDActivitySection.bucket(at: 10, count: 0))
     }
 }
