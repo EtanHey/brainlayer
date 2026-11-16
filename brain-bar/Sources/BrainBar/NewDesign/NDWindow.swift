@@ -28,7 +28,7 @@ struct NDWindowRoot: View {
                 }
                 .padding(.horizontal, NDGrid.pageSide)
                 .padding(.top, NDGrid.pageTop)
-                .padding(.bottom, 24)
+                .padding(.bottom, 20)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .scrollIndicators(.automatic)
@@ -233,25 +233,68 @@ struct NDOverviewPage: View {
     @ObservedObject var store: NDStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// R1.2 (H6): a title, then up to three blocks: Problems (only when something is red), Activity, Pipeline. Each block
+    /// is one filled, rounded surface; Activity and Pipeline carry a heading above theirs. No dividers, no shadows.
     var body: some View {
         let r1 = store.r1
         VStack(alignment: .leading, spacing: 0) {
             NDHeadline(store: store, r1: r1)
-            NDActivitySection(store: store).padding(.top, 24)
-            HStack {
-                Text(BrainBarMenuPresenter.SurfaceSay.pipeline).font(NDType.bodyStrong).foregroundStyle(ND.t1)
-                    .accessibilityAddTraits(.isHeader)
-                Spacer()
+            NDActivitySection(store: store).padding(.top, 20)
+            NDBlockHeading(title: Say.pipeline).padding(.top, 20)
+            NDCard(padding: EdgeInsets(top: 16, leading: 16, bottom: 14, trailing: 16)) {
+                NDPipelineChart(state: r1.pipeline, memories: store.model.memories, popover: { station in
+                    AnyView(NDStationDetails(store: store, station: station))
+                })
             }
-            .frame(height: 22)
-            .padding(.top, 30)
-            NDPipelineChart(state: r1.pipeline, memories: store.model.memories, popover: { station in
-                AnyView(NDStationDetails(store: store, station: station))
-            })
-            .padding(.top, 10)
             .animation(reduceMotion ? nil : NDMotion.breakAppears, value: r1.pipeline)
         }
         .animation(reduceMotion ? .easeOut(duration: 0.15) : NDMotion.needsBand, value: r1.items.map(\.id))
+    }
+}
+
+/// A block's heading above its surface: 13 Semibold `t1`, 2 pt inset, a 22 pt row, 8 pt to the surface (R1.2 change 1).
+struct NDBlockHeading<Trailing: View>: View {
+    let title: String
+    @ViewBuilder var trailing: Trailing
+    var body: some View {
+        HStack {
+            Text(title).font(NDType.bodyStrong).foregroundStyle(ND.t1).accessibilityAddTraits(.isHeader)
+            Spacer()
+            trailing
+        }
+        .frame(height: 22)
+        .padding(.horizontal, 2)
+        .padding(.bottom, 8)
+    }
+}
+
+extension NDBlockHeading where Trailing == EmptyView {
+    init(title: String) {
+        self.title = title
+        self.trailing = EmptyView()
+    }
+}
+
+/// The one surface treatment (R1.2 change 2): `card` fill, a 0.5 pt `card-line` inside, radius 12, no shadow.
+struct NDCard<Content: View>: View {
+    var padding = EdgeInsets(top: 14, leading: 16, bottom: 16, trailing: 16)
+    @ViewBuilder var content: Content
+    var body: some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(ND.card))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(ND.cardLine, lineWidth: 0.5))
+            .environment(\.ndPlane, ND.card)
+    }
+}
+
+private struct NDPlaneKey: EnvironmentKey { static let defaultValue = ND.bg }
+extension EnvironmentValues {
+    /// The colour under a drawing (the plane, or a card): masks behind words set in lines use it.
+    var ndPlane: Color {
+        get { self[NDPlaneKey.self] }
+        set { self[NDPlaneKey.self] = newValue }
     }
 }
 
@@ -277,47 +320,35 @@ struct NDHeadline: View {
     @ObservedObject var store: NDStore
     let r1: NDR1
 
+    /// R1.2 changes 4 to 8 (and L24): something red: "N things need you" (red mark), then one Problems surface with a
+    /// row per item in urgency order: fix-it-here (Reconnect), then agent problems, then amber notices. Amber only, one:
+    /// its title and detail with the amber mark; two or more: "Check soon" and a surface of rows. Not confirmed: the
+    /// question mark, the title and its detail. Calm: "All good".
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if let symbol = r1.headlineSymbol {
-                    Image(systemName: symbol).font(.system(size: 15, weight: .regular)).foregroundStyle(tone(r1.headlineTone))
-                        .frame(width: 16, height: 22)
+                    Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(tone(r1.headlineTone))
+                        .frame(width: 16)
                 }
-                Text(r1.headline).font(NDType.title).tracking(-0.25).foregroundStyle(ND.t1)
-                Spacer(minLength: 16)
-                if r1.items.count == 1, let action = r1.items[0].action {
-                    actionButton(action, filled: NDButtonPolicy.filled(action))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(r1.headline).font(NDType.title).tracking(-0.25).foregroundStyle(ND.t1)
+                    if let detail = r1.headlineDetail { Text(keepingUnits(detail)).font(NDType.body).foregroundStyle(ND.t2) }
                 }
             }
             .frame(minHeight: 22)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
-            if r1.items.count == 1, let detail = r1.items[0].detail, !detail.isEmpty {
-                Text(keepingUnits(detail)).font(NDType.body).foregroundStyle(ND.t2).padding(.leading, 24).padding(.top, 2)
-            } else if let detail = r1.unconfirmedDetail, r1.items.isEmpty {
-                Text(detail).font(NDType.body).foregroundStyle(ND.t2).padding(.leading, 24).padding(.top, 2)
-            }
-            if r1.items.count > 1 {
-                // D7.1: each fault its own row (48 pt at least, 8 pt apart): its title, its one line of consequence (as the
-                // dropdown says it), and its button; one mark per surface (§ 2.2, § 7), rows in the text column.
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(r1.items) { item in
-                        HStack(alignment: .center, spacing: 8) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.title).font(NDType.bodyStrong).foregroundStyle(ND.t1).lineLimit(1)
-                                if let line = item.menuDetail ?? item.detail, !line.isEmpty {
-                                    Text(keepingUnits(line)).font(NDType.body).foregroundStyle(ND.t2).lineLimit(1)
-                                }
-                            }
-                            Spacer(minLength: 12)
-                            if let action = item.action { actionButton(action, filled: NDButtonPolicy.filled(action)) }
+            if r1.showsProblemRows {
+                NDCard(padding: EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16)) {
+                    VStack(spacing: 0) {
+                        ForEach(Array(r1.orderedItems.enumerated()), id: \.element.id) { index, item in
+                            if index > 0 { ND.cardLine.frame(height: 0.5) }
+                            NDProblemRow(store: store, item: item)
                         }
-                        .frame(minHeight: 48)
-                        .padding(.leading, 24)
                     }
                 }
-                .padding(.top, 6)
+                .padding(.top, 12)
             }
         }
     }
@@ -329,14 +360,36 @@ struct NDHeadline: View {
         case .fine: ND.t2
         }
     }
+}
 
-    @ViewBuilder private func actionButton(_ action: BrainBarMenuPresentation.Action, filled: Bool) -> some View {
-        let waiting = store.inputs.driveReconnecting && [.reconnectDrive, .connectDrive].contains(action.kind)
-        NDWaitingSwap(waiting: waiting) {
-            NDButton(label: action.label, filled: filled) { store.perform(action.kind) }
-        } line: {
-            Text(BrainBarMenuPresenter.SurfaceSay.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)
+/// One problem (R1.2 change 4): `16 mark | 10 | title over its consequence | its own button`, at least 52 pt, 8 pt padding.
+struct NDProblemRow: View {
+    @ObservedObject var store: NDStore
+    let item: NDR1.Item
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: item.severity == .red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 15)).foregroundStyle(item.severity == .red ? ND.red : ND.orange).frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title).font(NDType.bodyStrong).foregroundStyle(ND.t1)
+                if let line = item.detail, !line.isEmpty {
+                    Text(keepingUnits(line)).font(NDType.body).foregroundStyle(ND.t2)
+                }
+            }
+            Spacer(minLength: 12)
+            if let action = item.action {
+                let waiting = store.inputs.driveReconnecting && [.reconnectDrive, .connectDrive].contains(action.kind)
+                NDWaitingSwap(waiting: waiting) {
+                    NDButton(label: action.label, filled: NDButtonPolicy.filled(action)) { store.perform(action.kind) }
+                } line: {
+                    Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)
+                }
+            }
         }
+        .padding(.vertical, 8)
+        .frame(minHeight: 52)
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -355,27 +408,28 @@ struct NDActivitySection: View {
     }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     static let gutter: CGFloat = 52
-    static let plotWidth: CGFloat = 800
+    /// R1.2: the chart is 820 wide inside its surface: a 52 pt gutter and a 768 pt plot.
+    static let plotWidth: CGFloat = 768
     static let plotHeight: CGFloat = 112
 
     var body: some View {
         let wave = store.inputs.heroWaves[store.range]
         let known = wave?.readable == true
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(Say.activity).font(NDType.bodyStrong).foregroundStyle(ND.t1).accessibilityAddTraits(.isHeader)
-                Spacer()
-                NDRangeControl(store: store)
-            }
-            .frame(height: 22)
-            HStack(spacing: 20) {
+            NDBlockHeading(title: Say.activity) { NDRangeControl(store: store) }
+            NDCard { chart(wave: wave, known: known) }
+        }
+    }
+
+    @ViewBuilder private func chart(wave: NDWave?, known: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 24) {
                 legend(color: ND.saved, value: known ? wave.map { NDFormat.integer($0.savesTotal) } : nil, words: Say.savedByAgents)
                 legend(color: ND.read, value: known ? wave.map { NDFormat.integer($0.readsTotal) } : nil, words: Say.readFromConversations)
                 Spacer()
                 Text(Say.ownScale).font(NDType.caption).foregroundStyle(ND.t3)
             }
-            .frame(height: 18)
-            .padding(.top, 6)
+            .frame(height: 22)
             .accessibilityElement(children: .combine)
             ZStack(alignment: .topLeading) {
                 // R1.1 change 30: each half's maximum at the gutter's outer ends, so the size reads without hovering.
@@ -460,9 +514,10 @@ struct NDActivitySection: View {
     }
 
     private func legend(color: Color, value: String?, words: String) -> some View {
-        HStack(spacing: 6) {
-            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8)
-            Text(value ?? NDModel.Number.unknown.value).font(NDType.numberStrong).foregroundStyle(ND.t1)
+        // R1.2 change 19: the hour's totals are the calm page's hero numbers, at the title size.
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8).alignmentGuide(.firstTextBaseline) { d in d.height }
+            Text(value ?? NDModel.Number.unknown.value).font(NDType.title.monospacedDigit()).foregroundStyle(ND.t1)
             Text(words).font(NDType.body).foregroundStyle(ND.t2)
         }
     }
@@ -589,7 +644,8 @@ struct NDButtonStyle: ButtonStyle {
 /// below the spec's page height (Overview 716, Backups 480, Jobs 512), capped at the screen. A two-fault headline is
 /// two 24 pt rows taller than the calm one, so the Overview grows with it; past the screen the page scrolls (§ 2.3).
 @MainActor enum NDPageHeight {
-    static let chrome: CGFloat = NDGrid.titleBar + NDGrid.pageTop + 24 + NDGrid.footer
+    /// Title bar 52, page padding 20 top and 20 bottom (R1.2 change 2), footer 28.
+    static let chrome: CGFloat = NDGrid.titleBar + NDGrid.pageTop + 20 + NDGrid.footer
 
     /// The page's content height at the page width (852 pt), as SwiftUI lays it out.
     static func content(_ store: NDStore, page: NDPage) -> CGFloat {
@@ -603,10 +659,12 @@ struct NDButtonStyle: ButtonStyle {
         return ceil(hosting.sizeThatFits(in: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)).height)
     }
 
+    /// R1.2 change 22 and L25: the page's real height in every state (nothing reserved), up to the screen's visible
+    /// height minus 40 pt; past that the page scrolls inside the window and the footer stays.
     static func window(_ store: NDStore, page: NDPage, screen: CGFloat?) -> CGFloat {
-        let needed = max(NDGrid.windowHeight(page), content(store, page: page) + chrome)
+        let needed = ceil(content(store, page: page) + chrome)
         guard let screen, screen > 0 else { return needed }
-        return min(needed, max(NDGrid.windowHeight(page), screen))
+        return min(needed, screen - 40)
     }
 
     /// What decides the page's height: the page and the headline's lines.

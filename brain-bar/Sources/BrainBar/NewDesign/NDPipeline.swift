@@ -137,6 +137,8 @@ struct NDPipelineState: Equatable, Sendable {
     /// The observer is stale: every pipe dashed, no red, no marks; status lines at their last values, faded.
     var allUnconfirmed = false
     var unconfirmedSince: Date?
+    /// "14:02": the last confirmed evaluation's time, in the capture's zone (never the render time; R1.2 change 12).
+    var lastKnownAt: String?
 
     static let calm = NDPipelineState()
 
@@ -187,6 +189,7 @@ extension NDPipelineState {
         if !fresh || monitor?.state == .red {
             s.allUnconfirmed = true
             s.unconfirmedSince = verdict.evaluatedAt
+            s.lastKnownAt = NDR1.hhmm(verdict.evaluatedAt, c)
             return s
         }
         func check(_ name: String) -> BrainBarHealthVerdict.Check? { verdict.checks.first { $0.name == name } }

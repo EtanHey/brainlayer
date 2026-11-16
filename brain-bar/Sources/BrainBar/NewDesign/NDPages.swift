@@ -107,35 +107,39 @@ struct NDBackupsPage: View {
         VStack(alignment: .leading, spacing: 0) {
             NDPageTop(title: Say.backups, detail: fault == nil ? Say.backupsDetail : nil)
             if let fault { NDPageFault(store: store, item: fault).padding(.top, 14) }
-            HStack(spacing: 20) {
-                NDLegendItem(words: Say.copied) { Circle().fill(ND.t1).frame(width: 7, height: 7) }
-                NDLegendItem(words: Say.nextRun) { Circle().stroke(ND.t2, lineWidth: 1.5).frame(width: 6, height: 6) }
-                NDLegendItem(words: Say.lateIfLeftOfLine) { ND.t3.frame(width: 1, height: 12) }
-                if failed { NDLegendItem(words: Say.failed) { Circle().fill(ND.red).frame(width: 7, height: 7) } }
-                if stalled {
-                    NDLegendItem(words: Say.notUploadingSince) {
-                        Canvas { ctx, size in
-                            var p = Path(); p.move(to: CGPoint(x: 0, y: size.height / 2)); p.addLine(to: CGPoint(x: size.width, y: size.height / 2))
-                            ctx.stroke(p, with: .color(ND.red), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+            NDCard {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 20) {
+                        NDLegendItem(words: Say.copied) { Circle().fill(ND.t1).frame(width: 7, height: 7) }
+                        NDLegendItem(words: Say.nextRun) { Circle().stroke(ND.t2, lineWidth: 1.5).frame(width: 6, height: 6) }
+                        NDLegendItem(words: Say.lateIfLeftOfLine) { ND.t3.frame(width: 1, height: 12) }
+                        if failed { NDLegendItem(words: Say.failed) { Circle().fill(ND.red).frame(width: 7, height: 7) } }
+                        if stalled {
+                            NDLegendItem(words: Say.notUploadingSince) {
+                                Canvas { ctx, size in
+                                    var p = Path(); p.move(to: CGPoint(x: 0, y: size.height / 2)); p.addLine(to: CGPoint(x: size.width, y: size.height / 2))
+                                    ctx.stroke(p, with: .color(ND.red), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+                                }
+                                .frame(width: 14, height: 6)
+                            }
                         }
-                        .frame(width: 14, height: 6)
                     }
+                    .frame(height: 18)
+                    
+                    NDRailAxis(ticks: [(Say.daysAgoAxis(6), -144), (Say.daysAgoAxis(3), -72), (Say.lateAfter36h, -36), (Say.now, 0),
+                                       (Say.inHoursAxis(24), 24)],
+                               past: Self.past, ahead: Self.ahead, leading: Self.symbolColumn + Self.nameColumn,
+                               heads: [(Say.newest, Self.valueColumn), (Say.next, Self.valueColumn)])
+                        .padding(.top, 12)
+                    VStack(spacing: 0) {
+                        ForEach(lanes) { NDBackupLaneView(lane: $0) }
+                    }
+                    .padding(.top, 4)
+                    .background(alignment: .topLeading) { limitLine }
                 }
             }
-            .frame(height: 18)
             .padding(.top, fault == nil ? 20 : 18)
-            NDRailAxis(ticks: [(Say.daysAgoAxis(6), -144), (Say.daysAgoAxis(3), -72), (Say.lateAfter36h, -36), (Say.now, 0),
-                               (Say.inHoursAxis(24), 24)],
-                       past: Self.past, ahead: Self.ahead, leading: Self.symbolColumn + Self.nameColumn,
-                       heads: [(Say.newest, Self.valueColumn), (Say.next, Self.valueColumn)])
-                .padding(.top, 12)
-            VStack(spacing: 0) {
-                ForEach(lanes) { NDBackupLaneView(lane: $0) }
-            }
-            .padding(.top, 4)
-            .background(alignment: .topLeading) { limitLine }
-            ND.hair.frame(height: 0.5).padding(.top, 20)
-            details(m).padding(.top, 14)
+            details(m).padding(.top, 14).padding(.horizontal, 2)
         }
     }
 
@@ -345,29 +349,33 @@ struct NDJobsPage: View {
         VStack(alignment: .leading, spacing: 0) {
             NDPageTop(title: Say.jobs, detail: fault == nil ? Say.jobsDetail : nil)
             if let fault { NDPageFault(store: store, item: fault).padding(.top, 14) }
-            HStack(spacing: 20) {
-                NDLegendItem(words: Say.ran) { Circle().fill(ND.t1).frame(width: 7, height: 7) }
-                NDLegendItem(words: Say.failed) { Circle().fill(ND.red).frame(width: 7, height: 7) }
-                NDLegendItem(words: Say.runsAllTheTime) { Capsule().fill(ND.t2).frame(width: 14, height: 3) }
-                NDLegendItem(words: Say.everyFewMinutes) {
-                    HStack(spacing: 2) { ForEach(0..<3, id: \.self) { _ in Circle().fill(ND.t2).frame(width: 2.5, height: 2.5) } }
-                }
-                NDLegendItem(words: Say.nextRun) { Circle().stroke(ND.t2, lineWidth: 1.5).frame(width: 6, height: 6) }
-                NDLegendItem(words: Say.outsideTimeline) {
-                    Image(systemName: "chevron.left").font(.system(size: 9, weight: .semibold)).foregroundStyle(ND.t2)
+            NDCard {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 20) {
+                        NDLegendItem(words: Say.ran) { Circle().fill(ND.t1).frame(width: 7, height: 7) }
+                        NDLegendItem(words: Say.failed) { Circle().fill(ND.red).frame(width: 7, height: 7) }
+                        NDLegendItem(words: Say.runsAllTheTime) { Capsule().fill(ND.t2).frame(width: 14, height: 3) }
+                        NDLegendItem(words: Say.everyFewMinutes) {
+                            HStack(spacing: 2) { ForEach(0..<3, id: \.self) { _ in Circle().fill(ND.t2).frame(width: 2.5, height: 2.5) } }
+                        }
+                        NDLegendItem(words: Say.nextRun) { Circle().stroke(ND.t2, lineWidth: 1.5).frame(width: 6, height: 6) }
+                        NDLegendItem(words: Say.outsideTimeline) {
+                            Image(systemName: "chevron.left").font(.system(size: 9, weight: .semibold)).foregroundStyle(ND.t2)
+                        }
+                    }
+                    .frame(height: 18)
+                    NDRailAxis(ticks: [(Say.hoursAgoAxis(36), -36), (Say.hoursAgoAxis(24), -24), (Say.hoursAgoAxis(12), -12), (Say.now, 0),
+                                       (Say.inHoursAxis(12), 12)],
+                               past: Self.past, ahead: Self.ahead, leading: Self.nameColumn,
+                               heads: [(Say.lastRun, Self.valueColumn), (Say.nextRunHead, Self.valueColumn), (BrainBarMenuPresenter.SurfaceSay.onHeader, Self.switchColumn)])
+                        .padding(.top, 12)
+                    VStack(spacing: 0) {
+                        ForEach(lanes(store.model)) { NDJobLaneView(store: store, lane: $0) }
+                    }
+                    .padding(.top, 4)
                 }
             }
-            .frame(height: 18)
             .padding(.top, fault == nil ? 20 : 18)
-            NDRailAxis(ticks: [(Say.hoursAgoAxis(36), -36), (Say.hoursAgoAxis(24), -24), (Say.hoursAgoAxis(12), -12), (Say.now, 0),
-                               (Say.inHoursAxis(12), 12)],
-                       past: Self.past, ahead: Self.ahead, leading: Self.nameColumn,
-                       heads: [(Say.lastRun, Self.valueColumn), (Say.nextRunHead, Self.valueColumn), (BrainBarMenuPresenter.SurfaceSay.onHeader, Self.switchColumn)])
-                .padding(.top, 12)
-            VStack(spacing: 0) {
-                ForEach(lanes(store.model)) { NDJobLaneView(store: store, lane: $0) }
-            }
-            .padding(.top, 4)
         }
     }
 

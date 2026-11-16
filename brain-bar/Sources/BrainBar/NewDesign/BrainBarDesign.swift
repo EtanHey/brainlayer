@@ -57,11 +57,15 @@ enum NDColor {
     // R1 tokens (DESIGN-SPEC-R1 § 1.1): a neutral cool platform grey; colour only for meaning.
     private static func white(_ a: CGFloat) -> NSColor { NSColor(white: 1, alpha: a) }
     private static func black(_ a: CGFloat) -> NSColor { NSColor(white: 0, alpha: a) }
-    static let bg = dynamic("bg", dark: rgb(0x1B1B1E), light: rgb(0xF6F6F7))
+    /// R1.2 change 2: the light plane one step darker, so a white surface reads.
+    static let bg = dynamic("bg", dark: rgb(0x1B1B1E), light: rgb(0xEEEEF0))
+    /// R1.2 change 2: the one surface treatment for every block (no shadow, 0.5 pt inner line, radius 12).
+    static let card = dynamic("card", dark: rgb(0x242428), light: rgb(0xFFFFFF))
+    static let cardLine = dynamic("card.line", dark: white(0.06), light: black(0.07))
     static let raised = dynamic("raised", dark: rgb(0x242428), light: rgb(0xFFFFFF))
     static let pop = dynamic("pop", dark: rgb(0x2C2C31), light: rgb(0xFFFFFF))
     static let bar = dynamic("bar", dark: rgb(0x212124), light: rgb(0xEFEFF1))
-    static let node = dynamic("node", dark: rgb(0x2A2A2F), light: rgb(0xFFFFFF))
+    static let node = dynamic("node", dark: rgb(0x2A2A2F), light: rgb(0xF7F7F8))
     static let t1 = dynamic("t1", dark: rgb(0xEDEDF0), light: rgb(0x1D1D1F))
     static let t2 = dynamic("t2", dark: rgb(0xA1A1A8), light: rgb(0x55555D))
     static let t3 = dynamic("t3", dark: rgb(0x8A8A92), light: rgb(0x6E6E76))
@@ -75,8 +79,8 @@ enum NDColor {
     static let focus = dynamic("focus", dark: rgb(0x4D8DFF), light: rgb(0x1F5FD6))
     static let saved = dynamic("saved", dark: rgb(0xA995FF), light: rgb(0x7356DA))
     static let savedText = dynamic("saved.t", dark: rgb(0xB6A6FF), light: rgb(0x6446CC))
-    /// D8.3: dark read bars 15 % lighter (#6B7385 → #7D8597; on bg 3.61 → 4.64:1).
-    static let read = dynamic("read", dark: rgb(0x7D8597), light: rgb(0x80889B))
+    /// R1.2 change 21: dark read bars #8189A0 (4.69:1 on the card); light unchanged.
+    static let read = dynamic("read", dark: rgb(0x8189A0), light: rgb(0x80889B))
     static let readText = dynamic("read.t", dark: rgb(0x9AA1B3), light: rgb(0x5F677A))
     static let red = dynamic("red", dark: rgb(0xFF453A), light: rgb(0xFF3B30))
     static let redText = dynamic("red.t", dark: rgb(0xFF6961), light: rgb(0xD70015))
@@ -114,6 +118,8 @@ enum NDColor {
 enum ND {
     static let bg = Color(nsColor: NDColor.bg)
     static let raised = Color(nsColor: NDColor.raised)
+    static let card = Color(nsColor: NDColor.card)
+    static let cardLine = Color(nsColor: NDColor.cardLine)
     static let pop = Color(nsColor: NDColor.pop)
     static let bar = Color(nsColor: NDColor.bar)
     static let node = Color(nsColor: NDColor.node)
@@ -239,10 +245,11 @@ enum NDMotion {
     static let rangeFade = Animation.easeInOut(duration: 0.12)
     static let breakAppears = Animation.easeOut(duration: 0.2)
     static let popoverOpens = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.16)
-    static let buttonLeaves = Animation.easeOut(duration: 0.1)
+    /// R1.2 change 24: the pressed button fades over 160 ms ease-out in its pressed colour; the line from 64 ms over 160 ms.
+    static let buttonLeaves = Animation.easeOut(duration: 0.16)
     /// D8.2: the waiting line starts at 40 % of the button's 100 ms fade (§ 3.4 #10: a 150 ms cross-fade), so no empty
     /// frame falls between the button leaving and the line arriving.
-    static let waitingDelay: Double = 0.04
-    static let waitingEnters = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.15).delay(waitingDelay)
+    static let waitingDelay: Double = 0.064
+    static let waitingEnters = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.16).delay(waitingDelay)
     static let runningPeriod: TimeInterval = 1.6
 }

@@ -604,7 +604,21 @@ extension BrainBarMenuPresenter {
         static func macAgo(_ age: String) -> String { "Mac \(age) ago" }
         static let lastKnown = "last known"
         /// D8.3: each half's scale, said as a scale ("up to 4/min"), not a bare number that reads like an axis floor.
-        static func upTo(_ value: String, minutes: Int) -> String { minutes == 1 ? "up to \(value)/min" : "up to \(value)/\(minutes) min" }
+        static func upTo(_ value: String, minutes: Int) -> String { minutes == 1 ? "up to \(value) / min" : "up to \(value) / \(minutes) min" }
+        // Revision 1.2 (L23, L24, L26).
+        static let checkSoon = "Check soon"
+        static func lastDriveUpload(_ age: String) -> String { "Last Drive upload \(age) ago." }
+        static func statusChecked(_ age: String) -> String { "Status checked \(age) ago" }
+        static func nextStatusCheck(_ age: String) -> String { "Next status check in \(age)" }
+        static func valuesLastKnownAt(_ time: String) -> String { "not confirmed: values last known at \(time)" }
+        static func lastKnownAt(_ time: String) -> String { "Last known at \(time)" }
+        static let failedThenRetried = "failed, then copied on retry"
+        static func uploadFailedRetried(_ failed: String, _ retry: String) -> String {
+            "Upload failed at \(failed); the \(retry) retry succeeded."
+        }
+        static let searchByWordsNoCheck = "Search by words: no check yet"
+        static func notCheckedSinceShort(_ day: String) -> String { "Not checked since \(day)." }
+        static let nothingKnownBrokenShort = "Nothing is known to be broken."
         static let lateIfLeftOfLine = "late if the newest copy is left of this line"
         static func more(_ n: Int) -> String { "\(n) more" }
         static func plusMore(_ n: Int) -> String { "+\(n) more" }

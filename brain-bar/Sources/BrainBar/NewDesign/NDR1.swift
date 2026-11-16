@@ -27,6 +27,9 @@ struct NDR1: Equatable, Sendable {
         var menuTitle: String? = nil
         /// The dropdown's one line under the title (R1.1 change 28; the strips are gone).
         var menuDetail: String? = nil
+        /// An amber state the app is handling itself (catching up on conversations or search by meaning): L23 keeps
+        /// the resting icon for these.
+        var catchingUp: Bool { severity == .orange && (id == "meaning" || id == "reader") }
         /// The page that owns it (the dropdown's row values turn red when concerned).
         var concerns: Set<String>
     }
@@ -46,6 +49,10 @@ struct NDR1: Equatable, Sendable {
     var headline: String
     var headlineSymbol: String?
     var headlineTone: NDModel.Tone
+    /// The line under the title (one amber notice, or not confirmed); problems put theirs on their rows.
+    var headlineDetail: String?
+    /// The Problems surface: something red, or two or more amber notices.
+    var showsProblemRows: Bool
     var items: [Item]
     /// Not confirmed: the stale verdict's time and age.
     var unconfirmedSince: String?
@@ -55,6 +62,16 @@ struct NDR1: Equatable, Sendable {
     var footerRight: String?
     var calm: Bool { items.isEmpty && unconfirmedSince == nil }
     var redCount: Int { items.filter { $0.severity == .red }.count }
+    /// R1.2 change 6: red problems you can fix here first (Reconnect), then red problems an agent must fix, then amber.
+    var orderedItems: [Item] {
+        func rank(_ i: Item) -> Int {
+            if i.severity != .red { return 2 }
+            return i.action.map { NDButtonPolicy.filled($0) } == true ? 0 : 1
+        }
+        return items.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map(\.element)
+    }
+    /// L23: the amber dot on the icon iff an amber notice that is not catching up, and nothing red.
+    var amberDot: Bool { redCount == 0 && items.contains { $0.severity == .orange && !$0.catchingUp } }
     /// Tab badges (D6): red items only, by the page that owns them.
     var backupsBadge: Int {
         items.filter { $0.severity == .red && !$0.concerns.isDisjoint(with: NDR1.backupChecks) }.count
@@ -82,7 +99,7 @@ struct NDR1: Equatable, Sendable {
                                   detail: c.driveAuthModel == .missing ? BrainBarMenuPresenter.Say.s13DetailMissing.text
                                       : BrainBarMenuPresenter.Say.s13Detail.text,
                                   action: action, strip: Strip(from: Say.stageMac, to: Say.stageDrive, side: .target, severity: .red),
-                                  menuDetail: driveAges(verdict).min().map { Say.nothingUploadedFor(NDFormat.ageText($0)) },
+                                  menuDetail: driveAges(verdict).min().map { Say.lastDriveUpload(NDFormat.ageText($0)) },
                                   concerns: ["drive_auth", "backup_offsite", "transcripts"]))
                 covered.formUnion(["drive_auth", "backup_offsite", "transcripts"])
             }
@@ -116,7 +133,8 @@ struct NDR1: Equatable, Sendable {
                 items.append(Item(id: "nightly", severity: .red, title: Say.nightlyFailed(nights),
                                   detail: since ?? BrainBarMenuPresenter.Say.cantFix.text, action: copyReport,
                                   strip: Strip(from: Say.jobs, to: Say.stageMemory, side: .source, severity: .red),
-                                  menuTitle: Say.nightlyFailedShort(nights), menuDetail: since,
+                                  menuTitle: Say.nightlyFailedShort(nights),
+                                  menuDetail: lastNightly(i).map { Say.notCheckedSinceShort(weekday($0, c)) },
                                   concerns: ["maintenanceNightly", "nightly"]))
                 covered.formUnion(["maintenanceNightly", "nightly"])
             }
@@ -148,37 +166,46 @@ struct NDR1: Equatable, Sendable {
         // One filled button per surface: the first item's action; the copy-report button is never the filled one when a
         // reconnect exists (kept as data: the views read `filledActionIndex`).
 
-        // Headline.
+        // Headline (R1.2 changes 4 to 8, L24).
         var unconfirmedSince: String?
         var unconfirmedDetail: String?
         var headline = BrainBarMenuPresenter.Say.allGood.text
+        var detail: String?
         var symbol: String?
         var tone: NDModel.Tone = .fine
+        var rows = false
+        let red = items.filter { $0.severity == .red }.count
         if pipeline.allUnconfirmed, items.isEmpty {
-            // R1.1 change 32: said once, in the title; the detail says nothing is known to be broken.
             headline = Say.notConfirmed
             symbol = "questionmark.circle"
             if let at = verdict?.evaluatedAt {
                 unconfirmedSince = Say.notConfirmedSince(hhmm(at, c))
                 headline = unconfirmedSince ?? headline
                 unconfirmedDetail = Say.nothingKnownBroken(NDFormat.ageText(max(0, c.now.timeIntervalSince(at))))
+                detail = unconfirmedDetail
             }
+        } else if red > 0 {
+            // "N things need you" (red items only), then the Problems surface: one row per item, its action on its row.
+            headline = red == 1 ? BrainBarMenuPresenter.Say.countOne.text : Say.thingsNeedYou(red)
+            symbol = "exclamationmark.circle.fill"
+            tone = .fault
+            rows = true
         } else if items.count == 1, let only = items.first {
-            headline = only.title
-            symbol = only.severity == .red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill"
-            tone = only.severity == .red ? .fault : .warn
-        } else if items.count > 1 {
-            // D6: "needs you" and its count are for red items only; amber ones are listed, never counted.
-            let red = items.filter { $0.severity == .red }.count
-            if red == 0, let first = items.first {
-                headline = first.title
-                symbol = "exclamationmark.triangle.fill"
-                tone = .warn
+            // Amber only, one: a catching-up state names itself; any other notice is "Check soon" with its sentence.
+            symbol = "exclamationmark.triangle.fill"
+            tone = .warn
+            if only.catchingUp {
+                headline = only.title
+                detail = only.detail
             } else {
-                headline = red == 1 ? BrainBarMenuPresenter.Say.countOne.text : Say.thingsNeedYou(red)
-                symbol = "exclamationmark.circle.fill"
-                tone = .fault
+                headline = Say.checkSoon
+                detail = only.title
             }
+        } else if items.count > 1 {
+            headline = Say.checkSoon
+            symbol = "exclamationmark.triangle.fill"
+            tone = .warn
+            rows = true
         }
 
         // Footer (finding 8).
@@ -189,14 +216,15 @@ struct NDR1: Equatable, Sendable {
                 left = Say.waitingForNextCheck
                 _ = age
             } else {
-                left = Say.checkedAgo(age)
+                // R1.2 change 14: "status" check, so it never collides with the nightly check-up.
+                left = Say.statusChecked(age)
                 let next = at.addingTimeInterval(300).timeIntervalSince(c.now)
-                if next > 0 { right = Say.nextCheckIn(NDFormat.ageText(max(60, next))) }
+                if next > 0 { right = Say.nextStatusCheck(NDFormat.ageText(max(60, next))) }
             }
         }
 
-        return NDR1(pipeline: pipeline, headline: headline, headlineSymbol: symbol, headlineTone: tone, items: items,
-                    unconfirmedSince: unconfirmedSince, unconfirmedDetail: unconfirmedDetail,
+        return NDR1(pipeline: pipeline, headline: headline, headlineSymbol: symbol, headlineTone: tone, headlineDetail: detail,
+                    showsProblemRows: rows, items: items, unconfirmedSince: unconfirmedSince, unconfirmedDetail: unconfirmedDetail,
                     menuRows: menuRows(i, m, items: items, pipeline: pipeline), footerLeft: left, footerRight: right)
     }
 
