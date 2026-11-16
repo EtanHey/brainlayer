@@ -40,6 +40,10 @@ struct BrainBarMenuRowView: View {
     @ObservedObject var focus: BrainBarMenuRowFocus
     let perform: (P.ActionKind) -> Void
 
+    private var noticeColor: Color {
+        Color(nsColor: NSColor.systemOrange.blended(withFraction: accessibility.increaseContrast ? 0.5 : 0.3,
+            of: .labelColor) ?? .systemOrange)
+    }
     private var secondary: Color { accessibility.increaseContrast ? .primary : .secondary }
     private var lastInBlock: Bool { next == nil || next == .separator }
 
@@ -94,6 +98,8 @@ struct BrainBarMenuRowView: View {
     @ViewBuilder private var gutter: some View {
         if let mark = row.mark {
             BrainBarMenuMark(mark: mark, size: gutterHeight, accessibility: accessibility)
+        } else if row.state == .notice {
+            Image(systemName: "circle.fill").font(.system(size: 8)).foregroundStyle(noticeColor)
         } else if row.spinner || (row.state == .behind && row.kind != .headlineDetail) {
             spinner
         } else if row.state == .cantTell, row.kind != .headlineDetail {
@@ -119,7 +125,7 @@ struct BrainBarMenuRowView: View {
             switch (row.kind, index) {
             case (.headline, 0): text.font(.system(size: 15, weight: .semibold)).frame(minHeight: 26)
             case (.needsYou, 0): text.fontWeight(.semibold)
-            default: text.foregroundStyle(secondary).padding(.top, index == 0 ? 0 : 2)
+            default: text.foregroundStyle(row.state == .notice ? noticeColor : secondary).padding(.top, index == 0 ? 0 : 2)
             }
         }
         if handoff > 0 {

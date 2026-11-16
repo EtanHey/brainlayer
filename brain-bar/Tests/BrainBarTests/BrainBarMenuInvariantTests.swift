@@ -397,8 +397,8 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                 let expected: [[String]] = eligible
                     ? [["Backing up now"], ["To Google Drive."], [], ["Can’t confirm agents can search right now."],
                        ["Saving and upkeep are fine."], [], ["Settings…"], ["Quit BrainBar"]]
-                    : [["1 thing needs you"], [], ["Something BrainBar checks needs attention.", "BrainBar can’t fix this itself.",
-                        "Give the report to an agent."], ["Can’t confirm agents can search right now."], [], ["Settings…"], ["Quit BrainBar"]]
+                    : [["Check soon"], [], ["Something BrainBar checks needs attention."], ["Can’t confirm agents can search right now."],
+                       ["Saving and upkeep are fine."], [], ["Settings…"], ["Quit BrainBar"]]
                 let p = BrainBarMenuPresenter.present(c), f = Facts(c: c, p: p)
                 XCTAssertEqual(p.rows.map(\.strings), expected)
                 for text in p.rows.flatMap(\.strings).flatMap(Self.sentences) {
@@ -595,7 +595,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         XCTAssertEqual(detail(duplicateDrive), ["Backed up to Google Drive Nov 11 at 11:48."])
         let duplicateSearch = adding(capture(["search": .amber], profile: 0),
                                      Check(name: "search", state: .amber, since: "2026-11-12T10:48:00+02:00", note: "", unknownTicks: 0, blind: false))
-        XCTAssertEqual(BrainBarMenuPresenter.present(duplicateSearch).count, 1)
+        XCTAssertEqual(BrainBarMenuPresenter.present(duplicateSearch).count, 0)
         // A4 (R26): under the never-connected row (profile 1, model `missing`).
         XCTAssertTrue(sentences(capture(["drive_auth": .red, "transcripts": .amber], profile: 1))
             .contains("Conversation backups can’t upload either until Drive is connected."))
@@ -840,9 +840,9 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             return BrainBarMenuPresenter.present(c)
         }
         XCTAssertEqual(present(["coverage_drop"]).count, 0)
-        XCTAssertEqual(present(["file_ingestion_failure"]).count, 1)
-        XCTAssertEqual(present(["a_reason_nobody_knows"]).count, 1)
-        XCTAssertEqual(present(["coverage_drop", "file_ingestion_failure"]).count, 1)
+        XCTAssertEqual(present(["file_ingestion_failure"]).count, 0)
+        XCTAssertEqual(present(["a_reason_nobody_knows"]).count, 0)
+        XCTAssertEqual(present(["coverage_drop", "file_ingestion_failure"]).count, 0)
         // R10: `quarantined_record` is Fine, and the oracle agrees (review round 1, Codex N3, Claude N3).
         var quarantined = Self.capture(["search": .amber], base: 0, dot: .green, checking: false, wake: false, freshness: .fresh0, measured: true)
         quarantined.watcher = .init(alertReasons: ["quarantined_record"])
@@ -1129,6 +1129,8 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         },
         "X02": { f, _ in f.c.wakeCatchUpPending },
         "S4": { f, v in f.c.lastKnownBackupAt.map { $0 <= f.c.now && f.nameable($0) && f.dayWords($0) == v[0] } == true },
+        "R31": { f, _ in f.p.count == 0 && (f.c.verdict?.checks.contains { $0.state == .amber } == true
+            || f.c.watcher.map { w in w.readable && w.fresh && w.alertReasons.contains { !["offset_lag", "quarantined_record"].contains($0) && !($0 == "coverage_drop" && w.dbProbeFailed) } } == true) },
         "R02.headline": { f, _ in f.catchingUp },
         "R02": { f, _ in f.catchingUp },
         "S03.headline": { f, _ in f.running != nil },
@@ -1221,9 +1223,8 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         }
         // I7 (R20): a Needs-you fact the app reads without the producer counts, whatever the verdict or the flags.
         if let w = c.watcher, w.readable, w.fresh {
-            let alert = w.alertReasons.contains { !["offset_lag", "quarantined_record"].contains($0) && !($0 == "coverage_drop" && w.dbProbeFailed) }
             let lagPast = w.alertReasons.contains("offset_lag") && c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } == true
-            if (alert || lagPast), p.form != .needs { out.append("I7 a readable watcher fact did not count") }
+            if lagPast, p.form != .needs { out.append("I7 a readable watcher fact did not count") }
         }
         if c.maintenanceNightFailures.map({ $0 >= 3 }) == true, p.form != .needs { out.append("I7 nightly upkeep failing did not count") }
         // I5: words.

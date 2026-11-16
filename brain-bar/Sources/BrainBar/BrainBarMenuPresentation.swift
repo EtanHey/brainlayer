@@ -55,7 +55,7 @@ struct BrainBarMenuPresentation: Equatable, Sendable {
     enum Icon: String, Sendable { case resting, marked }
     /// The cases file's `mark`: A2's signs, A1's disc, and A1's row marks.
     enum Mark: String, Sendable { case ok, busy, wait, marked, alertCircle = "alert-circle", checkmark }
-    enum RowState: String, Sendable { case behind, cantTell = "cant-tell" }
+    enum RowState: String, Sendable { case behind, notice, cantTell = "cant-tell" }
     enum ActionKind: String, Sendable {
         case reconnectDrive = "reconnect_drive", connectDrive = "connect_drive", copyReport = "copy_report"
         case openStorageSettings = "open_storage_settings"

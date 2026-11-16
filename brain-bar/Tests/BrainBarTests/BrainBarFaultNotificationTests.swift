@@ -134,7 +134,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         }
     }
 
-    func testAmberIngestWithoutLagKeepsR24Attention() {
+    func testAmberIngestWithoutLagIsR31Notice() {
         var c = lagCapture()
         c.watcher = .init()
         c.verdict = .init(dot: .amber, checks: c.verdict!.checks.map { k in
@@ -142,8 +142,8 @@ final class BrainBarFaultNotificationTests: XCTestCase {
                 note: "an agent BrainLayer does not index is running", unknownTicks: 0, blind: false) : k
         }, notes: [], evaluatedAt: c.now)
         let p = BrainBarMenuPresenter.present(c)
-        XCTAssertEqual(p.form, .needs)
-        XCTAssertEqual(p.rows.first { $0.kind == .needsYou }?.strings.first, BrainBarMenuPresenter.Say.generic.text)
+        XCTAssertEqual(p.form, .calm)
+        XCTAssertEqual(p.rows.first { $0.state == .notice }?.strings.first, BrainBarMenuPresenter.Say.generic.text)
     }
 
     func testNewSameGoneAndReturned() async {
@@ -359,7 +359,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertEqual(center.posts.first?.1, "Memory search needs attention")
     }
 
-    func testAppKnownWatcherUnknownGapDoesNotRearm() async {
+    func testWatcherNoticeUnknownGapNeverNotifies() async {
         let center = Center()
         let observed = BrainBarFaultNotifications(center: center, defaults: defaults())
         var c = capture()
@@ -369,7 +369,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         missing.watcher = nil
         await observed.update(missing)
         await observed.update(c)
-        XCTAssertEqual(center.posts.count, 1)
+        XCTAssertEqual(center.posts.count, 0)
     }
 
     func testAppKnownHistoryUnknownGapDoesNotRearm() async {
@@ -544,7 +544,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
             }, notes: [], evaluatedAt: c.now)
             await subject.update(c)
         }
-        XCTAssertEqual(center.posts.count, 1)
+        XCTAssertEqual(center.posts.count, 0)
     }
 
     func testRound2RecoveredThingRearmsWhileOtherThingRemainsUnknown() async {
@@ -651,7 +651,8 @@ final class BrainBarFaultNotificationTests: XCTestCase {
                 }, notes: [], evaluatedAt: c.now)
                 await subject.update(c, jobAlerts: [:])
                 XCTAssertEqual(center.posts.count, 2, key)
-                XCTAssertEqual(center.posts.last?.1, "Backups need attention")
+                if state == .red { XCTAssertEqual(center.posts.last?.1, "Backups need attention") }
+                else { XCTAssertEqual(center.posts.last?.1, BrainBarMenuPresenter.notificationFaults(c).first?.title) }
             }
         }
         }

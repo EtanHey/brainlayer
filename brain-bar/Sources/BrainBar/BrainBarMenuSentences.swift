@@ -113,6 +113,10 @@ extension BrainBarMenuPresenter {
         static let backedUp = S("S01", .claim, "Backed up to Google Drive {at}.") { c, p, v in
             allGoodProven(c) && p.headline == allGood.text && allGoodDate(c).map { at($0, c) } == v[0]
         }
+        static let checkSoon = S("R31", .claim, "Check soon") { c, p, _ in
+            p.count == 0 && (c.verdict?.checks.contains { $0.state.uiKind == .notice } == true
+                || c.watcher.map { w in w.readable && w.fresh && w.alertReasons.contains { !["offset_lag", "quarantined_record"].contains($0) && !($0 == "coverage_drop" && w.dbProbeFailed) } } == true)
+        }
         static let checkingMemory = S("X01", .neutral, "Checking on your memory…")
         static let checkingSleep = S("X02", .claim, "Checking after sleep…") { c, _, _ in c.wakeCatchUpPending }
         static let notConfirmed = S("X01.detail", .neutral, "Saving, search, backups and upkeep aren’t confirmed yet.")
@@ -218,7 +222,7 @@ extension BrainBarMenuPresenter {
             allGood, backedUp, checkingMemory, checkingSleep, notConfirmed, lastBackup, r02Headline, r02, s03Headline, s03, s03Started, s03StartedOn,
             s03Progress, s03ProgressEta, catchingTwo, catchingFew, f02, checking, cantConfirmBackups, stillChecking, stillCheckingFew,
             fineIs, fineAre, everythingElse, countOne, countMany, generic, cantFix, giveReport, ifNotFinished, u03, stillSaved, s19,
-            s19Memory, f07, f07Since, exactWords, noRecord, nothingInDrive, s32, s32Progress, s32On, s32ProgressOn, s06, s06Newest, s06Confirmed, r15, s13,
+            checkSoon, s19Memory, f07, f07Since, exactWords, noRecord, nothingInDrive, s32, s32Progress, s32On, s32ProgressOn, s06, s06Newest, s06Confirmed, r15, s13,
             s13Missing, s13Detail, s13DetailMissing, d13, d13Missing, reconnect, connect, copyReport, storage, settings, quit, restart,
         ]
         static let exact = Dictionary(uniqueKeysWithValues: all.filter { !$0.template.contains("{") }.map { ($0.template, $0) })

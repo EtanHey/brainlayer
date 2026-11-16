@@ -83,7 +83,13 @@ struct BrainBarBackupRunFailure: Equatable, Sendable {
 enum BrainBarRenderedDot: String, Codable, Sendable { case green, amber, red }
 
 struct BrainBarHealthVerdict: Codable, Equatable, Sendable {
-    enum State: String, Codable, Sendable { case green, amber, red, unknown }
+    enum State: String, Codable, Sendable {
+        case green, amber, red, unknown
+        /// R31: shared by Classic/status receipts and menu row severity. Amber never asks for action.
+        var uiKind: BrainBarUIStatusItem.Kind? {
+            switch self { case .red: .attention; case .amber: .notice; default: nil }
+        }
+    }
     struct Check: Codable, Equatable, Sendable {
         let name: String
         let state: State

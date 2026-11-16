@@ -236,7 +236,7 @@ import XCTest
         let builder = BrainBarMenuBuilder(actions: recorder, accessibility: .init())  // the menu holds its builder weakly
         let menu = builder.build(s12)
         for index in menu.items.indices where menu.items[index].isEnabled { menu.performActionForItem(at: index) }
-        XCTAssertEqual(recorder.calls, [.row(.copyReport), .row(.reconnectDrive), .row(.copyReport), .settings, .quit, .restart])
+        XCTAssertEqual(recorder.calls, [.row(.reconnectDrive), .row(.copyReport), .settings, .quit, .restart])
     }
 
     func testOnlyAKeyboardHighlightFocusesThatRowsButton() throws {
@@ -246,11 +246,11 @@ import XCTest
         let rows = menu.items.filter { $0.view != nil && $0.isEnabled }
         func focused() -> [Bool] { rows.map { builder.focusState(of: $0)?.keyboardFocused ?? false } }
         builder.highlight(rows[1], byKeyboard: true)
-        XCTAssertEqual(focused(), [false, true, false])
+        XCTAssertEqual(focused(), [false, true])
         builder.highlight(rows[1], byKeyboard: false)
-        XCTAssertEqual(focused(), [false, false, false], "a hover never shows the focus ring")
+        XCTAssertEqual(focused(), [false, false], "a hover never shows the focus ring")
         builder.highlight(nil, byKeyboard: true)
-        XCTAssertEqual(focused(), [false, false, false])
+        XCTAssertEqual(focused(), [false, false])
     }
 
     /// Reduce Motion and Increase Contrast build every case, and change no row's size: nothing shifts.
