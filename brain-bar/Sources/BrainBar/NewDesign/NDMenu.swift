@@ -1,10 +1,12 @@
 import AppKit
 import SwiftUI
 
-/// The new dropdown (DESIGN-SPEC § 6.2): custom views in a real `NSMenu`, on the system menu material. The headline, the
-/// fault blocks with one action each, "Everything else is fine.", the four area rows, then the standing items on the
-/// system edge (R4). Every row shares one grid, `12 mark | 8 | content`, so the headline's text and the area names start
-/// at the same x in every state (review finding 5). Opening and closing are the system's own, never animated.
+private typealias Say = BrainBarMenuPresenter.SurfaceSay
+
+/// The dropdown (DESIGN-SPEC-R1 § 2.2): a real `NSMenu`, 320 pt. The headline; under a fault, a block with its title, the
+/// broken pipe cut to its two stages, and its one button (the first filled, others bordered); the four area rows, each
+/// with its symbol and one value, each opening its page; then Open BrainBar, Settings… and Quit as system items.
+/// Opening and closing are the system's own, never animated.
 @MainActor final class NDMenuBuilder: NSObject, NSMenuDelegate {
     let store: NDStore
     let perform: @MainActor (BrainBarMenuAction) -> Void
@@ -31,48 +33,59 @@ import SwiftUI
     func populate(_ menu: NSMenu) {
         menu.removeAllItems()
         rowStates = [:]
-        let model = store.model
-        menu.addItem(hosted(NDMenuHeadline(store: store), label: [model.headline, model.headlineDetail].compactMap { $0 }.joined(separator: ". ")))
+        let r1 = store.r1
+        let headline = NDMenuHeadline.text(r1)
+        menu.addItem(hosted(NDMenuHeadline(r1: r1), label: headline))
         menu.addItem(.separator())
-        for (index, fault) in model.faults.enumerated() {
+        let filled = NDMenuFaultBlock.filledIndex(r1.items)
+        for (index, item) in r1.items.enumerated() {
             if index > 0 { menu.addItem(.separator()) }
             let state = NDMenuRowState()
-            let item = hosted(NDMenuFaultRow(store: store, fault: fault, state: state) { [weak self] kind in self?.perform(.row(kind)) },
-                              label: ([fault.title] + fault.facts).joined(separator: " "), state: state)
-            if let action = fault.action {
-                item.title = action.label  // type-select and VoiceOver reach the action; the view draws the row
-                item.target = self
-                item.action = #selector(performItem)
-                item.representedObject = BrainBarMenuAction.row(action.kind)
-                item.isEnabled = true
+            let row = hosted(NDMenuFaultBlock(store: store, item: item, filled: index == filled, state: state) { [weak self] kind in
+                self?.perform(.row(kind))
+            }, label: [item.title, item.detail].compactMap { $0 }.joined(separator: ". "), state: state)
+            if let action = item.action {
+                row.title = action.label  // type-select and VoiceOver reach the action; the view draws the block
+                row.target = self
+                row.action = #selector(performItem)
+                row.representedObject = BrainBarMenuAction.row(action.kind)
+                row.isEnabled = true
             }
-            menu.addItem(item)
+            menu.addItem(row)
         }
-        if model.everythingElse {
-            menu.addItem(hosted(NDMenuEverythingElse(), label: BrainBarMenuPresenter.Say.everythingElse.text))
-        }
-        if !model.faults.isEmpty { menu.addItem(.separator()) }
-        for area in model.menuAreas {
+        if !r1.items.isEmpty { menu.addItem(.separator()) }
+        for row in r1.menuRows {
             let state = NDMenuRowState()
-            let item = hosted(NDMenuAreaRow(store: store, area: area, state: state) { [weak self] in self?.openOverview() },
-                              label: "\(area.name), \(area.accessibility)" + (area.unknownReason.map { ", " + $0 } ?? ""), state: state)
-            item.title = area.name
-            item.toolTip = area.unknownReason
+            let item = hosted(NDMenuAreaRow(store: store, row: row, state: state) { [weak self] in self?.open(row.kind) },
+                              label: [row.label, row.value, row.help].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", "),
+                              state: state)
+            item.title = row.label
+            item.toolTip = row.help
             item.target = self
-            item.action = #selector(openArea)
+            item.action = #selector(openRow)
+            item.representedObject = row.kind.rawValue
             item.isEnabled = true
             menu.addItem(item)
         }
         menu.addItem(.separator())
-        let settings = standard(BrainBarMenuPresenter.Say.settings.text, key: ",", action: .settings)
-        let quit = standard(BrainBarMenuPresenter.Say.quit.text, key: "q", action: .quit)
-        let restart = standard(BrainBarMenuPresenter.Say.restart.text, key: "q", action: .restart)
+        let open = NSMenuItem(title: Say.openBrainBar, action: #selector(openOverview), keyEquivalent: "")
+        open.target = self
+        open.image = Self.symbol("macwindow")
+        open.isEnabled = true
+        let settings = standard(BrainBarMenuPresenter.Say.settings.text, key: ",", action: .settings, symbol: "gearshape")
+        let quit = standard(BrainBarMenuPresenter.Say.quit.text, key: "q", action: .quit, symbol: "power")
+        let restart = standard(BrainBarMenuPresenter.Say.restart.text, key: "q", action: .restart, symbol: "arrow.clockwise")
         restart.keyEquivalentModifierMask = [.command, .option]
         restart.isAlternate = true
-        [settings, quit, restart].forEach(menu.addItem)
+        [open, settings, quit, restart].forEach(menu.addItem)
     }
 
-    /// Arrow keys and the pointer reach the area rows and the fault rows; the row draws its own highlight.
+    static func symbol(_ name: String) -> NSImage? {
+        NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .regular))
+    }
+
+    /// The pointer and the arrow keys reach the area rows and the fault blocks; the row draws the system selection.
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
         let byKeyboard = NSApp.currentEvent?.type == .keyDown
         for (id, state) in rowStates {
@@ -88,11 +101,21 @@ import SwiftUI
         if let action = sender.representedObject as? BrainBarMenuAction { perform(action) }
     }
 
-    @objc private func openArea(_ sender: NSMenuItem) { openOverview() }
+    @objc private func openRow(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let kind = NDR1.MenuRow.Kind(rawValue: raw) else { return }
+        open(kind)
+    }
 
-    private func openOverview() {
+    @objc private func openOverview() { open(.activity) }
+
+    /// Each row opens the window at its page (Activity and Search at the Overview).
+    private func open(_ kind: NDR1.MenuRow.Kind) {
         menuDismiss?()
-        openWindow(.overview)
+        switch kind {
+        case .activity, .search: openWindow(.overview)
+        case .backups: openWindow(.backups)
+        case .jobs: openWindow(.jobs)
+        }
     }
 
     private func hosted<V: View>(_ view: V, label: String, state: NDMenuRowState? = nil) -> NSMenuItem {
@@ -103,11 +126,12 @@ import SwiftUI
         return item
     }
 
-    private func standard(_ title: String, key: String, action: BrainBarMenuAction) -> NSMenuItem {
+    private func standard(_ title: String, key: String, action: BrainBarMenuAction, symbol: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: #selector(performItem), keyEquivalent: key)
         item.keyEquivalentModifierMask = .command
         item.target = self
         item.representedObject = action
+        item.image = Self.symbol(symbol)
         item.isEnabled = true
         return item
     }
@@ -138,106 +162,155 @@ final class NDMenuRowHost: NSView {
 
 // MARK: - Rows
 
-/// `12 mark | 8 | content`, inside the menu's 5 pt selection margin and 9 pt padding: content starts at x = 34.
-struct NDMenuGrid<Mark: View, Content: View>: View {
-    var alignment: VerticalAlignment = .center
-    @ViewBuilder var mark: Mark
-    @ViewBuilder var content: Content
-    var body: some View {
-        HStack(alignment: alignment, spacing: NDGrid.menuMarkGap) {
-            mark.frame(width: NDGrid.menuMark)
-            content.frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 9)
-        .padding(.horizontal, 5)
-    }
-}
-
+/// The headline: "All good" (17 Semibold) alone; with faults one red mark and "N things need you"; stale, the question
+/// mark and "Not confirmed". 19 pt from the menu's edge, as the system rows' text.
 struct NDMenuHeadline: View {
-    @ObservedObject var store: NDStore
+    let r1: NDR1
+
+    static func text(_ r1: NDR1) -> String {
+        if r1.items.isEmpty { return r1.headline }
+        return r1.items.count == 1 ? BrainBarMenuPresenter.Say.countOne.text : Say.thingsNeedYou(r1.items.count)
+    }
+
     var body: some View {
-        let m = store.model
-        VStack(alignment: .leading, spacing: 0) {
-            NDMenuGrid {
-                NDMarkView(mark: m.headlineMark)
-            } content: {
-                Text(m.headline).font(NDType.menuHeadline).tracking(-0.1).foregroundStyle(Color(nsColor: .labelColor))
+        HStack(spacing: 8) {
+            if !r1.items.isEmpty {
+                let red = r1.items.contains { $0.severity == .red }
+                Image(systemName: red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 15)).foregroundStyle(red ? ND.red : ND.orange)
+            } else if let symbol = r1.headlineSymbol {
+                Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(Color(nsColor: .secondaryLabelColor))
             }
-            .frame(minHeight: 34)
-            if let detail = m.headlineDetail {
-                NDMenuGrid { Color.clear } content: {
-                    Text(detail).font(NDType.menuFact).foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.bottom, 6)
-            }
+            Text(Self.text(r1)).font(NDType.title).tracking(-0.25).foregroundStyle(Color(nsColor: .labelColor))
+            Spacer(minLength: 0)
         }
+        .padding(.top, 7).padding(.bottom, 6)
+        .padding(.horizontal, NDGrid.menuInset)
+        .frame(minHeight: 36)
     }
 }
 
-struct NDMenuFaultRow: View {
+/// One fault: its title (13 Semibold), the broken pipe cut to its two stages, and its one button.
+struct NDMenuFaultBlock: View {
     @ObservedObject var store: NDStore
-    let fault: NDModel.Fault
+    let item: NDR1.Item
+    let filled: Bool
     @ObservedObject var state: NDMenuRowState
     let perform: (BrainBarMenuPresentation.ActionKind) -> Void
 
-    private var waiting: Bool {
-        store.inputs.driveReconnecting && [.reconnectDrive, .connectDrive].contains(fault.action?.kind)
+    /// One filled button per surface: a reconnect when there is one, otherwise the first action.
+    static func filledIndex(_ items: [NDR1.Item]) -> Int {
+        items.firstIndex { $0.action.map { [.reconnectDrive, .connectDrive].contains($0.kind) } == true }
+            ?? items.firstIndex { $0.action != nil } ?? 0
     }
 
     var body: some View {
-        NDMenuGrid(alignment: .top) {
-            NDMarkView(mark: .fault).padding(.top, 2.5)
-        } content: {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(keepingUnits(fault.title)).font(NDType.menuFaultTitle).foregroundStyle(Color(nsColor: .labelColor))
-                    .lineSpacing(2).fixedSize(horizontal: false, vertical: true)
-                if !fault.shownFacts.isEmpty {
-                    Text(keepingUnits(fault.shownFacts.joined(separator: " "))).font(NDType.menuFact)
-                        .foregroundStyle(Color(nsColor: .secondaryLabelColor)).lineSpacing(2)
-                        .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
+        VStack(alignment: .leading, spacing: 0) {
+            Text(item.menuTitle ?? item.title).font(NDType.bodyStrong).foregroundStyle(Color(nsColor: .labelColor))
+                .fixedSize(horizontal: false, vertical: true)
+            // R1.1 change 28: one line of words under the title (the strips are gone).
+            if let detail = item.menuDetail ?? item.detail, !detail.isEmpty {
+                Text(keepingUnits(detail)).font(NDType.body).foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
+            }
+            if let action = item.action {
+                let waiting = store.inputs.driveReconnecting && [.reconnectDrive, .connectDrive].contains(action.kind)
+                NDWaitingSwap(waiting: waiting, alignment: .leading) {
+                    NDButton(label: action.label, filled: filled, small: true) { perform(action.kind) }
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 3).padding(-3)
+                            .opacity(state.keyboard ? 1 : 0))
+                } line: {
+                    Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(Color(nsColor: .secondaryLabelColor))
                 }
-                if let action = fault.action {
-                    // The waiting line takes the button's place at the button's height (R3): nothing below moves.
-                    NDWaitingSwap(waiting: waiting, alignment: .leading) {
-                        NDActionButton(label: action.label, keyboardFocus: state.keyboard) { perform(action.kind) }
-                    } line: {
-                        HStack(spacing: 7) {
-                            NDMarkView(mark: .running)
-                            Text(BrainBarMenuPresenter.SurfaceSay.waitingForBrowser).font(NDType.menuFact)
-                                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                        }
-                    }
-                    .padding(.top, 8)
-                    if action.kind == .copyReport, store.inputs.copyReportFailed {
-                        Text(BrainBarMenuPresenter.SurfaceSay.copyFailed).font(NDType.menuFact)
-                            .foregroundStyle(Color(nsColor: .secondaryLabelColor)).padding(.top, 4)
-                    }
-                }
+                .padding(.top, 9)
             }
         }
-        .padding(.top, 7)
-        .padding(.bottom, 9)
+        .padding(.top, 6).padding(.bottom, 8)
+        .padding(.horizontal, NDGrid.menuInset)
     }
 }
 
-/// The one action: a filled button in Lumen. It answers a press (scale 0.97, motion 9) and shows focus when the arrow
-/// keys reach its row.
-struct NDActionButton: View {
-    let label: String
-    var keyboardFocus = false
-    var large = false
-    let action: () -> Void
+/// The broken pipe at 320 pt (§ 3.2): the two stages either side of the break, the pipe between them, and the same red or
+/// orange stretch and mark at the same side; downstream dotted `quiet`. 250 × 14.
+struct NDPipeStrip: View {
+    let strip: NDR1.Strip
+    static let width: CGFloat = 250
 
     var body: some View {
-        Button(action: action) { Text(label) }
-            .buttonStyle(NDFilledButtonStyle(large: large))
-            // The window's (large) buttons take keyboard focus; a menu row's focus is the menu's highlight, drawn below.
-            .modifier(NDWindowFocus(enabled: large, action: action))
-            .overlay(RoundedRectangle(cornerRadius: large ? 9 : 8, style: .continuous)
-                .strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 3).padding(-3)
-                .opacity(keyboardFocus ? 1 : 0))
-            .accessibilityLabel(Text(label))
+        Canvas { ctx, size in Self.draw(ctx, size, strip) }
+            .frame(width: Self.width, height: 14)
+            .accessibilityHidden(true)
+    }
+
+    static func labelWidth(_ s: String) -> CGFloat {
+        ceil(NSAttributedString(string: s, attributes: [.font: NSFont.systemFont(ofSize: 11)]).size().width)
+    }
+
+    static func draw(_ ctx: GraphicsContext, _ size: CGSize, _ strip: NDR1.Strip) {
+        let w = size.width, y: CGFloat = 7
+        let x0 = labelWidth(strip.from) + 8, x1 = w - labelWidth(strip.to) - 8
+        let tint = strip.severity == .red ? ND.red : ND.orange
+        let solid = StrokeStyle(lineWidth: 1.6, lineCap: .round)
+        func line(_ a: CGFloat, _ b: CGFloat) -> Path {
+            var p = Path()
+            p.move(to: CGPoint(x: a, y: y)); p.addLine(to: CGPoint(x: b, y: y))
+            return p
+        }
+        let mark: CGFloat
+        if strip.side == .target {
+            ctx.stroke(line(x0, x1 - 30), with: .color(ND.pipe), style: solid)
+            ctx.stroke(line(x1 - 30, x1 - 16), with: .color(tint), style: solid)
+            mark = x1 - 7
+        } else {
+            ctx.stroke(line(x0 + 16, x0 + 26), with: .color(tint), style: solid)
+            ctx.stroke(line(x0 + 30, x1), with: .color(ND.quiet), style: StrokeStyle(lineWidth: 1.6, dash: [2, 3]))
+            mark = x0 + 7
+        }
+        NDPipelineChart.symbol(ctx, strip.severity == .red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill",
+                               at: CGPoint(x: mark, y: y), size: 12, color: tint)
+        let secondary = Color(nsColor: .secondaryLabelColor)
+        ctx.draw(Text(strip.from).font(.system(size: 11)).foregroundColor(secondary), at: CGPoint(x: 0, y: y), anchor: .leading)
+        ctx.draw(Text(strip.to).font(.system(size: 11)).foregroundColor(secondary), at: CGPoint(x: w, y: y), anchor: .trailing)
+    }
+}
+
+/// An area row (24 pt): `16 symbol | 8 | label | flexible | value`; the Activity row carries the 128 × 18 two-sided chart
+/// instead of a value. The row under the pointer takes the system selection with white text.
+struct NDMenuAreaRow: View {
+    @ObservedObject var store: NDStore
+    let row: NDR1.MenuRow
+    @ObservedObject var state: NDMenuRowState
+    let open: () -> Void
+
+    static let symbols: [NDR1.MenuRow.Kind: String] = [.activity: "chart.bar", .search: "magnifyingglass", .backups: "externaldrive",
+                                                       .jobs: "clock"]
+
+    var body: some View {
+        let selected = state.highlighted
+        let text = Color(nsColor: selected ? .alternateSelectedControlTextColor : .labelColor)
+        let secondary = Color(nsColor: selected ? .alternateSelectedControlTextColor : .secondaryLabelColor)
+        HStack(spacing: 8) {
+            Image(systemName: Self.symbols[row.kind] ?? "circle").font(.system(size: 13)).foregroundStyle(secondary)
+                .frame(width: 16)
+            Text(row.label).font(NDType.body).foregroundStyle(text)
+            Spacer(minLength: 8)
+            if row.kind == .activity {
+                NDWaveform(wave: store.inputs.menuWave, size: .menu)
+                    .frame(width: 128, height: 18)
+                    .environment(\.ndPalette, selected ? .menuSelected : .menu)
+            } else {
+                Text(row.value)
+                    .font(row.tone == .fine ? NDType.number : NDType.numberStrong)
+                    .foregroundStyle(selected ? secondary : row.tone == .fault ? ND.redText : row.tone == .warn ? ND.orangeText : secondary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: NDGrid.menuAreaRow)
+        .background { if selected { NDMenuSelection() } }
+        .padding(.horizontal, 5)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: open)
     }
 }
 
@@ -266,7 +339,7 @@ struct NDWaitingSwap<Button: View, Line: View>: View {
     }
 }
 
-/// The system menu's own selection: the `.selection` material, emphasized, 5 pt continuous corners.
+/// The system menu's own selection: the `.selection` material, emphasized, 6 pt continuous corners.
 struct NDMenuSelection: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
@@ -274,7 +347,7 @@ struct NDMenuSelection: NSViewRepresentable {
         view.isEmphasized = true
         view.state = .active
         view.wantsLayer = true
-        view.layer?.cornerRadius = 5
+        view.layer?.cornerRadius = 6
         view.layer?.cornerCurve = .continuous
         view.layer?.masksToBounds = true
         return view
@@ -283,94 +356,9 @@ struct NDMenuSelection: NSViewRepresentable {
     func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
-private struct NDWindowFocus: ViewModifier {
-    let enabled: Bool
-    let action: () -> Void
-    func body(content: Content) -> some View {
-        if enabled { content.ndKeyboardFocus(action: action) } else { content }
-    }
-}
-
-/// Motion 9: a press scales to 0.97 over 100 ms and releases over 160 ms. The spec keeps it under Reduce Motion (§ 8, row
-/// 9: it is feedback at the pointer, not travel), so the style does not read the setting.
-struct NDFilledButtonStyle: ButtonStyle {
-    var large = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: large ? 13 : 12, weight: .semibold))
-            .foregroundStyle(ND.onLumen)
-            .padding(.horizontal, large ? 14 : 11)
-            .frame(height: large ? 28 : 24)
-            .background(RoundedRectangle(cornerRadius: large ? 7 : 6, style: .continuous).fill(ND.lumen))
-            .contentShape(RoundedRectangle(cornerRadius: large ? 7 : 6, style: .continuous))
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.easeOut(duration: configuration.isPressed ? 0.1 : 0.16), value: configuration.isPressed)
-    }
-}
-
-struct NDMenuEverythingElse: View {
-    var body: some View {
-        NDMenuGrid {
-            NDMarkView(mark: .check)
-        } content: {
-            Text(BrainBarMenuPresenter.Say.everythingElse.text).font(NDType.menuFact)
-                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-        }
-        .padding(.vertical, 3)
-        .padding(.bottom, 4)
-    }
-}
-
-struct NDMenuAreaRow: View {
-    @ObservedObject var store: NDStore
-    let area: NDModel.MenuArea
-    @ObservedObject var state: NDMenuRowState
-    let open: () -> Void
-
-    var body: some View {
-        HStack(spacing: 0) {
-            NDMarkView(mark: area.shownMark).frame(width: NDGrid.menuMark)
-            Spacer().frame(width: NDGrid.menuMarkGap)
-            Text(area.name)
-                .font(area.mark == .fault ? NDType.menuAreaNameStrong : NDType.menuAreaName)
-                .tracking(0.15)
-                .foregroundStyle(Color(nsColor: state.highlighted ? .alternateSelectedControlTextColor : .labelColor))
-                .frame(width: NDGrid.menuName, alignment: .leading)
-            Group {
-                visual.frame(width: NDGrid.menuVisual, height: 20)
-                NDNumberText(number: area.number, size: 12, selected: state.highlighted).frame(maxWidth: .infinity, alignment: .trailing)
-            }
-            .environment(\.ndPalette, state.highlighted ? .menuSelected : .menu)
-        }
-        .padding(.horizontal, 9)
-        .frame(height: NDGrid.menuAreaRow)
-        // Fix 7 and review polish 2: one menu, one blue: the selection material the system rows use, emphasized, inset
-        // 5 pt and 5 pt round like them; text and graphics in the selected text colour while highlighted.
-        .background { if state.highlighted { NDMenuSelection() } }
-        .padding(.horizontal, 5)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: open)
-    }
-
-    @ViewBuilder private var visual: some View {
-        switch area.visual {
-        case .wave: NDWaveform(wave: store.inputs.menuWave, size: .menu)
-        case let .fill(share): NDFillBar(share: share)
-        case let .gauge(g): NDGaugeView(visual: .gauge(g), endTick: true)
-        case let .streak(n):
-            HStack(spacing: 6) {
-                NDGaugeView(visual: .streak(n))
-                NDStreakDots(count: n)
-            }
-        case .unknown: NDDashed().frame(height: 12)
-        }
-    }
-}
-
-/// R28a, for line breaking only: a number stays with the word after it.
 /// Fix 11: the report sentence is one unit, so neither "an agent." nor "to an agent." is left alone on a line.
 func keepingUnits(_ string: String) -> String {
     let report = BrainBarMenuPresenter.Say.giveReport.text
-    return string.replacingOccurrences(of: report, with: report.replacingOccurrences(of: " ", with: "\u{00A0}")).replacing(#/(\d%?) /#) { "\($0.1)\u{00A0}" }.replacing(#/\b([A-Z][a-z]{2}) (\d)/#) { "\($0.1)\u{00A0}\($0.2)" }
+    return string.replacingOccurrences(of: report, with: report.replacingOccurrences(of: " ", with: "\u{00A0}"))
+        .replacing(#/(\d%?) /#) { "\($0.1)\u{00A0}" }.replacing(#/\b([A-Z][a-z]{2}) (\d)/#) { "\($0.1)\u{00A0}\($0.2)" }
 }
