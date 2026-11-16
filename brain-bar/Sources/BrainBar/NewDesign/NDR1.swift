@@ -151,6 +151,21 @@ struct NDR1: Equatable, Sendable {
                 covered.formUnion(["maintenanceNightly", "nightly"])
             }
         }
+        // Amber notices the pipeline draws on a station with no item yet, in the station's own words (R2A 9), decided
+        // from the verdict itself, never from the presenter's classification: main's R31 presenter makes an amber check a
+        // notice rather than a fault, and the window must say the same thing on either side of that change.
+        if !pipeline.allUnconfirmed {
+            for station in [NDStation.queue, .mac, .drive, .jobs] where pipeline.notices.contains(station) {
+                guard !items.contains(where: { $0.station == station }), let status = pipeline.status[station]?.text else { continue }
+                let here = Set(stationForCheck.filter { $0.value == station }.map(\.key))
+                let amber = (verdict?.checks ?? []).filter { here.contains($0.name) && $0.state == .amber }.map(\.name)
+                guard !amber.isEmpty else { continue }
+                items.append(Item(id: "notice." + station.rawValue, severity: .orange,
+                                  title: Say.stationSays(NDPipelineLayout.name(station), status), detail: nil, action: nil,
+                                  strip: nil, concerns: Set(amber), station: station))
+                covered.formUnion(amber)
+            }
+        }
         // Search by meaning behind is drawn below as its own (orange or red) item.
         if !pipeline.allUnconfirmed, check("embedding").flatMap(sev) != nil { covered.insert("embedding") }
         // Every presenter fault the pipeline did not explain, in the presenter's own words.
