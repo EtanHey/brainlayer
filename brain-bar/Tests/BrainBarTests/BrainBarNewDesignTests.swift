@@ -111,7 +111,7 @@ import SwiftUI
         defer { controller.stop() }
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
         XCTAssertTrue(controller.contextMenuForTesting.items.contains { $0.view is NDMenuRowHost })
-        XCTAssertEqual(host.item.view.alphaValue, 0.45, accuracy: 0.001, "no reading yet: the resting brain, dimmed")
+        XCTAssertEqual(host.item.view.alphaValue, 1, "L23: no reading yet is drawn into the image (45 % brain and a \"?\" badge)")
         d.set("classic", forKey: BrainBarDesign.key)
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
         controller.renderStatusIconForTesting(stats: stats(), state: .idle)
@@ -193,7 +193,9 @@ import SwiftUI
         // macOS 15, 0 measured on the capture Mac's macOS 26), so heights are pinned to [page, page + one 52 pt row].
         let window = controller.windowForTesting
         func holds(_ page: NDPage, _ line: UInt = #line) {
-            let h = NDGrid.windowHeight(page)
+            // R1.2 change 22 and L25: the page's measured height, capped at the screen's visible height minus 40 pt.
+            let h = NDPageHeight.window(controller.newDesignStore, page: page,
+                                        screen: window.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height)
             let held = controller.windowWillResize(window, to: NSSize(width: 1400, height: 200))
             XCTAssertEqual(held.width, 900, "not resizable: the delegate holds the page size", line: line)
             XCTAssertGreaterThanOrEqual(held.height, h, line: line)
@@ -460,7 +462,7 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
     func testFixtureNamesAreTheCaptureList() {
         XCTAssertEqual(BrainBarDesignFixture.Name.allCases.map(\.rawValue),
                        ["calm", "agent-not-read", "drive-signed-out", "saves-stuck", "meaning-behind", "nightly-failing",
-                        "not-confirmed", "two-faults", "reconnect-waiting", "backups-failed-upload"])
+                        "not-confirmed", "two-faults", "reconnect-waiting", "backups-failed-upload", "backup-late"])
     }
 }
 
@@ -1140,6 +1142,14 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
 
     /// L18: every health check maps to connections, a stage, or the observer; every mapping names a connection that
     /// exists; every connection is guarded by a check or listed as a known gap.
+    /// The copy deck names jobs by their launchd raw value (it imports no settings types); every key is a real job.
+    func testJobWordsAreKeyedByRealJobs() {
+        let jobs = Set(BrainLayerLaunchdJob.allCases.map(\.rawValue))
+        XCTAssertTrue(Set(Say.jobNames.keys).isSubset(of: jobs))
+        XCTAssertEqual(Set(Say.jobNames.keys), Set(Say.jobHelp.keys))
+        XCTAssertEqual(Set(Say.jobNames.keys), jobs.subtracting(["index"]), "every scheduled job has a name and a help line")
+    }
+
     func testEveryHealthCheckMapsInTheGraph() {
         let checks = Set(BrainBarHealthVerdict.Check.labels.keys)
         XCTAssertFalse(checks.isEmpty)
@@ -1260,6 +1270,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         }
         XCTAssertEqual(r1(.calm).headline, BrainBarMenuPresenter.Say.allGood.text)
         XCTAssertTrue(r1(.calm).items.isEmpty)
+        // R1.2 changes 4 to 7 skipped (lead, 09:55): one red item still names itself in the headline.
         XCTAssertEqual(r1(.agentNotRead).headline, Say.agentNotRead("Cursor"))
         XCTAssertEqual(r1(.driveSignedOut).headline, Say.driveSignedOut)
         XCTAssertEqual(r1(.savesStuck).items.first?.detail, Say.savesWaited(38, NDFormat.ageText(2 * 3600)))
@@ -1278,7 +1289,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 XCTAssertEqual(NDButtonPolicy.filled(action), [.reconnectDrive, .connectDrive].contains(action.kind), name.rawValue)
             }
         }
-        XCTAssertEqual(r1(.twoFaults).items.first?.menuDetail, Say.nothingUploadedFor(NDFormat.ageText(27 * 3600)))
+        XCTAssertEqual(r1(.twoFaults).items.first?.menuDetail, Say.lastDriveUpload(NDFormat.ageText(27 * 3600)))
         XCTAssertEqual(r1(.twoFaults).items.last?.menuTitle, Say.nightlyFailedShort(3))
     }
 
@@ -1315,17 +1326,16 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 let store = NDStore(fixture: inputs, page: page)
                 let window = NDPageHeight.window(store, page: page, screen: nil)
                 let content = NDPageHeight.content(store, page: page)
-                XCTAssertGreaterThanOrEqual(window, NDGrid.windowHeight(page), "\(name) \(page)")
-                // title bar 52 + top inset 20 + content + bottom inset 24 + footer 28
-                XCTAssertLessThanOrEqual(NDGrid.titleBar + NDGrid.pageTop + content + 24 + NDGrid.footer, window + 0.5, "\(name) \(page)")
+                // title bar 52 + top inset 20 + content + bottom inset 20 + footer 28 (R1.2 change 22: no floor)
+                XCTAssertLessThanOrEqual(NDGrid.titleBar + NDGrid.pageTop + content + 20 + NDGrid.footer, window + 0.5, "\(name) \(page)")
                 if page == .overview { heights.append("\(name) \(Int(window))") }
             }
         }
-        XCTAssertEqual(NDPageHeight.window(NDStore(fixture: Fixture.inputs(.calm), page: .overview), page: .overview, screen: nil), 716)
+        let calm = NDPageHeight.window(NDStore(fixture: Fixture.inputs(.calm), page: .overview), page: .overview, screen: nil)
         let twoFaults = NDPageHeight.window(NDStore(fixture: Fixture.inputs(.twoFaults), page: .overview), page: .overview, screen: nil)
-        XCTAssertGreaterThan(twoFaults, 716, "the two-fault headline is taller, so the window is")
-        // Capped at the screen: past it, the page scrolls under its fade (§ 2.3).
-        XCTAssertEqual(NDPageHeight.window(NDStore(fixture: three, page: .overview), page: .overview, screen: 720), 720)
+        XCTAssertGreaterThan(twoFaults, calm, "two Problems rows are taller, so the window is")
+        // L25: capped at the screen's visible height minus 40 pt; past it, the page scrolls and the footer stays.
+        XCTAssertEqual(NDPageHeight.window(NDStore(fixture: three, page: .overview), page: .overview, screen: 720), 680)
         print("Overview heights: " + heights.joined(separator: ", "))
     }
 
@@ -1421,11 +1431,13 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testAPastFailedUploadIsExplainedOnTheBackupsPage() {
         let store = NDStore(fixture: Fixture.inputs(.backupsFailedUpload), page: .backups)
         let lanes = NDBackupsPage(store: store).lanes(store.model)
-        XCTAssertTrue(lanes.contains { $0.events.contains { $0.kind == .fail } })
-        XCTAssertTrue(NDBackupsPage.legend(lanes).contains(Say.failed))
+        // R1.2 change 13: retried the same night, so a hollow ring and its own legend words, never a filled red dot.
+        XCTAssertTrue(lanes.contains { $0.events.contains { $0.kind == .retried } })
+        XCTAssertTrue(NDBackupsPage.legend(lanes).contains(Say.failedThenRetried))
         XCTAssertEqual(store.r1.headline, BrainBarMenuPresenter.Say.allGood.text)
         let calm = NDStore(fixture: Fixture.inputs(.calm), page: .backups)
         XCTAssertFalse(NDBackupsPage.legend(NDBackupsPage(store: calm).lanes(calm.model)).contains(Say.failed))
+        XCTAssertFalse(NDBackupsPage.legend(NDBackupsPage(store: calm).lanes(calm.model)).contains(Say.failedThenRetried))
     }
 
     /// D6 (L20 rewritten): red, "needs you", the count, the badges and the fault icon are for red verdicts only. For every
@@ -1471,8 +1483,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let size = NSHostingController(rootView: NDHeadline(store: two, r1: two.r1).frame(width: 852))
             .sizeThatFits(in: CGSize(width: 852, height: 1000))
         XCTAssertGreaterThanOrEqual(size.height, 22 + 6 + 2 * 48 + 8, "each fault a 48 pt row, 8 pt apart")
-        XCTAssertEqual(two.r1.items.map(\.menuDetail), [Say.nothingUploadedFor(NDFormat.ageText(27 * 3600)),
-                                                        Say.notCheckedSince("Thursday")])
+        XCTAssertEqual(two.r1.items.map(\.menuDetail), [Say.lastDriveUpload(NDFormat.ageText(27 * 3600)),
+                                                        Say.notCheckedSinceShort("Thursday")])
         XCTAssertNotEqual(NDPalette.menu, NDPalette.menuSelected, "a selected row's chart redraws in the selected colours")
         let pinned = BrainBarDesignFixture.makeNow(capturing: true, wall: Date(), pinned: "2026-11-16T02:24:30+02:00")
         XCTAssertEqual(pinned, ISO8601DateFormatter().date(from: "2026-11-16T02:24:00+02:00"), "BRAINBAR_DESIGN_NOW pins the clock")
@@ -1496,15 +1508,16 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         for bucket in [0, 30, 59] {
             XCTAssertEqual(try XCTUnwrap(plotFrame(hover: bucket)), rest, "bucket \(bucket)")
         }
-        XCTAssertEqual(Say.upTo("4", minutes: 1), "up to 4/min")
-        XCTAssertEqual(Say.upTo("83", minutes: 3), "up to 83/3 min")
+        XCTAssertEqual(Say.upTo("4", minutes: 1), "up to 4 / min", "R1.2 change 20")
+        XCTAssertEqual(Say.upTo("83", minutes: 3), "up to 83 / 3 min")
     }
 
     /// D8.2 and D8.3: the waiting line starts inside the button's 100 ms fade (no empty frame); the dark read bars are the
     /// lifted #7D8597 (4.64:1 on bg, recorded in the build log).
     func testReconnectSwapHasNoGapAndReadBarsAreLifted() {
         XCTAssertLessThan(NDMotion.waitingDelay, 0.1, "the line arrives before the button has gone")
-        XCTAssertEqual(NDMotion.waitingDelay, 0.04, accuracy: 0.0001)
+        // R1.2 change 24: the line fades in from 64 ms, 40 % of the button's 160 ms fade.
+        XCTAssertEqual(NDMotion.waitingDelay, 0.064, accuracy: 0.0001)
         let dark = NDColor.read.usingColorSpace(.sRGB).flatMap { _ in
             NSAppearance(named: .darkAqua).map { appearance -> NSColor? in
                 var resolved: NSColor?
@@ -1513,18 +1526,120 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             } ?? nil
         }
         let c = dark ?? NSColor.black
-        XCTAssertEqual(Int((c.redComponent * 255).rounded()), 0x7D)
-        XCTAssertEqual(Int((c.greenComponent * 255).rounded()), 0x85)
-        XCTAssertEqual(Int((c.blueComponent * 255).rounded()), 0x97)
+        // R1.2 change 21: #8189A0 in dark.
+        XCTAssertEqual(Int((c.redComponent * 255).rounded()), 0x81)
+        XCTAssertEqual(Int((c.greenComponent * 255).rounded()), 0x89)
+        XCTAssertEqual(Int((c.blueComponent * 255).rounded()), 0xA0)
+    }
+
+    /// L23 over every fixture: the red icon iff something is red; the amber dot iff an amber notice that is not a catching-
+    /// up state and nothing red; the "?" badge iff not confirmed (or no reading yet); otherwise the resting brain.
+    func testIconPredicateOverEveryFixture() {
+        for name in Fixture.Name.allCases {
+            let i = Fixture.inputs(name)
+            let m = NDModel.make(i)
+            let r1 = NDR1.make(i, m)
+            let state = NDIcon.state(m, r1)
+            if r1.redCount > 0 {
+                XCTAssertEqual(state, .red(r1.redCount), name.rawValue)
+            } else if r1.pipeline.allUnconfirmed {
+                XCTAssertEqual(state, .unconfirmed, name.rawValue)
+            } else if r1.items.contains(where: { $0.severity == .orange && !$0.catchingUp }) {
+                XCTAssertEqual(state, .amber, name.rawValue)
+            } else {
+                XCTAssertEqual(state, .rest, name.rawValue)
+            }
+        }
+        func state(_ name: Fixture.Name) -> NDIcon.State {
+            let i = Fixture.inputs(name)
+            let m = NDModel.make(i)
+            return NDIcon.state(m, NDR1.make(i, m))
+        }
+        XCTAssertEqual(state(.meaningBehind), .rest, "catching up keeps the resting brain")
+        XCTAssertEqual(state(.backupLate), .amber, "a late copy: Check soon, the amber dot")
+        XCTAssertEqual(state(.notConfirmed), .unconfirmed)
+        XCTAssertEqual(state(.twoFaults), .red(2))
+    }
+
+    /// R1.2 changes 5, 8 and 9, L24: Reconnect is the only filled button and at most one per page; amber notices never get
+    /// a button; one amber notice says itself (catching up by its own title, any other as "Check soon" with its sentence);
+    /// the dropdown shows blocks only when something is red or there are two or more notices.
+    func testOneFilledButtonAndAmberNeverGetsOne() {
+        for name in Fixture.Name.allCases {
+            let i = Fixture.inputs(name)
+            let r1 = NDR1.make(i, NDModel.make(i))
+            let red = r1.items.filter { $0.severity == .red }
+            XCTAssertEqual(r1.showsProblemRows, !red.isEmpty || r1.items.count > 1, name.rawValue)
+            let filled = r1.items.compactMap(\.action).filter(NDButtonPolicy.filled)
+            XCTAssertLessThanOrEqual(filled.count, 1, "\(name.rawValue): one filled button per page")
+            XCTAssertTrue(filled.allSatisfy { [.reconnectDrive, .connectDrive].contains($0.kind) }, name.rawValue)
+            XCTAssertTrue(r1.items.filter { $0.severity == .orange }.allSatisfy { $0.action == nil }, "\(name.rawValue): amber, no button")
+            if red.isEmpty { XCTAssertFalse(r1.headline.contains("need"), "\(name.rawValue): amber is never \"needs you\"") }
+        }
+        let two = NDR1.make(Fixture.inputs(.twoFaults), NDModel.make(Fixture.inputs(.twoFaults)))
+        XCTAssertEqual(two.headline, Say.thingsNeedYou(2))
+        let late = NDR1.make(Fixture.inputs(.backupLate), NDModel.make(Fixture.inputs(.backupLate)))
+        XCTAssertEqual(late.headline, Say.checkSoon, "L24")
+        XCTAssertEqual(late.headlineDetail, late.items.first?.title)
+        XCTAssertFalse(late.showsProblemRows)
+        let behind = NDR1.make(Fixture.inputs(.meaningBehind), NDModel.make(Fixture.inputs(.meaningBehind)))
+        XCTAssertEqual(behind.headline, Say.meaningCatchingUp)
+        XCTAssertEqual(behind.headlineDetail, Say.meaningBehindDetail)
+    }
+
+    /// Lead, 09:55: the Activity chart carries no "own scale" note; each half's "up to" label says its size.
+    func testActivityHasNoScaleNote() throws {
+        let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar")
+        for file in ["BrainBarMenuSentences.swift", "NewDesign/NDWindow.swift", "NewDesign/NDMenu.swift"] {
+            let text = try String(contentsOf: sources.appendingPathComponent(file), encoding: .utf8)
+            XCTAssertFalse(text.contains("own scale") || text.contains("ownScale"), file)
+        }
+    }
+
+    /// R1.2 change 12: "last known" is the last confirmed evaluation's time, the same in the window and the dropdown.
+    func testLastKnownTimeIsTheEvaluationsInBothSurfaces() throws {
+        let i = Fixture.inputs(.notConfirmed)
+        let r1 = NDR1.make(i, NDModel.make(i))
+        let at = try XCTUnwrap(i.capture.verdict?.evaluatedAt)
+        XCTAssertEqual(r1.pipeline.lastKnownAt, NDR1.hhmm(at, i.capture), "the evaluation's time, never the render time")
+        XCTAssertEqual(Say.valuesLastKnownAt(r1.pipeline.lastKnownAt!), "not confirmed: values last known at 06:00")
+        XCTAssertEqual(Say.lastKnownAt(r1.pipeline.lastKnownAt!), "Last known at 06:00")
+        XCTAssertEqual(NDMenuHeadline.detail(r1, lastVerdictHadRed: false), Say.nothingKnownBrokenShort)
+        XCTAssertNil(NDMenuHeadline.detail(r1, lastVerdictHadRed: true), "only when the last confirmed verdict had no red check")
+    }
+
+    /// R1.2 change 22 and L25: the window is the page's real height in every fixture, capped at the screen minus 40 pt.
+    func testWindowIsThePagesHeightCappedByTheScreen() {
+        for name in Fixture.Name.allCases {
+            for page in NDPage.allCases {
+                let store = NDStore(fixture: Fixture.inputs(name), page: page)
+                let needed = ceil(NDPageHeight.content(store, page: page) + NDPageHeight.chrome)
+                XCTAssertEqual(NDPageHeight.window(store, page: page, screen: nil), needed, "\(name.rawValue) \(page)")
+                XCTAssertEqual(NDPageHeight.window(store, page: page, screen: 600), min(needed, 560), "\(name.rawValue) \(page): L25")
+            }
+        }
+    }
+
+    /// R1.2 change 13: a failed upload retried the same night is one hollow red ring, said in the legend and its help tag.
+    func testARetriedFailureIsAHollowRingWithItsWords() throws {
+        let store = NDStore(fixture: Fixture.inputs(.backupsFailedUpload), page: .backups)
+        let lanes = NDBackupsPage(store: store).lanes(store.model)
+        let drive = try XCTUnwrap(lanes.first { $0.id == "backup_offsite" })
+        XCTAssertTrue(drive.events.contains { $0.kind == .retried })
+        XCTAssertFalse(drive.events.contains { $0.kind == .fail }, "no filled red dot when the retry succeeded")
+        XCTAssertNotNil(drive.help)
+        XCTAssertTrue(NDBackupsPage.legend(lanes).contains(Say.failedThenRetried))
+        XCTAssertEqual(store.r1.headline, BrainBarMenuPresenter.Say.allGood.text)
     }
 
     /// § 3.1 hover: the pointer's bucket is the pitch that holds it; outside the plot there is none.
     func testActivityHoverPicksTheBucketUnderThePointer() {
         XCTAssertEqual(NDActivitySection.bucket(at: 0, count: 60), 0)
         XCTAssertEqual(NDActivitySection.bucket(at: 13.4, count: 60), 1)
-        XCTAssertEqual(NDActivitySection.bucket(at: 799.9, count: 60), 59)
+        XCTAssertEqual(NDActivitySection.bucket(at: 767.9, count: 60), 59)
         XCTAssertNil(NDActivitySection.bucket(at: -1, count: 60))
-        XCTAssertNil(NDActivitySection.bucket(at: 800, count: 60))
+        XCTAssertNil(NDActivitySection.bucket(at: 768, count: 60), "R1.2: a 768 pt plot inside its surface")
         XCTAssertNil(NDActivitySection.bucket(at: 10, count: 0))
     }
 }

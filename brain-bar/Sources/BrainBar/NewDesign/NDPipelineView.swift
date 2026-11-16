@@ -67,14 +67,15 @@ struct NDPolyline: Equatable, Sendable {
 // MARK: - Layout (852 × 262 pt, DESIGN-SPEC-R1 § 3.2 as revised by R1.1 change 1), as data
 
 enum NDPipelineLayout {
-    /// R1.2 change 18: 820 wide inside its surface, lanes 90 pt apart.
-    static let size = CGSize(width: 820, height: 246)
-    static let yRail: CGFloat = 24, yTop: CGFloat = 70, yBottom: CGFloat = 160, yWords: CGFloat = 137
+    /// 820 wide so it fits inside its surface (R1.2 change 1); the vertical geometry is R1.1's (changes 17 and 18 were
+    /// skipped by the lead: revision 1.3 redraws the chart).
+    static let size = CGSize(width: 820, height: 262)
+    static let yRail: CGFloat = 24, yTop: CGFloat = 70, yBottom: CGFloat = 178, yWords: CGFloat = 148
     static let junction = CGPoint(x: 132, y: 70)
     static let stationRadius: CGFloat = 13
     /// The hub: an outline at x 338, y 54, 108 × 138 (change 9).
-    static let hub = CGRect(x: 338, y: 54, width: 108, height: 122)
-    /// "Kept safe": a hairline frame around the two copies (change 6; R1.2 x 486).
+    static let hub = CGRect(x: 338, y: 54, width: 108, height: 138)
+    /// "Kept safe": a hairline frame around the two copies (change 6; x 486 to fit the surface).
     static let keptSafe = CGRect(x: 486, y: 44, width: 292, height: 82)
     /// Agents: a list at a 16 pt pitch centred on the top lane (change 17a); names right-aligned at x 64, at most 60 pt.
     static let agentPitch: CGFloat = 16
@@ -85,9 +86,9 @@ enum NDPipelineLayout {
     }()
 
     static let stations: [NDStation: CGPoint] = [
-        .read: CGPoint(x: 204, y: 70), .queue: CGPoint(x: 204, y: 160), .mac: CGPoint(x: 552, y: 70),
-        .drive: CGPoint(x: 700, y: 70), .meaning: CGPoint(x: 552, y: 160), .search: CGPoint(x: 700, y: 160),
-        .jobs: CGPoint(x: 392, y: 222),
+        .read: CGPoint(x: 204, y: 70), .queue: CGPoint(x: 204, y: 178), .mac: CGPoint(x: 552, y: 70),
+        .drive: CGPoint(x: 700, y: 70), .meaning: CGPoint(x: 552, y: 178), .search: CGPoint(x: 700, y: 178),
+        .jobs: CGPoint(x: 392, y: 238),
     ]
 
     static let symbols: [NDStation: String] = [
@@ -132,7 +133,7 @@ enum NDPipelineLayout {
                                   line: NDPolyline(points: [CGPoint(x: 72, y: y), CGPoint(x: 100, y: y), junction]), arrowhead: false))
         }
         out.append(Connection(pipe: .junctionRead, line: NDPolyline(points: [junction, point(.read)]).trimmed(end: r)))
-        let rail = NDPolyline(points: [CGPoint(x: 146, y: yTop), CGPoint(x: 158, y: yTop), CGPoint(x: 158, y: yRail),
+        let rail = NDPolyline(points: [CGPoint(x: 140, y: yTop), CGPoint(x: 158, y: yTop), CGPoint(x: 158, y: yRail),
                                        CGPoint(x: point(.drive).x, y: yRail), point(.drive)]).trimmed(end: r)
         out.append(Connection(pipe: .conversationsCopy, line: rail, corner: 10, label: Say.conversationsCopiedAsTheyAre, labelAt: 0.42))
         out.append(Connection(pipe: .readMemory, line: NDPolyline(points: [point(.read), CGPoint(x: hub.minX, y: yTop)]).trimmed(start: r)))
@@ -162,16 +163,15 @@ struct NDPipeStroke: Equatable {
     var opacity: Double = 1
 
     /// Flowing, and a check confirms it.
-    /// R1.2 change 18: routine lighter (1.5 pt), breaks louder (2.5 pt).
-    static let flowing = NDPipeStroke(color: ND.pipe, width: 1.5, dash: [])
+    static let flowing = NDPipeStroke(color: ND.pipe, width: 2, dash: [])
     /// Not confirmed: the only meaning of a dash, always with words beside it.
-    static let unconfirmed = NDPipeStroke(color: ND.pipe, width: 1.5, dash: [3, 4])
+    static let unconfirmed = NDPipeStroke(color: ND.pipe, width: 2, dash: [3, 4])
     /// Downstream of a break: solid at 28 %.
-    static let downstream = NDPipeStroke(color: ND.pipe, width: 1.5, dash: [], opacity: 0.28)
+    static let downstream = NDPipeStroke(color: ND.pipe, width: 2, dash: [], opacity: 0.28)
     /// The word path: nothing checks it.
     static let unguarded = NDPipeStroke(color: ND.pipe, width: 1.6, dash: [3, 4])
     static func severity(_ s: NDSeverity) -> NDPipeStroke {
-        NDPipeStroke(color: s == .red ? ND.red : ND.orange, width: 2.5, dash: [])
+        NDPipeStroke(color: s == .red ? ND.red : ND.orange, width: 2, dash: [])
     }
 
     var shading: GraphicsContext.Shading { .color(color.opacity(opacity)) }
@@ -282,11 +282,11 @@ struct NDPipelineChart: View {
                 // The stage refuses: the pipe arrives in `pipe`, its last 30 pt in red.
                 let (up, red) = line.split(max(0, line.length - 30))
                 ctx.stroke(up.path(radius: c.corner), with: NDPipeStroke.flowing.shading, style: NDPipeStroke.flowing.style)
-                ctx.stroke(red.path(radius: c.corner), with: .color(ND.red), style: NDPipeStroke.severity(.red).style)
+                ctx.stroke(red.path(radius: c.corner), with: .color(ND.red), style: NDPipeStroke.flowing.style)
                 last = .color(ND.red)
             } else if !state.allUnconfirmed, let br = state.breaks[c.pipe] {
                 let total = line.length, gap: CGFloat = 20
-                let start: CGFloat = br.side == .source ? 5 : max(0, total - gap - 6)
+                let start: CGFloat = br.side == .source ? 5 : max(0, total - gap - 5)
                 let (a, rest) = line.split(start)
                 let (_, b) = rest.split(gap)
                 let tint = NDPipeStroke.severity(br.severity)
@@ -298,7 +298,6 @@ struct NDPipelineChart: View {
                     let (up, end) = a.split(max(0, a.length - 26))
                     ctx.stroke(up.path(radius: c.corner), with: NDPipeStroke.flowing.shading, style: NDPipeStroke.flowing.style)
                     ctx.stroke(end.path(radius: c.corner), with: tint.shading, style: tint.style)
-                    ctx.stroke(b.path(radius: c.corner), with: tint.shading, style: tint.style)
                     last = tint.shading
                 }
                 marks.append((line.point(at: start + gap / 2), br.severity))
@@ -325,9 +324,9 @@ struct NDPipelineChart: View {
         // Memory: an outline (change 9).
         let hub = L.hub
         ctx.stroke(Path(roundedRect: hub, cornerRadius: 12, style: .continuous), with: .color(ND.hair2), lineWidth: 1)
-        symbol(ctx, "brain", at: CGPoint(x: hub.midX, y: hub.minY + 44), size: 20, color: ND.t2)
-        put(ctx, text(Say.stageMemory, size: 13, color: ND.t1, weight: .semibold), x: hub.midX, baseline: hub.minY + 74, size: 13, anchor: .middle)
-        put(ctx, text(memories ?? NDModel.Number.unknown.value, size: 11, color: ND.t2, mono: true), x: hub.midX, baseline: hub.minY + 89,
+        symbol(ctx, "brain", at: CGPoint(x: hub.midX, y: hub.minY + 52), size: 20, color: ND.t2)
+        put(ctx, text(Say.stageMemory, size: 13, color: ND.t1, weight: .semibold), x: hub.midX, baseline: hub.minY + 84, size: 13, anchor: .middle)
+        put(ctx, text(memories ?? NDModel.Number.unknown.value, size: 11, color: ND.t2, mono: true), x: hub.midX, baseline: hub.minY + 99,
             size: 11, anchor: .middle)
         // Stations, their names (t1) and status lines.
         // Stale values stay readable (full `t2`); R1.2 change 12 says "last known" once, in the top-right caption.
@@ -371,7 +370,7 @@ struct NDPipelineChart: View {
                 x: 64, baseline: y + 4, size: 11, anchor: .end)
         }
         put(ctx, text(Say.savedByAgentsInput, size: 11, color: ND.t2), x: 128, baseline: L.yBottom + 4, size: 11, anchor: .end)
-        put(ctx, text(Say.answersToAgents, size: 11, color: ND.t2), x: L.size.width, baseline: L.yBottom - 8, size: 11, anchor: .end)
+        put(ctx, text(Say.answersToAgents, size: 11, color: ND.t2), x: L.size.width, baseline: L.yBottom + 22, size: 11, anchor: .end)
         put(ctx, text(Say.goesIn, size: 11, color: ND.t3, weight: .medium), x: 0, baseline: 10, size: 11, anchor: .start)
         if state.allUnconfirmed {
             let caption = state.lastKnownAt.map(Say.valuesLastKnownAt) ?? Say.everyPipeNotConfirmed
@@ -550,7 +549,7 @@ struct NDStationDetails: View {
             }
             return [row("backup_offsite", as: Say.databaseCopy), row("transcripts", as: Say.conversationsCopy), account].compactMap { $0 }
         case .jobs:
-            return [row("nightly", as: Say.jobNames[.maintenanceNightly]), row("weekly", as: Say.jobNames[.maintenanceWeekly])].compactMap { $0 }
+            return [row("nightly", as: Say.jobNames[BrainLayerLaunchdJob.maintenanceNightly.rawValue]), row("weekly", as: Say.jobNames[BrainLayerLaunchdJob.maintenanceWeekly.rawValue])].compactMap { $0 }
         }
     }
 }

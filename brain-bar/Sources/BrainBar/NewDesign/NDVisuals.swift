@@ -436,7 +436,7 @@ struct NDRail: View {
         /// recorded (or still running): a dashed ring, never a success dot (F02). unconfirmed: an attempt from the app's own
         /// log on a row whose newest copy is unknown this moment (review N1): an open 1 pt ring in Ink 3 (Ink 2 at 55 %),
         /// smaller and fainter than the next-run ring (Ink 2, 1.5 pt, filled with the plane), and always left of now.
-        enum Kind: Equatable { case ok, fail, next, unknown, unconfirmed }
+        enum Kind: Equatable { case ok, fail, next, unknown, unconfirmed, retried }
         var hours: Double
         var kind: Kind
     }
@@ -530,6 +530,11 @@ struct NDRail: View {
                 ctx.fill(Path(ellipseIn: CGRect(x: cx - 3.5, y: mid - 3.5, width: 7, height: 7)), with: .color(palette.ink))
             case .fail:
                 ctx.fill(Path(ellipseIn: CGRect(x: cx - 3.5, y: mid - 3.5, width: 7, height: 7)), with: .color(palette.fault))
+            case .retried:
+                // R1.2 change 13: failed, then copied on retry the same night: a hollow red ring.
+                ctx.fill(Path(ellipseIn: CGRect(x: cx - 3.2, y: mid - 3.2, width: 6.4, height: 6.4)), with: .color(ND.card))
+                ctx.stroke(Path(ellipseIn: CGRect(x: cx - 3.2, y: mid - 3.2, width: 6.4, height: 6.4)), with: .color(palette.fault),
+                           lineWidth: 1.4)
             case .unconfirmed:
                 let r = CGRect(x: cx - 3, y: mid - 3, width: 6, height: 6)
                 ctx.fill(Path(ellipseIn: r), with: .color(palette.plane))

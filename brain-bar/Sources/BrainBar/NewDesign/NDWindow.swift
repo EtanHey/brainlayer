@@ -233,8 +233,8 @@ struct NDOverviewPage: View {
     @ObservedObject var store: NDStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// R1.2 (H6): a title, then up to three blocks: Problems (only when something is red), Activity, Pipeline. Each block
-    /// is one filled, rounded surface; Activity and Pipeline carry a heading above theirs. No dividers, no shadows.
+    /// R1.2 (H6) changes 1 to 3: the headline, then the Activity and Pipeline blocks, each a heading above one filled,
+    /// rounded surface. No dividers, no shadows. (The Problems surface, changes 4 to 7, waits for revision 1.3.)
     var body: some View {
         let r1 = store.r1
         VStack(alignment: .leading, spacing: 0) {
@@ -320,35 +320,48 @@ struct NDHeadline: View {
     @ObservedObject var store: NDStore
     let r1: NDR1
 
-    /// R1.2 changes 4 to 8 (and L24): something red: "N things need you" (red mark), then one Problems surface with a
-    /// row per item in urgency order: fix-it-here (Reconnect), then agent problems, then amber notices. Amber only, one:
-    /// its title and detail with the amber mark; two or more: "Check soon" and a surface of rows. Not confirmed: the
-    /// question mark, the title and its detail. Calm: "All good".
+    /// The headline as at 6d779bc1 (R1.2 changes 4 to 7 skipped by the lead for revision 1.3): one item names itself with
+    /// its detail and button; more: the title and one row per item (its title, one line, its button). R1.2 change 8 and
+    /// L24: one amber notice gives its line under the title; not confirmed, the question mark, title and detail.
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
                 if let symbol = r1.headlineSymbol {
-                    Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(tone(r1.headlineTone))
-                        .frame(width: 16)
+                    Image(systemName: symbol).font(.system(size: 15, weight: .regular)).foregroundStyle(tone(r1.headlineTone))
+                        .frame(width: 16, height: 22)
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(r1.headline).font(NDType.title).tracking(-0.25).foregroundStyle(ND.t1)
-                    if let detail = r1.headlineDetail { Text(keepingUnits(detail)).font(NDType.body).foregroundStyle(ND.t2) }
+                Text(r1.headline).font(NDType.title).tracking(-0.25).foregroundStyle(ND.t1)
+                Spacer(minLength: 16)
+                if r1.items.count == 1, let action = r1.items[0].action {
+                    actionButton(action, filled: NDButtonPolicy.filled(action))
                 }
             }
             .frame(minHeight: 22)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
-            if r1.showsProblemRows {
-                NDCard(padding: EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16)) {
-                    VStack(spacing: 0) {
-                        ForEach(Array(r1.orderedItems.enumerated()), id: \.element.id) { index, item in
-                            if index > 0 { ND.cardLine.frame(height: 0.5) }
-                            NDProblemRow(store: store, item: item)
+            if let detail = r1.headlineDetail ?? (r1.items.count == 1 ? r1.items[0].detail : nil), !detail.isEmpty {
+                Text(keepingUnits(detail)).font(NDType.body).foregroundStyle(ND.t2).padding(.leading, 24).padding(.top, 2)
+            }
+            if r1.items.count > 1 {
+                // D7.1: each item its own row (48 pt at least, 8 pt apart): its title, its one line of consequence (as the
+                // dropdown says it), and its button; one mark per surface (§ 2.2, § 7), rows in the text column.
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(r1.items) { item in
+                        HStack(alignment: .center, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title).font(NDType.bodyStrong).foregroundStyle(ND.t1).lineLimit(1)
+                                if let line = item.menuDetail ?? item.detail, !line.isEmpty {
+                                    Text(keepingUnits(line)).font(NDType.body).foregroundStyle(ND.t2).lineLimit(1)
+                                }
+                            }
+                            Spacer(minLength: 12)
+                            if let action = item.action { actionButton(action, filled: NDButtonPolicy.filled(action)) }
                         }
+                        .frame(minHeight: 48)
+                        .padding(.leading, 24)
                     }
                 }
-                .padding(.top, 12)
+                .padding(.top, 6)
             }
         }
     }
@@ -360,36 +373,14 @@ struct NDHeadline: View {
         case .fine: ND.t2
         }
     }
-}
 
-/// One problem (R1.2 change 4): `16 mark | 10 | title over its consequence | its own button`, at least 52 pt, 8 pt padding.
-struct NDProblemRow: View {
-    @ObservedObject var store: NDStore
-    let item: NDR1.Item
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: item.severity == .red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
-                .font(.system(size: 15)).foregroundStyle(item.severity == .red ? ND.red : ND.orange).frame(width: 16)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.title).font(NDType.bodyStrong).foregroundStyle(ND.t1)
-                if let line = item.detail, !line.isEmpty {
-                    Text(keepingUnits(line)).font(NDType.body).foregroundStyle(ND.t2)
-                }
-            }
-            Spacer(minLength: 12)
-            if let action = item.action {
-                let waiting = store.inputs.driveReconnecting && [.reconnectDrive, .connectDrive].contains(action.kind)
-                NDWaitingSwap(waiting: waiting) {
-                    NDButton(label: action.label, filled: NDButtonPolicy.filled(action)) { store.perform(action.kind) }
-                } line: {
-                    Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)
-                }
-            }
+    @ViewBuilder private func actionButton(_ action: BrainBarMenuPresentation.Action, filled: Bool) -> some View {
+        let waiting = store.inputs.driveReconnecting && [.reconnectDrive, .connectDrive].contains(action.kind)
+        NDWaitingSwap(waiting: waiting) {
+            NDButton(label: action.label, filled: filled) { store.perform(action.kind) }
+        } line: {
+            Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)
         }
-        .padding(.vertical, 8)
-        .frame(minHeight: 52)
-        .accessibilityElement(children: .contain)
     }
 }
 
@@ -427,7 +418,6 @@ struct NDActivitySection: View {
                 legend(color: ND.saved, value: known ? wave.map { NDFormat.integer($0.savesTotal) } : nil, words: Say.savedByAgents)
                 legend(color: ND.read, value: known ? wave.map { NDFormat.integer($0.readsTotal) } : nil, words: Say.readFromConversations)
                 Spacer()
-                Text(Say.ownScale).font(NDType.caption).foregroundStyle(ND.t3)
             }
             .frame(height: 22)
             .accessibilityElement(children: .combine)
@@ -435,12 +425,11 @@ struct NDActivitySection: View {
                 // R1.1 change 30: each half's maximum at the gutter's outer ends, so the size reads without hovering.
                 if let wave, wave.readable, wave.count > 0 {
                     let bucket = max(1, store.range.minutes / max(wave.count, 1))
+                    // One line each, from the gutter's edge (the plot's bars start lower and higher than these).
                     Text(Say.upTo(NDFormat.integer(wave.saves.max() ?? 0), minutes: bucket))
-                        .font(NDType.captionNumber).foregroundStyle(ND.t3)
-                        .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 5)
+                        .font(NDType.captionNumber).foregroundStyle(ND.t3).fixedSize().offset(y: -2)
                     Text(Say.upTo(NDFormat.integer(wave.reads.max() ?? 0), minutes: bucket))
-                        .font(NDType.captionNumber).foregroundStyle(ND.t3)
-                        .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 106)
+                        .font(NDType.captionNumber).foregroundStyle(ND.t3).fixedSize().offset(y: 99)
                 }
                 // "saved" just above the baseline, "read" just below it, in the series' text colours (H1).
                 Text(Say.saved).font(NDType.captionMedium).foregroundStyle(ND.savedText)

@@ -35,10 +35,14 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
         rowStates = [:]
         let r1 = store.r1
         let headline = NDMenuHeadline.text(r1)
-        menu.addItem(hosted(NDMenuHeadline(r1: r1), label: headline))
+        let hadRed = store.inputs.capture.verdict?.checks.contains { $0.state == .red } == true
+        menu.addItem(hosted(NDMenuHeadline(r1: r1, lastVerdictHadRed: hadRed), label: headline))
         menu.addItem(.separator())
-        let filled = NDMenuFaultBlock.filledIndex(r1.items)
-        for (index, item) in r1.items.enumerated() {
+        // R1.2 change 9 and L24: blocks when something is red or two or more amber notices; a single amber state says
+        // itself in the headline and its line.
+        let blocks = r1.showsProblemRows ? r1.items : []
+        let filled = NDMenuFaultBlock.filledIndex(blocks)
+        for (index, item) in blocks.enumerated() {
             if index > 0 { menu.addItem(.separator()) }
             let state = NDMenuRowState()
             let row = hosted(NDMenuFaultBlock(store: store, item: item, filled: index == filled, state: state) { [weak self] kind in
@@ -53,7 +57,11 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
             }
             menu.addItem(row)
         }
-        if !r1.items.isEmpty { menu.addItem(.separator()) }
+        if !blocks.isEmpty { menu.addItem(.separator()) }
+        // R1.2 change 12: not confirmed: "Last known at 14:02" once, above the rows that show their last-known values.
+        if let at = r1.pipeline.lastKnownAt {
+            menu.addItem(hosted(NDMenuCaption(text: Say.lastKnownAt(at)), label: Say.lastKnownAt(at)))
+        }
         for row in r1.menuRows {
             let state = NDMenuRowState()
             let item = hosted(NDMenuAreaRow(store: store, row: row, state: state) { [weak self] in self?.open(row.kind) },
@@ -174,8 +182,17 @@ struct NDMenuHeadline: View {
         return red == 1 ? BrainBarMenuPresenter.Say.countOne.text : Say.thingsNeedYou(red)
     }
 
+    /// The one line under a headline: an amber state's own line; not confirmed, "Nothing is known to be broken." only when
+    /// the last confirmed verdict had no red check (L26).
+    static func detail(_ r1: NDR1, lastVerdictHadRed: Bool) -> String? {
+        if r1.pipeline.allUnconfirmed { return lastVerdictHadRed ? nil : Say.nothingKnownBrokenShort }
+        return r1.redCount == 0 ? r1.headlineDetail : nil
+    }
+
+    var lastVerdictHadRed = false
+
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             if !r1.items.isEmpty {
                 let red = r1.redCount > 0
                 Image(systemName: red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
@@ -183,7 +200,13 @@ struct NDMenuHeadline: View {
             } else if let symbol = r1.headlineSymbol {
                 Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(Color(nsColor: .secondaryLabelColor))
             }
-            Text(Self.text(r1)).font(NDType.title).tracking(-0.25).foregroundStyle(Color(nsColor: .labelColor))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Self.text(r1)).font(NDType.title).tracking(-0.25).foregroundStyle(Color(nsColor: .labelColor))
+                if let line = Self.detail(r1, lastVerdictHadRed: lastVerdictHadRed) {
+                    Text(keepingUnits(line)).font(NDType.body).foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             Spacer(minLength: 0)
         }
         .padding(.top, 7).padding(.bottom, 6)
@@ -192,7 +215,17 @@ struct NDMenuHeadline: View {
     }
 }
 
-/// One fault: its title (13 Semibold), the broken pipe cut to its two stages, and its one button.
+/// "Last known at 14:02" (11 `t3`), once above the rows.
+struct NDMenuCaption: View {
+    let text: String
+    var body: some View {
+        Text(text).font(NDType.caption).foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+            .padding(.horizontal, NDGrid.menuInset).padding(.top, 4).padding(.bottom, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One fault: its title (13 Semibold), its one line, and its one button.
 struct NDMenuFaultBlock: View {
     @ObservedObject var store: NDStore
     let item: NDR1.Item

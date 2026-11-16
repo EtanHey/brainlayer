@@ -49,9 +49,9 @@ struct NDR1: Equatable, Sendable {
     var headline: String
     var headlineSymbol: String?
     var headlineTone: NDModel.Tone
-    /// The line under the title (one amber notice, or not confirmed); problems put theirs on their rows.
+    /// The line under the title for one amber notice or not confirmed (a single red item uses its own detail).
     var headlineDetail: String?
-    /// The Problems surface: something red, or two or more amber notices.
+    /// The dropdown's blocks: something red, or two or more amber notices (one amber notice says itself in the headline).
     var showsProblemRows: Bool
     var items: [Item]
     /// Not confirmed: the stale verdict's time and age.
@@ -62,14 +62,6 @@ struct NDR1: Equatable, Sendable {
     var footerRight: String?
     var calm: Bool { items.isEmpty && unconfirmedSince == nil }
     var redCount: Int { items.filter { $0.severity == .red }.count }
-    /// R1.2 change 6: red problems you can fix here first (Reconnect), then red problems an agent must fix, then amber.
-    var orderedItems: [Item] {
-        func rank(_ i: Item) -> Int {
-            if i.severity != .red { return 2 }
-            return i.action.map { NDButtonPolicy.filled($0) } == true ? 0 : 1
-        }
-        return items.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map(\.element)
-    }
     /// L23: the amber dot on the icon iff an amber notice that is not catching up, and nothing red.
     var amberDot: Bool { redCount == 0 && items.contains { $0.severity == .orange && !$0.catchingUp } }
     /// Tab badges (D6): red items only, by the page that owns them.
@@ -166,7 +158,7 @@ struct NDR1: Equatable, Sendable {
         // One filled button per surface: the first item's action; the copy-report button is never the filled one when a
         // reconnect exists (kept as data: the views read `filledActionIndex`).
 
-        // Headline (R1.2 changes 4 to 8, L24).
+        // Headline (R1.2 change 8 and L24; changes 4 to 7 skipped by the lead for revision 1.3: red keeps 6d779bc1's headline).
         var unconfirmedSince: String?
         var unconfirmedDetail: String?
         var headline = BrainBarMenuPresenter.Say.allGood.text
@@ -185,8 +177,12 @@ struct NDR1: Equatable, Sendable {
                 detail = unconfirmedDetail
             }
         } else if red > 0 {
-            // "N things need you" (red items only), then the Problems surface: one row per item, its action on its row.
-            headline = red == 1 ? BrainBarMenuPresenter.Say.countOne.text : Say.thingsNeedYou(red)
+            // One red item names itself; more items: "N things need you" (red items only), then one row per item.
+            if items.count == 1, let only = items.first {
+                headline = only.title
+            } else {
+                headline = red == 1 ? BrainBarMenuPresenter.Say.countOne.text : Say.thingsNeedYou(red)
+            }
             symbol = "exclamationmark.circle.fill"
             tone = .fault
             rows = true

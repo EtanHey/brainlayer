@@ -114,6 +114,9 @@ struct NDBackupsPage: View {
                         NDLegendItem(words: Say.nextRun) { Circle().stroke(ND.t2, lineWidth: 1.5).frame(width: 6, height: 6) }
                         NDLegendItem(words: Say.lateIfLeftOfLine) { ND.t3.frame(width: 1, height: 12) }
                         if failed { NDLegendItem(words: Say.failed) { Circle().fill(ND.red).frame(width: 7, height: 7) } }
+                        if legend.contains(Say.failedThenRetried) {
+                            NDLegendItem(words: Say.failedThenRetried) { Circle().stroke(ND.red, lineWidth: 1.4).frame(width: 6.4, height: 6.4) }
+                        }
                         if stalled {
                             NDLegendItem(words: Say.notUploadingSince) {
                                 Canvas { ctx, size in
@@ -148,6 +151,7 @@ struct NDBackupsPage: View {
     static func legend(_ lanes: [Lane]) -> [String] {
         var words = [Say.copied, Say.nextRun, Say.lateIfLeftOfLine]
         if lanes.contains(where: { $0.events.contains { $0.kind == .fail } }) { words.append(Say.failed) }
+        if lanes.contains(where: { $0.events.contains { $0.kind == .retried } }) { words.append(Say.failedThenRetried) }
         if lanes.contains(where: { $0.stalledFrom != nil }) { words.append(Say.notUploadingSince) }
         return words
     }
@@ -210,6 +214,8 @@ struct NDBackupsPage: View {
         var stalledFrom: Double?
         /// Review N1: set when the newest cell is unknown; the rail claims no confirmed copy.
         var unconfirmedFrom: Double? = nil
+        /// R1.2 change 13: the retried ring's help tag ("Upload failed at 03:16; the 04:02 retry succeeded.").
+        var help: String? = nil
         var number: NDModel.Number
         var strong: Bool
         var accessibility: String
@@ -225,8 +231,25 @@ struct NDBackupsPage: View {
         let driveDown = m.faults.contains { $0.concerns.contains("drive_auth") }
         func lane(_ id: String, _ name: String, _ attempts: [NDAttempt]?, next: Date?, stalls: Bool) -> Lane {
             let row = rows.first { $0.id == id }
-            var events = (attempts ?? []).map { NDRail.Event(hours: $0.at.timeIntervalSince(now) / 3600, kind: $0.ok ? .ok : .fail) }
-                .filter { $0.hours >= -Self.past }
+            // R1.2 change 13: a failed attempt followed by a success within the same night (12 h) is one hollow red
+            // ring ("failed, then copied on retry"); a failure with no later success that night stays a filled red dot.
+            let sorted = (attempts ?? []).sorted { $0.at < $1.at }
+            var events: [NDRail.Event] = []
+            var retryHelp: [String] = []
+            var skip: Set<Int> = []
+            for (index, attempt) in sorted.enumerated() where !skip.contains(index) {
+                let hours = attempt.at.timeIntervalSince(now) / 3600
+                if !attempt.ok, let retry = sorted.indices.first(where: { $0 > index && sorted[$0].ok
+                        && sorted[$0].at.timeIntervalSince(attempt.at) <= 12 * 3600 }) {
+                    skip.insert(retry)
+                    events.append(.init(hours: hours, kind: .retried))
+                    retryHelp.append(Say.uploadFailedRetried(NDR1.hhmm(attempt.at, store.inputs.capture),
+                                                             NDR1.hhmm(sorted[retry].at, store.inputs.capture)))
+                } else {
+                    events.append(.init(hours: hours, kind: attempt.ok ? .ok : .fail))
+                }
+            }
+            events = events.filter { $0.hours >= -Self.past }
             let stalled = stalls && driveDown
             let last = events.map(\.hours).max()
             if let next, !stalled { events.append(.init(hours: next.timeIntervalSince(now) / 3600, kind: .next)) }
@@ -245,6 +268,7 @@ struct NDBackupsPage: View {
             }
             return Lane(id: id, name: name, events: events, unknown: attempts == nil,
                         stalledFrom: stalled ? (last ?? -Self.past) : nil, unconfirmedFrom: unconfirmedFrom,
+                        help: retryHelp.isEmpty ? nil : retryHelp.joined(separator: " "),
                         number: number, strong: row?.strong ?? false, accessibility: spoken + newest)
         }
         return [
@@ -299,8 +323,9 @@ struct NDBackupLaneView: View {
                 .frame(width: NDBackupsPage.valueColumn, alignment: .trailing)
         }
         .frame(height: NDGrid.row)
+        .help(lane.help ?? "")
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(lane.accessibility)
+        .accessibilityLabel(lane.accessibility + (lane.help.map { ". " + $0 } ?? ""))
     }
 }
 
@@ -400,12 +425,12 @@ struct NDJobsPage: View {
         let alerted = Set(m.faults.flatMap(\.jobs))
         guard let jobs = store.inputs.jobs else {
             return NDStore.jobOrder.map { job in
-                Lane(job: job, name: Say.jobNames[job] ?? job.title, enabled: nil, band: false, events: [], olderLabel: nil,
-                     unknown: true, number: .unknown, streak: nil, fault: false, accessibility: "\(Say.jobNames[job] ?? job.title), not known")
+                Lane(job: job, name: Say.jobNames[job.rawValue] ?? job.title, enabled: nil, band: false, events: [], olderLabel: nil,
+                     unknown: true, number: .unknown, streak: nil, fault: false, accessibility: "\(Say.jobNames[job.rawValue] ?? job.title), not known")
             }
         }
         return jobs.map { j in
-            let name = Say.jobNames[j.job] ?? j.job.title
+            let name = Say.jobNames[j.job.rawValue] ?? j.job.title
             let streak = j.job == .maintenanceNightly ? failing : nil
             let fault = streak != nil || alerted.contains(j.job)
             var events: [NDRail.Event] = []
@@ -482,7 +507,7 @@ struct NDJobLaneView: View {
         HStack(spacing: 0) {
             Text(lane.name).font(lane.fault ? NDType.bodyStrong : NDType.body).foregroundStyle(ND.t1)
                 .frame(width: NDJobsPage.nameColumn, alignment: .leading)
-                .help(Say.jobHelp[lane.job] ?? "")
+                .help(Say.jobHelp[lane.job.rawValue] ?? "")
             NDRail(past: NDJobsPage.past, ahead: NDJobsPage.ahead, events: frequent ? [] : lane.events, band: lane.band,
                    dotted: frequent && lane.enabled != false, unknown: lane.unknown, olderLabel: lane.olderLabel)
             Text(last.0).font(last.1 == .fault ? NDType.numberStrong : NDType.number)

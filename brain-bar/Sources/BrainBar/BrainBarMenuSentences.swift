@@ -472,7 +472,6 @@ extension BrainBarMenuPresenter {
         static func lastCheckedAgo(_ age: String) -> String { "Last checked \(age) ago" }
         static let savedByAgents = "saved by agents"
         static let readFromConversations = "read from conversations"
-        static let ownScale = "Each half has its own scale"
         static let saved = "saved"
         static let readWord = "read"
         static let now = "now"
@@ -551,23 +550,24 @@ extension BrainBarMenuPresenter {
         static let lastRun = "Last run"
         static let nextRunHead = "Next run"
         static func inAge(_ age: String) -> String { "in \(age)" }
-        static let jobNames: [BrainLayerLaunchdJob: String] = [
-            .watch: "Read new conversations", .hotlane: "Keep search ready", .drain: "Save waiting memories",
-            .walCheckpoint: "Tidy up storage", .backupDaily: "Back up the database", .jsonlBackup: "Back up conversations",
-            .maintenanceNightly: "Nightly check-up", .maintenanceWeekly: "Weekly deep clean", .decay: "Fade old memories",
-            .repairFTS: "Repair word search",
+        /// Keyed by the job's launchd raw value, so the copy deck stays free of the settings types.
+        static let jobNames: [String: String] = [
+            "watch": "Read new conversations", "hotlane": "Keep search ready", "drain": "Save waiting memories",
+            "walCheckpoint": "Tidy up storage", "backupDaily": "Back up the database", "jsonlBackup": "Back up conversations",
+            "maintenanceNightly": "Nightly check-up", "maintenanceWeekly": "Weekly deep clean", "decay": "Fade old memories",
+            "repairFTS": "Repair word search",
         ]
-        static let jobHelp: [BrainLayerLaunchdJob: String] = [
-            .watch: "Reads what your agents write, as they write it.",
-            .hotlane: "Keeps search by meaning loaded.",
-            .drain: "Writes saves that had to wait. Every few minutes.",
-            .walCheckpoint: "Folds the write log into the database. Every few minutes.",
-            .backupDaily: "Copies memory to this Mac, then to Google Drive. Nightly at 03:15.",
-            .jsonlBackup: "Copies your agents\u{2019} conversations to Google Drive. Nightly.",
-            .maintenanceNightly: "Checks memory can still save, and tidies the log. Nightly at 04:00.",
-            .maintenanceWeekly: "Compacts the database. Sundays at 04:00.",
-            .decay: "Lowers the weight of memories nobody uses.",
-            .repairFTS: "Rebuilds the word index. Weekly.",
+        static let jobHelp: [String: String] = [
+            "watch": "Reads what your agents write, as they write it.",
+            "hotlane": "Keeps search by meaning loaded.",
+            "drain": "Writes saves that had to wait. Every few minutes.",
+            "walCheckpoint": "Folds the write log into the database. Every few minutes.",
+            "backupDaily": "Copies memory to this Mac, then to Google Drive. Nightly at 03:15.",
+            "jsonlBackup": "Copies your agents\u{2019} conversations to Google Drive. Nightly.",
+            "maintenanceNightly": "Checks memory can still save, and tidies the log. Nightly at 04:00.",
+            "maintenanceWeekly": "Compacts the database. Sundays at 04:00.",
+            "decay": "Lowers the weight of memories nobody uses.",
+            "repairFTS": "Rebuilds the word index. Weekly.",
         ]
 
         // Station popovers

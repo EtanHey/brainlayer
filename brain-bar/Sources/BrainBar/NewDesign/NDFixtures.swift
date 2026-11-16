@@ -21,6 +21,8 @@ enum BrainBarDesignFixture {
         case twoFaults = "two-faults"
         case reconnectWaiting = "reconnect-waiting"
         case backupsFailedUpload = "backups-failed-upload"
+        /// L24: one amber notice that is not catching up (the copy on this Mac is late): "Check soon" and the amber dot.
+        case backupLate = "backup-late"
 
         /// The window page the fixture opens on.
         var page: NDPage {
@@ -146,7 +148,12 @@ enum BrainBarDesignFixture {
             i.nightlyLastRun = .ran(now.addingTimeInterval(-3 * 86_400 - 4 * 3600))
             i.jobs = jobs(nightlyFailing: true)
         case .backupsFailedUpload:
-            i.backupHistory = history(failedDriveDayAgo: 3)
+            // R1.2 change 13: a failed upload retried successfully the same night; the checks stay green.
+            i.backupHistory = history(failedDriveDayAgo: 3, retried: true)
+        case .backupLate:
+            i.capture = capture(replacing(calmChecks(), check("backup_local", .amber, age: 30 * 3600, limit: 36 * 3600)), dot: .amber)
+            i.newestLocalCopyAt = now.addingTimeInterval(-30 * 3600)
+            i.backupHistory = history(localNewestHoursAgo: 30)
         }
         return i
     }
@@ -212,16 +219,20 @@ enum BrainBarDesignFixture {
 
     /// A week of nightly attempts. Each lane's newest attempt sits at the age its row's gauge says (the Drive copy 3 h,
     /// the others 4 h; with Drive stalled, the Drive lanes stop at 21 h), so the rail and the number agree.
-    static func history(failedDriveDayAgo: Int? = nil, driveStalledAfterDays: Int? = nil) -> NDBackupHistory {
+    static func history(failedDriveDayAgo: Int? = nil, driveStalledAfterDays: Int? = nil, retried: Bool = false,
+                        localNewestHoursAgo: Double = 4) -> NDBackupHistory {
         func nights(newestHoursAgo: Double, fail: Int? = nil) -> [NDAttempt] {
-            (0...6).reversed().compactMap { day in
+            (0...6).reversed().flatMap { day -> [NDAttempt] in
                 let at = now.addingTimeInterval(-Double(day) * 86_400 - newestHoursAgo * 3600)
-                return now.timeIntervalSince(at) <= 144 * 3600 ? NDAttempt(at: at, ok: day != fail) : nil
+                guard now.timeIntervalSince(at) <= 144 * 3600 else { return [] }
+                // A retry 46 minutes after a failed upload, the same night.
+                if day == fail, retried { return [NDAttempt(at: at, ok: false), NDAttempt(at: at.addingTimeInterval(46 * 60), ok: true)] }
+                return [NDAttempt(at: at, ok: day != fail)]
             }
         }
         let stalled = driveStalledAfterDays != nil
         return .read(NDBackupLanes(
-            local: nights(newestHoursAgo: 4), drive: nights(newestHoursAgo: stalled ? 27 : 3, fail: failedDriveDayAgo),
+            local: nights(newestHoursAgo: localNewestHoursAgo), drive: nights(newestHoursAgo: stalled ? 27 : 3, fail: failedDriveDayAgo),
             conversations: nights(newestHoursAgo: stalled ? 28 : 4), integrity: nights(newestHoursAgo: 4)))
     }
 

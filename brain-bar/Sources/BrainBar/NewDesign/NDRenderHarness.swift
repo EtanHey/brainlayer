@@ -83,23 +83,22 @@ import SwiftUI
 
     /// The brain in its four states, real size and 4x, on a strip of the menu bar's colour.
     static func icons(name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
-        let models = [BrainBarDesignFixture.Name.calm, .driveSignedOut, .twoFaults].map { NDModel.make(BrainBarDesignFixture.inputs($0)) }
-        var unread = BrainBarDesignFixture.inputs(.calm)
-        unread.capture.verdict = nil
-        unread.capture.isChecking = true
-        let all = models + [NDModel.make(unread)]
+        // R1.2 change 10 (L23): rest, one red, two red, amber ("Check soon"), not confirmed.
+        let images: [NSImage] = [BrainBarDesignFixture.Name.calm, .driveSignedOut, .twoFaults, .backupLate, .notConfirmed].map { name in
+            let inputs = BrainBarDesignFixture.inputs(name)
+            let model = NDModel.make(inputs)
+            return NDIcon.image(for: model, NDR1.make(inputs, model))
+        }
         let dark = appearance == .darkAqua
-        let size = NSSize(width: 4 * 120, height: 140)
+        let size = NSSize(width: 5 * 120, height: 140)
         let rep = try bitmap(size)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
         (NSAppearance(named: appearance) ?? .currentDrawing()).performAsCurrentDrawingAppearance {
             NDColor.rgb(dark ? 0x1B2440 : 0xD5DEEF).setFill()
             NSRect(origin: .zero, size: size).fill()
-            for (index, model) in all.enumerated() {
-                let image = NDIcon.image(for: model)
+            for (index, image) in images.enumerated() {
                 let tint: NSColor = dark ? .white : .black
-                let alpha: CGFloat = NDIcon.noReadingYet(model) ? 0.45 : 1
                 for (scale, y) in [(CGFloat(1), CGFloat(110)), (CGFloat(4), CGFloat(10))] {
                     let w = image.size.width * scale, h = image.size.height * scale
                     let rect = NSRect(x: CGFloat(index) * 120 + (120 - w) / 2, y: y, width: w, height: h)
@@ -107,9 +106,9 @@ import SwiftUI
                         let tinted = NSImage(size: image.size, flipped: false) { r in
                             image.draw(in: r); tint.set(); r.fill(using: .sourceAtop); return true
                         }
-                        tinted.draw(in: rect, from: .zero, operation: .sourceOver, fraction: alpha)
+                        tinted.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
                     } else {
-                        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: alpha)
+                        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
                     }
                 }
             }

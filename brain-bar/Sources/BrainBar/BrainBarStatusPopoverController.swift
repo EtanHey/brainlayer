@@ -134,7 +134,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         let model = newDesignStore.model
         let r1 = newDesignStore.r1
         button.image = NDIcon.image(for: model, r1)
-        button.alphaValue = NDIcon.dimmed(model, r1) ? 0.45 : 1
+        button.alphaValue = 1  // R1.2: the dimmed, badged and dotted states are drawn in the image itself
         button.setAccessibilityLabel("BrainBar — " + r1.headline)
         button.toolTip = r1.headline
     }
