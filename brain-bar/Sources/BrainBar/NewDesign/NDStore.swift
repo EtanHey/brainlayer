@@ -8,6 +8,8 @@ import SwiftUI
 @MainActor final class NDStore: ObservableObject {
     @Published private(set) var inputs: NDInputs
     @Published private(set) var model: NDModel
+    /// What round 1 of the design draws (pipeline, headline items, dropdown rows, footer), from the same inputs.
+    var r1: NDR1 { NDR1.make(inputs, model) }
     @Published var range: NDRange = .hour {
         didSet { if range != oldValue { refreshWaves() } }
     }
