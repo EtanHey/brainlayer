@@ -41,7 +41,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: EtanHey/golems
-          ref: ${{ steps.input.outputs.sha }}
+          ref: master
+          fetch-depth: 0
           path: golems
           persist-credentials: false
       - name: Require committed signing files before building
@@ -49,8 +50,9 @@ jobs:
           GOLEMS_SHA: ${{ steps.input.outputs.sha }}
         run: |
           set -euo pipefail
-          test "$(git -C golems rev-parse HEAD)" = "$GOLEMS_SHA"
           python3 scripts/golems_approve_release.py merged-sha golems "$GOLEMS_SHA"
+          git -C golems checkout --detach "$GOLEMS_SHA"
+          test "$(git -C golems rev-parse HEAD)" = "$GOLEMS_SHA"
           git -C golems ls-files --error-unmatch native/golems-approve/GolemsApprove.entitlements native/golems-approve/Info.plist >/dev/null
           python3 scripts/golems_approve_release.py source golems/native/golems-approve
       - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90

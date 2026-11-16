@@ -293,3 +293,13 @@ def test_shallow_checkout_fetches_complete_master(golems_history, tmp_path):
     assert git(shallow, "rev-parse", "--is-shallow-repository") == "true"
     assert run("merged-sha", shallow, merged).returncode == 0
     assert git(shallow, "rev-parse", "--is-shallow-repository") == "false"
+
+
+def test_golems_action_checks_out_only_trusted_master_before_local_sha_selection():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/sign-golems-approve.yml").read_text())
+    steps = workflow["jobs"]["build"]["steps"]
+    checkout = next(s for s in steps if s.get("with", {}).get("repository") == "EtanHey/golems")
+    assert checkout["with"]["ref"] == "master"
+    assert checkout["with"]["fetch-depth"] == 0
+    admission = next(s["run"] for s in steps if ".py merged-sha" in s.get("run", ""))
+    assert admission.index(".py merged-sha") < admission.index('checkout --detach "$GOLEMS_SHA"')

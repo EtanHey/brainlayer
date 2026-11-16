@@ -2,8 +2,10 @@
 
 `sign-golems-approve.yml` is manual dispatch only, from brainlayer `main`.
 The lead supplies a reviewed full EtanHey/golems commit SHA. Before building, the
-runner freshly fetches the complete `origin/master` history and requires that SHA
-to be an ancestor of (or equal to) master. Fetch failure refuses; a stale tracking
+Actions checks out only fixed `master` with full history. The runner then freshly
+fetches `origin/master` and requires the supplied SHA
+to be an ancestor of (or equal to) master before locally checking out that exact
+commit. No Actions checkout consumes the caller SHA. Fetch failure refuses; a stale tracking
 ref is never accepted as fallback. It must contain
 `native/golems-approve/GolemsApprove.entitlements` and `Info.plist`; missing files
 refuse by name. No entitlements or bundle metadata are synthesized. The old
