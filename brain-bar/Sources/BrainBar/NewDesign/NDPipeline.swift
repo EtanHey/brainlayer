@@ -160,16 +160,14 @@ struct NDPipelineState: Equatable, Sendable {
         }
     }
 
-    /// How one pipe is drawn (change 9 to 11): the break out of a red stage, the break into a stage that refuses what
-    /// arrives, an amber stretch into a stage with a notice, dashed when not confirmed, otherwise flowing.
-    enum PipeLook: Equatable, Sendable { case flowing, dashed, breakOut, breakIn, notice }
+    /// How one pipe is drawn (R1.4 change 16, L36): the pipe after a faulty stage is faint (28 %); nothing else on a pipe
+    /// changes for a fault or a notice. Dashed when not confirmed, otherwise flowing.
+    enum PipeLook: Equatable, Sendable { case flowing, dashed, faint }
 
     func look(_ pipe: NDPipe) -> PipeLook {
         if allUnconfirmed { return .dashed }
         guard let ends = NDPipelineGraph.ends[pipe] else { return .flowing }
-        if faults.contains(ends.from), !arrivalBreaks.contains(ends.from) { return .breakOut }
-        if faults.contains(ends.to), arrivalBreaks.contains(ends.to) { return .breakIn }
-        if notices.contains(ends.to) { return .notice }
+        if faults.contains(ends.from), !arrivalBreaks.contains(ends.from) { return .faint }
         if unconfirmed.contains(pipe) { return .dashed }
         return .flowing
     }
@@ -227,7 +225,10 @@ extension NDPipelineState {
                 s.status[.read] = sev == .red ? Status(text: Say.notBeingRead, severity: .red)
                     : s.status[.read].map { Status(text: $0.text, severity: .orange) }
             } else {
+                // R1.4 change 3 (L38): only the providers the check names; Read's status names them.
                 for family in agents { s.agentFaults[family] = sev }
+                let names = agents.map(NDProvider.name).joined(separator: ", ")
+                s.status[.read] = Status(text: Say.providerNotRead(names), severity: sev)
             }
         }
 
@@ -300,17 +301,15 @@ extension NDPipelineState {
         if let heartbeat = i.watcherHeartbeatAgeS, heartbeat >= 0 {
             out[.read] = Status(text: Say.lastRead(NDFormat.ageText(heartbeat)))
         }
+        // R1.4 changes 13 and 14: "empty" and "working" moved into the popovers; a status shows a number or a fault.
         if let waiting = i.savesWaiting {
-            if waiting == 0 {
-                out[.queue] = Status(text: Say.empty)
-            } else if let queued = i.oldestSaveQueuedAt {
+            if waiting > 0, let queued = i.oldestSaveQueuedAt {
                 out[.queue] = Status(text: Say.waiting(NDFormat.ageText(max(0, c.now.timeIntervalSince(queued)))))
             }
         }
         if let mac = age("backup_local") { out[.mac] = Status(text: Say.lastBackup(NDFormat.ageText(mac))) }
         let drive = [age("backup_offsite"), age("transcripts")].compactMap { $0 }
         if drive.count == 2, let older = drive.max() { out[.drive] = Status(text: Say.lastBackup(NDFormat.ageText(older))) }
-        if checks.first(where: { $0.name == "search" })?.state == .green { out[.search] = Status(text: Say.working) }
         if case let .ran(at) = i.nightlyLastRun {
             out[.jobs] = Status(text: Say.lastCheckUp(NDFormat.ageText(max(0, c.now.timeIntervalSince(at)))))
         }

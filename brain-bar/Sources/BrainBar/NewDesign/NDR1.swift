@@ -117,8 +117,8 @@ struct NDR1: Equatable, Sendable {
             if let ingest = check("ingest"), let sev = sev(ingest) {
                 let agents = NDPipelineState.agentCodes(ingest)
                 if let first = agents.first {
-                    items.append(Item(id: "agent", severity: sev, title: Say.agentNotRead(first.label), detail: Say.agentNotReadDetail,
-                                      action: sev == .red ? copyReport : nil, strip: Strip(from: first.label, to: Say.stageRead, side: .source, severity: sev),
+                    items.append(Item(id: "agent", severity: sev, title: Say.agentNotRead(NDProvider.name(first)), detail: Say.agentNotReadDetail,
+                                      action: sev == .red ? copyReport : nil, strip: Strip(from: NDProvider.name(first), to: Say.stageRead, side: .source, severity: sev),
                                       concerns: ["ingest"], station: .agents))
                 } else {
                     // D6: amber is late, not stopped: "Catching up on new conversations", no "needs you", no button.

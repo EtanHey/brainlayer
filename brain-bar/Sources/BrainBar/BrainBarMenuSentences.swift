@@ -646,6 +646,25 @@ extension BrainBarMenuPresenter {
         static let explainDrive = "The copy on this Mac is uploaded to your Google Drive, and the agents\u{2019} session files are copied there too. If Drive is signed out, both stop."
         static let explainJobs = "Read memory, check it and tidy it in place: a light check-up every night and a deep clean that compacts the whole database every week. They add no new memories."
 
+        // Revision 1.4 (L34, L35, L38): provider names, the words that moved into hovers, the readout's first line.
+        static let antigravity = "Antigravity"
+        static func providerNotRead(_ provider: String) -> String { "\(provider) not read" }
+        static func busiestMinute(_ span: String, saved: String, read: String) -> String {
+            "Busiest minute \(span): \(saved) saved, \(read) read"
+        }
+        static let thisHour = "this hour"
+        static let theseThreeHours = "these 3 hours"
+        static let today = "today"
+        static let waitingRow = "Waiting"
+        static let none = "none"
+        static let lastCheck = "Last check"
+        static let railTitle = "Session files, copied as they are"
+        static let railLine = "The agents\u{2019} session files go to your Google Drive as they are."
+        static let answersTitle = "Answers to agents"
+        static let answersLine = "What Search finds goes back to the agent that asked."
+        static let agentsLine = "Claude, Codex, Cursor and Antigravity."
+        static let keptSafeLine = "A copy on this Mac every night, and a copy in your Google Drive."
+
         // Settings
         static let settingsTitle = "BrainBar Settings"
         static let reconnectShort = "Reconnect"

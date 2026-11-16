@@ -389,15 +389,7 @@ struct NDActivitySection: View {
             .frame(height: 22)
             .accessibilityElement(children: .combine)
             ZStack(alignment: .topLeading) {
-                // R1.1 change 30: each half's maximum at the gutter's outer ends, so the size reads without hovering.
-                if let wave, wave.readable, wave.count > 0 {
-                    let bucket = max(1, store.range.minutes / max(wave.count, 1))
-                    // One line each, from the gutter's edge (the plot's bars start lower and higher than these).
-                    Text(Say.upTo(NDFormat.integer(wave.saves.max() ?? 0), minutes: bucket))
-                        .font(NDType.captionNumber).foregroundStyle(ND.t3).fixedSize().offset(y: -2)
-                    Text(Say.upTo(NDFormat.integer(wave.reads.max() ?? 0), minutes: bucket))
-                        .font(NDType.captionNumber).foregroundStyle(ND.t3).fixedSize().offset(y: 99)
-                }
+                // R1.4 changes 11 and 12: the halves' maxima moved into the hover readout's first line.
                 // "saved" just above the baseline, "read" just below it, in the series' text colours (H1).
                 Text(Say.saved).font(NDType.captionMedium).foregroundStyle(ND.savedText)
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 53)
@@ -493,6 +485,9 @@ struct NDActivityReadout: View {
         let end = (wave.endsAt ?? now).addingTimeInterval(-Double(wave.count - 1 - index) * width)
         let start = end.addingTimeInterval(-width)
         VStack(alignment: .leading, spacing: 0) {
+            if let busiest = Self.busiest(wave, minutes: minutes) {
+                Text(busiest).font(NDType.captionNumber).foregroundStyle(ND.t2).padding(.bottom, 3)
+            }
             Text(Self.clock(start, zone) + " to " + Self.clock(end, zone)).font(NDType.captionNumber).foregroundStyle(ND.t2)
                 .padding(.bottom, 3)
             row(ND.saved, index < wave.saves.count ? wave.saves[index] : 0, Say.savedByAgents)
@@ -511,6 +506,14 @@ struct NDActivityReadout: View {
             Text(words).font(NDType.body).foregroundStyle(ND.t2)
         }
         .frame(height: 18)
+    }
+
+    /// R1.4 changes 11 and 12 (L38): "Busiest minute this hour: 6 saved, 67 read", the range's real maxima. Said only where
+    /// a bucket is one minute (the 1 h range): on 3 h and 24 h a bucket is 3 or 24 minutes, and "minute" would not be true.
+    static func busiest(_ wave: NDWave, minutes: Int) -> String? {
+        guard wave.count > 0, minutes / wave.count == 1, minutes % wave.count == 0 else { return nil }
+        let span = minutes == 60 ? Say.thisHour : minutes == 180 ? Say.theseThreeHours : Say.today
+        return Say.busiestMinute(span, saved: NDFormat.integer(wave.saves.max() ?? 0), read: NDFormat.integer(wave.reads.max() ?? 0))
     }
 
     static func clock(_ date: Date, _ zone: TimeZone) -> String {

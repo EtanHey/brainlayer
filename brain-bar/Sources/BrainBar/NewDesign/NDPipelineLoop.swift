@@ -1,20 +1,30 @@
 import AppKit
 import SwiftUI
 
-// MARK: - Layout (R1.3 changes 1 to 6 with the 1.3.1 corrections L1 to L5), as data
+// MARK: - Layout (R1.3 with 1.3.1; R1.4 changes 1, 17 and 19), as data
 
 enum NDPipelineLayout {
     typealias Say = BrainBarMenuPresenter.SurfaceSay
 
-    /// 820 × 294 inside its surface. The drawing may run 12 pt into the surface's right padding: the Kept-safe frame
-    /// keeps 12 pt between its edge and any text (lead, 1.3 build brief).
-    static let size = CGSize(width: 820, height: 294)
+    /// 820 × 270 inside its surface (R1.4 change 19). The drawing may run 12 pt into the surface's right padding: the
+    /// Kept-safe frame keeps 12 pt between its edge and any text (lead, 1.3 build brief).
+    static let size = CGSize(width: 820, height: 270)
     static let drawWidth: CGFloat = 832
-    static let yTop: CGFloat = 64, ySaves: CGFloat = 134, yAnswers: CGFloat = 248, yRail: CGFloat = 18
+    static let yTop: CGFloat = 64, ySaves: CGFloat = 134, yAnswers: CGFloat = 236, yRail: CGFloat = 18
     static let stationRadius: CGFloat = 13
-    /// "Your agents": the group the lanes leave and the answers return to (L1).
-    static let agentsFrame = CGRect(x: 8, y: 38, width: 92, height: 104)
-    static let agentRows: [(AgentFamily, CGFloat)] = AgentFamily.allCases.enumerated().map { ($0.element, 60 + 22 * CGFloat($0.offset)) }
+    /// The fault ring's radius (R1.4 change 16).
+    static let ringRadius: CGFloat = 15.5
+    /// R1.4 change 17: every line ends 3 pt outside the outermost ring a station can have, in every state, arrow tips
+    /// included; at the Memory box and the agents' frame, 3 pt from the edge.
+    static let lineEnd: CGFloat = 18.5
+    static let edgeGap: CGFloat = 3
+    /// The agents: four provider icons in one column (R1.4 change 1).
+    static let agentsFrame = CGRect(x: 16, y: 38, width: 44, height: 108)
+    static let agentRows: [(AgentFamily, CGFloat)] = AgentFamily.allCases.enumerated().map { ($0.element, 56 + 24 * CGFloat($0.offset)) }
+    static let iconSize: CGFloat = 16
+    static func iconCentre(_ family: AgentFamily) -> CGPoint {
+        CGPoint(x: agentsFrame.midX, y: agentRows.first { $0.0 == family }?.1 ?? agentsFrame.midY)
+    }
     /// Memory: an outline, 100 × 102 (L5).
     static let hub = CGRect(x: 400, y: 44, width: 100, height: 102)
     /// "Kept safe" hugs its two stations (L5), widened by the lead so the two text blocks keep 16 pt between them and
@@ -22,11 +32,11 @@ enum NDPipelineLayout {
     static let keptSafe = CGRect(x: 561, y: 38, width: 269, height: 80)
 
     static let stations: [NDStation: CGPoint] = [
-        .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 580, y: 248),
+        .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 580, y: 236),
         .mac: CGPoint(x: 630, y: 64), .drive: CGPoint(x: 760, y: 64), .jobs: CGPoint(x: 450, y: 186),
     ]
     static let symbols: [NDStation: String] = [
-        .read: "text.bubble", .queue: "tray.full", .memory: "brain", .mac: "laptopcomputer", .drive: "icloud",
+        .read: "text.bubble", .queue: "tray.full", .memory: "brain", .mac: "laptopcomputer.and.arrow.down", .drive: "icloud",
         .search: "magnifyingglass", .jobs: "clock", .agents: "person.2",
     ]
 
@@ -60,47 +70,61 @@ enum NDPipelineLayout {
         }
     }
 
-    /// One drawn connection: its points, a label set in the line, and its arrowheads (Jobs has one at each end).
+    /// One drawn connection: its points and its arrowheads (Jobs has one at each end). R1.4 change 5 to 8: no words.
     struct Connection: Sendable {
         var pipe: NDPipe
         var line: NDPolyline
-        var corner: CGFloat = 8
-        var label: String? = nil
-        var labelAt: CGFloat = 0.5
+        var corner: CGFloat = 10
         var bothWays = false
     }
 
     static let connections: [Connection] = {
-        let r = stationRadius
+        let e = lineEnd, g = edgeGap
         let read = point(.read), queue = point(.queue), search = point(.search), mac = point(.mac), drive = point(.drive)
-        let jobs = point(.jobs)
+        let jobs = point(.jobs), ax = agentsFrame.midX
         var out: [Connection] = []
-        out.append(Connection(pipe: .sessions, line: NDPolyline(points: [CGPoint(x: agentsFrame.maxX, y: yTop), read]).trimmed(end: r),
-                              label: Say.lanesSessions))
-        out.append(Connection(pipe: .readMemory, line: NDPolyline(points: [read, CGPoint(x: hub.minX, y: yTop)]).trimmed(start: r)))
-        out.append(Connection(pipe: .saves, line: NDPolyline(points: [CGPoint(x: agentsFrame.maxX, y: ySaves), queue]).trimmed(end: r),
-                              label: Say.lanesSaves))
-        out.append(Connection(pipe: .queueMemory, line: NDPolyline(points: [queue, CGPoint(x: hub.minX, y: ySaves)]).trimmed(start: r)))
-        out.append(Connection(pipe: .memorySearch, line: NDPolyline(points: [CGPoint(x: hub.maxX, y: ySaves), CGPoint(x: search.x, y: ySaves),
-                                                                              search]).trimmed(end: r), corner: 12))
-        // L1: the answers run left along the bottom, then up into the group's bottom edge, the arrowhead touching it.
-        out.append(Connection(pipe: .answers, line: NDPolyline(points: [search, CGPoint(x: 54, y: yAnswers),
-                                                                         CGPoint(x: 54, y: agentsFrame.maxY)]).trimmed(start: r), corner: 12))
-        out.append(Connection(pipe: .memoryMac, line: NDPolyline(points: [CGPoint(x: hub.maxX, y: yTop), mac]).trimmed(end: r)))
-        out.append(Connection(pipe: .macDrive, line: NDPolyline(points: [mac, drive]).trimmed(start: r, end: r)))
-        // The copy rail leaves the group's top at x 70; its label sits at 78 % so Memory's popover never covers it.
-        out.append(Connection(pipe: .rail, line: NDPolyline(points: [CGPoint(x: 70, y: agentsFrame.minY), CGPoint(x: 70, y: yRail),
-                                                                     CGPoint(x: drive.x, y: yRail), drive]).trimmed(end: r),
-                              corner: 10, label: Say.sessionFilesCopied, labelAt: 0.78))
-        // L3: straight and vertical, hub bottom to Jobs, an arrowhead at both ends.
-        out.append(Connection(pipe: .jobsMemory, line: NDPolyline(points: [jobs, CGPoint(x: jobs.x, y: hub.maxY)]).trimmed(start: r),
+        out.append(Connection(pipe: .sessions, line: NDPolyline(points: [CGPoint(x: agentsFrame.maxX + g, y: yTop), read]).trimmed(end: e)))
+        out.append(Connection(pipe: .readMemory, line: NDPolyline(points: [read, CGPoint(x: hub.minX - g, y: yTop)]).trimmed(start: e)))
+        out.append(Connection(pipe: .saves, line: NDPolyline(points: [CGPoint(x: agentsFrame.maxX + g, y: ySaves), queue]).trimmed(end: e)))
+        out.append(Connection(pipe: .queueMemory, line: NDPolyline(points: [queue, CGPoint(x: hub.minX - g, y: ySaves)]).trimmed(start: e)))
+        out.append(Connection(pipe: .memorySearch, line: NDPolyline(points: [CGPoint(x: hub.maxX + g, y: ySaves), CGPoint(x: search.x, y: ySaves),
+                                                                              search]).trimmed(end: e), corner: 12))
+        out.append(Connection(pipe: .answers, line: NDPolyline(points: [search, CGPoint(x: ax, y: yAnswers),
+                                                                         CGPoint(x: ax, y: agentsFrame.maxY + g)]).trimmed(start: e), corner: 12))
+        out.append(Connection(pipe: .memoryMac, line: NDPolyline(points: [CGPoint(x: hub.maxX + g, y: yTop), mac]).trimmed(end: e)))
+        out.append(Connection(pipe: .macDrive, line: NDPolyline(points: [mac, drive]).trimmed(start: e, end: e)))
+        out.append(Connection(pipe: .rail, line: NDPolyline(points: [CGPoint(x: ax, y: agentsFrame.minY - g), CGPoint(x: ax, y: yRail),
+                                                                     CGPoint(x: drive.x, y: yRail), drive]).trimmed(end: e)))
+        out.append(Connection(pipe: .jobsMemory, line: NDPolyline(points: [jobs, CGPoint(x: jobs.x, y: hub.maxY + g)]).trimmed(start: e),
                               bothWays: true))
         return out
     }()
 
-    /// "answers to agents" beside the rising leg (L1), and the agent fault's phrase under the group.
-    static let answersLabel = CGPoint(x: 62, y: 204)
-    static let agentPhrase = CGPoint(x: 62, y: 158)
+    /// What a line ends on: a station's centre (with the line-end radius) or a frame (with the 3 pt gap).
+    enum End: Equatable { case station(NDStation), frame(CGRect) }
+    static func ends(_ pipe: NDPipe) -> (start: End, end: End) {
+        switch pipe {
+        case .sessions: (.frame(agentsFrame), .station(.read))
+        case .readMemory: (.station(.read), .frame(hub))
+        case .saves: (.frame(agentsFrame), .station(.queue))
+        case .queueMemory: (.station(.queue), .frame(hub))
+        case .memorySearch: (.frame(hub), .station(.search))
+        case .answers: (.station(.search), .frame(agentsFrame))
+        case .memoryMac: (.frame(hub), .station(.mac))
+        case .macDrive: (.station(.mac), .station(.drive))
+        case .rail: (.frame(agentsFrame), .station(.drive))
+        case .jobsMemory: (.station(.jobs), .frame(hub))
+        }
+    }
+
+    /// The hover strips along the rail and the return line (R1.4 changes 5 and 8): each segment, 12 pt thick.
+    static func hoverStrips(_ pipe: NDPipe) -> [CGRect] {
+        guard let line = connections.first(where: { $0.pipe == pipe })?.line, line.points.count > 1 else { return [] }
+        return (1..<line.points.count).map { i in
+            let a = line.points[i - 1], b = line.points[i]
+            return CGRect(x: min(a.x, b.x) - 6, y: min(a.y, b.y) - 6, width: abs(b.x - a.x) + 12, height: abs(b.y - a.y) + 12)
+        }
+    }
 
     // MARK: actions at rest (change 16, L3)
 
@@ -108,56 +132,114 @@ enum NDPipelineLayout {
     /// runs below: Jobs on its left (L3), Read and Search on their right. Google Drive's and the Mac's sit just under the
     /// Kept-safe frame, which no longer grows: the lead's wider frame would otherwise grow into the Memory-to-Search lane.
     static func actionFrame(_ s: NDStation, width: CGFloat) -> CGRect {
-        let p = point(s), r = stationRadius
+        let p = point(s)
         switch s {
-        case .drive, .mac: return CGRect(x: p.x - width / 2, y: keptSafe.maxY + 6, width: width, height: 20)
+        case .drive, .mac: return CGRect(x: p.x - width / 2, y: keptSafe.maxY + 8, width: width, height: 20)
         case .queue: return CGRect(x: p.x - width / 2, y: p.y + 51, width: width, height: 20)
-        case .jobs: return CGRect(x: p.x - r - 12 - width, y: p.y - 10, width: width, height: 20)
+        case .jobs: return CGRect(x: p.x - 31 - width, y: p.y - 10, width: width, height: 20)
         case .read: return CGRect(x: p.x + 50, y: p.y + 33, width: width, height: 20)
-        case .search: return CGRect(x: p.x + r + 12, y: p.y - 10, width: width, height: 20)
-        case .agents: return CGRect(x: 62, y: agentsFrame.maxY + 24, width: width, height: 20)
+        case .search: return CGRect(x: p.x + lineEnd + 8, y: p.y - 10, width: width, height: 20)
+        case .agents: return CGRect(x: agentsFrame.midX + 8, y: agentsFrame.maxY + 10, width: width, height: 20)
         case .memory: return CGRect(x: p.x - width / 2, y: hub.maxY + 6, width: width, height: 20)
         }
     }
 
-    // MARK: popovers (L2)
+    // MARK: hover panels (L2, and the lead's 1.4 rule: every arrow on its own station)
 
-    struct PopoverSpec: Equatable {
+    /// A station's hover panel: the edge it opens on, the rect its arrow points at, the arrow's tip, the body, and the
+    /// whole window (body and arrow). The arrow always sits on the station's own circle (its frame for the agents, its box
+    /// for Memory); the body slides along the edge to keep clear of every neighbour's words and actions.
+    struct Panel: Equatable {
         var edge: Edge
-        /// The rect the popover's arrow points at, in chart coordinates.
         var anchor: CGRect
-        var width: CGFloat
+        var tip: CGPoint
+        var body: CGRect
+        var outer: CGRect
     }
 
-    /// Popover sides per station: never over its own station, a neighbour's name or status, a lane label or an action.
-    /// `actions` names the stations showing an action at rest (a Kept-safe popover opens under either copy's button).
-    static func popover(_ s: NDStation, actions: Set<NDStation>) -> PopoverSpec {
-        let p = point(s)
-        let hasAction = actions.contains(s)
-        let keptAction = !actions.isDisjoint(with: [.mac, .drive])
-        let circle = CGRect(x: p.x - 13, y: p.y - 13, width: 26, height: 26)
+    static let arrowLength: CGFloat = 10
+    static let arrowHalfWidth: CGFloat = 9
+    /// The arrow keeps at least this far from the body's ends (its corner radius plus the arrow's half width).
+    static let arrowInset: CGFloat = 18
+
+    /// The station's own shape: its circle, the agents' frame, or the Memory box.
+    static func circle(_ s: NDStation) -> CGRect {
         switch s {
-        case .agents: return PopoverSpec(edge: .top, anchor: agentsFrame, width: 260)
-        case .read: return PopoverSpec(edge: .top, anchor: circle, width: 260)
-        case .memory: return PopoverSpec(edge: .top, anchor: CGRect(x: hub.minX, y: hub.minY, width: 32, height: hub.height), width: 208)
-        case .mac: return PopoverSpec(edge: .bottom, anchor: CGRect(x: 620, y: p.y - 13, width: 60, height: keptAction ? 97 : 73), width: 220)
-        case .drive: return PopoverSpec(edge: .bottom, anchor: CGRect(x: p.x - 13, y: p.y - 13, width: 26, height: keptAction ? 97 : 73), width: 220)
-        case .search:
-            if hasAction { return PopoverSpec(edge: .bottom, anchor: CGRect(x: p.x - 13, y: p.y - 13, width: 26, height: 62), width: 214) }
-            return PopoverSpec(edge: .trailing, anchor: circle, width: 214)
-        case .queue: return PopoverSpec(edge: .bottom, anchor: CGRect(x: 217, y: p.y - 13, width: 88, height: hasAction ? 88 : 67), width: 200)
-        case .jobs: return PopoverSpec(edge: .bottom, anchor: CGRect(x: 370, y: p.y - 13, width: 60, height: 63), width: 230)
+        case .agents: agentsFrame
+        case .memory: hub
+        default: CGRect(x: point(s).x - stationRadius, y: point(s).y - stationRadius, width: 2 * stationRadius, height: 2 * stationRadius)
         }
     }
 
-    /// Where the popover lands for a content `height` (NSPopover centres on the anchor; the arrow is 10 pt long).
-    static func popoverFrame(_ spec: PopoverSpec, height: CGFloat) -> CGRect {
-        let arrow: CGFloat = 10
-        switch spec.edge {
-        case .top: return CGRect(x: spec.anchor.midX - spec.width / 2, y: spec.anchor.minY - arrow - height, width: spec.width, height: height)
-        case .bottom: return CGRect(x: spec.anchor.midX - spec.width / 2, y: spec.anchor.maxY + arrow, width: spec.width, height: height)
-        case .trailing: return CGRect(x: spec.anchor.maxX + arrow, y: spec.anchor.midY - height / 2, width: spec.width, height: height)
-        case .leading: return CGRect(x: spec.anchor.minX - arrow - spec.width, y: spec.anchor.midY - height / 2, width: spec.width, height: height)
+    /// Where each station's panel opens, its width, and how far the body slides along the edge from centred.
+    static func panelSide(_ s: NDStation, hasAction: Bool) -> (edge: Edge, width: CGFloat, slide: CGFloat) {
+        switch s {
+        case .agents: (.top, 240, 100)
+        case .read: (.top, 260, 0)
+        case .memory: (.top, 208, 0)
+        case .mac: (.top, 220, 0)
+        case .drive: (.top, 220, -34)
+        // Search opens below its name: to its right the Kept-safe actions sit, and above it run Jobs' words.
+        case .search: (.bottom, 214, 0)
+        // Between an agent's action (left) and Jobs' action (right).
+        case .queue: (.bottom, 180, 0)
+        case .jobs: (.bottom, 230, -48)
+        }
+    }
+
+    static func panel(_ s: NDStation, state: NDPipelineState, actions: Set<NDStation>, actionWidths: [NDStation: CGFloat] = [:],
+                      height: CGFloat) -> Panel {
+        let side = panelSide(s, hasAction: actions.contains(s))
+        let own = circle(s)
+        var anchor = own
+        if side.edge == .bottom {
+            // Below the station's own words (and its action, when it sits under them), never over them.
+            for r in labelRects(s, state) { anchor = anchor.union(r) }
+            if actions.contains(s), let w = actionWidths[s] {
+                let f = actionFrame(s, width: w)
+                if f.minY >= own.maxY { anchor = anchor.union(f) }
+            }
+        }
+        let a = arrowLength, w = side.width
+        let tip: CGPoint
+        var body: CGRect
+        switch side.edge {
+        case .top:
+            tip = CGPoint(x: own.midX, y: anchor.minY)
+            body = CGRect(x: tip.x - w / 2 + side.slide, y: tip.y - a - height, width: w, height: height)
+        case .bottom:
+            tip = CGPoint(x: own.midX, y: anchor.maxY)
+            body = CGRect(x: tip.x - w / 2 + side.slide, y: tip.y + a, width: w, height: height)
+        case .trailing:
+            tip = CGPoint(x: anchor.maxX, y: own.midY)
+            body = CGRect(x: tip.x + a, y: tip.y - height / 2 + side.slide, width: w, height: height)
+        case .leading:
+            tip = CGPoint(x: anchor.minX, y: own.midY)
+            body = CGRect(x: tip.x - a - w, y: tip.y - height / 2 + side.slide, width: w, height: height)
+        }
+        // The arrow never leaves the body's straight edge.
+        switch side.edge {
+        case .top, .bottom:
+            body.origin.x = min(max(body.minX, tip.x - w + arrowInset), tip.x - arrowInset)
+        case .leading, .trailing:
+            body.origin.y = min(max(body.minY, tip.y - height + arrowInset), tip.y - arrowInset)
+        }
+        let arrowBox: CGRect = switch side.edge {
+        case .top: CGRect(x: tip.x - arrowHalfWidth, y: tip.y - a, width: 2 * arrowHalfWidth, height: a)
+        case .bottom: CGRect(x: tip.x - arrowHalfWidth, y: tip.y, width: 2 * arrowHalfWidth, height: a)
+        case .trailing: CGRect(x: tip.x, y: tip.y - arrowHalfWidth, width: a, height: 2 * arrowHalfWidth)
+        case .leading: CGRect(x: tip.x - a, y: tip.y - arrowHalfWidth, width: a, height: 2 * arrowHalfWidth)
+        }
+        return Panel(edge: side.edge, anchor: anchor, tip: tip, body: body, outer: body.union(arrowBox))
+    }
+
+    /// What a pointer lands on (the lead's 1.4 rule): the station's ring and its name, in the drawing's own coordinates.
+    static func hitShape(_ s: NDStation, _ state: NDPipelineState) -> (circle: CGRect, label: CGRect?) {
+        switch s {
+        case .agents, .memory: return (circle(s), nil)
+        default:
+            let p = point(s), r = ringRadius
+            return (CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r), labelRects(s, state).first)
         }
     }
 
@@ -181,23 +263,8 @@ enum NDPipelineLayout {
         return out
     }
 
-    /// The words set in or beside lanes, and the two group captions.
-    static func laneLabelRects() -> [(String, CGRect)] {
-        var out: [(String, CGRect)] = []
-        for c in connections {
-            guard let label = c.label else { continue }
-            let m = c.line.point(at: c.line.length * c.labelAt)
-            let w = textWidth(label, size: 11) + 12
-            out.append((label, CGRect(x: m.x - w / 2, y: m.y - 8, width: w, height: 16)))
-        }
-        out.append((Say.answersToAgentsLane, CGRect(x: answersLabel.x, y: answersLabel.y - 10,
-                                                    width: textWidth(Say.answersToAgentsLane, size: 11), height: 13)))
-        out.append((Say.keptSafe, CGRect(x: keptSafe.minX + 10, y: keptSafe.minY - 8,
-                                         width: textWidth(Say.keptSafe, size: 11, weight: .medium) + 12, height: 16)))
-        out.append((Say.yourAgents, CGRect(x: agentsFrame.minX + 8, y: agentsFrame.minY - 8,
-                                           width: textWidth(Say.yourAgents, size: 11, weight: .medium) + 12, height: 16)))
-        return out
-    }
+    /// R1.4 change 5 to 10: no words are set in or beside lanes, and the two frames have no caption.
+    static func laneLabelRects() -> [(String, CGRect)] { [] }
 }
 
 // MARK: - Strokes as tokens (change 9: one meaning per line style)

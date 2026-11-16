@@ -470,8 +470,8 @@ extension NDModel {
             let sessions = a.sessions.map { $0 == 1 ? "1 session now" : "\($0) sessions now" } ?? "sessions not known"
             // L5 ruling: the count is every memory attributed to the agent's family in 24 h, not its saves alone.
             let memories = a.saves.map { "\(NDFormat.integer($0)) memories in the last 24 hours" } ?? "memories not known"
-            return Row(id: a.family.rawValue, name: a.family.label, visual: .agent(sessions: a.sessions, saves: a.saves, scale: scale),
-                       number: number, accessibility: "\(a.family.label): \(sessions), \(memories)")
+            return Row(id: a.family.rawValue, name: NDProvider.name(a.family), visual: .agent(sessions: a.sessions, saves: a.saves, scale: scale),
+                       number: number, accessibility: "\(NDProvider.name(a.family)): \(sessions), \(memories)")
         }
         let unknown = ctx.i.agents.agents.contains { $0.sessions == nil || $0.saves == nil }
         return Area(thing: nil, name: "Agents", mark: unknown ? .unknown : .none, rows: rows, limitLine: false,

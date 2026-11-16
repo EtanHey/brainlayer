@@ -53,6 +53,8 @@ import SwiftUI
             }
             written.append(try settings(name: "settings-\(suffix)", appearance: appearance, in: directory))
             written.append(try icons(name: "icons-\(suffix)", appearance: appearance, in: directory))
+            // R1.4 comp 45: where the words went, each in the hover that now carries it.
+            written.append(try wordsSheet(name: "hovers-words-\(suffix)", appearance: appearance, in: directory))
             // R1.3 comp 37: the three hover states (Memory's explanation; the Jobs and Drive faults with their actions).
             for (fixture, station) in [(BrainBarDesignFixture.Name.calm, NDStation.memory), (.twoFaults, .jobs), (.twoFaults, .drive)] {
                 let store = NDStore(fixture: BrainBarDesignFixture.inputs(fixture), page: .overview)
@@ -84,6 +86,46 @@ import SwiftUI
             NDCard(padding: EdgeInsets(top: 16, leading: 16, bottom: 12, trailing: 16)) { chart }
                 .frame(width: NDGrid.windowWidth - 2 * NDGrid.pageSide)
                 .offset(x: NDGrid.pageSide, y: 150)
+        }
+        .frame(width: size.width, height: size.height)
+        try write(host(view, size: size, appearance: appearance), name: name, in: directory)
+        return name
+    }
+
+    /// Comp 45's sheet: the Cursor icon's name, the rail, Save queue, Search, the return line, the agents' group, Kept safe
+    /// and the Activity readout, each as its hover draws it.
+    static func wordsSheet(name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
+        typealias Say = BrainBarMenuPresenter.SurfaceSay
+        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .overview)
+        func card<V: View>(_ v: V) -> some View {
+            v.background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(ND.raised))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(ND.hair2, lineWidth: 0.5))
+        }
+        let wave = store.inputs.heroWaves[.hour]
+        let peak = wave.map { w in w.saves.indices.max { w.saves[$0] < w.saves[$1] } ?? 0 } ?? 0
+        let cards: [AnyView] = [
+            AnyView(card(Text(NDProvider.name(.cursor)).font(NDType.bodyStrong).foregroundStyle(ND.t1).padding(12))),
+            AnyView(card(NDHoverRegion.card(title: Say.railTitle, line: Say.railLine))),
+            AnyView(card(NDStationPopover(store: store, station: .queue))),
+            AnyView(card(NDStationPopover(store: store, station: .search))),
+            AnyView(card(NDHoverRegion.card(title: Say.answersTitle, line: Say.answersLine))),
+            AnyView(card(NDStationPopover(store: store, station: .agents))),
+            AnyView(card(NDHoverRegion.card(title: Say.keptSafe, line: Say.keptSafeLine))),
+            AnyView(wave.map { NDActivityReadout(wave: $0, index: peak, minutes: 60, now: store.inputs.capture.now, zone: store.inputs.capture.timeZone) }),
+        ]
+        let size = NSSize(width: 900, height: 760)
+        let view = ZStack(alignment: .topLeading) {
+            ND.bg
+            VStack(alignment: .leading, spacing: 20) {
+                ForEach(0..<3, id: \.self) { row in
+                    HStack(alignment: .top, spacing: 20) {
+                        ForEach(0..<3, id: \.self) { col in
+                            if row * 3 + col < cards.count { cards[row * 3 + col] }
+                        }
+                    }
+                }
+            }
+            .padding(24)
         }
         .frame(width: size.width, height: size.height)
         try write(host(view, size: size, appearance: appearance), name: name, in: directory)
