@@ -27,15 +27,17 @@ enum NDPipelineLayout {
         CGPoint(x: agentsFrame.midX, y: agentRows.first { $0.0 == family }?.1 ?? agentsFrame.midY)
     }
     /// Memory: an outline, 100 × 102 (L5).
-    static let hub = CGRect(x: 400, y: 44, width: 100, height: 102)
+    /// R2 item 8: the diagram sits centred in its card, 32 pt from each side: everything right of the agents moved 26 pt
+    /// left (the long first-row lines are shorter).
+    static let hub = CGRect(x: 374, y: 44, width: 100, height: 102)
     /// "Kept safe" hugs its two stations (L5), widened by the lead so the two text blocks keep 16 pt between them and
     /// 12 pt to the frame at their widest statuses ("last backup 27 h ago" in Semibold): Copy on this Mac moves to x 630.
     /// R1.5: Copy on this Mac's status grew ("3 kept, newest 30 h ago"), so it moves to x 622 and the frame starts at x 544.
-    static let keptSafe = CGRect(x: 544, y: 38, width: 286, height: 80)
+    static let keptSafe = CGRect(x: 518, y: 38, width: 286, height: 80)
 
     static let stations: [NDStation: CGPoint] = [
-        .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 580, y: 248),
-        .mac: CGPoint(x: 622, y: 64), .drive: CGPoint(x: 760, y: 64), .jobs: CGPoint(x: 450, y: 186),
+        .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 554, y: 248),
+        .mac: CGPoint(x: 596, y: 64), .drive: CGPoint(x: 734, y: 64), .jobs: CGPoint(x: 424, y: 186),
     ]
     static let symbols: [NDStation: String] = [
         .read: "text.bubble", .queue: "tray.full", .memory: "brain", .mac: "laptopcomputer.and.arrow.down", .drive: "icloud",
@@ -177,11 +179,15 @@ enum NDPipelineLayout {
             p.body.origin.x = min(max(p.body.minX, limit.minX), limit.maxX - w)
             p.body.origin.x = min(max(p.body.minX, p.tip.x - w + arrowInset), p.tip.x - arrowInset)
             // At least one scrolling line of body (32 pt), however short the screen.
-            if p.edge == .bottom, p.body.maxY > limit.maxY { p.body.size.height = max(32, limit.maxY - p.body.minY) }
+            if p.edge == .bottom, p.body.maxY > limit.maxY {
+                p.body.size.height = max(32, limit.maxY - p.body.minY)
+                p.scrolls = true
+            }
             if p.edge == .top, p.body.minY < limit.minY {
                 let bottom = p.body.maxY
                 p.body.origin.y = limit.minY
                 p.body.size.height = max(32, bottom - limit.minY)
+                p.scrolls = true
             }
         case .leading, .trailing:
             p.body.origin.y = min(max(p.body.minY, limit.minY), limit.maxY - p.body.height)
@@ -208,6 +214,8 @@ enum NDPipelineLayout {
         var tip: CGPoint
         var body: CGRect
         var outer: CGRect
+        /// R2 item 2: the body scrolls only when the screen made it shorter than its content.
+        var scrolls = false
     }
 
     static let arrowLength: CGFloat = 10
@@ -253,7 +261,7 @@ enum NDPipelineLayout {
         case .drive: (.top, 288, -60)
         case .search: (.trailing, 288, 0)
         // Save queue's slides left of the Jobs name; Jobs' slides left of Search's circle and words.
-        case .queue: (.bottom, 288, -24)
+        case .queue: (.bottom, 288, -64)
         case .jobs: (.bottom, 288, -77)
         }
     }
@@ -335,7 +343,8 @@ enum NDPipelineLayout {
         guard stations[s] != nil else { return [] }
         let p = point(s)
         let t = state.treatment(s)
-        let nameW = textWidth(name(s), size: 13, weight: t == .fault ? .semibold : .regular)
+        let nameW = textWidth(name(s), size: 13)  // R2 item 10: the name keeps its normal weight
+        _ = t
         var out = [CGRect(x: p.x - nameW / 2, y: p.y + 17, width: nameW, height: 16)]
         if let status = state.status[s] {
             let w = textWidth(status.text, size: 11, weight: t == .fault || t == .notice ? .semibold : .regular)

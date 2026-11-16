@@ -20,7 +20,7 @@ struct NDWindowRoot: View {
             }
             ScrollView(.vertical) {
                 Group {
-                    switch store.page {
+                    switch store.shownPage {
                     case .overview: NDOverviewPage(store: store).onAppear { drawn(.overview) }
                     case .backups: NDBackupsPage(store: store).onAppear { drawn(.backups) }
                     case .jobs: NDJobsPage(store: store).onAppear { drawn(.jobs) }
@@ -358,13 +358,18 @@ struct NDActivitySection: View {
     @State private var hover: Int?
     /// The plot's frame in the section, reported as laid out (D8.1's test).
     var reportPlotFrame: ((CGRect) -> Void)? = nil
+    /// R1.6 item 9: the readout's frame in the section, reported as laid out.
+    var reportReadoutFrame: ((CGRect) -> Void)? = nil
 
-    init(store: NDStore, hover: Int? = nil, reportPlotFrame: ((CGRect) -> Void)? = nil) {
+    init(store: NDStore, hover: Int? = nil, reportPlotFrame: ((CGRect) -> Void)? = nil,
+         reportReadoutFrame: ((CGRect) -> Void)? = nil) {
         self.store = store
         _hover = State(initialValue: hover)
         self.reportPlotFrame = reportPlotFrame
+        self.reportReadoutFrame = reportReadoutFrame
     }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.ndPreviewHover) private var previewHover
     static let gutter: CGFloat = 52
     /// R1.2: the chart is 820 wide inside its surface: a 52 pt gutter and a 768 pt plot.
     static let plotWidth: CGFloat = 768
@@ -372,14 +377,35 @@ struct NDActivitySection: View {
 
     var body: some View {
         let wave = store.inputs.heroWaves[store.range]
-        let known = wave?.readable == true
+        let cut = Self.noDataFraction(store, wave: wave)
+        // R1.6 item 6: not confirmed, the totals say "—".
+        let known = wave?.readable == true && cut == nil
         VStack(alignment: .leading, spacing: 0) {
             NDBlockHeading(title: Say.activity) { NDRangeControl(store: store) }
-            NDCard { chart(wave: wave, known: known) }
+            NDCard { chart(wave: wave, known: known, cut: cut) }
         }
     }
 
-    @ViewBuilder private func chart(wave: NDWave?, known: Bool) -> some View {
+    /// R1.6 item 6: where the last confirmed check falls on the range, 0 to 1 from the left; nil while the state is
+    /// confirmed.
+    static func noDataFraction(_ store: NDStore, wave: NDWave?) -> CGFloat? {
+        guard store.r1.unconfirmedSince != nil, let at = store.inputs.capture.verdict?.evaluatedAt else { return nil }
+        let span = Double(store.range.minutes * 60)
+        let end = wave?.endsAt ?? store.inputs.capture.now
+        return CGFloat(min(1, max(0, (at.timeIntervalSince(end) + span) / span)))
+    }
+
+    /// R1.6 item 6: a column can be hovered only before the last confirmed check (past it nothing is known).
+    static func hoverable(_ index: Int, count: Int, cut: CGFloat?) -> Bool {
+        guard let cut else { return true }
+        let pitch = plotWidth / CGFloat(max(count, 1))
+        return CGFloat(index + 1) * pitch <= NDWaveform.noDataX(cut, width: plotWidth)
+    }
+
+    /// The hero canvas the waveform draws on (the plot and the 8 pt under it for the now tick).
+    static let canvas = CGSize(width: plotWidth, height: plotHeight + 8)
+
+    @ViewBuilder private func chart(wave: NDWave?, known: Bool, cut: CGFloat?) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 24) {
                 legend(color: ND.saved, value: known ? wave.map { NDFormat.integer($0.savesTotal) } : nil, words: Say.savedByAgents)
@@ -397,7 +423,7 @@ struct NDActivitySection: View {
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 72)
                 // Council r2a finding 3: the hover reads the pointer in the plot's own coordinates, the same origin the
                 // rule is drawn from (before, an offset moved the drawing but not the hit area, 52 pt apart).
-                NDWaveform(wave: wave, size: .hero, nowTick: true, hover: hover)
+                NDWaveform(wave: wave, size: .hero, nowTick: true, hover: shown(wave, cut: cut), noDataFrom: cut)
                     .frame(width: Self.plotWidth, height: Self.plotHeight + 8)
                     .contentShape(Rectangle())
                     .onContinuousHover(coordinateSpace: .local) { phase in
@@ -415,15 +441,36 @@ struct NDActivitySection: View {
                                                                         removal: .opacity.animation(NDMotion.rangeOut)))
             }
             .frame(width: Self.gutter + Self.plotWidth, height: Self.plotHeight + 8, alignment: .topLeading)
-            // D8.1: the readout is an overlay: it takes no layout space, so the plot never moves when it appears.
+            // R1.6 item 6: the hatch's words, centred in it.
             .overlay(alignment: .topLeading) {
-                if let hover, let wave, wave.readable, hover < wave.count {
-                    NDActivityReadout(wave: wave, index: hover, minutes: store.range.minutes, now: store.inputs.capture.now,
-                                      zone: store.inputs.capture.timeZone)
+                if let cut, let at = store.inputs.capture.verdict?.evaluatedAt {
+                    let x0 = NDWaveform.noDataX(cut, width: Self.plotWidth)
+                    Text(Say.noDataSince(NDR1.hhmm(at, store.inputs.capture)))
+                        .font(NDType.caption).foregroundStyle(ND.t2)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(ND.card))
                         .fixedSize()
-                        .alignmentGuide(.leading) { d in -Self.readoutX(hover, count: wave.count, width: d.width) }
-                        .alignmentGuide(.top) { _ in 6 }
-                        .allowsHitTesting(false)
+                        .frame(width: max(0, Self.plotWidth - x0), height: Self.plotHeight)
+                        .offset(x: Self.gutter + x0)
+                        .accessibilityHidden(true)
+                }
+            }
+            // D8.1: the readout is an overlay: it takes no layout space, so the plot never moves when it appears.
+            // R1.6 item 9: placed by a layout that measures it (no alignment guides), beside its column.
+            .overlay(alignment: .topLeading) {
+                if let index = shown(wave, cut: cut), let wave {
+                    let c = Self.center(index, count: wave.count)
+                    NDReadoutPlacement(column: Self.gutter + c,
+                                       barTop: NDWaveform.columnTop(wave, index: index, canvas: Self.canvas, nowTick: true, size: .hero),
+                                       flips: Self.readoutFlips(index, count: wave.count)) {
+                        NDActivityReadout(wave: wave, index: index, minutes: store.range.minutes, now: store.inputs.capture.now,
+                                          zone: store.inputs.capture.timeZone)
+                            .fixedSize()
+                            .background(GeometryReader { g in
+                                Color.clear.onAppear { reportReadoutFrame?(g.frame(in: .named("activity"))) }
+                            })
+                    }
+                    .allowsHitTesting(false)
                 }
             }
             .padding(.top, 14)
@@ -450,13 +497,15 @@ struct NDActivitySection: View {
         .coordinateSpace(name: "activity")
     }
 
-    /// R2A item 2: the readout sits beside the hovered column, 12 pt right of it, flipping to its left in the chart's
-    /// right third; never over the pointer, which is on the column. In the section's coordinates (gutter, then plot).
-    static func readoutX(_ index: Int, count: Int, width: CGFloat) -> CGFloat {
-        let c = center(index, count: count)
-        let x = gutter + c
-        return c < plotWidth * 2 / 3 ? x + 12 : x - 12 - width
+    /// The hovered column, when it is readable and before any unconfirmed stretch (the harness can preset one).
+    private func shown(_ wave: NDWave?, cut: CGFloat?) -> Int? {
+        guard let index = hover ?? previewHover, let wave, wave.readable, index >= 0, index < wave.count,
+              Self.hoverable(index, count: wave.count, cut: cut) else { return nil }
+        return index
     }
+
+    /// R2A item 2 and R1.6 item 9: the readout flips to the column's left in the chart's right third.
+    static func readoutFlips(_ index: Int, count: Int) -> Bool { center(index, count: count) >= plotWidth * 2 / 3 }
 
     static func center(_ index: Int, count: Int) -> CGFloat {
         let pitch = plotWidth / CGFloat(max(count, 1))
@@ -496,10 +545,8 @@ struct NDActivityReadout: View {
         let width = Double(minutes * 60) / Double(max(wave.count, 1))
         let end = (wave.endsAt ?? now).addingTimeInterval(-Double(wave.count - 1 - index) * width)
         let start = end.addingTimeInterval(-width)
+        // R1.6 item 9: its lines describe the hovered column only.
         VStack(alignment: .leading, spacing: 0) {
-            if let busiest = Self.busiest(wave, minutes: minutes) {
-                Text(busiest).font(NDType.captionNumber).foregroundStyle(ND.t2).padding(.bottom, 3)
-            }
             Text(Self.clock(start, zone) + " to " + Self.clock(end, zone)).font(NDType.captionNumber).foregroundStyle(ND.t2)
                 .padding(.bottom, 3)
             row(ND.saved, index < wave.saves.count ? wave.saves[index] : 0, Say.savedByAgents)
@@ -520,25 +567,42 @@ struct NDActivityReadout: View {
         .frame(height: 18)
     }
 
-    /// R1.4 changes 11 and 12 (L38, L39): the range's real maxima. "Busiest minute this hour: 6 saved, 67 read" where a bar
-    /// is one minute; "Busiest 3 minutes: …" and "Busiest 24 minutes: …" where a bar spans 3 or 24 minutes.
-    static func busiest(_ wave: NDWave, minutes: Int) -> String? {
-        guard wave.count > 0, minutes % wave.count == 0 else { return nil }
-        let span = minutes / wave.count
-        let saved = NDFormat.integer(wave.saves.max() ?? 0), read = NDFormat.integer(wave.reads.max() ?? 0)
-        guard span > 1 else {
-            let words = minutes == 60 ? Say.thisHour : minutes == 180 ? Say.theseThreeHours : Say.today
-            return Say.busiestMinute(words, saved: saved, read: read)
-        }
-        return Say.busiestMinutes(span, saved: saved, read: read)
-    }
-
     static func clock(_ date: Date, _ zone: TimeZone) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = zone
         f.dateFormat = "HH:mm"
         return f.string(from: date)
+    }
+}
+
+/// R1.6 item 9: places the hover readout by measuring it: beside the hovered column, 12 pt right of it (left of it in
+/// the chart's right third), its bottom 8 pt above the column's tallest bar. A tall column would lift it into the totals
+/// row, so its top stops at the row's foot; beside the column it still never covers it. Coordinates: the chart row's
+/// (the gutter, then the plot; y 0 at the plot's top).
+struct NDReadoutPlacement: Layout {
+    let column: CGFloat
+    let barTop: CGFloat
+    let flips: Bool
+    static let gap: CGFloat = 12
+    static let lift: CGFloat = 8
+    /// The totals row's foot, above the plot's top (the row's 14 pt padding).
+    static let ceiling: CGFloat = -14
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let readout = subviews.first else { return }
+        let size = readout.sizeThatFits(.unspecified)
+        let origin = Self.origin(column: column, barTop: barTop, flips: flips, size: size)
+        readout.place(at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y), anchor: .topLeading,
+                      proposal: ProposedViewSize(size))
+    }
+
+    static func origin(column: CGFloat, barTop: CGFloat, flips: Bool, size: CGSize) -> CGPoint {
+        CGPoint(x: flips ? column - gap - size.width : column + gap, y: max(ceiling, barTop - lift - size.height))
     }
 }
 
@@ -654,5 +718,14 @@ struct NDButtonStyle: ButtonStyle {
         let r1 = store.r1
         let parts: [String] = [store.page.rawValue, r1.headline, r1.unconfirmedDetail ?? ""] + r1.items.map(\.id)
         return parts.joined(separator: "|")
+    }
+}
+
+private struct NDPreviewHoverKey: EnvironmentKey { static let defaultValue: Int? = nil }
+extension EnvironmentValues {
+    /// Render harness only: the Activity chart's hovered column (R1.6 item 9: the readout drawn as the window draws it).
+    var ndPreviewHover: Int? {
+        get { self[NDPreviewHoverKey.self] }
+        set { self[NDPreviewHoverKey.self] = newValue }
     }
 }

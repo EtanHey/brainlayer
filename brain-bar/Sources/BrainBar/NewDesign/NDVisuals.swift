@@ -67,15 +67,19 @@ struct NDWaveform: View {
     var nowTick = false
     /// The bucket under the pointer (H2): that pair at 100 %, every other bar at 32 %, a 1 pt line marks it.
     var hover: Int? = nil
+    /// R1.6 item 6: where the last confirmed check falls, 0 to 1 from the left. From there on the plot is hatched and
+    /// draws no bars; the bars before it are dimmed. Nil when the state is confirmed.
+    var noDataFrom: CGFloat? = nil
 
     var body: some View {
         let target = wave?.sequence ?? 0
         ZStack {
             Canvas { ctx, canvas in
-                Self.drawStatic(ctx, canvas, wave: wave, size: size, palette: palette, nowTick: nowTick, hover: hover)
+                Self.drawStatic(ctx, canvas, wave: wave, size: size, palette: palette, nowTick: nowTick, hover: hover,
+                                noDataFrom: noDataFrom)
             }
             NDWaveStrip(phase: Double(target), target: target, wave: wave, size: size, palette: palette, nowTick: nowTick,
-                        hover: hover)
+                        hover: hover, noDataFrom: noDataFrom)
                 .clipShape(Rectangle())
         }
         .animation(wave?.outgoing != nil && !reduceMotion ? NDMotion.shift : nil, value: target)
@@ -109,8 +113,29 @@ struct NDWaveform: View {
         CGRect(x: 0, y: plot(canvas, nowTick: nowTick).cy - 0.5, width: canvas.width, height: 1)
     }
 
+    /// The saved bar's height for a bucket, exactly as the strip draws it (each half to its own maximum; the outgoing
+    /// bucket counts, so no bar changes height as it leaves).
+    static func savedHeight(_ wave: NDWave, saves: Int, size: Size) -> CGFloat {
+        guard saves > 0 else { return 0 }
+        let maxSaves = CGFloat(max(wave.saves.max() ?? 0, wave.outgoing?.saves ?? 0, 1))
+        return max(size == .hero ? 2 : 1.5, CGFloat(saves) / maxSaves * halves(size).up)
+    }
+
+    /// R1.6 item 9: the top of a column's tallest bar (its saved bar, which rises from the baseline; the baseline when it
+    /// saved nothing), in the canvas's coordinates.
+    static func columnTop(_ wave: NDWave, index: Int, canvas: CGSize, nowTick: Bool, size: Size) -> CGFloat {
+        let saves = index >= 0 && index < wave.saves.count ? wave.saves[index] : 0
+        return plot(canvas, nowTick: nowTick).cy - 0.5 - savedHeight(wave, saves: saves, size: size)
+    }
+
+    /// R1.6 item 6: the x where the hatch starts, on whole points.
+    static func noDataX(_ fraction: CGFloat, width: CGFloat) -> CGFloat { (width * min(1, max(0, fraction))).rounded() }
+
+    /// R1.6 item 6: the bars before the last confirmed check are drawn at this opacity.
+    static let dimmedBefore: Double = 0.4
+
     static func drawStatic(_ ctx: GraphicsContext, _ canvas: CGSize, wave: NDWave?, size: Size, palette: NDPalette, nowTick: Bool,
-                           hover: Int? = nil) {
+                           hover: Int? = nil, noDataFrom: CGFloat? = nil) {
         let (h, cy) = plot(canvas, nowTick: nowTick)
         guard let wave, wave.readable else {
             // Unknown: the baseline dashed, no bars.
@@ -120,6 +145,24 @@ struct NDWaveform: View {
             return
         }
         ctx.fill(Path(baseline(canvas, nowTick: nowTick)), with: .color(palette.track))
+        if let noDataFrom {
+            // Diagonal hatch, 1 pt lines 6 pt apart, over the plot from the last confirmed check to the right edge.
+            let x0 = noDataX(noDataFrom, width: canvas.width)
+            let area = CGRect(x: x0, y: 0, width: canvas.width - x0, height: h)
+            if area.width > 0 {
+                var hatch = ctx
+                hatch.clip(to: Path(area))
+                var lines = Path()
+                var x = x0 - h
+                while x < canvas.width {
+                    lines.move(to: CGPoint(x: x, y: h))
+                    lines.addLine(to: CGPoint(x: x + h, y: 0))
+                    x += 6
+                }
+                hatch.stroke(lines, with: .color(ND.hair2), lineWidth: 1)
+                ctx.fill(Path(CGRect(x: x0, y: 0, width: 1, height: h)), with: .color(ND.t3.opacity(0.6)))
+            }
+        }
         let n = wave.count
         guard n > 0 else { return }
         let pitch = canvas.width / CGFloat(n)
@@ -163,6 +206,7 @@ struct NDWaveStrip: View, Animatable {
     let palette: NDPalette
     let nowTick: Bool
     var hover: Int? = nil
+    var noDataFrom: CGFloat? = nil
 
     nonisolated var animatableData: Double {
         get { phase }
@@ -176,21 +220,24 @@ struct NDWaveStrip: View, Animatable {
     private func draw(_ ctx: GraphicsContext, _ canvas: CGSize) {
         guard let wave, wave.readable, wave.count > 0 else { return }
         let (_, cy) = NDWaveform.plot(canvas, nowTick: nowTick)
-        let (up, down) = NDWaveform.halves(size)
+        let down = NDWaveform.halves(size).down
         let (bw, gap) = NDWaveform.layout(width: canvas.width, count: wave.count, size: size)
         let offset = NDWaveform.offset(target: target, phase: phase, pitch: bw + gap)
         // Each half to its own maximum; the scale includes the outgoing bucket, so no bar changes height as it leaves.
-        let maxSaves = CGFloat(max(wave.saves.max() ?? 0, wave.outgoing?.saves ?? 0, 1))
         let maxReads = CGFloat(max(wave.reads.max() ?? 0, wave.outgoing?.reads ?? 0, 1))
         let minBar: CGFloat = size == .hero ? 2 : 1.5
         let corner: CGFloat = size == .hero ? 2 : 1
         let first = offset > 0 && wave.outgoing != nil ? -1 : 0
+        let cut = noDataFrom.map { NDWaveform.noDataX($0, width: canvas.width) }
         for (k, item) in NDWaveform.strip(wave, width: canvas.width, size: size, offset: offset).enumerated() {
             let (x, b) = item
             let index = k + first
-            let alpha: Double = hover.map { $0 == index ? 1 : 0.32 } ?? 1
+            // R1.6 item 6: nothing is drawn past the last confirmed check; what came before it is dimmed.
+            if let cut, x + bw > cut { continue }
+            let hovered: Double = hover.map { $0 == index ? 1 : 0.32 } ?? 1
+            let alpha = cut == nil ? hovered : hovered * NDWaveform.dimmedBefore
             if b.saves > 0 {
-                let bh = max(minBar, CGFloat(b.saves) / maxSaves * up)
+                let bh = NDWaveform.savedHeight(wave, saves: b.saves, size: size)
                 let radius = NDWaveform.barRadius(height: bh, width: bw, pill: false, corner: corner)
                 ctx.fill(Path(roundedRect: CGRect(x: x, y: cy - 0.5 - bh, width: bw, height: bh), cornerRadius: radius),
                          with: .color(palette.saves.opacity(alpha)))

@@ -1249,7 +1249,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let nightly = pipeline(.nightlyFailing)
         XCTAssertEqual(nightly.faults, [.jobs])
         XCTAssertEqual(nightly.look(.jobsMemory), .faint)
-        XCTAssertEqual(nightly.status[.jobs], .init(text: Say.nightlyFailedShort(3), severity: .red), "the status names the job")
+        XCTAssertEqual(nightly.status[.jobs], .init(text: Say.failedNights(3), severity: .red), "R1.6 item 10: the short line, red")
 
         let stale = pipeline(.notConfirmed)
         XCTAssertTrue(stale.allUnconfirmed)
@@ -1330,15 +1330,16 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(r1(.twoFaults).items.last?.menuTitle, Say.nightlyFailedShort(3))
     }
 
-    /// § 4.1: the calm dropdown says what it must in 9 words (a number with its unit counts as nothing).
-    func testCalmDropdownIsNineWords() throws {
+    /// § 4.1: the calm dropdown says what it must in 11 words (a number with its unit counts as nothing); R1.6 item 14
+    /// made the Search row "99% searchable by meaning".
+    func testCalmDropdownIsElevenWords() throws {
         let i = Fixture.inputs(.calm)
         let r1 = NDR1.make(i, NDModel.make(i))
         let words = ([NDMenuHeadline.text(r1)] + r1.menuRows.flatMap { [$0.label, $0.value] }).joined(separator: " ")
         let stripped = words.replacing(#/\d+(?:[.,]\d+)?\s?(?:%|h|min|s|d)?/#, with: "")
         let count = stripped.split(whereSeparator: { $0 == " " || $0 == "\u{00A0}" }).count
-        XCTAssertEqual(count, 9, stripped)
-        XCTAssertEqual(r1.menuRows.map(\.value), ["", Say.percentReady(99), Say.ago(NDFormat.ageText(4 * 3600)), Say.fine])
+        XCTAssertEqual(count, 11, stripped)
+        XCTAssertEqual(r1.menuRows.map(\.value), ["", Say.searchableByMeaning(99), Say.ago(NDFormat.ageText(4 * 3600)), Say.fine])
         let two = NDR1.make(Fixture.inputs(.twoFaults), NDModel.make(Fixture.inputs(.twoFaults)))
         XCTAssertEqual(two.menuRows.map(\.value)[2], Say.driveAgo(NDFormat.ageText(27 * 3600)),
                        "D7.3: the stale copy named, one number for one fact (as 'Nothing has uploaded for 27 h')")
@@ -1646,7 +1647,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let two = NDR1.make(Fixture.inputs(.twoFaults), NDModel.make(Fixture.inputs(.twoFaults)))
         XCTAssertEqual(two.headline, Say.thingsNeedYou(2))
         let late = NDR1.make(Fixture.inputs(.backupLate), NDModel.make(Fixture.inputs(.backupLate)))
-        XCTAssertEqual(late.headline, Say.stationSays(Say.stageMac, Say.keptNewest(2, NDFormat.ageText(30 * 3600))), "R2A item 9")
+        XCTAssertEqual(late.headline, Say.macLate(NDFormat.ageText(30 * 3600)), "R2A item 9, R1.6 item 5")
         XCTAssertNil(late.headlineDetail)
         XCTAssertFalse(late.showsProblemRows)
         let behind = NDR1.make(Fixture.inputs(.meaningBehind), NDModel.make(Fixture.inputs(.meaningBehind)))
@@ -1706,7 +1707,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let fault = NDPipelineChart.marks(.fault)
         XCTAssertNotNil(fault.ring)
         XCTAssertNotNil(fault.badge)
-        XCTAssertTrue(fault.nameRed)
+        XCTAssertFalse(fault.nameRed, "R1.6 item 10: the name keeps its colour and weight; the short line is red")
         XCTAssertEqual(fault.statusTone, .fault)
         let notice = NDPipelineChart.marks(.notice)
         XCTAssertNotNil(notice.ring)
@@ -1829,8 +1830,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     /// No station moves between states; the Kept-safe frame never grows (R1.5: no actions on the chart).
     func testStationsDoNotMoveBetweenStates() {
         let expected: [NDStation: CGPoint] = [
-            .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 580, y: 248),
-            .mac: CGPoint(x: 622, y: 64), .drive: CGPoint(x: 760, y: 64), .jobs: CGPoint(x: 450, y: 186),
+            .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 554, y: 248),
+            .mac: CGPoint(x: 596, y: 64), .drive: CGPoint(x: 734, y: 64), .jobs: CGPoint(x: 424, y: 186),
         ]
         XCTAssertEqual(NDPipelineLayout.stations, expected)
         for name in Fixture.Name.allCases {
@@ -1842,7 +1843,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             }
         }
         XCTAssertEqual(NDPipelineLayout.keptFrame(grown: true), NDPipelineLayout.keptSafe)
-        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 544, y: 38, width: 286, height: 80))
+        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 518, y: 38, width: 286, height: 80), "R1.6 item 8: centred")
     }
 
     /// Lead (1.3 brief): inside Kept safe, 16 pt between the two stations' text blocks and 12 pt from any text to the frame,
@@ -1988,19 +1989,16 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertTrue(rows.contains { $0.label == Say.searchByWordsNotChecked }, "R2A item 1: \"not checked yet\", in full")
     }
 
-    func testScaleMaximaAreInTheReadout() throws {
-        let i = Fixture.inputs(.calm)
-        let wave = try XCTUnwrap(i.heroWaves[.hour])
-        XCTAssertEqual(NDActivityReadout.busiest(wave, minutes: 60),
-                       Say.busiestMinute(Say.thisHour, saved: NDFormat.integer(wave.saves.max()!), read: NDFormat.integer(wave.reads.max()!)))
-        // L39: on 3 h and 24 h the readout names the bar's real span.
-        let three = try XCTUnwrap(i.heroWaves[.threeHours])
-        XCTAssertEqual(NDActivityReadout.busiest(three, minutes: 180),
-                       Say.busiestMinutes(3, saved: NDFormat.integer(three.saves.max()!), read: NDFormat.integer(three.reads.max()!)))
-        let day = try XCTUnwrap(i.heroWaves[.day])
-        XCTAssertEqual(NDActivityReadout.busiest(day, minutes: 1440),
-                       Say.busiestMinutes(24, saved: NDFormat.integer(day.saves.max()!), read: NDFormat.integer(day.reads.max()!)))
-        XCTAssertEqual(Say.busiestMinutes(24, saved: "9", read: "120"), "Busiest 24 minutes: 9 saved, 120 read")
+    /// R1.6 item 9: the readout's lines describe the hovered column only: its time range and its two counts; the
+    /// range-wide "Busiest" line is gone from it.
+    func testR16ReadoutLinesDescribeTheColumnOnly() throws {
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDWindow.swift"), encoding: .utf8)
+        let a = try XCTUnwrap(source.range(of: "struct NDActivityReadout: View {"))
+        let b = try XCTUnwrap(source.range(of: "struct NDReadoutPlacement: Layout {"))
+        let readout = source[a.lowerBound..<b.lowerBound]
+        XCTAssertFalse(readout.contains("busiest") || readout.contains("Busiest"), "no range-wide line in the readout")
+        XCTAssertTrue(readout.contains("wave.saves[index]") && readout.contains("wave.reads[index]"), "the column's own counts")
     }
 
     /// R1.4 changes 5 to 15: the chart at rest draws none of the moved words.
@@ -2126,7 +2124,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         for name in Fixture.Name.allCases {
             let store = NDStore(fixture: Fixture.inputs(name), page: .backups)
             let r1 = store.r1
-            guard !r1.pipeline.allUnconfirmed, let newest = NDR1.driveNewest(store.inputs.capture.verdict) else { continue }
+            // R1.6 item 4: Drive's measure is the newest database copy's upload age.
+            guard !r1.pipeline.allUnconfirmed,
+                  let newest = store.inputs.capture.verdict?.checks.first(where: { $0.name == "backup_offsite" })?.ageS else { continue }
             let measure = NDFormat.ageText(newest)
             if r1.pipeline.treatment(.drive) != .fault {
                 XCTAssertEqual(r1.pipeline.status[.drive]?.text, Say.lastUpload(measure), "\(name.rawValue): the station")
@@ -2179,17 +2179,46 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         }
     }
 
-    /// R2A 2: the readout sits 12 pt beside the hovered column, flipping left in the chart's right third, never over the
-    /// pointer (which is on the column).
-    func testR2A2ReadoutSitsBesideTheHoveredColumn() {
-        let count = 60, width: CGFloat = 150
-        for bin in [0, 20, 39, 40, 59] {
-            let column = NDActivitySection.gutter + NDActivitySection.center(bin, count: count)
-            let x = NDActivitySection.readoutX(bin, count: count, width: width)
-            let inRightThird = NDActivitySection.center(bin, count: count) >= NDActivitySection.plotWidth * 2 / 3
-            XCTAssertEqual(inRightThird ? column - (x + width) : x - column, 12, accuracy: 0.01, "bin \(bin)")
-            XCTAssertFalse((x...(x + width)).contains(column), "bin \(bin): never over the pointer")
+    /// R1.6 item 9 (R2A 2 again): the readout as the window lays it out (the hosted section, the path the live window
+    /// uses): 12 pt right of the hovered column, left of it in the right third, its bottom 8 pt above the column's
+    /// tallest bar (its top stops at the totals row's foot), for the first, a middle and the last column.
+    func testR16ReadoutIsAnchoredToTheHoveredColumnAsLaidOut() throws {
+        let store = NDStore(fixture: Fixture.inputs(.calm))
+        let wave = try XCTUnwrap(store.inputs.heroWaves[.hour])
+        func frames(hover: Int) -> (plot: CGRect, readout: CGRect)? {
+            var plot: CGRect?
+            var readout: CGRect?
+            let section = NDActivitySection(store: store, hover: hover, reportPlotFrame: { plot = $0 }, reportReadoutFrame: { readout = $0 })
+            let host = NSHostingView(rootView: section.frame(width: 852))
+            host.frame = NSRect(x: 0, y: 0, width: 852, height: 220)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+            host.layoutSubtreeIfNeeded()
+            guard let plot, let readout else { return nil }
+            return (plot, readout)
         }
+        let last = wave.count - 1
+        XCTAssertFalse(NDActivitySection.readoutFlips(0, count: wave.count))
+        XCTAssertTrue(NDActivitySection.readoutFlips(last, count: wave.count))
+        for index in [0, wave.count / 2, last] {
+            let f = try XCTUnwrap(frames(hover: index), "column \(index): a readout is laid out")
+            let column = f.plot.minX + NDActivitySection.center(index, count: wave.count)
+            if NDActivitySection.readoutFlips(index, count: wave.count) {
+                XCTAssertEqual(column - f.readout.maxX, 12, accuracy: 0.5, "column \(index): 12 pt left of it")
+            } else {
+                XCTAssertEqual(f.readout.minX - column, 12, accuracy: 0.5, "column \(index): 12 pt right of it")
+            }
+            XCTAssertFalse((f.readout.minX...f.readout.maxX).contains(column), "column \(index): never over the pointer")
+            let top = f.plot.minY + NDWaveform.columnTop(wave, index: index, canvas: NDActivitySection.canvas, nowTick: true, size: .hero)
+            let ceiling = f.plot.minY + NDReadoutPlacement.ceiling
+            XCTAssertEqual(f.readout.minY, max(ceiling, top - 8 - f.readout.height), accuracy: 0.5, "column \(index): 8 pt above its bar")
+            XCTAssertGreaterThan(f.readout.minX, f.plot.minX - NDActivitySection.gutter, "column \(index): never at the top left")
+        }
+        // The placement itself: below the ceiling the bottom is 8 pt above the bar; a tall bar stops it at the ceiling.
+        let size = CGSize(width: 120, height: 60)
+        XCTAssertEqual(NDReadoutPlacement.origin(column: 300, barTop: 100, flips: false, size: size), CGPoint(x: 312, y: 32))
+        XCTAssertEqual(NDReadoutPlacement.origin(column: 600, barTop: 100, flips: true, size: size), CGPoint(x: 468, y: 32))
+        XCTAssertEqual(NDReadoutPlacement.origin(column: 300, barTop: 2, flips: false, size: size).y, NDReadoutPlacement.ceiling)
     }
 
     /// R2A 3: Drive's status names what it measures (an upload); in backup-late the Mac copy's age stays the Mac's.
@@ -2250,7 +2279,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/BrainBarDashboardPanelController.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("NDMotion.pageResize(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)"))
-        XCTAssertTrue(source.contains("CAMediaTimingFunction(name: .easeInEaseOut)"))
+        XCTAssertTrue(source.contains("CAMediaTimingFunction(name: .easeOut)"), "R1.6 item 3: 200 ms ease-out")
         XCTAssertTrue(source.contains("y: top - frameSize.height"), "the top edge stays")
     }
 
@@ -2267,7 +2296,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testR2A9ASingleFaultSaysWhatItIs() {
         func r1(_ name: Fixture.Name) -> NDR1 { NDR1.make(Fixture.inputs(name), NDModel.make(Fixture.inputs(name))) }
         XCTAssertEqual(r1(.driveSignedOut).headline, Say.driveSignedOut)
-        XCTAssertEqual(r1(.backupLate).headline, "Copy on this Mac: 2 kept, newest 30\u{00A0}h ago")
+        XCTAssertEqual(r1(.backupLate).headline, "Copy on this Mac is late: newest 30\u{00A0}h ago", "R1.6 item 5")
         XCTAssertEqual(r1(.meaningBehind).headline, Say.meaningCatchingUp)
         XCTAssertEqual(r1(.twoFaults).headline, Say.thingsNeedYou(2))
         XCTAssertNil(r1(.twoFaults).headlineDetail, "no list under the count")
@@ -2362,7 +2391,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(notice?.id, "notice.mac", "derived from the verdict, not a presenter fault")
         XCTAssertEqual(notice?.severity, .orange)
         XCTAssertEqual(r1.items.filter { $0.station == .mac }.count, 1, "said once")
-        XCTAssertEqual(r1.headline, Say.stationSays(Say.stageMac, Say.keptNewest(2, NDFormat.ageText(30 * 3600))))
+        XCTAssertEqual(r1.headline, Say.macLate(NDFormat.ageText(30 * 3600)))
     }
 
     // MARK: Revision 1.5 (L40 to L45)
@@ -2521,5 +2550,207 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertNil(NDActivitySection.bucket(at: -1, count: 60))
         XCTAssertNil(NDActivitySection.bucket(at: 768, count: 60), "R1.2: a 768 pt plot inside its surface")
         XCTAssertNil(NDActivitySection.bucket(at: 10, count: 0))
+    }
+
+    // MARK: Revision 1.6 (R2-DECISIONS "Taken")
+
+    /// R1.6 item 1: a panel closes the moment the pointer leaves (no delay, a 100 ms fade) and never stays up while
+    /// another station is highlighted. With no window to draw in, the presenter's state is the whole story.
+    func testR16PanelsCloseWhenThePointerLeaves() {
+        XCTAssertEqual(NDPanelPresenter.closeDelay, 0)
+        XCTAssertEqual(NDPanelPresenter.closeFade, 0.1, accuracy: 0.0001)
+        let presenter = NDPanelPresenter()
+        let layout = NDPipelineLayout.Panel(edge: .top, anchor: .zero, tip: .zero, body: .zero, outer: .zero)
+        presenter.show(.read, layout: layout, content: AnyView(EmptyView()), pinned: false)
+        presenter.pointer(.read, over: false) { _ in }
+        XCTAssertNil(presenter.shown, "gone the moment the pointer leaves, with no delay")
+        presenter.show(.read, layout: layout, content: AnyView(EmptyView()), pinned: false)
+        presenter.pointer(.drive, over: true) { _ in }
+        XCTAssertNil(presenter.shown, "another station highlighted: the old panel is gone at once")
+        presenter.hide()
+    }
+
+    /// R1.6 item 2: a panel fits its content: no scroll view unless the screen limit cuts it.
+    func testR16PanelsFitTheirContent() throws {
+        let store = NDStore(fixture: Fixture.inputs(.twoFaults), page: .overview)
+        let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
+        let roomy = CGRect(x: -2000, y: -2000, width: 4000, height: 4000)
+        for station in NDStation.allCases {
+            let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
+            XCTAssertFalse(panel.scrolls, "\(station): no scroll bar at its own height")
+            XCTAssertFalse(NDPipelineLayout.fitted(panel, within: roomy).scrolls, "\(station): a roomy screen cuts nothing")
+        }
+        let jobs = chart.panel(.jobs, content: AnyView(NDStationPopover(store: store, station: .jobs)))
+        let short = CGRect(x: -2000, y: -2000, width: 4000, height: 2000 + jobs.body.minY + 40)
+        XCTAssertTrue(NDPipelineLayout.fitted(jobs, within: short).scrolls, "the screen cuts it: then it scrolls")
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDPipelineChart.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("if layout.scrolls {"), "the chrome holds a scroll view only when cut")
+    }
+
+    /// R1.6 item 3: a page switch never draws a clipped page: growing, the frame goes first (200 ms ease-out) and the
+    /// page follows; shrinking, the page goes first; Reduce Motion swaps both at once. The store keeps the page shown
+    /// apart from the page chosen, so the controller can hold it.
+    func testR16PageSwitchesNeverDrawAClippedPage() {
+        XCTAssertEqual(NDPageSwitch.order(from: 500, to: 800, animates: true), .frameThenPage)
+        XCTAssertEqual(NDPageSwitch.order(from: 800, to: 500, animates: true), .pageThenFrame)
+        XCTAssertEqual(NDPageSwitch.order(from: 500, to: 800, animates: false), .together, "Reduce Motion: at once")
+        XCTAssertEqual(NDPageSwitch.order(from: 600, to: 600.2, animates: true), .together)
+        XCTAssertEqual(NDMotion.pageResizeDuration, 0.2, accuracy: 0.0001)
+        let store = NDStore(fixture: Fixture.inputs(.calm), page: .overview)
+        var held: [NDPage] = []
+        store.pageDidChange = { held.append($0) }
+        store.page = .jobs
+        XCTAssertEqual(held, [.jobs])
+        XCTAssertEqual(store.shownPage, .overview, "the old page stays drawn until the controller swaps it")
+    }
+
+    /// R1.6 items 4 and 5: Drive's station says the newest database copy's upload age (the session files' age is a row
+    /// in its panel); backup-late shows the true older age; the dropdown's Backups row uses the same measure; the
+    /// headline says the Mac copy is late with its age.
+    func testR16DriveSaysTheDatabaseCopyAndBackupLateIsTrue() throws {
+        for name in Fixture.Name.allCases {
+            let i = Fixture.inputs(name)
+            let p = NDPipelineState.make(i)
+            guard p.condition(.drive) == .fine, !p.allUnconfirmed,
+                  let db = i.capture.verdict?.checks.first(where: { $0.name == "backup_offsite" })?.ageS else { continue }
+            XCTAssertEqual(p.status[.drive]?.text, Say.lastUpload(NDFormat.ageText(db)), "\(name.rawValue)")
+        }
+        let late = Fixture.inputs(.backupLate)
+        let db = try XCTUnwrap(late.capture.verdict?.checks.first { $0.name == "backup_offsite" }?.ageS)
+        XCTAssertEqual(db, 30 * 3600, "the fixture's database copy is as old as the late Mac copy")
+        let r1 = NDR1.make(late, NDModel.make(late))
+        XCTAssertEqual(r1.pipeline.status[.drive]?.text, Say.lastUpload(NDFormat.ageText(db)))
+        let store = NDStore(fixture: late, page: .overview)
+        let rows = NDStationPopover.model(.drive, item: nil, late, store.model, r1.pipeline).rows
+        XCTAssertEqual(rows.map(\.label), [Say.databaseCopy, Say.conversationsCopy], "the session files' age is a row")
+        XCTAssertEqual(r1.menuRows.first { $0.kind == .backups }?.value.contains(NDFormat.ageText(db)), true)
+        XCTAssertEqual(r1.headline, Say.macLate(NDFormat.ageText(30 * 3600)))
+        XCTAssertEqual(Say.macLate("30 h"), "Copy on this Mac is late: newest 30 h ago")
+    }
+
+    /// R1.6 item 6: not confirmed, the Activity chart draws no live data: hatched from the last confirmed check, with
+    /// "no data since {time}"; the totals say "—"; the bars before it are dimmed; past it no column can be hovered.
+    func testR16NotConfirmedDrawsNoLiveData() throws {
+        let store = NDStore(fixture: Fixture.inputs(.notConfirmed), page: .overview)
+        let wave = try XCTUnwrap(store.inputs.heroWaves[.hour])
+        XCTAssertEqual(try XCTUnwrap(NDActivitySection.noDataFraction(store, wave: wave)), 0, accuracy: 0.001,
+                       "the last check was 2 h ago: the whole hour is hatched")
+        store.range = .threeHours
+        let three = try XCTUnwrap(NDActivitySection.noDataFraction(store, wave: store.inputs.heroWaves[.threeHours]))
+        XCTAssertEqual(three, 1.0 / 3, accuracy: 0.01, "on 3 h the first hour is drawn, dimmed")
+        XCTAssertTrue(NDActivitySection.hoverable(0, count: 60, cut: three))
+        XCTAssertFalse(NDActivitySection.hoverable(59, count: 60, cut: three), "nothing past the last check reads out")
+        XCTAssertNil(NDActivitySection.noDataFraction(NDStore(fixture: Fixture.inputs(.calm)), wave: wave), "confirmed: none")
+        XCTAssertLessThan(NDWaveform.dimmedBefore, 1)
+        XCTAssertEqual(Say.noDataSince("14:02"), "no data since 14:02")
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDWindow.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("let known = wave?.readable == true && cut == nil"), "the totals say \"—\"")
+    }
+
+    /// R1.6 item 7: no control holds focus when the window opens; the window itself is first responder until Tab.
+    func testR16NoFocusRingWhenTheWindowOpens() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled],
+                              backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        let button = NSButton(title: "1 h", target: nil, action: nil)
+        window.contentView?.addSubview(button)
+        window.makeFirstResponder(button)
+        BrainBarDashboardPanelController.clearInitialFocus(window)
+        XCTAssertTrue(window.firstResponder === window, "nothing in the window holds focus")
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/BrainBarDashboardPanelController.swift"), encoding: .utf8)
+        let show = try XCTUnwrap(source.range(of: "    func show(anchoredTo anchorView: NSView? = nil) {"))
+        let end = try XCTUnwrap(source.range(of: "    func dismiss() {"))
+        XCTAssertTrue(source[show.lowerBound..<end.lowerBound].contains("Self.clearInitialFocus(window)"), "opening clears it")
+    }
+
+    /// R1.6 item 8: the diagram is centred in its card: equal 32 pt insets left and right (card padding 16 plus 16).
+    func testR16DiagramIsCentredInItsCard() {
+        let L = NDPipelineLayout.self
+        for name in Fixture.Name.allCases {
+            let p = NDPipelineState.make(Fixture.inputs(name))
+            var drawn = L.agentsFrame.union(L.hub).union(L.keptSafe)
+            for station in NDStation.allCases { L.labelRects(station, p).forEach { drawn = drawn.union($0) } }
+            XCTAssertEqual(16 + drawn.minX, 32, accuracy: 0.5, "\(name.rawValue): left inset")
+            XCTAssertEqual(16 + L.size.width - drawn.maxX, 32, accuracy: 0.5, "\(name.rawValue): right inset")
+        }
+    }
+
+    /// R1.6 items 10 and 11: a broken station's name keeps its colour and weight; only its short line is red
+    /// ("failed 3 nights"); the jobs fault panel's title is "Failed 3 nights in a row".
+    func testR16ABrokenStationKeepsItsNameOnlyItsLineIsRed() throws {
+        let marks = NDPipelineChart.marks(.fault)
+        XCTAssertFalse(marks.nameRed, "the name keeps its normal colour and weight")
+        XCTAssertEqual(marks.statusTone, .fault)
+        let failing = Fixture.inputs(.nightlyFailing)
+        let p = NDPipelineState.make(failing)
+        XCTAssertEqual(p.status[.jobs], .init(text: Say.failedNights(3), severity: .red))
+        let r1 = NDR1.make(failing, NDModel.make(failing))
+        let item = try XCTUnwrap(r1.stationItems[.jobs])
+        XCTAssertEqual(NDStationPopover.faultTitle(.jobs, item, failing), Say.failedInARow(3))
+        XCTAssertEqual(Say.failedInARow(3), "Failed 3 nights in a row")
+        XCTAssertEqual(Say.failedNights(3), "failed 3 nights")
+    }
+
+    /// R1.6 item 12: an on Jobs switch uses the system accent; the system's gray is for off only.
+    func testR16JobsSwitchesShowTheirState() throws {
+        XCTAssertEqual(NDColor.switchOn, NSColor.controlAccentColor)
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDPages.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains(".toggleStyle(.switch)") && source.contains(".tint(ND.switchOn)"))
+    }
+
+    /// R1.6 item 13: the dropdown's words hold 4.5 : 1 composited over a white and a black desktop. The material is
+    /// modelled as measured on the round-2 captures (`NDMenuBacking`); the hosted rows' backing sits on it; each colour
+    /// the rows write words in is composited over that, in both appearances.
+    func testR16DropdownTextHoldsContrastOverAnyDesktop() throws {
+        func lum(_ c: (CGFloat, CGFloat, CGFloat)) -> CGFloat {
+            func ch(_ v: CGFloat) -> CGFloat { let x = v / 255; return x <= 0.03928 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4) }
+            let r = 0.2126 * ch(c.0), g = 0.7152 * ch(c.1), b = 0.0722 * ch(c.2)
+            return r + g + b
+        }
+        func over(_ top: NSColor, _ under: (CGFloat, CGFloat, CGFloat), alpha extra: CGFloat = 1) -> (CGFloat, CGFloat, CGFloat) {
+            let c = top.usingColorSpace(.sRGB)!
+            let a = c.alphaComponent * extra
+            return (c.redComponent * 255 * a + under.0 * (1 - a), c.greenComponent * 255 * a + under.1 * (1 - a),
+                    c.blueComponent * 255 * a + under.2 * (1 - a))
+        }
+        // Words at 4.5 : 1; the red and orange marks are symbols, held to the graphics floor of 3 : 1.
+        let words: [(String, NSColor, CGFloat)] = [("label", .labelColor, 4.5), ("secondary", NDColor.menuText2, 4.5),
+                                                   ("red text", NDColor.redText, 4.5), ("orange text", NDColor.orangeText, 4.5),
+                                                   ("red mark", NDColor.red, 3), ("orange mark", NDColor.orange, 3)]
+        for (name, appearanceName) in [("dark", NSAppearance.Name.darkAqua), ("light", NSAppearance.Name.aqua)] {
+            let appearance = try XCTUnwrap(NSAppearance(named: appearanceName))
+            appearance.performAsCurrentDrawingAppearance {
+                let material = name == "dark" ? NDMenuBacking.materialDark : NDMenuBacking.materialLight
+                for desktop in [CGFloat(0), 255] {
+                    let m = material.tint * material.alpha + desktop * (1 - material.alpha)
+                    let backed = over(NDColor.menuBacking, (m, m, m), alpha: NDMenuBacking.opacity)
+                    for (word, color, floor) in words {
+                        let text = over(color, backed)
+                        let (hi, lo) = (max(lum(text), lum(backed)), min(lum(text), lum(backed)))
+                        let ratio = (hi + 0.05) / (lo + 0.05)
+                        XCTAssertGreaterThanOrEqual(ratio, floor, "\(name) over \(desktop == 0 ? "black" : "white"): \(word) \(ratio)")
+                    }
+                }
+            }
+        }
+        // The model is what the captures measured: without the backing the system's secondary label fails.
+        let m = NDMenuBacking.materialDark.tint * NDMenuBacking.materialDark.alpha + 255 * (1 - NDMenuBacking.materialDark.alpha)
+        XCTAssertEqual(m, 128, accuracy: 1, "dark glass over white composites to grey 128")
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDMenu.swift"), encoding: .utf8)
+        XCTAssertFalse(source.contains(".secondaryLabelColor") || source.contains(".tertiaryLabelColor"), "solid greys only")
+        XCTAssertTrue(source.contains(".background(ND.menuBacking.opacity(NDMenuBacking.opacity))"), "every hosted row is backed")
+    }
+
+    /// R1.6 item 14: the dropdown's Search row says how much is searchable by meaning.
+    func testR16DropdownSearchRowSaysSearchableByMeaning() throws {
+        let i = Fixture.inputs(.calm)
+        let row = try XCTUnwrap(NDR1.make(i, NDModel.make(i)).menuRows.first { $0.kind == .search })
+        XCTAssertTrue(row.value.hasSuffix("% searchable by meaning"), row.value)
+        XCTAssertEqual(Say.searchableByMeaning(99), "99% searchable by meaning")
     }
 }

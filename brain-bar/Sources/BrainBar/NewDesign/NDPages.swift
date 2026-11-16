@@ -521,7 +521,7 @@ struct NDJobLaneView: View {
         .accessibilityLabel(lane.accessibility)
     }
 
-    /// The system switch, mini, graphite when on (R1.1 change 19); its help says what a click does.
+    /// The system switch, mini, in the system accent when on (R1.6 item 12); its help says what a click does.
     @ViewBuilder private var toggle: some View {
         if let enabled = lane.enabled {
             Toggle(lane.name, isOn: Binding(get: { enabled }, set: { store.setJob(lane.job, enabled: $0) }))

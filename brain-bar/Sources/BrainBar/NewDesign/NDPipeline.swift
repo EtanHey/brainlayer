@@ -285,7 +285,8 @@ extension NDPipelineState {
         // c12: a scheduled job failing; the Jobs status names it (change 13).
         if let nights = c.maintenanceNightFailures, nights >= 3 {
             s.faults.insert(.jobs)
-            s.status[.jobs] = Status(text: Say.nightlyFailedShort(nights), severity: .red)
+            // R2 item 10: the fault said once, short, on the secondary line ("failed 3 nights").
+            s.status[.jobs] = Status(text: Say.failedNights(nights), severity: .red)
         }
         // A fault outranks a notice on the same station.
         s.notices.subtract(s.faults)
@@ -335,7 +336,9 @@ extension NDPipelineState {
         // 11, "Last Drive upload" and "Drive … ago"); the Backups page shows each copy, and this is the newer of the two.
         // R2A item 3: Drive's status names what it measures: an upload. (The copy it uploads is the Mac's, whose age the
         // Mac station shows; one age per copy.)
-        if let newest = NDR1.driveNewest(c.verdict) { out[.drive] = Status(text: Say.lastUpload(NDFormat.ageText(newest))) }
+        // R2 item 4: Drive's status is the newest DATABASE copy's upload (what its panel says Drive receives); the session
+        // files' upload is a row in its panel.
+        if let db = age("backup_offsite") { out[.drive] = Status(text: Say.lastUpload(NDFormat.ageText(db))) }
         if case let .ran(at) = i.nightlyLastRun {
             out[.jobs] = Status(text: Say.lastCheckUp(NDFormat.ageText(max(0, c.now.timeIntervalSince(at)))))
         }

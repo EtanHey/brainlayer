@@ -698,6 +698,12 @@ extension BrainBarMenuPresenter {
                 ? ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"][n] : "\(n)"
         }
 
+        // Round 2 decisions (R2-DECISIONS "Taken", approved copy).
+        static func macLate(_ age: String) -> String { "Copy on this Mac is late: newest \(age) ago" }
+        static func noDataSince(_ time: String) -> String { "no data since \(time)" }
+        static func failedInARow(_ n: Int) -> String { "Failed \(n) nights in a row" }
+        static func searchableByMeaning(_ p: Int) -> String { "\(p)% searchable by meaning" }
+
         // Settings
         static let settingsTitle = "BrainBar Settings"
         static let reconnectShort = "Reconnect"

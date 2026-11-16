@@ -18,8 +18,14 @@ import SwiftUI
     /// layout pass drew the old page and the old selected segment at the new height. Followers now run here, after the
     /// value is stored, so the page, the segment and the height change together.
     @Published var page: NDPage = .overview {
-        didSet { if page != oldValue { pageDidChange?(page) } }
+        didSet {
+            guard page != oldValue else { return }
+            if let pageDidChange { pageDidChange(page) } else { shownPage = page }
+        }
     }
+    /// R2 item 3: the page the window root draws. It changes only when the window can hold it: after the window has grown
+    /// to a taller page, before it shrinks to a shorter one, so a page is never drawn clipped.
+    @Published var shownPage: NDPage = .overview
     /// Called after `page` holds its new value (the window's refit).
     var pageDidChange: (@MainActor (NDPage) -> Void)?
 #if DEBUG
@@ -149,6 +155,7 @@ import SwiftUI
         inputs = fixture
         model = NDModel.make(fixture)
         self.page = page
+        shownPage = page
         report = Self.reportText(model, verdict: fixture.capture.verdict, extras: fixture.extras, version: "fixture",
                                  now: fixture.capture.now)
     }

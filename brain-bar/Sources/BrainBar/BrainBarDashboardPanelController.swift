@@ -365,8 +365,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         visibleHeightOverride ?? window.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height
     }
 
-    /// The page's size, exactly (min = max), keeping the window's top-left corner. R2A item 7: a shown window's height
-    /// change animates over 200 ms ease-in-out (none under Reduce Motion, none while hidden).
+    /// The page's size, exactly (min = max), keeping the window's top-left corner. R2 item 3: a shown window's height
+    /// change animates over 200 ms ease-out, and the page is never drawn clipped: a taller page appears after the window
+    /// has grown, a shorter one before it shrinks; under Reduce Motion (or hidden) both change at once.
     func fitPage(_ page: NDPage) {
         // R1.2 change 22 and L25: the page's own height, from its laid-out content, capped at the screen's visible height
         // minus 40 pt, past which the page scrolls under its fade and the footer stays.
@@ -376,26 +377,31 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         let top = window.frame.maxY
         let target = NSRect(x: window.frame.minX, y: top - frameSize.height, width: frameSize.width, height: frameSize.height)
         let duration = NDMotion.pageResize(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
-        guard window.isVisible, let duration, abs(window.frame.height - target.height) > 0.5 else {
+        let order = NDPageSwitch.order(from: window.frame.height, to: target.height,
+                                       animates: window.isVisible && duration != nil)
+        guard order != .together, let duration else {
             // Content limits only: AppKit keeps one pair of size limits, and setting `minSize`/`maxSize` clears these.
             window.contentMinSize = size
             window.contentMaxSize = size
             window.setFrame(target, display: window.isVisible, animate: false)
+            newDesignStore.shownPage = page
             return
         }
+        if order == .pageThenFrame { newDesignStore.shownPage = page }
         // While it moves, the limits span both heights; at the end they are the page's size exactly.
         let current = window.contentRect(forFrameRect: window.frame).size
         window.contentMinSize = NSSize(width: size.width, height: min(current.height, size.height))
         window.contentMaxSize = NSSize(width: size.width, height: max(current.height, size.height))
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             window.animator().setFrame(target, display: true)
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.fittedFrameSize == frameSize else { return }
                 self.window.contentMinSize = size
                 self.window.contentMaxSize = size
+                if order == .frameThenPage { self.newDesignStore.shownPage = page }
             }
         })
     }
@@ -437,7 +443,20 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
+#if BRAINBAR_UI
+        if shownDesign == .new {
+            Self.clearInitialFocus(window)
+            // SwiftUI may hand focus on after the window becomes key; clear it again on the next turn.
+            Task { @MainActor [weak window] in if let window { Self.clearInitialFocus(window) } }
+        }
+#endif
         isClosingWindow = false
+    }
+
+    /// R1.6 item 7: nothing holds focus when the window opens, so no focus ring shows until Tab. The window itself is
+    /// the first responder; Tab from it starts the key-view loop at the first control.
+    static func clearInitialFocus(_ window: NSWindow) {
+        window.makeFirstResponder(nil)
     }
 
     func dismiss() {

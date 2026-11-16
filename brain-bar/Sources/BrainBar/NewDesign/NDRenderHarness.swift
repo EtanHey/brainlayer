@@ -64,6 +64,21 @@ import SwiftUI
                 written.append(try hover(store, station: station, name: "hover-\(station.rawValue)-\(fixture.rawValue)-\(suffix)",
                                          appearance: appearance, in: directory))
             }
+            // R1.6 item 9: the Activity readout as the window lays it out, at the first, a middle and the last column.
+            let calm = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .overview)
+            for (label, column) in [("first", 0), ("middle", 30), ("last", 59)] {
+                written.append(try activity(calm, hover: column, name: "activity-hover-\(label)-calm-\(suffix)", appearance: appearance,
+                                            in: directory))
+            }
+            // R1.6 item 6: not confirmed on 3 h: the first hour dimmed, then the hatch.
+            let stale = NDStore(fixture: BrainBarDesignFixture.inputs(.notConfirmed), page: .overview)
+            stale.range = .threeHours
+            written.append(try activity(stale, hover: nil, name: "activity-not-confirmed-3h-\(suffix)", appearance: appearance, in: directory))
+            // R1.6 item 3: the frames of a page switch, as the controller orders them.
+            for (from, to) in [(NDPage.overview, NDPage.jobs), (.jobs, .overview)] {
+                written.append(try pageSwitch(from: from, to: to, name: "switch-\(from.rawValue)-to-\(to.rawValue)-\(suffix)",
+                                              appearance: appearance, in: directory))
+            }
         }
         return written
     }
@@ -95,6 +110,66 @@ import SwiftUI
         .frame(width: size.width, height: size.height)
         try write(host(view, size: size, appearance: appearance), name: name, in: directory)
         return name
+    }
+
+    /// The Activity block on the page's background, one column hovered (R1.6 item 9).
+    static func activity(_ store: NDStore, hover: Int?, name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
+        let size = NSSize(width: NDGrid.windowWidth, height: 300)
+        let view = ZStack(alignment: .topLeading) {
+            ND.bg
+            NDActivitySection(store: store)
+                .environment(\.ndPreviewHover, hover)
+                .frame(width: NDGrid.windowWidth - 2 * NDGrid.pageSide)
+                .offset(x: NDGrid.pageSide, y: 60)
+        }
+        .frame(width: size.width, height: size.height)
+        try write(host(view, size: size, appearance: appearance), name: name, in: directory)
+        return name
+    }
+
+    /// R1.6 item 3: five frames of a page switch side by side (0, 50, 100, 150, 200 ms): the window's height on the
+    /// controller's ease-out curve, its top edge fixed, and the page it draws in the order `NDPageSwitch` gives.
+    static func pageSwitch(from: NDPage, to: NDPage, name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
+        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: from)
+        let start = NDPageHeight.window(store, page: from, screen: nil)
+        let end = NDPageHeight.window(store, page: to, screen: nil)
+        let order = NDPageSwitch.order(from: start, to: end, animates: true)
+        let times: [Double] = [0, 0.25, 0.5, 0.75, 1]
+        let gap: CGFloat = 24
+        let tall = max(start, end)
+        let size = NSSize(width: CGFloat(times.count) * (NDGrid.windowWidth + gap) + gap, height: tall + 2 * gap)
+        let frames: [AnyView] = times.map { t in
+            let height = start + (end - start) * easeOut(t)
+            let page: NDPage
+            switch order {
+            case .pageThenFrame, .together: page = to
+            case .frameThenPage: page = t >= 1 ? to : from
+            }
+            let frameStore = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: page)
+            return AnyView(NDWindowRoot(store: frameStore, drawsTrafficLights: true)
+                .frame(width: NDGrid.windowWidth, height: NDPageHeight.window(frameStore, page: page, screen: nil), alignment: .top)
+                .frame(width: NDGrid.windowWidth, height: height, alignment: .top)
+                .background(ND.bg)
+                .clipped()
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.gray, lineWidth: 1)))
+        }
+        let view = ZStack(alignment: .topLeading) {
+            Color.gray.opacity(0.35)
+            HStack(alignment: .top, spacing: gap) { ForEach(0..<frames.count, id: \.self) { frames[$0] } }
+                .padding(gap)
+        }
+        .frame(width: size.width, height: size.height)
+        try write(host(view, size: size, appearance: appearance), name: name, in: directory)
+        return name
+    }
+
+    /// Core Animation's ease-out, cubic-bezier(0, 0, 0.58, 1), at time t.
+    static func easeOut(_ t: Double) -> Double {
+        func x(_ u: Double) -> Double { 3 * (1 - u) * u * u * 0.58 + u * u * u }
+        func y(_ u: Double) -> Double { 3 * (1 - u) * (1 - u) * u * 0 + 3 * (1 - u) * u * u + u * u * u }
+        var lo = 0.0, hi = 1.0
+        for _ in 0..<40 { let mid = (lo + hi) / 2; if x(mid) < t { lo = mid } else { hi = mid } }
+        return y((lo + hi) / 2)
     }
 
     /// Comp 51's sheet: Drive with Reconnect; a failing job at rest and "Copied"; a failing agent; Copy on this Mac; the

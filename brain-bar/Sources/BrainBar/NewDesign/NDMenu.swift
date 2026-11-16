@@ -37,13 +37,13 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
         let headline = NDMenuHeadline.text(r1)
         let hadRed = store.inputs.capture.verdict?.checks.contains { $0.state == .red } == true
         menu.addItem(hosted(NDMenuHeadline(r1: r1, lastVerdictHadRed: hadRed), label: headline))
-        menu.addItem(.separator())
+        menu.addItem(separator())
         // R1.2 change 9 and L24: blocks when something is red or two or more amber notices; a single amber state says
         // itself in the headline and its line.
         let blocks = r1.showsProblemRows ? r1.items : []
         let filled = NDMenuFaultBlock.filledIndex(blocks)
         for (index, item) in blocks.enumerated() {
-            if index > 0 { menu.addItem(.separator()) }
+            if index > 0 { menu.addItem(separator()) }
             let state = NDMenuRowState()
             let row = hosted(NDMenuFaultBlock(store: store, item: item, filled: index == filled, state: state) { [weak self] kind in
                 self?.perform(.row(kind))
@@ -57,7 +57,7 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
             }
             menu.addItem(row)
         }
-        if !blocks.isEmpty { menu.addItem(.separator()) }
+        if !blocks.isEmpty { menu.addItem(separator()) }
         // R1.2 change 12: not confirmed: "Last known at 14:02" once, above the rows that show their last-known values.
         if let at = r1.pipeline.lastKnownAt {
             menu.addItem(hosted(NDMenuCaption(text: Say.lastKnownAt(at)), label: Say.lastKnownAt(at)))
@@ -134,6 +134,16 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
         return item
     }
 
+    /// R1.6 item 13: a separator between hosted rows draws the backing too, so the backed rows read as one surface.
+    private func separator() -> NSMenuItem {
+        let item = NSMenuItem()
+        let host = NDMenuRowHost(NDMenuSeparator(), label: "")
+        host.setAccessibilityElement(false)
+        item.view = host
+        item.isEnabled = false
+        return item
+    }
+
     private func standard(_ title: String, key: String, action: BrainBarMenuAction, symbol: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: #selector(performItem), keyEquivalent: key)
         item.keyEquivalentModifierMask = .command
@@ -142,6 +152,16 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
         item.image = Self.symbol(symbol)
         item.isEnabled = true
         return item
+    }
+}
+
+/// R1.6 item 13: the system separator's line, drawn in a hosted row so the backing runs under it.
+struct NDMenuSeparator: View {
+    static let height: CGFloat = 11
+    var body: some View {
+        Color(nsColor: .separatorColor).frame(height: 1).padding(.horizontal, 16)
+            .frame(height: Self.height)
+            .accessibilityHidden(true)
     }
 }
 
@@ -154,7 +174,10 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
 /// A hosted row: sized to its view at the menu's width, one accessibility element that reads the row's words.
 final class NDMenuRowHost: NSView {
     init<V: View>(_ view: V, label: String) {
-        let hosting = NSHostingView(rootView: view.frame(width: NDGrid.menuWidth, alignment: .leading))
+        // R1.6 item 13: each hosted row draws the backing across the menu's width, so its words hold 4.5 : 1 over any
+        // desktop.
+        let hosting = NSHostingView(rootView: view.frame(width: NDGrid.menuWidth, alignment: .leading)
+            .background(ND.menuBacking.opacity(NDMenuBacking.opacity)))
         let height = ceil(hosting.fittingSize.height)
         super.init(frame: NSRect(x: 0, y: 0, width: NDGrid.menuWidth, height: height))
         hosting.frame = bounds
@@ -198,12 +221,12 @@ struct NDMenuHeadline: View {
                 Image(systemName: red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.system(size: 15)).foregroundStyle(red ? ND.red : ND.orange)
             } else if let symbol = r1.headlineSymbol {
-                Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(ND.menuText2)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(Self.text(r1)).font(NDType.title).tracking(-0.25).foregroundStyle(Color(nsColor: .labelColor))
                 if let line = Self.detail(r1, lastVerdictHadRed: lastVerdictHadRed) {
-                    Text(keepingUnits(line)).font(NDType.body).foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    Text(keepingUnits(line)).font(NDType.body).foregroundStyle(ND.menuText2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -219,7 +242,7 @@ struct NDMenuHeadline: View {
 struct NDMenuCaption: View {
     let text: String
     var body: some View {
-        Text(text).font(NDType.caption).foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+        Text(text).font(NDType.caption).foregroundStyle(ND.menuText2)
             .padding(.horizontal, NDGrid.menuInset).padding(.top, 4).padding(.bottom, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -245,7 +268,7 @@ struct NDMenuFaultBlock: View {
                 .fixedSize(horizontal: false, vertical: true)
             // R1.1 change 28: one line of words under the title (the strips are gone).
             if let detail = item.menuDetail ?? item.detail, !detail.isEmpty {
-                Text(keepingUnits(detail)).font(NDType.body).foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                Text(keepingUnits(detail)).font(NDType.body).foregroundStyle(ND.menuText2)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
             }
             if let action = item.action {
@@ -256,7 +279,7 @@ struct NDMenuFaultBlock: View {
                             .strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 3).padding(-3)
                             .opacity(state.keyboard ? 1 : 0))
                 } line: {
-                    Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.menuText2)
                 }
                 .padding(.top, 9)
             }
@@ -304,7 +327,7 @@ struct NDPipeStrip: View {
         }
         NDPipelineChart.symbol(ctx, strip.severity == .red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill",
                                at: CGPoint(x: mark, y: y), size: 12, color: tint)
-        let secondary = Color(nsColor: .secondaryLabelColor)
+        let secondary = ND.menuText2
         ctx.draw(Text(strip.from).font(.system(size: 11)).foregroundColor(secondary), at: CGPoint(x: 0, y: y), anchor: .leading)
         ctx.draw(Text(strip.to).font(.system(size: 11)).foregroundColor(secondary), at: CGPoint(x: w, y: y), anchor: .trailing)
     }
@@ -324,7 +347,7 @@ struct NDMenuAreaRow: View {
     var body: some View {
         let selected = state.highlighted
         let text = Color(nsColor: selected ? .alternateSelectedControlTextColor : .labelColor)
-        let secondary = Color(nsColor: selected ? .alternateSelectedControlTextColor : .secondaryLabelColor)
+        let secondary = selected ? Color(nsColor: .alternateSelectedControlTextColor) : ND.menuText2
         HStack(spacing: 8) {
             // R1.3 change 12: the row's symbol takes the station's treatment: red for a fault, amber for a notice.
             Image(systemName: Self.symbols[row.kind] ?? "circle").font(.system(size: 13))

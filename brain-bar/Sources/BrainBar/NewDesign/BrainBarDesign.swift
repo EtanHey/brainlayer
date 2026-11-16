@@ -94,8 +94,8 @@ enum NDColor {
     static let button = dynamic("btn", dark: white(0.10), light: rgb(0xFFFFFF))
     static let buttonHover = dynamic("btn.h", dark: white(0.17), light: rgb(0xF0F0F2))
     static let buttonPressed = dynamic("btn.p", dark: white(0.24), light: rgb(0xE4E4E8))
-    /// R1.1 change 19: graphite switches.
-    static let switchOn = dynamic("sw.on", dark: rgb(0xA1A1A8), light: rgb(0x6E6E76))
+    /// R1.6 item 12: an on switch shows its state in the system accent; the system's gray is for off only.
+    static let switchOn = NSColor.controlAccentColor
 
     // The names the earlier surfaces used, kept on the R1 values (one palette).
     static let night = bg
@@ -114,6 +114,11 @@ enum NDColor {
     static let menuSaves = saved
     static let menuReads = read
     static let menuTrack = hair2
+    /// R1.6 item 13: the dropdown's glass composites to mid-grey over a white or black desktop (measured on the round-2
+    /// captures), where the system's label colours fall under 4.5 : 1. The hosted rows draw this backing at
+    /// `NDMenuBacking.opacity`, and their secondary words take a solid grey that holds 4.5 : 1 over it.
+    static let menuBacking = dynamic("menu.back", dark: rgb(0x242426), light: rgb(0xF4F4F6))
+    static let menuText2 = dynamic("menu.t2", dark: rgb(0xA6A6AA), light: rgb(0x5E5E66))
 }
 
 /// SwiftUI handles of the same colours.
@@ -168,6 +173,17 @@ enum ND {
     static let menuSaves = saved
     static let menuReads = read
     static let menuTrack = hair2
+    static let menuBacking = Color(nsColor: NDColor.menuBacking)
+    static let menuText2 = Color(nsColor: NDColor.menuText2)
+}
+
+/// R1.6 item 13: the dropdown's backing, and the material it sits on as measured (round-2 captures, macOS 27, native 2x):
+/// over a white desktop the dark glass composites to grey 128 and the light glass to 250; over a black desktop to 44
+/// and 135. As a tint over the desktop that is dark 65.6 at 0.671 and light 246 at 0.549 (sRGB, 0 to 255).
+enum NDMenuBacking {
+    static let opacity: CGFloat = 0.9
+    static let materialDark = (tint: CGFloat(65.6), alpha: CGFloat(0.671))
+    static let materialLight = (tint: CGFloat(246), alpha: CGFloat(0.549))
 }
 
 /// R1 type (§ 1.2): one face, three sizes, no condensed width; figures tabular on every number.
@@ -250,10 +266,11 @@ enum NDMotion {
     static let rangeOutDuration: Double = 0.1
     static let rangeOut = Animation.easeOut(duration: rangeOutDuration)
     static let rangeIn = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.15).delay(rangeOutDuration)
-    /// R2A item 7: the window's height change on a page switch: 200 ms ease-in-out, top edge fixed; none under Reduce
-    /// Motion.
+    /// R2A item 7, R2 item 3: the window's height change on a page switch: 200 ms ease-out, top edge fixed; none under
+    /// Reduce Motion.
     static let pageResizeDuration: Double = 0.2
     static func pageResize(reduceMotion: Bool) -> Double? { reduceMotion ? nil : pageResizeDuration }
+
     static let breakAppears = Animation.easeOut(duration: 0.2)
     static let popoverOpens = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.16)
     /// R1.2 change 24: the pressed button fades over 160 ms ease-out, holding its pressed colour.
@@ -265,4 +282,14 @@ enum NDMotion {
     static let buttonReturns = Animation.easeOut(duration: 0.16).delay(buttonLeavesDuration)
     static let waitingEnters = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.16).delay(waitingDelay)
     static let runningPeriod: TimeInterval = 1.6
+}
+
+/// R2 item 3: the order of a page switch, so no page is ever drawn clipped. A taller page waits for the window to grow;
+/// a shorter one appears first, then the window shrinks; without animation both change together.
+enum NDPageSwitch: Equatable {
+    case frameThenPage, pageThenFrame, together
+    static func order(from current: CGFloat, to target: CGFloat, animates: Bool) -> NDPageSwitch {
+        guard animates, abs(current - target) > 0.5 else { return .together }
+        return target > current ? .frameThenPage : .pageThenFrame
+    }
 }

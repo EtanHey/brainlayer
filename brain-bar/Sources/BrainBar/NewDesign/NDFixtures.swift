@@ -151,10 +151,12 @@ enum BrainBarDesignFixture {
             // R1.2 change 13: a failed upload retried successfully the same night; the checks stay green.
             i.backupHistory = history(failedDriveDayAgo: 3, retried: true)
         case .backupLate:
-            i.capture = capture(replacing(calmChecks(), check("backup_local", .amber, age: 30 * 3600, limit: 36 * 3600)), dot: .amber)
+            // R2 item 4: Drive's database copy is the Mac copy it uploads, so it is as old: the upload of the 30 h copy.
+            i.capture = capture(replacing(replacing(calmChecks(), check("backup_local", .amber, age: 30 * 3600, limit: 36 * 3600)),
+                                          check("backup_offsite", age: 30 * 3600, limit: 36 * 3600)), dot: .amber)
             i.newestLocalCopyAt = now.addingTimeInterval(-30 * 3600)
             i.localCopiesKept = 2  // a missed night: two copies on this Mac
-            i.backupHistory = history(localNewestHoursAgo: 30)
+            i.backupHistory = history(localNewestHoursAgo: 30, driveNewestHoursAgo: 30)
         }
         return i
     }
@@ -222,7 +224,7 @@ enum BrainBarDesignFixture {
     /// A week of nightly attempts. Each lane's newest attempt sits at the age its row's gauge says (the Drive copy 3 h,
     /// the others 4 h; with Drive stalled, the Drive lanes stop at 21 h), so the rail and the number agree.
     static func history(failedDriveDayAgo: Int? = nil, driveStalledAfterDays: Int? = nil, retried: Bool = false,
-                        localNewestHoursAgo: Double = 4) -> NDBackupHistory {
+                        localNewestHoursAgo: Double = 4, driveNewestHoursAgo: Double? = nil) -> NDBackupHistory {
         func nights(newestHoursAgo: Double, fail: Int? = nil) -> [NDAttempt] {
             (0...6).reversed().flatMap { day -> [NDAttempt] in
                 let at = now.addingTimeInterval(-Double(day) * 86_400 - newestHoursAgo * 3600)
@@ -234,7 +236,7 @@ enum BrainBarDesignFixture {
         }
         let stalled = driveStalledAfterDays != nil
         return .read(NDBackupLanes(
-            local: nights(newestHoursAgo: localNewestHoursAgo), drive: nights(newestHoursAgo: stalled ? 27 : 3, fail: failedDriveDayAgo),
+            local: nights(newestHoursAgo: localNewestHoursAgo), drive: nights(newestHoursAgo: driveNewestHoursAgo ?? (stalled ? 27 : 3), fail: failedDriveDayAgo),
             conversations: nights(newestHoursAgo: stalled ? 28 : 4), integrity: nights(newestHoursAgo: 4)))
     }
 

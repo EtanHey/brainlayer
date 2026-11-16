@@ -160,8 +160,12 @@ struct NDR1: Equatable, Sendable {
                 let here = Set(stationForCheck.filter { $0.value == station }.map(\.key))
                 let amber = (verdict?.checks ?? []).filter { here.contains($0.name) && $0.state == .amber }.map(\.name)
                 guard !amber.isEmpty else { continue }
+                // R2 item 5: a late copy says it is late (only when the local-copy check is amber for age).
+                let localAge = (verdict?.checks ?? []).first { $0.name == "backup_local" && $0.state == .amber }?.ageS
+                let title = station == .mac && amber.contains("backup_local") && localAge.map({ $0.isFinite && $0 >= 0 }) == true
+                    ? Say.macLate(NDFormat.ageText(localAge!)) : Say.stationSays(NDPipelineLayout.name(station), status)
                 items.append(Item(id: "notice." + station.rawValue, severity: .orange,
-                                  title: Say.stationSays(NDPipelineLayout.name(station), status), detail: nil, action: nil,
+                                  title: title, detail: nil, action: nil,
                                   strip: nil, concerns: Set(amber), station: station))
                 covered.formUnion(amber)
             }
@@ -232,6 +236,8 @@ struct NDR1: Equatable, Sendable {
             if only.catchingUp {
                 headline = only.title
                 detail = only.detail
+            } else if only.id.hasPrefix("notice.") {
+                headline = only.title
             } else if let station = only.station, let status = pipeline.status[station]?.text {
                 headline = Say.stationSays(NDPipelineLayout.name(station), status)
             } else {
@@ -325,7 +331,8 @@ struct NDR1: Equatable, Sendable {
         func tone(_ s: NDSeverity) -> NDModel.Tone { s == .red ? .fault : .warn }
         // Search: the share searchable by meaning, when search by meaning and search read fine.
         let percent = i.searchable.map { Int(($0 * 100).rounded(.down)) }
-        var searchValue = percent.map { Say.percentReady($0) } ?? NDModel.Number.unknown.value
+        // R2 item 14: say what is ready.
+        var searchValue = percent.map { Say.searchableByMeaning($0) } ?? NDModel.Number.unknown.value
         var searchTone: NDModel.Tone = .fine
         switch worst([.search]) {
         case .fine: break
@@ -350,7 +357,8 @@ struct NDR1: Equatable, Sendable {
         var backupsTone: NDModel.Tone = concerned.contains { $0.severity == .red } ? .fault : concerned.isEmpty ? .fine : .warn
         // The area row says the older of the two destinations' last backups: the Mac's or Drive's number, never a third.
         let mac = checks.first { $0.name == "backup_local" }?.ageS.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
-        if fresh, ages.count == copyNames.count, let mac, let drive = driveNewest(c.verdict) {
+        let driveDB = checks.first { $0.name == "backup_offsite" }?.ageS.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        if fresh, ages.count == copyNames.count, let mac, let drive = driveDB {
             backupsValue = Say.ago(NDFormat.ageText(max(mac, drive)))
         } else {
             backupsValue = NDModel.Number.unknown.value
@@ -362,8 +370,8 @@ struct NDR1: Equatable, Sendable {
             if backupsTone == .fine { backupsTone = tone(sev) }
             // D7.3: name the copy that is stale, with one number for one fact. Drive: the last time anything reached it
             // (the same age as "Nothing has uploaded for …"); otherwise the copy on this Mac.
-            if pipeline.condition(.drive) != .fine, let newest = driveAges(c.verdict).min() {
-                backupsValue = Say.driveAgo(NDFormat.ageText(newest))
+            if pipeline.condition(.drive) != .fine, let db = driveDB {
+                backupsValue = Say.driveAgo(NDFormat.ageText(db))
             } else if let mac = checks.first(where: { $0.name == "backup_local" })?.ageS, mac.isFinite, mac >= 0 {
                 backupsValue = Say.macAgo(NDFormat.ageText(mac))
             }

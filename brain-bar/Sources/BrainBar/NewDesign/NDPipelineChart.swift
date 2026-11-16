@@ -326,7 +326,8 @@ struct NDPipelineChart: View {
 
     static func marks(_ t: NDPipelineState.Treatment) -> Marks {
         switch t {
-        case .fault: Marks(ring: ND.red, badge: "exclamationmark.circle.fill", nameRed: true, statusTone: .fault)
+        // R2 item 10: the name keeps its normal colour and weight; only the short secondary line is red.
+        case .fault: Marks(ring: ND.red, badge: "exclamationmark.circle.fill", nameRed: false, statusTone: .fault)
         case .notice: Marks(ring: ND.orange, badge: "exclamationmark.triangle.fill", statusTone: .warn)
         case .notConfirmed: Marks(ring: ND.t3, ringDashed: true)
         case .calm: Marks()
@@ -481,16 +482,41 @@ struct NDStationButton: View {
     private var monitors: [Any] = []
     private var pending: Task<Void, Never>?
 
-    /// The pointer arrived at or left a station: open after 300 ms, close 250 ms after it has left station and panel.
+    /// The pointer arrived at or left a station: open after 300 ms.
+    /// R1.6 item 1 (R2 decision 1): a panel closes the moment the pointer leaves (no delay; a 100 ms fade, called off if the pointer
+    /// reaches the panel within it), and never stays up while another station is highlighted.
+    static let closeDelay: Double = 0
+    static let closeFade: Double = 0.1
+
     func pointer(_ station: NDStation, over: Bool, open: @escaping (Bool) -> Void) {
         overStation = over
         pending?.cancel()
-        pending = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(over ? 300 : 250))
-            guard let self, !Task.isCancelled else { return }
-            if over, self.overStation, self.shown != station { open(false) }
-            if !over, !self.overStation, !self.overPanel, !self.pinned { self.hide() }
+        if over, let shown, shown != station { hide() }  // another station is highlighted: the old panel goes at once
+        if over {
+            if panel?.alphaValue ?? 1 < 1 { panel?.animator().alphaValue = 1 }
+            pending = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(300))
+                guard let self, !Task.isCancelled, self.overStation, self.shown != station else { return }
+                open(false)
+            }
+        } else {
+            leave()
         }
+    }
+
+    /// The pointer left the station or the panel: fade out at once; if it came back over either, stay.
+    private func leave() {
+        guard !overStation, !overPanel, !pinned, shown != nil else { return }
+        guard let panel else { hide(); return }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = Self.closeFade
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.panel === panel else { return }
+                if self.overStation || self.overPanel || self.pinned { panel.animator().alphaValue = 1 } else { self.hide() }
+            }
+        })
     }
 
     func show(_ station: NDStation, layout: NDPipelineLayout.Panel, content: AnyView, pinned: Bool, focusAction: Bool = false) {
@@ -515,7 +541,11 @@ struct NDStationButton: View {
         p.appearance = window.effectiveAppearance
         let root = NDPanelChrome(layout: layout, content: content)
             .environment(\.ndPanelFocusAction, focusAction)
-            .onHover { [weak self] inside in self?.overPanel = inside }
+            .onHover { [weak self] inside in
+                guard let self else { return }
+                self.overPanel = inside
+                if inside { self.panel?.animator().alphaValue = 1 } else { self.leave() }
+            }
         p.contentView = NSHostingView(rootView: root)
         window.addChildWindow(p, ordered: .above)
         if focusAction { p.makeKey() }
@@ -604,12 +634,17 @@ struct NDPanelChrome: View {
                 .fill(ND.pop)
             NDPanelShape(body: body, tip: tip, edge: layout.edge)
                 .stroke(ND.hair2, lineWidth: 0.5)
-            // A body the screen made shorter than its content scrolls (L39); otherwise it is exactly its content.
-            ScrollView(.vertical) { content }
-                .scrollIndicators(.automatic)
-                .frame(width: body.width, height: body.height, alignment: .topLeading)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .offset(x: body.minX, y: body.minY)
+            // R2 item 2: exactly its content; it scrolls only when the screen made it shorter (L39).
+            Group {
+                if layout.scrolls {
+                    ScrollView(.vertical) { content }.scrollIndicators(.automatic)
+                } else {
+                    content
+                }
+            }
+            .frame(width: body.width, height: body.height, alignment: .topLeading)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .offset(x: body.minX, y: body.minY)
         }
         .frame(width: o.width, height: o.height, alignment: .topLeading)
     }
@@ -718,9 +753,15 @@ struct NDStationPopover: View {
         let fault = faultLines(station, item: item, i, p)
         // A notice the station says in its own words (backup-late): its title, then what the station is and does.
         let showOwn = fault.isEmpty
-        return Model(mark: item.severity == .red ? .fault : .notice, title: item.title,
+        return Model(mark: item.severity == .red ? .fault : .notice, title: faultTitle(station, item, i),
                      lines: showOwn ? ownLines : fault, firstLineStrong: !showOwn,
-                     rows: showOwn ? ownRows : [], action: item.action)
+                     rows: showOwn || station == .drive ? ownRows : [], action: item.action)
+    }
+
+    /// R2 item 11: the jobs fault panel's title, short (the station is named above it).
+    static func faultTitle(_ station: NDStation, _ item: NDR1.Item, _ i: NDInputs) -> String {
+        if station == .jobs, item.id == "nightly", let nights = i.capture.maintenanceNightFailures { return Say.failedInARow(nights) }
+        return item.title
     }
 
     static func title(_ station: NDStation) -> String {
@@ -792,6 +833,14 @@ struct NDStationPopover: View {
         switch station {
         case .queue:
             return i.savesWaiting == 0 ? [Line(label: Say.waitingRow, value: Say.none)] : []
+        case .drive:
+            // R2 item 4: the two uploads Drive receives, each its own age (the station shows the database copy's).
+            let checks = i.capture.verdict?.checks ?? []
+            func age(_ name: String) -> String? {
+                checks.first { $0.name == name }?.ageS.flatMap { $0.isFinite && $0 >= 0 ? Say.ago(NDFormat.ageText($0)) : nil }
+            }
+            return [age("backup_offsite").map { Line(label: Say.databaseCopy, value: $0) },
+                    age("transcripts").map { Line(label: Say.conversationsCopy, value: $0) }].compactMap { $0 }
         case .mac:
             // R1.5 change 8: Kept (the copies actually found) and Newest.
             var out: [Line] = []
