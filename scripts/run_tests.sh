@@ -187,6 +187,12 @@ map_changed_files_to_pytests() {
       done
     fi
     case "$changed" in
+      src/brainlayer/backup_age.py|scripts/backup_age_setup.py)
+        if [ -f "$TEST_ROOT/test_backup_age.py" ]; then
+          append_unique "$TEST_ROOT/test_backup_age.py"
+          mapped=1
+        fi
+        ;;
       .github/workflows/*.yml|.github/workflows/*.yaml)
         # Select the workflow's actual owners; unrelated CI guards cannot establish coverage.
         for test_path in "$TEST_ROOT"/test_*.py; do
