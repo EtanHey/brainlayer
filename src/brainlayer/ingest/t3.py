@@ -300,7 +300,7 @@ class T3Reader:
     def _read_v2_snapshot(conn: sqlite3.Connection, selection=None) -> list[T3Thread]:
         """Read only the explicitly selected V2 projection; never fall back to legacy rows."""
         # JSON parameters avoid SQLite's bound-variable limit for large replay windows.
-        params = () if selection is None else tuple(json.dumps(sorted(ids)) for ids in selection)
+        params = () if selection is None else tuple(json.dumps(sorted(ids)) for ids in selection[:2])
         selected = (
             ""
             if selection is None
@@ -439,6 +439,9 @@ def _provider_session_id(resume_cursor_json: str | None) -> str | None:
 class _IndexBudget:
     remaining: int = DEFAULT_T3_MAX_CHANGED_CHUNKS
     deferred: int = 0
+    oldest_first: bool = False
+    pending_ids: set[str] | None = None
+    deferred_ids: set[str] = field(default_factory=set)
 
 
 def _changed_chunks(chunks, store):
@@ -475,13 +478,16 @@ def _index_chunks(
     if skipped_empty:
         logger.info("T3 index admission skipped_empty_chunks=%s source_file=%s", skipped_empty, source_file)
     eligible = admitted
+    if budget.pending_ids is not None:
+        eligible = [chunk for chunk in eligible if chunk.metadata["chunk_id"] in budget.pending_ids]
     # Fail fast on an already-busy writer, then release it before model loading.
     with open_writer_store(db_path) as store:
         changed = _changed_chunks(eligible, store)
-    changed.sort(key=_newest_chunk_key, reverse=True)
+    changed.sort(key=_newest_chunk_key, reverse=not budget.oldest_first)
     selected = changed[: budget.remaining]
     budget.remaining -= len(selected)
     budget.deferred += len(changed) - len(selected)
+    budget.deferred_ids.update(chunk.metadata["chunk_id"] for chunk in changed[len(selected) :])
     if not selected:
         return 0
     computed = embed_chunks(selected)
@@ -632,6 +638,7 @@ def ingest_t3(
     threads = []
     seen_messages = set()
     source_alerts = []
+    resume_pending = True
     # Read every selected source before indexing. Newer projections win shared IDs.
     for path, version in sources:
         source_reader = (
@@ -653,9 +660,14 @@ def ingest_t3(
                 next_state["sources"][key] = fingerprint
                 if previous == fingerprint:
                     continue
+                if "pending_chunks" in state:
+                    next_state["sources"].pop(key, None)
+                    if previous:
+                        next_state["sources"][key] = previous
             source_threads = source_reader.read_threads(report_success=False)
             if hasattr(source_reader, "_next_bookmark"):
                 next_state["sources"][key] = source_reader._next_bookmark
+                resume_pending &= source_reader._next_bookmark.pop("resume_pending")
         except BrainLayerAlarm:
             if state_db_path is not None or path == reader.state_db_path or reader.projection_version != 2:
                 raise
@@ -697,7 +709,9 @@ def ingest_t3(
             from ..paths import DEFAULT_DB_PATH
 
             destination = DEFAULT_DB_PATH
-        budget = _IndexBudget(remaining=DEFAULT_T3_MAX_CHANGED_CHUNKS)
+        budget = _IndexBudget(remaining=DEFAULT_T3_MAX_CHANGED_CHUNKS, oldest_first=hasattr(reader, "_next_bookmark"))
+        if "pending_chunks" in state and resume_pending:
+            budget.pending_ids = set(state["pending_chunks"])
         try:
             for path, batch in batches.items():
                 result.chunks_indexed += _index_chunks(
@@ -737,6 +751,22 @@ def ingest_t3(
             )
         )
     )
+    if result.chunks_deferred and state_path is not None and hasattr(reader, "_next_bookmark"):
+        held = {
+            "target": target,
+            "sources": dict(state.get("sources", {})),
+            "pending_chunks": sorted(budget.deferred_ids),
+        }
+        for path, version in sources:
+            key = str(path.resolve())
+            candidate = next_state["sources"].get(key)
+            if version == 2 and candidate:
+                held["sources"][key] = {
+                    **candidate,
+                    "last_sequence": held["sources"].get(key, {}).get("last_sequence"),
+                    "pending_to": candidate["last_sequence"],
+                }
+        t3_bookmark.save(state_path, held)
     if state_path is not None and (not dry_run or bookmark_path) and result.bookmark_held is None:
         try:
             t3_bookmark.save(state_path, next_state)

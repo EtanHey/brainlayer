@@ -34,16 +34,25 @@ def identity(path):
 
 def window(conn, previous, source_identity):
     # First data read in the transaction: later commits belong to the next run.
-    ceiling = conn.execute("SELECT coalesce(max(sequence), 0) FROM orchestration_events").fetchone()[0]
+    head = conn.execute("SELECT coalesce(max(sequence), 0) FROM orchestration_events").fetchone()[0]
     metadata = dict(conn.execute("SELECT projection_name, last_sequence FROM orchestration_v2_projection_metadata"))
-    if metadata.get("thread-projections", ceiling) < ceiling:
-        raise RuntimeError("T3 projection is behind its event log; retain bookmark for replay")
+    ceiling = min(head, metadata.get("thread-projections", head))
+    same_source = previous.get("identity") == source_identity
+    pending = previous.get("pending_to") if same_source else None
+    resume_pending = type(pending) is int and pending <= ceiling
+    if resume_pending:
+        ceiling = pending
+    stamp = conn.execute(
+        "SELECT occurred_at FROM orchestration_events WHERE sequence <= ? ORDER BY sequence DESC LIMIT 1",
+        (ceiling,),
+    ).fetchone()
+    occurred_at = stamp[0] if stamp else previous.get("occurred_at")
     start = previous.get("last_sequence")
     valid = (
-        previous.get("identity") == source_identity
+        same_source
         and type(start) is int
         and "event-log-pruned-through" in metadata
-        and metadata.get("event-log-pruned-through", 0) <= start <= ceiling
+        and metadata.get("event-log-pruned-through", 0) <= start <= ceiling <= head
     )
     info = {
         "mode": "incremental" if valid else "full",
@@ -55,17 +64,21 @@ def window(conn, previous, source_identity):
     messages, threads = set(), set()
     if valid:
         rows = conn.execute(
-            "SELECT event_type, stream_id, CASE WHEN event_type='message.updated' "
-            "THEN json_extract(payload_json, '$.id') END FROM orchestration_events "
-            "WHERE sequence > ? AND sequence <= ?",
+            "SELECT stream_id FROM orchestration_events WHERE sequence > ? AND sequence <= ?",
             (start, ceiling),
         )
-        for event_type, stream_id, message_id in rows:
+        for (stream_id,) in rows:
             info["events_read"] += 1
-            if event_type == "message.updated":
-                if not isinstance(message_id, str):
-                    raise RuntimeError("T3 message event has no message id; retain bookmark")
-                messages.add(message_id)
-            elif event_type.startswith(("thread.", "provider-thread.")):
+            if isinstance(stream_id, str):
                 threads.add(stream_id)
-    return info, messages, threads, {"identity": source_identity, "last_sequence": ceiling}
+    return (
+        info,
+        messages,
+        threads,
+        {
+            "identity": source_identity,
+            "last_sequence": ceiling,
+            "occurred_at": occurred_at,
+            "resume_pending": resume_pending,
+        },
+    )

@@ -24,6 +24,9 @@ def run(tmp_path, monkeypatch):
                 projection_name TEXT PRIMARY KEY, schema_version INTEGER NOT NULL,
                 last_sequence INTEGER NOT NULL, updated_at TEXT NOT NULL);
             INSERT INTO orchestration_v2_projection_metadata VALUES ('event-log-pruned-through',2,0,'');
+            ALTER TABLE orchestration_v2_projection_messages ADD COLUMN updated_at TEXT DEFAULT '2026-10-09T00:00:00Z';
+            INSERT INTO orchestration_events(event_type,stream_id,occurred_at,payload_json)
+                VALUES ('bootstrap','project','2026-11-17T00:00:00Z','{}');
         """)
     indexed = {}
     calls = []
@@ -31,12 +34,18 @@ def run(tmp_path, monkeypatch):
     def index(chunks, *, budget, **kwargs):
         calls.append(len(chunks))
         changed = [c for c in chunks if indexed.get(c.metadata["chunk_id"]) != c.content]
+        if getattr(budget, "pending_ids", None) is not None:
+            changed = [c for c in changed if c.metadata["chunk_id"] in budget.pending_ids]
+        changed.sort(key=t3._newest_chunk_key, reverse=not getattr(budget, "oldest_first", False))
         selected = changed[: budget.remaining]
         budget.remaining -= len(selected)
         budget.deferred += len(changed) - len(selected)
+        if hasattr(budget, "deferred_ids"):
+            budget.deferred_ids.update(c.metadata["chunk_id"] for c in changed[len(selected) :])
         indexed.update((c.metadata["chunk_id"], c.content) for c in selected)
         return len(selected)
 
+    real_index = t3._index_chunks
     monkeypatch.setattr(t3, "_index_chunks", index)
     bookmark = tmp_path / "bookmark.json"
 
@@ -46,6 +55,7 @@ def run(tmp_path, monkeypatch):
         )
 
     invoke.source, invoke.bookmark, invoke.indexed, invoke.calls = source, bookmark, indexed, calls
+    invoke.real_index = real_index
     return invoke
 
 
@@ -57,18 +67,26 @@ def event(run, message="v2-streaming", *, kind="message.updated", text=None):
                 (json.dumps({"text": text}), message),
             )
         conn.execute(
-            "INSERT INTO orchestration_events(event_type,stream_id,payload_json) VALUES (?,?,?)",
-            (kind, "v2-a", json.dumps({"id": message, "threadId": "v2-a"})),
+            "INSERT INTO orchestration_events(event_type,stream_id,payload_json,occurred_at) VALUES (?,?,?,?)",
+            (kind, "v2-a", json.dumps({"id": message, "threadId": "v2-a"}), "2026-11-17T01:00:00Z"),
         )
 
 
-def test_idle_window_reads_zero_payloads_and_never_indexes(run):
+def test_idle_window_reads_zero_payloads_and_never_indexes(run, monkeypatch):
     run()
     run.calls.clear()
     result = run()
     assert result.messages_seen == 0
     assert result.mode == "incremental" and result.events_read == 0
     assert run.calls == []
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("no-op attempted writer pidfile or embedding")
+
+    monkeypatch.setattr("brainlayer.runtime_store.open_writer_store", forbidden)
+    monkeypatch.setattr("brainlayer.index_new.embed_chunks", forbidden)
+    monkeypatch.setattr(t3, "_index_chunks", run.real_index)
+    assert run().messages_seen == 0
 
 
 def test_stream_finalization_after_bookmark_is_ingested_once(run):
@@ -77,7 +95,7 @@ def test_stream_finalization_after_bookmark_is_ingested_once(run):
     assert not any("v2-streaming" in key for key in run.indexed)
     event(run, text="final answer")
     result = run()
-    assert result.messages_seen == result.chunks_indexed == 1
+    assert result.messages_seen == 2 and result.chunks_indexed == 1
     assert run().chunks_indexed == 0
     assert sum("v2-streaming" in key for key in run.indexed) == 1
 
@@ -86,10 +104,10 @@ def test_pruned_window_falls_back_and_sets_bookmark(run):
     run()
     event(run, text="completed")
     with sqlite3.connect(run.source) as conn:
-        conn.execute("UPDATE orchestration_v2_projection_metadata SET last_sequence=1")
+        conn.execute("UPDATE orchestration_v2_projection_metadata SET last_sequence=2")
     result = run()
     assert result.mode == "full" and result.messages_seen == 3
-    assert result.bookmark_to == 1 and run().mode == "incremental"
+    assert result.bookmark_to == 2 and run().mode == "incremental"
 
 
 def test_replaced_database_identity_forces_full_scan(run):
@@ -101,13 +119,17 @@ def test_replaced_database_identity_forces_full_scan(run):
     assert run().mode == "full"
 
 
-def test_indexing_error_holds_and_replays_same_window(run, monkeypatch):
+@pytest.mark.parametrize("busy", [False, True])
+def test_indexing_error_holds_and_replays_same_window(run, monkeypatch, busy):
+    from brainlayer.vector_store import WriterInUseError
+
     run()
     before = run.bookmark.read_bytes()
     event(run, text="completed")
     original = t3._index_chunks
     with monkeypatch.context() as patch:
-        patch.setattr(t3, "_index_chunks", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("failure")))
+        error = WriterInUseError("failure") if busy else RuntimeError("failure")
+        patch.setattr(t3, "_index_chunks", lambda *a, **k: (_ for _ in ()).throw(error))
         with pytest.raises(RuntimeError, match="failure"):
             run()
     assert run.bookmark.read_bytes() == before
@@ -120,7 +142,7 @@ def test_budget_deferral_holds_until_remaining_chunks_finish(run, monkeypatch):
     monkeypatch.setattr(t3, "DEFAULT_T3_MAX_CHANGED_CHUNKS", 1)
     first = run()
     assert first.chunks_deferred == 1 and first.bookmark_held == "chunks_deferred"
-    assert not run.bookmark.exists()
+    assert next(iter(json.loads(run.bookmark.read_text())["sources"].values()))["last_sequence"] is None
     second = run()
     assert second.chunks_indexed == 1 and second.bookmark_held is None
     assert run().mode == "incremental" and run().messages_seen == 0
@@ -160,3 +182,95 @@ def test_unchanged_legacy_source_is_skipped(run, tmp_path, monkeypatch):
     with sqlite3.connect(legacy) as conn:
         conn.execute("UPDATE projection_thread_messages SET text='changed' WHERE message_id='message-1'")
     assert run().messages_seen == 2
+
+
+def test_lagging_projection_does_not_skip_committed_flip(run):
+    run()
+    event(run)
+    with sqlite3.connect(run.source) as conn:
+        conn.execute("INSERT INTO orchestration_v2_projection_metadata VALUES ('thread-projections',2,1,'')")
+    assert run().bookmark_to == 1
+    with sqlite3.connect(run.source) as conn:
+        conn.execute("UPDATE orchestration_v2_projection_messages SET streaming=0 WHERE message_id='v2-streaming'")
+        conn.execute(
+            "UPDATE orchestration_v2_projection_metadata SET last_sequence=2 WHERE projection_name='thread-projections'"
+        )
+    assert run().chunks_indexed == 1
+
+
+def test_restored_head_below_bookmark_forces_full_scan(run):
+    event(run)
+    run()
+    with sqlite3.connect(run.source) as conn:
+        conn.execute("DELETE FROM orchestration_events WHERE sequence=2")
+    assert run().mode == "full"
+
+
+def test_kill_before_bookmark_write_replays_committed_chunks(run, monkeypatch):
+    run()
+    before = run.bookmark.read_bytes()
+    event(run, text="committed before interruption")
+
+    def killed(*args):
+        raise KeyboardInterrupt()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(t3.t3_bookmark, "save", killed)
+        with pytest.raises(KeyboardInterrupt):
+            run()
+    assert run.bookmark.read_bytes() == before
+    result = run()
+    assert result.events_read == 1 and result.chunks_indexed == 0
+
+
+def test_over_200_changed_freezes_window_despite_new_arrivals(run):
+    def add_messages(count, prefix, updated):
+        with sqlite3.connect(run.source) as conn:
+            conn.executemany(
+                "INSERT INTO orchestration_v2_projection_messages VALUES (?,?,?,?,?,?,?)",
+                [
+                    (
+                        f"{prefix}-{i}",
+                        "v2-a",
+                        "user",
+                        updated,
+                        json.dumps({"text": f"{prefix} content {i}"}),
+                        0,
+                        updated,
+                    )
+                    for i in range(count)
+                ],
+            )
+
+    add_messages(205, "backlog", "2026-10-09T01:00:00Z")
+    first = run()
+    assert first.chunks_deferred == 7
+    add_messages(201, "incoming", "2026-11-17T01:00:00Z")
+    event(run, kind="unfamiliar.import-or-revert")
+    second = run()
+    assert second.chunks_indexed == 7 and second.chunks_deferred == 0 and second.bookmark_to == 1
+    assert run().chunks_indexed == 200
+    assert run().chunks_indexed == 1
+    assert run().messages_seen == 0
+
+
+@pytest.mark.parametrize("replace_identity", [False, True])
+def test_pending_ids_are_discarded_when_source_is_restored_or_replaced(run, monkeypatch, replace_identity):
+    monkeypatch.setattr(t3, "DEFAULT_T3_MAX_CHANGED_CHUNKS", 1)
+    assert run().chunks_deferred == 1
+    assert json.loads(run.bookmark.read_text())["pending_chunks"]
+    with sqlite3.connect(run.source) as conn:
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_messages VALUES "
+            "('restored-message','v2-a','user','2026-10-10', '{\"text\":\"restored content\"}',0,'2026-10-10')"
+        )
+        if not replace_identity:
+            conn.execute("DELETE FROM orchestration_events")
+    if replace_identity:
+        replacement = run.source.with_suffix(".restored")
+        with sqlite3.connect(run.source) as source, sqlite3.connect(replacement) as target:
+            source.backup(target)
+        replacement.replace(run.source)
+    assert run().chunks_deferred == 1
+    assert run().chunks_indexed == 1
+    assert len(run.indexed) == 3
