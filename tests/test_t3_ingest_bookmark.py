@@ -185,6 +185,19 @@ def test_incremental_deferral_survives_pruning_past_replay_start(run, monkeypatc
     assert run().messages_seen == 0
 
 
+def test_unresumable_pending_window_never_uses_bounded_read(run):
+    # A pre-fix held state: replay start 1, frozen ceiling past the restored head, later timestamp.
+    run()
+    event(run, text="pending before restore")
+    state = json.loads(run.bookmark.read_text())
+    next(iter(state["sources"].values())).update(last_sequence=1, pending_to=10_000, occurred_at="2026-11-17T23:59:00Z")
+    state["pending_chunks"] = []
+    run.bookmark.write_text(json.dumps(state))
+    with sqlite3.connect(run.source) as conn:
+        conn.execute("UPDATE orchestration_v2_projection_metadata SET last_sequence=2")
+    assert run().mode == "full"
+
+
 def test_pruned_bookmark_without_updated_at_uses_full_read(run):
     run()
     event(run, text="completed without updated_at column")

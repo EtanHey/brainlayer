@@ -62,9 +62,9 @@ def window(conn, previous, source_identity):
         and start <= ceiling <= head
         and "event-log-pruned-through" in metadata
         and metadata.get("event-log-pruned-through", 0) > start
-        # A pending replay may predate this version's start-time preservation.
-        # If its sequence window is gone, reload pending IDs from the full read.
-        and not resume_pending
+        # Any saved pending replay (resumable or not, e.g. pending_to past a restored
+        # head) may predate start-time preservation: reload it from the full read.
+        and pending is None
         and isinstance(previous.get("occurred_at"), str)
         and any(
             row[1] == "updated_at" for row in conn.execute("PRAGMA table_info(orchestration_v2_projection_messages)")
