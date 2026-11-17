@@ -244,7 +244,7 @@ def configured_environment():
 
 
 def deployment_policies():
-    return [{"name": "main", "type": "branch"}, {"name": "v*", "type": "tag"}]
+    return [{"name": "main", "type": "branch"}]
 
 
 def test_empty_switch_uses_repository_secrets_without_metadata_access(monkeypatch):
@@ -255,13 +255,13 @@ def test_empty_switch_uses_repository_secrets_without_metadata_access(monkeypatc
     release.environment_ready("")
 
 
-def test_named_environment_accepts_main_and_version_tags_without_other_rules():
+def test_named_environment_accepts_main_only():
     release.environment_policy("release-signing", configured_environment(), deployment_policies())
     release.environment_policy("release-signing", configured_environment(), list(reversed(deployment_policies())))
 
 
 @pytest.mark.parametrize(
-    "fault", ["missing", "unrestricted", "missing-tags", "extra-branch", "wrong-tags", "tag-main", "duplicate"]
+    "fault", ["missing", "unrestricted", "missing-policy", "extra-branch", "version-tags", "tag-main", "duplicate"]
 )
 def test_named_environment_rejects_other_deployment_policies(fault):
     metadata = configured_environment()
@@ -270,16 +270,16 @@ def test_named_environment_rejects_other_deployment_policies(fault):
         metadata = {}
     elif fault == "unrestricted":
         metadata["deployment_branch_policy"] = None
-    elif fault == "missing-tags":
+    elif fault == "missing-policy":
         policies.pop()
     elif fault == "extra-branch":
         policies.append({"name": "*", "type": "branch"})
-    elif fault == "wrong-tags":
-        policies[1]["name"] = "*"
+    elif fault == "version-tags":
+        policies.append({"name": "v*", "type": "tag"})
     elif fault == "tag-main":
         policies[0]["type"] = "tag"
     else:
-        policies[1] = policies[0]
+        policies.append(policies[0])
     with pytest.raises(SystemExit, match="signing environment release-signing"):
         release.environment_policy("release-signing", metadata, policies)
 
