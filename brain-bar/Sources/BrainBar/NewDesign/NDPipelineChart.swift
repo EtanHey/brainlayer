@@ -23,7 +23,7 @@ struct NDPipelineChart: View {
     @StateObject private var panels = NDPanelPresenter()
 
     /// Tab order (change 16): each station, then its action, then the next station.
-    static let order: [NDStation] = [.agents, .read, .queue, .memory, .jobs, .search, .mac, .drive]
+    static let order: [NDStation] = [.agents, .read, .queue, .memory, .jobs, .weekly, .search, .mac, .drive]
 
     struct Control: Equatable, Identifiable {
         var station: NDStation
@@ -176,6 +176,30 @@ struct NDPipelineChart: View {
         case .end: .trailing
         }
         ctx.draw(t, at: CGPoint(x: x, y: y), anchor: unit)
+    }
+
+    /// R1.10 (comp 58): the nightly check-up is a crescent moon with a small check at its top right; the weekly clean a
+    /// broom (SF Symbols has none, so it is drawn): a handle to the lower left and a fanned head with three bristles.
+    static func jobGlyph(_ ctx: GraphicsContext, _ station: NDStation, at p: CGPoint, size: CGFloat, color: Color) {
+        let u = size / 14
+        if station == .jobs {
+            symbol(ctx, "moon", at: CGPoint(x: p.x - 1.5 * u, y: p.y + 1.2 * u), size: 11.5 * u, color: color)
+            symbol(ctx, "checkmark", at: CGPoint(x: p.x + 4.4 * u, y: p.y - 4.6 * u), size: 7.5 * u, color: color)
+            return
+        }
+        func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: p.x + (x - 7) * u, y: p.y + (y - 7) * u) }
+        var handle = Path()
+        handle.move(to: pt(12.5, 1.5)); handle.addLine(to: pt(7.6, 6.4))
+        var head = Path()
+        head.move(to: pt(6.2, 5.0)); head.addLine(to: pt(9.0, 7.8)); head.addLine(to: pt(5.6, 12.4))
+        head.addLine(to: pt(1.6, 8.4)); head.closeSubpath()
+        var bristles = Path()
+        bristles.move(to: pt(3.2, 10.0)); bristles.addLine(to: pt(1.8, 12.2))
+        bristles.move(to: pt(4.6, 11.4)); bristles.addLine(to: pt(3.6, 13.2))
+        let style = StrokeStyle(lineWidth: 1.3 * u, lineCap: .round, lineJoin: .round)
+        ctx.stroke(handle, with: .color(color), style: style)
+        ctx.stroke(head, with: .color(color), style: style)
+        ctx.stroke(bristles, with: .color(color), style: style)
     }
 
     static func symbol(_ ctx: GraphicsContext, _ name: String, at p: CGPoint, size: CGFloat, color: Color) {
@@ -354,6 +378,8 @@ struct NDPipelineChart: View {
             ctx.stroke(node, with: .color(ND.hair2), lineWidth: 1)
             if station == .mac {
                 macWithArrow(ctx, at: p, color: m.nameRed ? ND.red : ND.t2)
+            } else if station == .jobs || station == .weekly {
+                Self.jobGlyph(ctx, station, at: p, size: 14, color: m.nameRed ? ND.red : ND.t2)
             } else {
                 symbol(ctx, L.symbols[station] ?? "circle", at: p, size: 14, color: m.nameRed ? ND.red : ND.t2)
             }
@@ -759,15 +785,14 @@ struct NDStationPopover: View {
                      rows: showOwn || station == .drive ? ownRows : [], action: item.action)
     }
 
-    /// R2 item 11: the jobs fault panel's title, short (the station is named above it).
+    /// R2 item 11: the jobs fault panel's title, short (the station is named above it). R1.10 keeps it short: comp 59's
+    /// two-line "Nightly check-up failed 3 nights in a row" makes the panel too tall for the room under Save queue.
     static func faultTitle(_ station: NDStation, _ item: NDR1.Item, _ i: NDInputs) -> String {
         if station == .jobs, item.id == "nightly", let nights = i.capture.maintenanceNightFailures { return Say.failedInARow(nights) }
         return item.title
     }
 
-    static func title(_ station: NDStation) -> String {
-        station == .jobs ? Say.jobsPanelTitle : NDPipelineLayout.name(station)
-    }
+    static func title(_ station: NDStation) -> String { NDPipelineLayout.name(station) }  // R1.10: each job its own panel
 
     /// A station's own lines: its explanation (§ F), the providers for the agents, the copies' truth for the Mac (L42),
     /// what the jobs do for Jobs.
@@ -775,7 +800,6 @@ struct NDStationPopover: View {
         switch station {
         case .agents: [Say.agentsLine, Say.explainAgents]
         case .mac: [Say.macKeepsNewest(Say.countWord(NDBackupFacts.keepNewest)), Say.macOlderRemoved]
-        case .jobs: [Say.jobsPanelLine]
         default: [explanation(station)]
         }
     }
@@ -796,7 +820,8 @@ struct NDStationPopover: View {
         case .search: Say.explainSearch
         case .mac: Say.explainMac
         case .drive: Say.explainDrive
-        case .jobs: Say.explainJobs
+        case .jobs: Say.explainNightly  // R1.10 (L51)
+        case .weekly: Say.explainWeekly
         }
     }
 
@@ -821,7 +846,7 @@ struct NDStationPopover: View {
         case (.drive, "drive"):
             var out: [String] = []
             if let newest = NDR1.driveAges(i.capture.verdict).min() { out.append(Say.lastDriveUpload(NDFormat.ageText(newest))) }
-            if green("backup_local") { out.append(Say.macCopyStillMade) }
+            if green("backup_local") { out.append(Say.localCopyStillMade) }  // R1.10: one thing, one name
             return out
         default:
             return [item.detail].compactMap { $0 }.filter { !$0.isEmpty }
@@ -846,23 +871,20 @@ struct NDStationPopover: View {
             // R1.5 change 8: Kept (the copies actually found) and Newest.
             var out: [Line] = []
             if let kept = i.localCopiesKept { out.append(Line(label: Say.keptRow, value: "\(kept)")) }
-            if let at = i.newestLocalCopyAt {
-                out.append(Line(label: Say.newestRow, value: Say.ago(NDFormat.ageText(max(0, i.capture.now.timeIntervalSince(at))))))
-            }
+            // R1.10 (L50): the newest copy as a clock time on its day.
+            if let at = i.newestLocalCopyAt { out.append(Line(label: Say.newestRow, value: NDR1.dayAt(at, i.capture))) }
             return out
-        case .jobs:
-            // R1.5 change 7: every job that works on memory, from the Jobs page, with its last run.
-            let jobs: [BrainLayerLaunchdJob] = [.maintenanceNightly, .maintenanceWeekly, .walCheckpoint, .decay, .repairFTS]
-            return jobs.map { job in
-                let last: Date?
-                switch job {
-                case .maintenanceNightly: if case let .ran(at) = i.nightlyLastRun { last = at } else { last = nil }
-                case .maintenanceWeekly: if case let .ran(at) = i.weeklyLastRun { last = at } else { last = nil }
-                default: last = i.jobs?.first { $0.job == job }?.lastRun
-                }
-                let value = last.map { Say.ago(NDFormat.ageText(max(0, i.capture.now.timeIntervalSince($0)))) } ?? NDModel.Number.unknown.value
-                return Line(label: Say.jobNames[job.rawValue] ?? job.title, value: value)
-            }
+        case .jobs, .weekly:
+            // R1.10 (comp 59): the job's own last and next run, from what the Jobs page reads.
+            let job: BrainLayerLaunchdJob = station == .jobs ? .maintenanceNightly : .maintenanceWeekly
+            let input = i.jobs?.first { $0.job == job }
+            let ran: NDRun = station == .jobs ? i.nightlyLastRun : i.weeklyLastRun
+            let now = i.capture.now
+            var last: Date?
+            if case let .ran(at) = ran { last = at } else { last = input?.lastRun }
+            let lastValue = last.map { Say.ago(NDFormat.ageText(max(0, now.timeIntervalSince($0)))) } ?? NDModel.Number.unknown.value
+            let nextValue = input?.nextRun.map { Say.inAge(NDFormat.ageText(max(60, $0.timeIntervalSince(now)))) } ?? NDModel.Number.unknown.value
+            return [Line(label: Say.lastRun, value: lastValue), Line(label: Say.nextRunHead, value: nextValue)]
         case .search:
             var out: [Line] = []
             if i.capture.verdict?.checks.first(where: { $0.name == "search" })?.state == .green {

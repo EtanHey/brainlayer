@@ -703,6 +703,23 @@ extension BrainBarMenuPresenter {
         static func noDataSince(_ time: String) -> String { "no data since \(time)" }
         static func failedInARow(_ n: Int) -> String { "Failed \(n) nights in a row" }
         static func searchableByMeaning(_ p: Int) -> String { "\(p)% searchable by meaning" }
+        // Revision 1.10 (L48 to L51), approved in CHANGES-R1.10 § D.
+        static let oneThingNeedsYou = "1 thing needs you"
+        static let rowDriveSignedOut = "Google Drive signed out"
+        static let rowNightlyFailing = "Nightly check-up failing"
+        static let rowWeeklyFailing = "Weekly clean failing"
+        static func rowQueueWaiting(_ age: String) -> String { "Save queue waiting \(age)" }
+        static let stationNightly = "Nightly check-up"
+        static let stationWeekly = "Weekly clean"
+        static func lastRunAgo(_ age: String) -> String { "last run \(age) ago" }
+        static func failedWeeks(_ n: Int) -> String { "failed \(n) weeks" }
+        static let explainNightly = "A light check of memory every night: it checks that saving still works and tidies the write log."
+        static let explainWeekly = "Compacts the whole database once a week. It adds no new memories."
+        static let localCopy = "Local copy"
+        static func dayTodayAt(_ time: String) -> String { "today at \(time)" }
+        static func dayYesterdayAt(_ time: String) -> String { "yesterday at \(time)" }
+        static func dayWeekdayAt(_ day: String, _ time: String) -> String { "\(day) at \(time)" }
+        static let localCopyStillMade = "The local copy is still made every night."
 
         // Settings
         static let settingsTitle = "BrainBar Settings"

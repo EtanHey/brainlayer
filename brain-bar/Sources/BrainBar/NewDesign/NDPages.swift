@@ -372,7 +372,7 @@ struct NDJobsPage: View {
 
     var body: some View {
         let r1 = store.r1
-        let fault = r1.items.first { $0.id == "nightly" || $0.concerns.contains("nightly") }
+        let fault = r1.items.first { item in ["nightly", "weekly"].contains { item.id == $0 || item.concerns.contains($0) } }
         VStack(alignment: .leading, spacing: 0) {
             NDPageTop(title: Say.jobs, detail: fault == nil ? Say.jobsDetail : nil)
             if let fault { NDPageFault(store: store, item: fault).padding(.top, 14) }

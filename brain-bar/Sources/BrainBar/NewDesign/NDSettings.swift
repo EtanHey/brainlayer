@@ -127,7 +127,7 @@ struct NDSettingsView: View {
     /// "Signed in" / "Signed out" (or "—" when the last check cannot say), from the accepted Backups row (F01).
     private var driveState: String {
         let state = store.model.drive.state
-        if store.model.drive.action != nil { return Say.signedOutValue }
+        if Self.driveAction(store.r1) != nil { return Say.signedOutValue }
         return state == NDModel.Number.unknown.value ? state : Say.signedIn
     }
 
@@ -142,11 +142,18 @@ struct NDSettingsView: View {
 
     /// L8: no Disconnect. R1.1 change 26: no Reconnect while signed in; signed out or expired, Reconnect is the window's
     /// one filled button; one click, then the waiting line.
+    /// R1.10: Settings shows the same action as Google Drive's station panel and its problem row, with the same words
+    /// ("Reconnect"), whenever Drive is signed out, and nothing when it is not: the Drive problem's own action.
+    static func driveAction(_ r1: NDR1) -> BrainBarMenuPresentation.Action? {
+        r1.items.first { $0.id == "drive" && $0.severity == .red }?.action
+    }
+
     @ViewBuilder private var driveAction: some View {
-        if let action = store.model.drive.action {
+        if let action = Self.driveAction(store.r1) {
             NDWaitingSwap(waiting: store.inputs.driveReconnecting) {
-                NDButton(label: action.kind == .connectDrive ? BrainBarMenuPresenter.Say.connect.text : Say.reconnectShort,
-                         filled: true, small: true) { store.reconnectDrive() }
+                NDButton(label: NDPipelineChart.shortLabel(action), filled: true, small: true, accessibility: action.label) {
+                    store.reconnectDrive()
+                }
             } line: {
                 Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)
             }

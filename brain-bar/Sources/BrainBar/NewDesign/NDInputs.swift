@@ -160,6 +160,9 @@ struct NDJobInput: Equatable, Sendable, Identifiable {
     var loaded: Bool?
     /// What the last run recorded (F02): a success dot needs `.ok`.
     var lastOutcome: NDRunOutcome = .unknown
+    /// R1.10: the job's own run-failure streak from its calendar history (nil when the history is damaged or unread);
+    /// the weekly clean's "failed {n} weeks" reads it.
+    var failureStreak: Int? = nil
 }
 
 /// A job's last run as its records show it.

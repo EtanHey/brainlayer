@@ -242,6 +242,8 @@ struct NDOverviewPage: View {
         let r1 = store.r1
         VStack(alignment: .leading, spacing: 0) {
             NDHeadline(store: store, r1: r1)
+            // R1.10 (L48): one very short row per red problem, 12 pt under the headline, 20 pt above Activity.
+            if !r1.problemRows.isEmpty { NDProblemRows(store: store, rows: r1.problemRows).padding(.top, 12) }
             NDActivitySection(store: store).padding(.top, 20)
             NDBlockHeading(title: Say.pipeline).padding(.top, 20)
             NDCard(padding: EdgeInsets(top: 16, leading: 16, bottom: 14, trailing: 16)) {
@@ -252,6 +254,44 @@ struct NDOverviewPage: View {
             .animation(reduceMotion ? nil : NDMotion.breakAppears, value: r1.pipeline)
         }
         .animation(reduceMotion ? .easeOut(duration: 0.15) : NDMotion.needsBand, value: r1.items.map(\.id))
+    }
+}
+
+/// R1.10 (L48, comp 55): the problems surface: one 36 pt row per red problem in a card, a 14 pt red mark, its few words
+/// (13 Semibold, one line) and its action on the right (the same action as its station's panel and its dropdown block),
+/// a 0.5 pt line between rows. The headline counts; the rows name; nothing longer than the words lives here.
+struct NDProblemRows: View {
+    @ObservedObject var store: NDStore
+    let rows: [NDR1.ProblemRow]
+    static let rowHeight: CGFloat = 36
+
+    var body: some View {
+        NDCard(padding: EdgeInsets()) {
+            VStack(spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 { ND.cardLine.frame(height: 0.5) }
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.circle.fill").font(.system(size: 14)).foregroundStyle(ND.red)
+                            .accessibilityHidden(true)
+                        Text(row.words).font(NDType.bodyStrong).foregroundStyle(ND.t1).lineLimit(1)
+                        Spacer(minLength: 12)
+                        if let action = row.action { button(action) }
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: Self.rowHeight)
+                    .accessibilityElement(children: .contain)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func button(_ action: BrainBarMenuPresentation.Action) -> some View {
+        if action.kind == .copyReport {
+            NDCopyReportButton(label: NDPipelineChart.shortLabel(action), spoken: action.label) { store.perform(action.kind) }
+        } else {
+            NDButton(label: NDPipelineChart.shortLabel(action), filled: NDButtonPolicy.filled(action), small: true,
+                     accessibility: action.label) { store.perform(action.kind) }
+        }
     }
 }
 

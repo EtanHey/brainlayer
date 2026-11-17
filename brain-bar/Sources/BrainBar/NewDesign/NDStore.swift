@@ -308,7 +308,8 @@ import SwiftUI
             }
             return NDJobInput(job: job, enabled: model.configReadSucceeded ? model.config.launchdJobs[job]?.enabled : nil,
                               continuous: o?.isContinuous ?? false, lastRun: o?.lastRunAt, nextRun: o?.nextRunAt, loaded: loaded,
-                              lastOutcome: o.map(outcome) ?? .unknown)
+                              lastOutcome: o.map(outcome) ?? .unknown,
+                              failureStreak: o?.calendarHistoryDamaged == true ? nil : o?.calendarConsecutiveFailures)
         }
     }
 

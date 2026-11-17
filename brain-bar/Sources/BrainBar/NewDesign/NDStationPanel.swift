@@ -78,6 +78,14 @@ struct NDStationPanelBody: View {
         switch model.mark {
         case .fault: Image(systemName: "exclamationmark.circle.fill").font(.system(size: 13)).foregroundStyle(ND.red)
         case .notice: Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 13)).foregroundStyle(ND.orange)
+        // R1.10: the two job stations' glyphs are drawn (no SF Symbol is a broom), the same drawing as on the chart.
+        case let .symbol(name) where name == "moon" || name == "broom":
+            Canvas { ctx, size in
+                NDPipelineChart.jobGlyph(ctx, name == "moon" ? .jobs : .weekly, at: CGPoint(x: size.width / 2, y: size.height / 2),
+                                         size: 13, color: ND.t2)
+            }
+            .frame(width: 14, height: 14)
+            .alignmentGuide(.firstTextBaseline) { d in d.height * 0.8 }
         case let .symbol(name): Image(systemName: name).font(.system(size: 13)).foregroundStyle(ND.t2)
         }
     }

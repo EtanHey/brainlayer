@@ -15,12 +15,15 @@ enum NDPipe: String, CaseIterable, Sendable {
     case macDrive = "mac_drive"
     case rail
     case jobsMemory = "jobs"
+    /// R1.10 (L49): the weekly clean's own two-way link to Memory.
+    case weeklyMemory = "weekly"
 }
 
 /// The eight things you can point at (R1.3): the agents' group, six stations and the Memory hub. Search is one stage;
 /// the word index is not drawn (its missing check is a row in Search's details).
+/// R1.10 (L49): the jobs are two stations: `jobs` is the nightly check-up (its name since 1.10), `weekly` the weekly clean.
 enum NDStation: String, CaseIterable, Sendable, Identifiable {
-    case agents, read, queue, memory, jobs, search, mac, drive
+    case agents, read, queue, memory, jobs, weekly, search, mac, drive
     var id: String { rawValue }
 }
 
@@ -50,7 +53,8 @@ enum NDPipelineGraph {
         Connection(id: "c9", from: "Memory", to: "Copy on this Mac", pipes: [.memoryMac]),
         Connection(id: "c10", from: "Copy on this Mac", to: "Copy in Google Drive", pipes: [.macDrive]),
         Connection(id: "c11", from: "Agents' sessions", to: "Session files in Google Drive", pipes: [.rail]),
-        Connection(id: "c12", from: "Jobs", to: "Memory", pipes: [.jobsMemory]),
+        Connection(id: "c12", from: "Nightly check-up", to: "Memory", pipes: [.jobsMemory]),
+        Connection(id: "c13", from: "Weekly clean", to: "Memory", pipes: [.weeklyMemory]),
     ]
 
     /// What a check guards: connections (by id), a stage, or nothing because it is the observer.
@@ -77,7 +81,8 @@ enum NDPipelineGraph {
 
     /// Connections guarded by a presenter fact rather than one of the eleven checks: c12 by the job alerts' failed
     /// streaks (`maintenanceNightFailures`).
-    static let factGuards: [String: String] = ["c12": "job alerts (maintenanceNightFailures)"]
+    static let factGuards: [String: String] = ["c12": "job alerts (maintenanceNightFailures)",
+                                                "c13": "the weekly job's own failure streak (maintenanceWeekly)"]
 
     /// Connections no check guards today (draft "what it cannot show yet"): not drawn; said in Search's details.
     static let unguarded: Set<String> = ["c6"]
@@ -92,7 +97,7 @@ enum NDPipelineGraph {
     static let ends: [NDPipe: (from: NDStation, to: NDStation)] = [
         .sessions: (.agents, .read), .readMemory: (.read, .memory), .saves: (.agents, .queue), .queueMemory: (.queue, .memory),
         .memorySearch: (.memory, .search), .answers: (.search, .agents), .memoryMac: (.memory, .mac), .macDrive: (.mac, .drive),
-        .rail: (.agents, .drive), .jobsMemory: (.jobs, .memory),
+        .rail: (.agents, .drive), .jobsMemory: (.jobs, .memory), .weeklyMemory: (.weekly, .memory),
     ]
 }
 
@@ -292,9 +297,14 @@ extension NDPipelineState {
         // c12: a scheduled job failing; the Jobs status names it (change 13).
         if let nights = c.maintenanceNightFailures, nights >= 3 {
             s.faults.insert(.jobs)
-            // R2 item 10: the fault said once, short, on the secondary line. R1.8 item 5: it names the job that failed
-            // (the station's name lists two): "Nightly check-up failed 3 nights".
-            s.status[.jobs] = Status(text: Say.nightlyFailedShort(nights), severity: .red)
+            // R2 item 10: the fault said once, short, on the secondary line. R1.10: the station is named "Nightly
+            // check-up" alone, so its line is "failed 3 nights" again.
+            s.status[.jobs] = Status(text: Say.failedNights(nights), severity: .red)
+        }
+        // R1.10 (L49, L51): the weekly clean faults on its own job's failure streak only.
+        if let weekly = i.jobs?.first(where: { $0.job == .maintenanceWeekly }), let weeks = Self.weeklyFailures(weekly) {
+            s.faults.insert(.weekly)
+            s.status[.weekly] = Status(text: Say.failedWeeks(weeks), severity: .red)
         }
         // A fault outranks a notice on the same station.
         s.notices.subtract(s.faults)
@@ -344,10 +354,21 @@ extension NDPipelineState {
         // R2 item 4: Drive's status is the newest DATABASE copy's upload (what its panel says Drive receives); the session
         // files' upload is a row in its panel.
         if let db = age("backup_offsite") { out[.drive] = Status(text: Say.lastUpload(NDFormat.ageText(db))) }
+        // R1.10: each job station says its last run ("last run {t} ago"); the weekly clean only for a run that did its
+        // work (a run its safety gates skipped is never shown as done).
         if case let .ran(at) = i.nightlyLastRun {
-            out[.jobs] = Status(text: Say.lastCheckUp(NDFormat.ageText(max(0, c.now.timeIntervalSince(at)))))
+            out[.jobs] = Status(text: Say.lastRunAgo(NDFormat.ageText(max(0, c.now.timeIntervalSince(at)))))
+        }
+        if let weekly = i.jobs?.first(where: { $0.job == .maintenanceWeekly }), weekly.lastOutcome == .ok, let at = weekly.lastRun {
+            out[.weekly] = Status(text: Say.lastRunAgo(NDFormat.ageText(max(0, c.now.timeIntervalSince(at)))))
         }
         return out
+    }
+
+    /// R1.10: the weekly clean is failing when its last run failed and its own streak counts the weeks.
+    static func weeklyFailures(_ weekly: NDJobInput) -> Int? {
+        guard weekly.lastOutcome == .failed, let n = weekly.failureStreak, n >= 1 else { return nil }
+        return n
     }
 
     /// The agents an `ingest` check names: the growth check (`growth_not_indexed:<agent>`) or the census

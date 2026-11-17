@@ -29,19 +29,23 @@ enum NDPipelineLayout {
     /// Memory: an outline, 100 × 102 (L5).
     /// R2 item 8: the diagram sits centred in its card, 32 pt from each side: everything right of the agents moved 26 pt
     /// left (the long first-row lines are shorter).
-    static let hub = CGRect(x: 374, y: 44, width: 100, height: 102)
+    /// R1.10 (L49): 140 wide, so the two job stations hang under it with straight links.
+    static let hub = CGRect(x: 380, y: 44, width: 140, height: 102)
     /// "Kept safe" hugs its two stations (L5), widened by the lead so the two text blocks keep 16 pt between them and
     /// 12 pt to the frame at their widest statuses ("last backup 27 h ago" in Semibold): Copy on this Mac moves to x 630.
     /// R1.5: Copy on this Mac's status grew ("3 kept, newest 30 h ago"), so it moves to x 622 and the frame starts at x 544.
-    static let keptSafe = CGRect(x: 518, y: 38, width: 286, height: 80)
+    /// R1.10: Memory grew 40 pt, so the frame starts 16 pt right of it; its two stations sit 137 pt apart, the least that
+    /// keeps their widest statuses ("2 kept, newest 30 h ago", "last upload 30 h ago") 16 pt apart (the lead's 1.3 rule;
+    /// the comp's 110 let them overlap), and the frame keeps 12 pt to them.
+    static let keptSafe = CGRect(x: 536, y: 38, width: 283, height: 80)
 
     static let stations: [NDStation: CGPoint] = [
-        .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 554, y: 248),
-        .mac: CGPoint(x: 596, y: 64), .drive: CGPoint(x: 734, y: 64), .jobs: CGPoint(x: 424, y: 186),
+        .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 600, y: 248),
+        .mac: CGPoint(x: 614, y: 64), .drive: CGPoint(x: 751, y: 64), .jobs: CGPoint(x: 392, y: 186), .weekly: CGPoint(x: 508, y: 186),
     ]
     static let symbols: [NDStation: String] = [
         .read: "text.bubble", .queue: "tray.full", .memory: "brain", .mac: "laptopcomputer.and.arrow.down", .drive: "icloud",
-        .search: "magnifyingglass", .jobs: "clock", .agents: "person.2",
+        .search: "magnifyingglass", .jobs: "moon", .weekly: "broom", .agents: "person.2",
     ]
 
     static func name(_ station: NDStation) -> String {
@@ -50,10 +54,11 @@ enum NDPipelineLayout {
         case .read: return Say.stageRead
         case .queue: return Say.stageQueue
         case .memory: return Say.stageMemory
-        case .mac: return Say.stageMac
+        case .mac: return Say.localCopy  // R1.10 (L50)
         case .drive: return Say.stageDrive
         case .search: return Say.search
-        case .jobs: return Say.jobsStationName
+        case .jobs: return Say.stationNightly  // R1.10 (L49)
+        case .weekly: return Say.stationWeekly
         }
     }
 
@@ -85,7 +90,7 @@ enum NDPipelineLayout {
     static let connections: [Connection] = {
         let e = lineEnd, g = edgeGap
         let read = point(.read), queue = point(.queue), search = point(.search), mac = point(.mac), drive = point(.drive)
-        let jobs = point(.jobs), ax = agentsFrame.midX
+        let jobs = point(.jobs), weekly = point(.weekly), ax = agentsFrame.midX
         var out: [Connection] = []
         out.append(Connection(pipe: .sessions, line: NDPolyline(points: [CGPoint(x: agentsFrame.maxX + g, y: yTop), read]).trimmed(end: e)))
         out.append(Connection(pipe: .readMemory, line: NDPolyline(points: [read, CGPoint(x: hub.minX - g, y: yTop)]).trimmed(start: e)))
@@ -106,6 +111,8 @@ enum NDPipelineLayout {
                                                                      CGPoint(x: drive.x, y: yRail), drive]).trimmed(end: e)))
         out.append(Connection(pipe: .jobsMemory, line: NDPolyline(points: [jobs, CGPoint(x: jobs.x, y: hub.maxY + g)]).trimmed(start: e),
                               bothWays: true))
+        out.append(Connection(pipe: .weeklyMemory, line: NDPolyline(points: [weekly, CGPoint(x: weekly.x, y: hub.maxY + g)]).trimmed(start: e),
+                              bothWays: true))
         return out
     }()
 
@@ -123,6 +130,7 @@ enum NDPipelineLayout {
         case .macDrive: (.station(.mac), .station(.drive))
         case .rail: (.frame(agentsFrame), .station(.drive))
         case .jobsMemory: (.station(.jobs), .frame(hub))
+        case .weeklyMemory: (.station(.weekly), .frame(hub))
         }
     }
 
@@ -261,10 +269,12 @@ enum NDPipelineLayout {
         case .mac: (.top, 288, 0)
         case .drive: (.top, 288, -60)
         case .search: (.trailing, 288, 0)
-        // Save queue's slides left of the Jobs name. R1.7 item 3: Jobs' opens beside its station (right of its words),
-        // under the Kept-safe frame and above the footer, not down over the loop line.
+        // Save queue's slides left of the nightly check-up's name. R1.10: the two job stations open to their outer sides
+        // (no clear room below them): the nightly check-up to its left, under Save queue's words; the weekly clean to its
+        // right, under the copies' words.
         case .queue: (.bottom, 288, -64)
-        case .jobs: (.trailing, 288, 0)
+        case .jobs: (.leading, 288, 0)
+        case .weekly: (.trailing, 288, 0)
         }
     }
 
@@ -303,15 +313,20 @@ enum NDPipelineLayout {
             tip = CGPoint(x: anchor.maxX, y: point(.read).y - 8)
             let ceiling = (labelRects(.read, state).first?.minY ?? (point(.read).y + ringRadius)) - 4
             body = CGRect(x: tip.x + a, y: ceiling - height, width: w, height: height)
-        case .trailing where s == .jobs:
+        case .trailing where s == .weekly:
             // Just below the copies' words, the arrow at the station's height.
-            // The body starts where the loop line meets Search's circle, so it never lies on that line.
-            tip = CGPoint(x: max(anchor.maxX, point(.search).x - ringRadius - 2 - a), y: own.midY)
+            tip = CGPoint(x: anchor.maxX, y: own.midY)
             let words = (labelRects(.mac, state) + labelRects(.drive, state)).map(\.maxY).max() ?? keptSafe.maxY
             body = CGRect(x: tip.x + a, y: words + 4, width: w, height: height)
         case .trailing:
             tip = CGPoint(x: anchor.maxX, y: own.midY)
             body = CGRect(x: tip.x + a, y: tip.y - height / 2 + side.slide, width: w, height: height)
+        case .leading where s == .jobs:
+            // Just below Save queue's words; the arrow as high on the station as that allows.
+            let words = (labelRects(.queue, state).map(\.maxY).max() ?? point(.queue).y + ringRadius) + 4
+            let top = min(words, own.maxY - arrowInset)
+            tip = CGPoint(x: anchor.minX, y: min(own.maxY, max(own.midY, top + arrowInset)))
+            body = CGRect(x: tip.x - a - w, y: top, width: w, height: height)
         case .leading:
             tip = CGPoint(x: anchor.minX, y: own.midY)
             body = CGRect(x: tip.x - a - w, y: tip.y - height / 2 + side.slide, width: w, height: height)

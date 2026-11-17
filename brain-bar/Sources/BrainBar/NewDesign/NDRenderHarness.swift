@@ -51,7 +51,10 @@ import SwiftUI
                     written.append(try window(store, name: "window-\(name.rawValue)-\(page.rawValue)-\(suffix)", appearance: appearance, in: directory))
                 }
             }
-            written.append(try settings(name: "settings-\(suffix)", appearance: appearance, in: directory))
+            // R1.10: Settings calm (no action) and signed out (Reconnect, as in Drive's panel).
+            written.append(try settings(name: "settings-calm-\(suffix)", fixture: .calm, appearance: appearance, in: directory))
+            written.append(try settings(name: "settings-drive-signed-out-\(suffix)", fixture: .driveSignedOut, appearance: appearance,
+                                        in: directory))
             written.append(try icons(name: "icons-\(suffix)", appearance: appearance, in: directory))
             // R1.5 comp 51: the station panels, the Copy report click state.
             written.append(try panelsSheet(name: "panels-\(suffix)", appearance: appearance, in: directory))
@@ -59,7 +62,8 @@ import SwiftUI
             written.append(try wordsSheet(name: "hovers-words-\(suffix)", appearance: appearance, in: directory))
             // R1.3 comp 37: the three hover states (Memory's explanation; the Jobs and Drive faults with their actions).
             for (fixture, station) in [(BrainBarDesignFixture.Name.calm, NDStation.memory), (.twoFaults, .jobs), (.twoFaults, .drive),
-                                       (.agentNotRead, .agents), (.calm, .search), (.reconnectWaiting, .drive)] {
+                                       (.agentNotRead, .agents), (.calm, .search), (.reconnectWaiting, .drive), (.calm, .jobs),
+                                       (.calm, .weekly), (.calm, .mac)] {
                 let store = NDStore(fixture: BrainBarDesignFixture.inputs(fixture), page: .overview)
                 written.append(try hover(store, station: station, name: "hover-\(station.rawValue)-\(fixture.rawValue)-\(suffix)",
                                          appearance: appearance, in: directory))
@@ -184,7 +188,7 @@ import SwiftUI
         }
         let cards: [AnyView] = [
             panel(.twoFaults, .drive), panel(.twoFaults, .jobs), panel(.twoFaults, .jobs, copied: true),
-            panel(.agentNotRead, .agents), panel(.calm, .mac), panel(.calm, .jobs),
+            panel(.calm, .mac), panel(.calm, .jobs), panel(.calm, .weekly),  // R1.10 comp 59
         ]
         let size = NSSize(width: 980, height: 620)
         let view = ZStack(alignment: .topLeading) {
@@ -243,8 +247,8 @@ import SwiftUI
         return name
     }
 
-    static func settings(name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
-        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm))
+    static func settings(name: String, fixture: BrainBarDesignFixture.Name, appearance: NSAppearance.Name, in directory: URL) throws -> String {
+        let store = NDStore(fixture: BrainBarDesignFixture.inputs(fixture))
         // Polish 3: the view runs under the transparent 28 pt title bar and draws its hairline; the render adds only the
         // title the system draws there.
         let view = NDSettingsView(store: store)

@@ -34,13 +34,15 @@ struct NDR1: Equatable, Sendable {
         var concerns: Set<String>
         /// R1.3: the station that carries it on the loop (its treatment, its popover, its action at rest).
         var station: NDStation? = nil
+        /// R1.10 (L48): the problem row's few words, when the deck gives them ("Google Drive signed out").
+        var rowTitle: String? = nil
     }
 
     /// The station a check belongs to on the loop.
     static let stationForCheck: [String: NDStation] = [
         "ingest": .read, "stores": .queue, "embedding": .search, "search": .search, "backup_local": .mac, "integrity": .mac,
         "disk": .mac, "backup_offsite": .drive, "transcripts": .drive, "drive_auth": .drive,
-        "maintenanceNightly": .jobs, "nightly": .jobs, "weekly": .jobs,
+        "maintenanceNightly": .jobs, "nightly": .jobs, "maintenanceWeekly": .weekly, "weekly": .weekly,
     ]
 
     struct MenuRow: Equatable, Sendable, Identifiable {
@@ -82,6 +84,31 @@ struct NDR1: Equatable, Sendable {
         }
         return out
     }
+    /// R1.10 (L48): one very short row per red problem, under the headline: its words and its action (the same action as
+    /// its station's panel and its dropdown block). Reconnect first, then the pipeline's order; amber gets no row.
+    struct ProblemRow: Equatable, Sendable, Identifiable {
+        var id: String
+        var words: String
+        var action: P.Action?
+        var station: NDStation?
+    }
+
+    static let pipelineOrder: [NDStation] = [.agents, .read, .queue, .memory, .jobs, .weekly, .search, .mac, .drive]
+
+    var problemRows: [ProblemRow] {
+        let red = items.filter { $0.severity == .red }
+        func rank(_ item: Item) -> Int {
+            if item.action.map({ [.reconnectDrive, .connectDrive].contains($0.kind) }) == true { return -1 }
+            return item.station.flatMap { Self.pipelineOrder.firstIndex(of: $0) } ?? Self.pipelineOrder.count
+        }
+        return red.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map(\.element).map { item in
+            ProblemRow(id: item.id, words: Self.rowWords(item, pipeline), action: item.action, station: item.station)
+        }
+    }
+
+    /// The row's few words (CHANGES-R1.10 § A 2); anything longer stays in the station's panel.
+    static func rowWords(_ item: Item, _ pipeline: NDPipelineState) -> String { item.rowTitle ?? item.menuTitle ?? item.title }
+
     /// L47 (replaces L23): the amber dot on the icon whenever any check is amber and none is red, the catching-up states
     /// (new conversations, search by meaning) included.
     var amberDot: Bool { redCount == 0 && (amberCheck || items.contains { $0.severity == .orange }) }
@@ -90,7 +117,7 @@ struct NDR1: Equatable, Sendable {
         items.filter { $0.severity == .red && !$0.concerns.isDisjoint(with: NDR1.backupChecks) }.count
     }
     var jobsBadge: Int {
-        items.filter { $0.severity == .red && ($0.id == "nightly" || $0.concerns.contains("nightly")) }.count
+        items.filter { item in item.severity == .red && ["nightly", "weekly"].contains { item.id == $0 || item.concerns.contains($0) } }.count
     }
     static let backupChecks: Set<String> = ["drive_auth", "backup_local", "backup_offsite", "transcripts", "integrity", "disk"]
 
@@ -113,7 +140,8 @@ struct NDR1: Equatable, Sendable {
                                       : BrainBarMenuPresenter.Say.s13Detail.text,
                                   action: action, strip: Strip(from: Say.stageMac, to: Say.stageDrive, side: .target, severity: .red),
                                   menuDetail: driveAges(verdict).min().map { Say.lastDriveUpload(NDFormat.ageText($0)) },
-                                  concerns: ["drive_auth", "backup_offsite", "transcripts"], station: .drive))
+                                  concerns: ["drive_auth", "backup_offsite", "transcripts"], station: .drive,
+                                  rowTitle: Say.rowDriveSignedOut))
                 covered.formUnion(["drive_auth", "backup_offsite", "transcripts"])
             }
             // One agent's sessions not read, or the reader itself.
@@ -122,7 +150,7 @@ struct NDR1: Equatable, Sendable {
                 if let first = agents.first {
                     items.append(Item(id: "agent", severity: sev, title: Say.agentNotRead(NDProvider.name(first)), detail: Say.agentNotReadDetail,
                                       action: sev == .red ? copyReport : nil, strip: Strip(from: NDProvider.name(first), to: Say.stageRead, side: .source, severity: sev),
-                                      concerns: ["ingest"], station: .agents))
+                                      concerns: ["ingest"], station: .agents, rowTitle: Say.providerNotRead(NDProvider.name(first))))
                 } else {
                     // D6: amber is late, not stopped: "Catching up on new conversations", no "needs you", no button.
                     items.append(Item(id: "reader", severity: sev,
@@ -139,7 +167,7 @@ struct NDR1: Equatable, Sendable {
                 items.append(Item(id: "saves", severity: sev, title: Say.savesStuck,
                                   detail: Say.savesWaited(i.savesWaiting.flatMap { $0 > 0 ? $0 : nil }, age), action: sev == .red ? copyReport : nil,
                                   strip: Strip(from: Say.stageQueue, to: Say.stageMemory, side: .target, severity: sev), concerns: ["stores"],
-                                  station: .queue))
+                                  station: .queue, rowTitle: Say.rowQueueWaiting(age)))
                 covered.insert("stores")
             }
             // The nightly check-up failing (c12, source).
@@ -150,8 +178,15 @@ struct NDR1: Equatable, Sendable {
                                   strip: Strip(from: Say.jobs, to: Say.stageMemory, side: .source, severity: .red),
                                   menuTitle: Say.nightlyFailedShort(nights),
                                   menuDetail: lastNightly(i).map { Say.notCheckedSinceShort(weekday($0, c)) },
-                                  concerns: ["maintenanceNightly", "nightly"], station: .jobs))
+                                  concerns: ["maintenanceNightly", "nightly"], station: .jobs, rowTitle: Say.rowNightlyFailing))
                 covered.formUnion(["maintenanceNightly", "nightly"])
+            }
+            // R1.10 (L49, L51): the weekly clean failing, from its own job's failure streak (c13, source).
+            if let weekly = i.jobs?.first(where: { $0.job == .maintenanceWeekly }), NDPipelineState.weeklyFailures(weekly) != nil {
+                items.append(Item(id: "weekly", severity: .red, title: Say.rowWeeklyFailing, detail: nil, action: copyReport, strip: nil,
+                                  menuTitle: Say.rowWeeklyFailing, concerns: ["maintenanceWeekly", "weekly"], station: .weekly,
+                                  rowTitle: Say.rowWeeklyFailing))
+                covered.formUnion(["maintenanceWeekly", "weekly"])
             }
         }
         // Amber notices the pipeline draws on a station with no item yet, in the station's own words (R2A 9), decided
@@ -179,6 +214,7 @@ struct NDR1: Equatable, Sendable {
         for f in m.faults {
             let explained = !f.concerns.isDisjoint(with: covered)
                 || (covered.contains("maintenanceNightly") && (f.jobs.contains(.maintenanceNightly) || f.thing == .upkeep))
+                || (covered.contains("maintenanceWeekly") && f.jobs.contains(.maintenanceWeekly))
                 || (covered.contains("embedding") && f.thing == .finding)
             guard !explained else { continue }
             if f.thing == .finding, check("embedding").flatMap(sev) != nil { continue }  // drawn as "behind" below
@@ -187,7 +223,9 @@ struct NDR1: Equatable, Sendable {
             let concerned = (verdict?.checks ?? []).filter { f.concerns.contains($0.name) }
             let red = concerned.isEmpty || concerned.contains { $0.state == .red }
             let action = red ? f.action : f.action.flatMap { NDButtonPolicy.filled($0) ? $0 : nil }
-            let station = (!f.jobs.isEmpty || f.thing == .upkeep) ? NDStation.jobs
+            // R1.10: a weekly job's alert belongs to the weekly clean, any other job's to the nightly check-up.
+            let station = f.jobs == [.maintenanceWeekly] ? NDStation.weekly
+                : (!f.jobs.isEmpty || f.thing == .upkeep) ? NDStation.jobs
                 : f.concerns.sorted().compactMap { stationForCheck[$0] }.first
             items.append(Item(id: "p." + f.title, severity: red ? .red : .orange, title: f.title, detail: f.shownFacts.joined(separator: " "),
                               action: action, strip: nil, concerns: f.concerns, station: station))
@@ -222,12 +260,9 @@ struct NDR1: Equatable, Sendable {
                 detail = unconfirmedDetail
             }
         } else if red > 0 {
-            // L27: one line. The single fault's own sentence, or "N things need you"; each problem is carried by its station.
-            if red == 1, let only = items.first(where: { $0.severity == .red }) {
-                headline = only.title
-            } else {
-                headline = Say.thingsNeedYou(red)
-            }
+            // R1.10 (L48, L51): the headline counts and the problem rows name, so words never repeat: "1 thing needs you"
+            // with one problem, "N things need you" with more.
+            headline = red == 1 ? Say.oneThingNeedsYou : Say.thingsNeedYou(red)
             symbol = "exclamationmark.circle.fill"
             tone = .fault
             rows = true
@@ -309,6 +344,19 @@ struct NDR1: Equatable, Sendable {
         }
     }
 
+    /// R1.10 (L50): a past moment as a clock time on its day, in the capture's zone: "today at 03:16", "yesterday at
+    /// 23:40", or "Thursday at 04:00".
+    static func dayAt(_ date: Date, _ c: BrainBarMenuCapture) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = c.timeZone
+        let time = hhmm(date, c)
+        if calendar.isDate(date, inSameDayAs: c.now) { return Say.dayTodayAt(time) }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: c.now), calendar.isDate(date, inSameDayAs: yesterday) {
+            return Say.dayYesterdayAt(time)
+        }
+        return Say.dayWeekdayAt(weekday(date, c), time)
+    }
+
     static func hhmm(_ date: Date, _ c: BrainBarMenuCapture) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -386,12 +434,12 @@ struct NDR1: Equatable, Sendable {
         let backupsHelp: String? = fresh && ages.count == copyNames.count ? zip([Say.laneMac, Say.laneDrive, Say.laneConversations], ages)
             .map { "\($0.0): " + Say.ago(NDFormat.ageText($0.1)) }.joined(separator: ", ") : nil
         // Jobs: fine, failed (red) or late (orange).
-        let jobsFailed = items.contains { $0.id == "nightly" } || m.faults.contains { !$0.jobs.isEmpty || $0.thing == .upkeep }
+        let jobsFailed = items.contains { $0.id == "nightly" || $0.id == "weekly" } || m.faults.contains { !$0.jobs.isEmpty || $0.thing == .upkeep }
         let upkeep = m.areas.first { $0.thing == .upkeep }
         let jobsLate = upkeep?.rows.contains { $0.number.tone == .warn } == true
         let jobsValue: String
         let jobsTone: NDModel.Tone
-        let jobsStage = worst([.jobs])
+        let jobsStage = worst([.jobs, .weekly])
         if !fresh || jobsStage == .notConfirmed {
             jobsValue = NDModel.Number.unknown.value
             jobsTone = .fine
