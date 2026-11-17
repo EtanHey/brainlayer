@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -54,15 +55,38 @@ def window(conn, previous, source_identity):
         and "event-log-pruned-through" in metadata
         and metadata.get("event-log-pruned-through", 0) <= start <= ceiling <= head
     )
+    cutoff = None
+    if (
+        same_source
+        and type(start) is int
+        and start <= ceiling <= head
+        and metadata.get("event-log-pruned-through", 0) > start
+        and isinstance(previous.get("occurred_at"), str)
+    ):
+        try:
+            stamp_time = datetime.fromisoformat(previous["occurred_at"].replace("Z", "+00:00"))
+            if stamp_time.tzinfo is not None:
+                cutoff = (stamp_time.astimezone(timezone.utc) - timedelta(minutes=10)).isoformat()
+        except (ValueError, OverflowError):
+            pass  # An unusable timestamp requires the full safety read.
     info = {
-        "mode": "incremental" if valid else "full",
+        "mode": "incremental" if valid else "bounded" if cutoff is not None else "full",
         "events_read": 0,
         "bookmark_from": start,
         "bookmark_to": ceiling,
         "bookmark_held": None,
     }
     messages, threads = set(), set()
-    if valid:
+    if cutoff is not None:
+        messages.update(
+            row[0]
+            for row in conn.execute(
+                "SELECT message_id FROM orchestration_v2_projection_messages "
+                "WHERE julianday(updated_at) > julianday(?)",
+                (cutoff,),
+            )
+        )
+    elif valid:
         rows = conn.execute(
             "SELECT stream_id FROM orchestration_events WHERE sequence > ? AND sequence <= ?",
             (start, ceiling),

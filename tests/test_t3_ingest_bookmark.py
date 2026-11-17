@@ -92,6 +92,117 @@ def test_idle_window_reads_zero_payloads_and_never_indexes(run, monkeypatch):
     assert run().messages_seen == 0
 
 
+def test_pruned_bookmark_bounds_payloads_and_keeps_margin_and_finalization(run):
+    run()
+    event(run, text="finalized during gap")
+    with sqlite3.connect(run.source) as conn:
+        conn.execute("UPDATE orchestration_v2_projection_metadata SET last_sequence=2")
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET updated_at=? WHERE message_id='v2-streaming'",
+            ("2026-11-17T00:30:00Z",),
+        )
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET updated_at=? WHERE message_id='v2-user'",
+            ("2026-11-16T23:55:00Z",),
+        )
+    result = run()
+    assert result.mode == "bounded" and result.messages_seen == 2
+    assert result.chunks_indexed == 1
+    assert any("v2-streaming" in key for key in run.indexed)
+    assert next(iter(json.loads(run.bookmark.read_text())["sources"].values()))["last_sequence"] == 2
+    assert run().messages_seen == 0
+
+
+@pytest.mark.parametrize("stamp", [None, "invalid"])
+def test_pruned_bookmark_without_usable_timestamp_keeps_full_read(run, stamp):
+    run()
+    state = json.loads(run.bookmark.read_text())
+    next(iter(state["sources"].values()))["occurred_at"] = stamp
+    run.bookmark.write_text(json.dumps(state))
+    event(run, text="completed")
+    with sqlite3.connect(run.source) as conn:
+        conn.execute("UPDATE orchestration_v2_projection_metadata SET last_sequence=2")
+    result = run()
+    assert result.mode == "full" and result.messages_seen == 3
+
+
+def test_bounded_fallback_deferral_replays_every_pending_chunk(run, monkeypatch):
+    run()
+    event(run, text="finalized")
+    with sqlite3.connect(run.source) as conn:
+        conn.execute("UPDATE orchestration_v2_projection_metadata SET last_sequence=2")
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET updated_at='2026-11-17T00:30:00Z', "
+            "payload_json=? WHERE streaming=0",
+            (json.dumps({"text": "changed during prune gap"}),),
+        )
+    monkeypatch.setattr(t3, "DEFAULT_T3_MAX_CHANGED_CHUNKS", 1)
+    first = run()
+    assert first.mode == "bounded" and first.chunks_deferred == 2
+    assert run().chunks_deferred == 1
+    assert run().chunks_deferred == 0
+    assert all(content == "changed during prune gap" for content in run.indexed.values())
+    assert run().messages_seen == 0
+
+
+def test_phase_timings_present_in_result_and_health_for_full_and_idle(run):
+    for _ in range(2):
+        result = run()
+        health = json.loads(run.bookmark.with_name("health.json").read_text())
+        for phase in ("read_ms", "chunk_ms", "change_check_ms", "embed_ms", "write_ms"):
+            assert getattr(result, phase) >= 0
+            assert health[phase] == getattr(result, phase)
+
+
+def test_phase_timings_measure_real_indexing_and_failure_health(run, tmp_path, monkeypatch):
+    from brainlayer.embeddings import EmbeddedChunk
+    from brainlayer.vector_store import VectorStore
+
+    destination = tmp_path / "dest.db"
+    VectorStore(destination).close()
+    monkeypatch.setattr(t3, "_index_chunks", run.real_index)
+    monkeypatch.setattr(
+        "brainlayer.index_new.embed_chunks",
+        lambda chunks: [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks],
+    )
+    result = run()
+    assert result.chunks_indexed == 2
+    for phase in ("read_ms", "chunk_ms", "change_check_ms", "embed_ms", "write_ms"):
+        assert getattr(result, phase) > 0
+    event(run, text="updated")
+
+    def failed_embed(chunks):
+        raise RuntimeError("embedding failed")
+
+    monkeypatch.setattr("brainlayer.index_new.embed_chunks", failed_embed)
+    with pytest.raises(RuntimeError, match="embedding failed"):
+        run()
+    health = json.loads(run.bookmark.with_name("health.json").read_text())
+    assert health["bookmark_held"] == "indexing_failure"
+    assert health["read_ms"] > 0 and health["chunk_ms"] > 0
+    assert health["change_check_ms"] > 0 and health["embed_ms"] > 0
+    assert health["write_ms"] == 0
+
+
+def test_unchanged_legacy_does_not_read_v2_identity_set(run, tmp_path, monkeypatch):
+    legacy = _create_t3_fixture(tmp_path / "state.sqlite")
+    _select_sources(run, legacy, monkeypatch)
+    run(discover=True)
+    queries = []
+    original = t3.T3Reader._connect
+
+    def connect(reader):
+        conn = original(reader)
+        conn.set_trace_callback(queries.append)
+        return conn
+
+    monkeypatch.setattr(t3.T3Reader, "_connect", connect)
+    assert run(discover=True).messages_seen == 0
+    assert not any(
+        query.strip() == "SELECT thread_id, message_id FROM orchestration_v2_projection_messages" for query in queries
+    )
+
+
 def test_stream_finalization_after_bookmark_is_ingested_once(run):
     event(run)
     run()
@@ -108,8 +219,12 @@ def test_pruned_window_falls_back_and_sets_bookmark(run):
     event(run, text="completed")
     with sqlite3.connect(run.source) as conn:
         conn.execute("UPDATE orchestration_v2_projection_metadata SET last_sequence=2")
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET updated_at='2026-11-17T01:00:00Z' "
+            "WHERE message_id='v2-streaming'"
+        )
     result = run()
-    assert result.mode == "full" and result.messages_seen == 3
+    assert result.mode == "bounded" and result.messages_seen == 1
     assert result.bookmark_to == 2 and run().mode == "incremental"
 
 
@@ -119,7 +234,8 @@ def test_replaced_database_identity_forces_full_scan(run):
     with sqlite3.connect(run.source) as source, sqlite3.connect(replacement) as target:
         source.backup(target)
     replacement.replace(run.source)
-    assert run().mode == "full"
+    result = run()
+    assert result.mode == "full" and result.messages_seen == 2
 
 
 @pytest.mark.parametrize("busy", [False, True])
@@ -243,6 +359,10 @@ def test_full_scan_deferral_never_reuses_old_sequence(run, monkeypatch, fallback
     with sqlite3.connect(run.source) as conn:
         conn.execute("UPDATE orchestration_events SET sequence=100")
     run()
+    if fallback == "prune":
+        state = json.loads(run.bookmark.read_text())
+        next(iter(state["sources"].values())).pop("occurred_at")
+        run.bookmark.write_text(json.dumps(state))
     # Both threads change, but one thread's last event precedes the old bookmark.
     with sqlite3.connect(run.source) as conn:
         conn.execute(
@@ -293,7 +413,8 @@ def test_restored_head_below_bookmark_forces_full_scan(run):
     run()
     with sqlite3.connect(run.source) as conn:
         conn.execute("DELETE FROM orchestration_events WHERE sequence=2")
-    assert run().mode == "full"
+    result = run()
+    assert result.mode == "full" and result.messages_seen == 2
 
 
 def test_kill_before_bookmark_write_replays_committed_chunks(run, monkeypatch):
