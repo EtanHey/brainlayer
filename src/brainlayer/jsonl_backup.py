@@ -457,20 +457,18 @@ def reconcile_drive_receipts(
         if not candidates:
             continue
         size = path.stat().st_size
-        md5 = _md5_file(path)
-        matches = []
+        sized = []
         for remote in candidates:
             try:
                 remote_size = int(remote.get("size"))
             except (TypeError, ValueError):
                 continue
-            if (
-                remote.get("trashed") is False
-                and remote_size == size
-                and remote.get("id")
-                and remote.get("md5Checksum") == md5
-            ):
-                matches.append(remote)
+            if remote.get("trashed") is False and remote_size == size and remote.get("id"):
+                sized.append(remote)
+        if not sized:
+            continue  # Hash a multi-GB archive only when some live copy has its exact size.
+        md5 = _md5_file(path)
+        matches = [remote for remote in sized if remote.get("md5Checksum") == md5]
         if len(matches) != 1:
             continue
         remote = matches[0]

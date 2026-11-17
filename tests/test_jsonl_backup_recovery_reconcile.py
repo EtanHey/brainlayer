@@ -121,3 +121,18 @@ def test_recovery_scan_excludes_symlinks_and_non_directories(tmp_path):
     (staging / "recovery-link").symlink_to(outside, target_is_directory=True)
     (staging / "recovery-file").write_bytes(b"not a directory")
     assert b._local_archive_paths(staging) == []
+
+
+def test_no_size_match_never_hashes_the_archive(tmp_path, monkeypatch):
+    archive = tmp_path / "claude-jsonl-2026-09-14.tar.gz"
+    archive.write_bytes(b"local")
+    (tmp_path / "claude-jsonl-2026-11-17.tar.gz").write_bytes(b"new")
+    state = {}
+
+    def hashed(path):
+        raise AssertionError(f"hashed {path.name} although no Drive copy has its size")
+
+    monkeypatch.setattr(b, "_md5_file", hashed)
+    objects = [remote("longer", b"local-but-longer"), remote("trashed", trashed=True), remote("bad", size="x")]
+    assert b.reconcile_drive_receipts(tmp_path, state=state, now=NOW, drive_objects={archive.name: objects}) == []
+    assert state["drive_archives"] == {}
