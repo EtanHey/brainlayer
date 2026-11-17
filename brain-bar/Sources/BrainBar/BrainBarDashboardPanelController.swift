@@ -368,6 +368,15 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     /// The page's size, exactly (min = max), keeping the window's top-left corner. R2 item 3: a shown window's height
     /// change animates over 200 ms ease-out, and the page is never drawn clipped: a taller page appears after the window
     /// has grown, a shorter one before it shrinks; under Reduce Motion (or hidden) both change at once.
+    /// R1.10.2: the new page is laid out now, before the height moves. The swap only marks SwiftUI's state; its update
+    /// arrives on a later display or run-loop pass, and when that pass came late (always on a headless runner, where there
+    /// is no display) the frame animation resized the old page and the window kept showing it.
+    private func layOutShownPage() {
+        guard let content = window.contentView else { return }
+        content.needsLayout = true
+        content.layoutSubtreeIfNeeded()
+    }
+
     /// Tests only: run a page switch as a visible window would (the window itself is never shown).
     var animatesPageSwitchForTesting: Bool?
     /// Tests only: the Reduce Motion setting a page switch reads (a CI runner's session has it on).
@@ -393,6 +402,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             window.contentMaxSize = size
             window.setFrame(target, display: window.isVisible, animate: false)
             newDesignStore.shownPage = page
+            layOutShownPage()
             return
         }
         // R1.8 item 1: the new page first, in both directions; then the height. R1.10.1: at once, never animated: an
@@ -401,6 +411,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         var swap = Transaction()
         swap.disablesAnimations = true
         withTransaction(swap) { newDesignStore.shownPage = page }
+        layOutShownPage()
         // While it moves, the limits span both heights; at the end they are the page's size exactly.
         let current = window.contentRect(forFrameRect: window.frame).size
         window.contentMinSize = NSSize(width: size.width, height: min(current.height, size.height))

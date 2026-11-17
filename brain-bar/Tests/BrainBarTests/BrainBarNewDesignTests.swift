@@ -68,10 +68,12 @@ import SwiftUI
                 step = nil
                 swaps = []
                 store.page = to  // what a click on the tab does
-                layout()
-                // The cause, read on the live path: an animated swap is a transition, and a scroll view lays out both of a
-                // transition's pages, stacked, the old on top (a headless window shows only the end state, so the swap's
-                // transaction is what a test can see).
+                // R1.10.2: read at once, with no run-loop pass and no display: the controller must have laid the new page
+                // out before it starts the height (on a headless runner a deferred update never came, and the window kept
+                // the old page through the whole resize).
+                // The 1.10.1 cause, read on the live path: an animated swap is a transition, and a scroll view lays out
+                // both of a transition's pages, stacked, the old on top (a headless window shows only the end state, so
+                // the swap's transaction is what a test can see).
                 XCTAssertFalse(swaps.isEmpty, "\(name.rawValue) → \(to): the window swapped the page")
                 XCTAssertFalse(swaps.contains(true), "\(name.rawValue) → \(to): the page swaps at once, never animated")
                 func check(_ moment: String) {
