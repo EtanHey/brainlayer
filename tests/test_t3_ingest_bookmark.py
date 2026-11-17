@@ -49,9 +49,12 @@ def run(tmp_path, monkeypatch):
     monkeypatch.setattr(t3, "_index_chunks", index)
     bookmark = tmp_path / "bookmark.json"
 
-    def invoke():
+    def invoke(*, discover=False):
         return t3.ingest_t3(
-            source, db_path=tmp_path / "dest.db", health_path=tmp_path / "health.json", bookmark_path=bookmark
+            None if discover else source,
+            db_path=tmp_path / "dest.db",
+            health_path=tmp_path / "health.json",
+            bookmark_path=bookmark,
         )
 
     invoke.source, invoke.bookmark, invoke.indexed, invoke.calls = source, bookmark, indexed, calls
@@ -176,12 +179,99 @@ def test_thread_rename_reloads_messages_with_same_ids(run):
 
 def test_unchanged_legacy_source_is_skipped(run, tmp_path, monkeypatch):
     legacy = _create_t3_fixture(tmp_path / "state.sqlite")
-    monkeypatch.setattr(t3, "resolve_t3_sources", lambda *a, **k: [(run.source, 2), (legacy, 1)])
-    run()
-    assert run().messages_seen == 0
+    _select_sources(run, legacy, monkeypatch)
+    run(discover=True)
+    assert run(discover=True).messages_seen == 0
     with sqlite3.connect(legacy) as conn:
         conn.execute("UPDATE projection_thread_messages SET text='changed' WHERE message_id='message-1'")
-    assert run().messages_seen == 2
+    assert run(discover=True).messages_seen == 3
+    assert run.indexed["t3:thread-1:message-1:0"] == "changed"
+
+
+def _select_sources(run, legacy, monkeypatch):
+    original = t3.resolve_t3_sources
+
+    def resolve(path=None, version=None, **kwargs):
+        if path is not None:
+            return original(path, version, **kwargs)
+        return [(run.source, 2), (legacy, 1)]
+
+    monkeypatch.setattr(t3, "resolve_t3_sources", resolve)
+
+
+@pytest.mark.parametrize("touched", [False, True])
+def test_changed_legacy_cannot_overwrite_untouched_v2_message(run, tmp_path, monkeypatch, touched):
+    legacy = _create_t3_fixture(tmp_path / "state.sqlite")
+    with sqlite3.connect(legacy) as conn:
+        conn.execute("UPDATE projection_threads SET thread_id='v2-b' WHERE thread_id='thread-1'")
+        conn.execute("UPDATE projection_thread_messages SET thread_id='v2-b' WHERE thread_id='thread-1'")
+        conn.execute("UPDATE projection_thread_messages SET message_id='v2-assistant' WHERE message_id='message-1'")
+    _select_sources(run, legacy, monkeypatch)
+    run(discover=True)
+    authoritative = run.indexed["t3:v2-b:v2-assistant:0"]
+    with sqlite3.connect(legacy) as conn:
+        conn.execute("UPDATE projection_thread_messages SET text='stale legacy copy' WHERE message_id='v2-assistant'")
+        conn.execute("UPDATE projection_thread_messages SET text='legacy-only update' WHERE message_id='message-2'")
+    if touched:
+        event(run, text="new V2 content in another thread")
+    result = run(discover=True)
+    assert result.mode == "incremental"
+    assert run.indexed["t3:v2-b:v2-assistant:0"] == authoritative
+    assert run.indexed["t3:v2-b:message-2:0"] == "legacy-only update"
+
+
+def test_legacy_fingerprint_oserror_recovers_with_v2(run, tmp_path, monkeypatch):
+    legacy = _create_t3_fixture(tmp_path / "state.sqlite")
+    _select_sources(run, legacy, monkeypatch)
+    original = t3.Path.stat
+
+    def vanished(path, *args, **kwargs):
+        if path == legacy:
+            raise FileNotFoundError("optional legacy disappeared after discovery")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(t3.Path, "stat", vanished)
+    result = run(discover=True)
+    assert result.chunks_indexed == 2 and result.bookmark_held == "source_failure"
+    health = json.loads((tmp_path / "health.json").read_text())
+    assert health["alert_reasons"] == ["legacy_source_failure"]
+    assert health["failures"][-1]["code"] == "t3_reader_failed"
+
+
+@pytest.mark.parametrize("fallback", ["replacement", "prune", "restored"])
+def test_full_scan_deferral_never_reuses_old_sequence(run, monkeypatch, fallback):
+    with sqlite3.connect(run.source) as conn:
+        conn.execute("UPDATE orchestration_events SET sequence=100")
+    run()
+    # Both threads change, but one thread's last event precedes the old bookmark.
+    with sqlite3.connect(run.source) as conn:
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET payload_json=?", (json.dumps({"text": "changed"}),)
+        )
+        conn.execute("DELETE FROM orchestration_events")
+        conn.executemany(
+            "INSERT INTO orchestration_events(sequence,stream_id,event_type) VALUES (?,?,'message.updated')",
+            [(50, "v2-b"), (80 if fallback == "restored" else 200, "v2-a")],
+        )
+        if fallback == "prune":
+            conn.execute("UPDATE orchestration_v2_projection_metadata SET last_sequence=150")
+    if fallback == "replacement":
+        replacement = run.source.with_suffix(".replacement")
+        with sqlite3.connect(run.source) as source, sqlite3.connect(replacement) as target:
+            source.backup(target)
+        replacement.replace(run.source)
+    monkeypatch.setattr(t3, "DEFAULT_T3_MAX_CHANGED_CHUNKS", 1)
+    first = run()
+    assert first.mode == "full" and first.chunks_deferred == 1
+    held = json.loads(run.bookmark.read_text())
+    pending = set(held["pending_chunks"])
+    assert len(pending) == 1
+    second = run()
+    assert second.chunks_indexed == 1 and second.chunks_deferred == 0
+    assert all(run.indexed[key] == "changed" for key in pending)
+    assert next(iter(held["sources"].values()))["last_sequence"] is None
+    assert "pending_chunks" not in json.loads(run.bookmark.read_text())
+    assert run().mode == "incremental" and run().messages_seen == 0
 
 
 def test_lagging_projection_does_not_skip_committed_flip(run):

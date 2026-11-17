@@ -156,6 +156,12 @@ class T3Reader:
                     )
                     if self._bookmark_info["mode"] == "incremental":
                         selection = (mids, tids)
+                        if getattr(self, "_include_message_identities", False):
+                            # Legacy precedence needs all V2 owners, not just touched threads.
+                            # Read IDs only, in the same snapshot as the event window.
+                            self._message_identities = set(
+                                conn.execute("SELECT thread_id, message_id FROM orchestration_v2_projection_messages")
+                            )
             threads = (
                 self._read_v2_snapshot(conn, selection) if self.projection_version == 2 else self._read_snapshot(conn)
             )
@@ -635,6 +641,7 @@ def ingest_t3(
         state = {}
     next_state = {"target": target, "sources": {}}
     reader._source_paths = [str(path) for path, _ in sources]
+    reader._include_message_identities = any(version == 1 for _, version in sources)
     threads = []
     seen_messages = set()
     source_alerts = []
@@ -652,11 +659,19 @@ def ingest_t3(
             if version == 2:
                 source_reader._previous_bookmark = previous
             else:
-                stat = path.stat()
-                fingerprint = {**t3_bookmark.identity(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
-                # WAL changes must invalidate the legacy skip too.
-                wal = Path(str(path) + "-wal")
-                fingerprint["wal"] = [wal.stat().st_size, wal.stat().st_mtime_ns] if wal.exists() else None
+                try:
+                    stat = path.stat()
+                    fingerprint = {**t3_bookmark.identity(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+                    # WAL changes must invalidate the legacy skip too.
+                    wal = Path(str(path) + "-wal")
+                    fingerprint["wal"] = [wal.stat().st_size, wal.stat().st_mtime_ns] if wal.exists() else None
+                except OSError as error:
+                    source_reader._fail(
+                        "t3_reader_failed",
+                        "T3 legacy source fingerprint could not be read",
+                        {"state_db_path": str(path), "error_type": type(error).__name__},
+                        error,
+                    )
                 next_state["sources"][key] = fingerprint
                 if previous == fingerprint:
                     continue
@@ -682,6 +697,7 @@ def ingest_t3(
                     seen_messages.add(identity)
                     messages.append(message)
             threads.append((path, replace(thread, messages=tuple(messages))))
+        seen_messages.update(getattr(source_reader, "_message_identities", ()))
     result = T3IngestionResult(
         **getattr(reader, "_bookmark_info", {}),
         threads_seen=len({thread.thread_id for _, thread in threads}),
@@ -763,7 +779,13 @@ def ingest_t3(
             if version == 2 and candidate:
                 held["sources"][key] = {
                     **candidate,
-                    "last_sequence": held["sources"].get(key, {}).get("last_sequence"),
+                    # Only an incremental window can replay from the old sequence.
+                    # Full safety scans must keep reloading all pending threads.
+                    "last_sequence": (
+                        reader._bookmark_info["bookmark_from"]
+                        if reader._bookmark_info["mode"] == "incremental"
+                        else None
+                    ),
                     "pending_to": candidate["last_sequence"],
                 }
         t3_bookmark.save(state_path, held)
