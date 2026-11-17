@@ -126,6 +126,18 @@ def test_pruned_bookmark_without_usable_timestamp_keeps_full_read(run, stamp):
     assert result.mode == "full" and result.messages_seen == 3
 
 
+@pytest.mark.parametrize("sequence", [1, -1])
+def test_missing_prune_marker_keeps_full_read_even_for_malformed_bookmark(run, sequence):
+    run()
+    state = json.loads(run.bookmark.read_text())
+    next(iter(state["sources"].values()))["last_sequence"] = sequence
+    run.bookmark.write_text(json.dumps(state))
+    with sqlite3.connect(run.source) as conn:
+        conn.execute("DELETE FROM orchestration_v2_projection_metadata")
+    result = run()
+    assert result.mode == "full" and result.messages_seen == 2
+
+
 def test_bounded_fallback_deferral_replays_every_pending_chunk(run, monkeypatch):
     run()
     event(run, text="finalized")

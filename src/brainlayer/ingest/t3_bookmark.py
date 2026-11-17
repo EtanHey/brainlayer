@@ -60,6 +60,7 @@ def window(conn, previous, source_identity):
         same_source
         and type(start) is int
         and start <= ceiling <= head
+        and "event-log-pruned-through" in metadata
         and metadata.get("event-log-pruned-through", 0) > start
         and isinstance(previous.get("occurred_at"), str)
     ):
