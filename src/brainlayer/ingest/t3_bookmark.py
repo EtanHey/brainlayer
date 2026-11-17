@@ -62,7 +62,13 @@ def window(conn, previous, source_identity):
         and start <= ceiling <= head
         and "event-log-pruned-through" in metadata
         and metadata.get("event-log-pruned-through", 0) > start
+        # A pending replay may predate this version's start-time preservation.
+        # If its sequence window is gone, reload pending IDs from the full read.
+        and not resume_pending
         and isinstance(previous.get("occurred_at"), str)
+        and any(
+            row[1] == "updated_at" for row in conn.execute("PRAGMA table_info(orchestration_v2_projection_messages)")
+        )
     ):
         try:
             stamp_time = datetime.fromisoformat(previous["occurred_at"].replace("Z", "+00:00"))

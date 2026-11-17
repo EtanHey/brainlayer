@@ -157,6 +157,45 @@ def test_bounded_fallback_deferral_replays_every_pending_chunk(run, monkeypatch)
     assert run().messages_seen == 0
 
 
+@pytest.mark.parametrize("start_time", ["2026-11-17T00:00:00Z", None])
+def test_incremental_deferral_survives_pruning_past_replay_start(run, monkeypatch, start_time):
+    run()
+    state = json.loads(run.bookmark.read_text())
+    next(iter(state["sources"].values()))["occurred_at"] = start_time
+    run.bookmark.write_text(json.dumps(state))
+    event(run, text="pending update near replay start")
+    with sqlite3.connect(run.source) as conn:
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET updated_at='2026-11-17T00:05:00Z', "
+            "payload_json=? WHERE streaming=0",
+            (json.dumps({"text": "pending update near replay start"}),),
+        )
+    monkeypatch.setattr(t3, "DEFAULT_T3_MAX_CHANGED_CHUNKS", 1)
+    first = run()
+    assert first.mode == "incremental" and first.chunks_deferred == 1
+    held = json.loads(run.bookmark.read_text())
+    pending = set(held["pending_chunks"])
+    with sqlite3.connect(run.source) as conn:
+        conn.execute("UPDATE orchestration_v2_projection_metadata SET last_sequence=2")
+        conn.execute("DELETE FROM orchestration_events WHERE sequence=1")
+    assert run().chunks_indexed == 1
+    assert all(run.indexed[key] == "pending update near replay start" for key in pending)
+    assert next(iter(held["sources"].values()))["occurred_at"] == start_time
+    assert "pending_chunks" not in json.loads(run.bookmark.read_text())
+    assert run().messages_seen == 0
+
+
+def test_pruned_bookmark_without_updated_at_uses_full_read(run):
+    run()
+    event(run, text="completed without updated_at column")
+    with sqlite3.connect(run.source) as conn:
+        conn.execute("ALTER TABLE orchestration_v2_projection_messages DROP COLUMN updated_at")
+        conn.execute("UPDATE orchestration_v2_projection_metadata SET last_sequence=2")
+    result = run()
+    assert result.mode == "full" and result.messages_seen == 3
+    assert result.chunks_indexed == 1
+
+
 def test_phase_timings_present_in_result_and_health_for_full_and_idle(run):
     for _ in range(2):
         result = run()

@@ -839,6 +839,12 @@ def ingest_t3(
                         if reader._bookmark_info["mode"] == "incremental"
                         else None
                     ),
+                    # The held sequence and timestamp must describe the same start.
+                    "occurred_at": (
+                        state.get("sources", {}).get(key, {}).get("occurred_at")
+                        if reader._bookmark_info["mode"] == "incremental"
+                        else None
+                    ),
                     "pending_to": candidate["last_sequence"],
                 }
         t3_bookmark.save(state_path, held)
