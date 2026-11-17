@@ -219,7 +219,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     /// L6: the content shown follows `BrainBarDesign`, read live. Classic keeps main's hosting controller untouched;
     /// the new design swaps in its own and swaps back.
     private let classicContent: NSViewController
-    private var newContent: NSViewController?
+    private var newContent: NSHostingController<NDWindowRoot>?
     private(set) var shownDesign: BrainBarDesign = .classic
     private let runtimeForDesign: BrainBarRuntime
     private let workspaceForDesign: any BrainBarWorkspaceActing
@@ -368,10 +368,12 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     /// The page's size, exactly (min = max), keeping the window's top-left corner. R2 item 3: a shown window's height
     /// change animates over 200 ms ease-out, and the page is never drawn clipped: a taller page appears after the window
     /// has grown, a shorter one before it shrinks; under Reduce Motion (or hidden) both change at once.
-    /// R1.10.2: the new page is laid out now, before the height moves. The swap only marks SwiftUI's state; its update
-    /// arrives on a later display or run-loop pass, and when that pass came late (always on a headless runner, where there
-    /// is no display) the frame animation resized the old page and the window kept showing it.
-    private func layOutShownPage() {
+    /// R1.10.2 and R1.10.3: the new page is laid out now, before the height moves, by construction: the page is handed to
+    /// the hosting controller as its root view's own value (applied on the layout that follows, with no wait for the store's
+    /// change to be observed), then the content is laid out. Before, the swap only marked the store, and SwiftUI applied it
+    /// on a later pass that a displayless machine could defer past the whole resize.
+    private func layOutShownPage(_ page: NDPage) {
+        newContent?.rootView = NDWindowRoot(store: newDesignStore, page: page)
         guard let content = window.contentView else { return }
         content.needsLayout = true
         content.layoutSubtreeIfNeeded()
@@ -402,7 +404,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             window.contentMaxSize = size
             window.setFrame(target, display: window.isVisible, animate: false)
             newDesignStore.shownPage = page
-            layOutShownPage()
+            layOutShownPage(page)
             return
         }
         // R1.8 item 1: the new page first, in both directions; then the height. R1.10.1: at once, never animated: an
@@ -411,7 +413,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         var swap = Transaction()
         swap.disablesAnimations = true
         withTransaction(swap) { newDesignStore.shownPage = page }
-        layOutShownPage()
+        layOutShownPage(page)
         // While it moves, the limits span both heights; at the end they are the page's size exactly.
         let current = window.contentRect(forFrameRect: window.frame).size
         window.contentMinSize = NSSize(width: size.width, height: min(current.height, size.height))

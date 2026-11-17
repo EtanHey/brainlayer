@@ -26,18 +26,19 @@ import SwiftUI
         return UserDefaults(suiteName: name)!
     }
 
-    /// R1.10.1, on the window controller's real switch path and the real window content, for every fixture and each of the
-    /// three pages: from the moment a tab is clicked and through every frame of the height change, the window lays out the
-    /// selected page and nothing else, at the top of the page area. (1.10 kept the old page laid out above the new one
-    /// during its cross-fade: the scroll view stacks a transition's two pages, so a shrinking window showed the Overview.)
+    /// R1.10.1 and R1.10.3, on the window controller's real switch path and the real window content, for every fixture and
+    /// each of the three pages: in the click, the window's root takes the selected page, at once (never animated: an
+    /// animated swap is a transition, and the scroll view stacks a transition's two pages, the old on top), BEFORE the
+    /// height starts to move, and through every frame of the resize it takes no other page. Read from the one signal a
+    /// window that is never shown gives synchronously: the root's own update (its swap transaction, with the page), in the
+    /// order things happen. Page bodies and preference callbacks are built or delivered on a display pass, which a headless
+    /// runner never has; reading them made the outcome depend on which pass happened to run (1.10.1 and 1.10.2 on CI).
     func testR1101TheWindowShowsTheSelectedPageThroughTheSwitch() throws {
         let d = defaults()
         d.set("new", forKey: BrainBarDesign.key)
-        var laidOut: [NDPage: CGFloat] = [:]
-        var swaps: [Bool] = []
-        NDLaidOutPagesProbe.report = { laidOut = $0 }
-        NDLaidOutPagesProbe.swap = { swaps.append($0) }
-        defer { NDLaidOutPagesProbe.report = nil; NDLaidOutPagesProbe.swap = nil }
+        var events: [String] = []
+        NDLaidOutPagesProbe.swap = { page, animated in events.append("\(animated ? "animated" : "swap") \(page.rawValue)") }
+        defer { NDLaidOutPagesProbe.swap = nil }
         for name in BrainBarDesignFixture.Name.allCases {
             let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
             controller.visibleHeightOverride = 2000
@@ -55,6 +56,7 @@ import SwiftUI
             controller.animatesPageSwitchForTesting = true
             var step: ((CGFloat) -> Void)?
             controller.pageFrameAnimatorForTesting = { target, _, _, finish in
+                events.append("resize")
                 let before = window.frame
                 step = { t in
                     let h = before.height + (target.height - before.height) * t
@@ -63,32 +65,23 @@ import SwiftUI
                 }
             }
             layout()
-            var top: CGFloat?
             for to in [NDPage.backups, .jobs, .overview, .jobs, .backups, .overview] {
                 step = nil
-                swaps = []
+                events = []
                 store.page = to  // what a click on the tab does
-                // R1.10.2: read at once, with no run-loop pass and no display: the controller must have laid the new page
-                // out before it starts the height (on a headless runner a deferred update never came, and the window kept
-                // the old page through the whole resize).
-                // The 1.10.1 cause, read on the live path: an animated swap is a transition, and a scroll view lays out
-                // both of a transition's pages, stacked, the old on top (a headless window shows only the end state, so
-                // the swap's transaction is what a test can see).
-                XCTAssertFalse(swaps.isEmpty, "\(name.rawValue) → \(to): the window swapped the page")
-                XCTAssertFalse(swaps.contains(true), "\(name.rawValue) → \(to): the page swaps at once, never animated")
-                func check(_ moment: String) {
-                    XCTAssertEqual(Set(laidOut.keys), [to], "\(name.rawValue) → \(to) \(moment): only the selected page is laid out")
-                    if let y = laidOut[to] {
-                        if top == nil { top = y }
-                        XCTAssertEqual(y, top ?? y, accuracy: 0.5, "\(name.rawValue) → \(to) \(moment): at the top of the page area")
-                    }
+                let at = "\(name.rawValue) → \(to)"
+                XCTAssertFalse(events.contains { $0.hasPrefix("animated ") }, "\(at): the page swaps at once, never animated: \(events)")
+                let swapped = events.firstIndex(of: "swap \(to.rawValue)")
+                XCTAssertNotNil(swapped, "\(at): the window's root took the selected page in the click: \(events)")
+                if let resize = events.firstIndex(of: "resize"), let swapped {
+                    XCTAssertLessThan(swapped, resize, "\(at): before the height started to move: \(events)")
                 }
-                check("at the click")
                 for t in [0.25, 0.5, 0.75, 1.0] {
                     step?(CGFloat(t))
                     layout()
-                    check("at \(Int(t * 100)) %")
                 }
+                let others = events.filter { !$0.hasSuffix(" \(to.rawValue)") && $0 != "resize" }
+                XCTAssertEqual(others, [], "\(at): the root took no other page through the resize: \(events)")
             }
         }
     }

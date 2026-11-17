@@ -9,6 +9,9 @@ struct NDWindowRoot: View {
     @ObservedObject var store: NDStore
     /// Headless renders have no toolbar, so they draw the same row themselves, with stand-in traffic lights.
     var drawsTrafficLights = false
+    /// R1.10.3: the page the window draws, handed in by the window controller as the root view's own value when it swaps
+    /// the page (nil: the store's `shownPage`, for renders and tests that host the root themselves).
+    var page: NDPage? = nil
 
     var body: some View {
         let r1 = store.r1
@@ -19,19 +22,22 @@ struct NDWindowRoot: View {
                 ND.bar.frame(height: NDGrid.titleBar).overlay(alignment: .bottom) { ND.hair.frame(height: 0.5) }
             }
             ScrollView(.vertical) {
+                let shown = page ?? store.shownPage
                 Group {
-                    switch store.shownPage {
-                    case .overview: NDOverviewPage(store: store).onAppear { drawn(.overview) }.modifier(NDLaidOutPage(page: .overview))
-                    case .backups: NDBackupsPage(store: store).onAppear { drawn(.backups) }.modifier(NDLaidOutPage(page: .backups))
-                    case .jobs: NDJobsPage(store: store).onAppear { drawn(.jobs) }.modifier(NDLaidOutPage(page: .jobs))
+                    switch shown {
+                    case .overview: NDOverviewPage(store: store).onAppear { drawn(.overview) }
+                    case .backups: NDBackupsPage(store: store).onAppear { drawn(.backups) }
+                    case .jobs: NDJobsPage(store: store).onAppear { drawn(.jobs) }
                     }
                 }
                 // R1.10.1: the page swaps at once, never through a transition. During a transition the scroll view lays out
                 // both pages, stacked, the old one on top, so a window shrinking to the new page showed the old Overview
                 // under a selected Jobs or Backups tab (stuck there when the removal did not finish).
-                .transaction(value: store.shownPage) { t in
+                // R1.10.3: the root says which page it now holds and how it got it, in the update pass itself (the one signal
+                // a window that is never shown gives synchronously; page bodies are built on a display pass).
+                .transaction(value: shown) { t in
                     let animated = t.animation != nil
-                    MainActor.assumeIsolated { NDLaidOutPagesProbe.swap?(animated) }
+                    MainActor.assumeIsolated { NDLaidOutPagesProbe.swap?(shown, animated) }
                 }
                 .padding(.horizontal, NDGrid.pageSide)
                 .padding(.top, NDGrid.pageTop)
@@ -47,10 +53,6 @@ struct NDWindowRoot: View {
                     .accessibilityHidden(true)
             }
             NDFooter(left: r1.footerLeft, right: r1.footerRight)
-        }
-        .coordinateSpace(name: "ndRoot")
-        .onPreferenceChange(NDLaidOutPagesKey.self) { pages in
-            MainActor.assumeIsolated { NDLaidOutPagesProbe.report?(pages) }
         }
         .ignoresSafeArea(.container, edges: .top)
         .background(ND.bg)
@@ -68,21 +70,7 @@ extension NDWindowRoot {
     }
 }
 
-/// R1.10.1: each page reports where it is laid out in the window (its top, in the root's space), so a test can read what
-/// the window really shows, not only which page the store holds.
-struct NDLaidOutPagesKey: PreferenceKey {
-    static let defaultValue: [NDPage: CGFloat] = [:]
-    static func reduce(value: inout [NDPage: CGFloat], nextValue: () -> [NDPage: CGFloat]) { value.merge(nextValue()) { $1 } }
-}
 
-struct NDLaidOutPage: ViewModifier {
-    let page: NDPage
-    func body(content: Content) -> some View {
-        content.background(GeometryReader { g in
-            Color.clear.preference(key: NDLaidOutPagesKey.self, value: [page: g.frame(in: .named("ndRoot")).minY])
-        })
-    }
-}
 
 /// "Checked 1 min ago" · "Next check in 4 min" (finding 8); stale: "Last checked 2 h ago" alone.
 struct NDFooter: View {
@@ -824,8 +812,7 @@ extension EnvironmentValues {
     }
 }
 
-/// Tests only: receives the pages the window lays out and where, and whether a page swap arrived animated (R1.10.1).
+/// Tests only: each page the window's root takes, and whether it arrived animated (R1.10.1, R1.10.3).
 @MainActor enum NDLaidOutPagesProbe {
-    static var report: (([NDPage: CGFloat]) -> Void)?
-    static var swap: ((Bool) -> Void)?
+    static var swap: ((NDPage, Bool) -> Void)?
 }
