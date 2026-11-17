@@ -219,7 +219,9 @@ extension NDPipelineState {
         let driveRefuses = check("drive_auth")?.state == .red
         if driveRefuses {
             s.faults.insert(.drive)
-            s.status[.drive] = Status(text: Say.signedOut, severity: .red)
+            // R1.10.1: after Reconnect, the station waits like every other surface (one source, NDDriveWaiting).
+            // Still a fault (Drive is signed out until the browser approves), so the line stays red.
+            s.status[.drive] = Status(text: NDDriveWaiting.shows(i, for: nil) ? Say.stationWaiting : Say.signedOut, severity: .red)
         }
 
         // c1: one agent's sessions not read (its row in the group), or the reader itself stalled (the Read station).

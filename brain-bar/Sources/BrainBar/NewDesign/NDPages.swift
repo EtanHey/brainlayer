@@ -63,8 +63,7 @@ struct NDPageFault: View {
             }
             Spacer(minLength: 16)
             if let action = item.action {
-                let waiting = store.inputs.driveReconnecting && [.reconnectDrive, .connectDrive].contains(action.kind)
-                NDWaitingSwap(waiting: waiting) {
+                NDWaitingSwap(waiting: NDDriveWaiting.shows(store.inputs, for: action)) {
                     NDButton(label: action.label, filled: NDButtonPolicy.filled(action)) { store.perform(action.kind) }
                 } line: {
                     Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)

@@ -288,7 +288,7 @@ enum NDMotion {
 }
 
 /// R1.8 item 1: a page switch shows the new page first, in both directions, so the tab and the page always agree: the
-/// page cross-fades in 120 ms (ease-out, opacity only), and the window's height moves 200 ms on the strong ease-out curve
+/// page swaps at once (R1.10.1: no cross-fade, see the controller), and the window's height moves 200 ms on the strong ease-out curve
 /// with its top edge fixed (a growing window reveals the new page's foot as it opens). Without animation (Reduce Motion,
 /// or no visible window) both change together. 1.6's "frame first" kept the old page up through every growing resize.
 enum NDPageSwitch: Equatable {
@@ -297,7 +297,6 @@ enum NDPageSwitch: Equatable {
         guard animates, abs(current - target) > 0.5 else { return .together }
         return .pageThenFrame
     }
-    static let crossfade: Double = 0.12
     /// cubic-bezier(0.23, 1, 0.32, 1).
     static let curve: (Float, Float, Float, Float) = (0.23, 1, 0.32, 1)
 }

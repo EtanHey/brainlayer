@@ -150,7 +150,7 @@ struct NDSettingsView: View {
 
     @ViewBuilder private var driveAction: some View {
         if let action = Self.driveAction(store.r1) {
-            NDWaitingSwap(waiting: store.inputs.driveReconnecting) {
+            NDWaitingSwap(waiting: NDDriveWaiting.shows(store.inputs, for: action)) {
                 NDButton(label: NDPipelineChart.shortLabel(action), filled: true, small: true, accessibility: action.label) {
                     store.reconnectDrive()
                 }

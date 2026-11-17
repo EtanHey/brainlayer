@@ -100,7 +100,7 @@ struct NDStationPanelBody: View {
         } else {
             // R1.8 item 6: the waiting line takes the whole footer, left-aligned, 13 pt secondary, a small spinner first;
             // one line where it fits (it wrapped into two right-aligned lines in the button's corner).
-            NDWaitingSwap(waiting: waiting && [.reconnectDrive, .connectDrive].contains(action.kind), alignment: .leading) {
+            NDWaitingSwap(waiting: waiting, alignment: .leading) {
                 HStack {
                     Spacer()
                     NDButton(label: NDPipelineChart.shortLabel(action), filled: NDButtonPolicy.filled(action), small: true,

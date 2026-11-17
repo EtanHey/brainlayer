@@ -395,8 +395,12 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             newDesignStore.shownPage = page
             return
         }
-        // R1.8 item 1: the new page first (a 120 ms cross-fade), in both directions; then the height.
-        withAnimation(.easeOut(duration: NDPageSwitch.crossfade)) { newDesignStore.shownPage = page }
+        // R1.8 item 1: the new page first, in both directions; then the height. R1.10.1: at once, never animated: an
+        // animated swap is a transition, and the page's scroll view lays out both of a transition's pages stacked, the old
+        // on top, so the shrinking window showed the old page under the new tab.
+        var swap = Transaction()
+        swap.disablesAnimations = true
+        withTransaction(swap) { newDesignStore.shownPage = page }
         // While it moves, the limits span both heights; at the end they are the page's size exactly.
         let current = window.contentRect(forFrameRect: window.frame).size
         window.contentMinSize = NSSize(width: size.width, height: min(current.height, size.height))

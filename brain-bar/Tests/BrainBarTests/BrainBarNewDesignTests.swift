@@ -26,6 +26,71 @@ import SwiftUI
         return UserDefaults(suiteName: name)!
     }
 
+    /// R1.10.1, on the window controller's real switch path and the real window content, for every fixture and each of the
+    /// three pages: from the moment a tab is clicked and through every frame of the height change, the window lays out the
+    /// selected page and nothing else, at the top of the page area. (1.10 kept the old page laid out above the new one
+    /// during its cross-fade: the scroll view stacks a transition's two pages, so a shrinking window showed the Overview.)
+    func testR1101TheWindowShowsTheSelectedPageThroughTheSwitch() throws {
+        let d = defaults()
+        d.set("new", forKey: BrainBarDesign.key)
+        var laidOut: [NDPage: CGFloat] = [:]
+        var swaps: [Bool] = []
+        NDLaidOutPagesProbe.report = { laidOut = $0 }
+        NDLaidOutPagesProbe.swap = { swaps.append($0) }
+        defer { NDLaidOutPagesProbe.report = nil; NDLaidOutPagesProbe.swap = nil }
+        for name in BrainBarDesignFixture.Name.allCases {
+            let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
+            controller.visibleHeightOverride = 2000
+            controller.reduceMotionForTesting = false
+            controller.designDefaults = d
+            controller.applyDesign()
+            let store = controller.newDesignStore
+            store.setInputsForTesting(BrainBarDesignFixture.inputs(name))
+            let window = controller.windowForTesting
+            func layout() {
+                window.contentView?.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+                window.contentView?.layoutSubtreeIfNeeded()
+            }
+            controller.animatesPageSwitchForTesting = true
+            var step: ((CGFloat) -> Void)?
+            controller.pageFrameAnimatorForTesting = { target, _, _, finish in
+                let before = window.frame
+                step = { t in
+                    let h = before.height + (target.height - before.height) * t
+                    window.setFrame(NSRect(x: before.minX, y: before.maxY - h, width: target.width, height: h), display: false)
+                    if t >= 1 { finish() }
+                }
+            }
+            layout()
+            var top: CGFloat?
+            for to in [NDPage.backups, .jobs, .overview, .jobs, .backups, .overview] {
+                step = nil
+                swaps = []
+                store.page = to  // what a click on the tab does
+                layout()
+                // The cause, read on the live path: an animated swap is a transition, and a scroll view lays out both of a
+                // transition's pages, stacked, the old on top (a headless window shows only the end state, so the swap's
+                // transaction is what a test can see).
+                XCTAssertFalse(swaps.isEmpty, "\(name.rawValue) → \(to): the window swapped the page")
+                XCTAssertFalse(swaps.contains(true), "\(name.rawValue) → \(to): the page swaps at once, never animated")
+                func check(_ moment: String) {
+                    XCTAssertEqual(Set(laidOut.keys), [to], "\(name.rawValue) → \(to) \(moment): only the selected page is laid out")
+                    if let y = laidOut[to] {
+                        if top == nil { top = y }
+                        XCTAssertEqual(y, top ?? y, accuracy: 0.5, "\(name.rawValue) → \(to) \(moment): at the top of the page area")
+                    }
+                }
+                check("at the click")
+                for t in [0.25, 0.5, 0.75, 1.0] {
+                    step?(CGFloat(t))
+                    layout()
+                    check("at \(Int(t * 100)) %")
+                }
+            }
+        }
+    }
+
     /// R1.8 item 1, on the window controller's real switch path (a tab click stores the page; the store hands it to the
     /// controller, which swaps the page and moves the window; the window is never shown). The frame animation goes
     /// through the controller's seam, so the test steps it frame by frame itself (a headless runner never advances
@@ -1297,7 +1362,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             XCTAssertEqual(drive.faults, [.drive], name.rawValue)
             XCTAssertEqual(drive.look(.macDrive), .flowing, "L36: Drive refuses what arrives; its incoming pipes stay as they are")
             XCTAssertEqual(drive.look(.rail), .flowing)
-            XCTAssertEqual(drive.status[.drive], .init(text: Say.signedOut, severity: .red))
+            // R1.10.1: while the browser is asked, the station waits like every surface.
+            XCTAssertEqual(drive.status[.drive], .init(text: name == .reconnectWaiting ? Say.stationWaiting : Say.signedOut, severity: .red))
             XCTAssertEqual(drive.status[.mac]?.severity, nil, "the Mac copy is still fresh")
         }
 
@@ -2239,7 +2305,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertTrue(NDPipelineChart.controls(store.r1.stationItems).allSatisfy { $0.action == nil })
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDStationPanel.swift"), encoding: .utf8)
-        XCTAssertTrue(source.contains("NDWaitingSwap(waiting: waiting && [.reconnectDrive, .connectDrive].contains(action.kind), alignment: .leading)"))
+        XCTAssertTrue(source.contains("NDWaitingSwap(waiting: waiting, alignment: .leading)"), "R1.10.1: the panel's waiting comes from NDDriveWaiting")
     }
 
     // MARK: Round 2a decisions (R2A-DECISIONS.md, "Taken"), one test each
@@ -2798,6 +2864,46 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(Say.searchableByMeaning(99), "99% searchable by meaning")
     }
 
+    // MARK: Revision 1.10.1
+
+    /// R1.10.1: after Reconnect (the reconnect-waiting fixture, and a press on the row's Reconnect in drive-signed-out), the
+    /// problem row, Google Drive's station status, its panel, Settings and the dropdown all take the one waiting state,
+    /// from the one source, and none offers a filled Reconnect; before the press, all offer it.
+    func testR1101WaitingAfterReconnectIsShownEverywhere() throws {
+        let pressed = NDStore(fixture: Fixture.inputs(.driveSignedOut), page: .overview)
+        let before = pressed.r1
+        let rowAction = try XCTUnwrap(before.problemRows.first { $0.id == "drive" }?.action)
+        XCTAssertFalse(NDDriveWaiting.shows(pressed.inputs, for: rowAction), "before the press: Reconnect")
+        XCTAssertEqual(before.pipeline.status[.drive]?.text, Say.signedOut)
+        pressed.perform(rowAction.kind)  // a click on the row's Reconnect
+        let cases: [(String, NDStore)] = [("reconnect-waiting", NDStore(fixture: Fixture.inputs(.reconnectWaiting), page: .overview)),
+                                          ("drive-signed-out after Reconnect", pressed)]
+        for (name, store) in cases {
+            let r1 = store.r1
+            let row = try XCTUnwrap(r1.problemRows.first { $0.id == "drive" }, name)
+            XCTAssertTrue(NDDriveWaiting.shows(store.inputs, for: row.action), "\(name): the row waits")
+            XCTAssertEqual(r1.pipeline.status[.drive]?.text, Say.stationWaiting, "\(name): the station waits")
+            let panel = NDStationPopover.model(.drive, item: r1.stationItems[.drive], store.inputs, store.model, r1.pipeline)
+            XCTAssertTrue(NDDriveWaiting.shows(store.inputs, for: panel.action), "\(name): the panel waits")
+            XCTAssertTrue(NDDriveWaiting.shows(store.inputs, for: NDSettingsView.driveAction(r1)), "\(name): Settings waits")
+            let dropdown = r1.items.first { $0.id == "drive" }?.action
+            XCTAssertTrue(NDDriveWaiting.shows(store.inputs, for: dropdown), "\(name): the dropdown waits")
+        }
+        // Every surface that offers Reconnect reads the one predicate.
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign")
+        for (file, needle) in [("NDWindow.swift", "if NDDriveWaiting.shows(store.inputs, for: action) {"),
+                               ("NDPipelineChart.swift", "waiting: NDDriveWaiting.shows(store.inputs, for: store.r1.stationItems[station]?.action)"),
+                               ("NDSettings.swift", "NDWaitingSwap(waiting: NDDriveWaiting.shows(store.inputs, for: action))"),
+                               ("NDMenu.swift", "NDWaitingSwap(waiting: NDDriveWaiting.shows(store.inputs, for: action), alignment: .leading)"),
+                               ("NDPages.swift", "NDWaitingSwap(waiting: NDDriveWaiting.shows(store.inputs, for: action))"),
+                               ("NDPipeline.swift", "NDDriveWaiting.shows(i, for: nil) ? Say.stationWaiting : Say.signedOut")] {
+            let source = try String(contentsOf: dir.appendingPathComponent(file), encoding: .utf8)
+            XCTAssertTrue(source.contains(needle), "\(file) reads the one waiting state")
+        }
+        XCTAssertEqual(Say.stationWaiting, Say.waitingRow.lowercased(), "the approved word")
+    }
+
     // MARK: Revision 1.10 (L48 to L51, CHANGES-R1.10)
 
     /// R1.10 A (L48): one very short row per red problem and none for amber; each row is one line at the default width;
@@ -3011,7 +3117,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testR18WaitingLineFitsTheFooter() throws {
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDStationPanel.swift"), encoding: .utf8)
-        XCTAssertTrue(source.contains("contains(action.kind), alignment: .leading)"), "left-aligned across the footer")
+        XCTAssertTrue(source.contains("NDWaitingSwap(waiting: waiting, alignment: .leading)"), "left-aligned across the footer")
         XCTAssertTrue(source.contains("ProgressView().progressViewStyle(.circular).controlSize(.mini).frame(width: 12, height: 12)"))
         XCTAssertTrue(source.contains("Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2)"))
         let host = NSHostingView(rootView: NDStationPanelBody.waitingLine.frame(width: 288 - 28))

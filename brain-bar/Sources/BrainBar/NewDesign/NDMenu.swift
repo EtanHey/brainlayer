@@ -250,8 +250,7 @@ struct NDMenuFaultBlock: View {
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
             }
             if let action = item.action {
-                let waiting = store.inputs.driveReconnecting && [.reconnectDrive, .connectDrive].contains(action.kind)
-                NDWaitingSwap(waiting: waiting, alignment: .leading) {
+                NDWaitingSwap(waiting: NDDriveWaiting.shows(store.inputs, for: action), alignment: .leading) {
                     NDButton(label: action.label, filled: filled, small: true, takesFocus: false) { perform(action.kind) }
                         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 3).padding(-3)

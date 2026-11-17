@@ -21,14 +21,18 @@ struct NDWindowRoot: View {
             ScrollView(.vertical) {
                 Group {
                     switch store.shownPage {
-                    case .overview: NDOverviewPage(store: store).onAppear { drawn(.overview) }
-                    case .backups: NDBackupsPage(store: store).onAppear { drawn(.backups) }
-                    case .jobs: NDJobsPage(store: store).onAppear { drawn(.jobs) }
+                    case .overview: NDOverviewPage(store: store).onAppear { drawn(.overview) }.modifier(NDLaidOutPage(page: .overview))
+                    case .backups: NDBackupsPage(store: store).onAppear { drawn(.backups) }.modifier(NDLaidOutPage(page: .backups))
+                    case .jobs: NDJobsPage(store: store).onAppear { drawn(.jobs) }.modifier(NDLaidOutPage(page: .jobs))
                     }
                 }
-                // R1.8 item 1: the page cross-fades when the controller swaps it (opacity only).
-                .id(store.shownPage)
-                .transition(.opacity)
+                // R1.10.1: the page swaps at once, never through a transition. During a transition the scroll view lays out
+                // both pages, stacked, the old one on top, so a window shrinking to the new page showed the old Overview
+                // under a selected Jobs or Backups tab (stuck there when the removal did not finish).
+                .transaction(value: store.shownPage) { t in
+                    let animated = t.animation != nil
+                    MainActor.assumeIsolated { NDLaidOutPagesProbe.swap?(animated) }
+                }
                 .padding(.horizontal, NDGrid.pageSide)
                 .padding(.top, NDGrid.pageTop)
                 .padding(.bottom, 20)
@@ -44,6 +48,10 @@ struct NDWindowRoot: View {
             }
             NDFooter(left: r1.footerLeft, right: r1.footerRight)
         }
+        .coordinateSpace(name: "ndRoot")
+        .onPreferenceChange(NDLaidOutPagesKey.self) { pages in
+            MainActor.assumeIsolated { NDLaidOutPagesProbe.report?(pages) }
+        }
         .ignoresSafeArea(.container, edges: .top)
         .background(ND.bg)
         .foregroundStyle(ND.t1)
@@ -57,6 +65,22 @@ extension NDWindowRoot {
 #if DEBUG
         store.drawnPageForTesting = page
 #endif
+    }
+}
+
+/// R1.10.1: each page reports where it is laid out in the window (its top, in the root's space), so a test can read what
+/// the window really shows, not only which page the store holds.
+struct NDLaidOutPagesKey: PreferenceKey {
+    static let defaultValue: [NDPage: CGFloat] = [:]
+    static func reduce(value: inout [NDPage: CGFloat], nextValue: () -> [NDPage: CGFloat]) { value.merge(nextValue()) { $1 } }
+}
+
+struct NDLaidOutPage: ViewModifier {
+    let page: NDPage
+    func body(content: Content) -> some View {
+        content.background(GeometryReader { g in
+            Color.clear.preference(key: NDLaidOutPagesKey.self, value: [page: g.frame(in: .named("ndRoot")).minY])
+        })
     }
 }
 
@@ -248,7 +272,7 @@ struct NDOverviewPage: View {
             NDBlockHeading(title: Say.pipeline).padding(.top, 20)
             NDCard(padding: EdgeInsets(top: 16, leading: 16, bottom: 14, trailing: 16)) {
                 NDPipelineChart(state: r1.pipeline, memories: store.model.memories, items: r1.stationItems,
-                                waiting: store.inputs.driveReconnecting, perform: { store.perform($0) },
+                                waiting: NDDriveWaiting.shows(store.inputs, for: nil), perform: { store.perform($0) },
                                 popover: { station in AnyView(NDStationPopover(store: store, station: station)) })
             }
             .animation(reduceMotion ? nil : NDMotion.breakAppears, value: r1.pipeline)
@@ -286,7 +310,13 @@ struct NDProblemRows: View {
     }
 
     @ViewBuilder private func button(_ action: BrainBarMenuPresentation.Action) -> some View {
-        if action.kind == .copyReport {
+        if NDDriveWaiting.shows(store.inputs, for: action) {
+            // R1.10.1: after Reconnect, the row shows the approved waiting words (a spinner first), not the button.
+            HStack(spacing: 6) {
+                ProgressView().progressViewStyle(.circular).controlSize(.mini).frame(width: 12, height: 12)
+                Text(Say.waitingForBrowser).font(NDType.body).foregroundStyle(ND.t2).lineLimit(1)
+            }
+        } else if action.kind == .copyReport {
             NDCopyReportButton(label: NDPipelineChart.shortLabel(action), spoken: action.label) { store.perform(action.kind) }
         } else {
             NDButton(label: NDPipelineChart.shortLabel(action), filled: NDButtonPolicy.filled(action), small: true,
@@ -792,4 +822,10 @@ extension EnvironmentValues {
         get { self[NDPreviewHoverKey.self] }
         set { self[NDPreviewHoverKey.self] = newValue }
     }
+}
+
+/// Tests only: receives the pages the window lays out and where, and whether a page swap arrived animated (R1.10.1).
+@MainActor enum NDLaidOutPagesProbe {
+    static var report: (([NDPage: CGFloat]) -> Void)?
+    static var swap: ((Bool) -> Void)?
 }

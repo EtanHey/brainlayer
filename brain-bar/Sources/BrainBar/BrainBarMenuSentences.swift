@@ -720,6 +720,9 @@ extension BrainBarMenuPresenter {
         static func dayYesterdayAt(_ time: String) -> String { "yesterday at \(time)" }
         static func dayWeekdayAt(_ day: String, _ time: String) -> String { "\(day) at \(time)" }
         static let localCopyStillMade = "The local copy is still made every night."
+        /// R1.10.1: Google Drive's station status while it waits for the browser: the approved word "Waiting" (the row
+        /// label), lower case as every station status is.
+        static let stationWaiting = "waiting"
 
         // Settings
         static let settingsTitle = "BrainBar Settings"

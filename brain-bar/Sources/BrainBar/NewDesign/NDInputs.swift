@@ -44,6 +44,17 @@ struct NDInputs: Sendable {
 /// R1.5 (L42, L45): what the backup does with the copies on this Mac, from `src/brainlayer/backup_daily.py`. It keeps the
 /// newest `DEFAULT_LOCAL_COMPRESSED_KEEP` compressed copies and removes an older one only when Google Drive holds a checked
 /// copy (`prune_local_compressed_snapshots`). A test reads the Python file and fails if the two disagree.
+/// R1.10.1: the one waiting state after Reconnect, read by every surface that offers Reconnect (the problem row, Google
+/// Drive's station and its panel, Settings, the dropdown and the Backups page), from one source: Drive's reconnect in
+/// progress (`driveReconnecting`, from `driveAuth.isReconnecting`, or a capture fixture's press). While it holds, those
+/// surfaces show the approved waiting words and none offers Reconnect.
+enum NDDriveWaiting {
+    static func shows(_ i: NDInputs, for action: BrainBarMenuPresentation.Action?) -> Bool {
+        guard i.driveReconnecting else { return false }
+        return action.map { [.reconnectDrive, .connectDrive].contains($0.kind) } ?? true
+    }
+}
+
 enum NDBackupFacts {
     static let keepNewest = 3
     /// R1.7 item 4: a copy is late after this many hours: `backup_local_amber_s` in health_verdict.py, the threshold that

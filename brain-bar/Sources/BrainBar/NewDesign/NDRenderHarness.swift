@@ -51,6 +51,15 @@ import SwiftUI
                     written.append(try window(store, name: "window-\(name.rawValue)-\(page.rawValue)-\(suffix)", appearance: appearance, in: directory))
                 }
             }
+            // R1.10.1: drive-signed-out right after a press on the row's Reconnect: every surface waits.
+            let pressed = NDStore(fixture: BrainBarDesignFixture.inputs(.driveSignedOut), page: .overview)
+            pressed.perform(.reconnectDrive)
+            written.append(try window(pressed, name: "window-drive-signed-out-after-reconnect-overview-\(suffix)", appearance: appearance,
+                                      in: directory))
+            written.append(try hover(pressed, station: .drive, name: "hover-drive-drive-signed-out-after-reconnect-\(suffix)",
+                                     appearance: appearance, in: directory))
+            written.append(try settings(name: "settings-drive-signed-out-after-reconnect-\(suffix)", store: pressed, appearance: appearance,
+                                        in: directory))
             // R1.10: Settings calm (no action) and signed out (Reconnect, as in Drive's panel).
             written.append(try settings(name: "settings-calm-\(suffix)", fixture: .calm, appearance: appearance, in: directory))
             written.append(try settings(name: "settings-drive-signed-out-\(suffix)", fixture: .driveSignedOut, appearance: appearance,
@@ -248,7 +257,10 @@ import SwiftUI
     }
 
     static func settings(name: String, fixture: BrainBarDesignFixture.Name, appearance: NSAppearance.Name, in directory: URL) throws -> String {
-        let store = NDStore(fixture: BrainBarDesignFixture.inputs(fixture))
+        try settings(name: name, store: NDStore(fixture: BrainBarDesignFixture.inputs(fixture)), appearance: appearance, in: directory)
+    }
+
+    static func settings(name: String, store: NDStore, appearance: NSAppearance.Name, in directory: URL) throws -> String {
         // Polish 3: the view runs under the transparent 28 pt title bar and draws its hairline; the render adds only the
         // title the system draws there.
         let view = NDSettingsView(store: store)
