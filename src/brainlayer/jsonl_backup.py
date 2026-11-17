@@ -468,8 +468,12 @@ def _weekly_decrypt_test(state: dict[str, Any], staging_dir: Path, state_path: P
         return
     try:
         identity = backup_age.private_identity()
-        if identity is None:
-            return
+    except Exception:
+        # A locked/unavailable keychain cannot verify ciphertext. Retry next run.
+        return
+    if identity is None:
+        return
+    try:
         newest = max(available, key=lambda p: receipts[p.name].get("verified_at", 0))
         expected = receipts[newest.name].get("plaintext_sha256")
         if not expected or backup_age.decrypted_sha256(newest, identity) != expected:
@@ -1816,11 +1820,12 @@ def run_backup(
     state_path = Path(state_path).expanduser()
     state = _load_state(state_path)
     encryption_required = backup_age.enabled()
+    retention_receipt["encryption"] = "enabled" if encryption_required else "not_enabled"
     from .job_alerts import report
 
     report(
         "jsonl-backup-encryption-setup",
-        None if encryption_required else "backup encryption not yet enabled",
+        None,
         path=state_path.parent / "job-alerts.json",
     )
     if encryption_required and upload:

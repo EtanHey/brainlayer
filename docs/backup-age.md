@@ -6,8 +6,9 @@ to the brainlayer formula in EtanHey/homebrew-layers before enabling it.
 Both encryption and decrypt verification stream, including multi-GB bundles.
 
 The recovery gate is `~/.config/brainlayer/backup-age-recovery-confirmed`.
-Until that file exists, existing uploads continue and job health carries one
-`backup encryption not yet enabled` note. After confirmation, missing recipients,
+Until that file exists, existing uploads continue and each run logs
+`encryption: not_enabled` without a job alert. Enabled runs log `encryption: enabled`.
+Any older setup alert is cleared. After confirmation, missing recipients,
 missing age, or failed encryption block upload, retain the local tarball and
 raise `JSONL backup not encrypted: <reason>`. iCloud and optional forever uploads
 also receive ciphertext. Existing remote plaintext backups remain untouched.
@@ -33,7 +34,9 @@ the ciphertext and its metadata are durably written.
 
 On a scheduled backup run, at most once per successful week, a Mac with the
 keychain identity decrypts its newest local, verified uploaded ciphertext and
-compares its digest to the receipt. Failures remain alerting and are retried on
-the next run. A Mac without the identity skips silently. This does not download
+compares its digest to the receipt. Decrypt failures and digest mismatches remain
+alerting and are retried on the next run. A missing identity or a locked/unavailable
+keychain skips without an alert or advancing the successful-test timestamp, so
+the next run retries. This does not download
 or rewrite any existing Drive object. Setup/keychain integration and real Drive
 operation require release validation; tests use throwaway keys and local fixtures.

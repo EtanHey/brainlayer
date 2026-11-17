@@ -8,7 +8,7 @@ import pytest
 
 from brainlayer import backup_age
 from brainlayer import jsonl_backup as backup
-from brainlayer.job_alerts import active_alerts
+from brainlayer.job_alerts import active_alerts, report
 from tests.test_jsonl_backup import _mock_drive_success, _write_jsonl
 
 
@@ -19,6 +19,7 @@ def keys(tmp_path, monkeypatch):
     config = tmp_path / "config"
     config.mkdir()
     monkeypatch.setattr(backup_age, "config_dir", lambda: config)
+    keychain_lookup = backup_age.private_identity
     monkeypatch.setattr(backup_age, "private_identity", lambda: None)
     generated = subprocess.run([str(backup_age.executable("age-keygen"))], capture_output=True, check=True)
     public = (
@@ -30,7 +31,7 @@ def keys(tmp_path, monkeypatch):
     )
     (config / "backup-age-recipient.txt").write_text(public)
     (config / "backup-age-recovery-confirmed").touch()
-    return config, generated.stdout
+    return config, generated.stdout, keychain_lookup
 
 
 def test_encrypted_upload_roundtrip_and_receipt(tmp_path, monkeypatch, keys):
@@ -54,6 +55,7 @@ def test_encrypted_upload_roundtrip_and_receipt(tmp_path, monkeypatch, keys):
         queue_dir=tmp_path / "queue",
     )
     assert result["uploaded"]
+    assert result["encryption"] == "enabled"
     assert len(uploads) == 2 and all(p.name.endswith(".age") for p in uploads)
     archive = Path(result["archive"])
     assert not archive.with_suffix("").exists()
@@ -124,8 +126,12 @@ def test_weekly_decrypt_skips_missing_key_and_respects_week(tmp_path, monkeypatc
     backup._weekly_decrypt_test(state, tmp_path, tmp_path / "state.json", 2_000_000_001)
 
 
-def test_gate_off_adds_one_health_note(tmp_path, monkeypatch, keys):
+@pytest.mark.parametrize("stale_alert", [False, True])
+def test_gate_off_does_not_alert(tmp_path, monkeypatch, keys, stale_alert):
     (keys[0] / "backup-age-recovery-confirmed").unlink()
+    alert_path = tmp_path / "job-alerts.json"
+    if stale_alert:
+        report("jsonl-backup-encryption-setup", "backup encryption not yet enabled", path=alert_path)
     source = tmp_path / "sources"
     source.mkdir()
     for _ in range(2):
@@ -137,10 +143,38 @@ def test_gate_off_adds_one_health_note(tmp_path, monkeypatch, keys):
             queue_dir=tmp_path / "queue",
         )
         assert result["status"] == "no-op"
-    assert active_alerts(tmp_path / "job-alerts.json") == {
-        "jsonl-backup-encryption-setup": "backup encryption not yet enabled"
-    }
+        assert not active_alerts(alert_path)
+        assert result["encryption"] == "not_enabled"
+    assert all(json.loads(line)["encryption"] == "not_enabled" for line in (tmp_path / "log").read_text().splitlines())
     assert not (tmp_path / "state.json").exists()
+
+
+@pytest.mark.parametrize("failure", [36, 1, "timeout", "unavailable"])
+def test_weekly_decrypt_skips_keychain_lookup_failure(tmp_path, monkeypatch, keys, failure):
+    plain = tmp_path / "claude-jsonl-fixture.tar.gz"
+    plain.write_bytes(b"fixture")
+    cipher, metadata = backup._encrypt_archive(plain)
+    state = {"drive_archives": {cipher.name: {"verified": True, **metadata}}, "age_decrypt_test_at": 1}
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(state))
+    original_state = state_path.read_bytes()
+    # Exercise the real lookup wrapper without contacting the operator's keychain.
+    monkeypatch.setattr(backup_age, "private_identity", keys[2])
+
+    def security_failure(command, **kwargs):
+        assert command[0] == "/usr/bin/security"
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(command, 15)
+        if failure == "unavailable":
+            raise OSError("security unavailable")
+        return subprocess.CompletedProcess(command, failure, stdout=b"", stderr=b"locked")
+
+    monkeypatch.setattr(backup_age.subprocess, "run", security_failure)
+    monkeypatch.setattr(backup_age, "decrypted_sha256", lambda *args: pytest.fail("lookup failed; skip decrypt"))
+    backup._weekly_decrypt_test(state, tmp_path, state_path, 2_000_000_000)
+    assert not active_alerts(tmp_path / "job-alerts.json")
+    assert state["age_decrypt_test_at"] == 1
+    assert state_path.read_bytes() == original_state
 
 
 def test_ciphertext_reconcile_and_retention(tmp_path, monkeypatch, keys):
