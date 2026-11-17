@@ -18,6 +18,7 @@ import numpy as np
 from . import search_profile
 from ._helpers import _escape_fts5_query, _is_sqlite_busy_error, serialize_f32
 from .agent_profiles import boost_weight, source_weight, validate_agent_profile
+from .agent_provenance import hidden_source_classes
 from .archive_lifecycle import lifecycle_active_clauses
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from .content_class import DEFAULT_CONTENT_CLASS, normalize_content_class
@@ -417,13 +418,15 @@ def _source_class_where(
 ) -> str | None:
     """Build the unadvertised source-class visibility gate.
 
-    Legacy NULL rows stay visible. The internal opt-in reveals desktop rows,
-    while brain-worker rows remain excluded even if a legacy leak exists.
+    Legacy NULL rows stay visible. The internal opt-in reveals desktop and
+    agent-thinking rows, while brain-worker rows remain excluded even if a
+    legacy leak exists.
     """
     if not getattr(store, "_has_source_class", False):
         return None
     column = f"{alias}.source_class" if alias else "source_class"
-    hidden = "('brain-worker')" if include_hidden_source_classes else "('desktop', 'brain-worker')"
+    values = hidden_source_classes(include_hidden_source_classes=include_hidden_source_classes)
+    hidden = "(" + ", ".join(f"'{value}'" for value in values) + ")"
     return f"({column} IS NULL OR {column} NOT IN {hidden})"
 
 
@@ -898,7 +901,7 @@ class SearchMixin:
         if cached is not None and reader_state is not None and cached[0] == reader_state[1]:
             hidden_count = int(cached[1])
         else:
-            hidden_values = ("brain-worker",) if include_hidden_source_classes else ("desktop", "brain-worker")
+            hidden_values = hidden_source_classes(include_hidden_source_classes=include_hidden_source_classes)
             placeholders = ",".join("?" for _ in hidden_values)
             hidden_count = 0
             for attempt in range(3):

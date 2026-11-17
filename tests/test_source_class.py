@@ -128,6 +128,46 @@ def test_per_class_default_visibility_opt_in_and_exact_expansion(tmp_path: Path)
     store.close()
 
 
+def test_agent_thinking_is_hidden_from_default_search_and_revealed_by_the_opt_in(tmp_path: Path) -> None:
+    """Etan, 17 Nov (choice A): agents' thinking is stored, hidden by default, searchable on purpose."""
+    store = VectorStore(tmp_path / "thinking-visibility.db")
+    for position, (chunk_id, source_class) in enumerate([("said", "cli-agent"), ("thought", "agent-thinking")]):
+        store.conn.cursor().execute(
+            """
+            INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type,
+                char_count, conversation_id, position, source_class
+            ) VALUES (?, ?, '{}', '/session.jsonl', 'brainlayer', 'assistant_text', 40, 'conversation', ?, ?)
+            """,
+            (chunk_id, f"ThinkingVisibilityNeedle {chunk_id}", position, source_class),
+        )
+
+    default_ids = set(store.search(query_text="ThinkingVisibilityNeedle", n_results=20)["ids"][0])
+    opt_in_ids = set(
+        store.search(query_text="ThinkingVisibilityNeedle", n_results=20, include_hidden_source_classes=True)["ids"][0]
+    )
+
+    assert default_ids == {"said"}
+    assert opt_in_ids == {"said", "thought"}
+    assert store.get_context("thought")["target"]["id"] == "thought"
+    store.close()
+
+
+def test_supplied_agent_thinking_class_survives_provenance_resolution_but_never_unhides_brain_workers() -> None:
+    from brainlayer.agent_provenance import resolve_source_class
+
+    assert (
+        resolve_source_class(
+            "/state.sqlite", supplied_source_class="agent-thinking", provenance_class="t3-thread", source="t3"
+        )
+        == "agent-thinking"
+    )
+    assert (
+        resolve_source_class("/session.jsonl", supplied_source_class="agent-thinking", provenance_class="recon-agent")
+        == "brain-worker"
+    )
+
+
 @pytest.mark.parametrize(
     "provenance,source,expected",
     [

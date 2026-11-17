@@ -2633,7 +2633,11 @@ final class BrainDatabase: @unchecked Sendable {
             clauses.append("\(alias).archived_at IS NULL")
         }
         if !includeHiddenSources && columns.contains("source_class") {
-            clauses.append("(\(alias).source_class IS NULL OR \(alias).source_class NOT IN ('desktop', 'brain-worker'))")
+            // Same list as agent_provenance.DEFAULT_HIDDEN_SOURCE_CLASSES: desktop apps and agents'
+            // thinking are stored but kept out of default search; brain-workers never show.
+            clauses.append(
+                "(\(alias).source_class IS NULL OR \(alias).source_class NOT IN ('desktop', 'agent-thinking', 'brain-worker'))"
+            )
         }
         return clauses.isEmpty ? "1 = 1" : clauses.joined(separator: " AND ")
     }

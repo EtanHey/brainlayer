@@ -21,8 +21,23 @@ from .t3_provenance import T3_APP_SESSION, CompactCodexHeader, is_t3_app_initiat
 
 SearchPolicy = Literal["KEEP", "ISOLATE", "OUT"]
 EffectiveVisibility = Literal["default", "operational", "cold"]
-SourceClass = Literal["cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination"]
-SOURCE_CLASSES = frozenset({"cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination"})
+SourceClass = Literal["cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination", "agent-thinking"]
+SOURCE_CLASSES = frozenset({"cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination", "agent-thinking"})
+# Agents' thinking (reasoning) blocks: stored, hidden from default search, opt-in only
+# (Etan, 2026-11-17, choice A) -- the same visibility the letter gives desktop apps.
+# The class a thinking chunk would otherwise carry is kept in its metadata.
+THINKING_SOURCE_CLASS: SourceClass = "agent-thinking"
+# The single search-visibility list: the unadvertised opt-in reveals these...
+OPT_IN_HIDDEN_SOURCE_CLASSES: tuple[SourceClass, ...] = ("desktop", THINKING_SOURCE_CLASS)
+# ...and never these.
+ALWAYS_HIDDEN_SOURCE_CLASSES: tuple[SourceClass, ...] = ("brain-worker",)
+DEFAULT_HIDDEN_SOURCE_CLASSES: tuple[SourceClass, ...] = OPT_IN_HIDDEN_SOURCE_CLASSES + ALWAYS_HIDDEN_SOURCE_CLASSES
+
+
+def hidden_source_classes(*, include_hidden_source_classes: bool = False) -> tuple[SourceClass, ...]:
+    return ALWAYS_HIDDEN_SOURCE_CLASSES if include_hidden_source_classes else DEFAULT_HIDDEN_SOURCE_CLASSES
+
+
 ProvenanceClass = Literal[
     "codex-session",
     "cursor-gather",
@@ -310,12 +325,21 @@ def resolve_source_class(
     provenance_class: str | None = None,
     source: str | None = None,
 ) -> SourceClass | None:
-    """Prefer independently derived provenance; use only a valid supplied fallback."""
-    return derive_source_class(
+    """Prefer independently derived provenance; use only a valid supplied fallback.
+
+    A supplied ``agent-thinking`` label is the one exception: provenance says who wrote a
+    chunk, not whether it was thinking, so it keeps the label unless provenance says
+    brain-worker (always hidden, which is stricter).
+    """
+    derived = derive_source_class(
         source_file,
         provenance_class=provenance_class,
         source=source,
-    ) or normalize_source_class(supplied_source_class)
+    )
+    supplied = normalize_source_class(supplied_source_class)
+    if supplied == THINKING_SOURCE_CLASS and derived not in ALWAYS_HIDDEN_SOURCE_CLASSES:
+        return supplied
+    return derived or supplied
 
 
 def effective_visibility(decision: ProvenanceDecision, content_class: str | None) -> EffectiveVisibility:

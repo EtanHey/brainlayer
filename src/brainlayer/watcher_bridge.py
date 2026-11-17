@@ -8,6 +8,10 @@ Filtering layers:
   2. classify_content: existing pipeline (skip tool JSON, acknowledgments, etc.)
   3. chunk_content: min-length by content type (80 for assistant, 15 for user)
   4. Post-chunk: strip system-reminder injections from content, skip file deletion diffs
+
+Thinking (reasoning) blocks take a parallel path: classify_thinking applies the same
+assistant-text gates, layers 3-4 run unchanged, and the chunk is stored with the hidden
+``agent-thinking`` source class (Etan, 2026-11-17, choice A: stored, opt-in search only).
 """
 
 import hashlib
@@ -23,7 +27,7 @@ from typing import Any
 
 import apsw
 
-from .agent_provenance import classify_provenance, effective_visibility
+from .agent_provenance import THINKING_SOURCE_CLASS, classify_provenance, effective_visibility
 from .agy_attribution import STATE_FILE_NAME, AgyAttributionGate
 from .alarm import BrainLayerAlarm
 from .chunk_origin import detect_chunk_origin
@@ -34,7 +38,7 @@ from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
 from .pipeline.chunk import chunk_content
-from .pipeline.classify import classify_content
+from .pipeline.classify import classify_content, classify_thinking
 from .pipeline.correction_detection import build_correction_tags
 from .pipeline.secret_scrub import scrub_secrets
 from .queue_io import enqueue_watcher_chunk
@@ -560,30 +564,37 @@ def create_flush_callback(
                         unresolved_source_versions[source_file] = source_version
             claude_conversation_id = metrics.run("provenance", _extract_claude_conversation_id, source_file)
 
+            # Thinking blocks: their own classifier, so layers 1-2 below stay text-only.
+            try:
+                thinking = metrics.run("classify", classify_thinking, entry)
+            except Exception:
+                logger.exception("Thinking classification failed for watcher entry from %s", source_file)
+                thinking = None
+
             # Layer 1: Pre-classify filter
             skip_reason = should_skip_entry(entry, source_file=source_file)
-            if skip_reason:
-                skipped += 1
-                confirm_entry(entry, source_file)
-                continue
 
             # Layer 2: Pipeline classify
-            try:
-                classified = metrics.run("classify", classify_content, entry)
-            except Exception:
-                logger.exception("Classification failed for watcher entry from %s", source_file)
-                skipped += 1
-                confirm_entry(entry, source_file)
-                continue
+            classified = None
+            if not skip_reason:
+                try:
+                    classified = metrics.run("classify", classify_content, entry)
+                except Exception:
+                    logger.exception("Classification failed for watcher entry from %s", source_file)
 
-            if classified is None:
+            if classified is None and thinking is None:
                 skipped += 1
                 confirm_entry(entry, source_file)
                 continue
 
             # Layer 3: Pipeline chunk
             try:
-                chunks = metrics.run("chunk", chunk_content, classified)
+                chunks = [
+                    chunk
+                    for item in (classified, thinking)
+                    if item is not None
+                    for chunk in metrics.run("chunk", chunk_content, item)
+                ]
             except Exception:
                 logger.exception("Chunking failed for watcher entry from %s", source_file)
                 skipped += 1
@@ -652,6 +663,10 @@ def create_flush_callback(
                 if source_class == "brain-worker":
                     skipped += 1
                     continue
+                is_thinking = metadata.get("thinking") is True
+                if is_thinking:
+                    metadata["thinking_source_class"] = source_class
+                    source_class = THINKING_SOURCE_CLASS
                 metadata["provenance_tag"] = provenance_decision.provenance_tag
                 metadata["provenance_search_policy"] = provenance_decision.search_policy
                 metadata["provenance_effective_visibility"] = visibility
@@ -742,7 +757,8 @@ def create_flush_callback(
                                     "tags": tags,
                                     "created_at": created_at,
                                     "last_seen_at": created_at,
-                                    "source_class": source_class,
+                                    # A thinking write never relabels a row that already exists.
+                                    "source_class": None if is_thinking else source_class,
                                 },
                             ):
                                 record_direct_liveness(chunk_id, ingested_at)

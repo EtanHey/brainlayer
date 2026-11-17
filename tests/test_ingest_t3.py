@@ -258,6 +258,69 @@ def test_t3_ingestion_keeps_short_messages_and_sets_first_class_provenance(tmp_p
     }
 
 
+_THINKING_TEXT = (
+    "The profile shows reading takes about ten seconds, so the timeouts came from the write budget, not the read."
+)
+
+
+def _t3_message(message_id: str, role: str = "assistant", text: str = _THINKING_TEXT):
+    from brainlayer.ingest.t3 import T3Message, T3Thread
+
+    thread = T3Thread("thread-1", "project-1", "Thread", "2026-11-17T00:00:00Z", provider_name="claudeAgent")
+    return thread, T3Message(message_id, "thread-1", role, text, "2026-11-17T00:00:01Z")
+
+
+def test_t3_thinking_part_is_stored_with_the_hidden_agent_thinking_class():
+    from brainlayer.ingest.t3 import _message_chunks
+
+    thinking = _message_chunks(*_t3_message("message:provider:claudeAgent:native-item:msg_011Ch9D%3Athinking%3A1"))
+    said = _message_chunks(*_t3_message("message:provider:claudeAgent:native-item:msg_011Ch9D%3Atext%3A0"))
+
+    assert thinking and {chunk.metadata.get("source_class") for chunk in thinking} == {"agent-thinking"}
+    assert all(chunk.metadata.get("thinking") is True for chunk in thinking)
+    assert said and all("source_class" not in chunk.metadata for chunk in said)
+    assert all(not chunk.metadata.get("thinking") for chunk in said)
+
+
+@pytest.mark.parametrize(
+    ("message_id", "role"),
+    [
+        # A user's delegated task named "thinking-policy": a substring match would hide the user's words.
+        ("message:delegated-task:command%3Amcp%3A15c8%3Adelegate-task%3Athinking-policy-20261117", "user"),
+        ("message:provider:claudeAgent:native-item:msg_011Ch9D%3Athinking%3A1", "user"),
+        ("message:provider:codex:native-item:msg_0265c2dcad01c999", "assistant"),
+        ("message:provider:claudeAgent:native-item:msg_011Ch9D%3Athinking-notes%3A1", "assistant"),
+    ],
+)
+def test_t3_only_an_exact_assistant_thinking_item_is_hidden(message_id, role):
+    from brainlayer.ingest.t3 import _message_chunks
+
+    chunks = _message_chunks(*_t3_message(message_id, role=role))
+
+    assert chunks and all("source_class" not in chunk.metadata for chunk in chunks)
+
+
+def test_indexer_keeps_the_t3_agent_thinking_class_over_the_t3_thread_provenance(monkeypatch):
+    from brainlayer import index_new
+    from brainlayer.ingest.t3 import _message_chunks
+
+    chunks = _message_chunks(*_t3_message("message:provider:claudeAgent:native-item:msg_011Ch9D%3Athinking%3A1"))
+    captured = {}
+
+    class FakeStore:
+        def upsert_chunks(self, rows, embeddings, *, deadline_monotonic=None):
+            captured["rows"] = rows
+            return len(rows)
+
+    monkeypatch.setattr(
+        index_new, "embed_chunks", lambda items, on_progress=None: [EmbeddedChunk(c, [0.1]) for c in items]
+    )
+
+    assert index_new.index_chunks_to_sqlite(chunks, source_file="/missing/statev2.sqlite", store=FakeStore()) == 1
+    assert captured["rows"][0]["provenance_class"] == "t3-thread"
+    assert captured["rows"][0]["source_class"] == "agent-thinking"
+
+
 def test_indexer_preserves_stable_identity_timestamp_and_provenance(monkeypatch):
     from brainlayer import index_new
 

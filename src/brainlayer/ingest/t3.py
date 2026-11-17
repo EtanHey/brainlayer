@@ -12,6 +12,7 @@ import functools
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
@@ -585,7 +586,28 @@ def _chunk_id(thread: T3Thread, message: T3Message, index: int) -> str:
     )
 
 
+_NATIVE_ITEM_PREFIX = re.compile(r"^message:provider:[^:]+:native-item:")
+# The native item id is URL-encoded inside the message id (":" as "%3A"); accept either form.
+_THINKING_ITEM_SUFFIX = re.compile(r"(?::|%3[Aa])thinking(?::|%3[Aa])\d+$")
+
+
+def _is_thinking_message(message: T3Message) -> bool:
+    """True only for a provider's own thinking item.
+
+    T3's payload has no kind field; the only marker is the native item id, URL-encoded
+    inside the message id (``...native-item:msg_X%3Athinking%3A1``). Match it exactly:
+    a substring test would also hide a user's task named "thinking-policy".
+    """
+    if message.role != "assistant":
+        return False
+    prefix = _NATIVE_ITEM_PREFIX.match(message.message_id)
+    if prefix is None:
+        return False
+    return _THINKING_ITEM_SUFFIX.search(message.message_id, prefix.end()) is not None
+
+
 def _message_chunks(thread: T3Thread, message: T3Message) -> list:
+    from ..agent_provenance import THINKING_SOURCE_CLASS
     from ..pipeline.chunk import Chunk, chunk_content
     from ..pipeline.classify import ClassifiedContent, ContentType, ContentValue
 
@@ -609,6 +631,10 @@ def _message_chunks(thread: T3Thread, message: T3Message) -> list:
         "t3_provider_name": thread.provider_name,
         "t3_provider_session_id": thread.provider_session_id,
     }
+    if _is_thinking_message(message):
+        # Stored, hidden from default search (Etan, 2026-11-17, choice A). Rows written
+        # before this change keep their class until an owner-approved reclassification.
+        base_metadata.update({"source_class": THINKING_SOURCE_CLASS, "thinking": True})
     classified = ClassifiedContent(
         content=message.text,
         content_type=content_type,
