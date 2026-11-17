@@ -21,6 +21,7 @@ from typing import Any
 from ..alarm import BrainLayerAlarm, raise_alarm
 from ..t3_sources import DEFAULT_T3_STATE_DB as DEFAULT_T3_STATE_DB
 from ..t3_sources import resolve_t3_sources
+from . import t3_bookmark
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,11 @@ class T3Thread:
 
 @dataclass
 class T3IngestionResult:
+    mode: str = "full"
+    events_read: int = 0
+    bookmark_from: int | None = None
+    bookmark_to: int | None = None
+    bookmark_held: str | None = None
     threads_seen: int = 0
     threads_ingested: int = 0
     messages_seen: int = 0
@@ -125,21 +131,34 @@ class T3Reader:
     ):
         self.state_db_path, self.projection_version = resolve_t3_sources(state_db_path, projection_version)[0]
         self.health_path = Path(health_path).expanduser() if health_path is not None else None
-        self._last_counts: dict[str, int] = {}
+        self._last_counts: dict[str, Any] = {}
         self._failures: list[dict[str, Any]] = []
 
     def read_threads(self, *, report_success: bool = True) -> list[T3Thread]:
         """Read a complete short snapshot of the T3 projections.
 
-        Each query runs in SQLite autocommit mode and is fully materialized
-        before the next query, so the adapter does not hold an application
-        transaction open while indexing.
+        Bookmark reads use one short transaction so the event ceiling and
+        projections agree. All rows are materialized and the connection closes
+        before indexing; direct reads retain the legacy autocommit behavior.
         """
         conn: sqlite3.Connection | None = None
         try:
+            source_identity = t3_bookmark.identity(self.state_db_path)
             conn = self._connect()
             self._validate_schema(conn, self.projection_version)
-            threads = self._read_v2_snapshot(conn) if self.projection_version == 2 else self._read_snapshot(conn)
+            selection = None
+            if self.projection_version == 2 and hasattr(self, "_previous_bookmark"):
+                tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if {"orchestration_events", "orchestration_v2_projection_metadata"} <= tables:
+                    conn.execute("BEGIN")
+                    self._bookmark_info, mids, tids, self._next_bookmark = t3_bookmark.window(
+                        conn, self._previous_bookmark, source_identity
+                    )
+                    if self._bookmark_info["mode"] == "incremental":
+                        selection = (mids, tids)
+            threads = (
+                self._read_v2_snapshot(conn, selection) if self.projection_version == 2 else self._read_snapshot(conn)
+            )
         except BrainLayerAlarm:
             raise
         except T3PayloadError as error:
@@ -175,6 +194,9 @@ class T3Reader:
                 {"state_db_path": str(self.state_db_path), "error_type": type(error).__name__},
                 error,
             )
+        except RuntimeError as error:
+            self._last_counts["bookmark_held"] = "event_window_failure"
+            self._fail("t3_reader_failed", "T3 event window could not be read", {}, error)
         else:
             self._last_counts = {
                 "threads_seen": len(threads),
@@ -275,27 +297,47 @@ class T3Reader:
         return threads
 
     @staticmethod
-    def _read_v2_snapshot(conn: sqlite3.Connection) -> list[T3Thread]:
+    def _read_v2_snapshot(conn: sqlite3.Connection, selection=None) -> list[T3Thread]:
         """Read only the explicitly selected V2 projection; never fall back to legacy rows."""
+        # JSON parameters avoid SQLite's bound-variable limit for large replay windows.
+        params = () if selection is None else tuple(json.dumps(sorted(ids)) for ids in selection)
+        selected = (
+            ""
+            if selection is None
+            else """
+            AND (message_id IN (SELECT value FROM json_each(?))
+                 OR thread_id IN (SELECT value FROM json_each(?)))
+        """
+        )
+        message_rows = conn.execute(
+            "SELECT message_id, thread_id, role, created_at, payload_json "
+            "FROM orchestration_v2_projection_messages WHERE streaming = 0 "
+            + selected
+            + " ORDER BY thread_id, created_at, message_id",
+            params,
+        ).fetchall()
+        thread_filter = ""
+        thread_params = ()
+        if selection is not None:
+            touched = selection[1] | {row[1] for row in message_rows}
+            thread_filter = "WHERE t.thread_id IN (SELECT value FROM json_each(?))"
+            thread_params = (json.dumps(sorted(touched)),)
         thread_rows = conn.execute(
             """
             SELECT t.thread_id, t.project_id, p.title, t.title, t.created_at,
                    t.default_provider, t.active_provider_thread_id
               FROM orchestration_v2_projection_threads AS t
               LEFT JOIN projection_projects AS p ON p.project_id = t.project_id
-             ORDER BY t.created_at, t.thread_id
             """
+            + thread_filter
+            + " ORDER BY t.created_at, t.thread_id",
+            thread_params,
         ).fetchall()
-        message_rows = conn.execute(
-            """
-            SELECT message_id, thread_id, role, created_at, payload_json
-              FROM orchestration_v2_projection_messages
-             WHERE streaming = 0
-             ORDER BY thread_id, created_at, message_id
-            """
-        ).fetchall()
+        provider_ids = json.dumps([row[6] for row in thread_rows if row[6]])
         provider_rows = conn.execute(
             "SELECT provider_thread_id, provider, payload_json FROM orchestration_v2_projection_provider_threads"
+            " WHERE provider_thread_id IN (SELECT value FROM json_each(?))",
+            (provider_ids,),
         ).fetchall()
         providers = {}
         for provider_thread_id, provider, raw in provider_rows:
@@ -337,6 +379,9 @@ class T3Reader:
         return threads
 
     def _fail(self, code: str, message: str, context: dict[str, Any], error: BaseException) -> None:
+        self._last_counts.update(getattr(self, "_bookmark_info", {}))
+        if not self._last_counts.get("bookmark_held"):
+            self._last_counts["bookmark_held"] = "reader_failure"
         failure = {
             "code": code,
             "message": message,
@@ -553,8 +598,14 @@ def ingest_t3(
     health_path: Path | str | None = DEFAULT_T3_HEALTH_PATH,
     dry_run: bool = False,
     projection_version: int | None = None,
+    bookmark_path: Path | str | None = None,
 ) -> T3IngestionResult:
-    """Ingest all T3 threads, deliberately retaining mirrored content."""
+    """Replay changed T3 messages, deliberately retaining mirrored content.
+
+    State defaults beside health; ``health_path=None`` disables implicit state.
+    Dry runs persist state only with an explicit ``bookmark_path`` and never
+    open a BrainLayer destination. Dry-run state cannot skip a real backfill.
+    """
     destination = Path(db_path).expanduser() if db_path is not None else None
     try:
         sources = resolve_t3_sources(state_db_path, projection_version, tolerate_legacy_failure=True)
@@ -565,6 +616,18 @@ def ingest_t3(
         failed_reader._write_health(alerting=True, alert_reasons=["source_selection_failure"])
         raise
     reader = T3Reader(sources[0][0], health_path=health_path, projection_version=sources[0][1])
+    # Dry-run state is explicitly opt-in and never shares production replay state.
+    state_path = (
+        Path(bookmark_path).expanduser()
+        if bookmark_path is not None
+        else (Path(health_path).expanduser().with_name("t3-bookmark.json") if health_path is not None else None)
+    )
+    state = t3_bookmark.load(state_path) if state_path is not None and (not dry_run or bookmark_path) else {}
+    # A different destination needs a full backfill, including dry-run → real indexing.
+    target = "dry-run" if dry_run else str(destination.resolve()) if destination else "default"
+    if state.get("target") != target:
+        state = {}
+    next_state = {"target": target, "sources": {}}
     reader._source_paths = [str(path) for path, _ in sources]
     threads = []
     seen_messages = set()
@@ -577,7 +640,22 @@ def ingest_t3(
             else T3Reader(path, health_path=health_path, projection_version=version)
         )
         try:
+            key = str(path.resolve())
+            previous = state.get("sources", {}).get(key, {})
+            if version == 2:
+                source_reader._previous_bookmark = previous
+            else:
+                stat = path.stat()
+                fingerprint = {**t3_bookmark.identity(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+                # WAL changes must invalidate the legacy skip too.
+                wal = Path(str(path) + "-wal")
+                fingerprint["wal"] = [wal.stat().st_size, wal.stat().st_mtime_ns] if wal.exists() else None
+                next_state["sources"][key] = fingerprint
+                if previous == fingerprint:
+                    continue
             source_threads = source_reader.read_threads(report_success=False)
+            if hasattr(source_reader, "_next_bookmark"):
+                next_state["sources"][key] = source_reader._next_bookmark
         except BrainLayerAlarm:
             if state_db_path is not None or path == reader.state_db_path or reader.projection_version != 2:
                 raise
@@ -593,6 +671,7 @@ def ingest_t3(
                     messages.append(message)
             threads.append((path, replace(thread, messages=tuple(messages))))
     result = T3IngestionResult(
+        **getattr(reader, "_bookmark_info", {}),
         threads_seen=len({thread.thread_id for _, thread in threads}),
         threads_ingested=len({thread.thread_id for _, thread in threads}),
         messages_seen=sum(len(thread.messages) for _, thread in threads),
@@ -629,6 +708,8 @@ def ingest_t3(
             # Preserve failure/cancellation semantics and any committed rows for stable-ID replay.
             # A successful projection read must not remain the final health result of a failed import.
             reader._last_counts["chunks_planned"] = result.chunks_planned
+            reader._last_counts.update(getattr(reader, "_bookmark_info", {}))
+            reader._last_counts["bookmark_held"] = "indexing_failure"
             reader._failures.append(
                 {
                     "code": "t3_indexing_failure",
@@ -643,10 +724,36 @@ def ingest_t3(
             reason = "writer_busy" if isinstance(exc, WriterInUseError) else "indexing_failure"
             reader._write_health(alerting=True, alert_reasons=source_alerts + [reason])
             raise
+    result.bookmark_held = (
+        "chunks_deferred"
+        if result.chunks_deferred
+        else (
+            "source_failure"
+            if source_alerts
+            else (
+                "event_log_unavailable"
+                if reader.projection_version == 2 and not hasattr(reader, "_next_bookmark")
+                else None
+            )
+        )
+    )
+    if state_path is not None and (not dry_run or bookmark_path) and result.bookmark_held is None:
+        try:
+            t3_bookmark.save(state_path, next_state)
+        except OSError as error:
+            reader._last_counts["bookmark_held"] = "state_write_failure"
+            reader._fail("t3_bookmark_failed", "T3 replay state could not be saved", {}, error)
+    elif state_path is None or (dry_run and bookmark_path is None):
+        result.bookmark_held = "state_disabled"
     if reader.health_path is not None:
         reader._last_counts.update(
             {
                 "threads_seen": result.threads_seen,
+                "mode": result.mode,
+                "events_read": result.events_read,
+                "bookmark_from": result.bookmark_from,
+                "bookmark_to": result.bookmark_to,
+                "bookmark_held": result.bookmark_held,
                 "messages_seen": result.messages_seen,
                 "threads_ingested": result.threads_ingested,
                 "messages_ingested": result.messages_ingested,
