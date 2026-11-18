@@ -2764,6 +2764,16 @@
         "target": "import subprocess"
       }
     },
+    "6d1093eb2620d6a2fb131ceb7d9cf0a05bb9a6ceb248fafdfe55ef2d0f9a38b9": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/watcher.py <module>.JSONLWatcher._parent_session_held (read-only mode=ro lookup of a fork's parent session in the local BrainLayer DB; no network or cloud provider invocation).",
+      "site": {
+        "call_sha256": "c8b8ac10fefc7b2a20e393ea74f41a66627e2acafed27f76e74c0b023564b9a2",
+        "kind": "generic_send",
+        "owner": "<module>.JSONLWatcher._parent_session_held",
+        "path": "src/brainlayer/watcher.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "6d59c1ba939a8c2949a0a4bef600091b2b9bbfa57d9b9cafc6a1b362f4194e3e": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/timestamp_iso.py <module>",
       "site": {
