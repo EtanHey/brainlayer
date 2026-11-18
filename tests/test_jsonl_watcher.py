@@ -1280,6 +1280,7 @@ class TestJSONLWatcher:
             on_flush=lambda items: flushed.extend(items),
             batch_size=1,
             max_lines_per_file=1,
+            catch_up_budget_s=0,  # the single-pass cap itself; catch-up rounds have their own tests
         )
 
         assert watcher.poll_once() == 2
@@ -1312,6 +1313,7 @@ class TestJSONLWatcher:
             on_flush=confirm_all,
             batch_size=1,
             max_lines_per_file=1,
+            catch_up_budget_s=0,  # pins the one-slice buffer state catch-up rounds would finish
         )
 
         assert watcher.poll_once() == 1
@@ -1411,6 +1413,7 @@ class TestJSONLWatcher:
             registry_path=tmp_path / "offsets.json",
             on_flush=confirm_all,
             batch_size=1,
+            catch_up_budget_s=0,  # pins the one-window state catch-up rounds would finish
         )
 
         assert watcher.poll_once() == 1
@@ -1432,6 +1435,7 @@ class TestJSONLWatcher:
             registry_path=registry_path,
             on_flush=lambda _items: None,
             registry_flush_interval_s=3600,
+            catch_up_budget_s=0,  # pins the one-window state catch-up rounds would finish
         )
 
         assert watcher.poll_once() == 0
@@ -1671,6 +1675,7 @@ class TestJSONLWatcher:
             on_flush=fail_flush,
             batch_size=10,
             flush_interval_ms=360000,
+            catch_up_budget_s=0,  # pins the one-window state catch-up rounds would finish
         )
 
         assert watcher.poll_once() == 1
@@ -1703,6 +1708,7 @@ class TestJSONLWatcher:
             on_flush=confirm_first_only,
             batch_size=2,
             flush_interval_ms=360000,
+            catch_up_budget_s=0,  # pins the one-window state catch-up rounds would finish
         )
 
         assert watcher.poll_once() == 2

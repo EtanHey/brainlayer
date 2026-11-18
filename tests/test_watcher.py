@@ -98,7 +98,8 @@ def test_never_skips_a_file_the_tailer_is_still_behind_on(tmp_path):
 
     Skipping on stat alone would stall that file forever, so offset must be checked too.
     """
-    watcher = _watcher(tmp_path, max_lines_per_file=1)
+    # No catch-up rounds: this pins the single-slice state they would otherwise finish.
+    watcher = _watcher(tmp_path, max_lines_per_file=1, catch_up_budget_s=0)
     src = tmp_path / "projects" / "p"
     src.mkdir()
     f = src / "a.jsonl"
