@@ -8,6 +8,10 @@ struct BrainBarMenuCapture: Sendable {
         var readable = true, fresh = true
         var alertReasons: [String] = []
         var dbProbeFailed = false
+        /// R1.11 (A1): `max_offset_lag_bytes`, the bytes the reader has still to read; nil when the file does not say.
+        var lagBytes: Int? = nil
+        /// R1.11 (A4): the file's `updated_at`, when the reader last reported.
+        var lastReadAt: Date? = nil
     }
 
     /// `localSnapshot.uploadState == "in_progress"`, with `uploadProcessStartedAt` / `uploadProcessLive`.
@@ -47,6 +51,9 @@ struct BrainBarMenuCapture: Sendable {
     var jsonlBackupFailures: Int? = nil
     /// `collector.signalCoverage.keyword`, 0...1 (F07's exact-words sentence). Not in today's status inputs.
     var keywordCoverage: Double? = nil
+    /// R1.11: how a lag that drains by itself is shown. Production takes the one named switch,
+    /// `BrainBarMenuPresenter.lagSeverity`; a test sets either side here.
+    var lagSeverity: BrainBarMenuPresenter.LagSeverity = BrainBarMenuPresenter.lagSeverity
 }
 
 /// Everything the M menu and icon show for one capture (phase-8 PRESENTATION-SPEC.md).

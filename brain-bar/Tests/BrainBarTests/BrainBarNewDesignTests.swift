@@ -412,7 +412,9 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
         // The headline, count and icon: the presentation's, or more urgent, never calmer.
         if m.count < p.count { out.append("count \(m.count) < presentation \(p.count)") }
         if p.icon == .marked, m.icon != .marked { out.append("icon calmer than the presentation") }
-        if p.form == .needs, m.headlineMark != .fault { out.append("needs form without the fault mark") }
+        // L53, one mark per problem: a needs headline carries none (its count and the icon say it); each fault row carries one.
+        if p.form == .needs, m.headlineMark != .none { out.append("needs headline with a mark") }
+        if p.form == .needs, m.faults.isEmpty { out.append("needs form without a fault row") }
         if m.headline == say.allGood.text, !BrainBarMenuPresenter.allGoodProven(c) { out.append("All good unproven") }
         if m.headline == say.allGood.text, !i.extras.isEmpty { out.append("All good beside a runtime warning") }
         if m.faults.count != m.count, m.icon == .marked { out.append("count \(m.count) but \(m.faults.count) fault rows") }
@@ -521,7 +523,7 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
         let extras = NDExtra.derive(snapshot: .checking, watchSetting: setting)
         XCTAssertEqual(extras.map(\.level), [.fault])
         XCTAssertEqual(extras.first?.thing, .remembering)
-        XCTAssertEqual(extras.first?.text, BrainBarMenuPresenter.Say.generic.text)
+        XCTAssertEqual(extras.first?.text, BrainBarMenuPresenter.Say.stopped.text)  // R1.11: an unloaded reader has stopped
     }
 
     /// L4: the Drive fault drops the Drive copy's age where a gauge shows it; VoiceOver and the report keep it.
@@ -624,7 +626,8 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
     func testFixtureNamesAreTheCaptureList() {
         XCTAssertEqual(BrainBarDesignFixture.Name.allCases.map(\.rawValue),
                        ["calm", "agent-not-read", "drive-signed-out", "saves-stuck", "meaning-behind", "nightly-failing",
-                        "not-confirmed", "two-faults", "reconnect-waiting", "backups-failed-upload", "backup-late"])
+                        "not-confirmed", "two-faults", "reconnect-waiting", "backups-failed-upload", "backup-late",
+                        "lag-behind", "search-failing"])  // R1.11: the designer's lag and agent-only states
     }
 }
 
@@ -1022,7 +1025,7 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
 
     /// Fix 11: the report sentence never breaks, so neither "an agent." nor "to an agent." can stand alone.
     func testReportSentenceIsOneUnit() {
-        let report = BrainBarMenuPresenter.Say.giveReport.text
+        let report = BrainBarMenuPresenter.Say.agent.text  // R1.11: the one who-acts sentence
         XCTAssertFalse(keepingUnits("Fact one. " + report).hasSuffix(" " + report.split(separator: " ").suffix(2).joined(separator: " ")))
         XCTAssertFalse(keepingUnits(report).contains(" "))
     }

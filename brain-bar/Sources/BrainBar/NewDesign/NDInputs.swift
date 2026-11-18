@@ -214,7 +214,7 @@ struct NDExtra: Equatable, Sendable, Identifiable {
         }
         if let setting = watchSetting, setting.enabled, setting.loadState == .unloaded,
            !out.contains(where: { $0.thing == .remembering && $0.jobs.contains(.watch) }) {
-            out.append(.init(id: "nd.watch-unloaded", level: .fault, text: BrainBarMenuPresenter.Say.generic.text,
+            out.append(.init(id: "nd.watch-unloaded", level: .fault, text: BrainBarMenuPresenter.Say.stopped.text,
                              thing: .remembering, jobs: [.watch]))
         }
         var seen = Set<String>()

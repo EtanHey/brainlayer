@@ -106,6 +106,51 @@ extension BrainBarMenuPresenter {
         }
         private static func countIs(_ p: P, _ value: String) -> Bool { String(p.rows.filter { $0.kind == .needsYou }.count) == value }
 
+        // MARK: R1.11 conditions
+        static func states(_ c: Capture, _ name: String, _ states: [State]) -> [BrainBarHealthVerdict.Check] {
+            c.verdict?.checks.filter { $0.name == name && states.contains($0.state) } ?? []
+        }
+        private static func amber(_ c: Capture, _ name: String) -> Bool { !states(c, name, [.amber]).isEmpty }
+        /// A watcher alert on a readable, fresh file.
+        static func fresh(_ c: Capture, _ reason: String) -> Bool {
+            c.watcher.map { $0.readable && $0.fresh && $0.alertReasons.contains(reason) } == true
+        }
+        /// A7: the provider a `growth_not_indexed:{provider}` alert names, as L38 names it; nil for any other alert.
+        static func provider(_ reason: String) -> String? {
+            let prefix = "growth_not_indexed:"
+            return reason.hasPrefix(prefix) ? providerNames[String(reason.dropFirst(prefix.count))] : nil
+        }
+        /// A5: a failed database probe makes `coverage_drop` unprovable.
+        static func coverageDrop(_ c: Capture) -> Bool { fresh(c, "coverage_drop") && c.watcher?.dbProbeFailed == false }
+        /// A7: the providers the census names (`growth_not_indexed:{provider}`, on a failing or late `ingest` check's context, as
+        /// the window reads it, or as a fresh watcher alert), as L38 names them; an unknown one is never guessed.
+        static func providers(_ c: Capture) -> [String] {
+            let codes = states(c, "ingest", [.red, .amber]).flatMap { $0.contextCodes ?? [] }
+            let alerts = c.watcher.map { $0.readable && $0.fresh ? $0.alertReasons : [] } ?? []
+            var names: [String] = []
+            for name in (codes + alerts).compactMap(provider) where !names.contains(name) { names.append(name) }
+            return names
+        }
+        static let providerNames = ["claude": "Claude", "codex": "Codex", "cursor": "Cursor", "gemini": "Antigravity"]
+        /// C2, C3: Drive is signed in, so a late Drive copy is not a Reconnect.
+        static func driveSignedIn(_ c: Capture) -> Bool {
+            let drive = c.verdict?.checks.filter { $0.name == "drive_auth" } ?? []
+            return !drive.isEmpty && drive.allSatisfy { $0.state == .green }
+        }
+        /// D2: the health check itself is late.
+        static func monitorLate(_ c: Capture) -> Bool { !states(c, "monitor", [.red, .amber]).isEmpty }
+        /// A1: lag on a readable, fresh watcher file, past the app’s 30-minute clock or with `ingest` red.
+        static func lagShown(_ c: Capture) -> Bool { fresh(c, "offset_lag") && (lagPastLimit(c) || red(c, "ingest")) }
+        /// A1’s “catching up by itself”: the lag is the watcher’s only alert (R10’s quarantined records aside).
+        static func lagDraining(_ c: Capture) -> Bool {
+            lagShown(c) && c.watcher?.alertReasons.allSatisfy { ["offset_lag", "quarantined_record"].contains($0) } == true
+        }
+        /// A4: `ingest` red, and the watcher file readable but no longer fresh.
+        static func readerStopped(_ c: Capture) -> Bool { red(c, "ingest") && c.watcher.map { $0.readable && !$0.fresh } == true }
+        /// The words for the bytes left to read and the episode’s length, or nil when the fact is not in the capture.
+        static func lagSize(_ c: Capture) -> String? { c.watcher?.lagBytes.flatMap(size) }
+        static func lagSpan(_ c: Capture) -> String? { c.lagEpisodeStart.flatMap { span(c.now.timeIntervalSince($0)) } }
+
         // MARK: the calm form (A2)
 
         static let allGood = S("S1", .reassurance, "All good") { c, _, _ in allGoodProven(c) }
@@ -149,13 +194,82 @@ extension BrainBarMenuPresenter {
 
         static let countOne = S("A1.count.one", .claim, "1 thing needs you") { _, p, _ in countIs(p, "1") }
         static let countMany = S("A1.count.many", .claim, "{N2} things need you") { _, p, v in countIs(p, v[0]) }
-        /// R31: neutral wording for red Needs-you rows, amber notices and app facts; only the two app clocks escalate.
-        /// I4 counts Needs-you rows, never notices.
-        static let generic = S("R17", .neutral, "Something BrainBar checks needs attention.")
-        static let cantFix = S("U12", .neutral, "BrainBar can’t fix this itself.")
-        static let giveReport = S("U12.give", .neutral, "Give the report to an agent.")
-        static let ifNotFinished = S("D10", .neutral, "If this backup doesn’t finish, BrainBar can’t fix it itself.")
-        static let u03 = S("U03", .claim, "Nightly upkeep failed {N3} nights in a row", .upkeep) { c, _, v in
+        /// R1.11 (L52, L53), D5: the safety net. It says what it knows and what it doesn’t; it should never show, and stays
+        /// true if it does (the report carries the check names). It replaces R17’s generic sentence everywhere.
+        static let d5 = S("D5", .neutral, "A check failed, and BrainBar can’t tell which")
+        static let d5Line = S("D5.line", .neutral, "Open BrainBar for the details.")
+        /// R1.11: one sentence that says who acts, only on a row where an agent really must (replaces U12 and U12.give).
+        static let agent = S("R111.agent", .neutral, "An agent needs to look at this.")
+        /// C5: the running upload’s row (replaces D10).
+        static let ifNotFinished = S("C5", .neutral, "If it doesn’t finish, an agent needs to look at it.")
+
+        // MARK: R1.11 (CHANGES-R1.11 § 1 and § 6, approved by L53): each row names the thing
+
+        /// A1, A2: the reader is behind past its limit (the app’s clock) or `ingest` is red, on a fresh watcher file with lag.
+        static let lagBehind = S("A1", .claim, "Reading new conversations is behind", .remembering) { c, _, _ in lagShown(c) }
+        static let lagLeftFor = S("A1.leftFor", .claim, "{size} left to read, behind for {span}.") { c, _, v in
+            lagShown(c) && lagSize(c) == v[0] && lagSpan(c) == v[1]
+        }
+        static let lagLeft = S("A1.left", .claim, "{size} left to read.") { c, _, v in lagShown(c) && lagSize(c) == v[0] }
+        static let lagFor = S("A1.for", .claim, "Behind for {span}.") { c, _, v in lagShown(c) && lagSpan(c) == v[0] }
+        static let byItself = S("A1.byItself", .claim, "It’s catching up by itself.") { c, _, _ in lagDraining(c) }
+        /// A4: `ingest` red and the watcher file readable but not fresh.
+        static let stopped = S("A4", .claim, "Reading new conversations has stopped", .remembering) { c, _, _ in readerStopped(c) }
+        static let lastRead = S("A4.lastRead", .claim, "It last read {at}.") { c, _, v in
+            readerStopped(c) && c.watcher?.lastReadAt.map { $0 <= c.now && sayable($0) && at($0, c) == v[0] } == true
+        }
+        static let coverage = S("A5", .claim, "Some new conversations aren’t being read", .remembering) { c, _, _ in coverageDrop(c) }
+        static let coverageLine = S("A5.line", .claim, "Fewer of them are turning into memories than usual.") { c, _, _ in coverageDrop(c) }
+        static let unreadFiles = S("A6", .claim, "Some conversation files can’t be read", .remembering) { c, _, _ in
+            fresh(c, "file_ingestion_failure")
+        }
+        static let unreadFilesLine = S("A6.line", .claim, "BrainBar skips them and reads the rest.") { c, _, _ in fresh(c, "file_ingestion_failure") }
+        static let providerUnread = S("A7", .claim, "{provider}’s sessions aren’t being read", .remembering) { c, _, v in providers(c).contains(v[0]) }
+        static let providerUnreadLine = S("A7.line", .claim, "Its new work isn’t reaching memory.") { c, _, _ in !providers(c).isEmpty }
+        static let savesStuck = S("B1", .claim, "Saves are stuck", .remembering) { c, _, _ in red(c, "stores") }
+        static let savesStuckLine = S("B1.line", .claim, "The oldest has waited {span} and isn’t in memory yet.") { c, _, v in
+            states(c, "stores", [.red]).contains { $0.ageS.flatMap(span) == v[0] }
+        }
+        static let savesSlow = S("B2", .claim, "Saves are slow", .remembering) { c, _, _ in amber(c, "stores") }
+        static let savesSlowLine = S("B2.line", .claim, "The oldest has waited {span}.") { c, _, v in
+            states(c, "stores", [.amber]).contains { $0.ageS.flatMap(span) == v[0] }
+        }
+        static let searchDown = S("B3", .claim, "Agents can’t search memory", .finding) { c, _, _ in red(c, "search") }
+        static let searchFails = S("B3.line", .claim, "Search has failed its last {N2} checks.") { c, _, v in
+            states(c, "search", [.red]).contains { $0.fails.map { $0 >= 2 && String($0) == v[0] } == true }
+        }
+        static let searchCheck = S("B4", .claim, "Search failed a check", .finding) { c, _, _ in amber(c, "search") }
+        static let searchOneOff = S("B4.line", .neutral, "It may be a one-off; BrainBar checks again every 5 min.")
+        static let localLate = S("C1.local", .claim, "The local copy is late", .safe) { c, _, _ in red(c, "backup_local") }
+        static let driveLate = S("C1.drive", .claim, "The Google Drive copy is late", .safe) { c, _, _ in red(c, "backup_offsite") && driveSignedIn(c) }
+        static let conversationsLate = S("C1.conversations", .claim, "The conversations copy in Google Drive is late", .safe) { c, _, _ in
+            red(c, "transcripts") && driveSignedIn(c)
+        }
+        static let newestIs = S("C1.newest", .claim, "The newest is {age}.") { c, _, v in
+            ["backup_local", "backup_offsite", "transcripts"].contains { age(c, [$0], v[0]) }
+        }
+        static let localRunningLate = S("C4.local", .claim, "The local copy is running late", .safe) { c, _, _ in amber(c, "backup_local") }
+        static let driveRunningLate = S("C4.drive", .claim, "The Google Drive copy is running late", .safe) { c, _, _ in amber(c, "backup_offsite") }
+        static let conversationsRunningLate = S("C4.conversations", .claim, "The conversations copy in Google Drive is running late", .safe) { c, _, _ in
+            amber(c, "transcripts")
+        }
+        static let noRoom = S("C7", .claim, "Not enough room for the next backup", .safe) { c, _, _ in red(c, "disk") }
+        static let roomTight = S("C8", .claim, "Room for backups is getting tight", .safe) { c, _, _ in amber(c, "disk") }
+        static let checksStopped = S("D2", .claim, "BrainBar’s checks have stopped") { c, _, _ in monitorLate(c) }
+        static let checksLastRan = S("D2.line", .claim, "The last one ran {at}, so nothing since then is confirmed.") { c, _, v in
+            monitorLate(c) && c.verdict.map { $0.evaluatedAt <= c.now && sayable($0.evaluatedAt) && at($0.evaluatedAt, c) == v[0] } == true
+        }
+        static let unknownCheck = S("D3", .claim, "A check this BrainBar doesn’t know is failing") { c, _, _ in
+            c.verdict?.checks.contains { !known.contains($0.name) && [.red, .amber].contains($0.state) } == true
+        }
+        static let newerLayer = S("D3.newer", .neutral, "BrainLayer is newer than BrainBar.")
+        static let updateNames = S("D3.update", .neutral, "Updating BrainBar will name it.")
+        /// D4: a row from a verdict that is no longer fresh says when it was true.
+        static let asOf = S("D4", .claim, "(as of {at})") { c, _, v in
+            !verdictIsFresh(c) && c.verdict.map { $0.evaluatedAt <= c.now && sayable($0.evaluatedAt) && at($0.evaluatedAt, c) == v[0] } == true
+        }
+
+        static let u03 = S("U03", .claim, "Nightly check-up failed {N3} nights in a row", .upkeep) { c, _, v in
             appEscalationCauses(c).contains(appNotificationCause("maintenance"))
                 && c.maintenanceNightFailures.map { String($0) == v[0] } == true
         }
@@ -165,7 +279,7 @@ extension BrainBarMenuPresenter {
         static let s19 = S("S19", .claim, "The newest checked backup is damaged", .safe) { c, _, _ in red(c, "integrity") }
         static let s19Memory = S("S19.memory", .claim, "Your memory itself may be damaged too.") { c, _, _ in red(c, "integrity") }
         static let f07 = S("F07", .claim, "Search by meaning isn’t catching up", .finding) { c, _, _ in stalled(c) }
-        static let f07Since = S("F07.since", .claim, "BrainBar hasn’t seen the memories waiting for it go down{over}.") { c, _, v in
+        static let f07Since = S("F07.since", .claim, "Its queue hasn’t shrunk{over}.") { c, _, v in
             stalled(c) { ($0.ageS.flatMap(over).map { " " + $0 } ?? "") == v[0] }  // one exact form: `{over}` of a stalled check's age
         }
         static let exactWords = S("F07.exactWords", .reassurance, "Agents can still find every memory by exact words.") { c, _, _ in
@@ -199,7 +313,7 @@ extension BrainBarMenuPresenter {
             age(c, ["backup_local", "backup_offsite"], v[0])
         }
         static let r15 = S("R15", .claim, "Your newest backup in Google Drive is {age}.", .safe) { c, _, v in c.backupsMeasured && age(c, ["backup_offsite"], v[0]) }
-        static let s13 = S("S13", .claim, "Google Drive is disconnected", .safe) { c, _, _ in drive(c, missing: false) }
+        static let s13 = S("S13", .claim, "Google Drive is signed out", .safe) { c, _, _ in drive(c, missing: false) }
         static let s13Missing = S("S13.missing", .claim, "Google Drive isn’t connected", .safe) { c, _, _ in drive(c, missing: true) }
         static let s13Detail = S("S13.detail", .claim, "Backups can’t upload until you reconnect it.") { c, _, _ in drive(c, missing: false) }
         static let s13DetailMissing = S("S13.detailMissing", .claim, "Backups can’t upload until you connect it.") { c, _, _ in drive(c, missing: true) }
@@ -213,7 +327,7 @@ extension BrainBarMenuPresenter {
 
         static let reconnect = S("action.reconnect", .neutral, "Reconnect Google Drive")
         static let connect = S("action.connect", .neutral, "Connect Google Drive")
-        static let copyReport = S("action.copyReport", .neutral, "Copy report for an agent")
+        static let copyReport = S("action.copyReport", .neutral, "Copy a report for your agent")
         static let storage = S("action.storage", .neutral, "Open Storage Settings")
         static let settings = S("R4.settings", .neutral, "Settings…")
         static let quit = S("R4.quit", .neutral, "Quit BrainBar")
@@ -223,9 +337,13 @@ extension BrainBarMenuPresenter {
         static let all: [S] = [
             allGood, backedUp, checkingMemory, checkingSleep, notConfirmed, lastBackup, r02Headline, r02, s03Headline, s03, s03Started, s03StartedOn,
             s03Progress, s03ProgressEta, catchingTwo, catchingFew, f02, checking, cantConfirmBackups, stillChecking, stillCheckingFew,
-            fineIs, fineAre, everythingElse, countOne, countMany, generic, cantFix, giveReport, ifNotFinished, u03, stillSaved, s19,
+            fineIs, fineAre, everythingElse, countOne, countMany, d5, d5Line, agent, ifNotFinished, u03, stillSaved, s19,
             checkSoon, s19Memory, f07, f07Since, exactWords, noRecord, nothingInDrive, s32, s32Progress, s32On, s32ProgressOn, s06, s06Newest, s06Confirmed, r15, s13,
             s13Missing, s13Detail, s13DetailMissing, d13, d13Missing, reconnect, connect, copyReport, storage, settings, quit, restart,
+            lagBehind, lagLeftFor, lagLeft, lagFor, byItself, stopped, lastRead, coverage, coverageLine, unreadFiles, unreadFilesLine,
+            providerUnread, providerUnreadLine, savesStuck, savesStuckLine, savesSlow, savesSlowLine, searchDown, searchFails, searchCheck,
+            searchOneOff, localLate, driveLate, conversationsLate, newestIs, localRunningLate, driveRunningLate, conversationsRunningLate,
+            noRoom, roomTight, checksStopped, checksLastRan, unknownCheck, newerLayer, updateNames, asOf,
         ]
         static let exact = Dictionary(uniqueKeysWithValues: all.filter { !$0.template.contains("{") }.map { ($0.template, $0) })
         static let templated = all.filter { $0.template.contains("{") }
@@ -271,6 +389,19 @@ extension BrainBarMenuPresenter {
                 let words = value.split(separator: " "), unit = words.last.map { $0.hasPrefix("hour") ? 3600.0 : $0.hasPrefix("minute") ? 60 : 0 } ?? 0
                 let n = words.count < 2 ? nil : ["a", "an"].contains(words[words.count - 2]) ? 1 : Double(words[words.count - 2])
                 return value.isEmpty || n.map { over($0 * unit + 1).map { " " + $0 } == value } == true
+            // R1.11: the words its formatter makes for a quantity the capture holds, byte for byte.
+            // Read back to the quantity the words name, said again, byte for byte; whether it is the capture's is the condition's.
+            case "size":
+                let parts = value.split(separator: "\u{00A0}")
+                guard parts.count == 2, let n = Double(parts[0]), n.isFinite, n > 0, n < 1e9 else { return false }
+                let bytes = Int((n * (parts[1] == "GB" ? 1_073_741_824 : parts[1] == "MB" ? 1_048_576 : .nan)).rounded(.down))
+                return size(bytes) == value
+            case "span":
+                let parts = value.split(separator: "\u{00A0}")
+                guard parts.count == 2, let n = Int(parts[0]), n > 0, n < 1_000_000,
+                      let unit = ["min": 60.0, "h": 3600, "d": 86_400][String(parts[1])] else { return false }
+                return span(Double(n) * unit) == value
+            case "provider": return providerNames.values.contains(value)  // L38's names; whether one is named is the condition's
             case "thing", "two", "fine", "fines":
                 let nouns = slot.hasPrefix("fine") ? fineNoun : behindNoun, named = things(value, nouns)
                 let said = (slot.hasPrefix("fine") ? list : joined)(named.compactMap { nouns[$0] })
@@ -289,7 +420,10 @@ extension BrainBarMenuPresenter {
             let eta = runningUpload(c)?.onSchedule?.eta.flatMap { calendar(c).isDate(minute($0, c), inSameDayAs: c.now) ? $0 : nil }
             let copies = (c.verdict?.checks ?? []).filter { ["backup_local", "backup_offsite"].contains($0.name) && valid($0.ageS) }
                 .map { c.verdict!.evaluatedAt.addingTimeInterval(-$0.ageS!) }.filter { copyAge(since: $0, c) != nil }
-            return ([last, allGoodDate(c), uploadStart(c)?.date, eta].compactMap { $0 } + copies).filter { hasWords($0, c) }
+            // R1.11: the watcher's last read (A4) and the verdict's own time (D2, D4), each at or before now.
+            let read = c.watcher?.lastReadAt.flatMap { $0 <= c.now && sayable($0) ? $0 : nil }
+            let evaluated = c.verdict.flatMap { $0.evaluatedAt <= c.now && sayable($0.evaluatedAt) ? $0.evaluatedAt : nil }
+            return ([last, allGoodDate(c), uploadStart(c)?.date, eta, read, evaluated].compactMap { $0 } + copies).filter { hasWords($0, c) }
         }
 
         /// "HH:mm" read leniently as an hour and a minute.
@@ -402,6 +536,22 @@ extension BrainBarMenuPresenter {
         return hasWords(copied, c) ? "from \(at(copied, c))" : nil
     }
 
+    /// R1.11 `{span}`: how long, rounded down ("40 min", "2 h", "3 d"); nil for a negative or non-finite one.
+    static func span(_ seconds: Double) -> String? {
+        guard seconds.isFinite, seconds >= 0, seconds < 1e12 else { return nil }
+        if seconds < 3600 { return "\(max(1, Int(seconds / 60)))\u{00A0}min" }
+        if seconds < 172_800 { return "\(Int(seconds / 3600))\u{00A0}h" }
+        return "\(Int(seconds / 86_400))\u{00A0}d"
+    }
+
+    /// R1.11 `{size}`: bytes left to read, in the Dashboard's binary megabytes ("117 MB", "1.4 GB"); nil under one megabyte.
+    static func size(_ bytes: Int) -> String? {
+        let mb = Double(bytes) / 1_048_576
+        guard mb >= 1 else { return nil }
+        if mb < 1024 { return "\(Int(mb.rounded()))\u{00A0}MB" }
+        return String(format: "%.1f\u{00A0}GB", mb / 1024)
+    }
+
     /// `{over d}`: a strict lower bound from an awake-adjusted age, rounded down ("in over an hour"); nil under a minute.
     static func over(_ age: Double) -> String? {
         guard age.isFinite, age > 60 else { return nil }
@@ -503,7 +653,7 @@ extension BrainBarMenuPresenter {
 
         // Fault headlines and details (the pipeline's seven states)
         static func agentNotRead(_ agent: String) -> String { "\(agent)\u{2019}s sessions aren\u{2019}t being read" }
-        static let agentNotReadDetail = "Its new work isn\u{2019}t reaching memory. BrainBar can\u{2019}t fix this itself."
+        static let agentNotReadDetail = "Its new work isn\u{2019}t reaching memory. An agent needs to look at this."  // R1.11 (L53)
         static let readerNotReading = "New conversations aren\u{2019}t being read"
         static let driveSignedOut = "Google Drive is signed out"
         static let savesStuck = "Saves are stuck in the queue"

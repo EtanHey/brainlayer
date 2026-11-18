@@ -194,10 +194,10 @@ struct NDMenuHeadline: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if !r1.items.isEmpty {
-                let red = r1.redCount > 0
-                Image(systemName: red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 15)).foregroundStyle(red ? ND.red : ND.orange)
+            if r1.redCount > 0 {
+                // L53, one mark per problem: "N things need you" carries none; each problem block below carries its own.
+            } else if !r1.items.isEmpty {
+                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 15)).foregroundStyle(ND.orange)
             } else if let symbol = r1.headlineSymbol {
                 Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(ND.menuText2)
             }
@@ -410,7 +410,7 @@ struct NDMenuSelection: NSViewRepresentable {
 
 /// Fix 11: the report sentence is one unit, so neither "an agent." nor "to an agent." is left alone on a line.
 func keepingUnits(_ string: String) -> String {
-    let report = BrainBarMenuPresenter.Say.giveReport.text
+    let report = BrainBarMenuPresenter.Say.agent.text
     return string.replacingOccurrences(of: report, with: report.replacingOccurrences(of: " ", with: "\u{00A0}"))
         .replacing(#/(\d%?) /#) { "\($0.1)\u{00A0}" }.replacing(#/\b([A-Z][a-z]{2}) (\d)/#) { "\($0.1)\u{00A0}\($0.2)" }
 }

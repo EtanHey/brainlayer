@@ -41,10 +41,12 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         case .absent: return nil
         }
         // Copies under their red line and an embedding stall under its threshold, so P2's S06, S32 and F07 can fire.
+        // R1.11: the oldest waiting save's age (B1, B2) and search's failed checks (B3) so their lines can fire.
         let (age, threshold): (Double?, Double?) = ["backup_offsite": (27660, 280800), "transcripts": (31620, 280800),
-                                                     "embedding": (3960, 21600)][name] ?? (nil, nil)
+                                                     "embedding": (3960, 21600), "stores": (7320, nil)][name] ?? (nil, nil)
         let since = name == "search" && setting == .amber ? "2026-11-12T12:45:00+02:00" : nil
-        return Check(name: name, state: state, ageS: age, thresholdS: threshold, since: since, note: "", unknownTicks: 0, blind: false)
+        return Check(name: name, state: state, ageS: age, thresholdS: threshold, since: since, note: "", unknownTicks: 0, blind: false,
+                     fails: name == "search" && setting == .red ? 3 : nil)
     }
 
     struct Input { var settings: [String: Setting], base: Int, upkeep: Int
@@ -80,10 +82,21 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         c.keywordCoverage = [nil, 1, 1, nil, nil][input.profile]
         if [1, 5].contains(input.base) { c.upload = .init(startedAt: now.addingTimeInterval(input.base == 1 ? -1920 : -93_600), live: true) }
         if [2, 4, 5].contains(input.base) {
-            c.watcher = .init(alertReasons: ["offset_lag"])
-            c.lagEpisodeStart = now.addingTimeInterval(input.base == 4 ? -1860 : -480)
+            // R1.11 (A1): base 2 knows the bytes left (117 MB); on profile 3 it has no episode clock, so only the bytes are said.
+            c.watcher = .init(alertReasons: ["offset_lag"], lagBytes: input.base == 2 ? 122_683_392 : nil)
+            c.lagEpisodeStart = input.base == 2 && input.profile == 3 ? nil : now.addingTimeInterval(input.base == 4 ? -1860 : -480)
         }
-        if input.base == 3 { c.watcher = .init(alertReasons: ["file_ingestion_failure"]) }
+        if input.base == 3 {
+            // R1.11: A6 on most profiles; A5 (coverage) on 2, A7 (a provider) on 3, and on 4 a file gone stale (A4, last read 50 min ago).
+            let reasons = [2: ["coverage_drop"], 3: ["growth_not_indexed:cursor"]][input.profile] ?? ["file_ingestion_failure"]
+            c.watcher = .init(fresh: input.profile != 4, alertReasons: reasons, lastReadAt: now.addingTimeInterval(-3000))
+        }
+        // R1.11 (B4): on profile 3 search's amber carries no start, so it is past F02's 15 minutes.
+        if input.profile == 3, let v = c.verdict {
+            c.verdict = BrainBarHealthVerdict(dot: v.dot, checks: v.checks.map {
+                $0.name == "search" && $0.state == .amber ? Check(name: "search", state: .amber, note: "", unknownTicks: 0, blind: false) : $0
+            }, notes: v.notes, evaluatedAt: v.evaluatedAt)
+        }
         // P2b: on the two live-upload bases, profiles 2 to 4 also carry an on-schedule `recovering` with progress, its ETA today
         // (2), none (3) or tomorrow (4): S03's and S32's progress sentences, and R27.
         if [1, 5].contains(input.base), [2, 3, 4].contains(input.profile) {
@@ -356,7 +369,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(templated.count, 20)
         XCTAssertEqual(accepted(Self.edgeCaptures() + odd), [])
         XCTAssertEqual(Self.wordless { zone in accepted(Self.edgeCaptures().map { var c = $0; c.timeZone = zone; return c }) }, [])
-        XCTAssertNotNil(BrainBarMenuPresenter.entry(for: "BrainBar hasn’t seen the memories waiting for it go down.", odd[0]))
+        XCTAssertNotNil(BrainBarMenuPresenter.entry(for: "Its queue hasn’t shrunk.", odd[0]))
     }
 
     /// The forward path with a moment whose words are forced empty: nothing names it (a), the matcher refuses its empty
@@ -397,7 +410,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                 let expected: [[String]] = eligible
                     ? [["Backing up now"], ["To Google Drive."], [], ["Can’t confirm agents can search right now."],
                        ["Saving and upkeep are fine."], [], ["Settings…"], ["Quit BrainBar"]]
-                    : [["Check soon"], [], ["Something BrainBar checks needs attention."], ["Can’t confirm agents can search right now."],
+                    : [["Check soon"], [], ["The Google Drive copy is running late", "The newest is 8 hours old."], ["Can’t confirm agents can search right now."],
                        ["Saving and upkeep are fine."], [], ["Settings…"], ["Quit BrainBar"]]
                 let p = BrainBarMenuPresenter.present(c), f = Facts(c: c, p: p)
                 XCTAssertEqual(p.rows.map(\.strings), expected)
@@ -414,7 +427,6 @@ final class BrainBarMenuInvariantTests: XCTestCase {
 
     /// Registry entries no enumerated capture or case shows, each with its reason.
     static let unreached: Set<String> = [
-        "action.storage",  // the Open Storage Settings action exists for P3's disk rows; no row takes it yet
         "C.few",  // "Catching up on a few things": the two Behind rows (R02, S03) each carry their own headline
     ]
 
@@ -453,7 +465,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                         rows: [P.Row(kind: .headline, strings: ["All good"], mark: .ok), P.Row(kind: .headlineDetail, strings: ["Backed up."])])
         let oneNeeds = P(form: .needs, headline: "1 thing needs you", count: 1, icon: .marked,
                          rows: [P.Row(kind: .headline, strings: ["1 thing needs you"], mark: .marked), P.Row(kind: .separator),
-                                P.Row(kind: .needsYou, strings: ["Something BrainBar checks needs attention."], mark: .alertCircle)])
+                                P.Row(kind: .needsYou, strings: ["A check failed, and BrainBar can’t tell which"], mark: .alertCircle)])
         let red = base { $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks + [Self.check("disk", .red)!], notes: [], evaluatedAt: Self.now) }
         let unmeasured = base { $0.backupsMeasured = false }
         let searchAmber = base { $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks.filter { $0.name != "search" }
@@ -475,9 +487,9 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             P(form: .needs, headline: "1 thing needs you", count: 1, icon: .marked,
               rows: [P.Row(kind: .headline, strings: ["1 thing needs you"], mark: .marked), P.Row(kind: .separator)] + rows)
         }
-        let handoff = ["BrainBar can’t fix this itself.", "Give the report to an agent."]
-        let report = P.Action(kind: .copyReport, label: "Copy report for an agent")
-        let drive = P.Row(kind: .needsYou, strings: ["Google Drive is disconnected", "Backups can’t upload until you reconnect it."],
+        let handoff = ["An agent needs to look at this."]
+        let report = P.Action(kind: .copyReport, label: "Copy a report for your agent")
+        let drive = P.Row(kind: .needsYou, strings: ["Google Drive is signed out", "Backups can’t upload until you reconnect it."],
                           action: P.Action(kind: .reconnectDrive, label: "Reconnect Google Drive"), mark: .alertCircle)
         let fine = P.Row(kind: .everythingElse, strings: ["Everything else is fine."], mark: .checkmark)
         let driveAndSearchAmber = base { $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks.filter { !["search", "drive_auth"].contains($0.name) }
@@ -485,11 +497,11 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         let upkeepUnmeasured = base { $0.maintenanceNightFailures = 3; $0.backupsMeasured = false }
         let embeddingRed = base { $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks.filter { $0.name != "embedding" }
                                                                     + [Self.check("embedding", .red)!], notes: [], evaluatedAt: Self.now) }
-        let upkeepRow = P.Row(kind: .needsYou, strings: ["Nightly upkeep failed 3 nights in a row", Self.stillSaved] + handoff, action: report, mark: .alertCircle)
+        let upkeepRow = P.Row(kind: .needsYou, strings: ["Nightly check-up failed 3 nights in a row", Self.stillSaved] + handoff, action: report, mark: .alertCircle)
         let meaningRow = P.Row(kind: .needsYou, strings: ["Search by meaning isn’t catching up",
-                                                          "BrainBar hasn’t seen the memories waiting for it go down in over an hour. " + Self.exactWords] + handoff,
+                                                          "Its queue hasn’t shrunk in over an hour. " + Self.exactWords] + handoff,
                                action: report, mark: .alertCircle)
-        let generic = P.Row(kind: .needsYou, strings: ["Something BrainBar checks needs attention."] + handoff, action: report, mark: .alertCircle)
+        let generic = P.Row(kind: .needsYou, strings: ["A check failed, and BrainBar can’t tell which", "Open BrainBar for the details."], action: report, mark: .alertCircle)
         // Round 1 of #1787: the still-saved sentence needs a watcher file that proves saving (Codex P2-F2), and the I8 claims.
         func upkeepWith(_ w: Capture.Watcher) -> Capture { base { $0.maintenanceNightFailures = 3; $0.watcher = w } }
         let localNoRecord = base { $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks.filter { $0.name != "backup_local" }
@@ -504,7 +516,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks.filter { $0.name != "drive_auth" } + [Self.check("drive_auth", .red)!],
                                                notes: [], evaluatedAt: Self.now.addingTimeInterval(-86_400))
         }
-        let driveAged = P.Row(kind: .needsYou, strings: ["Google Drive is disconnected",
+        let driveAged = P.Row(kind: .needsYou, strings: ["Google Drive is signed out",
                                                          "Backups can’t upload until you reconnect it. Your newest backup in Google Drive is 8 hours old."],
                               action: P.Action(kind: .reconnectDrive, label: "Reconnect Google Drive"), mark: .alertCircle)
         let connect = P.Row(kind: .needsYou, strings: ["Google Drive isn’t connected", "Backups can’t upload until you connect it. " + Self.nothingInDrive],
@@ -539,7 +551,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             ("I7: calm over upkeep failing, verdict stale", base { $0.maintenanceNightFailures = 3; $0.verdictAwakeAgeS = 901 }, allGood),
             ("I7: calm over a watcher alert, no verdict", base { $0.verdict = nil; $0.watcher = .init(alertReasons: ["file_ingestion_failure"]) }, allGood),
             // P2b (Codex R2-F1): a claim on no list before, and a sentence no entry makes.
-            ("I8: U03’s title with no failed nights", base(), needsForm([P.Row(kind: .needsYou, strings: ["Nightly upkeep failed 3 nights in a row"] + handoff,
+            ("I8: U03’s title with no failed nights", base(), needsForm([P.Row(kind: .needsYou, strings: ["Nightly check-up failed 3 nights in a row"] + handoff,
                                                                          action: report, mark: .alertCircle)])),
             ("I8: the Drive row with Drive green", base(), needsForm([drive])),
             ("I8: a Behind headline with nothing running", base(), P(form: .calm, headline: "Backing up now", count: 0, icon: .resting,
@@ -653,7 +665,11 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         }
         // Everything the matcher reads: the clock, the zone, and since round 1 of #1790 the capture's own moments (CodeRabbit on #1790).
         func context(_ c: Capture) -> String {
-            "\(c.now.timeIntervalSinceReferenceDate)|\(c.timeZone.identifier)|" + BrainBarMenuPresenter.Say.spoken(c).map { "\($0.timeIntervalSinceReferenceDate)" }.joined(separator: ",")
+            let moments: String = BrainBarMenuPresenter.Say.spoken(c).map { "\($0.timeIntervalSinceReferenceDate)" }.joined(separator: ",")
+            // R1.11: the facts the new slots read (the bytes left, the episode's length, the providers named).
+            let size: String = BrainBarMenuPresenter.Say.lagSize(c) ?? "", span: String = BrainBarMenuPresenter.Say.lagSpan(c) ?? ""
+            let providers: String = BrainBarMenuPresenter.Say.providers(c).joined(separator: ",")
+            return "\(c.now.timeIntervalSinceReferenceDate)|\(c.timeZone.identifier)|" + moments + "|" + size + "|" + span + "|" + providers
         }
         var accepted: [String: [(BrainBarMenuPresenter.Sentence, [(values: [String], sentence: String)])]] = [:]
         for c in captures where accepted[context(c)] == nil {
@@ -752,6 +768,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             return [value, "1 hour old", "2 hours old", "23 hours old"] + hours + days
         case "over": return [value, "", " in over a minute", " in over 2 minutes", " in over an hour", " in over 2 hours", " in over 3 hours"]
         case "thing": return ["new conversations", "search", "backups", "upkeep"]
+        case "provider": return ["Claude", "Codex", "Cursor", "Antigravity", "cursor", "Gemini"]  // R1.11 (A7)
         case "two": return ["new conversations and backups", "new conversations and search", "search and backups"]
         case "fine": return ["Saving", "Search", "Backups", "Upkeep", "Saving and saving"]
         case "fines": return ["Saving and search", "Saving, search and backups", "Saving, search, backups and upkeep", "Search, backups and upkeep",
@@ -768,15 +785,15 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             "Saving and search is fine.", "saving is fine.", "Your newest backup in Google Drive is 1 hours old.",
             "Your newest backup in Google Drive is 24 hours old.", "Your newest backup is 0 hours old.", "Started at 25:00.", "Started at 12:60.",
             "0 things need you", "1 things need you", "02 things need you", "The last 0 backups didn’t finish", "The last 1 backups didn’t finish",
-            "Nightly upkeep failed 2 nights in a row", "Nightly upkeep failed 03 nights in a row", "Last backup Foo 9 at 04:00.",
+            "Nightly check-up failed 2 nights in a row", "Nightly check-up failed 03 nights in a row", "Last backup Foo 9 at 04:00.",
             "Last backup Nov 32 at 04:00.", "Last backup Nov 09 at 04:00.", "Catching up on backups and new conversations",
-            "Catching up on backups and backups", "BrainBar hasn’t seen the memories waiting for it go down in over 1 hours.",
-            "BrainBar hasn’t seen the memories waiting for it go down in over 60 minutes.", "101% done.", "040% done.",
+            "Catching up on backups and backups", "Its queue hasn’t shrunk in over 1 hours.",
+            "Its queue hasn’t shrunk in over 60 minutes.", "101% done.", "040% done.",
             // P2c (round 2 of #1788, R2-B1): a day that does not exist, a doubled space, an hour count above the clamp; and more
             // of each kind: day words the formatter would not use at this now, a time today after now (every {at} is past).
             "Last backup Feb 31 at 04:00.", "Last backup Nov  9 at 04:00.",
-            "BrainBar hasn’t seen the memories waiting for it go down in over 277777778 hours.",
-            "BrainBar hasn’t seen the memories waiting for it go down in over 300000000 hours.",
+            "Its queue hasn’t shrunk in over 277777778 hours.",
+            "Its queue hasn’t shrunk in over 300000000 hours.",
             "Last backup Feb 30 at 04:00.", "Last backup Apr 31 at 04:00.", "Last backup Jun 31 at 04:00.", "Last backup  Nov 9 at 04:00.",
             "Last backup Nov 9  at 04:00.", "Last backup yesterday at 11:00.", "Last backup today at 13:00.", "Started yesterday at 11:00.",
             "Started Feb 30 at 23:40.", "Your newest backup is from Feb 31 at 04:00.", "Your newest backup in Google Drive is from Nov  9 at 03:44.",
@@ -787,18 +804,18 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         let accepted = [
             "Saving, search and upkeep are fine.", "Search is fine.", "Saving and backups are fine.", "Your newest backup in Google Drive is 1 hour old.",
             "Your newest backup is 23 hours old.", "The newest backup BrainBar can confirm is from Nov 9 at 03:44.", "Started at 23:59.",
-            "Started yesterday at 23:40.", "2 things need you", "The last 2 backups didn’t finish", "Nightly upkeep failed 3 nights in a row",
+            "Started yesterday at 23:40.", "2 things need you", "The last 2 backups didn’t finish", "Nightly check-up failed 3 nights in a row",
             "Last backup today at 04:00.", "Catching up on new conversations and backups", "100% done.", "0% done, about 13:05.",
-            "BrainBar hasn’t seen the memories waiting for it go down in over 2 minutes.", "BrainBar hasn’t seen the memories waiting for it go down.",
+            "Its queue hasn’t shrunk in over 2 minutes.", "Its queue hasn’t shrunk.",
         ]
         XCTAssertEqual(accepted.filter { BrainBarMenuPresenter.entry(for: $0, c) == nil }, [])
         // The round trip (P2c): Feb 29 of a leap year, a month and day a year ago, the clamp's own largest hour count; odd numbers
         // read back without trapping and are refused.
         XCTAssertEqual(["Last backup Feb 29 at 04:00.", "Your newest backup is from Nov 12 at 04:00.", "Last backup yesterday at 23:59.",
-                        "BrainBar hasn’t seen the memories waiting for it go down in over 277777777 hours."].filter { BrainBarMenuPresenter.entry(for: $0, c) == nil }, [])
+                        "Its queue hasn’t shrunk in over 277777777 hours."].filter { BrainBarMenuPresenter.entry(for: $0, c) == nil }, [])
         XCTAssertEqual(["Started at 99999:00.", "Started at -1:00.", "Started at 12::30.", "Last backup Nov 99999999999 at 04:00.", "Last backup Nov -1 at 04:00.",
                         "Your newest backup is 1e300 hours old.", "Your newest backup is nan hours old.", "40.0% done.", "1e1% done.",
-                        "BrainBar hasn’t seen the memories waiting for it go down in over inf hours.", "BrainBar hasn’t seen the memories waiting for it go down in over a hour.",
+                        "Its queue hasn’t shrunk in over inf hours.", "Its queue hasn’t shrunk in over a hour.",
                         "Saving and Search are fine.", "Search, saving are fine."].filter { BrainBarMenuPresenter.entry(for: $0, c) != nil }, [])
         // In the capture's zone: 02:30 does not exist in Berlin on 29 Mar 2026, so no time today says it; a year before, it did.
         var berlin = c
@@ -825,7 +842,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
                 refused += made.filter { BrainBarMenuPresenter.entry(for: $0, own) == nil }
             }
             for age in [61.0, 119.0, 120.0, 121.0, 3599.0, 3600.0, 3601.0, 7199.0, 7200.0, 7201.0, 86_399.0, 1e6, 1e12 - 1.0, 1e12, 3e12] as [TimeInterval] {
-                let said = "BrainBar hasn’t seen the memories waiting for it go down \(BrainBarMenuPresenter.over(age)!)."
+                let said = "Its queue hasn’t shrunk \(BrainBarMenuPresenter.over(age)!)."
                 if BrainBarMenuPresenter.entry(for: said, zoned) == nil { refused.append(said) }
             }
             XCTAssertEqual(refused, [])
@@ -967,12 +984,18 @@ final class BrainBarMenuInvariantTests: XCTestCase {
     /// The thing each worded row speaks for, read from the cases file's titles and status lines. A row not listed here
     /// (R17's generic rows) speaks for no one thing, so "Everything else is fine." beside it covers all four.
     static let speaksFor: [(prefix: String, word: String)] = [
-        ("Google Drive is disconnected", "backups"), ("Google Drive isn’t connected", "backups"), ("The last ", "backups"),
+        ("Google Drive is signed out", "backups"), ("Google Drive isn’t connected", "backups"), ("The last ", "backups"),
         ("No verified backup on record", "backups"), ("The newest checked backup is damaged", "backups"),
         ("Your newest backup in Google Drive", "backups"), ("A backup to Google Drive started", "backups"),
         ("Conversation backups can’t upload", "backups"), ("To Google Drive.", "backups"),
         ("Search by meaning isn’t catching up", "search"), ("Can’t confirm agents can search", "search"),
-        ("Catching up on new conversations", "saving"), ("Nightly upkeep failed", "upkeep"),
+        ("Catching up on new conversations", "saving"), ("Nightly check-up failed", "upkeep"),
+        // R1.11: each title names its thing (CHANGES-R1.11 § 1).
+        ("Reading new conversations", "saving"), ("Some new conversations", "saving"), ("Some conversation files", "saving"),
+        ("Claude’s sessions", "saving"), ("Codex’s sessions", "saving"), ("Cursor’s sessions", "saving"), ("Antigravity’s sessions", "saving"),
+        ("Saves are ", "saving"), ("Agents can’t search memory", "search"), ("Search failed a check", "search"),
+        ("The local copy", "backups"), ("The Google Drive copy", "backups"), ("The conversations copy", "backups"),
+        ("Not enough room for the next backup", "backups"), ("Room for backups", "backups"),
     ]
 
     static let things: [(word: String, checks: [String])] = [
@@ -1113,6 +1136,33 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         }
         /// R25: no copy in Drive of either kind has a verified record.
         var noDriveRecord: Bool { every("backup_offsite") { $0.ageS == nil } && named("transcripts").allSatisfy { $0.ageS == nil } }
+
+        // R1.11, written from CHANGES-R1.11 § 1's conditions column.
+        func amber(_ name: String) -> Bool { named(name).contains { $0.state == .amber } }
+        /// A watcher alert on a file that is readable and fresh.
+        func alert(_ reason: String) -> Bool { c.watcher.map { $0.readable && $0.fresh && $0.alertReasons.contains(reason) } == true }
+        /// A1: lag on a fresh file, past 30 minutes on the app's clock, or `ingest` red.
+        var lagShown: Bool { alert("offset_lag") && (c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } == true || red("ingest")) }
+        /// A1's "catching up by itself": the lag is the only alert but R10's.
+        var draining: Bool { lagShown && c.watcher!.alertReasons.allSatisfy { $0 == "offset_lag" || $0 == "quarantined_record" } }
+        /// The notice side of the one switch holds, and the only red is that lag's.
+        var lagNotice: Bool {
+            c.lagSeverity == .noticeWhileDraining && draining && (c.verdict?.checks ?? []).allSatisfy { $0.state != .red || $0.name == "ingest" }
+        }
+        var stopped: Bool { red("ingest") && c.watcher.map { $0.readable && !$0.fresh } == true }
+        var lagSize: String? { c.watcher?.lagBytes.flatMap(BrainBarMenuInvariantTests.sizeWords) }
+        var lagSpan: String? { c.lagEpisodeStart.flatMap { BrainBarMenuInvariantTests.spanWords(c.now.timeIntervalSince($0)) } }
+        /// A7: a provider named by `growth_not_indexed:` on a red or amber `ingest` check's context, or as a fresh watcher alert.
+        var providers: [String] {
+            let names = ["claude": "Claude", "codex": "Codex", "cursor": "Cursor", "gemini": "Antigravity"]
+            let codes = named("ingest").filter { $0.state == .red || $0.state == .amber }.flatMap { $0.contextCodes ?? [] }
+            let alerts = c.watcher.map { $0.readable && $0.fresh ? $0.alertReasons : [] } ?? []
+            return (codes + alerts).compactMap { $0.hasPrefix("growth_not_indexed:") ? names[String($0.dropFirst(19))] : nil }
+        }
+        /// When the verdict was made, in `{at}` words, if it was at or before now.
+        func evaluatedWords(_ value: String) -> Bool {
+            c.verdict.map { $0.evaluatedAt <= c.now && nameable($0.evaluatedAt) && dayWords($0.evaluatedAt) == value } == true
+        }
         func fineWords(_ text: String) -> [String] { BrainBarMenuInvariantTests.things.map(\.word).filter { text.lowercased().contains($0) } }
     }
 
@@ -1173,7 +1223,56 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         "S13.detailMissing": { f, _ in f.red("drive_auth") && f.c.driveAuthModel == .missing },
         "D13": { f, _ in f.red("drive_auth") && f.c.driveAuthModel != .missing },
         "D13.missing": { f, _ in f.red("drive_auth") && f.c.driveAuthModel == .missing },
+        // R1.11 (CHANGES-R1.11 § 1, approved by L53).
+        "A1": { f, _ in f.lagShown },
+        "A1.leftFor": { f, v in f.lagShown && f.lagSize == v[0] && f.lagSpan == v[1] },
+        "A1.left": { f, v in f.lagShown && f.lagSize == v[0] },
+        "A1.for": { f, v in f.lagShown && f.lagSpan == v[0] },
+        "A1.byItself": { f, _ in f.draining },
+        "A4": { f, _ in f.stopped },
+        "A4.lastRead": { f, v in f.stopped && f.c.watcher?.lastReadAt.map { $0 <= f.c.now && f.nameable($0) && f.dayWords($0) == v[0] } == true },
+        "A5": { f, _ in f.alert("coverage_drop") && f.c.watcher?.dbProbeFailed == false },
+        "A5.line": { f, _ in f.alert("coverage_drop") && f.c.watcher?.dbProbeFailed == false },
+        "A6": { f, _ in f.alert("file_ingestion_failure") },
+        "A6.line": { f, _ in f.alert("file_ingestion_failure") },
+        "A7": { f, v in f.providers.contains(v[0]) },
+        "A7.line": { f, _ in !f.providers.isEmpty },
+        "B1": { f, _ in f.red("stores") },
+        "B1.line": { f, v in f.named("stores").contains { $0.state == .red && $0.ageS.flatMap(spanWords) == v[0] } },
+        "B2": { f, _ in f.amber("stores") },
+        "B2.line": { f, v in f.named("stores").contains { $0.state == .amber && $0.ageS.flatMap(spanWords) == v[0] } },
+        "B3": { f, _ in f.red("search") },
+        "B3.line": { f, v in f.named("search").contains { $0.state == .red && $0.fails.map { $0 >= 2 && $0 == Int(v[0]) } == true } },
+        "B4": { f, _ in f.amber("search") },
+        "C1.local": { f, _ in f.red("backup_local") },
+        "C1.drive": { f, _ in f.red("backup_offsite") && f.every("drive_auth") { $0.state == .green } },
+        "C1.conversations": { f, _ in f.red("transcripts") && f.every("drive_auth") { $0.state == .green } },
+        "C1.newest": { f, v in ["backup_local", "backup_offsite", "transcripts"].contains { f.age([$0], v[0]) } },
+        "C4.local": { f, _ in f.amber("backup_local") },
+        "C4.drive": { f, _ in f.amber("backup_offsite") },
+        "C4.conversations": { f, _ in f.amber("transcripts") },
+        "C7": { f, _ in f.red("disk") },
+        "C8": { f, _ in f.amber("disk") },
+        "D2": { f, _ in f.red("monitor") || f.amber("monitor") },
+        "D2.line": { f, v in (f.red("monitor") || f.amber("monitor")) && f.evaluatedWords(v[0]) },
+        "D3": { f, _ in f.c.verdict?.checks.contains { !known.contains($0.name) && ($0.state == .red || $0.state == .amber) } == true },
+        "D4": { f, v in !f.fresh && f.evaluatedWords(v[0]) },
     ]
+
+    /// R1.11's `{span}`, written here: whole minutes under an hour (at least one), whole hours under two days, else whole days.
+    static func spanWords(_ seconds: Double) -> String? {
+        guard seconds.isFinite, seconds >= 0, seconds < 1e12 else { return nil }
+        let hours = Int(floor(seconds / 3600))
+        if hours == 0 { return "\(max(1, Int(floor(seconds / 60))))\u{00A0}min" }
+        return hours < 48 ? "\(hours)\u{00A0}h" : "\(Int(floor(seconds / 86_400)))\u{00A0}d"
+    }
+
+    /// R1.11's `{size}`: binary megabytes, rounded, under a binary gigabyte; else gigabytes to one decimal; nothing under 1 MB.
+    static func sizeWords(_ bytes: Int) -> String? {
+        let mb = Double(bytes) / 1_048_576
+        if mb < 1 { return nil }
+        return mb < 1024 ? "\(Int(mb.rounded()))\u{00A0}MB" : String(format: "%.1f\u{00A0}GB", mb / 1024)
+    }
 
     /// The oracle's own formatters, one per format and zone on each thread.
     static func formatted(_ date: Date, _ format: String, _ zone: TimeZone) -> String {
@@ -1196,7 +1295,8 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         var out: [String] = [], shown: [String: [String]] = [:]
         let f = Facts(c: c, p: p)
         // I1: no hidden red.
-        if let v = c.verdict, v.dot == .red || v.checks.contains(where: { $0.state == .red }), p.form != .needs {
+        // R1.11: under the notice side of the one switch, a red that is only the draining lag is its notice.
+        if let v = c.verdict, v.dot == .red || v.checks.contains(where: { $0.state == .red }), p.form != .needs, !f.lagNotice {
             out.append("I1 a red with a verdict present is not the needs form")
         }
         // The closed world, and I2, I3 and I8 by sentence: every sentence shown is a registered one, and a claim or a
@@ -1228,7 +1328,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         // I7 (R20): a Needs-you fact the app reads without the producer counts, whatever the verdict or the flags.
         if let w = c.watcher, w.readable, w.fresh {
             let lagPast = w.alertReasons.contains("offset_lag") && c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } == true
-            if lagPast, p.form != .needs { out.append("I7 a readable watcher fact did not count") }
+            if lagPast, p.form != .needs, !f.lagNotice { out.append("I7 a readable watcher fact did not count") }
         }
         if c.maintenanceNightFailures.map({ $0 >= 3 }) == true, p.form != .needs { out.append("I7 nightly upkeep failing did not count") }
         // I5: words.

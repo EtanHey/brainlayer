@@ -178,6 +178,6 @@ extension BrainBarMenuInvariantTests {
         XCTAssertEqual(unknown.form, .calm)
         XCTAssertEqual(unknown.count, 0)
         XCTAssertTrue(unknown.rows.contains { $0.state == .cantTell && $0.strings == ["Checking…"] })
-        XCTAssertFalse(unknown.rows.flatMap(\.strings).contains { $0.contains("Nightly upkeep failed") })
+        XCTAssertFalse(unknown.rows.flatMap(\.strings).contains { $0.contains("Nightly check-up failed") })
     }
 }

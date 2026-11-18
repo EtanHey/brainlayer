@@ -151,11 +151,19 @@ struct NDR1: Equatable, Sendable {
                     items.append(Item(id: "agent", severity: sev, title: Say.agentNotRead(NDProvider.name(first)), detail: Say.agentNotReadDetail,
                                       action: sev == .red ? copyReport : nil, strip: Strip(from: NDProvider.name(first), to: Say.stageRead, side: .source, severity: sev),
                                       concerns: ["ingest"], station: .agents, rowTitle: Say.providerNotRead(NDProvider.name(first))))
+                } else if sev == .red, BrainBarMenuPresenter.Say.lagShown(c) {
+                    // R1.11 (A1): a red reader that is only behind names the lag, says how far, and has no button; its
+                    // severity is the presenter's one switch.
+                    let lagSeverity: NDSeverity = BrainBarMenuPresenter.lagIsNotice(c) ? .orange : .red
+                    items.append(Item(id: "reader", severity: lagSeverity,
+                                      title: BrainBarMenuPresenter.Say.lagBehind.text, detail: BrainBarMenuPresenter.lagDetail(c), action: nil,
+                                      strip: Strip(from: Say.yourAgents, to: Say.stageRead, side: .target, severity: lagSeverity),
+                                      concerns: ["ingest"], station: .read))
                 } else {
                     // D6: amber is late, not stopped: "Catching up on new conversations", no "needs you", no button.
                     items.append(Item(id: "reader", severity: sev,
                                       title: sev == .red ? Say.readerNotReading : BrainBarMenuPresenter.Say.r02Headline.text,
-                                      detail: sev == .red ? BrainBarMenuPresenter.Say.cantFix.text : nil, action: sev == .red ? copyReport : nil,
+                                      detail: sev == .red ? BrainBarMenuPresenter.Say.agent.text : nil, action: sev == .red ? copyReport : nil,
                                       strip: Strip(from: Say.yourAgents, to: Say.stageRead, side: .target, severity: sev), concerns: ["ingest"],
                                       station: .read))
                 }
@@ -174,7 +182,7 @@ struct NDR1: Equatable, Sendable {
             if let nights = c.maintenanceNightFailures, nights >= 3 {
                 let since = lastNightly(i).map { Say.notCheckedSince(weekday($0, c)) }
                 items.append(Item(id: "nightly", severity: .red, title: Say.nightlyFailed(nights),
-                                  detail: since ?? BrainBarMenuPresenter.Say.cantFix.text, action: copyReport,
+                                  detail: since ?? BrainBarMenuPresenter.Say.agent.text, action: copyReport,
                                   strip: Strip(from: Say.jobs, to: Say.stageMemory, side: .source, severity: .red),
                                   menuTitle: Say.nightlyFailedShort(nights),
                                   menuDetail: lastNightly(i).map { Say.notCheckedSinceShort(weekday($0, c)) },
@@ -263,7 +271,7 @@ struct NDR1: Equatable, Sendable {
             // R1.10 (L48, L51): the headline counts and the problem rows name, so words never repeat: "1 thing needs you"
             // with one problem, "N things need you" with more.
             headline = red == 1 ? Say.oneThingNeedsYou : Say.thingsNeedYou(red)
-            symbol = "exclamationmark.circle.fill"
+            symbol = nil  // L53, one mark per problem: the count headline has none; each problem row carries its own
             tone = .fault
             rows = true
         } else if items.count == 1, let only = items.first {

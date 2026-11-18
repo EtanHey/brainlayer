@@ -19,6 +19,9 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         "watcher.fresh": "mapped from caller sleepHistory.elapsed since file.updatedAt, 0...300 seconds",
         "watcher.alertReasons": "mapped from WatcherHealthFile.alertReasons",
         "watcher.dbProbeFailed": "mapped from WatcherHealthFile.dbProbeFailed",
+        "watcher.lagBytes": "mapped from WatcherHealthFile.maxOffsetLagBytes when above zero; zero -> nil (R1.11 A1)",
+        "watcher.lastReadAt": "mapped from WatcherHealthFile.updatedAt (R1.11 A4)",
+        "lagSeverity": "mapped from BrainBarMenuPresenter.lagSeverity, the one named switch (R1.11)",
         "upload": "mapped from measured backups.localSnapshot in_progress with both process fields",
         "upload.startedAt": "mapped from localSnapshot.uploadProcessStartedAt",
         "upload.live": "mapped from localSnapshot.uploadProcessLive",
@@ -204,21 +207,17 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         let stale = BrainBarStatusSnapshot(issues: [], isChecking: false, staleHealthVerdict: source.verdict)
         let c = Self.adapt(source, status: stale, awake: 901.0)
         let actual = BrainBarMenuPresenter.present(c)
-        XCTAssertEqual(actual, .init(form: .needs, headline: "2 things need you", count: 2, icon: .marked,
-            rows: [.init(kind: .headline, strings: ["2 things need you"], mark: .marked),
-                   .init(kind: .separator),
-                   .init(kind: .needsYou, strings: ["Something BrainBar checks needs attention.",
-                       "BrainBar can’t fix this itself.", "Give the report to an agent."],
-                       action: .init(kind: .copyReport, label: "Copy report for an agent"), mark: .alertCircle),
-                   .init(kind: .needsYou, strings: ["Something BrainBar checks needs attention.",
-                       "BrainBar can’t fix this itself.", "Give the report to an agent."],
-                       action: .init(kind: .copyReport, label: "Copy report for an agent"), mark: .alertCircle, dividerBefore: true),
-                   .init(kind: .statusLine, strings: ["Checking…"], state: .cantTell),
-                   .init(kind: .statusLine, strings: ["Checking…"], state: .cantTell),
-                   .init(kind: .statusLine, strings: ["Checking…"], state: .cantTell),
-                   .init(kind: .separator),
-                   .init(kind: .standardItem, strings: ["Settings…"], keyEquivalent: "⌘,"),
-                   .init(kind: .standardItem, strings: ["Quit BrainBar"], keyEquivalent: "⌘Q", optionAlternate: "Restart BrainBar")]))
+        // R1.11 (D4): the stale red keeps its own words and says when it was true; the red dot adds no second, generic row.
+        XCTAssertEqual(actual.form, .needs)
+        XCTAssertEqual(actual.count, 1)
+        XCTAssertEqual(actual.headline, "1 thing needs you")
+        XCTAssertNil(actual.rows.first { $0.kind == .headline }?.mark, "L53: the count headline carries no mark")
+        let row = try XCTUnwrap(actual.rows.first { $0.kind == .needsYou })
+        XCTAssertEqual(row.strings.first, "Google Drive is signed out")
+        XCTAssertTrue(row.strings.last?.hasPrefix("(as of ") == true, "\(row.strings)")
+        XCTAssertEqual(row.action?.kind, .reconnectDrive)
+        XCTAssertEqual(row.mark, .alertCircle)
+        XCTAssertEqual(actual.rows.filter { $0.kind == .statusLine }.map(\.strings), [["Checking…"], ["Checking…"], ["Checking…"]])
     }
 
     static func checking(_ headline: String, fine: String) -> BrainBarMenuPresentation {

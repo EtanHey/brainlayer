@@ -23,6 +23,11 @@ enum BrainBarDesignFixture {
         case backupsFailedUpload = "backups-failed-upload"
         /// L24: one amber notice that is not catching up (the copy on this Mac is late): "Check soon" and the amber dot.
         case backupLate = "backup-late"
+        /// R1.11 (A1): the reader past its limit with `ingest` red, draining by itself; the watcher knows the bytes left
+        /// (117 MB) and, as in the installed app, no episode clock.
+        case lagBehind = "lag-behind"
+        /// R1.11 (B3): a failure only an agent can fix: search failed its last 3 checks.
+        case searchFailing = "search-failing"
 
         /// The window page the fixture opens on.
         var page: NDPage {
@@ -157,6 +162,11 @@ enum BrainBarDesignFixture {
             i.newestLocalCopyAt = now.addingTimeInterval(-30 * 3600)
             i.localCopiesKept = 2  // a missed night: two copies on this Mac
             i.backupHistory = history(localNewestHoursAgo: 30, driveNewestHoursAgo: 30)
+        case .lagBehind:
+            i.capture = capture(replacing(calmChecks(), check("ingest", .red, age: 40 * 60, limit: 900)), dot: .red)
+            i.capture.watcher = .init(alertReasons: ["offset_lag"], lagBytes: 117 * 1_048_576, lastReadAt: now.addingTimeInterval(-30))
+        case .searchFailing:
+            i.capture = capture(replacing(calmChecks(), check("search", .red, fails: 3)), dot: .red)
         }
         return i
     }

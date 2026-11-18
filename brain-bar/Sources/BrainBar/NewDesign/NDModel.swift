@@ -182,8 +182,7 @@ extension NDModel {
         // said twice (R29) but still turns its area red.
         let faultExtras = i.extras.filter { $0.level == .fault }
         for extra in faultExtras where !faults.contains(where: { $0.title == extra.text }) {
-            faults.append(Fault(title: extra.text, facts: [Say.cantFix.text, Say.giveReport.text],
-                                shownFacts: [Say.cantFix.text, Say.giveReport.text],
+            faults.append(Fault(title: extra.text, facts: [Say.agent.text], shownFacts: [Say.agent.text],
                                 action: P.Action(kind: .copyReport, label: Say.copyReport.text), thing: extra.thing,
                                 concerns: [], jobs: extra.jobs))
         }
@@ -191,7 +190,7 @@ extension NDModel {
         // Which areas are red: a worded row's thing, the things behind the generic rows (their non-green checks and the
         // facts the app reads by itself), and the runtime warnings.
         var faultThings = Set(faults.compactMap(\.thing))
-        let generic = p.rows.contains { $0.kind == .needsYou && $0.strings.first == Say.generic.text }
+        let generic = p.rows.contains { $0.kind == .needsYou && $0.strings.first == Say.d5.text }
         if generic {
             for name in BrainBarMenuPresenter.known where name != "monitor" {
                 let states = (c.verdict?.checks ?? []).filter { $0.name == name }.map(\.state)
@@ -240,7 +239,7 @@ extension NDModel {
             count = faults.count
             headline = count == 1 ? Say.countOne.text : Say.countMany(String(count))
             icon = .marked
-            headlineMark = .fault
+            headlineMark = .none  // L53: the count headline carries no mark; each row carries its own
         } else if headline == Say.allGood.text, !unknown.isEmpty {
             // "All good" is never said beside something the presentation does not carry and cannot prove.
             let nouns = BrainBarMenuPresenter.four.filter(unknown.contains).compactMap { Say.behindNoun[$0] }
@@ -328,6 +327,15 @@ extension NDModel {
         case "S07": return ["backup_local"]
         case "U03": return ["nightly"]
         case _ where id.hasPrefix("S32"): return ["backup_offsite"]
+        // R1.11: each named row concerns its own check.
+        case "A1", "A4", "A5", "A6", "A7": return ["ingest"]
+        case "B1", "B2": return ["stores"]
+        case "B3", "B4": return ["search"]
+        case "C1.local", "C4.local": return ["backup_local"]
+        case "C1.drive", "C4.drive": return ["backup_offsite"]
+        case "C1.conversations", "C4.conversations": return ["transcripts"]
+        case "C7", "C8": return ["disk"]
+        case "D2": return ["monitor"]
         case "S06":
             return Set((c.verdict?.checks ?? []).filter { ["backup_local", "backup_offsite"].contains($0.name) && $0.state != .green }.map(\.name))
         default:
@@ -360,7 +368,7 @@ extension NDModel {
             // The shown headline replaced the presenter's (a runtime warning): "All good"'s own detail goes with it.
             rows = rows.compactMap { row in
                 var row = row
-                if row.kind == .headline { row.strings = [headline]; row.mark = icon == .marked ? .marked : .wait }
+                if row.kind == .headline { row.strings = [headline]; row.mark = icon == .marked ? nil : .wait }  // L53: one mark per problem
                 if row.kind == .headlineDetail, p.headline == Say.allGood.text { return nil }
                 return row
             }
@@ -515,7 +523,7 @@ extension NDModel {
             if let streak {
                 return Row(id: id, name: name, visual: .streak(streak),
                            number: Number(value: String(streak), unit: "nights"), strong: true,
-                           accessibility: "Nightly upkeep failed \(streak) nights in a row")
+                           accessibility: BrainBarMenuPresenter.SurfaceSay.nightlyFailed(streak))  // R1.11: "upkeep" is gone (H4)
             }
             guard case let .ran(at) = last, ctx.c.maintenanceNightFailures != nil || id == "weekly" else {
                 return Row(id: id, name: name, visual: .unknown, number: .unknown, accessibility: "\(name), not known")

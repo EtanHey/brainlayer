@@ -37,7 +37,7 @@ final class BrainBarAmberNoticeTests: XCTestCase {
         XCTAssertTrue(p.rows.contains { $0.kind == .statusLine && $0.state == .notice }, name)
         XCTAssertFalse(p.rows.contains { $0.action != nil }, name)
         let report = BrainBarMenuReport.text(presentation: p, verdict: c.verdict, version: "test", now: c.now)
-        XCTAssertFalse(report.contains(BrainBarMenuPresenter.Say.cantFix.text), name)
+        XCTAssertFalse(report.contains(BrainBarMenuPresenter.Say.agent.text), name)  // R1.11: a notice asks no one to act
         let center = Center()
         await subject(center).update(c)
         XCTAssertEqual(center.posts, 0, name)
@@ -73,12 +73,13 @@ final class BrainBarAmberNoticeTests: XCTestCase {
                 XCTAssertEqual(p.count, doc["attention_count"] as? Int, "\(name) \(state)")
                 XCTAssertEqual(p.count, state == .red ? 1 : 0)
                 if state == .red {
-                    let titles = ["backup_local": BrainBarMenuPresenter.Say.noRecord.text,
-                        "drive_auth": BrainBarMenuPresenter.Say.s13.text,
-                        "embedding": BrainBarMenuPresenter.Say.f07.text,
-                        "integrity": BrainBarMenuPresenter.Say.s19.text]
-                    XCTAssertEqual(p.rows.first { $0.kind == .needsYou }?.strings.first,
-                        titles[name] ?? BrainBarMenuPresenter.Say.generic.text, name)
+                    // R1.11: every red check names itself; D5 only where BrainBar cannot (a red reader with no watcher alert).
+                    typealias Say = BrainBarMenuPresenter.Say
+                    let titles = ["backup_local": Say.noRecord.text, "drive_auth": Say.s13.text, "embedding": Say.f07.text,
+                        "integrity": Say.s19.text, "backup_offsite": Say.driveLate.text, "transcripts": Say.conversationsLate.text,
+                        "disk": Say.noRoom.text, "stores": Say.savesStuck.text, "search": Say.searchDown.text,
+                        "monitor": Say.checksStopped.text, "ingest": Say.d5.text]
+                    XCTAssertEqual(p.rows.first { $0.kind == .needsYou }?.strings.first, titles[name], name)
                 }
             }
             let other = ["backup_local", "backup_offsite", "transcripts", "drive_auth", "integrity", "disk"].contains(name) ? "stores" : "disk"
@@ -87,31 +88,33 @@ final class BrainBarAmberNoticeTests: XCTestCase {
             let rows = p.rows.filter { $0.kind == .needsYou || $0.kind == .statusLine }
             XCTAssertEqual(rows.first?.kind, .needsYou, name)
             XCTAssertEqual(rows.dropFirst().first?.state, .notice, name)
-            XCTAssertEqual(rows.dropFirst().first?.strings.first, BrainBarMenuPresenter.Say.generic.text, other)
+            XCTAssertEqual(rows.dropFirst().first?.strings.first,
+                           other == "stores" ? BrainBarMenuPresenter.Say.savesSlow.text : BrainBarMenuPresenter.Say.roomTight.text, other)
         }
     }
-    private func assertOneGenericSentence(_ c: BrainBarMenuCapture) {
+    private func assertOneRow(_ c: BrainBarMenuCapture, titled title: String) {
         let p = BrainBarMenuPresenter.present(c)
-        XCTAssertEqual(p.rows.filter { $0.strings.first == BrainBarMenuPresenter.Say.generic.text }.count, 1)
+        XCTAssertEqual(p.rows.filter { $0.strings.first == title }.count, 1)
     }
     func testNoDuplicateAtAmberLagTimeEscalation() {
         var c = capture("ingest", .amber)
         c.watcher?.alertReasons = ["offset_lag"]
         c.lagEpisodeStart = c.now.addingTimeInterval(-1801)
-        assertOneGenericSentence(c)
+        assertOneRow(c, titled: BrainBarMenuPresenter.Say.lagBehind.text)
         let p = BrainBarMenuPresenter.present(c)
         XCTAssertEqual(p.rows.filter { $0.kind == .needsYou }.count, 1)
-        XCTAssertEqual(p.rows.first { $0.kind == .needsYou }?.strings.first, BrainBarMenuPresenter.Say.generic.text)
+        XCTAssertEqual(p.rows.first { $0.kind == .needsYou }?.strings.first, BrainBarMenuPresenter.Say.lagBehind.text)
+        XCTAssertNil(p.rows.first { $0.kind == .needsYou }?.action, "R1.11: nobody acts on a lag that drains by itself")
         XCTAssertEqual(p.count, 1)
         XCTAssertEqual(p.icon, .marked)
     }
     func testNoDuplicateAtRedIngestStall() {
         var c = capture("ingest", .red)
         c.watcher?.alertReasons = ["file_ingestion_failure"]
-        assertOneGenericSentence(c)
+        assertOneRow(c, titled: BrainBarMenuPresenter.Say.unreadFiles.text)
     }
     func testNoDuplicateAtRedBackupAmberTranscripts() {
-        assertOneGenericSentence(capture("backup_offsite", .red, amber: "transcripts"))
+        assertOneRow(capture("backup_offsite", .red, amber: "transcripts"), titled: BrainBarMenuPresenter.Say.driveLate.text)
     }
 
     func testDifferentAmberSentenceInSameThingStays() {
@@ -129,7 +132,7 @@ final class BrainBarAmberNoticeTests: XCTestCase {
 
     func testLaterWordedNoticeSurvivesEarlierGenericDuplicate() {
         typealias Presenter = BrainBarMenuPresenter
-        let generic = Presenter.Say.generic.text
+        let generic = Presenter.Say.d5.text
         let worded = Presenter.Say.r02.text
         let p = Presenter.assemble(capture("stores", .red), [
             .init(thing: .remembering, level: .needs, strings: [generic], worded: false),
@@ -175,7 +178,7 @@ final class BrainBarAmberNoticeTests: XCTestCase {
         c.watcher?.alertReasons = ["file_ingestion_failure"]
         await observed.update(c)
         XCTAssertEqual(center.posts, 1)
-        assertOneGenericSentence(c)
+        assertOneRow(c, titled: BrainBarMenuPresenter.Say.savesStuck.text)
         XCTAssertFalse(BrainBarMenuPresenter.notificationFaults(c).flatMap { $0.causes }.contains("app:file_ingestion_failure"))
     }
 
