@@ -193,6 +193,19 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      src/brainlayer/backup_credential_scan.py)
+        mapped=1
+        for rel in test_backup_credential_scan.py test_jsonl_backup.py; do
+          if [ -f "$TEST_ROOT/$rel" ]; then append_unique "$TEST_ROOT/$rel"; else mapped=0; fi
+        done
+        ;;
+      src/brainlayer/pipeline/secret_scrub.py)
+        # The backup's anchored detector lives here too; the generic rule would map only test_secret_scrub.py.
+        mapped=1
+        for rel in test_secret_scrub.py test_secret_scrub_anchors.py test_secret_scrub_token_families.py test_secret_scrub_label_regex.py test_backup_credential_scan.py; do
+          if [ -f "$TEST_ROOT/$rel" ]; then append_unique "$TEST_ROOT/$rel"; else mapped=0; fi
+        done
+        ;;
       .github/workflows/*.yml|.github/workflows/*.yaml)
         # Select the workflow's actual owners; unrelated CI guards cannot establish coverage.
         for test_path in "$TEST_ROOT"/test_*.py; do

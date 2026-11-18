@@ -53,9 +53,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic as _monotonic
 from time import sleep as _sleep
-from typing import Any
+from typing import Any, Callable
 
-from . import backup_age, backup_daily
+from . import backup_age, backup_credential_scan, backup_daily
+from .backup_credential_scan import CredentialScan
 from .queue_io import enqueue_store
 
 DEFAULT_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "claude-jsonl"]
@@ -1452,13 +1453,16 @@ class _HashingReader:
     than O(file). The largest real source JSONL is ~375MB, so that distinction matters.
     """
 
-    def __init__(self, handle: Any) -> None:
+    def __init__(self, handle: Any, observer: Callable[[bytes], None] | None = None) -> None:
         self._handle = handle
         self._digest = hashlib.sha256()
+        self._observer = observer
 
     def read(self, size: int = -1) -> bytes:
         chunk = self._handle.read(size)
         self._digest.update(chunk)
+        if self._observer is not None:
+            self._observer(chunk)
         return chunk
 
     def hexdigest(self) -> str:
@@ -1466,9 +1470,18 @@ class _HashingReader:
 
 
 def create_jsonl_bundle_with_digests(
-    candidates: list[JsonlCandidate], staging_dir: Path, *, date_stamp: str
+    candidates: list[JsonlCandidate],
+    staging_dir: Path,
+    *,
+    date_stamp: str,
+    credential_scan: CredentialScan | None = None,
 ) -> tuple[Path | None, dict[str, str], dict[str, int]]:
-    """Bundle completed source snapshots; return no archive when every source vanished."""
+    """Bundle completed source snapshots; return no archive when every source vanished.
+
+    ``credential_scan`` watches the bytes already being read and then reads each
+    member's own snapshot; it never changes what is archived and never opens a
+    source file itself.
+    """
     if not candidates:
         raise ValueError("create_jsonl_bundle requires at least one candidate")
     staging_dir = Path(staging_dir).expanduser()
@@ -1489,11 +1502,12 @@ def create_jsonl_bundle_with_digests(
                 # even partway through a read must leave no partial member in the gzip.
                 # Hash exactly the snapshot bytes, at O(buffer) memory. Following links
                 # and dereferencing hardlinks keeps every source a regular member.
+                file_scan = credential_scan.open_file(candidate.path, candidate.root) if credential_scan else None
                 with tempfile.TemporaryFile(dir=staging_dir) as snapshot:
                     try:
                         with candidate.path.open("rb") as handle:
                             info = tar.gettarinfo(fileobj=handle, arcname=_archive_name(candidate))
-                            reader = _HashingReader(handle)
+                            reader = _HashingReader(handle, file_scan.observe if file_scan else None)
                             tarfile.copyfileobj(reader, snapshot, info.size)
                     except OSError as exc:
                         if isinstance(exc, FileNotFoundError) or exc.errno == errno.ENOENT:
@@ -1501,6 +1515,9 @@ def create_jsonl_bundle_with_digests(
                         raise
                     snapshot.seek(0)
                     tar.addfile(info, snapshot)
+                    if file_scan is not None:
+                        # Reads the snapshot just archived, never the source.
+                        credential_scan.commit(file_scan, snapshot, mtime=info.mtime)
                 digests[candidate.path.as_posix()] = reader.hexdigest()
                 sizes[candidate.path.as_posix()] = info.size
         if not digests:
@@ -1935,13 +1952,32 @@ def run_backup(
     archive_path = None
     bundle_digests: dict[str, str] = {}
     bundle_sizes: dict[str, int] = {}
+    # A broken scan state never blocks the backup itself; the receipt says it failed.
+    scan_state_path = backup_credential_scan.state_path_for(state_path)
+    scan_error: str | None = None
+    try:
+        credential_scan = backup_credential_scan.start(state.get("files") or {}, state_path=scan_state_path, now=now)
+    except OSError as exc:
+        scan_error = f"credential scan state unavailable: {type(exc).__name__}"
+        credential_scan = CredentialScan(now=now)  # Still scans in full; nothing is trusted.
     if changed:
         archive_path, bundle_digests, bundle_sizes = create_jsonl_bundle_with_digests(
-            changed, staging_dir, date_stamp=date_stamp
+            changed, staging_dir, date_stamp=date_stamp, credential_scan=credential_scan
         )
         bundled = [candidate for candidate in changed if candidate.path.as_posix() in bundle_digests]
         vanished += len(changed) - len(bundled)
         changed = bundled
+    # Every run evaluates the alert, so a quiet week clears it even when nothing was bundled.
+    try:
+        retention_receipt["credential_scan"] = backup_credential_scan.apply_findings(
+            credential_scan, state_path=scan_state_path, alert_path=state_path.parent / "job-alerts.json"
+        )
+    except OSError as exc:
+        scan_error = scan_error or f"credential scan state unavailable: {type(exc).__name__}"
+    if scan_error is not None:
+        retention_receipt.setdefault("credential_scan", {})["error"] = scan_error
+        print(f"JSONL backup: {scan_error}", file=sys.stderr, flush=True)
+        _append_json_log(log_path, {"event": "credential_scan_error", "error": scan_error})
 
     if archive_path is None and pending_candidates:
         error = (
