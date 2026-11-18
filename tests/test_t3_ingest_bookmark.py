@@ -219,33 +219,32 @@ def test_phase_timings_present_in_result_and_health_for_full_and_idle(run):
 
 
 def test_phase_timings_measure_real_indexing_and_failure_health(run, tmp_path, monkeypatch):
-    from brainlayer.embeddings import EmbeddedChunk
     from brainlayer.vector_store import VectorStore
 
     destination = tmp_path / "dest.db"
     VectorStore(destination).close()
     monkeypatch.setattr(t3, "_index_chunks", run.real_index)
-    monkeypatch.setattr(
-        "brainlayer.index_new.embed_chunks",
-        lambda chunks: [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks],
-    )
     result = run()
     assert result.chunks_indexed == 2
-    for phase in ("read_ms", "chunk_ms", "change_check_ms", "embed_ms", "write_ms"):
+    for phase in ("read_ms", "chunk_ms", "change_check_ms", "write_ms"):
         assert getattr(result, phase) > 0
+    # Embedding is deferred to the hotlane: an honest 0 with its reason, never a made-up time.
+    assert result.embed_ms == 0 and result.embed_deferred_to == "hotlane"
+    health = json.loads(run.bookmark.with_name("health.json").read_text())
+    assert health["embed_ms"] == 0 and health["embed_deferred_to"] == "hotlane"
     event(run, text="updated")
 
-    def failed_embed(chunks):
-        raise RuntimeError("embedding failed")
+    def failed_write(self, chunks, vectors, **kwargs):
+        raise RuntimeError("write failed")
 
-    monkeypatch.setattr("brainlayer.index_new.embed_chunks", failed_embed)
-    with pytest.raises(RuntimeError, match="embedding failed"):
+    monkeypatch.setattr(VectorStore, "upsert_chunks", failed_write)
+    with pytest.raises(RuntimeError, match="write failed"):
         run()
     health = json.loads(run.bookmark.with_name("health.json").read_text())
     assert health["bookmark_held"] == "indexing_failure"
     assert health["read_ms"] > 0 and health["chunk_ms"] > 0
-    assert health["change_check_ms"] > 0 and health["embed_ms"] > 0
-    assert health["write_ms"] == 0
+    assert health["change_check_ms"] > 0 and health["write_ms"] > 0
+    assert health["embed_ms"] == 0
 
 
 def test_unchanged_legacy_does_not_read_v2_identity_set(run, tmp_path, monkeypatch):

@@ -27,7 +27,11 @@ from . import t3_bookmark
 
 logger = logging.getLogger(__name__)
 
+# Per-run write cap. Rows are written without a vector, so this bounds the burst the
+# hotlane backlog lane must embed; the remainder is held as pending_chunks.
 DEFAULT_T3_MAX_CHANGED_CHUNKS = 200
+# Who computes the vectors for rows this adapter writes (it never loads the model).
+T3_EMBED_DEFERRED_TO = "hotlane"
 
 T3_SOURCE = "t3"
 T3_PROVENANCE_CLASS = "t3-thread"
@@ -115,6 +119,8 @@ class T3IngestionResult:
     change_check_ms: float = 0.0
     embed_ms: float = 0.0
     write_ms: float = 0.0
+    # Why embed_ms is 0: the rows were written without vectors for this embedder.
+    embed_deferred_to: str | None = None
     mode: str = "full"
     events_read: int = 0
     bookmark_from: int | None = None
@@ -496,7 +502,7 @@ def _newest_chunk_key(chunk):
 def _index_chunks(
     chunks, *, source_file: str, project: str | None, db_path: Path, budget: _IndexBudget | None = None
 ) -> int:
-    from ..index_new import _scrubbed_chunk, embed_chunks, index_chunks_to_sqlite
+    from ..index_new import _scrubbed_chunk, index_chunks_to_sqlite
     from ..runtime_store import open_writer_store
     from ..system_prompt_guard import looks_like_system_prompt
 
@@ -507,8 +513,8 @@ def _index_chunks(
             for chunk in chunks
             if not chunk.metadata.get("is_system_prompt") and not looks_like_system_prompt(chunk.content)
         ]
-        # Match index admission before budgeting, change detection, and precomputing
-        # vectors. Empty inputs are handled skips, not pending writes to replay.
+        # Match index admission before budgeting and change detection.
+        # Empty inputs are handled skips, not pending writes to replay.
         admitted = [chunk for chunk in eligible if chunk.content.strip()]
         skipped_empty = len(eligible) - len(admitted)
         if skipped_empty:
@@ -516,39 +522,36 @@ def _index_chunks(
         eligible = admitted
         if budget.pending_ids is not None:
             eligible = [chunk for chunk in eligible if chunk.metadata["chunk_id"] in budget.pending_ids]
-        # Fail fast on an already-busy writer, then release it before model loading.
-        with open_writer_store(db_path) as store:
-            changed = _changed_chunks(eligible, store)
-        changed.sort(key=_newest_chunk_key, reverse=not budget.oldest_first)
-        selected = changed[: budget.remaining]
-        budget.remaining -= len(selected)
-        budget.deferred += len(changed) - len(selected)
-        budget.deferred_ids.update(chunk.metadata["chunk_id"] for chunk in changed[len(selected) :])
-    if not selected:
-        return 0
-    with _timed_phase(budget.timings, "embed_ms"):
-        computed = embed_chunks(selected)
     with ExitStack() as writers:
-        # Another writer may have indexed these IDs while we embedded.
+        # One writer hold covers the change check and the write, so no other indexer
+        # can land these IDs in between (main released the writer to embed and had to
+        # re-check). A connection that holds no pidfile could still land the same body
+        # in the gap before BEGIN IMMEDIATE, exactly as on main: its vector is kept and
+        # the upsert counts one more sighting. Only t3-ingest writes t3: ids.
         with _timed_phase(budget.timings, "change_check_ms"):
             store = writers.enter_context(open_writer_store(db_path))
-            changed = _changed_chunks(selected, store)
-        if not changed:
+            changed = _changed_chunks(eligible, store)
+            changed.sort(key=_newest_chunk_key, reverse=not budget.oldest_first)
+            selected = changed[: budget.remaining]
+            budget.remaining -= len(selected)
+            budget.deferred += len(changed) - len(selected)
+            budget.deferred_ids.update(chunk.metadata["chunk_id"] for chunk in changed[len(selected) :])
+        if not selected:
             return 0
-        admitted = {(chunk.metadata["chunk_id"], chunk.content) for chunk in changed}
-        computed = [ec for ec in computed if (ec.chunk.metadata["chunk_id"], ec.chunk.content) in admitted]
+        # Rows are written with no vector; the hotlane backlog lane embeds them.
+        # t3-ingest never loads the embedding model, so embed_ms stays 0.
         with _timed_phase(budget.timings, "write_ms"):
             indexed = index_chunks_to_sqlite(
-                changed,
+                selected,
                 source_file=source_file,
                 project=project,
                 db_path=db_path,
                 store=store,
-                precomputed_embeddings=computed,
+                defer_embedding=True,
             )
-        if indexed != len(changed):
+        if indexed != len(selected):
             raise RuntimeError(
-                f"T3 indexing incomplete: indexed {indexed} of {len(changed)} eligible chunks; retain rows for replay"
+                f"T3 indexing incomplete: indexed {indexed} of {len(selected)} eligible chunks; retain rows for replay"
             )
         return indexed
 
@@ -787,6 +790,8 @@ def ingest_t3(
                     batch, source_file=str(path), project=None, db_path=destination, budget=budget
                 )
             result.chunks_deferred = budget.deferred
+            if result.chunks_indexed:
+                result.embed_deferred_to = T3_EMBED_DEFERRED_TO
         except BaseException as exc:
             # Preserve failure/cancellation semantics and any committed rows for stable-ID replay.
             # A successful projection read must not remain the final health result of a failed import.
@@ -873,6 +878,7 @@ def ingest_t3(
                 "chunks_planned": result.chunks_planned,
                 "chunks_indexed": result.chunks_indexed,
                 "chunks_deferred": result.chunks_deferred,
+                "embed_deferred_to": result.embed_deferred_to,
                 "duplicates_accepted": result.duplicates_accepted,
                 "messages_skipped": sum(result.messages_skipped.values()),
             }
