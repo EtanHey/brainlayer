@@ -369,7 +369,8 @@ brainlayer search "how did I implement authentication"
   `forkedFrom={sessionId: <immediate parent>, messageUuid}`, then the fork's own entries without
   it. The tailer consumes a copy without emitting it only when ALL hold: `<fork dir>/<parent>.jsonl`
   was discovered this poll and is not denylisted; it is still the file the registry has been
-  reading (rewind generation 0, same inode as this poll's stat, confirmed offset ≤ size); AND the
+  reading and is FULLY READ (rewind generation 0, same inode as this poll's stat, confirmed
+  offset == current size; a partly read parent ingests the copies and dedupe merges them); AND the
   parent has rows the WATCHER wrote (`source='realtime_watcher'` or a `source_end_offset`;
   read-only, cached per poll, fail-closed).
   Stop-hook `source='realtime'` rows exist for every session and never count. Otherwise the copies

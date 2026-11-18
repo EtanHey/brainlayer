@@ -328,21 +328,52 @@ def test_restart_in_the_middle_of_skipped_copies_loses_and_duplicates_nothing(tm
     assert _from(sink, fork_path) == [row["uuid"] for row in rows if "forkedFrom" not in row]
 
 
-def test_health_shows_how_far_the_watcher_has_read_the_parent_a_skip_relies_on(tmp_path, projects):
-    # red-team 1828-a F2: a skip made while the parent is still being read is visible.
+def test_a_partly_read_parent_does_not_vouch_for_its_fork(tmp_path, projects):
+    # CodeRabbit r4617993065: a skip made while the parent is still being read relied on the
+    # watcher finishing that parent later. Now the copies ingest until the parent is confirmed
+    # to its full size; content dedupe merges them.
     parent_path = projects / f"{PARENT}.jsonl"
     parent_path.write_text("".join(json.dumps(_entry(PARENT, i, kind="parent")) + "\n" for i in range(250)))
-    watcher = _watcher(tmp_path, projects, _Sink(), _db(tmp_path, held=(PARENT,)))
+    sink = _Sink()
+    watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)))
     _settle(watcher)  # 100 of the parent's 250 lines read and registered
     fork_path = projects / f"{FORK}.jsonl"
-    _write_fork(fork_path, FORK, PARENT, copies=60, own=1)
+    rows = _write_fork(fork_path, FORK, PARENT, copies=60, own=1)
 
-    watcher.poll_once()  # parent at 200 of 250 lines; the fork's copies skip while it is read
+    _settle(watcher)  # the parent is still partly read when the fork is read
 
-    row = json.loads((tmp_path / "watcher-health.json").read_text())["fork_copy_files"][0]
-    assert row["parent_path"] == str(parent_path)
-    assert row["parent_size"] == parent_path.stat().st_size
-    assert 0 < row["parent_confirmed_offset"] < row["parent_size"]  # 100 of 250 lines per poll
+    assert watcher.registry.get(str(parent_path))[0] < parent_path.stat().st_size
+    assert _from(sink, fork_path) == [row["uuid"] for row in rows]
+    health = json.loads((tmp_path / "watcher-health.json").read_text())
+    assert health["fork_copies_skipped_total"] == 0
+    assert health["fork_copy_files"] == []
+
+
+@pytest.mark.parametrize("loss", ["deleted", "rewritten", "truncated"])
+def test_parent_lost_after_its_fork_was_read_mid_parent_loses_no_copied_turn(tmp_path, projects, loss):
+    # CodeRabbit r4617993065, as a fail-first test: on 7cf445cf the fork's copies were skipped
+    # while the parent stood at 100-200 of 250 confirmed lines; losing the parent then lost the
+    # turns the watcher had not reached.
+    parent_path = projects / f"{PARENT}.jsonl"
+    parent = [_entry(PARENT, i, kind="parent") for i in range(250)]
+    parent_path.write_text("".join(json.dumps(row) + "\n" for row in parent))
+    sink = _Sink()
+    watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)))
+    _settle(watcher)  # parent at 100 of 250
+    fork_path = projects / f"{FORK}.jsonl"
+    fork_path.write_text("".join(json.dumps(row) + "\n" for row in _copies_of(parent) + [_entry(FORK, 999)]))
+    _settle(watcher)  # the fork is read while the parent is only partly confirmed
+
+    if loss == "deleted":
+        parent_path.unlink()
+    elif loss == "rewritten":
+        parent_path.unlink()
+        parent_path.write_text("".join(json.dumps(_entry(PARENT, i, kind="other")) + "\n" for i in range(3)))
+    else:
+        parent_path.write_text("")
+    _settle(watcher, 10)
+
+    assert {row["message"]["content"] for row in parent} - _texts(sink) == set()
 
 
 # ── red-team 1828 re-check R1: a parent rewritten before it was fully read no longer holds the turns ──

@@ -2213,13 +2213,15 @@ class JSONLWatcher:
     def _parent_transcript_intact(self, parent_path: str) -> bool:
         """Whether the parent file on disk is still the one the registry has been reading.
 
-        A parent rewritten or truncated before the watcher finished it no longer holds the
-        turns its fork copied, so skipping those copies would lose them (red-team 1828 R1).
-        Refuse when a rewind generation was ever recorded for it (mark_rewind), when the
-        registry has no inode for it or a different one than this poll's stat (never
-        registered, or replaced), or when its confirmed offset is past the current size
-        (shrunk in place before this poll's read of the parent noticed). The skip does not
-        require the parent to be fully read: a live parent keeps growing.
+        A parent rewritten, truncated or deleted before the watcher finished it no longer
+        holds the turns its fork copied, so skipping those copies would lose them (red-team
+        1828 R1; CodeRabbit r4617993065). Skip only when the parent is FULLY READ: its
+        confirmed offset equals its current size, so every turn the fork copied is already
+        indexed and a later loss of the parent takes nothing away. A partly read parent
+        (behind, or a live one with new bytes) ingests the copies as before, and content
+        dedupe merges them. Also refuse when a rewind generation was ever recorded for it
+        (mark_rewind) or when the registry has no inode for it or a different one than this
+        poll's stat (never registered, or replaced).
         """
         stats = self._current_file_stats.get(parent_path)
         if stats is None:
@@ -2229,7 +2231,8 @@ class JSONLWatcher:
             self.registry.generation(parent_path) == 0
             and registry_inode != 0
             and registry_inode == stats[2]
-            and confirmed_offset <= stats[1]
+            # Fully read: the copies then add nothing a later parent loss could take away.
+            and confirmed_offset == stats[1]
         )
 
     def _fork_copy_skipper(self, filepath: str) -> Callable[[dict], bool] | None:
@@ -2241,10 +2244,11 @@ class JSONLWatcher:
         already in BrainLayer under the parent's conversation_id when the parent was indexed;
         reading them again only feeds content dedupe. A copy is skipped only when ALL hold:
         the parent transcript <fork dir>/<parent>.jsonl was discovered this poll and is not
-        denylisted (so the watcher itself reads it in full), it is still the file the registry
-        has been reading (_parent_transcript_intact), and the watcher has already written rows
-        for the parent. Otherwise the copies ingest as before, so a fork that is the only
-        remaining copy -- parent file gone, elsewhere, excluded or rewritten -- is never lost.
+        denylisted; it is still the file the registry has been reading AND the watcher has
+        confirmed it to its current size (_parent_transcript_intact); and the watcher has
+        written rows for the parent. Otherwise the copies ingest as before, so a fork that is
+        the only remaining copy -- parent file gone, elsewhere, excluded, rewritten, or not yet
+        fully read -- is never lost.
         """
         if self.provider_for_file(filepath) != "claude" or self.db_path is None:
             return None
