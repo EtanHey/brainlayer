@@ -796,6 +796,7 @@ def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp
         "test_search_trigram_fts.py",
         "test_precompact_chunk_origin.py",
         "test_ingest_t3.py",
+        "test_t3_ingest_deferred_embedding.py",
         "test_context_pipeline.py",
         "test_index_empty_content.py",
         "test_index_checkpoint_boundary.py",
@@ -2203,12 +2204,22 @@ IDX_FOCUSED_MAPPINGS = (
             "test_index_calendar_deferrals.py",
         ),
     ),
-    ("ingest/t3", ("test_ingest_t3.py", "test_health_check.py", "test_paths.py")),
+    (
+        "ingest/t3",
+        (
+            "test_ingest_t3.py",
+            "test_t3_ingest_deferred_embedding.py",
+            "test_t3_ingest_bookmark.py",
+            "test_health_check.py",
+            "test_paths.py",
+        ),
+    ),
     (
         "index_new",
         (
             "test_source_class.py",
             "test_ingest_t3.py",
+            "test_t3_ingest_deferred_embedding.py",
             "test_context_pipeline.py",
             "test_index_empty_content.py",
             "test_index_checkpoint_boundary.py",
