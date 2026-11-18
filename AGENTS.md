@@ -364,6 +364,14 @@ brainlayer search "how did I implement authentication"
   nothing** — that is the split, not a dead watcher. The heartbeat is deliberately NOT duplicated
   onto stdout: one signal, one writer.
   `tests/test_jsonl_watcher.py::TestWatcherLivenessSurface` pins all three halves.
+- **A forked Claude chat starts at its fork point.** Claude Code writes a fork (/side, a resumed
+  fork) as the parent's entries copied under the fork's sessionId, each carrying
+  `forkedFrom={sessionId: <immediate parent>, messageUuid}`, then the fork's own entries without
+  it. The tailer consumes a copy without emitting it only while the DB already holds rows for
+  that parent (`chunks.conversation_id`, read-only, cached per poll, fail-closed); otherwise the
+  copies ingest as before. Skipped copies are neutral lines and do not count toward
+  `max_lines_per_file` (up to 25,000 per read). Health: `fork_copies_skipped_total`,
+  `fork_copy_files`. Only Claude has a per-entry fork marker; Codex's is header-level.
 - Source: `watcher.py` (tailer + indexer), `watcher_bridge.py` (pipeline integration)
 
 <!-- ARCHITECTURE: chunk lifecycle columns superseded_by/aggregated_into/archived_at; brain_supersede has safety gate for personal data; brain_archive is soft-delete -->
