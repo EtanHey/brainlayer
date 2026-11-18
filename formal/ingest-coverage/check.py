@@ -102,8 +102,9 @@ CASES = [
     case(
         "real-catchup-then-lag",
         "guarantee",
-        "WATCHER-CATCHUP: a lag that stops shrinking still leaves green within 2 ticks and stays non-green",
+        "WATCHER-CATCHUP: a lag that stops shrinking still leaves green within 2 ticks, stays non-green, reaches red",
         faults=("none", "catchup", "lag"),
+        inv=(*THREE, "StallReachesRed"),
     ),
     case(
         "before-fix-catchup",
@@ -113,6 +114,22 @@ CASES = [
         faults=("none", "catchup"),
         inv=("CatchUpIsNeverRed",),
         expect="CatchUpIsNeverRed",
+    ),
+    case(
+        "real-fakecatch",
+        "guarantee",
+        "#1827 r1: catching_up labels between stall checks (no real progress) hold the count; a stall still reaches red",
+        faults=("none", "lag", "fakecatch"),
+        inv=(*THREE, "StallReachesRed"),
+    ),
+    case(
+        "before-fix-fakecatch",
+        "history",
+        "0730dd20's verdict (Mut catch_resets): a catching_up label reset the count, so a flickering stall never went red",
+        mut="catch_resets",
+        faults=("none", "lag", "fakecatch"),
+        inv=("StallReachesRed",),
+        expect="StallReachesRed",
     ),
     case(
         "real-heartbeat-mix",

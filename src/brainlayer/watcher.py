@@ -684,16 +684,19 @@ class CoverageWatchdog:
         alert_after_s: float = 300.0,
         progress_span_s: float = 60.0,
         rate_window_s: float = 300.0,
+        max_eta_s: float = 6 * 3600.0,
         now_fn: Callable[[], float] = time.monotonic,
     ):
         self.coverage_ratio_threshold = coverage_ratio_threshold
         self.lag_threshold_bytes = lag_threshold_bytes
         self.alert_after_s = alert_after_s
-        # A lag counts as shrinking only against a sample at least progress_span_s old (two
-        # 30 s polls), so one lucky poll cannot pass for progress and a stall shows within
-        # about that long. The drain rate behind the estimate is measured over rate_window_s.
+        # Catching up = net progress over the WHOLE rate_window_s (the 300 s alert window): every
+        # lagging file below every sample of it (a new low), with at least progress_span_s of
+        # history, and an ETA no longer than max_eta_s. A sawtooth that grows overall, a reader
+        # re-reading from 0, or a lag shrinking a few bytes a poll is a stall (#1827 round 1).
         self.progress_span_s = progress_span_s
         self.rate_window_s = max(rate_window_s, progress_span_s)
+        self.max_eta_s = max_eta_s
         self.now_fn = now_fn
         self._coverage_bad_since: float | None = None
         self._lag_bad_since: float | None = None
@@ -703,23 +706,28 @@ class CoverageWatchdog:
     def _catch_up(self, now: float, over: dict[str, int]) -> tuple[bool, float | None, float | None]:
         """(shrinking, eta_s, drain_bytes_per_s) for the files over the lag threshold.
 
-        Shrinking means EVERY such file is smaller behind than it was in the newest sample at least
-        progress_span_s old. A file absent from that sample was under the threshold then, so it
-        grew: not shrinking. No sample old enough yet: not proven, so not shrinking. One stalled
-        file therefore keeps offset_lag even while a bigger file drains beside it.
+        Shrinking means EVERY such file is behind by less than in EVERY sample of the last
+        rate_window_s (a new low over the window), the window spans at least progress_span_s, and
+        each file's ETA at its window rate is at most max_eta_s. A file absent from a sample was
+        under the threshold then, so it grew: not shrinking. One stalled file therefore keeps
+        offset_lag even while a bigger file drains beside it.
         """
-        base = next((s for t, s in reversed(self._lag_samples) if now - t >= self.progress_span_s), None)
-        if base is None or not over or any(f not in base or lag >= base[f] for f, lag in over.items()):
+        window = [(t, s) for t, s in self._lag_samples if now - t <= self.rate_window_s]
+        if not over or not window or now - window[0][0] < self.progress_span_s:
             return False, None, None
+        then, oldest = window[0]
         eta_s = 0.0
         rate_total = 0.0
         for filepath, lag in over.items():
-            then, old = next((t, s[filepath]) for t, s in self._lag_samples if filepath in s)
-            rate = (old - lag) / (now - then) if now > then and old > lag else 0.0
-            if rate <= 0:
-                return True, None, None
+            past = [sample.get(filepath) for _t, sample in window]
+            if any(p is None or lag >= p for p in past):
+                return False, None, None
+            rate = (oldest[filepath] - lag) / (now - then)
+            eta = lag / rate
+            if eta > self.max_eta_s:
+                return False, None, None
             rate_total += rate
-            eta_s = max(eta_s, lag / rate)
+            eta_s = max(eta_s, eta)
         return True, eta_s, rate_total
 
     def evaluate(
@@ -757,10 +765,10 @@ class CoverageWatchdog:
             self._lag_bad_since = now if self._lag_bad_since is None else self._lag_bad_since
             state = CATCH_UP_BEHIND
             if now - self._lag_bad_since >= self.alert_after_s:
-                # A lag that is still shrinking is progress, not a stall: it is published as
-                # catch_up.state = catching_up, never as an alert reason (BrainBar and the health
-                # verdict make an unknown alert reason a "needs you"). A lag that stops shrinking
-                # is offset_lag at once, because the episode clock kept running throughout.
+                # Net progress (see _catch_up) is published as catch_up.state = catching_up,
+                # never as an alert reason (BrainBar and the health verdict make an unknown alert
+                # reason a "needs you"). Anything else is offset_lag at once, because the episode
+                # clock kept running throughout.
                 state = CATCH_UP_CATCHING_UP if shrinking else CATCH_UP_STALLED
                 if not shrinking:
                     reasons.append("offset_lag")
@@ -1980,6 +1988,26 @@ class JSONLWatcher:
                 )
                 self._advance_quarantined_offsets(filepath, source_inode, source_generation)
 
+    def _prune_persisted_growth_backfill(self) -> None:
+        """Drop a plain file's backfill marker once offsets.json holds an offset past its frontier.
+
+        Called right after a registry flush. The marker lives in watcher-health.json and the
+        checkpoint in offsets.json, flushed on different clocks. Dropping the marker on a READ (or
+        an unflushed confirmed) offset let a restart re-read from the on-disk offset with no marker,
+        take the whole file as a fresh backfill, and miss every line after the original frontier
+        (#1827 round 1; catch-up made a full read in one poll reachable for any file size).
+        """
+        for filepath, marker in list(self._growth_backfill.items()):
+            # A known frontier is a logical (decoded) offset for both representations, the same
+            # unit as the registry checkpoint. An unknown archive frontier is left to decoded EOF.
+            if not marker.get("frontier_known", not marker.get("compressed", False)):
+                continue
+            if (
+                self.registry.generation(filepath) == marker["generation"]
+                and self.registry.get(filepath)[0] >= marker["frontier"]
+            ):
+                self._growth_backfill.pop(filepath, None)
+
     def _confirmed_fingerprint(self, filepath: str, offset: int, source_inode: int) -> str | None:
         tailer = self._tailers.get(filepath)
         if tailer is None or tailer.observed_inode != source_inode:
@@ -2219,6 +2247,10 @@ class JSONLWatcher:
         discovery walk: the round works from this poll's stats, so a live file is caught up to
         the size it had at discovery and its newer bytes wait for the next poll like everyone
         else's. A file whose round moved nothing leaves the rounds for this poll.
+
+        No rounds while the indexer holds failed writes (the queue or DB write path is down):
+        reading ahead into a failing write path only grows retained memory and retries, and gains
+        nothing (#1827 round 1). Each round rescans only the previous round's behind files.
         """
         self._catch_up_rounds = 0
         self._catch_up_s = 0.0
@@ -2227,22 +2259,24 @@ class JSONLWatcher:
             return
         started = time.monotonic()
         deadline = started + self.catch_up_budget_s
-        done: set[str] = set()
+        behind = files
         try:
             while True:
-                behind = [f for f in files if f not in done and self._catch_up_position(f) is not None]
-                if not behind:
+                behind = [f for f in behind if self._catch_up_position(f) is not None]
+                if not behind or self.indexer.retained_failed_input_count() > 0:
                     return
                 self._catch_up_rounds += 1
+                moved = []
                 for filepath in behind:
-                    if time.monotonic() >= deadline:
+                    if time.monotonic() >= deadline or self.indexer.retained_failed_input_count() > 0:
                         return
                     before = self._catch_up_position(filepath)
                     if before is None:
                         continue
                     yield filepath
-                    if self._catch_up_position(filepath) in (before, None):
-                        done.add(filepath)
+                    if self._catch_up_position(filepath) not in (before, None):
+                        moved.append(filepath)
+                behind = moved
         finally:
             self._catch_up_s = time.monotonic() - started
 
@@ -2526,7 +2560,12 @@ class JSONLWatcher:
         return max(self._offset_lags(files).values(), default=0)
 
     def _offset_lags(self, files: list[str]) -> dict[str, int]:
-        """Bytes each file is behind its discovered size; files with no lag are left out."""
+        """Bytes each file is behind its discovered size; files with no lag are left out.
+
+        A plain file is measured from its CONFIRMED offset (the registry checkpoint), not the read
+        offset: bytes read into memory whose writes fail are not progress, so a failing write path
+        can never read as catching up (#1827 round 1). Archives keep the tailer's decoded offset.
+        """
         lags: dict[str, int] = {}
         for filepath in files:
             # Discovery stat'd every one of these moments ago; re-statting the whole corpus
@@ -2540,7 +2579,8 @@ class JSONLWatcher:
                 except OSError:
                     continue
             tailer = self._tailers.get(filepath)
-            offset = tailer.offset if tailer else self.registry.get(filepath)[0]
+            compressed = self._physical_files.get(filepath, filepath).endswith(".zst")
+            offset = tailer.offset if tailer and compressed else self.registry.get(filepath)[0]
             if size > offset:
                 lags[filepath] = size - offset
         return lags
@@ -3198,9 +3238,19 @@ class JSONLWatcher:
                         read + raw_count - classes.count("neutral") - blanks,
                         recognised + classes.count("recognised"),
                     )
-                    if filepath in self._growth_backfill and (
-                        (compressed and tailer.decoded_eof and not tailer._buffer)
-                        or (not compressed and tailer.offset >= frontier)
+                    # A plain file's backfill ends only once a PERSISTED offset reaches its frontier
+                    # (_prune_persisted_growth_backfill, after each registry flush), never at a read
+                    # offset: a restart re-reads from offsets.json and must still find the original
+                    # frontier (#1827 round 1).
+                    # An archive whose decoded frontier is still unknown has no offset to compare,
+                    # so it keeps the decoded-EOF rule.
+                    marker = self._growth_backfill.get(filepath)
+                    if (
+                        marker is not None
+                        and compressed
+                        and not marker.get("frontier_known", False)
+                        and tailer.decoded_eof
+                        and not tailer._buffer
                     ):
                         self._growth_backfill.pop(filepath, None)
                     reconcile_through = getattr(tailer, "_archive_reconcile_through", 0)
@@ -3271,7 +3321,8 @@ class JSONLWatcher:
             # Periodic registry flush
             now = time.monotonic()
             if now - self._last_registry_flush >= self.registry_flush_interval_s:
-                self.registry.flush()
+                if self.registry.flush():  # offsets.json now holds every in-memory checkpoint
+                    self._prune_persisted_growth_backfill()
                 self._last_registry_flush = now
 
             # Remember what we saw this pass so the next poll can skip files whose bytes

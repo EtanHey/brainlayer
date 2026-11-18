@@ -22,7 +22,15 @@
      catching_up and no alert reason; the verdict holds it amber and never counts
      it toward red. Mut = "catchup_lag" is the code before that change: a
      shrinking lag was offset_lag, red on the AlertRed-th check (the M4's 18 Nov
-     red, hours on a draining 146 MB transcript). *)
+     red, hours on a draining 146 MB transcript).
+   - "fakecatch" (#1827 round 1): the watcher LABELS a tick catching_up while no
+     progress happens (0730dd20's 60 s look-back did this for a growing sawtooth
+     or a re-read loop). The verdict cannot tell a lie from progress, so a
+     catching_up snapshot HOLDS the alert count (never resets it); a stall that
+     flickers to catching_up still reaches red on its AlertRed-th stall check.
+     Mut = "catch_resets" is 0730dd20's verdict (a catching_up snapshot reset
+     the count; red never stepped down). A measured catch-up steps a red check
+     down to amber (round-1 lead decision); the next stall is red again. *)
 EXTENDS Integers, Sequences
 
 CONSTANTS AmberT, RedT, UnknownAmber, Recovery, SleepGap, WakeGrace, AlertRed,
@@ -31,14 +39,14 @@ CONSTANTS AmberT, RedT, UnknownAmber, Recovery, SleepGap, WakeGrace, AlertRed,
 VARIABLES t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
           v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun, faultEver, wokeInStall, obs,
           covPrev, rootPrev, covLinger, fileNew, sBlind, partialRun, growthSamples, growthAge, growthAlarm,
-          fileCatch
+          fileCatch, lagRun, readLag
 
 NoScript == <<>>   \* cfg files cannot spell <<>>: they say Script <- NoScript
 
 vars == <<t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
           v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun, faultEver, wokeInStall, obs,
           covPrev, rootPrev, covLinger, fileNew, sBlind, partialRun, growthSamples, growthAge, growthAlarm,
-          fileCatch>>
+          fileCatch, lagRun, readLag>>
 
 (* The eight shapes, with shape 8 split in two. "stuck" is a live process whose
    poll loop no longer completes, so poll_count and updated_at freeze together
@@ -52,8 +60,9 @@ vars == <<t, fault, asleep, slept, hbA, hbW, pA, pW, resumed, grace,
    finding-real-drift shows it stays green. *)
 Shapes == {"dead", "stuck", "lag", "coverage", "dbfail",
            "blind_stale", "blind_unreadable", "rootgone", "rewrite", "rewrite_lossy", "drift", "growth", "partial",
-           "catchup"}
-NoProgress == {"dead", "stuck", "lag", "coverage", "dbfail", "rootgone", "rewrite_lossy", "drift", "growth"}
+           "catchup", "fakecatch"}
+NoProgress == {"dead", "stuck", "lag", "coverage", "dbfail", "rootgone", "rewrite_lossy", "drift", "growth",
+               "fakecatch"}
 \* Ground truth: records these faults consume and never index (independent of Mut).
 Dropping == {"coverage", "rewrite_lossy", "drift", "growth"}
 \* Mutation rewrite_progress: count every rewrite as progress, lossy or not.
@@ -76,7 +85,7 @@ Init == /\ t = 0 /\ fault = "none" /\ asleep = FALSE /\ slept = 0
         /\ backlog = FALSE /\ dropped = FALSE /\ stall = 0 /\ blindRun = 0 /\ faultEver = FALSE /\ wokeInStall = FALSE
         /\ obs = "fresh" /\ covPrev = FALSE /\ rootPrev = FALSE /\ covLinger = FALSE
         /\ growthSamples = <<0,0,0,0,0,0,0>> /\ growthAge = 0 /\ growthAlarm = FALSE
-        /\ fileNew = FALSE /\ sBlind = 0 /\ partialRun = 0 /\ fileCatch = FALSE
+        /\ fileNew = FALSE /\ sBlind = 0 /\ partialRun = 0 /\ fileCatch = FALSE /\ lagRun = 0 /\ readLag = FALSE
         /\ IF Script = <<>> THEN InitSteady \/ InitFresh ELSE InitSteady
 
 (* Lid closed: no watcher poll, no agent writes, no health tick. Wall time runs. *)
@@ -92,7 +101,7 @@ Sleep == /\ asleep' = TRUE
          /\ t' = IF Script = <<>> THEN t ELSE t + 1
          /\ UNCHANGED <<fault, hbA, pA, v, unk, good, alertT, fileAlert, backlog, dropped, stall, blindRun,
                         faultEver, wokeInStall, covPrev, rootPrev, covLinger, fileNew, sBlind, partialRun,
-                        fileCatch>>
+                        fileCatch, lagRun, readLag>>
 
 (* One awake health tick. f: the fault this tick; w: the agent appends;
    o: on the first tick after a wake, whether the monitor reads before the
@@ -147,7 +156,7 @@ Tick(f, w, o) ==
       gAlarm == ~recognised /\ (growthAlarm \/ (gAge >= 7 /\ previousVolume + incoming >= 200))
       \* catchup: a shrinking lag. The real watcher publishes catching_up (no alert reason);
       \* mutation catchup_lag publishes offset_lag for it, as before WATCHER-CATCHUP.
-      catchWritten == f = "catchup" /\ Mut # "catchup_lag"
+      catchWritten == f \in {"catchup", "fakecatch"} /\ Mut # "catchup_lag"
       alertWritten == \/ gAlarm /\ Mut # "no_growth"
                       \/ f = "lag" /\ backlogNow
                       \/ f = "catchup" /\ Mut = "catchup_lag"
@@ -162,20 +171,22 @@ Tick(f, w, o) ==
       inFile == IF f = "partial" THEN FALSE ELSE IF early THEN alertWritten ELSE fileAlert
       inCatch == IF f = "partial" THEN FALSE ELSE IF early THEN catchWritten ELSE fileCatch
       advanced == early \/ fileNew \/ alertT = 0
+      \* A catching_up-only snapshot HOLDS the count (round 1); Mut catch_resets = 0730dd20 resets it.
       aT == CASE Rule # "real" -> 0
               [] ~codesSeen -> alertT
-              [] advanced -> IF inFile THEN Min(alertT + 1, Cap) ELSE 0
+              [] advanced -> IF inFile THEN Min(alertT + 1, Cap)
+                             ELSE IF inCatch /\ Mut # "catch_resets" THEN alertT ELSE 0
               [] OTHER -> alertT
       \* a missing file is "observed, nothing there" (codes ()), not a blind stall reading
       sB == CASE Rule # "real" -> 0
               [] codesSeen -> 0
               [] seen \/ f = "blind_unreadable" -> Min(sBlind + 1, Cap)
               [] OTHER -> sBlind
-      \* catching_up never counts into aT (inFile is FALSE for it, so a new snapshot resets
-      \* the count); it is amber on its own (health_verdict._ingest_stall).
-      alertState == CASE aT >= AlertRed -> "red"
+      \* A catching_up-only snapshot reads amber whatever the held count (health_verdict._ingest_stall).
+      catchOnly == Rule = "real" /\ codesSeen /\ inCatch /\ ~inFile
+      alertState == CASE catchOnly -> "amber"
+                      [] aT >= AlertRed -> "red"
                       [] aT > 0 -> "amber"
-                      [] Rule = "real" /\ codesSeen /\ inCatch -> "amber"
                       [] sB >= UnknownAmber -> "amber"
                       [] OTHER -> "green"
       raw0 == CASE Mut = "stale_green" /\ seen -> "green"           \* age ignored
@@ -189,15 +200,17 @@ Tick(f, w, o) ==
       unk1 == IF raw = "unknown" THEN Min(unk + 1, Cap) ELSE 0   \* every value >= UnknownAmber acts alike
       base == IF v \in {"green", "amber", "red"} THEN v ELSE "unknown"
       g1 == IF raw # "green" \/ ~evidence THEN 0 ELSE good
+      \* round 1: a measured catch-up amber (_Raw.progress) steps a red check down
+      stepDown == catchOnly /\ raw = "amber" /\ Mut # "catch_resets"
       vNext == CASE raw = "unknown" ->
                       IF base = "red" THEN "red" ELSE IF unk1 >= UnknownAmber THEN "amber" ELSE base
                  [] ~evidence /\ NonGreen(v) /\ Rank(raw) < Rank(v) -> v
-                 [] v = "red" /\ raw = "amber" -> "red"
+                 [] v = "red" /\ raw = "amber" /\ ~stepDown -> "red"
                  [] raw = "green" /\ NonGreen(v) -> IF g1 + 1 < Recovery THEN v ELSE "green"
                  [] OTHER -> raw
       goodNext == CASE raw = "unknown" -> 0
                     [] ~evidence /\ NonGreen(v) /\ Rank(raw) < Rank(v) -> 0
-                    [] v = "red" /\ raw = "amber" -> 0
+                    [] v = "red" /\ raw = "amber" /\ ~stepDown -> 0
                     [] raw = "green" /\ NonGreen(v) -> IF g1 + 1 < Recovery THEN g1 + 1 ELSE 0
                     [] OTHER -> 0
       stalledNow == backlogNow /\ ~progress
@@ -214,6 +227,13 @@ Tick(f, w, o) ==
      /\ alertT' = aT
      /\ fileAlert' = IF writes THEN alertWritten ELSE fileAlert
      /\ fileCatch' = IF writes THEN catchWritten ELSE fileCatch
+     \* ghost: stall-coded snapshots the monitor READ (a new one) in the current no-progress
+     \* episode. A catching_up label in between (fakecatch) never erases them; progress does.
+     /\ lagRun' = IF ~stalledNow THEN 0
+                  ELSE IF Rule = "real" /\ codesSeen /\ advanced /\ inFile THEN Min(lagRun + 1, Cap)
+                  ELSE lagRun
+     \* ghost: this tick's read was a stall-coded snapshot
+     /\ readLag' = (Rule = "real" /\ codesSeen /\ inFile)
      /\ backlog' = (backlogNow /\ ~progress)
      /\ dropped' = (backlogNow /\ f \in Dropping)
      /\ stall' = IF stalledNow THEN Min(stall + 1, Cap) ELSE 0
@@ -260,6 +280,14 @@ StallAcrossWakeStillCounts == (wokeInStall /\ stall > N /\ (fault # "growth" \/ 
    is progress and never turns the check red. It is still amber (non-green) while
    it lasts; checked in real-catchup together with the stall invariants. *)
 CatchUpIsNeverRed == Faults \subseteq {"none", "catchup"} => v # "red"
+(* #1827 round 1: a stall reaches RED on time, whatever catching_up labels the
+   watcher puts between its stall checks. The verdict counts the snapshots it
+   READS (one per health tick; a watcher poll it never reads cannot count), so:
+   once the monitor has read AlertRed stall-coded snapshots in one no-progress
+   episode, a tick that reads a stall-coded snapshot is red. Non-green alone
+   (IngestFailureLeavesGreen) cannot see 0730dd20's fault: a catching_up label
+   reset the count, so a flickering stall stayed amber forever. *)
+StallReachesRed == (lagRun >= AlertRed /\ readLag) => v = "red"
 (* Replay helper: violated exactly when the script has run, so TLC prints it. *)
 ScriptRunning == t < Len(Script)
 =============================================================================

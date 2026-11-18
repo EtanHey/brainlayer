@@ -22,7 +22,7 @@ import pytest
 
 from brainlayer.health_facts import watcher_health_fact
 from brainlayer.health_verdict import UNOBSERVED
-from brainlayer.watcher import CoverageWatchdog, JSONLWatcher, WatchRoot
+from brainlayer.watcher import CoverageWatchdog, JSONLWatcher, OffsetRegistry, WatchRoot
 from tests.test_health_facts import NOW, _config, _verdict_ticks
 
 PAD = "x" * 160
@@ -43,11 +43,25 @@ def _sessions(tmp_path):
     return sessions
 
 
+def _confirming(flushed):
+    """A flush that succeeds and confirms what it wrote, like the real queue writer."""
+
+    def flush(items):
+        flushed.extend(items)
+        confirmed: dict[str, int] = {}
+        for item in items:
+            source = item["_source_file"]
+            confirmed[source] = max(confirmed.get(source, 0), item["_line_end_offset"])
+        return confirmed
+
+    return flush
+
+
 def _watcher(tmp_path, sessions, flushed, **kwargs):
     return JSONLWatcher(
         watch_roots=[WatchRoot("codex", sessions)],
         registry_path=tmp_path / "offsets.json",
-        on_flush=lambda items: flushed.extend(items),
+        on_flush=_confirming(flushed),
         batch_size=10,
         health_path=tmp_path / "watcher-health.json",
         **kwargs,
@@ -160,14 +174,15 @@ def test_a_bad_budget_value_falls_back_to_the_default(tmp_path, monkeypatch, raw
     assert watcher.catch_up_budget_s == 10.0
 
 
-def test_a_file_that_fails_every_read_takes_no_catch_up_rounds(tmp_path):
+def test_a_failing_write_path_takes_no_catch_up_rounds_and_never_reads_as_catching_up(tmp_path):
+    # Round 1 (a F3 = b F3): the old name claimed a failing READ; this is every FLUSH failing
+    # (queue or DB write path down). Reading ahead into it only grows retained memory.
     sessions = _sessions(tmp_path)
     big = sessions / "big.jsonl"
-    _write_lines(big, "big", 0, 500)
-    calls = []
+    _write_lines(big, "big", 0, 3000)
+    clock = [0.0]
 
     def always_fails(items):
-        calls.append(len(items))
         raise RuntimeError("writer unavailable")
 
     watcher = JSONLWatcher(
@@ -177,12 +192,80 @@ def test_a_file_that_fails_every_read_takes_no_catch_up_rounds(tmp_path):
         batch_size=10,
         flush_interval_ms=360000,
         catch_up_budget_s=5,
+        health_path=tmp_path / "watcher-health.json",
+        coverage_watchdog=CoverageWatchdog(lag_threshold_bytes=1000, alert_after_s=60, now_fn=lambda: clock[0]),
     )
-    started = time.monotonic()
+    states = []
+    for _ in range(4):
+        watcher.poll_once()
+        clock[0] += 30
+        health = json.loads((tmp_path / "watcher-health.json").read_text())
+        assert watcher._catch_up_rounds == 0
+        assert watcher.indexer.retained_failed_input_count() <= 4 * 100  # one slice a poll, as on main
+        # bytes_behind is CONFIRMED progress: nothing was confirmed, so the whole file is behind
+        assert health["catch_up"]["bytes_behind"] == big.stat().st_size
+        states.append(health["catch_up"]["state"])
+    assert "catching_up" not in states
+    assert watcher.registry.get(str(big))[0] == 0  # nothing confirmed, nothing checkpointed
+
+
+def _flush_test_watcher(tmp_path, monkeypatch, on_flush, batch_size):
+    monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
+    sessions = _sessions(tmp_path)
+    rollout = sessions / "rollout.jsonl"
+    watcher = JSONLWatcher(
+        watch_roots=[WatchRoot("codex", sessions)],
+        registry_path=tmp_path / "offsets.json",
+        on_flush=on_flush,
+        batch_size=batch_size,
+        flush_interval_ms=360000,
+        catch_up_budget_s=5,  # catch-up ON: the pinned tests' safety subject, unpinned (b F5)
+    )
+    return watcher, rollout
+
+
+def test_with_catch_up_on_retained_unconfirmed_entries_are_never_checkpointed(tmp_path, monkeypatch):
+    def fail_flush(_items):
+        raise RuntimeError("write unavailable")
+
+    watcher, rollout = _flush_test_watcher(tmp_path, monkeypatch, fail_flush, 10)
+    rollout.write_text(json.dumps({"role": "user", "content": "pending"}) + "\n")
     watcher.poll_once()
-    assert time.monotonic() - started < 3  # did not spin the 5 s budget on a failing file
-    # nothing was confirmed, so nothing was checkpointed, catch-up or not
-    assert watcher.registry.get(str(big))[0] == 0
+    with rollout.open("a") as handle:
+        handle.write(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
+    for _ in range(3):
+        watcher.poll_once()
+        assert watcher.registry.get(str(rollout)) == (0, 0)
+
+
+def test_with_catch_up_on_the_checkpoint_never_passes_a_partial_watermark(tmp_path, monkeypatch):
+    first_end = len(json.dumps({"role": "user", "content": "first"}) + "\n")
+    watcher, rollout = _flush_test_watcher(
+        tmp_path, monkeypatch, lambda items: {items[0]["_source_file"]: items[0]["_line_end_offset"]}, 2
+    )
+    rollout.write_text(
+        json.dumps({"role": "user", "content": "first"})
+        + "\n"
+        + json.dumps({"role": "user", "content": "second"})
+        + "\n"
+    )
+    watcher.poll_once()
+    confirmed = watcher.registry.get(str(rollout))
+    assert confirmed[0] == first_end
+    with rollout.open("a") as handle:
+        handle.write(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
+    for _ in range(3):
+        watcher.poll_once()
+        assert watcher.registry.get(str(rollout)) == confirmed
+
+
+def test_with_catch_up_on_an_unparsed_window_is_never_checkpointed(tmp_path, monkeypatch):
+    watcher, rollout = _flush_test_watcher(tmp_path, monkeypatch, lambda _items: None, 10)
+    rollout.write_text(json.dumps({"role": "user", "content": "x" * 256}) + "\n")
+    for _ in range(3):
+        watcher.poll_once()
+        watcher.registry.flush()
+        assert OffsetRegistry(tmp_path / "offsets.json").get(str(rollout)) == (0, 0)
 
 
 # ── What the watcher publishes ───────────────────────────────────────────────
@@ -306,3 +389,90 @@ def test_a_malformed_catch_up_block_is_unreadable_not_a_clean_reading(tmp_path):
         assert watcher_health_fact(config.watcher_health_path)[1] is UNOBSERVED
     config.watcher_health_path.write_text(json.dumps({**_payload(), "updated_at": NOW.isoformat()}))
     assert watcher_health_fact(config.watcher_health_path)[1] == ()  # an older watcher: no block, no code
+
+
+# ── Round 1: amber only for genuine progress ─────────────────────────────────
+
+
+def _watchdog_states(lags: list[int], **kwargs) -> list[str]:
+    """One file's lag per 30 s poll through the real CoverageWatchdog; the catch_up state each poll."""
+    clock = [0.0]
+    watchdog = CoverageWatchdog(lag_threshold_bytes=1_048_576, now_fn=lambda: clock[0], **kwargs)
+    states = []
+    for lag in lags:
+        result = watchdog.evaluate(
+            active_entries_per_minute=0,
+            realtime_inserts_per_minute=0,
+            max_offset_lag_bytes=lag,
+            lag_by_file={"f": lag},
+        )
+        assert ("offset_lag" in result["alert_reasons"]) == (result["catch_up"]["state"] == "stalled")
+        states.append(result["catch_up"]["state"])
+        clock[0] += 30
+    return states
+
+
+def test_a_lag_that_grows_overall_in_a_sawtooth_is_a_stall_never_catching_up():
+    # Reviewer a's sawtooth: 5 MB behind, 200 KB read a poll, a 900 KB burst every 3rd poll;
+    # over 6 h (720 polls) the lag grows 5.0 -> 76 MB. 0730dd20 called 237 of those polls
+    # catching_up (a 60 s look-back); net progress over the whole window never happens.
+    lag, lags = 5_000_000, []
+    for poll in range(720):
+        lag -= 200_000
+        if poll % 3 == 2:
+            lag += 900_000
+        lags.append(lag)
+    assert lags[-1] > 70_000_000
+    states = _watchdog_states(lags)
+    assert states[10:].count("catching_up") == 0
+    assert states[-1] == "stalled"
+
+
+def test_a_reader_re_reading_from_zero_every_few_polls_is_a_stall():
+    # Reviewer a's re-read loop: the lag drops for 5 polls, then jumps back (offset reset to 0).
+    lags = [20_000_000 - 1_000_000 * (poll % 6) for poll in range(120)]
+    assert _watchdog_states(lags)[12:].count("catching_up") == 0
+
+
+@pytest.mark.parametrize("step", [1, 1024], ids=["1 byte a poll (95-year ETA)", "1 KB a poll (37-day ETA)"])
+def test_a_lag_that_barely_shrinks_is_a_stall_not_catching_up(step):
+    lags = [107_000_000 - step * poll for poll in range(400)]
+    assert _watchdog_states(lags)[10:].count("catching_up") == 0
+
+
+def test_a_genuine_drain_under_the_eta_ceiling_is_catching_up():
+    # 107 MB at about 330 KB a poll is about 2.7 h: under the 6 h ceiling.
+    lags = [107_000_000 - 330_000 * poll for poll in range(40)]
+    states = _watchdog_states(lags)
+    assert states[10:] == ["catching_up"] * 30
+
+
+S = STALLED
+C = CATCHING_UP
+
+
+def _first_red(checks) -> int | None:
+    return next((i for i, c in enumerate(checks) if c.state == "red"), None)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [[S, S, C], [S, S, S, S, S, C]],
+    ids=["stalled-stalled-catching_up", "5x stalled then catching_up"],
+)
+def test_a_catching_up_snapshot_holds_the_count_so_a_flickering_stall_still_goes_red_on_time(tmp_path, pattern):
+    # Reviewer b's patterns: on 0730dd20 each catching_up reset the count, so neither ever went red.
+    payloads = (pattern * 10)[:24]
+    checks = _verdicts(_config(tmp_path), payloads)
+    sixth_stall = [i for i, p in enumerate(payloads) if p is S][5]
+    assert _first_red(checks) == sixth_stall  # red on the 6th stall snapshot, as main counts them
+    later_stalls = [i for i, p in enumerate(payloads) if p is S][6:]
+    assert all(checks[i].state == "red" for i in later_stalls)  # every later stall snapshot is red
+
+
+def test_a_red_check_steps_down_to_amber_during_a_genuine_catch_up_and_back_to_red_when_it_stops(tmp_path):
+    # Round 1 item 4 (a F4): red from an earlier stall, then a measured catch-up is amber with its
+    # ETA (0730dd20 held red for the whole catch-up); a stall after it is red again at once.
+    checks = _verdicts(_config(tmp_path), [S] * 6 + [C] * 3 + [S])
+    assert [c.state for c in checks] == ["amber"] * 5 + ["red"] + ["amber"] * 3 + ["red"]
+    assert "about 12 min left" in checks[6].note
