@@ -78,6 +78,13 @@ def _db(tmp_path: Path, held: tuple[str, ...], *, row: tuple[str, int | None] = 
     return db_path
 
 
+def _settle(watcher: "JSONLWatcher", polls: int = 1) -> None:
+    """Let the watcher read and register what exists now (a parent is read before its fork)."""
+    for _ in range(polls):
+        watcher.poll_once()
+        watcher.indexer.flush()
+
+
 def _from(sink: "_Sink", path: Path) -> list[str]:
     """Uuids the sink received from one file, in order (the parent file is read too)."""
     return [entry["uuid"] for entry in sink.entries if entry["_source_file"] == str(path)]
@@ -129,10 +136,11 @@ def projects(tmp_path):
 
 def test_fork_of_a_held_parent_ingests_only_its_own_entries_and_reaches_the_end_fast(tmp_path, projects):
     parent_path = _write_parent(projects, PARENT)
-    fork_path = projects / f"{FORK}.jsonl"
-    rows = _write_fork(fork_path, FORK, PARENT, copies=1_000, own=7)
     sink = _Sink()
     watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)))
+    _settle(watcher)
+    fork_path = projects / f"{FORK}.jsonl"
+    rows = _write_fork(fork_path, FORK, PARENT, copies=1_000, own=7)
 
     polls = _drain(watcher, fork_path)
 
@@ -160,10 +168,11 @@ def test_fork_of_a_held_parent_ingests_only_its_own_entries_and_reaches_the_end_
 
 def test_fork_copies_alone_confirm_their_offset_without_flushing_anything(tmp_path, projects):
     _write_parent(projects, PARENT)
-    fork_path = projects / f"{FORK}.jsonl"
-    _write_fork(fork_path, FORK, PARENT, copies=300, own=0)
     sink = _Sink()
     watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)))
+    _settle(watcher)
+    fork_path = projects / f"{FORK}.jsonl"
+    _write_fork(fork_path, FORK, PARENT, copies=300, own=0)
 
     assert _drain(watcher, fork_path) == 1
     watcher.registry.flush()
@@ -282,10 +291,11 @@ def test_interleaved_copies_and_own_entries_emit_every_own_entry_once_in_order(t
     # Ported from red-team 1828-a's drivers, now with the parent transcript beside the fork.
     monkeypatch.setattr(watcher_module, "_MAX_SKIPPED_RECORDS_PER_READ", 37)
     _write_parent(projects, PARENT)
-    fork_path = projects / f"{FORK}.jsonl"
-    rows = _interleaved(fork_path, [("own", 3), ("copy", 250), ("own", 120), ("copy", 90), ("own", 1), ("copy", 400)])
     sink = _Sink()
     watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)))
+    _settle(watcher)
+    fork_path = projects / f"{FORK}.jsonl"
+    rows = _interleaved(fork_path, [("own", 3), ("copy", 250), ("own", 120), ("copy", 90), ("own", 1), ("copy", 400)])
 
     for _ in range(40):
         watcher.poll_once()
@@ -299,11 +309,12 @@ def test_interleaved_copies_and_own_entries_emit_every_own_entry_once_in_order(t
 def test_restart_in_the_middle_of_skipped_copies_loses_and_duplicates_nothing(tmp_path, projects, monkeypatch):
     monkeypatch.setattr(watcher_module, "_MAX_SKIPPED_RECORDS_PER_READ", 50)
     _write_parent(projects, PARENT)
-    fork_path = projects / f"{FORK}.jsonl"
-    rows = _interleaved(fork_path, [("own", 2), ("copy", 500), ("own", 4)])
     db_path = _db(tmp_path, held=(PARENT,))
     sink = _Sink()
     first = _watcher(tmp_path, projects, sink, db_path)
+    _settle(first)
+    fork_path = projects / f"{FORK}.jsonl"
+    rows = _interleaved(fork_path, [("own", 2), ("copy", 500), ("own", 4)])
     first.poll_once()
     first.indexer.flush()
     first.registry.flush()
@@ -321,18 +332,86 @@ def test_health_shows_how_far_the_watcher_has_read_the_parent_a_skip_relies_on(t
     # red-team 1828-a F2: a skip made while the parent is still being read is visible.
     parent_path = projects / f"{PARENT}.jsonl"
     parent_path.write_text("".join(json.dumps(_entry(PARENT, i, kind="parent")) + "\n" for i in range(250)))
+    watcher = _watcher(tmp_path, projects, _Sink(), _db(tmp_path, held=(PARENT,)))
+    _settle(watcher)  # 100 of the parent's 250 lines read and registered
     fork_path = projects / f"{FORK}.jsonl"
     _write_fork(fork_path, FORK, PARENT, copies=60, own=1)
-    watcher = _watcher(tmp_path, projects, _Sink(), _db(tmp_path, held=(PARENT,)))
 
-    watcher.poll_once()
-    watcher.indexer.flush()
-    watcher.poll_once()  # the health snapshot of this poll sees the first poll's confirmation
+    watcher.poll_once()  # parent at 200 of 250 lines; the fork's copies skip while it is read
 
     row = json.loads((tmp_path / "watcher-health.json").read_text())["fork_copy_files"][0]
     assert row["parent_path"] == str(parent_path)
     assert row["parent_size"] == parent_path.stat().st_size
     assert 0 < row["parent_confirmed_offset"] < row["parent_size"]  # 100 of 250 lines per poll
+
+
+# ── red-team 1828 re-check R1: a parent rewritten before it was fully read no longer holds the turns ──
+
+
+def _copies_of(parent_rows: list[dict]) -> list[dict]:
+    """Claude Code's branch writer: the parent's entries under the fork's id, stamped forkedFrom."""
+    copies = []
+    for row in parent_rows:
+        copy = dict(row, sessionId=FORK, uuid=str(uuid.uuid4()))
+        copy["forkedFrom"] = {"sessionId": PARENT, "messageUuid": row["uuid"]}
+        copies.append(copy)
+    return copies
+
+
+def _texts(sink: "_Sink") -> set[str]:
+    return {entry["message"]["content"] for entry in sink.entries}
+
+
+@pytest.mark.parametrize("rewrite", ["truncate_to_empty", "replace_with_a_new_file"])
+def test_parent_rewritten_before_fully_read_loses_no_copied_turn(tmp_path, projects, rewrite):
+    # Reviewer a's re-check driver, inverted: on 65a3a474, 150 of 250 parent turns were lost and
+    # the health row still read parent_confirmed_offset == parent_size.
+    parent_path = projects / f"{PARENT}.jsonl"
+    parent = [_entry(PARENT, i, kind="parent") for i in range(250)]
+    parent_path.write_text("".join(json.dumps(row) + "\n" for row in parent))
+    sink = _Sink()
+    watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)))
+    _settle(watcher)
+    assert len(_texts(sink)) == 100  # 100 of 250 parent lines read; the DB holds watcher rows
+
+    if rewrite == "truncate_to_empty":
+        parent_path.write_text("")  # same inode, shrunk in place
+    else:
+        parent_path.unlink()
+        parent_path.write_text("".join(json.dumps(_entry(PARENT, i, kind="other")) + "\n" for i in range(3)))
+    fork_path = projects / f"{FORK}.jsonl"
+    fork_path.write_text("".join(json.dumps(row) + "\n" for row in _copies_of(parent) + [_entry(FORK, 999)]))
+    _settle(watcher, 10)
+
+    assert {row["message"]["content"] for row in parent} - _texts(sink) == set()
+
+
+def test_parent_file_empty_from_the_start_with_watcher_rows_ingests_the_copies(tmp_path, projects):
+    # Only a rewrite can leave watcher rows beside an empty parent; it was never registered.
+    (projects / f"{PARENT}.jsonl").write_text("")
+    parent = [_entry(PARENT, i, kind="parent") for i in range(30)]
+    fork_path = projects / f"{FORK}.jsonl"
+    fork_path.write_text("".join(json.dumps(row) + "\n" for row in _copies_of(parent)))
+    sink = _Sink()
+    watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)))
+
+    _settle(watcher, 3)
+
+    assert len(_from(sink, fork_path)) == 30
+
+
+def test_a_parent_whose_rewind_was_ever_recorded_never_vouches_for_a_fork(tmp_path, projects):
+    parent_path = _write_parent(projects, PARENT)
+    sink = _Sink()
+    watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)))
+    _settle(watcher)
+    watcher.registry.mark_rewind(str(parent_path), parent_path.stat().st_ino)  # a recorded rewind
+    fork_path = projects / f"{FORK}.jsonl"
+    rows = _write_fork(fork_path, FORK, PARENT, copies=30, own=1)
+
+    _drain(watcher, fork_path)
+
+    assert _from(sink, fork_path) == [row["uuid"] for row in rows]
 
 
 def test_fork_of_a_parent_not_held_ingests_every_copy_as_before(tmp_path, projects):
@@ -370,10 +449,11 @@ def test_fork_naming_a_missing_or_malformed_parent_is_ingested(tmp_path, project
 def test_fork_of_a_fork_skips_only_when_its_immediate_parent_is_held(tmp_path, projects):
     # Claude Code overwrites forkedFrom on a re-fork, so it names the IMMEDIATE parent.
     _write_fork(projects / f"{FORK}.jsonl", FORK, PARENT, copies=5, own=2)  # the immediate parent
-    held_path = projects / f"{FORK_OF_FORK}.jsonl"
-    held_rows = _write_fork(held_path, FORK_OF_FORK, FORK, copies=150, own=3)
     sink = _Sink()
     watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(FORK,)))
+    _settle(watcher)
+    held_path = projects / f"{FORK_OF_FORK}.jsonl"
+    held_rows = _write_fork(held_path, FORK_OF_FORK, FORK, copies=150, own=3)
     _drain(watcher, held_path)
     assert _from(sink, held_path) == [row["uuid"] for row in held_rows[150:]]
 
@@ -428,16 +508,17 @@ def test_a_record_naming_its_own_session_as_parent_is_not_skipped(tmp_path, proj
 
 def test_skipped_copies_are_neutral_growth_not_unrecognised_lines(tmp_path, projects):
     _write_parent(projects, PARENT)
+    watcher = _watcher(tmp_path, projects, _Sink(), _db(tmp_path, held=(PARENT,)))
+    _settle(watcher)
     fork_path = projects / f"{FORK}.jsonl"
     _write_fork(fork_path, FORK, PARENT, copies=400, own=0)
-    watcher = _watcher(tmp_path, projects, _Sink(), _db(tmp_path, held=(PARENT,)))
 
     watcher.poll_once()
 
     tailer = watcher._tailers[str(fork_path)]
     assert tailer.lines_read_total == 400
     assert tailer.neutral_lines_total == 400
-    # The parent's 4 lines are first-ingest backlog, which growth excludes; the copies are neutral.
+    # The fork's first ingest is backlog, which growth excludes anyway; the copies are neutral.
     read, recognised = watcher._growth_poll.get("claude", (0, 0))
     assert (read, recognised) == (0, 0)
 
