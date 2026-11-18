@@ -104,7 +104,9 @@ class _Sink:
         return confirmed
 
 
-def _watcher(tmp_path: Path, projects: Path, sink: _Sink, db_path: Path | None) -> JSONLWatcher:
+def _watcher(
+    tmp_path: Path, projects: Path, sink: _Sink, db_path: Path | None, *, catch_up_budget_s: float | None = None
+) -> JSONLWatcher:
     return JSONLWatcher(
         # The Claude root is ~/.claude/projects; transcripts sit one folder below it.
         watch_roots=[WatchRoot("claude", projects.parent)],
@@ -113,7 +115,13 @@ def _watcher(tmp_path: Path, projects: Path, sink: _Sink, db_path: Path | None) 
         batch_size=1,
         health_path=tmp_path / "watcher-health.json",
         db_path=db_path,
+        catch_up_budget_s=catch_up_budget_s,
     )
+
+
+# Pins one read per file per poll (100 lines), so a parent can be left PARTLY read: #1827's
+# catch-up rounds would otherwise finish a small fixture file within the same poll.
+SINGLE_PASS = 0.0
 
 
 def _drain(watcher: JSONLWatcher, path: Path, max_polls: int = 50) -> int:
@@ -311,7 +319,7 @@ def test_restart_in_the_middle_of_skipped_copies_loses_and_duplicates_nothing(tm
     _write_parent(projects, PARENT)
     db_path = _db(tmp_path, held=(PARENT,))
     sink = _Sink()
-    first = _watcher(tmp_path, projects, sink, db_path)
+    first = _watcher(tmp_path, projects, sink, db_path, catch_up_budget_s=SINGLE_PASS)
     _settle(first)
     fork_path = projects / f"{FORK}.jsonl"
     rows = _interleaved(fork_path, [("own", 2), ("copy", 500), ("own", 4)])
@@ -320,7 +328,7 @@ def test_restart_in_the_middle_of_skipped_copies_loses_and_duplicates_nothing(tm
     first.registry.flush()
     assert 0 < first.registry.get(str(fork_path))[0] < fork_path.stat().st_size
 
-    second = _watcher(tmp_path, projects, sink, db_path)  # a restart resumes from offsets.json
+    second = _watcher(tmp_path, projects, sink, db_path, catch_up_budget_s=SINGLE_PASS)  # resumes from offsets.json
     for _ in range(20):
         second.poll_once()
         second.indexer.flush()
@@ -335,7 +343,7 @@ def test_a_partly_read_parent_does_not_vouch_for_its_fork(tmp_path, projects):
     parent_path = projects / f"{PARENT}.jsonl"
     parent_path.write_text("".join(json.dumps(_entry(PARENT, i, kind="parent")) + "\n" for i in range(250)))
     sink = _Sink()
-    watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)))
+    watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)), catch_up_budget_s=SINGLE_PASS)
     _settle(watcher)  # 100 of the parent's 250 lines read and registered
     fork_path = projects / f"{FORK}.jsonl"
     rows = _write_fork(fork_path, FORK, PARENT, copies=60, own=1)
@@ -358,7 +366,7 @@ def test_parent_lost_after_its_fork_was_read_mid_parent_loses_no_copied_turn(tmp
     parent = [_entry(PARENT, i, kind="parent") for i in range(250)]
     parent_path.write_text("".join(json.dumps(row) + "\n" for row in parent))
     sink = _Sink()
-    watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)))
+    watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)), catch_up_budget_s=SINGLE_PASS)
     _settle(watcher)  # parent at 100 of 250
     fork_path = projects / f"{FORK}.jsonl"
     fork_path.write_text("".join(json.dumps(row) + "\n" for row in _copies_of(parent) + [_entry(FORK, 999)]))
@@ -401,7 +409,7 @@ def test_parent_rewritten_before_fully_read_loses_no_copied_turn(tmp_path, proje
     parent = [_entry(PARENT, i, kind="parent") for i in range(250)]
     parent_path.write_text("".join(json.dumps(row) + "\n" for row in parent))
     sink = _Sink()
-    watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)))
+    watcher = _watcher(tmp_path, projects, sink, _db(tmp_path, held=(PARENT,)), catch_up_budget_s=SINGLE_PASS)
     _settle(watcher)
     assert len(_texts(sink)) == 100  # 100 of 250 parent lines read; the DB holds watcher rows
 
