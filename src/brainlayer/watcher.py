@@ -2178,10 +2178,13 @@ class JSONLWatcher:
         return normalized
 
     def _parent_session_held(self, session_id: str) -> bool:
-        """Whether the DB already holds rows for `session_id`; cached for the current poll.
+        """Whether the WATCHER already wrote rows for `session_id`; cached for the current poll.
 
-        Read-only and fail-closed: no DB path, a missing table, a locked or unreadable DB all
-        answer False, so the fork's copies are ingested as before. Never skip on a guess.
+        Only watcher rows count (source='realtime_watcher', or a recorded source_end_offset):
+        the Stop hook writes a source='realtime' row for every session at every Stop, before
+        the watcher has read a line of it, so any-row would vouch for a transcript never indexed.
+        Read-only and fail-closed: no DB path, a missing table or column, a locked or unreadable
+        DB all answer False, so the fork's copies are ingested as before. Never skip on a guess.
         """
         cached = self._fork_parent_held.get(session_id)
         if cached is not None:
@@ -2193,7 +2196,8 @@ class JSONLWatcher:
                 try:
                     held = (
                         conn.execute(
-                            "SELECT 1 FROM chunks WHERE conversation_id = ? LIMIT 1",
+                            "SELECT 1 FROM chunks WHERE conversation_id = ?"
+                            " AND (source = 'realtime_watcher' OR source_end_offset IS NOT NULL) LIMIT 1",
                             (session_id,),
                         ).fetchone()
                         is not None
@@ -2213,12 +2217,16 @@ class JSONLWatcher:
         the new sessionId, each stamped forkedFrom={sessionId: <immediate parent>, messageUuid},
         followed by the fork's own entries without it. The copies are the parent's content,
         already in BrainLayer under the parent's conversation_id when the parent was indexed;
-        reading them again only feeds content dedupe. They are skipped only while the parent
-        is held; otherwise they ingest as before, so the only copy is never lost.
+        reading them again only feeds content dedupe. A copy is skipped only when BOTH hold:
+        the parent transcript <fork dir>/<parent>.jsonl was discovered this poll and is not
+        denylisted (so the watcher itself reads it in full), and the watcher has already
+        written rows for the parent. Otherwise the copies ingest as before, so a fork that is
+        the only remaining copy -- parent file gone, elsewhere, or excluded -- is never lost.
         """
         if self.provider_for_file(filepath) != "claude" or self.db_path is None:
             return None
         file_stem = Path(filepath).stem
+        fork_dir = Path(filepath).parent
 
         def skip(entry: dict) -> bool:
             forked_from = entry.get("forkedFrom")
@@ -2230,11 +2238,16 @@ class JSONLWatcher:
             # A record naming its own session as its parent is not a copy of another one.
             if parent in (entry.get("sessionId"), file_stem):
                 return False
+            # Discovery stat'd every live file this poll: membership is the per-poll stat.
+            parent_path = str(fork_dir / f"{parent}.jsonl")
+            if parent_path not in self._current_file_stats or self._denylisted(parent_path):
+                return False
             if not self._parent_session_held(parent):
                 return False
             self._fork_copies_skipped_total += 1
             progress = self._fork_copy_files.setdefault(filepath, {"skipped": 0})
             progress["parent_session_id"] = parent
+            progress["parent_path"] = parent_path
             progress["skipped"] += 1
             return True
 
@@ -2248,6 +2261,8 @@ class JSONLWatcher:
         for filepath, progress in sorted(self._fork_copy_files.items()):
             tailer = self._tailers.get(filepath)
             stats = self._current_file_stats.get(filepath)
+            parent_path = progress.get("parent_path")
+            parent_stats = self._current_file_stats.get(parent_path) if parent_path else None
             rows.append(
                 {
                     "path": filepath,
@@ -2255,6 +2270,10 @@ class JSONLWatcher:
                     "copies_skipped": progress.get("skipped", 0),
                     "offset": tailer.offset if tailer else self.registry.get(filepath)[0],
                     "size": stats[1] if stats else None,
+                    # The skip relies on the watcher reading the parent in full: show how far it is.
+                    "parent_path": parent_path,
+                    "parent_confirmed_offset": self.registry.get(parent_path)[0] if parent_path else None,
+                    "parent_size": parent_stats[1] if parent_stats else None,
                 }
             )
         return rows[:_MAX_HEALTH_FORK_FILES]
