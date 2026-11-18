@@ -241,6 +241,18 @@ struct NDMenuFaultBlock: View {
     }
 
     var body: some View {
+        // L53, one mark per problem: the count headline has none, so each red problem carries its own at its leading edge.
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if item.severity == .red {
+                Image(systemName: "exclamationmark.circle.fill").font(.system(size: 15)).foregroundStyle(ND.red).accessibilityHidden(true)
+            }
+            content
+        }
+        .padding(.top, 6).padding(.bottom, 8)
+        .padding(.horizontal, NDGrid.menuInset)
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(item.menuTitle ?? item.title).font(NDType.bodyStrong).foregroundStyle(ND.menuText1)
                 .fixedSize(horizontal: false, vertical: true)
@@ -261,8 +273,6 @@ struct NDMenuFaultBlock: View {
                 .padding(.top, 9)
             }
         }
-        .padding(.top, 6).padding(.bottom, 8)
-        .padding(.horizontal, NDGrid.menuInset)
     }
 }
 
