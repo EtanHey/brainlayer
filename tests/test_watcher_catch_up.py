@@ -287,6 +287,47 @@ def test_a_lag_that_falls_only_because_the_file_shrank_is_not_catching_up():
     assert states[-1] == "stalled"
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="PRE-EXISTING on main 4923d5a8 (same size - decoded offset subtraction): an archive whose "
+    "decoded offset passes its compressed size reports lag 0 while nothing is confirmed. Follow-up "
+    "(Fri 20 Nov): archive lag must be measured in confirmed decoded bytes vs decoded size, or flagged "
+    "unmeasurable. CodeRabbit residual on #1827.",
+)
+def test_an_archive_decoded_past_its_compressed_size_with_nothing_confirmed_still_lags(tmp_path, monkeypatch, compress):
+    monkeypatch.setenv("BRAINLAYER_CODEX_ZST_ADMISSION", "bounded")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+    record = {
+        "type": "response_item",
+        "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "x" * 400}]},
+    }
+    archive = compress("sessions/history.jsonl.zst", rollout() + (json.dumps(record) + "\n").encode() * 2000)
+    clock = [0.0]
+
+    def always_fails(_items):
+        raise RuntimeError("writer unavailable")
+
+    watcher = JSONLWatcher(
+        watch_roots=[WatchRoot("codex", tmp_path / "sessions")],
+        registry_path=tmp_path / "offsets.json",
+        on_flush=always_fails,
+        batch_size=10,
+        flush_interval_ms=360000,
+        max_lines_per_file=100,
+        health_path=tmp_path / "watcher-health.json",
+        coverage_watchdog=CoverageWatchdog(lag_threshold_bytes=1000, alert_after_s=60, now_fn=lambda: clock[0]),
+    )
+    for _ in range(6):
+        watcher.poll_once()
+        clock[0] += 30
+    logical = str(archive.with_suffix(""))
+    health = json.loads((tmp_path / "watcher-health.json").read_text())
+    assert watcher._tailers[logical].offset > archive.stat().st_size  # decoded past the compressed size
+    assert watcher.registry.get(logical)[0] == 0  # nothing confirmed
+    # what SHOULD hold: an archive with nothing confirmed is still behind, so offset_lag stands
+    assert "offset_lag" in health["alert_reasons"]
+
+
 def _flush_test_watcher(tmp_path, monkeypatch, on_flush, batch_size):
     monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
     sessions = _sessions(tmp_path)
