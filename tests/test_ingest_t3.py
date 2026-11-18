@@ -284,6 +284,36 @@ def test_t3_thinking_part_is_stored_with_the_hidden_agent_thinking_class():
 
 
 @pytest.mark.parametrize(
+    "text",
+    [
+        "Check the offset first.",  # under the 50-char assistant-text gate
+        "Now I check the offset before touching the tailer loop here.",  # passes 50, under the 80-char chunk floor
+        "Okay.",
+        _THINKING_TEXT,  # long enough: kept by both paths
+    ],
+)
+def test_t3_thinking_meets_the_same_length_gates_as_the_watcher(text):
+    """Kiro F4: short T3 thinking must not be kept where the watcher drops the same words."""
+    from brainlayer.ingest.t3 import _message_chunks
+    from brainlayer.pipeline.chunk import chunk_content
+    from brainlayer.pipeline.classify import classify_thinking
+
+    watcher = classify_thinking(
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": text}]}}
+    )
+    watcher_kept = bool(watcher and chunk_content(watcher))
+    t3_kept = bool(
+        _message_chunks(*_t3_message("message:provider:claudeAgent:native-item:msg_1%3Athinking%3A1", text=text))
+    )
+    said_kept = bool(
+        _message_chunks(*_t3_message("message:provider:claudeAgent:native-item:msg_1%3Atext%3A0", text=text))
+    )
+
+    assert t3_kept == watcher_kept
+    assert said_kept  # said text keeps T3's short-message fallback, unchanged
+
+
+@pytest.mark.parametrize(
     ("message_id", "role"),
     [
         # A user's delegated task named "thinking-policy": a substring match would hide the user's words.

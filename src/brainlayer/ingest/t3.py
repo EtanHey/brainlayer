@@ -609,8 +609,13 @@ def _is_thinking_message(message: T3Message) -> bool:
 def _message_chunks(thread: T3Thread, message: T3Message) -> list:
     from ..agent_provenance import THINKING_SOURCE_CLASS, derive_source_class
     from ..pipeline.chunk import Chunk, chunk_content
-    from ..pipeline.classify import ClassifiedContent, ContentType, ContentValue
+    from ..pipeline.classify import ClassifiedContent, ContentType, ContentValue, _should_keep_assistant_text
 
+    is_thinking = _is_thinking_message(message)
+    # Thinking meets the watcher's gates exactly (classify_thinking): the assistant-text filler
+    # and length filter, and no short-text fallback below. Said text keeps T3's own rules.
+    if is_thinking and not _should_keep_assistant_text(message.text):
+        return []
     content_type = ContentType.USER_MESSAGE if message.role == "user" else ContentType.ASSISTANT_TEXT
     value = ContentValue.HIGH if message.role == "user" else ContentValue.MEDIUM
     base_metadata = {
@@ -631,7 +636,7 @@ def _message_chunks(thread: T3Thread, message: T3Message) -> list:
         "t3_provider_name": thread.provider_name,
         "t3_provider_session_id": thread.provider_session_id,
     }
-    if _is_thinking_message(message):
+    if is_thinking:
         # Stored, hidden from default search (Etan, 2026-11-17, choice A). Rows written
         # before this change keep their class until an owner-approved reclassification.
         base_metadata.update(
@@ -652,7 +657,7 @@ def _message_chunks(thread: T3Thread, message: T3Message) -> list:
     )
     chunks = chunk_content(classified)
     if not chunks:
-        if not message.text.strip():
+        if is_thinking or not message.text.strip():
             return []
         chunks = [
             Chunk(
@@ -798,7 +803,10 @@ def ingest_t3(
                     continue
                 message_chunks = _message_chunks(thread, message)
                 if not message_chunks:
-                    result.messages_skipped["empty_text"] = result.messages_skipped.get("empty_text", 0) + 1
+                    reason = (
+                        "short_thinking" if _is_thinking_message(message) and message.text.strip() else "empty_text"
+                    )
+                    result.messages_skipped[reason] = result.messages_skipped.get(reason, 0) + 1
                     continue
                 result.messages_ingested += 1
                 chunks.extend(message_chunks)

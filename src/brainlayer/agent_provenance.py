@@ -275,7 +275,10 @@ def derive_source_class(
     source: str | None = None,
     content: str | None = None,
 ) -> SourceClass | None:
-    """Return the five-value source class only when provenance is unambiguous."""
+    """Return a provenance-derived source class only when provenance is unambiguous.
+
+    Never returns agent-thinking: that class marks content, not provenance, and is supplied by the writer.
+    """
     provenance_map: dict[str, SourceClass] = {
         T3_APP_SESSION: "cli-agent",
         "t3-thread": "cli-agent",
@@ -306,7 +309,7 @@ def derive_source_class(
 
 
 def normalize_source_class(value: object) -> SourceClass | None:
-    """Accept only an exact member of the five-value taxonomy."""
+    """Accept only an exact member of the source-class taxonomy (``SOURCE_CLASSES``, including agent-thinking)."""
     normalized = str(value or "").strip()
     return cast(SourceClass, normalized) if normalized in SOURCE_CLASSES else None
 
