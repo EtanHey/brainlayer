@@ -784,6 +784,43 @@ def test_changed_only_scope_maps_watcher_source_to_jsonl_watcher_tests(tmp_path:
     assert f"{test_root}/ -v" not in logged
 
 
+@pytest.mark.parametrize("changed", ["src/brainlayer/health_verdict.py", "src/brainlayer/health_facts.py"])
+def test_changed_only_scope_maps_the_ingest_verdict_to_its_stall_and_catch_up_suites(
+    tmp_path: Path, changed: str
+) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    owners = (
+        "test_health_verdict.py",
+        "test_health_facts.py",
+        "test_ingest_stall_alerts.py",
+        "test_watcher_catch_up.py",
+    )
+    for owner in owners:
+        (test_root / owner).write_text("test placeholder\n")
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = changed
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    logged = pytest_log.read_text()
+    own = test_root / f"test_{Path(changed).stem}.py"
+    for expected in (own, test_root / "test_ingest_stall_alerts.py", test_root / "test_watcher_catch_up.py"):
+        assert str(expected) in logged
+    assert f"{test_root}/ -v" not in logged
+
+
 def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp_path: Path) -> None:
     test_root = tmp_path / "tests"
     test_root.mkdir()

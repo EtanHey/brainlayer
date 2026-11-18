@@ -93,6 +93,28 @@ CASES = [
         for s in EIGHT[1:]
     ],
     case(
+        "real-catchup",
+        "guarantee",
+        "WATCHER-CATCHUP: a shrinking lag is progress: amber at most, never red, and every stall rule still holds",
+        faults=("none", "catchup"),
+        inv=(*THREE, "CatchUpIsNeverRed"),
+    ),
+    case(
+        "real-catchup-then-lag",
+        "guarantee",
+        "WATCHER-CATCHUP: a lag that stops shrinking still leaves green within 2 ticks and stays non-green",
+        faults=("none", "catchup", "lag"),
+    ),
+    case(
+        "before-fix-catchup",
+        "history",
+        "Before WATCHER-CATCHUP a shrinking lag was offset_lag: red on the AlertRed-th check while it drained",
+        mut="catchup_lag",
+        faults=("none", "catchup"),
+        inv=("CatchUpIsNeverRed",),
+        expect="CatchUpIsNeverRed",
+    ),
+    case(
         "real-heartbeat-mix",
         "guarantee",
         "Any mix of the heartbeat shapes (dead, stuck, blind, detected rewrite) still leaves green within 2 ticks",
