@@ -72,7 +72,8 @@ import SwiftUI
             // R1.3 comp 37: the three hover states (Memory's explanation; the Jobs and Drive faults with their actions).
             for (fixture, station) in [(BrainBarDesignFixture.Name.calm, NDStation.memory), (.twoFaults, .jobs), (.twoFaults, .drive),
                                        (.agentNotRead, .agents), (.calm, .search), (.reconnectWaiting, .drive), (.calm, .jobs),
-                                       (.calm, .weekly), (.calm, .mac)] {
+                                       (.calm, .weekly), (.calm, .mac), (.nightlyFailing, .jobs), (.nightlyFailing, .weekly),
+                                       (.savesStuck, .jobs), (.savesStuck, .weekly)] {
                 let store = NDStore(fixture: BrainBarDesignFixture.inputs(fixture), page: .overview)
                 written.append(try hover(store, station: station, name: "hover-\(station.rawValue)-\(fixture.rawValue)-\(suffix)",
                                          appearance: appearance, in: directory))

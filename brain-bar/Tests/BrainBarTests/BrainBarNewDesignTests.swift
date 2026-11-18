@@ -1580,14 +1580,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                     XCTAssertTrue((panel.body.minY + L.arrowInset - 0.01...panel.body.maxY - L.arrowInset + 0.01).contains(panel.tip.y), where_)
                 }
                 XCTAssertFalse(panel.outer.intersects(own.insetBy(dx: 1, dy: 1)), "\(where_) covers its own station")
-                // R1.7 items 2 and 3, the reported trade-offs: the agents' panel, right of the column and above Read's words,
-                // covers Read's circle; the Jobs panel, beside its words, covers Search's circle and name.
-                let tradeOff: [NDStation: NDStation] = [.agents: .read, .weekly: .search]
-                // R1.10: with saves stuck, Save queue's status line takes the room above the nightly panel (126 pt free, the
-                // panel needs about 135), so the nightly panel covers that line while it is open (reported).
-                let stuckQueue = station == .jobs && r1.pipeline.status[.queue] != nil
-                for other in NDStation.allCases where tradeOff[station] != other && !(stuckQueue && other == .queue) {
-                    if other != station {
+                // R1.7 item 2, the one reported trade-off left: the agents' panel, right of the column and above Read's
+                // words, covers Read's circle (never its name or status). R1.10.4: the job panels cover no station.
+                for other in NDStation.allCases {
+                    if other != station && !(station == .agents && other == .read) {
                         XCTAssertFalse(panel.body.intersects(L.circle(other)), "\(where_) covers \(other)")
                     }
                     for rect in L.labelRects(other, r1.pipeline) {
@@ -1976,8 +1972,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     /// No station moves between states; the Kept-safe frame never grows (R1.5: no actions on the chart).
     func testStationsDoNotMoveBetweenStates() {
         let expected: [NDStation: CGPoint] = [
-            .read: CGPoint(x: 230, y: 64), .queue: CGPoint(x: 230, y: 134), .search: CGPoint(x: 600, y: 248),
-            .mac: CGPoint(x: 614, y: 64), .drive: CGPoint(x: 751, y: 64), .jobs: CGPoint(x: 392, y: 186), .weekly: CGPoint(x: 508, y: 186),
+            .read: CGPoint(x: 215, y: 64), .queue: CGPoint(x: 215, y: 134), .search: CGPoint(x: 585, y: 248),
+            .mac: CGPoint(x: 599, y: 64), .drive: CGPoint(x: 736, y: 64), .jobs: CGPoint(x: 377, y: 186), .weekly: CGPoint(x: 493, y: 186),
         ]
         XCTAssertEqual(NDPipelineLayout.stations, expected)
         for name in Fixture.Name.allCases {
@@ -1989,7 +1985,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             }
         }
         XCTAssertEqual(NDPipelineLayout.keptFrame(grown: true), NDPipelineLayout.keptSafe)
-        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 536, y: 38, width: 283, height: 80), "R1.10: beside the wider Memory")
+        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 521, y: 38, width: 283, height: 80), "R1.10.4: 32 pt from the right")
     }
 
     /// Lead (1.3 brief): inside Kept safe, 16 pt between the two stations' text blocks and 12 pt from any text to the frame,
@@ -2318,7 +2314,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 // 1.5.1: the agents' panel opens below the group and passes the window's left edge (L39).
                 if station != .agents { XCTAssertGreaterThanOrEqual(panel.outer.minX, L.windowInside.minX - 0.01, where_) }
                 XCTAssertLessThanOrEqual(panel.outer.maxX, L.windowInside.maxX + 0.01, where_)
-                if ![.queue, .jobs].contains(station) {
+                if ![.queue, .jobs, .weekly].contains(station) {  // L39: below the window is allowed
                     XCTAssertLessThanOrEqual(panel.outer.maxY, L.windowInside.maxY + 0.01, where_)
                 }
             }
@@ -2821,9 +2817,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             var drawn = L.agentsFrame.union(L.hub).union(L.keptSafe)
             for station in NDStation.allCases { L.labelRects(station, p).forEach { drawn = drawn.union($0) } }
             XCTAssertEqual(16 + drawn.minX, 32, accuracy: 0.5, "\(name.rawValue): left inset")
-            // R1.10: Memory is 40 pt wider (two job stations under it), so the right inset is 17 pt, not 32: the copies
-            // need 137 pt between them at their widest statuses and the frame 12 pt around them.
-            XCTAssertGreaterThanOrEqual(16 + L.size.width - drawn.maxX, 16, "\(name.rawValue): right inset")
+            // R1.10.4: equal again (everything right of the agents moved 15 pt left; the copies keep 137 pt between them).
+            XCTAssertEqual(16 + L.size.width - drawn.maxX, 32, accuracy: 0.5, "\(name.rawValue): right inset")
         }
     }
 
@@ -3202,27 +3197,29 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         }
     }
 
-    /// R1.7 item 3, as R1.10 has it: each job station's panel opens to its outer side (the nightly check-up left, under Save
-    /// queue's words; the weekly clean right, under the copies' words), above the footer, its arrow on its station, over no
-    /// station's words (the weekly clean's covers Search, the accepted trade-off). Both cover part of the loop line: there
-    /// is no clear room beside two stations under Memory (reported).
+    /// R1.7 item 3, as R1.10.4 has it: each job station's panel opens below its own words (L39: it may pass the window's
+    /// bottom edge, inside the screen), its arrow on its station, over the loop line and no station: no circle, no name,
+    /// no status, in every fixture (saves-stuck's "waiting 2 h" included), and never over the headings or the footer's text.
     func testR17JobsPanelOpensBesideItsStation() {
         let L = NDPipelineLayout.self
         for name in Fixture.Name.allCases {
             let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
             let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
-            for (station, edge) in [(NDStation.jobs, Edge.leading), (.weekly, .trailing)] {
+            for station in [NDStation.jobs, .weekly] {
                 let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
                 let where_ = "\(name.rawValue) \(station)"
-                XCTAssertEqual(panel.edge, edge, where_)
-                XCTAssertTrue((L.circle(station).minY...L.circle(station).maxY).contains(panel.tip.y), "\(where_): on its station")
-                XCTAssertLessThanOrEqual(panel.outer.maxY, L.footerTop - 4 + 0.5, "\(where_): above the footer")
-                let stuckQueue = station == .jobs && store.r1.pipeline.status[.queue] != nil  // reported trade-off, as above
-                for other in NDStation.allCases where !(station == .weekly && other == .search) && !(stuckQueue && other == .queue) {
+                XCTAssertEqual(panel.edge, .bottom, where_)
+                XCTAssertTrue((L.circle(station).minX...L.circle(station).maxX).contains(panel.tip.x), "\(where_): on its station")
+                let words = L.labelRects(station, store.r1.pipeline).map(\.maxY).max() ?? L.circle(station).maxY
+                XCTAssertGreaterThanOrEqual(panel.body.minY, words, "\(where_): below its own words")
+                for other in NDStation.allCases where other != station {
+                    XCTAssertFalse(panel.body.intersects(L.circle(other)), "\(where_): over \(other)'s circle")
                     for rect in L.labelRects(other, store.r1.pipeline) {
                         XCTAssertFalse(panel.body.intersects(rect), "\(where_): over \(other)'s words")
                     }
                 }
+                XCTAssertFalse(panel.outer.intersects(L.pipelineHeading), where_)
+                for text in L.footerTexts { XCTAssertFalse(panel.outer.intersects(text), "\(where_): over the footer's text") }
             }
         }
     }
