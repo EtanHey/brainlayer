@@ -271,17 +271,16 @@ map_changed_files_to_pytests() {
       src/brainlayer/health_verdict.py|src/brainlayer/health_facts.py)
         # The ingest verdict is also pinned by the stall-alert and catch-up suites; a verdict-only
         # change must run them, not just test_<module>.py.
-        test_path="$TEST_ROOT/test_$(basename "$changed" .py).py"
-        if [ -f "$test_path" ]; then
-          append_unique "$test_path"
+        # Mapped only when BOTH ingest suites exist (a renamed suite falls back to the full run).
+        if [ -f "$TEST_ROOT/test_ingest_stall_alerts.py" ] && [ -f "$TEST_ROOT/test_watcher_catch_up.py" ]; then
+          test_path="$TEST_ROOT/test_$(basename "$changed" .py).py"
+          if [ -f "$test_path" ]; then
+            append_unique "$test_path"
+          fi
+          append_unique "$TEST_ROOT/test_ingest_stall_alerts.py"
+          append_unique "$TEST_ROOT/test_watcher_catch_up.py"
           mapped=1
         fi
-        for rel in test_ingest_stall_alerts.py test_watcher_catch_up.py; do
-          if [ -f "$TEST_ROOT/$rel" ]; then
-            append_unique "$TEST_ROOT/$rel"
-            mapped=1
-          fi
-        done
         ;;
       src/brainlayer/watcher.py|src/brainlayer/watcher_bridge.py)
         if [ "$changed" = "src/brainlayer/watcher.py" ]; then

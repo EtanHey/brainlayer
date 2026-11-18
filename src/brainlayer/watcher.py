@@ -700,10 +700,13 @@ class CoverageWatchdog:
         self.now_fn = now_fn
         self._coverage_bad_since: float | None = None
         self._lag_bad_since: float | None = None
-        # (time, {file: lag}) for files over the lag threshold only, oldest first.
-        self._lag_samples: list[tuple[float, dict[str, int]]] = []
+        # (time, {file: lag}, {file: (confirmed offset, generation)}) for files over the lag
+        # threshold only, oldest first.
+        self._lag_samples: list[tuple[float, dict[str, int], dict[str, tuple[int, int]] | None]] = []
 
-    def _catch_up(self, now: float, over: dict[str, int]) -> tuple[bool, float | None, float | None]:
+    def _catch_up(
+        self, now: float, over: dict[str, int], progress: dict[str, tuple[int, int]] | None
+    ) -> tuple[bool, float | None, float | None]:
         """(shrinking, eta_s, drain_bytes_per_s) for the files over the lag threshold.
 
         Shrinking means EVERY such file is behind by less than in EVERY sample of the last
@@ -711,17 +714,34 @@ class CoverageWatchdog:
         each file's ETA at its window rate is at most max_eta_s. A file absent from a sample was
         under the threshold then, so it grew: not shrinking. One stalled file therefore keeps
         offset_lag even while a bigger file drains beside it.
+
+        When the caller supplies ``progress`` (the watcher always does), each lagging file must
+        also have a CONFIRMED offset that advanced since the window's oldest sample, in the same
+        registry generation. A lag that falls only because the file shrank (truncation, rewrite:
+        a new generation) or because an archive's decoder read ahead with nothing confirmed is not
+        progress. A file with no progress entry (an archive: no confirmed decoded checkpoint to
+        compare) can never be catching up (#1827 CodeRabbit round).
         """
-        window = [(t, s) for t, s in self._lag_samples if now - t <= self.rate_window_s]
+        window = [(t, s, p) for t, s, p in self._lag_samples if now - t <= self.rate_window_s]
         if not over or not window or now - window[0][0] < self.progress_span_s:
             return False, None, None
-        then, oldest = window[0]
+        then, oldest, oldest_progress = window[0]
         eta_s = 0.0
         rate_total = 0.0
         for filepath, lag in over.items():
-            past = [sample.get(filepath) for _t, sample in window]
+            past = [sample.get(filepath) for _t, sample, _p in window]
             if any(p is None or lag >= p for p in past):
                 return False, None, None
+            if progress is not None:
+                now_confirmed = progress.get(filepath)
+                then_confirmed = (oldest_progress or {}).get(filepath)
+                if (
+                    now_confirmed is None
+                    or then_confirmed is None
+                    or now_confirmed[1] != then_confirmed[1]
+                    or now_confirmed[0] <= then_confirmed[0]
+                ):
+                    return False, None, None
             rate = (oldest[filepath] - lag) / (now - then)
             eta = lag / rate
             if eta > self.max_eta_s:
@@ -737,6 +757,7 @@ class CoverageWatchdog:
         realtime_inserts_per_minute: float,
         max_offset_lag_bytes: int,
         lag_by_file: dict[str, int] | None = None,
+        progress_by_file: dict[str, tuple[int, int]] | None = None,
     ) -> dict[str, Any]:
         now = self.now_fn()
         reasons = []
@@ -757,9 +778,12 @@ class CoverageWatchdog:
             if lag_by_file is not None
             else {}
         )
-        shrinking, eta_s, drain_rate = self._catch_up(now, over) if lag_bad else (False, None, None)
-        self._lag_samples = [(t, s) for t, s in self._lag_samples if now - t <= self.rate_window_s]
-        self._lag_samples.append((now, over))
+        progress = (
+            {f: progress_by_file[f] for f in over if f in progress_by_file} if progress_by_file is not None else None
+        )
+        shrinking, eta_s, drain_rate = self._catch_up(now, over, progress) if lag_bad else (False, None, None)
+        self._lag_samples = [(t, s, p) for t, s, p in self._lag_samples if now - t <= self.rate_window_s]
+        self._lag_samples.append((now, over, progress))
         state = CATCH_UP_NONE
         if lag_bad:
             self._lag_bad_since = now if self._lag_bad_since is None else self._lag_bad_since
@@ -1860,9 +1884,15 @@ class JSONLWatcher:
         self.poll_interval_s = poll_interval_s
         self.registry_flush_interval_s = registry_flush_interval_s
         self.max_lines_per_file = max(1, max_lines_per_file)
-        self.catch_up_budget_s = (
-            _watch_catch_up_budget_s() if catch_up_budget_s is None else max(0.0, catch_up_budget_s)
-        )
+        if catch_up_budget_s is None:
+            self.catch_up_budget_s = _watch_catch_up_budget_s()
+        elif math.isfinite(catch_up_budget_s):
+            self.catch_up_budget_s = max(0.0, catch_up_budget_s)
+        else:  # nan/inf would set no deadline at all: the env path's fallback, loudly
+            logger.warning(
+                "Invalid catch_up_budget_s=%r; using default %s", catch_up_budget_s, _DEFAULT_WATCH_CATCHUP_BUDGET_S
+            )
+            self.catch_up_budget_s = _DEFAULT_WATCH_CATCHUP_BUDGET_S
         self._catch_up_rounds = 0
         self._catch_up_s = 0.0
         self.max_read_bytes_per_file = _watch_read_window_bytes()
@@ -2244,9 +2274,10 @@ class JSONLWatcher:
         The first pass is the poll as it always was, so every file gets its turn before any
         file gets a second one. Then, while catch_up_budget_s lasts, each file still behind its
         discovered size gets one more max_lines_per_file slice per round, round-robin. No new
-        discovery walk: the round works from this poll's stats, so a live file is caught up to
-        the size it had at discovery and its newer bytes wait for the next poll like everyone
-        else's. A file whose round moved nothing leaves the rounds for this poll.
+        discovery walk: admission to a round uses this poll's stats, so a live file stops taking
+        rounds once it reaches the size it had at discovery. The last slice may still read records
+        appended since (same slice code, same checkpoint rules, so they simply arrive early). A
+        file whose round moved nothing leaves the rounds for this poll.
 
         No rounds while the indexer holds failed writes (the queue or DB write path is down):
         reading ahead into a failing write path only grows retained memory and retries, and gains
@@ -2263,12 +2294,17 @@ class JSONLWatcher:
         try:
             while True:
                 behind = [f for f in behind if self._catch_up_position(f) is not None]
-                if not behind or self.indexer.retained_failed_input_count() > 0:
+                if not behind or self.indexer.retained_failed_input_count() > 0 or self._stop.is_set():
                     return
                 self._catch_up_rounds += 1
                 moved = []
                 for filepath in behind:
-                    if time.monotonic() >= deadline or self.indexer.retained_failed_input_count() > 0:
+                    # stop() ends the rounds: the slice in flight finished, the final flush follows.
+                    if (
+                        time.monotonic() >= deadline
+                        or self.indexer.retained_failed_input_count() > 0
+                        or self._stop.is_set()
+                    ):
                         return
                     before = self._catch_up_position(filepath)
                     if before is None:
@@ -2737,11 +2773,20 @@ class JSONLWatcher:
         roots_missing = self._missing_roots(now)
         lags = self._offset_lags(files)
         max_lag = max(lags.values(), default=0)
+        # Measured progress: a plain file's confirmed offset and its registry generation. An
+        # archive has no confirmed decoded checkpoint comparable to its physical size, so it gets
+        # no entry and can never read as catching up; its lag still raises offset_lag (#1827).
+        progress = {
+            filepath: (self.registry.get(filepath)[0], self.registry.generation(filepath))
+            for filepath in lags
+            if not self._physical_files.get(filepath, filepath).endswith(".zst")
+        }
         watchdog = self.coverage_watchdog.evaluate(
             active_entries_per_minute=active_entries_per_min,
             realtime_inserts_per_minute=watchdog_inserts_per_min,
             max_offset_lag_bytes=max_lag,
             lag_by_file=lags,
+            progress_by_file=progress,
         )
         # The honest catch-up surface (BrainBar: "catching up, about N minutes"): total bytes
         # behind, the estimate while the lag shrinks, and what this poll's catch-up rounds did.
@@ -3066,6 +3111,8 @@ class JSONLWatcher:
                     self._file_providers.pop(filepath, None)
                     self._pending_quarantined_offsets.pop(filepath, None)
                     self.registry.remove(filepath)
+                    # its persisted offset is gone, so the marker could never be pruned (#1827)
+                    self._growth_backfill.pop(filepath, None)
 
             from .codex_zst import queue_has_capacity
 
@@ -3113,6 +3160,7 @@ class JSONLWatcher:
                     self._file_providers.pop(filepath, None)
                     self._pending_quarantined_offsets.pop(filepath, None)
                     self.registry.remove(filepath)
+                    self._growth_backfill.pop(filepath, None)  # see the retirement above (#1827)
                     continue
                 self._vanished_sources.discard(filepath)
                 if self._can_skip_unchanged(filepath):

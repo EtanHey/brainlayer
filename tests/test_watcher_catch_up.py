@@ -23,7 +23,11 @@ import pytest
 from brainlayer.health_facts import watcher_health_fact
 from brainlayer.health_verdict import UNOBSERVED
 from brainlayer.watcher import CoverageWatchdog, JSONLWatcher, OffsetRegistry, WatchRoot
+from tests.test_codex_zstd_stream import compress as _compress
+from tests.test_codex_zstd_stream import rollout
 from tests.test_health_facts import NOW, _config, _verdict_ticks
+
+compress = _compress  # the zstd fixture, re-exported for the archive test
 
 PAD = "x" * 160
 
@@ -209,6 +213,80 @@ def test_a_failing_write_path_takes_no_catch_up_rounds_and_never_reads_as_catchi
     assert watcher.registry.get(str(big))[0] == 0  # nothing confirmed, nothing checkpointed
 
 
+def test_an_archive_whose_decoder_reads_ahead_with_nothing_confirmed_is_a_stall(tmp_path, monkeypatch, compress):
+    # CodeRabbit Major on caaa5a3e: a .zst file's lag mixed its PHYSICAL size with the DECODED read
+    # offset, so decoder progress alone made the lag fall and read as catching_up while every
+    # write failed. An archive has no confirmed decoded checkpoint to compare: never catching up.
+    import os
+
+    monkeypatch.setenv("BRAINLAYER_CODEX_ZST_ADMISSION", "bounded")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+    records = b"".join(
+        (
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": os.urandom(300).hex()}],
+                    },
+                }
+            )
+            + "\n"
+        ).encode()
+        for _ in range(1000)
+    )
+    archive = compress("sessions/history.jsonl.zst", rollout() + records)
+    assert archive.stat().st_size > 200_000  # random text: the archive stays large
+    clock = [0.0]
+
+    def always_fails(_items):
+        raise RuntimeError("writer unavailable")
+
+    watcher = JSONLWatcher(
+        watch_roots=[WatchRoot("codex", tmp_path / "sessions")],
+        registry_path=tmp_path / "offsets.json",
+        on_flush=always_fails,
+        batch_size=10,
+        flush_interval_ms=360000,
+        max_lines_per_file=10,
+        health_path=tmp_path / "watcher-health.json",
+        coverage_watchdog=CoverageWatchdog(lag_threshold_bytes=1000, alert_after_s=60, now_fn=lambda: clock[0]),
+    )
+    offsets, states = [], []
+    for _ in range(8):
+        watcher.poll_once()
+        clock[0] += 30
+        health = json.loads((tmp_path / "watcher-health.json").read_text())
+        offsets.append(watcher._tailers[str(archive.with_suffix(""))].offset)
+        states.append((health["catch_up"]["state"], "offset_lag" in health["alert_reasons"]))
+    assert offsets == sorted(offsets) and offsets[-1] > offsets[0]  # the decoder did read ahead
+    assert watcher.registry.get(str(archive.with_suffix("")))[0] == 0  # nothing was confirmed
+    assert states[2:] == [("stalled", True)] * 6  # a stall from the alert window on, as on main
+
+
+def test_a_lag_that_falls_only_because_the_file_shrank_is_not_catching_up():
+    # CodeRabbit (review body) on caaa5a3e: a truncation lowers size - confirmed offset with
+    # nothing confirmed. Progress needs the confirmed offset to advance in the same generation.
+    clock = [0.0]
+    watchdog = CoverageWatchdog(lag_threshold_bytes=1_048_576, now_fn=lambda: clock[0])
+    states = []
+    for poll in range(20):
+        lag = 100_000_000 - 1_000_000 * poll  # the file shrinks 1 MB a poll
+        result = watchdog.evaluate(
+            active_entries_per_minute=0,
+            realtime_inserts_per_minute=0,
+            max_offset_lag_bytes=lag,
+            lag_by_file={"f": lag},
+            progress_by_file={"f": (0, poll // 5)},  # confirmed stays 0; each rewrite is a new generation
+        )
+        states.append(result["catch_up"]["state"])
+        clock[0] += 30
+    assert "catching_up" not in states
+    assert states[-1] == "stalled"
+
+
 def _flush_test_watcher(tmp_path, monkeypatch, on_flush, batch_size):
     monkeypatch.setenv("BRAINLAYER_WATCH_MAX_FILE_BYTES", "128")
     sessions = _sessions(tmp_path)
@@ -317,8 +395,8 @@ def test_a_lag_that_stops_shrinking_is_offset_lag_at_once(tmp_path, monkeypatch)
         _write_lines(big, "big", 1000 + 30 * poll, 30)
         health = _poll(watcher, clock, tmp_path)
         states.append((health["catch_up"]["state"], "offset_lag" in health["alert_reasons"]))
-    # within the 60 s progress span the growth shows; from then on it is a stall, as today
-    assert states[-2:] == [("stalled", True), ("stalled", True)]
+    # the first growing poll is above the window's low: a stall at once, and every poll after it
+    assert states == [("stalled", True)] * 4
 
 
 def test_one_stalled_file_keeps_offset_lag_while_a_bigger_file_drains_beside_it():
@@ -363,8 +441,8 @@ def _verdicts(config, payloads):
     ticks = []
     for i, payload in enumerate(payloads):
         at = NOW + timedelta(minutes=5 * i)
-        write = lambda at=at, payload=payload: config.watcher_health_path.write_text(  # noqa: E731
-            json.dumps({**payload, "poll_count": i + 1, "updated_at": at.isoformat()})
+        write = lambda at=at, payload=payload, poll_count=i + 1: config.watcher_health_path.write_text(  # noqa: E731
+            json.dumps({**payload, "poll_count": poll_count, "updated_at": at.isoformat()})
         )
         ticks.append((at, write))
     return [verdict.check("ingest") for _, verdict in _verdict_ticks(config, ticks)]
@@ -384,11 +462,65 @@ def test_a_lag_that_stalls_after_catching_up_goes_red_after_its_threshold_as_tod
 
 def test_a_malformed_catch_up_block_is_unreadable_not_a_clean_reading(tmp_path):
     config = _config(tmp_path)
-    for bad in ("catching_up", {"state": 1}, ["catching_up"]):
+    for bad in (
+        "catching_up",
+        {"state": 1},
+        ["catching_up"],
+        None,  # CodeRabbit: an explicit null is not an older watcher's omission
+        {"state": "catching_up"},  # CodeRabbit: progress needs a measured lag and ETA
+        {"state": "catching_up", "bytes_behind": 107_000_000, "eta_s": None},
+        {"state": "catching_up", "bytes_behind": -1, "eta_s": 720.0},
+    ):
         config.watcher_health_path.write_text(json.dumps({**_payload(catch_up=bad), "updated_at": NOW.isoformat()}))
-        assert watcher_health_fact(config.watcher_health_path)[1] is UNOBSERVED
+        assert watcher_health_fact(config.watcher_health_path)[1] is UNOBSERVED, bad
     config.watcher_health_path.write_text(json.dumps({**_payload(), "updated_at": NOW.isoformat()}))
     assert watcher_health_fact(config.watcher_health_path)[1] == ()  # an older watcher: no block, no code
+
+
+@pytest.mark.parametrize("budget", [float("inf"), float("nan")])
+def test_an_explicit_nonfinite_budget_falls_back_to_the_default(tmp_path, budget):
+    watcher = _watcher(tmp_path, _sessions(tmp_path), [], catch_up_budget_s=budget)
+    assert watcher.catch_up_budget_s == 10.0
+
+
+def test_stop_during_catch_up_ends_the_rounds_after_the_slice_in_flight(tmp_path):
+    sessions = _sessions(tmp_path)
+    big = sessions / "big.jsonl"
+    _write_lines(big, "big", 0, 3000)
+    flushed: list[dict] = []
+    confirm = _confirming(flushed)
+    holder = {}
+
+    def stop_after_first_round_slice(items):
+        result = confirm(items)
+        if holder["w"]._catch_up_rounds >= 1:  # stop() arrives while a catch-up round runs
+            holder["w"].stop()
+        return result
+
+    watcher = JSONLWatcher(
+        watch_roots=[WatchRoot("codex", sessions)],
+        registry_path=tmp_path / "offsets.json",
+        on_flush=stop_after_first_round_slice,
+        batch_size=10,
+        catch_up_budget_s=10,
+    )
+    holder["w"] = watcher
+    watcher.poll_once()
+    assert watcher._catch_up_rounds == 1
+    assert len(_texts(flushed, "big")) == 200  # the normal slice plus the one round slice in flight
+
+
+def test_a_denylisted_source_drops_its_growth_backfill_marker(tmp_path, monkeypatch):
+    sessions = _sessions(tmp_path)
+    big = sessions / "big.jsonl"
+    _write_lines(big, "big", 0, 50)
+    watcher = _watcher(tmp_path, sessions, [])
+    watcher.indexer.on_flush = lambda _items: None  # unconfirmed: the marker survives the read
+    watcher.poll_once()
+    assert str(big) in watcher._growth_backfill
+    monkeypatch.setenv("BRAINLAYER_INGEST_DENYLIST", str(big))
+    watcher.poll_once()
+    assert str(big) not in watcher._growth_backfill  # retired with its registry entry
 
 
 # ── Round 1: amber only for genuine progress ─────────────────────────────────

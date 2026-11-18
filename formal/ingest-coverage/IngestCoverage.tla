@@ -184,11 +184,13 @@ Tick(f, w, o) ==
               [] OTHER -> sBlind
       \* A catching_up-only snapshot reads amber whatever the held count (health_verdict._ingest_stall).
       catchOnly == Rule = "real" /\ codesSeen /\ inCatch /\ ~inFile
-      alertState == CASE catchOnly -> "amber"
-                      [] aT >= AlertRed -> "red"
-                      [] aT > 0 -> "amber"
-                      [] sB >= UnknownAmber -> "amber"
-                      [] OTHER -> "green"
+      \* An ordered IF chain, not CASE: TLA+ CASE does not define which true guard wins, and a
+      \* catch-up-only read with a held aT >= AlertRed makes two guards true (CodeRabbit, #1827).
+      alertState == IF catchOnly THEN "amber"
+                    ELSE IF aT >= AlertRed THEN "red"
+                    ELSE IF aT > 0 THEN "amber"
+                    ELSE IF sB >= UnknownAmber THEN "amber"
+                    ELSE "green"
       raw0 == CASE Mut = "stale_green" /\ seen -> "green"           \* age ignored
                 [] Mut = "trust_alive" /\ f # "dead" -> "green"     \* frozen poll_count ignored
                 [] OTHER -> IF known THEN AgeState(age) ELSE "unknown"
@@ -201,7 +203,7 @@ Tick(f, w, o) ==
       base == IF v \in {"green", "amber", "red"} THEN v ELSE "unknown"
       g1 == IF raw # "green" \/ ~evidence THEN 0 ELSE good
       \* round 1: a measured catch-up amber (_Raw.progress) steps a red check down
-      stepDown == catchOnly /\ raw = "amber" /\ Mut # "catch_resets"
+      stepDown == catchOnly /\ raw = "amber" /\ Mut \notin {"catch_resets", "no_stepdown"}
       vNext == CASE raw = "unknown" ->
                       IF base = "red" THEN "red" ELSE IF unk1 >= UnknownAmber THEN "amber" ELSE base
                  [] ~evidence /\ NonGreen(v) /\ Rank(raw) < Rank(v) -> v
@@ -280,6 +282,10 @@ StallAcrossWakeStillCounts == (wokeInStall /\ stall > N /\ (fault # "growth" \/ 
    is progress and never turns the check red. It is still amber (non-green) while
    it lasts; checked in real-catchup together with the stall invariants. *)
 CatchUpIsNeverRed == Faults \subseteq {"none", "catchup"} => v # "red"
+(* A tick whose own fresh snapshot carries a catch-up label reads AMBER: never green
+   (the label must reach the verdict) and never red (a measured catch-up steps a red
+   check down). Idle ticks stay free to be green. Mut no_stepdown violates it. *)
+CatchUpReadIsAmber == (fault \in {"catchup", "fakecatch"} /\ obs = "fresh") => v = "amber"
 (* #1827 round 1: a stall reaches RED on time, whatever catching_up labels the
    watcher puts between its stall checks. The verdict counts the snapshots it
    READS (one per health tick; a watcher poll it never reads cannot count), so:
