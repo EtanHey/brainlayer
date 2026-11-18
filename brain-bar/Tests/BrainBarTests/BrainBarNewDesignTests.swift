@@ -1919,7 +1919,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let reconnect = try XCTUnwrap(two.stationItems[.drive]?.action)
         let report = try XCTUnwrap(two.stationItems[.jobs]?.action)
         XCTAssertEqual(NDPipelineChart.shortLabel(reconnect), Say.reconnectShort)
-        XCTAssertEqual(NDPipelineChart.shortLabel(report), Say.copyReportShort)
+        XCTAssertEqual(NDPipelineChart.shortLabel(report), "Copy a report for your agent", "R1.12 (§ C): one label on every surface")
         XCTAssertEqual(reconnect.label, BrainBarMenuPresenter.Say.reconnect.text, "the dropdown and the spoken name keep the long form")
         XCTAssertEqual(report.label, BrainBarMenuPresenter.Say.copyReport.text)
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()

@@ -67,7 +67,7 @@ struct NDPipelineChart: View {
     static func shortLabel(_ action: BrainBarMenuPresentation.Action) -> String {
         switch action.kind {
         case .reconnectDrive, .connectDrive: Say.reconnectShort
-        case .copyReport: Say.copyReportShort
+        case .copyReport: action.label  // R1.12 (§ C): "Copy a report for your agent" on every surface, then "Copied"
         default: action.label
         }
     }
