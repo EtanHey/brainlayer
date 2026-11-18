@@ -44,6 +44,43 @@ _LONG_LINE_CARRY_BYTES = 4 * _LONG_LINE_OVERLAP_CHARS
 # Two spaces keep every offset, so line numbers stay exact.
 _JSON_ESCAPES = ("\\n", "\\r", "\\t")
 _MAX_FILES_IN_ALERT = 3
+# Standard base64 contains "/", so a provider shape like google_oauth_refresh's
+# "1//..." turns up inside pasted images: 493 of 496 findings in the #1825 live
+# check, every one inside a base64 run of 100+ chars. A real key stands between
+# quotes, spaces or a short "label=", so its base64-alphabet neighbourhood is
+# small; a match whose run reaches this far past it is data, not a credential.
+_BASE64_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+_EMBEDDED_MIN_EXTENSION = 32
+# A value whose tail repeats a short unit ("Fa1KeFa1Ke...", "0000...", "xxxx...") is
+# a placeholder: a real key never has 16 chars of period <= 8.
+_PLACEHOLDER_MAX_PERIOD = 8
+_PLACEHOLDER_MIN_RUN = 16
+
+
+def is_embedded_in_base64(text: str, start: int, end: int) -> bool:
+    """True when the base64-alphabet run around [start, end) extends 32+ chars beyond it."""
+    left = start
+    left_limit = max(0, start - _EMBEDDED_MIN_EXTENSION)
+    while left > left_limit and text[left - 1] in _BASE64_CHARS:
+        left -= 1
+    right = end
+    right_limit = min(len(text), end + _EMBEDDED_MIN_EXTENSION)
+    while right < right_limit and text[right] in _BASE64_CHARS:
+        right += 1
+    return (start - left) + (right - end) >= _EMBEDDED_MIN_EXTENSION
+
+
+def is_placeholder(value: str) -> bool:
+    """True when a tail of 16+ chars, at least half the value, repeats a unit of <= 8 chars."""
+    length = len(value)
+    needed = max(_PLACEHOLDER_MIN_RUN, length // 2)
+    for period in range(1, _PLACEHOLDER_MAX_PERIOD + 1):
+        index = length - 1
+        while index - period >= 0 and value[index] == value[index - period]:
+            index -= 1
+        if length - 1 - index + period >= needed:
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -74,6 +111,8 @@ class FileScan:
         self.relative_path = relative_path
         self.scanned_bytes = 0
         self.proven_prefix_bytes = 0
+        self.ignored_embedded = 0
+        self.ignored_placeholder = 0
         self._prior = prior
         self._observed = 0
         self._prefix_hash = hashlib.sha256() if prior is not None else None
@@ -81,6 +120,9 @@ class FileScan:
         self._prefix_last_newline = -1
         self._pending: list[bytes] = []
         self._pending_bytes = 0
+        # After a long-line carry, the first chars were judged by the previous block
+        # with full context; here their left context is cut, so they are skipped.
+        self._skip_head = 0
         self._line = 1
         self._found: dict[tuple[str, str], int] = {}
 
@@ -130,30 +172,38 @@ class FileScan:
         self._pending_bytes = 0
         if not data:
             return
+        skip_head, self._skip_head = self._skip_head, 0
         if final:
-            self._scan(data, accept_before=None)
+            self._scan(data, accept_before=None, skip_head=skip_head)
             return
         cut = data.rfind(b"\n") + 1
         if cut:
-            self._scan(data[:cut], accept_before=None)
+            self._scan(data[:cut], accept_before=None, skip_head=skip_head)
             self._line += data.count(b"\n", 0, cut)
             carry = data[cut:]
         else:
             # One line longer than a block: keep memory bounded, accept only matches
             # clear of the tail, and rescan that tail with the next block.
-            self._scan(data, accept_before=_LONG_LINE_OVERLAP_CHARS)
+            self._scan(data, accept_before=_LONG_LINE_OVERLAP_CHARS, skip_head=skip_head)
             carry = data[-_LONG_LINE_CARRY_BYTES:]
+            self._skip_head = _EMBEDDED_MIN_EXTENSION
         if carry:
             self._pending = [carry]
             self._pending_bytes = len(carry)
 
-    def _scan(self, data: bytes, *, accept_before: int | None) -> None:
+    def _scan(self, data: bytes, *, accept_before: int | None, skip_head: int = 0) -> None:
         text = data.decode("utf-8", errors="replace")
         for escape in _JSON_ESCAPES:
             text = text.replace(escape, "  ")
         limit = None if accept_before is None else len(text) - accept_before
         for span in provider_secret_spans(text):
-            if limit is not None and span.end > limit:
+            if (limit is not None and span.end > limit) or span.start < skip_head:
+                continue
+            if is_embedded_in_base64(text, span.start, span.end):
+                self.ignored_embedded += 1
+                continue
+            if is_placeholder(span.original):
+                self.ignored_placeholder += 1
                 continue
             key = (span.provider, fingerprint(span.original))
             if key not in self._found:
@@ -165,9 +215,10 @@ class CredentialScan:
     """Collects findings across one bundling run.
 
     ``priors`` is the backup state's ``files`` map. An entry is trusted as already
-    scanned only when its recorded mtime is at or after ``scanning_since`` (the
-    start of the first run that scanned): an entry written by an earlier run
-    records an earlier mtime, so it can never vouch for bytes nobody scanned.
+    scanned only when its recorded mtime is strictly after ``scanning_since`` (the
+    last state write before the first scanning run; see ``_last_unscanned_write``):
+    an entry written by a run that did not scan records an mtime at or before
+    that, so it can never vouch for bytes nobody scanned.
     """
 
     now: float
@@ -177,6 +228,8 @@ class CredentialScan:
     scanned_files: int = 0
     scanned_bytes: int = 0
     proven_prefix_bytes: int = 0
+    ignored_embedded: int = 0
+    ignored_placeholder: int = 0
 
     def open_file(self, path: Path, root: Path) -> FileScan | None:
         if path.suffix.lower() not in SCANNED_SUFFIXES:
@@ -194,7 +247,7 @@ class CredentialScan:
         size, digest, mtime = entry.get("size"), entry.get("sha256"), entry.get("mtime")
         if not (isinstance(size, int) and size > 0 and isinstance(digest, str) and digest):
             return None
-        if not isinstance(mtime, (int, float)) or mtime < self.scanning_since:
+        if not isinstance(mtime, (int, float)) or mtime <= self.scanning_since:
             return None
         return PriorSnapshot(size=size, sha256=digest)
 
@@ -211,6 +264,8 @@ class CredentialScan:
         self.scanned_files += 1
         self.scanned_bytes += scan.scanned_bytes
         self.proven_prefix_bytes += scan.proven_prefix_bytes
+        self.ignored_embedded += scan.ignored_embedded
+        self.ignored_placeholder += scan.ignored_placeholder
 
 
 def state_path_for(backup_state_path: Path) -> Path:
@@ -246,13 +301,35 @@ def _write(path: Path, payload: dict[str, Any]) -> None:
         temp_path.unlink(missing_ok=True)
 
 
-def start(priors: Mapping[str, Any], *, state_path: Path, now: float) -> CredentialScan:
-    """Begin a run's scan; the first scanning run records when scanning began."""
+def _last_unscanned_write(backup_state: Mapping[str, Any], now: float) -> float:
+    """The newest moment a run that did not scan can have written a state entry.
+
+    Every entry records its file's mtime as seen before the run wrote state, so an
+    entry from a run that did not scan has mtime <= that run's ``updated_at``. The
+    first scanning run uses the state's ``updated_at`` (the last write before it)
+    as the cutoff, so its own entries vouch on the very next night. Using its own
+    start time instead made night 2 re-scan everything (live check, Defect 2: an
+    entry's mtime is always 600+ s older than the run that writes it).
+    """
+    files = backup_state.get("files")
+    if not files:
+        return 0.0  # No entry exists that a run without the scan could have written.
+    updated_at = backup_state.get("updated_at")
+    if isinstance(updated_at, str):
+        try:
+            return dt.datetime.fromisoformat(updated_at).timestamp()
+        except ValueError:
+            pass
+    return now  # Entries of unknown age: trust none of them.
+
+
+def start(backup_state: Mapping[str, Any], *, state_path: Path, now: float) -> CredentialScan:
+    """Begin a run's scan; the first scanning run records the trust cutoff once."""
     state = _load(state_path)
     if state["scanning_since"] is None:
-        state["scanning_since"] = now
+        state["scanning_since"] = _last_unscanned_write(backup_state, now)
         _write(state_path, state)
-    return CredentialScan(now=now, priors=priors, scanning_since=state["scanning_since"])
+    return CredentialScan(now=now, priors=backup_state.get("files") or {}, scanning_since=state["scanning_since"])
 
 
 def alert_message(new: list[CredentialFinding]) -> str:
@@ -305,4 +382,6 @@ def apply_findings(scan: CredentialScan, *, state_path: Path, alert_path: Path) 
         "scanned_files": scan.scanned_files,
         "scanned_bytes": scan.scanned_bytes,
         "proven_prefix_bytes": scan.proven_prefix_bytes,
+        "ignored_embedded_in_base64": scan.ignored_embedded,
+        "ignored_placeholders": scan.ignored_placeholder,
     }

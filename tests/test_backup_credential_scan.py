@@ -1,5 +1,7 @@
 """The transcript backup's credential scan: alert once on a key that looks current, store no values."""
 
+import base64
+import datetime as dt
 import gzip
 import hashlib
 import json
@@ -252,8 +254,8 @@ def test_rewritten_prefix_or_untrusted_entry_is_scanned_whole(tmp_path):
         assert collector.proven_prefix_bytes == 0, name
 
 
-def test_only_entries_written_after_scanning_began_skip_their_prefix(tmp_path, monkeypatch):
-    """End to end: the first scanning run trusts nothing older than itself."""
+def test_first_night_entries_vouch_on_night_two(tmp_path, monkeypatch):
+    """End to end: the full first-night scan happens once (live check, Defect 2)."""
     from tests.test_jsonl_backup import _mock_drive_success
 
     _mock_drive_success(backup, monkeypatch)
@@ -293,6 +295,65 @@ def test_only_entries_written_after_scanning_began_skip_their_prefix(tmp_path, m
     third = run(t0 + 1500, "2026-11-03")["credential_scan"]
 
     assert first["proven_prefix_bytes"] == 0
-    assert second["proven_prefix_bytes"] == 0  # its entry predates the first scanning run
+    # Night 1's entry records an mtime older than night 1 itself; it must still vouch.
+    assert second["proven_prefix_bytes"] == len('{"n":1}\n')
+    assert second["scanned_bytes"] == len('{"n":2}\n')
     assert third["proven_prefix_bytes"] == len('{"n":1}\n{"n":2}\n')
     assert third["scanned_bytes"] == len('{"n":3}\n')
+
+
+def test_entries_written_before_scanning_existed_never_vouch(tmp_path):
+    """The cutoff is the last state write before the first scanning run."""
+    path, prefix = _grown_file(tmp_path, old_key=_fake_key("pre-scan"), new_key=_fake_key("later"))
+    last_write = 5000.0
+    entry = {"size": len(prefix), "sha256": hashlib.sha256(prefix).hexdigest()}
+    backup_state = {
+        "files": {path.as_posix(): {**entry, "mtime": last_write}},
+        "updated_at": dt.datetime.fromtimestamp(last_write, dt.UTC).isoformat(),
+    }
+    state_path = tmp_path / "scan-state.json"
+
+    collector = scan.start(backup_state, state_path=state_path, now=last_write + 900)
+    assert collector.scanning_since == last_write
+    assert collector._prior(path) is None  # mtime == last write: may predate scanning
+    later = {**backup_state, "files": {path.as_posix(): {**entry, "mtime": last_write + 1}}}
+    assert scan.start(later, state_path=state_path, now=last_write + 2000)._prior(path) is not None
+    # With no prior state at all, nothing exists that could predate scanning.
+    assert scan.start({"files": {}}, state_path=tmp_path / "fresh.json", now=9e9).scanning_since == 0.0
+
+
+def test_a_provider_shape_inside_a_base64_run_is_not_a_key(tmp_path):
+    """Live check Defect 1: 493 of 496 findings were google_oauth_refresh inside base64."""
+    blob = base64.b64encode(b"".join(hashlib.sha256(bytes([i])).digest() for i in range(40))).decode()
+    refresh_shape = "1//" + "0" + hashlib.sha256(b"refresh").hexdigest()[:30]
+    embedded = blob[:300] + refresh_shape + "+" + blob[300:600]
+    standalone = "1//0" + hashlib.sha256(b"real refresh").hexdigest()[:40]
+    file_scan = scan.FileScan("x.jsonl")
+    lines = [
+        json.dumps({"type": "image", "data": embedded}),
+        json.dumps({"refresh_token": standalone}),
+        "token=" + standalone + " end",
+    ]
+    file_scan.feed(("\n".join(lines) + "\n").encode())
+
+    assert file_scan.finish() == [("google_oauth_refresh", 2, scan.fingerprint(standalone))]
+    assert file_scan.ignored_embedded == 1
+
+
+def test_repeated_filler_values_are_placeholders_and_never_alert(tmp_path):
+    """The audio-dashboard transcript's line 401: every value was "Fa1Ke" repeated."""
+    filler = "Fa1Ke" * 8
+    now = time.time()
+    source = tmp_path / "sources"
+    path = source / "fixture-output.jsonl"
+    path.parent.mkdir(parents=True)
+    values = ["sk_live_" + filler, "whsec_" + filler, "sk-proj-" + filler, "gh" + "p_" + filler, "AKIA" + "0" * 16]
+    path.write_text(json.dumps({"type": "user", "text": " ".join(values)}) + "\n", encoding="utf-8")
+    os.utime(path, (now - 3600, now - 3600))
+
+    result = _run(tmp_path, source, now=now)
+
+    assert _counts(result) == {"findings": 0, "current_findings": 0, "new_alerts": 0}
+    assert result["credential_scan"]["ignored_placeholders"] == len(values)
+    assert scan.ALERT_KEY not in _alerts(tmp_path)
+    assert not any(scan.is_placeholder(_fake_key(seed)) for seed in ("a", "b", "c", "d"))

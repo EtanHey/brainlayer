@@ -1956,7 +1956,7 @@ def run_backup(
     scan_state_path = backup_credential_scan.state_path_for(state_path)
     scan_error: str | None = None
     try:
-        credential_scan = backup_credential_scan.start(state.get("files") or {}, state_path=scan_state_path, now=now)
+        credential_scan = backup_credential_scan.start(state, state_path=scan_state_path, now=now)
     except OSError as exc:
         scan_error = f"credential scan state unavailable: {type(exc).__name__}"
         credential_scan = CredentialScan(now=now)  # Still scans in full; nothing is trusted.
