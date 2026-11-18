@@ -385,6 +385,20 @@ class _Stall:
     keep: dict[str, Any]
 
 
+CATCHING_UP_PREFIX = "catching_up:"  # health_facts.catching_up_code: catching_up:<bytes>:<eta s>
+
+
+def _catching_up_note(code: str) -> str:
+    """'watcher catching up: 107.0 MB behind, about 12 min left' from a catching_up code."""
+    _, behind, eta = (code.split(":") + ["?", "?"])[:3]
+    parts = []
+    if behind.isdigit():
+        parts.append(f"{int(behind) / 1_000_000:.1f} MB behind")
+    if eta.isdigit():
+        parts.append(f"about {max(1, round(int(eta) / 60))} min left")
+    return "watcher catching up" + (": " + ", ".join(parts) if parts else "")
+
+
 def _ingest_stall(facts: Facts, before: Mapping[str, Any], watcher: datetime | None, t: Thresholds) -> _Stall:
     """The watcher's stall codes as a severity, counted once per new snapshot.
 
@@ -399,7 +413,12 @@ def _ingest_stall(facts: Facts, before: Mapping[str, Any], watcher: datetime | N
     blind = int(before.get("stall_blind_ticks") or 0)
     codes = facts.watcher_stall_codes
     read = watcher is not None and isinstance(codes, tuple)
+    # A lag the watcher measured as still shrinking is progress: amber with its estimate, never
+    # counted toward red, and it resets the count like a clean snapshot. A lag that stops
+    # shrinking comes back as offset_lag and counts from 1 again, red on the 6th check.
+    catching_up = [c for c in codes if c.startswith(CATCHING_UP_PREFIX)] if read else []
     if read:
+        codes = tuple(c for c in codes if not c.startswith(CATCHING_UP_PREFIX))
         blind = 0
         if facts.stores_paused:
             codes = tuple(c for c in codes if c != "coverage_drop")  # the paused drain writes nothing
@@ -417,6 +436,8 @@ def _ingest_stall(facts: Facts, before: Mapping[str, Any], watcher: datetime | N
         what = ", ".join(codes) if read and codes else "a stall"
         state = RED if ticks >= t.ingest_alert_red_ticks else AMBER
         return _Stall(read, state, f"watcher reports {what} ({ticks} checks in a row)", keep)
+    if catching_up:
+        return _Stall(read, AMBER, _catching_up_note(catching_up[0]), keep)
     if blind >= t.unknown_amber_ticks:
         return _Stall(read, AMBER, f"watcher stall signals unreadable ({blind} checks in a row)", keep)
     return _Stall(read, None, "", keep)

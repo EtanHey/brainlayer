@@ -170,6 +170,7 @@ def drive_auth_fact(
 
 
 WATCHER_STALL_REASONS = ("coverage_drop", "offset_lag", "file_ingestion_failure")
+WATCHER_CATCHING_UP = "catching_up"  # watcher-health.json catch_up.state; amber, never a stall
 WATCHER_DB_PROBE_GRACE_S = 300.0
 
 
@@ -203,11 +204,29 @@ def watcher_stall_codes(payload: Mapping[str, Any]) -> Any:
         and polls >= 0
     ):
         return UNOBSERVED
+    # catch_up is newer than the fields above: absent (an older watcher) adds nothing, while a
+    # present but malformed block is unreadable like any other stall field.
+    catch_up = payload.get("catch_up")
+    if catch_up is not None and not (isinstance(catch_up, dict) and isinstance(catch_up.get("state"), str)):
+        return UNOBSERVED
     codes = [r for r in WATCHER_STALL_REASONS if r in reasons]
     codes += sorted({r for r in reasons if r.startswith("growth_not_indexed:")})
     if probe and probe_for >= WATCHER_DB_PROBE_GRACE_S:
         codes.append("db_probe_failed")
+    if catch_up is not None and catch_up["state"] == WATCHER_CATCHING_UP:
+        codes.append(catching_up_code(catch_up.get("bytes_behind"), catch_up.get("eta_s")))
     return tuple(codes + [f"root_missing:{r}" for r in roots])
+
+
+def catching_up_code(bytes_behind: Any, eta_s: Any) -> str:
+    """``catching_up:<bytes behind>:<eta seconds>``, ``?`` for a value the watcher did not measure.
+
+    The watcher publishes catching_up only for a lag over its threshold for alert_after_s that is
+    still shrinking (progress), so the verdict holds it at amber and never counts it toward red.
+    """
+    behind = str(int(bytes_behind)) if _is_number(bytes_behind) and bytes_behind >= 0 else "?"
+    eta = str(round(eta_s)) if _is_number(eta_s) and eta_s >= 0 else "?"
+    return f"{WATCHER_CATCHING_UP}:{behind}:{eta}"
 
 
 def watcher_health_fact(path: Path) -> tuple[datetime | None, Any, Any]:

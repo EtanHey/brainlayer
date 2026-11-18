@@ -55,6 +55,13 @@ _DEFAULT_WATCH_MAX_FILE_BYTES = 100 * 1024 * 1024
 _WATCH_MAX_RECORD_BYTES_ENV = "BRAINLAYER_WATCH_MAX_RECORD_BYTES"
 _DEFAULT_WATCH_MAX_RECORD_BYTES = 128 * 1024 * 1024
 _WATCH_READ_CHUNK_BYTES = 64 * 1024
+# Per-poll wall-clock budget for catch-up rounds: after every discovered file has had its normal
+# turn, files still behind their size keep reading, round-robin, until they catch up or this is
+# spent. One 146 MB resumed transcript otherwise drained at max_lines_per_file per 30 s poll,
+# about 7 hours (2026-11-18, M4). 0 disables catch-up. A third of the 30 s poll floor, so the
+# loop still sleeps most of each cycle and the discovery walk the floor protects is never re-run.
+_WATCH_CATCHUP_BUDGET_ENV = "BRAINLAYER_WATCH_CATCHUP_BUDGET_S"
+_DEFAULT_WATCH_CATCHUP_BUDGET_S = 10.0
 _MAX_HEALTH_FAILURE_DETAILS = 100
 _MAX_HEALTH_QUARANTINE_DETAILS = 100
 # A tailer's evidence that a path under the same inode (renamed back, or a new file handed a
@@ -197,6 +204,26 @@ def _watch_read_window_bytes() -> int:
             _DEFAULT_WATCH_MAX_FILE_BYTES,
         )
         return _DEFAULT_WATCH_MAX_FILE_BYTES
+    return parsed_value
+
+
+def _watch_catch_up_budget_s() -> float:
+    """Load the per-poll catch-up budget; a bad value falls back to the default, loudly."""
+    raw_value = os.environ.get(_WATCH_CATCHUP_BUDGET_ENV, str(_DEFAULT_WATCH_CATCHUP_BUDGET_S))
+    try:
+        parsed_value = float(raw_value)
+    except ValueError:
+        parsed_value = math.nan
+    # isfinite first: nan and inf survive `< 0`, and an infinite budget would let one file
+    # hold the poll loop for as long as it keeps growing.
+    if not math.isfinite(parsed_value) or parsed_value < 0:
+        logger.warning(
+            "Invalid %s=%r; using default %s",
+            _WATCH_CATCHUP_BUDGET_ENV,
+            raw_value,
+            _DEFAULT_WATCH_CATCHUP_BUDGET_S,
+        )
+        return _DEFAULT_WATCH_CATCHUP_BUDGET_S
     return parsed_value
 
 
@@ -645,6 +672,9 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
 ROOT_EXPECTED_FOR_S = 14 * 24 * 3600.0  # a vanished root alarms only if it was active this recently
 
 
+CATCH_UP_NONE, CATCH_UP_BEHIND, CATCH_UP_CATCHING_UP, CATCH_UP_STALLED = "none", "behind", "catching_up", "stalled"
+
+
 class CoverageWatchdog:
     def __init__(
         self,
@@ -652,14 +682,45 @@ class CoverageWatchdog:
         coverage_ratio_threshold: float = 0.25,
         lag_threshold_bytes: int = 1_048_576,
         alert_after_s: float = 300.0,
+        progress_span_s: float = 60.0,
+        rate_window_s: float = 300.0,
         now_fn: Callable[[], float] = time.monotonic,
     ):
         self.coverage_ratio_threshold = coverage_ratio_threshold
         self.lag_threshold_bytes = lag_threshold_bytes
         self.alert_after_s = alert_after_s
+        # A lag counts as shrinking only against a sample at least progress_span_s old (two
+        # 30 s polls), so one lucky poll cannot pass for progress and a stall shows within
+        # about that long. The drain rate behind the estimate is measured over rate_window_s.
+        self.progress_span_s = progress_span_s
+        self.rate_window_s = max(rate_window_s, progress_span_s)
         self.now_fn = now_fn
         self._coverage_bad_since: float | None = None
         self._lag_bad_since: float | None = None
+        # (time, {file: lag}) for files over the lag threshold only, oldest first.
+        self._lag_samples: list[tuple[float, dict[str, int]]] = []
+
+    def _catch_up(self, now: float, over: dict[str, int]) -> tuple[bool, float | None, float | None]:
+        """(shrinking, eta_s, drain_bytes_per_s) for the files over the lag threshold.
+
+        Shrinking means EVERY such file is smaller behind than it was in the newest sample at least
+        progress_span_s old. A file absent from that sample was under the threshold then, so it
+        grew: not shrinking. No sample old enough yet: not proven, so not shrinking. One stalled
+        file therefore keeps offset_lag even while a bigger file drains beside it.
+        """
+        base = next((s for t, s in reversed(self._lag_samples) if now - t >= self.progress_span_s), None)
+        if base is None or not over or any(f not in base or lag >= base[f] for f, lag in over.items()):
+            return False, None, None
+        eta_s = 0.0
+        rate_total = 0.0
+        for filepath, lag in over.items():
+            then, old = next((t, s[filepath]) for t, s in self._lag_samples if filepath in s)
+            rate = (old - lag) / (now - then) if now > then and old > lag else 0.0
+            if rate <= 0:
+                return True, None, None
+            rate_total += rate
+            eta_s = max(eta_s, lag / rate)
+        return True, eta_s, rate_total
 
     def evaluate(
         self,
@@ -667,6 +728,7 @@ class CoverageWatchdog:
         active_entries_per_minute: float,
         realtime_inserts_per_minute: float,
         max_offset_lag_bytes: int,
+        lag_by_file: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         now = self.now_fn()
         reasons = []
@@ -682,14 +744,39 @@ class CoverageWatchdog:
             self._coverage_bad_since = None
 
         lag_bad = max_offset_lag_bytes > self.lag_threshold_bytes
+        over = (
+            {f: lag for f, lag in lag_by_file.items() if lag > self.lag_threshold_bytes}
+            if lag_by_file is not None
+            else {}
+        )
+        shrinking, eta_s, drain_rate = self._catch_up(now, over) if lag_bad else (False, None, None)
+        self._lag_samples = [(t, s) for t, s in self._lag_samples if now - t <= self.rate_window_s]
+        self._lag_samples.append((now, over))
+        state = CATCH_UP_NONE
         if lag_bad:
             self._lag_bad_since = now if self._lag_bad_since is None else self._lag_bad_since
+            state = CATCH_UP_BEHIND
             if now - self._lag_bad_since >= self.alert_after_s:
-                reasons.append("offset_lag")
+                # A lag that is still shrinking is progress, not a stall: it is published as
+                # catch_up.state = catching_up, never as an alert reason (BrainBar and the health
+                # verdict make an unknown alert reason a "needs you"). A lag that stops shrinking
+                # is offset_lag at once, because the episode clock kept running throughout.
+                state = CATCH_UP_CATCHING_UP if shrinking else CATCH_UP_STALLED
+                if not shrinking:
+                    reasons.append("offset_lag")
         else:
             self._lag_bad_since = None
 
-        return {"alerting": bool(reasons), "alert_reasons": reasons}
+        return {
+            "alerting": bool(reasons),
+            "alert_reasons": reasons,
+            "catch_up": {
+                "state": state,
+                "eta_s": eta_s if shrinking else None,
+                "drain_bytes_per_s": drain_rate if shrinking else None,
+                "lagging_files": len(over),
+            },
+        }
 
 
 # ── Offset Registry ──────────────────────────────────────────────────────────
@@ -1737,6 +1824,7 @@ class JSONLWatcher:
         health_path: str | Path | None = None,
         coverage_watchdog: CoverageWatchdog | None = None,
         max_lines_per_file: int = 100,
+        catch_up_budget_s: float | None = None,
     ):
         from .codex_zst import zst_enabled, zst_limits
 
@@ -1764,6 +1852,11 @@ class JSONLWatcher:
         self.poll_interval_s = poll_interval_s
         self.registry_flush_interval_s = registry_flush_interval_s
         self.max_lines_per_file = max(1, max_lines_per_file)
+        self.catch_up_budget_s = (
+            _watch_catch_up_budget_s() if catch_up_budget_s is None else max(0.0, catch_up_budget_s)
+        )
+        self._catch_up_rounds = 0
+        self._catch_up_s = 0.0
         self.max_read_bytes_per_file = _watch_read_window_bytes()
         self.max_record_bytes = _watch_max_record_bytes()
         self._tailers: dict[str, JSONLTailer] = {}
@@ -2090,6 +2183,69 @@ class JSONLWatcher:
             and filepath not in self._file_ingestion_failures
         )
 
+    def _catch_up_position(self, filepath: str) -> tuple[int, int] | None:
+        """(offset, buffered bytes) when this file may take a catch-up round, else None.
+
+        Only a plain JSONL file already read this poll, behind its discovered size or holding
+        a complete buffered line, with nothing pending against it. Compressed archives keep their
+        own per-poll admission budget (zst files/bytes) and never take catch-up rounds; a file
+        with a recorded failure or quarantined offsets waits for its normal turn, so a file that
+        fails every read cannot spin the budget.
+        """
+        tailer = self._tailers.get(filepath)
+        stats = self._current_file_stats.get(filepath)
+        if (
+            tailer is None
+            or stats is None
+            or hasattr(tailer, "decoder")
+            or self._physical_files.get(filepath, filepath).endswith(".zst")
+            or tailer.filepath != self._physical_files.get(filepath, filepath)
+            or filepath in self._file_ingestion_failures
+            or self._pending_quarantined_offsets.get(filepath)
+            or filepath in self._vanished_sources
+            or self._denylisted(filepath)
+        ):
+            return None
+        if tailer.offset < stats[1] or tailer.has_complete_buffered_line():
+            return tailer.offset, len(tailer._buffer)
+        return None
+
+    def _poll_order(self, files: list[str]) -> Iterator[str]:
+        """Every discovered file once, then catch-up rounds over only the files still behind.
+
+        The first pass is the poll as it always was, so every file gets its turn before any
+        file gets a second one. Then, while catch_up_budget_s lasts, each file still behind its
+        discovered size gets one more max_lines_per_file slice per round, round-robin. No new
+        discovery walk: the round works from this poll's stats, so a live file is caught up to
+        the size it had at discovery and its newer bytes wait for the next poll like everyone
+        else's. A file whose round moved nothing leaves the rounds for this poll.
+        """
+        self._catch_up_rounds = 0
+        self._catch_up_s = 0.0
+        yield from files
+        if self.catch_up_budget_s <= 0:
+            return
+        started = time.monotonic()
+        deadline = started + self.catch_up_budget_s
+        done: set[str] = set()
+        try:
+            while True:
+                behind = [f for f in files if f not in done and self._catch_up_position(f) is not None]
+                if not behind:
+                    return
+                self._catch_up_rounds += 1
+                for filepath in behind:
+                    if time.monotonic() >= deadline:
+                        return
+                    before = self._catch_up_position(filepath)
+                    if before is None:
+                        continue
+                    yield filepath
+                    if self._catch_up_position(filepath) in (before, None):
+                        done.add(filepath)
+        finally:
+            self._catch_up_s = time.monotonic() - started
+
     def _normalize_lines(self, filepath: str, new_lines: list[dict]) -> list[dict]:
         provider = self.provider_for_file(filepath)
         compressed = provider == "codex" and self._physical_files.get(filepath, filepath).endswith(".zst")
@@ -2367,7 +2523,11 @@ class JSONLWatcher:
         return True
 
     def _max_offset_lag_bytes(self, files: list[str]) -> int:
-        max_lag = 0
+        return max(self._offset_lags(files).values(), default=0)
+
+    def _offset_lags(self, files: list[str]) -> dict[str, int]:
+        """Bytes each file is behind its discovered size; files with no lag are left out."""
+        lags: dict[str, int] = {}
         for filepath in files:
             # Discovery stat'd every one of these moments ago; re-statting the whole corpus
             # here would double the syscall cost of every poll for no new information.
@@ -2381,8 +2541,9 @@ class JSONLWatcher:
                     continue
             tailer = self._tailers.get(filepath)
             offset = tailer.offset if tailer else self.registry.get(filepath)[0]
-            max_lag = max(max_lag, max(size - offset, 0))
-        return max_lag
+            if size > offset:
+                lags[filepath] = size - offset
+        return lags
 
     def _db_realtime_inserts_since_window_start(self) -> int | None:
         if not self.db_path:
@@ -2534,12 +2695,24 @@ class JSONLWatcher:
             self._db_probe_failed_since = now
         db_probe_failed_for_s = now - self._db_probe_failed_since if db_probe_failed else 0.0
         roots_missing = self._missing_roots(now)
-        max_lag = self._max_offset_lag_bytes(files)
+        lags = self._offset_lags(files)
+        max_lag = max(lags.values(), default=0)
         watchdog = self.coverage_watchdog.evaluate(
             active_entries_per_minute=active_entries_per_min,
             realtime_inserts_per_minute=watchdog_inserts_per_min,
             max_offset_lag_bytes=max_lag,
+            lag_by_file=lags,
         )
+        # The honest catch-up surface (BrainBar: "catching up, about N minutes"): total bytes
+        # behind, the estimate while the lag shrinks, and what this poll's catch-up rounds did.
+        watchdog["catch_up"] = {
+            **watchdog.get("catch_up", {}),
+            "bytes_behind": sum(lags.values()),
+            "files_behind": len(lags),
+            "last_poll_rounds": self._catch_up_rounds,
+            "last_poll_s": round(self._catch_up_s, 3),
+            "budget_s": self.catch_up_budget_s,
+        }
         all_failure_payloads = [
             {key: value for key, value in failure.items() if key != "_fingerprint"}
             for _filepath, failure in sorted(self._file_ingestion_failures.items())
@@ -2868,7 +3041,7 @@ class JSONLWatcher:
                         )
                     )
                 )
-            for filepath in files:
+            for filepath in self._poll_order(files):
                 compressed = self._physical_files.get(filepath, filepath).endswith(".jsonl.zst")
                 if compressed:
                     if filepath in self._tailers:
