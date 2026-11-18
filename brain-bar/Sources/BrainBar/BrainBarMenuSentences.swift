@@ -483,7 +483,7 @@ extension BrainBarMenuPresenter {
         static let stageRead = "Read"
         static let stageQueue = "Save queue"
         static let stageMemory = "Memory"
-        static let stageMac = "Copy on this Mac"
+        static let stageMac = "Local copy"  // R1.10.5 (L50): one name everywhere
         static let stageDrive = "Google Drive"
         static let stageMeaning = "By meaning"
         static let byWordsNotChecked = "by words, not checked"
@@ -529,14 +529,14 @@ extension BrainBarMenuPresenter {
         static func inHoursAxis(_ n: Int) -> String { "in \(n)\u{00A0}h" }
         static let newest = "Newest"
         static let next = "Next"
-        static let laneMac = "Copy on this Mac"
+        static let laneMac = "Local copy"  // R1.10.5 (L50)
         static let laneDrive = "Copy in Google Drive"
         static let laneConversations = "Conversations in Drive"
         static let laneCheck = "Database check"
         static let passed = "passed"
         static let signedIn = "Signed in"
         static let signedOutValue = "Signed out"
-        static let newestCopyOnMac = "Newest copy on this Mac"
+        static let newestCopyOnMac = "Newest local copy"  // R1.10.5 (L50)
         static func todayAt(_ hhmm: String) -> String { "Today at \(hhmm)" }
         static let showInFinder = "Show in Finder"
         static let roomForBackups = "Room for backups"
@@ -555,7 +555,7 @@ extension BrainBarMenuPresenter {
         static let jobNames: [String: String] = [
             "watch": "Read new conversations", "hotlane": "Keep search ready", "drain": "Save waiting memories",
             "walCheckpoint": "Tidy up storage", "backupDaily": "Back up the database", "jsonlBackup": "Back up conversations",
-            "maintenanceNightly": "Nightly check-up", "maintenanceWeekly": "Weekly deep clean", "decay": "Fade old memories",
+            "maintenanceNightly": "Nightly check-up", "maintenanceWeekly": "Weekly clean", "decay": "Fade old memories",
             "repairFTS": "Repair word search",
         ]
         static let jobHelp: [String: String] = [
@@ -637,14 +637,14 @@ extension BrainBarMenuPresenter {
         static func lastGoodRun(_ day: String, _ time: String) -> String { "Last good run: \(day), \(time)." }
         static let memoryStillSaves = "Memory still saves and answers searches; it hasn\u{2019}t been checked or tidied since."
         static let notCheckedOrTidiedSince = "It hasn\u{2019}t been checked or tidied since."
-        static let macCopyStillMade = "The copy on this Mac is still made every night."
+        static let macCopyStillMade = "The local copy is still made every night."
         static let explainAgents = "Your coding agents. BrainBar reads the session files they write, and takes the memories they save. Search answers go back to them."
         static let explainRead = "Watches the agents\u{2019} session files as they grow, keeps what matters and turns it into memories."
         static let explainQueue = "Holds memories an agent has saved until they are written. It is normally empty; a save that waits too long shows here."
         static let explainMemory = "The database every memory lives in. Everything else reads from it or copies it."
         static let explainSearch = "Finds memories two ways: by meaning, and by matching words. Agents ask it, and the answers go back to them."
         static let explainMac = "Every night, a checked copy of the database is saved on this Mac."
-        static let explainDrive = "The copy on this Mac is uploaded to your Google Drive, and the agents\u{2019} session files are copied there too. If Drive is signed out, both stop."
+        static let explainDrive = "The local copy is uploaded to your Google Drive, and the agents\u{2019} session files are copied there too. If Drive is signed out, both stop."
         static let explainJobs = "Read memory, check it and tidy it in place: a light check-up every night and a deep clean that compacts the whole database every week. They add no new memories."
 
         // Revision 1.4 (L34, L35, L38): provider names, the words that moved into hovers, the readout's first line.
@@ -668,7 +668,7 @@ extension BrainBarMenuPresenter {
         static let answersTitle = "Answers to agents"
         static let answersLine = "What Search finds goes back to the agent that asked."
         static let agentsLine = "Claude, Codex, Cursor and Antigravity."
-        static let keptSafeLine = "A copy on this Mac every night, and a copy in your Google Drive."
+        static let keptSafeLine = "A local copy every night, and a copy in your Google Drive."
         // Round 2a decisions (R2A-DECISIONS.md, taken 3, 6, 8, 9).
         static func lastUpload(_ age: String) -> String { "last upload \(age) ago" }
         static func readAt(_ time: String) -> String { "read at \(time)" }
@@ -678,7 +678,7 @@ extension BrainBarMenuPresenter {
         static func stationSays(_ station: String, _ status: String) -> String { "\(station): \(status)" }
 
         // Revision 1.5 (L45): the Jobs name, the copies' truth, the panel rows, the copy click, the agent panel.
-        static let jobsStationName = "Nightly check-up, weekly clean"
+        static let jobsStationName = "Nightly check-up"  // R1.10 (L49): the jobs are two stations now
         static let jobsPanelTitle = "Jobs that work on memory"
         static let jobsPanelLine = "They read memory, check it and tidy it in place. They add no new memories."
         static func keptNewest(_ n: Int, _ age: String) -> String { "\(n) kept, newest \(age) ago" }
@@ -699,7 +699,7 @@ extension BrainBarMenuPresenter {
         }
 
         // Round 2 decisions (R2-DECISIONS "Taken", approved copy).
-        static func macLate(_ age: String) -> String { "Copy on this Mac is late: newest \(age) ago" }
+        static func macLate(_ age: String) -> String { "Local copy is late: newest \(age) ago" }  // R1.10.5 (L50)
         static func noDataSince(_ time: String) -> String { "no data since \(time)" }
         static func failedInARow(_ n: Int) -> String { "Failed \(n) nights in a row" }
         static func searchableByMeaning(_ p: Int) -> String { "\(p)% searchable by meaning" }

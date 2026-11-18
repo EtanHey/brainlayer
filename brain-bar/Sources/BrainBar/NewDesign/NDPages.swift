@@ -273,7 +273,7 @@ struct NDBackupsPage: View {
                         number: number, strong: row?.strong ?? false, accessibility: spoken + newest)
         }
         return [
-            lane("backup_local", "Copy on this Mac", lanes?.local, next: databaseNext, stalls: false),
+            lane("backup_local", NDPipelineLayout.name(.mac), lanes?.local, next: databaseNext, stalls: false),  // R1.10.5: one name
             lane("backup_offsite", "Copy in Google Drive", lanes?.drive, next: databaseNext, stalls: true),
             lane("transcripts", "Conversations in Drive", lanes?.conversations, next: conversationsNext, stalls: true),
             lane("integrity", "Database check", lanes?.integrity, next: databaseNext, stalls: false),

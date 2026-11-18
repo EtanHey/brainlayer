@@ -481,7 +481,7 @@ extension NDModel {
     static func backups(_ ctx: Context, _ mark: Mark) -> Area {
         let fault = mark == .fault
         var rows = [
-            gaugeRow(ctx, id: "backup_local", name: "Copy on this Mac", check: "backup_local", areaFault: fault),
+            gaugeRow(ctx, id: "backup_local", name: BrainBarMenuPresenter.SurfaceSay.localCopy, check: "backup_local", areaFault: fault),
             gaugeRow(ctx, id: "backup_offsite", name: "Copy in Google Drive", check: "backup_offsite", areaFault: fault),
             gaugeRow(ctx, id: "transcripts", name: "Conversations in Drive", check: "transcripts", areaFault: fault),
         ]

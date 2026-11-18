@@ -2439,7 +2439,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testR2A9ASingleFaultSaysWhatItIs() {
         func r1(_ name: Fixture.Name) -> NDR1 { NDR1.make(Fixture.inputs(name), NDModel.make(Fixture.inputs(name))) }
         XCTAssertEqual(r1(.driveSignedOut).headline, Say.oneThingNeedsYou, "R1.10: the row names it")
-        XCTAssertEqual(r1(.backupLate).headline, "Copy on this Mac is late: newest 30\u{00A0}h ago", "R1.6 item 5")
+        XCTAssertEqual(r1(.backupLate).headline, "Local copy is late: newest 30\u{00A0}h ago", "R1.6 item 5, R1.10.5 one name")
         XCTAssertEqual(r1(.meaningBehind).headline, Say.meaningCatchingUp)
         XCTAssertEqual(r1(.twoFaults).headline, Say.thingsNeedYou(2))
         XCTAssertNil(r1(.twoFaults).headlineDetail, "no list under the count")
@@ -2769,7 +2769,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(rows.map(\.label), [Say.databaseCopy, Say.conversationsCopy], "the session files' age is a row")
         XCTAssertEqual(r1.menuRows.first { $0.kind == .backups }?.value.contains(NDFormat.ageText(db)), true)
         XCTAssertEqual(r1.headline, Say.macLate(NDFormat.ageText(30 * 3600)))
-        XCTAssertEqual(Say.macLate("30 h"), "Copy on this Mac is late: newest 30 h ago")
+        XCTAssertEqual(Say.macLate("30 h"), "Local copy is late: newest 30 h ago", "R1.10.5: one name")
     }
 
     /// R1.6 item 6: not confirmed, the Activity chart draws no live data: hatched from the last confirmed check, with
@@ -2852,6 +2852,44 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let row = try XCTUnwrap(NDR1.make(i, NDModel.make(i)).menuRows.first { $0.kind == .search })
         XCTAssertTrue(row.value.hasSuffix("% searchable by meaning"), row.value)
         XCTAssertEqual(Say.searchableByMeaning(99), "99% searchable by meaning")
+    }
+
+    // MARK: Revision 1.10.5
+
+    /// R1.10.5 (L49, L50): one name per thing on every surface. The copy on this Mac is "Local copy" and the weekly job is
+    /// "Weekly clean" on the Overview's stations, the Backups page, the Jobs page, the dropdown's help, the model's rows
+    /// and the late headline; no source string still says the old names.
+    func testR1105OneNamePerThing() throws {
+        let local = NDPipelineLayout.name(.mac)
+        XCTAssertEqual(local, "Local copy")
+        XCTAssertEqual(NDPipelineLayout.name(.weekly), "Weekly clean")
+        let calm = NDStore(fixture: Fixture.inputs(.calm), page: .backups)
+        let lanes = NDBackupsPage(store: calm).lanes(calm.model)
+        XCTAssertEqual(lanes.first { $0.id == "backup_local" }?.name, local, "the Backups page")
+        XCTAssertEqual(Say.jobNames["maintenanceWeekly"], NDPipelineLayout.name(.weekly), "the Jobs page")
+        XCTAssertEqual(Say.jobNames["maintenanceNightly"], NDPipelineLayout.name(.jobs), "the Jobs page")
+        let help = try XCTUnwrap(calm.r1.menuRows.first { $0.kind == .backups }?.help)
+        XCTAssertTrue(help.hasPrefix(local + ":"), "the dropdown's help: \(help)")
+        let rows = calm.model.areas.flatMap(\.rows).map(\.name)
+        XCTAssertTrue(rows.contains(local), "the model's rows")
+        let late = NDR1.make(Fixture.inputs(.backupLate), NDModel.make(Fixture.inputs(.backupLate)))
+        XCTAssertTrue(late.headline.hasPrefix(local), late.headline)
+        // No string a surface draws still carries an old name (comments may tell the history).
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar")
+        let files = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("NewDesign").path)
+            .filter { $0.hasSuffix(".swift") }.map { "NewDesign/" + $0 } + ["BrainBarMenuSentences.swift"]
+        for file in files {
+            let source = try String(contentsOf: root.appendingPathComponent(file), encoding: .utf8)
+            for (number, line) in source.components(separatedBy: "\n").enumerated() {
+                let code = line.trimmingCharacters(in: .whitespaces)
+                guard !code.hasPrefix("//") else { continue }
+                let text = code.components(separatedBy: " // ").first ?? code
+                for old in ["Copy on this Mac", "copy on this Mac", "Weekly deep clean", "Nightly check-up, weekly clean"] {
+                    XCTAssertFalse(text.contains("\"") && text.contains(old), "\(file):\(number + 1) still says \"\(old)\"")
+                }
+            }
+        }
     }
 
     // MARK: Revision 1.10.1
