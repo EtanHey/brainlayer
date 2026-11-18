@@ -266,7 +266,7 @@ import SwiftUI
         // title the system draws there.
         let view = NDSettingsView(store: store)
             .overlay(alignment: .top) {
-                Text(BrainBarMenuPresenter.SurfaceSay.settingsTitle).font(.system(size: 13, weight: .semibold)).foregroundStyle(ND.t2)
+                Text(BrainBarMenuPresenter.SurfaceSay.settingsTitle).font(NDType.section).foregroundStyle(ND.t2)
                     .frame(height: NDSettingsWindowController.titleBar)
             }
         let height = NDSettingsWindowController.contentHeight

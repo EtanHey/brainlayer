@@ -150,7 +150,7 @@ struct NDModel: Equatable, Sendable {
 
 extension NDModel {
     /// The watcher job's name on the Jobs page (copy deck): the gauge is how long ago it last reported.
-    static let readerRow = "Read new conversations"
+    static let readerRow = BrainBarMenuPresenter.SurfaceSay.stageRead  // R1.12 (§ C): "Read", the stage's one name
     static let areaNames: [Thing: String] = [.remembering: "Remembering", .finding: "Finding", .safe: "Backups", .upkeep: "Upkeep"]
     /// The upkeep gauges' drawing scale only (L3): it places the notch and decides nothing.
     static let nightlyScaleS: Double = 36 * 3600
@@ -490,8 +490,8 @@ extension NDModel {
         let fault = mark == .fault
         var rows = [
             gaugeRow(ctx, id: "backup_local", name: BrainBarMenuPresenter.SurfaceSay.localCopy, check: "backup_local", areaFault: fault),
-            gaugeRow(ctx, id: "backup_offsite", name: "Copy in Google Drive", check: "backup_offsite", areaFault: fault),
-            gaugeRow(ctx, id: "transcripts", name: "Conversations in Drive", check: "transcripts", areaFault: fault),
+            gaugeRow(ctx, id: "backup_offsite", name: BrainBarMenuPresenter.SurfaceSay.laneDrive, check: "backup_offsite", areaFault: fault),
+            gaugeRow(ctx, id: "transcripts", name: BrainBarMenuPresenter.SurfaceSay.laneConversations, check: "transcripts", areaFault: fault),
         ]
         // A copy whose age is not measured this moment (backups not measured, R30 streaks) is not shown as known.
         if !ctx.c.backupsMeasured {
@@ -513,7 +513,7 @@ extension NDModel {
         rows.append(word("drive_auth", "Google Drive", "drive_auth",
                          [.green: "connected", .amber: "connected", .red: missing ? "not connected" : "disconnected"]))
         // The database check reads "passed"; on failure the fault row above says what failed, and the cell shows the mark.
-        rows.append(word("integrity", "Database check", "integrity", [.green: "passed", .red: "■"]))
+        rows.append(word("integrity", BrainBarMenuPresenter.SurfaceSay.laneCheck, "integrity", [.green: "passed", .red: "■"]))
         rows.append(word("disk", "Room for backups", "disk", [.green: "enough", .amber: "tight", .red: "full"]))
         return Area(thing: .safe, name: "Backups", mark: mark, rows: rows)
     }

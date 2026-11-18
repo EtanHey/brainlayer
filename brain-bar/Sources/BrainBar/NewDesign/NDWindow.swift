@@ -200,12 +200,17 @@ struct NDSegments: NSViewRepresentable {
         control.selectedSegment = selection
     }
 
-    /// "Backups ⓵": the label, then a 16 pt pill in red tint with the count in red text, 6 pt after it. Drawn at
-    /// display time, so the colours follow the control's appearance.
-    @MainActor static func labelImage(_ title: String, count: Int, selected: Bool, size: CGFloat = 13) -> NSImage {
+    /// R1.12 (§ D): the badge is a neutral count, not a red mark: two problems draw 4 red marks, not 7. It still says
+    /// where the problem lives.
+    static let badgeFill = NDColor.badge
+    static let badgeText = NDColor.t1
+
+    /// "Backups ①": the label, then a 16 pt neutral count pill, 6 pt after it. Drawn at display time, so the colours
+    /// follow the control's appearance.
+    @MainActor static func labelImage(_ title: String, count: Int, selected: Bool, size: CGFloat = NDScale.body) -> NSImage {
         let font = NSFont.systemFont(ofSize: size, weight: selected ? .medium : .regular)
         let label = NSAttributedString(string: title, attributes: [.font: font])
-        let countFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        let countFont = NSFont.monospacedDigitSystemFont(ofSize: NDScale.caption, weight: .semibold)
         let numeral = NSAttributedString(string: String(count), attributes: [.font: countFont])
         let pill = max(16, ceil(numeral.size().width) + 8)
         let width = ceil(label.size().width + (count > 0 ? 6 + pill : 0))
@@ -216,9 +221,9 @@ struct NDSegments: NSViewRepresentable {
                 .draw(at: NSPoint(x: 0, y: y))
             if count > 0 {
                 let box = NSRect(x: label.size().width + 6, y: (rect.height - 16) / 2, width: pill, height: 16)
-                NDColor.red.setFill()
+                badgeFill.setFill()
                 NSBezierPath(roundedRect: box, xRadius: 8, yRadius: 8).fill()
-                NSAttributedString(string: String(count), attributes: [.font: countFont, .foregroundColor: NSColor.white])
+                NSAttributedString(string: String(count), attributes: [.font: countFont, .foregroundColor: badgeText])
                     .draw(at: NSPoint(x: box.midX - numeral.size().width / 2, y: box.midY - numeral.size().height / 2))
             }
             return true
@@ -255,9 +260,11 @@ struct NDOverviewPage: View {
         VStack(alignment: .leading, spacing: 0) {
             NDHeadline(store: store, r1: r1)
             // R1.10 (L48): one very short row per red problem, 12 pt under the headline, 20 pt above Activity.
-            if !r1.problemRows.isEmpty { NDProblemRows(store: store, rows: r1.problemRows).padding(.top, 12) }
-            NDActivitySection(store: store).padding(.top, 20)
-            NDBlockHeading(title: Say.pipeline).padding(.top, 20)
+            // R1.12 change 4: 14 pt from the headline to the problem rows and 24 pt to the Activity label; change B: 32 pt
+            // from the Activity card to the Pipeline label, the room the top-lane panels open into.
+            if !r1.problemRows.isEmpty { NDProblemRows(store: store, rows: r1.problemRows).padding(.top, NDGrid.headlineToRows) }
+            NDActivitySection(store: store).padding(.top, NDGrid.toActivity)
+            NDBlockHeading(title: Say.pipeline).padding(.top, NDGrid.activityToPipeline)
             NDCard(padding: EdgeInsets(top: 16, leading: 16, bottom: 14, trailing: 16)) {
                 NDPipelineChart(state: r1.pipeline, memories: store.model.memories, items: r1.stationItems,
                                 waiting: NDDriveWaiting.shows(store.inputs, for: nil), perform: { store.perform($0) },
@@ -283,8 +290,9 @@ struct NDProblemRows: View {
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                     if index > 0 { ND.cardLine.frame(height: 0.5) }
                     HStack(spacing: 10) {
-                        Image(systemName: "exclamationmark.circle.fill").font(.system(size: 14)).foregroundStyle(ND.red)
-                            .accessibilityHidden(true)
+                        // R1.12 (§ D): the row's one mark is its station's own symbol in red, 16 pt, which ties it to the
+                        // station (the cloud, the moon); the headline has none.
+                        NDStationGlyph(station: row.station, color: ND.red, size: 16).accessibilityHidden(true)
                         Text(row.words).font(NDType.bodyStrong).foregroundStyle(ND.t1).lineLimit(1)
                         Spacer(minLength: 12)
                         if let action = row.action { button(action) }
@@ -313,13 +321,36 @@ struct NDProblemRows: View {
     }
 }
 
-/// A block's heading above its surface: 13 Semibold `t1`, 2 pt inset, a 22 pt row, 8 pt to the surface (R1.2 change 1).
+/// R1.12 (§ D): a station's symbol at a size and colour: the drawn glyphs for the Mac and the two jobs, an SF Symbol for
+/// the rest; the red exclamation mark for a problem with no station.
+struct NDStationGlyph: View {
+    let station: NDStation?
+    let color: Color
+    var size: CGFloat = 16
+
+    var body: some View {
+        switch station {
+        case let .some(s) where s == .mac || s == .jobs || s == .weekly:
+            Canvas { ctx, box in
+                let p = CGPoint(x: box.width / 2, y: box.height / 2)
+                if s == .mac { NDPipelineChart.macWithArrow(ctx, at: p, color: color) } else { NDPipelineChart.jobGlyph(ctx, s, at: p, size: size, color: color) }
+            }
+            .frame(width: size + 2, height: size + 2)
+        case let .some(s):
+            Image(systemName: s == .memory ? "brain" : (NDPipelineLayout.symbols[s] ?? "circle")).font(.system(size: size)).foregroundStyle(color)
+        case .none:
+            Image(systemName: "exclamationmark.circle.fill").font(.system(size: size)).foregroundStyle(color)
+        }
+    }
+}
+
+/// A block's heading above its surface: 13 Semibold `t2`, 2 pt inset, a 22 pt row, 8 pt to the surface (R1.2 change 1, R1.12 change 2).
 struct NDBlockHeading<Trailing: View>: View {
     let title: String
     @ViewBuilder var trailing: Trailing
     var body: some View {
         HStack {
-            Text(title).font(NDType.bodyStrong).foregroundStyle(ND.t1).accessibilityAddTraits(.isHeader)
+            Text(title).font(NDType.section).foregroundStyle(ND.t2).accessibilityAddTraits(.isHeader)  // R1.12 change 2
             Spacer()
             trailing
         }
@@ -366,7 +397,8 @@ struct NDPageTop: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(NDType.title).tracking(-0.25).foregroundStyle(ND.t1).frame(height: 22)
+            // R1.12 change 1: the page titles take the window's headline.
+            Text(title).font(NDType.windowHeadline).tracking(NDType.headlineTracking).foregroundStyle(ND.t1).frame(height: NDType.headlineLine)
             if let detail { Text(detail).font(NDType.body).foregroundStyle(ND.t2) }
         }
         .accessibilityElement(children: .combine)
@@ -391,10 +423,10 @@ struct NDHeadline: View {
                     Image(systemName: symbol).font(.system(size: 15, weight: .regular)).foregroundStyle(tone(r1.headlineTone))
                         .frame(width: 16, height: 22)
                 }
-                Text(r1.headline).font(NDType.title).tracking(-0.25).foregroundStyle(ND.t1)
+                Text(r1.headline).font(NDType.windowHeadline).tracking(NDType.headlineTracking).foregroundStyle(ND.t1)
                 Spacer(minLength: 0)
             }
-            .frame(minHeight: 22)
+            .frame(minHeight: NDType.headlineLine)  // R1.12 change 1
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
             if let detail = r1.headlineDetail, !detail.isEmpty {
@@ -594,7 +626,7 @@ struct NDActivitySection: View {
         // R1.2 change 19: the hour's totals are the calm page's hero numbers, at the title size.
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8).alignmentGuide(.firstTextBaseline) { d in d.height }
-            Text(value ?? NDModel.Number.unknown.value).font(NDType.title.monospacedDigit()).foregroundStyle(ND.t1)
+            Text(value ?? NDModel.Number.unknown.value).font(NDType.total).foregroundStyle(ND.t1)  // R1.12 change 3
             Text(words).font(NDType.body).foregroundStyle(ND.t2)
         }
     }
@@ -745,7 +777,7 @@ struct NDButtonStyle: ButtonStyle {
             let fill: Color = filled ? (pressed ? ND.accentPressed : hovering ? ND.accentHover : ND.accent)
                 : (pressed ? ND.buttonPressed : hovering ? ND.buttonHover : ND.button)
             configuration.label
-                .font(.system(size: 13, weight: .medium))
+                .font(NDType.bodyMedium)
                 .foregroundStyle(filled ? Color.white : ND.t1)
                 .lineLimit(1)
                 .padding(.horizontal, small || compact ? 10 : 12)

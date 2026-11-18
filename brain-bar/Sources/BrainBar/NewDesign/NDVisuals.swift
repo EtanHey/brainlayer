@@ -557,7 +557,7 @@ struct NDRail: View {
                 chevron(left: true, color: e.kind == .fail ? palette.fault : palette.ink2)
                 if let olderLabel {
                     let failed = e.kind == .fail
-                    ctx.draw(Text(olderLabel).font(.system(size: 11, weight: failed ? .semibold : .regular))
+                    ctx.draw(Text(olderLabel).font(failed ? NDType.captionStrong : NDType.caption)
                         .foregroundColor(failed ? ND.redText : palette.ink2),
                              at: CGPoint(x: 10, y: mid), anchor: .leading)
                 }

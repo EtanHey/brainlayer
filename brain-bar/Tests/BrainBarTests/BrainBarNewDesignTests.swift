@@ -877,7 +877,7 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
     /// F07: the row is named for what it measures: the conversation reader's heartbeat.
     func testReaderRowIsNamedForTheHeartbeat() {
         let row = NDModel.make(BrainBarDesignFixture.inputs(.calm)).areas.first { $0.thing == .remembering }!.rows.first!
-        XCTAssertEqual(row.name, "Read new conversations")
+        XCTAssertEqual(row.name, "Read")  // R1.12 (§ C): the stage's one name
         XCTAssertTrue(row.accessibility.contains("last reported"), row.accessibility)
         XCTAssertTrue(NDModel.make(BrainBarDesignFixture.inputs(.calm)).areas.flatMap(\.rows).allSatisfy { $0.name != "New conversations" })
     }
@@ -1342,18 +1342,18 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertFalse(calm.allUnconfirmed)
         XCTAssertTrue(NDPipe.allCases.allSatisfy { calm.look($0) == .flowing }, "L6: calm stays calm")
         XCTAssertEqual(calm.status[.read]?.text, Say.lastRead(NDFormat.ageText(48)))
-        XCTAssertNil(calm.status[.queue], "R1.4 change 13: \"empty\" lives in the Save queue popover")
+        XCTAssertEqual(calm.status[.queue]?.text, Say.empty, "R1.12 (F): Save queue says it is empty")
         XCTAssertEqual(calm.status[.mac]?.text, Say.keptNewest(3, NDFormat.ageText(4 * 3600)), "R1.5 change 8: the copies kept")
         XCTAssertEqual(calm.status[.drive]?.text, Say.lastUpload(NDFormat.ageText(3 * 3600)), "Drive's newest upload of either kind")
         XCTAssertEqual(calm.status[.jobs]?.text, Say.lastRunAgo(NDFormat.ageText(5 * 3600)))
-        XCTAssertNil(calm.status[.search], "R1.4 change 14: \"working\" lives in the Search popover")
+        XCTAssertEqual(calm.status[.search]?.text, "99% searchable", "R1.12 (F): Search says how much is searchable")
         XCTAssertTrue(calm.status.values.allSatisfy { $0.severity == nil })
 
         let agent = pipeline(.agentNotRead)
         XCTAssertEqual(agent.agentFaults, [.cursor: .red])
         XCTAssertEqual(agent.treatment(.agents), .fault)
         XCTAssertTrue(NDPipe.allCases.allSatisfy { agent.look($0) == .flowing }, "an agent's fault is its icon, no pipe changes")
-        XCTAssertEqual(agent.status[.read], .init(text: Say.providerNotRead("Cursor")), "R1.5 change 6: Read names it in plain words")
+        XCTAssertEqual(agent.status[.read], .init(text: Say.providerNotRead("Cursor"), severity: .red), "R1.12 (E4): red, like every fault status")
 
         for name in [Fixture.Name.driveSignedOut, .reconnectWaiting] {
             let drive = pipeline(name)
@@ -1368,13 +1368,13 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let saves = pipeline(.savesStuck)
         XCTAssertEqual(saves.faults, [.queue])
         XCTAssertEqual(saves.look(.queueMemory), .faint, "the pipe after the faulty stage is faint")
-        XCTAssertEqual(saves.status[.queue], .init(text: Say.waiting(NDFormat.ageText(2 * 3600)), severity: .red))
+        XCTAssertEqual(saves.status[.queue], .init(text: Say.stuckFor(NDFormat.ageText(2 * 3600)), severity: .red))  // R1.12 (F)
 
         let meaning = pipeline(.meaningBehind)
         XCTAssertEqual(meaning.notices, [.search])
         XCTAssertEqual(meaning.look(.memorySearch), .flowing, "R1.4 change 16: a notice changes no pipe")
         XCTAssertEqual(meaning.look(.answers), .flowing, "the return to the agents stays solid")
-        XCTAssertEqual(meaning.status[.search], .init(text: Say.byMeaningBehind(NDFormat.ageText(2 * 3600)), severity: .orange))
+        XCTAssertEqual(meaning.status[.search], .init(text: Say.catchingUp, severity: .orange))  // R1.12 (F)
 
         let nightly = pipeline(.nightlyFailing)
         XCTAssertEqual(nightly.faults, [.jobs])
@@ -1457,19 +1457,19 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             }
         }
         XCTAssertEqual(r1(.twoFaults).items.first?.menuDetail, Say.lastDriveUpload(NDFormat.ageText(27 * 3600)))
-        XCTAssertEqual(r1(.twoFaults).items.last?.menuTitle, Say.nightlyFailedShort(3))
+        XCTAssertEqual(r1(.twoFaults).items.last?.title, "Nightly check-up failed 3 nights", "R1.12 (§ C): one wording")
     }
 
-    /// § 4.1: the calm dropdown says what it must in 11 words (a number with its unit counts as nothing); R1.6 item 14
-    /// made the Search row "99% searchable by meaning".
+    /// § 4.1: the calm dropdown says what it must in few words (a number with its unit counts as nothing); R1.6 item 14
+    /// made the Search row "99% searchable by meaning", R1.12 (F) "99% searchable", the station's words: 9 words.
     func testCalmDropdownIsElevenWords() throws {
         let i = Fixture.inputs(.calm)
         let r1 = NDR1.make(i, NDModel.make(i))
         let words = ([NDMenuHeadline.text(r1)] + r1.menuRows.flatMap { [$0.label, $0.value] }).joined(separator: " ")
         let stripped = words.replacing(#/\d+(?:[.,]\d+)?\s?(?:%|h|min|s|d)?/#, with: "")
         let count = stripped.split(whereSeparator: { $0 == " " || $0 == "\u{00A0}" }).count
-        XCTAssertEqual(count, 11, stripped)
-        XCTAssertEqual(r1.menuRows.map(\.value), ["", Say.searchableByMeaning(99), Say.ago(NDFormat.ageText(4 * 3600)), Say.fine])
+        XCTAssertEqual(count, 9, stripped)
+        XCTAssertEqual(r1.menuRows.map(\.value), ["", Say.searchablePercent(99), Say.ago(NDFormat.ageText(4 * 3600)), Say.fine])
         let two = NDR1.make(Fixture.inputs(.twoFaults), NDModel.make(Fixture.inputs(.twoFaults)))
         XCTAssertEqual(two.menuRows.map(\.value)[2], Say.driveAgo(NDFormat.ageText(27 * 3600)),
                        "D7.3: the stale copy named, one number for one fact (as 'Nothing has uploaded for 27 h')")
@@ -1502,7 +1502,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let calm = NDPageHeight.window(NDStore(fixture: Fixture.inputs(.calm), page: .overview), page: .overview, screen: nil)
         let twoFaults = NDPageHeight.window(NDStore(fixture: Fixture.inputs(.twoFaults), page: .overview), page: .overview, screen: nil)
         // R1.10 (L48): the Overview grows by the problems surface only: 12 pt, then two 36 pt rows and the line between.
-        XCTAssertEqual(twoFaults - calm, 12 + 2 * NDProblemRows.rowHeight + 0.5, accuracy: 1.5, "only the problem rows make it taller")
+        XCTAssertEqual(twoFaults - calm, NDGrid.headlineToRows + 2 * NDProblemRows.rowHeight + 0.5, accuracy: 1.5,
+                       "only the problem rows make it taller (R1.12: 14 pt under the headline)")
         // L25: capped at the screen's visible height minus 40 pt; past it, the page scrolls and the footer stays.
         XCTAssertEqual(NDPageHeight.window(NDStore(fixture: three, page: .overview), page: .overview, screen: 720), 680)
         print("Overview heights: " + heights.joined(separator: ", "))
@@ -1583,10 +1584,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                     XCTAssertTrue((panel.body.minY + L.arrowInset - 0.01...panel.body.maxY - L.arrowInset + 0.01).contains(panel.tip.y), where_)
                 }
                 XCTAssertFalse(panel.outer.intersects(own.insetBy(dx: 1, dy: 1)), "\(where_) covers its own station")
-                // R1.7 item 2, the one reported trade-off left: the agents' panel, right of the column and above Read's
-                // words, covers Read's circle (never its name or status). R1.10.4: the job panels cover no station.
+                // R1.12 (§ B, 9 of 9): no panel covers any other station's circle (the agents' panel opens above now, so
+                // the one trade-off of R1.7 item 2 is gone), name or status.
                 for other in NDStation.allCases {
-                    if other != station && !(station == .agents && other == .read) {
+                    if other != station {
                         XCTAssertFalse(panel.body.intersects(L.circle(other)), "\(where_) covers \(other)")
                     }
                     for rect in L.labelRects(other, r1.pipeline) {
@@ -1684,7 +1685,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let two = NDStore(fixture: Fixture.inputs(.twoFaults))
         let size = NSHostingController(rootView: NDHeadline(store: two, r1: two.r1).frame(width: 852))
             .sizeThatFits(in: CGSize(width: 852, height: 1000))
-        XCTAssertEqual(size.height, 22, accuracy: 1, "L27 withdrew D7.1's rows: the two-fault headline is one 22 pt line")
+        XCTAssertEqual(size.height, NDType.headlineLine, accuracy: 1, "L27: one line; R1.12: the 24 pt headline on its 30 pt line")
         XCTAssertEqual(two.r1.items.map(\.menuDetail), [Say.lastDriveUpload(NDFormat.ageText(27 * 3600)),
                                                         Say.notCheckedSinceShort("Thursday")])
         XCTAssertNotEqual(NDPalette.menu, NDPalette.menuSelected, "a selected row's chart redraws in the selected colours")
@@ -1792,8 +1793,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let two = NDR1.make(Fixture.inputs(.twoFaults), NDModel.make(Fixture.inputs(.twoFaults)))
         XCTAssertEqual(two.headline, Say.thingsNeedYou(2))
         let late = NDR1.make(Fixture.inputs(.backupLate), NDModel.make(Fixture.inputs(.backupLate)))
-        XCTAssertEqual(late.headline, Say.macLate(NDFormat.ageText(30 * 3600)), "R2A item 9, R1.6 item 5")
-        XCTAssertNil(late.headlineDetail)
+        XCTAssertEqual(late.headline, BrainBarMenuPresenter.Say.localRunningLate.text, "R2A item 9, R1.6 item 5")
+        XCTAssertTrue(late.headlineDetail?.hasPrefix("The newest is 30\u{00A0}h old") == true, "R1.12 (E3): its second line")
         XCTAssertFalse(late.showsProblemRows)
         let behind = NDR1.make(Fixture.inputs(.meaningBehind), NDModel.make(Fixture.inputs(.meaningBehind)))
         XCTAssertEqual(behind.headline, Say.meaningCatchingUp)
@@ -1953,8 +1954,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testMacCopyStillMadeOnlyWhileTheLocalCopyIsGreen() throws {
         var i = Fixture.inputs(.driveSignedOut)
         let item = try XCTUnwrap(NDR1.make(i, NDModel.make(i)).stationItems[.drive])
-        XCTAssertEqual(NDStationPopover.faultLines(.drive, item: item, i),
-                       [Say.lastDriveUpload(NDFormat.ageText(27 * 3600)), Say.localCopyStillMade])
+        // R1.12 (5e): Drive's fault panel is its title, its two rows and Reconnect; the rows carry each upload's age.
+        XCTAssertEqual(NDStationPopover.faultLines(.drive, item: item, i), [])
+        XCTAssertEqual(NDStationPopover.model(.drive, item: item, i, NDModel.make(i), NDPipelineState.make(i)).rows.map(\.label), ["Database", "Sessions"])
         i.capture.verdict = BrainBarHealthVerdict(dot: .red, checks: Fixture.replacing(i.capture.verdict!.checks,
                                                                                          Fixture.check("backup_local", .amber, age: 40 * 3600, limit: 36 * 3600)),
                                                   notes: [], evaluatedAt: i.capture.verdict!.evaluatedAt)
@@ -1962,7 +1964,13 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     }
 
     func testByMeaningBehindOnlyFromTheEmbeddingChecksAge() {
-        XCTAssertEqual(pipeline(.meaningBehind).status[.search]?.text, Say.byMeaningBehind(NDFormat.ageText(2 * 3600)))
+        // R1.12 (F): a notice says "catching up"; a stall keeps its backlog age, read from the check.
+        XCTAssertEqual(pipeline(.meaningBehind).status[.search]?.text, Say.catchingUp)
+        var stalled = Fixture.inputs(.meaningBehind)
+        stalled.capture.verdict = BrainBarHealthVerdict(dot: .red, checks: Fixture.replacing(stalled.capture.verdict!.checks,
+                                                                                               Fixture.check("embedding", .red, age: 2 * 3600, limit: 3600)),
+                                                        notes: [], evaluatedAt: stalled.capture.verdict!.evaluatedAt)
+        XCTAssertEqual(NDPipelineState.make(stalled).status[.search]?.text, Say.byMeaningBehind(NDFormat.ageText(2 * 3600)))
         var i = Fixture.inputs(.meaningBehind)
         i.capture.verdict = BrainBarHealthVerdict(dot: .amber, checks: Fixture.replacing(i.capture.verdict!.checks,
                                                                                            Fixture.check("embedding", .amber, age: nil, limit: 3600)),
@@ -1975,7 +1983,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     /// No station moves between states; the Kept-safe frame never grows (R1.5: no actions on the chart).
     func testStationsDoNotMoveBetweenStates() {
         let expected: [NDStation: CGPoint] = [
-            .read: CGPoint(x: 215, y: 64), .queue: CGPoint(x: 215, y: 134), .search: CGPoint(x: 585, y: 248),
+            // R1.12 change 6: Search at the loop's bottom-right corner, under Google Drive.
+            .read: CGPoint(x: 215, y: 64), .queue: CGPoint(x: 215, y: 134), .search: CGPoint(x: 736, y: 248),
             .mac: CGPoint(x: 599, y: 64), .drive: CGPoint(x: 736, y: 64), .jobs: CGPoint(x: 377, y: 186), .weekly: CGPoint(x: 493, y: 186),
         ]
         XCTAssertEqual(NDPipelineLayout.stations, expected)
@@ -1988,7 +1997,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             }
         }
         XCTAssertEqual(NDPipelineLayout.keptFrame(grown: true), NDPipelineLayout.keptSafe)
-        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 521, y: 38, width: 283, height: 80), "R1.10.4: 32 pt from the right")
+        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 521, y: 38, width: 283, height: 84), "R1.10.4: 32 pt from the right; R1.12: 84 tall")
     }
 
     /// Lead (1.3 brief): inside Kept safe, 16 pt between the two stations' text blocks and 12 pt from any text to the frame,
@@ -2126,12 +2135,17 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertTrue(NDStationPopover.rows(.queue, stuck, NDModel.make(stuck)).isEmpty, "\"none\" only when it is measured empty")
     }
 
+    /// R1.12 (F, Fable 11): the Search panel says its last check worked in its text, and its one row is the searchable
+    /// share; no "Search by words: no check yet" under "All good".
     func testWorkingIsInTheSearchHover() {
         let i = Fixture.inputs(.calm)
         let rows = NDStationPopover.rows(.search, i, NDModel.make(i))
-        XCTAssertEqual(rows.first?.label, Say.lastCheck)
-        XCTAssertEqual(rows.first?.value, Say.working)
-        XCTAssertTrue(rows.contains { $0.label == Say.searchByWordsNotChecked }, "R2A item 1: \"not checked yet\", in full")
+        XCTAssertEqual(rows, [.init(label: "By meaning", value: "99% searchable")])
+        XCTAssertEqual(NDStationPopover.lines(.search, i, NDPipelineState.make(i)),
+                       ["Finds memories by meaning and by matching words. Its last check worked."])
+        let failing = Fixture.inputs(.searchFailing)
+        XCTAssertEqual(NDStationPopover.lines(.search, failing, NDPipelineState.make(failing)),
+                       ["Finds memories by meaning and by matching words."], "the second sentence only while search is green")
     }
 
     /// R1.6 item 9: the readout's lines describe the hovered column only: its time range and its two counts; the
@@ -2162,7 +2176,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertFalse(window.contains("Say.upTo("), "the halves' maxima are in the readout, not on the chart")
         for name in Fixture.Name.allCases {
             let texts = pipeline(name).status.values.map(\.text)
-            XCTAssertFalse(texts.contains(Say.empty) || texts.contains(Say.working), name.rawValue)
+            XCTAssertFalse(texts.contains(Say.working), name.rawValue)  // R1.12 (F) brings "empty" back as Save queue's status
         }
     }
 
@@ -2179,23 +2193,17 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 let item = r1.stationItems[station]
                 let panelWidth = NDPipelineLayout.panelSide(station, hasAction: item?.action != nil).width
                 let available = panelWidth - 28
-                var lines: [(String, CGFloat, NSFont.Weight)] = []
-                if let item {
-                    lines.append((item.title, 13, .semibold))
-                    lines += NDStationPopover.faultLines(station, item: item, store.inputs).map { ($0, 13, .regular) }
-                } else {
-                    lines.append((NDPipelineLayout.name(station), 13, .semibold))
-                    if station == .agents { lines.append((Say.agentsLine, 13, .regular)) }
-                    lines.append((NDStationPopover.explanation(station), 13, .regular))
-                    for row in NDStationPopover.rows(station, store.inputs, store.model) {
-                        lines.append(((row.value.isEmpty ? row.label : row.label + "   " + row.value), 13, .regular))
-                    }
-                }
+                // R1.12: the panel's own model (its title at 13 Semibold, its text and rows at the panel size, 11 pt).
+                let model = NDStationPopover.model(station, item: item, store.inputs, store.model, r1.pipeline)
+                let body = NDType.panelBodySize, bodyLine = ceil(NSLayoutManager().defaultLineHeight(for: NSFont.systemFont(ofSize: body)))
+                var lines: [(String, CGFloat, NSFont.Weight, CGFloat)] = [(model.title, NDScale.body, .semibold, 16)]
+                lines += NDStationPanelBody.paragraphs(model.lines).map { ($0, body, .regular, bodyLine) }
+                lines += model.rows.map { ((($0.value.isEmpty ? $0.label : $0.label + "   " + $0.value)), body, .regular, NDStationPanelBody.rowHeight) }
                 let needed = lines.reduce(CGFloat(0)) { sum, line in
-                    sum + ceil(width(line.0, line.1, line.2) / available) * 15
+                    sum + ceil(width(line.0, line.1, line.2) / available) * line.3
                 }
                 let measured = NDStationPopover.measure(AnyView(NDStationPopover(store: store, station: station)), width: panelWidth).height
-                XCTAssertGreaterThanOrEqual(measured - 24, needed, "\(name.rawValue) \(station): every line fits, wrapped")
+                XCTAssertGreaterThanOrEqual(measured - 20, needed, "\(name.rawValue) \(station): every line fits, wrapped (R1.12: 10 pt padding)")
             }
         }
         // No popover text is limited to one line or a fixed height.
@@ -2304,8 +2312,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
 
     // MARK: Round 2a decisions (R2A-DECISIONS.md, "Taken"), one test each
 
-    /// R2A 1: a panel keeps 12 pt inside the window's content edge. Save queue's and Jobs' panels open below their words
-    /// and are the exception at the bottom edge only (no side has room without covering a neighbour; see the build log).
+    /// R2A 1, as R1.12 (§ B) has it: every panel keeps 12 pt inside the window's content edge on every side, with no
+    /// exception: none passes the left edge, none hangs below the window, none reaches into the Activity card.
     func testR2A1PanelsStayInsideTheWindow() {
         let L = NDPipelineLayout.self
         for name in Fixture.Name.allCases {
@@ -2314,12 +2322,11 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             for station in NDStation.allCases {
                 let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
                 let where_ = "\(name.rawValue) \(station)"
-                // 1.5.1: the agents' panel opens below the group and passes the window's left edge (L39).
-                if station != .agents { XCTAssertGreaterThanOrEqual(panel.outer.minX, L.windowInside.minX - 0.01, where_) }
+                XCTAssertGreaterThanOrEqual(panel.outer.minX, L.windowInside.minX - 0.01, where_)
                 XCTAssertLessThanOrEqual(panel.outer.maxX, L.windowInside.maxX + 0.01, where_)
-                if ![.queue, .jobs, .weekly].contains(station) {  // L39: below the window is allowed
-                    XCTAssertLessThanOrEqual(panel.outer.maxY, L.windowInside.maxY + 0.01, where_)
-                }
+                XCTAssertLessThanOrEqual(panel.outer.maxY, L.windowInside.maxY + 0.01, where_)
+                XCTAssertGreaterThanOrEqual(panel.outer.minY, L.activityLabelsBottom - 0.01,
+                                            "\(where_): over the Activity card's bars or axis labels (\(panel.outer.minY))")
             }
         }
     }
@@ -2411,10 +2418,11 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(stale.status[.read]?.text, NDModel.Number.unknown.value)
         var older = Fixture.inputs(.notConfirmed)
         older.watcherHeartbeatAgeS = 3 * 3600
-        XCTAssertTrue(NDPipelineState.make(older).status[.read]?.text.hasPrefix("read at ") == true, "a read before the check: its time")
-        XCTAssertEqual(stale.status[.mac]?.text, NDModel.Number.unknown.value, "R1.7 item 5: a dash like the others")
-        XCTAssertEqual(stale.status[.drive]?.text, NDModel.Number.unknown.value)
-        XCTAssertEqual(stale.status[.jobs]?.text, NDModel.Number.unknown.value)
+        XCTAssertTrue(NDPipelineState.make(older).status[.read]?.text.hasPrefix("last read ") == true, "a read before the check: its time")
+        // R1.12 (E2, replaces R1.7 item 5's dash): each station keeps its last-known value, as a clock time.
+        XCTAssertTrue(stale.status[.mac]?.text.hasPrefix("3 kept, newest ") == true, stale.status[.mac]?.text ?? "nil")
+        XCTAssertTrue(stale.status[.drive]?.text.hasPrefix("last upload ") == true, stale.status[.drive]?.text ?? "nil")
+        XCTAssertTrue(stale.status[.jobs]?.text.hasPrefix("last run ") == true, stale.status[.jobs]?.text ?? "nil")
     }
 
     /// R2A 7: the window's height change on a page switch animates 200 ms ease-in-out, and not at all under Reduce Motion.
@@ -2442,7 +2450,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testR2A9ASingleFaultSaysWhatItIs() {
         func r1(_ name: Fixture.Name) -> NDR1 { NDR1.make(Fixture.inputs(name), NDModel.make(Fixture.inputs(name))) }
         XCTAssertEqual(r1(.driveSignedOut).headline, Say.oneThingNeedsYou, "R1.10: the row names it")
-        XCTAssertEqual(r1(.backupLate).headline, "Local copy is late: newest 30\u{00A0}h ago", "R1.6 item 5, R1.10.5 one name")
+        XCTAssertEqual(r1(.backupLate).headline, "The local copy is running late", "R1.6 item 5, R1.12 (E3, L53 C4)")
         XCTAssertEqual(r1(.meaningBehind).headline, Say.meaningCatchingUp)
         XCTAssertEqual(r1(.twoFaults).headline, Say.thingsNeedYou(2))
         XCTAssertNil(r1(.twoFaults).headlineDetail, "no list under the count")
@@ -2498,7 +2506,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     /// cannot lose height without moving a station.
     func testPipelineBlockHeightIsSetByItsLowestStation() {
         let L = NDPipelineLayout.self
-        let search = L.labelRects(.search, .calm).map(\.maxY).max() ?? 0
+        let search = L.labelRects(.search, pipeline(.calm)).map(\.maxY).max() ?? 0  // R1.12 (F): with its status line
         XCTAssertGreaterThan(search, L.size.height - 4, "Search's name reaches the chart's bottom")
         XCTAssertLessThanOrEqual(search, L.size.height + 0.5)
     }
@@ -2537,7 +2545,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(notice?.id, "notice.mac", "derived from the verdict, not a presenter fault")
         XCTAssertEqual(notice?.severity, .orange)
         XCTAssertEqual(r1.items.filter { $0.station == .mac }.count, 1, "said once")
-        XCTAssertEqual(r1.headline, Say.macLate(NDFormat.ageText(30 * 3600)))
+        XCTAssertEqual(r1.headline, BrainBarMenuPresenter.Say.localRunningLate.text)
     }
 
     // MARK: Revision 1.5 (L40 to L45)
@@ -2582,7 +2590,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(redStations, [.agents], "exactly one red mark: the agent's")
         XCTAssertEqual(agent.agentFaults, [.cursor: .red], "on the named provider's icon")
         XCTAssertEqual(agent.treatment(.read), .calm, "Read has no ring")
-        XCTAssertNil(agent.status[.read]?.severity, "Read's words are plain")
+        XCTAssertEqual(agent.status[.read]?.severity, .red, "R1.12 (E4): its status reads red like every fault status (no ring)")
         XCTAssertEqual(NDPipelineChart.marks(agent.treatment(.read)), .init())
     }
 
@@ -2601,8 +2609,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let match = try XCTUnwrap(python.firstMatch(of: /\nDEFAULT_LOCAL_COMPRESSED_KEEP = (\d+)\n/))
         let keep = try XCTUnwrap(Int(match.1))
         XCTAssertEqual(NDBackupFacts.keepNewest, keep, "the app's keep number is the backup's")
-        XCTAssertEqual(NDStationPopover.lines(.mac, calm, pipeline(.calm)).first, Say.macKeepsNewest(Say.countWord(keep)))
-        XCTAssertTrue(Say.macKeepsNewest(Say.countWord(keep)).hasSuffix("It keeps the three newest."))
+        XCTAssertEqual(NDStationPopover.lines(.mac, calm, pipeline(.calm)), [Say.localCopyPanel(Say.countWord(keep))])  // R1.12 (I 12)
+        XCTAssertEqual(Say.localCopyPanel(Say.countWord(keep)),
+                       "Saved every night. The three newest are kept until Google Drive holds a checked copy.")
         XCTAssertEqual(BackupLocalFiles.compressedSnapshots(in: ["2026-11-15.db.zst", "2026-11-14.db.gz", "2026-11-13.db", "notes.txt",
                                                                 "2026-11-12T03-15.db.zst"]).count, 3, "compressed copies only")
     }
@@ -2670,8 +2679,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                       "the icon opens the same panel as the group")
     }
 
-    /// 1.5.1 (2, 3): no panel covers the "Pipeline" block heading or the footer's lines, for every station in every
-    /// fixture at the default window size.
+    /// 1.5.1 (2, 3), as R1.12 (§ B) has it: no panel covers the footer's lines, for every station in every fixture at the
+    /// default window size. (R1.12: a panel may cover the "Pipeline" section label, pipes, empty card padding and the
+    /// footer's empty middle.)
     func testNoPanelCoversTheHeadingOrTheFooter() {
         let L = NDPipelineLayout.self
         for name in Fixture.Name.allCases {
@@ -2680,7 +2690,6 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             for station in NDStation.allCases {
                 let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
                 let where_ = "\(name.rawValue) \(station)"
-                XCTAssertFalse(panel.outer.intersects(L.pipelineHeading), "\(where_) covers the Pipeline heading")
                 for (index, text) in L.footerTexts.enumerated() {
                     XCTAssertFalse(panel.outer.intersects(text), "\(where_) covers the footer's \(index == 0 ? "left" : "right") line")
                 }
@@ -2771,8 +2780,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let rows = NDStationPopover.model(.drive, item: nil, late, store.model, r1.pipeline).rows
         XCTAssertEqual(rows.map(\.label), [Say.databaseCopy, Say.conversationsCopy], "the session files' age is a row")
         XCTAssertEqual(r1.menuRows.first { $0.kind == .backups }?.value.contains(NDFormat.ageText(db)), true)
-        XCTAssertEqual(r1.headline, Say.macLate(NDFormat.ageText(30 * 3600)))
-        XCTAssertEqual(Say.macLate("30 h"), "Local copy is late: newest 30 h ago", "R1.10.5: one name")
+        XCTAssertEqual(r1.headline, BrainBarMenuPresenter.Say.localRunningLate.text)
+        // R1.12 (E3, L53 C4): the menu's sentence, with its second line.
+        XCTAssertEqual(r1.headline, "The local copy is running late")
+        XCTAssertTrue(r1.headlineDetail?.hasPrefix("The newest is 30\u{00A0}h old") == true, r1.headlineDetail ?? "nil")
     }
 
     /// R1.6 item 6: not confirmed, the Activity chart draws no live data: hatched from the last confirmed check, with
@@ -2836,9 +2847,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(p.status[.jobs], .init(text: Say.failedNights(3), severity: .red), "R1.10: the station names the job")
         let r1 = NDR1.make(failing, NDModel.make(failing))
         let item = try XCTUnwrap(r1.stationItems[.jobs])
-        XCTAssertEqual(NDStationPopover.faultTitle(.jobs, item, failing), Say.failedInARow(3))
-        XCTAssertEqual(Say.failedInARow(3), "Failed 3 nights in a row")
+        // R1.12 (§ C): one wording, and the station's line is its tail.
+        XCTAssertEqual(NDStationPopover.faultTitle(.jobs, item, failing), "Nightly check-up failed 3 nights")
         XCTAssertEqual(Say.failedNights(3), "failed 3 nights")
+        XCTAssertTrue(item.title.hasSuffix(Say.failedNights(3)))
     }
 
     /// R1.6 item 12: an on Jobs switch uses the system accent; the system's gray is for off only.
@@ -2853,8 +2865,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testR16DropdownSearchRowSaysSearchableByMeaning() throws {
         let i = Fixture.inputs(.calm)
         let row = try XCTUnwrap(NDR1.make(i, NDModel.make(i)).menuRows.first { $0.kind == .search })
-        XCTAssertTrue(row.value.hasSuffix("% searchable by meaning"), row.value)
-        XCTAssertEqual(Say.searchableByMeaning(99), "99% searchable by meaning")
+        XCTAssertEqual(row.value, "99% searchable", "R1.12 (F): the station's and the panel's words")
     }
 
     // MARK: Revision 1.10.5
@@ -2876,7 +2887,19 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let rows = calm.model.areas.flatMap(\.rows).map(\.name)
         XCTAssertTrue(rows.contains(local), "the model's rows")
         let late = NDR1.make(Fixture.inputs(.backupLate), NDModel.make(Fixture.inputs(.backupLate)))
-        XCTAssertTrue(late.headline.hasPrefix(local), late.headline)
+        XCTAssertTrue(late.headline.localizedCaseInsensitiveContains(local), late.headline)
+        // R1.12 (§ C, the 1.12 table): the session files, the Drive database copy, the stages and the check, one name each.
+        XCTAssertEqual(lanes.map(\.name), ["Local copy", "Database in Google Drive", "Sessions in Google Drive", "Local copy check"])
+        XCTAssertEqual(Say.jobNames["watch"], NDPipelineLayout.name(.read), "the Jobs page: Read")
+        XCTAssertEqual(Say.jobNames["drain"], NDPipelineLayout.name(.queue), "the Jobs page: Save queue")
+        XCTAssertEqual(Say.jobNames["jsonlBackup"], "Back up sessions")
+        let signedOut = Fixture.inputs(.driveSignedOut)
+        XCTAssertEqual(NDStationPopover.rows(.drive, signedOut, NDModel.make(signedOut)).map(\.label), ["Database", "Sessions"], "the Drive panel")
+        XCTAssertTrue(help.contains("Database in Google Drive:") && help.contains("Sessions in Google Drive:"), help)
+        let lateValue = try XCTUnwrap(late.menuRows.first { $0.kind == .backups }?.value)
+        XCTAssertTrue(lateValue.hasPrefix(local + " "), "the dropdown's Backups value names the late copy: \(lateValue)")
+        let checkHelp = lanes.first(where: { $0.id == "integrity" })?.help ?? ""
+        XCTAssertTrue(checkHelp.hasPrefix(Say.laneCheckHelp), "E1: its help tag: \(checkHelp)")
         // No string a surface draws still carries an old name (comments may tell the history).
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar")
@@ -2888,7 +2911,11 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 let code = line.trimmingCharacters(in: .whitespaces)
                 guard !code.hasPrefix("//") else { continue }
                 let text = code.components(separatedBy: " // ").first ?? code
-                for old in ["Copy on this Mac", "copy on this Mac", "Weekly deep clean", "Nightly check-up, weekly clean"] {
+                for old in ["Copy on this Mac", "copy on this Mac", "Weekly deep clean", "Nightly check-up, weekly clean",
+                            // R1.12 (§ C): the names 1.12 retires.
+                            "Copy in Google Drive", "Conversations in Drive", "Database check", "Read new conversations",
+                            "Save waiting memories", "Back up conversations", "Conversations copy", "Database copy",
+                            "nights in a row", "check-up failing", "clean failing", "stuck in the queue"] {
                     XCTAssertFalse(text.contains("\"") && text.contains(old), "\(file):\(number + 1) still says \"\(old)\"")
                 }
             }
@@ -2967,12 +2994,13 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             }
         }
         let two = NDR1.make(Fixture.inputs(.twoFaults), NDModel.make(Fixture.inputs(.twoFaults)))
-        XCTAssertEqual(two.problemRows.map(\.words), [Say.rowDriveSignedOut, Say.rowNightlyFailing], "Reconnect first")
+        // R1.12 (§ C): one wording per fault, the row's as everywhere else.
+        XCTAssertEqual(two.problemRows.map(\.words), ["Google Drive is signed out", "Nightly check-up failed 3 nights"], "Reconnect first")
         XCTAssertEqual(two.problemRows.first?.action?.kind, .reconnectDrive)
         let stuck = NDR1.make(Fixture.inputs(.savesStuck), NDModel.make(Fixture.inputs(.savesStuck)))
-        XCTAssertEqual(stuck.problemRows.map(\.words), [Say.rowQueueWaiting(NDFormat.ageText(2 * 3600))])
+        XCTAssertEqual(stuck.problemRows.map(\.words), ["Saves are stuck"])
         let agent = NDR1.make(Fixture.inputs(.agentNotRead), NDModel.make(Fixture.inputs(.agentNotRead)))
-        XCTAssertEqual(agent.problemRows.map(\.words), ["Cursor not read"])
+        XCTAssertEqual(agent.problemRows.map(\.words), ["Cursor\u{2019}s sessions aren\u{2019}t being read"])
     }
 
     /// R1.10 A 4 (L51): with one problem the headline is "1 thing needs you" and the row names the problem; the two never
@@ -2980,7 +3008,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testR110OneProblemSaysOneThingAndTheRowNamesIt() {
         let r1 = NDR1.make(Fixture.inputs(.driveSignedOut), NDModel.make(Fixture.inputs(.driveSignedOut)))
         XCTAssertEqual(r1.headline, "1 thing needs you")
-        XCTAssertEqual(r1.problemRows.map(\.words), ["Google Drive signed out"])
+        XCTAssertEqual(r1.problemRows.map(\.words), ["Google Drive is signed out"])  // R1.12 (§ C)
         XCTAssertFalse(r1.headline.localizedCaseInsensitiveContains("Google Drive"), "no repeated words")
         XCTAssertNil(r1.headlineDetail)
         let two = NDR1.make(Fixture.inputs(.twoFaults), NDModel.make(Fixture.inputs(.twoFaults)))
@@ -3002,7 +3030,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertFalse(weekly.faults.contains(.jobs), "a failing weekly does not mark the nightly")
         XCTAssertEqual(weekly.status[.weekly], .init(text: Say.failedWeeks(2), severity: .red))
         let r1 = NDR1.make(weeklyFailing, NDModel.make(weeklyFailing))
-        XCTAssertEqual(r1.problemRows.map(\.words), [Say.rowWeeklyFailing])
+        XCTAssertEqual(r1.problemRows.map(\.words), ["Weekly clean failed 2 weeks"])  // R1.12 (I 7)
         XCTAssertEqual(r1.problemRows.first?.action?.kind, .copyReport)
         XCTAssertEqual(r1.headline, Say.oneThingNeedsYou)
         // Calm: each says its last run; a weekly run its gates skipped is never shown as done.
@@ -3214,33 +3242,32 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertTrue(menu.items.filter { $0.view == nil && $0.title.isEmpty }.allSatisfy(\.isSeparatorItem), "system separators")
     }
 
-    /// R1.7 item 2: the agents' panel opens right of the column, arrow pointing left: never past the window's left edge,
-    /// never over a station's words or the headings, the keyboard-opened panel (same layout, clamped to the screen) too.
+    /// R1.12 (5a): the agents' panel opens above the column, from the chart's left edge, its notch down at the agents:
+    /// inside the window, over no station's words, the keyboard-opened panel (same layout, clamped to the screen) too.
     func testR17AgentsPanelOpensRightOfTheColumn() {
         let L = NDPipelineLayout.self
         for name in Fixture.Name.allCases {
             let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
             let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
             let panel = chart.panel(.agents, content: AnyView(NDStationPopover(store: store, station: .agents)))
-            XCTAssertEqual(panel.edge, .trailing, name.rawValue)
-            XCTAssertEqual(panel.tip.x, L.agentsFrame.maxX, accuracy: 0.5, "\(name.rawValue): the arrow on the column")
-            XCTAssertTrue((L.agentsFrame.minY...L.agentsFrame.maxY).contains(panel.tip.y), name.rawValue)
-            XCTAssertGreaterThan(panel.body.minX, L.agentsFrame.maxX, "\(name.rawValue): to the right")
+            XCTAssertEqual(panel.edge, .top, name.rawValue)
+            XCTAssertEqual(panel.tip.x, L.agentsFrame.midX, accuracy: 0.5, "\(name.rawValue): the notch at the column")
+            XCTAssertEqual(panel.body.minX, 0, accuracy: 0.5, "\(name.rawValue): from the chart's left edge")
+            XCTAssertLessThan(panel.body.maxY, L.agentsFrame.minY, "\(name.rawValue): above the column")
             XCTAssertGreaterThanOrEqual(panel.outer.minX, L.windowInside.minX, "\(name.rawValue): inside the window")
             for station in NDStation.allCases {
                 for rect in L.labelRects(station, store.r1.pipeline) {
                     XCTAssertFalse(panel.body.intersects(rect), "\(name.rawValue): over \(station)'s words")
                 }
             }
-            XCTAssertFalse(panel.outer.intersects(L.pipelineHeading))
             let screen = CGRect(x: L.windowInside.minX - 40, y: -400, width: 2000, height: 2000)
             XCTAssertEqual(NDPipelineLayout.fitted(panel, within: screen).body.minX, panel.body.minX, "keyboard: not clipped")
         }
     }
 
-    /// R1.7 item 3, as R1.10.4 has it: each job station's panel opens below its own words (L39: it may pass the window's
-    /// bottom edge, inside the screen), its arrow on its station, over the loop line and no station: no circle, no name,
-    /// no status, in every fixture (saves-stuck's "waiting 2 h" included), and never over the headings or the footer's text.
+    /// R1.12 (5g, 5h): the nightly check-up's panel opens left of it inside the loop, under Save queue's status; the weekly
+    /// clean's up-right, between the Kept-safe frame and Search. Each arrow on its station, over no circle, name or status,
+    /// in every fixture, and never over the footer's text.
     func testR17JobsPanelOpensBesideItsStation() {
         let L = NDPipelineLayout.self
         for name in Fixture.Name.allCases {
@@ -3249,17 +3276,21 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             for station in [NDStation.jobs, .weekly] {
                 let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
                 let where_ = "\(name.rawValue) \(station)"
-                XCTAssertEqual(panel.edge, .bottom, where_)
-                XCTAssertTrue((L.circle(station).minX...L.circle(station).maxX).contains(panel.tip.x), "\(where_): on its station")
-                let words = L.labelRects(station, store.r1.pipeline).map(\.maxY).max() ?? L.circle(station).maxY
-                XCTAssertGreaterThanOrEqual(panel.body.minY, words, "\(where_): below its own words")
+                XCTAssertEqual(panel.edge, station == .jobs ? .leading : .trailing, where_)
+                XCTAssertTrue((L.circle(station).minY...L.circle(station).maxY).contains(panel.tip.y), "\(where_): on its station")
+                if station == .jobs {
+                    let queueWords = L.labelRects(.queue, store.r1.pipeline).map(\.maxY).max() ?? 0
+                    XCTAssertGreaterThan(panel.body.minY, queueWords, "\(where_): under Save queue's words")
+                } else {
+                    XCTAssertGreaterThanOrEqual(panel.body.minY, L.keptSafe.maxY, "\(where_): under the Kept-safe frame")
+                    XCTAssertLessThanOrEqual(panel.body.height, 106, "\(where_): 106 pt at most")
+                }
                 for other in NDStation.allCases where other != station {
                     XCTAssertFalse(panel.body.intersects(L.circle(other)), "\(where_): over \(other)'s circle")
                     for rect in L.labelRects(other, store.r1.pipeline) {
                         XCTAssertFalse(panel.body.intersects(rect), "\(where_): over \(other)'s words")
                     }
                 }
-                XCTAssertFalse(panel.outer.intersects(L.pipelineHeading), where_)
                 for text in L.footerTexts { XCTAssertFalse(panel.outer.intersects(text), "\(where_): over the footer's text") }
             }
         }
@@ -3284,7 +3315,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     /// next check only when it is still due; the dropdown's sparkline is hatched after the last confirmed check.
     func testR17NotConfirmedSaysNothingCurrent() throws {
         let stale = pipeline(.notConfirmed)
-        XCTAssertEqual(stale.status[.mac]?.text, NDModel.Number.unknown.value)
+        // R1.12 (E2): the copy keeps its last-known value as a clock time (in `t3`), never a current age.
+        XCTAssertFalse(stale.status[.mac]?.text.hasSuffix(" ago") ?? true, stale.status[.mac]?.text ?? "nil")
         let store = NDStore(fixture: Fixture.inputs(.notConfirmed), page: .overview)
         XCTAssertNil(store.r1.footerRight, "2 h overdue: no next time is known")
         XCTAssertEqual(try XCTUnwrap(NDActivitySection.noDataFraction(store, wave: store.inputs.menuWave, minutes: 60)), 0,
@@ -3294,9 +3326,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertTrue(source.contains("noDataFrom: NDActivitySection.noDataFraction(store, wave: store.inputs.menuWave, minutes: 60)"))
     }
 
-    /// R1.7 item 6: when Drive's database copy is as old as the late copy on this Mac, Drive's line is amber too.
+    /// R1.12 (E3, replaces R1.7 item 6): when the local copy is late, Drive's older upload is its consequence, not a
+    /// second problem: its line stays `t2`, with no ring.
     func testR17ALateDriveCopyLooksLate() {
-        XCTAssertEqual(pipeline(.backupLate).status[.drive]?.severity, .orange)
+        XCTAssertNil(pipeline(.backupLate).status[.drive]?.severity)
         XCTAssertNil(pipeline(.calm).status[.drive]?.severity)
     }
 
@@ -3322,10 +3355,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertNotNil(NSImage(systemSymbolName: "waveform.path.ecg", accessibilityDescription: nil))
     }
 
-    /// R1.7 item 10: panel text: body 12 pt in the secondary colour, at most two lines a paragraph at the panel's width;
-    /// rows 12 pt with the value in primary semibold.
+    /// R1.7 item 10: panel text: body in the secondary colour, at most two lines a paragraph at the panel's width; rows
+    /// with the value in primary semibold. R1.12 (§ A): on the scale's 11 pt step, each panel at its own width (§ B).
     func testR17PanelText() throws {
-        XCTAssertEqual(NDType.panelBodySize, 12)
+        XCTAssertEqual(NDType.panelBodySize, NDScale.caption)
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDStationPanel.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("Text(keepingUnits(line)).font(NDType.panelBody).foregroundStyle(ND.t2)"))
@@ -3336,7 +3369,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(NDStationPanelBody.paragraphs([Say.explainQueue]).count, 2, "one paragraph a sentence, the deck's words")
         XCTAssertEqual(NDStationPanelBody.paragraphs([Say.explainQueue]).joined(separator: " "), Say.explainQueue)
         let font = NSFont.systemFont(ofSize: NDType.panelBodySize)
-        let lineHeight = ceil(NSLayoutManager().defaultLineHeight(for: font))
+        // One line as the same measure draws it (at 11 pt, 14 pt; the layout manager's default rounds to 13).
+        let lineHeight = ceil(NSAttributedString(string: "Ag", attributes: [.font: font])
+            .boundingRect(with: NSSize(width: 1000, height: 1000), options: [.usesLineFragmentOrigin]).height)
         for name in Fixture.Name.allCases {
             let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
             let r1 = store.r1
@@ -3344,7 +3379,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 let model = NDStationPopover.model(station, item: r1.stationItems[station], store.inputs, store.model, r1.pipeline)
                 for line in NDStationPanelBody.paragraphs(model.lines) where !longSentences.contains(line) {
                     let height = NSAttributedString(string: keepingUnits(line), attributes: [.font: font])
-                        .boundingRect(with: NSSize(width: 288 - 28, height: 1000), options: [.usesLineFragmentOrigin]).height
+                        .boundingRect(with: NSSize(width: NDPipelineLayout.panelSide(station, hasAction: false).width - 28, height: 1000),
+                                      options: [.usesLineFragmentOrigin]).height
                     XCTAssertLessThanOrEqual(ceil(height), 2 * lineHeight + 1, "\(name.rawValue) \(station): \(line)")
                 }
             }

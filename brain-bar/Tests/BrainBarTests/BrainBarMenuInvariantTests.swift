@@ -497,7 +497,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         let upkeepUnmeasured = base { $0.maintenanceNightFailures = 3; $0.backupsMeasured = false }
         let embeddingRed = base { $0.verdict = BrainBarHealthVerdict(dot: .green, checks: $0.verdict!.checks.filter { $0.name != "embedding" }
                                                                     + [Self.check("embedding", .red)!], notes: [], evaluatedAt: Self.now) }
-        let upkeepRow = P.Row(kind: .needsYou, strings: ["Nightly check-up failed 3 nights in a row", Self.stillSaved] + handoff, action: report, mark: .alertCircle)
+        let upkeepRow = P.Row(kind: .needsYou, strings: ["Nightly check-up failed 3 nights", Self.stillSaved] + handoff, action: report, mark: .alertCircle)
         let meaningRow = P.Row(kind: .needsYou, strings: ["Search by meaning isn’t catching up",
                                                           "Its queue hasn’t shrunk in over an hour. " + Self.exactWords] + handoff,
                                action: report, mark: .alertCircle)
@@ -551,7 +551,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             ("I7: calm over upkeep failing, verdict stale", base { $0.maintenanceNightFailures = 3; $0.verdictAwakeAgeS = 901 }, allGood),
             ("I7: calm over a watcher alert, no verdict", base { $0.verdict = nil; $0.watcher = .init(alertReasons: ["file_ingestion_failure"]) }, allGood),
             // P2b (Codex R2-F1): a claim on no list before, and a sentence no entry makes.
-            ("I8: U03’s title with no failed nights", base(), needsForm([P.Row(kind: .needsYou, strings: ["Nightly check-up failed 3 nights in a row"] + handoff,
+            ("I8: U03’s title with no failed nights", base(), needsForm([P.Row(kind: .needsYou, strings: ["Nightly check-up failed 3 nights"] + handoff,
                                                                          action: report, mark: .alertCircle)])),
             ("I8: the Drive row with Drive green", base(), needsForm([drive])),
             ("I8: a Behind headline with nothing running", base(), P(form: .calm, headline: "Backing up now", count: 0, icon: .resting,
@@ -785,7 +785,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             "Saving and search is fine.", "saving is fine.", "Your newest backup in Google Drive is 1 hours old.",
             "Your newest backup in Google Drive is 24 hours old.", "Your newest backup is 0 hours old.", "Started at 25:00.", "Started at 12:60.",
             "0 things need you", "1 things need you", "02 things need you", "The last 0 backups didn’t finish", "The last 1 backups didn’t finish",
-            "Nightly check-up failed 2 nights in a row", "Nightly check-up failed 03 nights in a row", "Last backup Foo 9 at 04:00.",
+            "Nightly check-up failed 2 nights", "Nightly check-up failed 03 nights", "Last backup Foo 9 at 04:00.",
             "Last backup Nov 32 at 04:00.", "Last backup Nov 09 at 04:00.", "Catching up on backups and new conversations",
             "Catching up on backups and backups", "Its queue hasn’t shrunk in over 1 hours.",
             "Its queue hasn’t shrunk in over 60 minutes.", "101% done.", "040% done.",
@@ -804,7 +804,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         let accepted = [
             "Saving, search and upkeep are fine.", "Search is fine.", "Saving and backups are fine.", "Your newest backup in Google Drive is 1 hour old.",
             "Your newest backup is 23 hours old.", "The newest backup BrainBar can confirm is from Nov 9 at 03:44.", "Started at 23:59.",
-            "Started yesterday at 23:40.", "2 things need you", "The last 2 backups didn’t finish", "Nightly check-up failed 3 nights in a row",
+            "Started yesterday at 23:40.", "2 things need you", "The last 2 backups didn’t finish", "Nightly check-up failed 3 nights",
             "Last backup today at 04:00.", "Catching up on new conversations and backups", "100% done.", "0% done, about 13:05.",
             "Its queue hasn’t shrunk in over 2 minutes.", "Its queue hasn’t shrunk.",
         ]

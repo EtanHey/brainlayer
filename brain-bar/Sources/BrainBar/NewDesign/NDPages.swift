@@ -272,11 +272,15 @@ struct NDBackupsPage: View {
                         help: retryHelp.isEmpty ? nil : retryHelp.joined(separator: " "),
                         number: number, strong: row?.strong ?? false, accessibility: spoken + newest)
         }
+        // R1.12 (§ C, E1): one name per thing, from the deck: the Drive copies by what they hold, and the check by what it
+        // checks (the local copy, not memory itself: its help tag says which is which).
+        var check = lane("integrity", Say.laneCheck, lanes?.integrity, next: databaseNext, stalls: false)
+        check.help = [Say.laneCheckHelp, check.help].compactMap { $0 }.joined(separator: " ")
         return [
             lane("backup_local", NDPipelineLayout.name(.mac), lanes?.local, next: databaseNext, stalls: false),  // R1.10.5: one name
-            lane("backup_offsite", "Copy in Google Drive", lanes?.drive, next: databaseNext, stalls: true),
-            lane("transcripts", "Conversations in Drive", lanes?.conversations, next: conversationsNext, stalls: true),
-            lane("integrity", "Database check", lanes?.integrity, next: databaseNext, stalls: false),
+            lane("backup_offsite", Say.laneDrive, lanes?.drive, next: databaseNext, stalls: true),
+            lane("transcripts", Say.laneConversations, lanes?.conversations, next: conversationsNext, stalls: true),
+            check,
         ]
     }
 
@@ -340,7 +344,7 @@ struct NDLinkButtonStyle: PrimitiveButtonStyle {
 
     private struct Pressable: ButtonStyle {
         func makeBody(configuration: Configuration) -> some View {
-            configuration.label.font(.system(size: 13, weight: .medium)).foregroundStyle(ND.lumen)
+            configuration.label.font(NDType.bodyMedium).foregroundStyle(ND.lumen)
                 .opacity(configuration.isPressed ? 0.7 : 1)
                 .contentShape(Rectangle())
         }
@@ -472,7 +476,7 @@ struct NDJobsPage: View {
                 number = NDModel.Number(value: "")
             }
             let spoken = [name, j.enabled == false ? "off" : nil,
-                          streak.map { "failed \($0) nights in a row" },
+                          streak.map { BrainBarMenuPresenter.SurfaceSay.failedNights($0) },  // R1.12 (§ C): one wording
                           j.continuous ? (j.loaded == false ? "not running" : BrainBarMenuPresenter.SurfaceSay.running) : nil,
                           j.lastRun.map { "last ran \(NDFormat.age(now.timeIntervalSince($0)).spoken) ago" + Self.outcomeWords(j.lastOutcome) },
                           j.nextRun.map { "next run in \(NDFormat.age(max(0, $0.timeIntervalSince(now))).spoken)" }]

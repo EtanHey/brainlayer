@@ -315,8 +315,8 @@ struct NDPipeStrip: View {
         NDPipelineChart.symbol(ctx, strip.severity == .red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill",
                                at: CGPoint(x: mark, y: y), size: 12, color: tint)
         let secondary = ND.menuText2
-        ctx.draw(Text(strip.from).font(.system(size: 11)).foregroundColor(secondary), at: CGPoint(x: 0, y: y), anchor: .leading)
-        ctx.draw(Text(strip.to).font(.system(size: 11)).foregroundColor(secondary), at: CGPoint(x: w, y: y), anchor: .trailing)
+        ctx.draw(Text(strip.from).font(NDType.caption).foregroundColor(secondary), at: CGPoint(x: 0, y: y), anchor: .leading)
+        ctx.draw(Text(strip.to).font(NDType.caption).foregroundColor(secondary), at: CGPoint(x: w, y: y), anchor: .trailing)
     }
 }
 

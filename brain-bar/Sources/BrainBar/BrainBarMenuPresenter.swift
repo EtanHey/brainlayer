@@ -305,9 +305,12 @@ enum BrainBarMenuPresenter {
             lines.append(line)
         }
         guard let w = c.watcher, w.readable, w.fresh else { return lines }
-        if ingestLagDisposition(c) == .escalated {  // R02 past its limit: A1, a Needs-you row or a notice by the one switch
+        // R02 past its limit, as the one escalation decision says it before the switch: A1, a Needs-you row or (the notice
+        // side) a notice; it notifies only when the decision after the switch still escalates it.
+        let lag = appNotificationCause("offset_lag")
+        if appEscalationCauses(c, beforeSwitch: true).contains(lag) {
             var line = lagLine(c)
-            line.notificationCauses = escalations.intersection([appNotificationCause("offset_lag")])
+            line.notificationCauses = escalations.intersection([lag])
             lines.append(line)
         }
         for reason in w.alertReasons where !["offset_lag", "quarantined_record"].contains(reason) {
@@ -335,10 +338,12 @@ enum BrainBarMenuPresenter {
     }
 
     /// R31 narrows R20 to these two app-owned clocks. Row severity, guard and sentence truth share this list.
-    static func appEscalationCauses(_ c: Capture) -> Set<String> {
+    /// R1.11: `beforeSwitch` gives the clocks' own decision; without it, the lag's severity switch (`lagSeverity`) then
+    /// leaves a lag that drains by itself out on its notice side. Both read the one threshold here.
+    static func appEscalationCauses(_ c: Capture, beforeSwitch: Bool = false) -> Set<String> {
         var causes: Set<String> = []
         if c.maintenanceNightFailures.map({ $0 >= 3 }) == true { causes.insert(appNotificationCause("maintenance")) }
-        if ingestLagDisposition(c) == .escalated, !lagIsNotice(c) { causes.insert(appNotificationCause("offset_lag")) }
+        if ingestLagDisposition(c) == .escalated, beforeSwitch || !lagIsNotice(c) { causes.insert(appNotificationCause("offset_lag")) }
         return causes
     }
 

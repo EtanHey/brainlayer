@@ -51,7 +51,7 @@ enum NDPipelineGraph {
         Connection(id: "c7", from: "Search", to: "Answers", pipes: [.answers]),
         Connection(id: "c8", from: "Answers", to: "Your agents", pipes: [.answers]),
         Connection(id: "c9", from: "Memory", to: "Local copy", pipes: [.memoryMac]),
-        Connection(id: "c10", from: "Local copy", to: "Copy in Google Drive", pipes: [.macDrive]),
+        Connection(id: "c10", from: "Local copy", to: "Database in Google Drive", pipes: [.macDrive]),
         Connection(id: "c11", from: "Agents' sessions", to: "Session files in Google Drive", pipes: [.rail]),
         Connection(id: "c12", from: "Nightly check-up", to: "Memory", pipes: [.jobsMemory]),
         Connection(id: "c13", from: "Weekly clean", to: "Memory", pipes: [.weeklyMemory]),
@@ -237,15 +237,18 @@ extension NDPipelineState {
                 // in plain words, the normal status colour: the fault is marked once, on the agent's icon.
                 for family in agents { s.agentFaults[family] = sev }
                 let names = agents.map(NDProvider.name).joined(separator: ", ")
-                s.status[.read] = Status(text: Say.providerNotRead(names))
+                // R1.12 (E4): the status reads as the fault it is, red Semibold like every fault status; Read still gets no
+                // ring and no badge (the provider's icon keeps the one fault mark, L41).
+                s.status[.read] = Status(text: Say.providerNotRead(names), severity: sev)
             }
         }
 
         // c3 / c4: saves that do not reach memory.
         if let stores = check("stores"), let sev = severity(stores) {
             mark(.queue, sev)
-            if let queued = i.oldestSaveQueuedAt {
-                s.status[.queue] = Status(text: Say.waiting(NDFormat.ageText(max(0, c.now.timeIntervalSince(queued)))), severity: sev)
+            if sev == .red, let queued = i.oldestSaveQueuedAt {
+                // R1.12 (F): the fault's tail, "stuck {t}", under "Save queue".
+                s.status[.queue] = Status(text: Say.stuckFor(NDFormat.ageText(max(0, c.now.timeIntervalSince(queued)))), severity: sev)
             } else if let text = s.status[.queue]?.text {
                 s.status[.queue] = Status(text: text, severity: sev)
             }
@@ -256,7 +259,11 @@ extension NDPipelineState {
         if let embedding = check("embedding"), let sev = severity(embedding) {
             mark(.search, sev)
             if sev == .red { s.arrivalBreaks.insert(.search) }
-            if let age = embedding.ageS, age.isFinite, age >= 0 {
+            // R1.12 (F, § C): a notice says "catching up", the tail of "Search by meaning is catching up"; a stall keeps
+            // its backlog age.
+            if sev == .orange {
+                s.status[.search] = Status(text: Say.catchingUp, severity: sev)
+            } else if let age = embedding.ageS, age.isFinite, age >= 0 {
                 s.status[.search] = Status(text: Say.byMeaningBehind(NDFormat.ageText(age)), severity: sev)
             }
         }
@@ -266,7 +273,10 @@ extension NDPipelineState {
             mark(.search, sev)
             if sev == .red {
                 s.arrivalBreaks.remove(.search)
-                if s.status[.search]?.severity == nil { s.status[.search] = nil }
+                // R1.12 (F): "failed {n} checks" when the canary counts them.
+                if let fails = search.fails, fails >= 2 {
+                    s.status[.search] = Status(text: Say.failedChecks(fails), severity: .red)
+                } else if s.status[.search]?.severity == nil { s.status[.search] = nil }
             }
         }
 
@@ -287,13 +297,8 @@ extension NDPipelineState {
                 }
             }
         }
-        // R1.7 item 6: a late Drive copy looks late: when the database copy on Drive is as old as the late copy on this
-        // Mac (it uploads that copy), Drive's line takes the amber tint too. Its tint only; no ring of its own.
-        if let local = check("backup_local"), severity(local) == .orange, let localAge = local.ageS,
-           let db = check("backup_offsite")?.ageS, db >= localAge, s.status[.drive]?.severity == nil,
-           let text = s.status[.drive]?.text {
-            s.status[.drive] = Status(text: text, severity: .orange)
-        }
+        // R1.12 (E3, replaces R1.7 item 6): when the local copy is late, Drive's older upload is its consequence, not a
+        // second problem: its line stays in `t2` with no ring (nothing new was made to upload).
         s.arrivalBreaks.insert(.drive)
 
         // c12: a scheduled job failing; the Jobs status names it (change 13).
@@ -317,15 +322,30 @@ extension NDPipelineState {
 
     /// R2A item 6: under "values last known at {time}" no relative age: the reader's last read as a clock time; every
     /// other status a dash, as the dropdown shows. R1.7 item 5: the copy on this Mac says "—" like the others.
+    /// R1.12 (E2): under "values last known at {time}" each station keeps its last-known value, as a clock time (with its
+    /// weekday when not today), never an age: "last read 06:59", "3 kept, newest 03:16", "last upload 04:20", "last run
+    /// 04:00", "last run Sun 04:00". A value with no time stays a dash. Nothing later than the caption's time is shown.
     static func lastKnownLines(_ i: NDInputs, _ lines: [NDStation: Status], at evaluated: Date) -> [NDStation: Status] {
         let c = i.capture
         var out: [NDStation: Status] = [:]
         for station in lines.keys { out[station] = Status(text: NDModel.Number.unknown.value) }
+        func known(_ date: Date?) -> String? { date.flatMap { $0 <= evaluated ? NDR1.clockOn($0, c) : nil } }
         // The reader's heartbeat is read live, not from the stale verdict: a time later than the caption's would
         // contradict "values last known at", so it shows only when it is not after the last confirmed check.
-        if let heartbeat = i.watcherHeartbeatAgeS, heartbeat >= 0 {
-            let read = c.now.addingTimeInterval(-heartbeat)
-            if read <= evaluated { out[.read] = Status(text: Say.readAt(NDR1.hhmm(read, c))) }
+        if let heartbeat = i.watcherHeartbeatAgeS, heartbeat >= 0, let at = known(c.now.addingTimeInterval(-heartbeat)) {
+            out[.read] = Status(text: Say.lastReadClock(at))
+        }
+        let checks = c.verdict?.checks ?? []
+        func copied(_ name: String) -> Date? {
+            checks.first { $0.name == name }?.ageS.flatMap { $0.isFinite && $0 >= 0 ? evaluated.addingTimeInterval(-$0) : nil }
+        }
+        if let at = known(i.newestLocalCopyAt ?? copied("backup_local")) {
+            out[.mac] = Status(text: i.localCopiesKept.map { Say.keptNewestClock($0, at) } ?? Say.backupAt(at))
+        }
+        if let at = known(copied("backup_offsite")) { out[.drive] = Status(text: Say.lastUploadClock(at)) }
+        if case let .ran(at) = i.nightlyLastRun, let when = known(at) { out[.jobs] = Status(text: Say.lastRunClock(when)) }
+        if let weekly = i.jobs?.first(where: { $0.job == .maintenanceWeekly }), weekly.lastOutcome == .ok, let when = known(weekly.lastRun) {
+            out[.weekly] = Status(text: Say.lastRunClock(when))
         }
         return out
     }
@@ -339,11 +359,13 @@ extension NDPipelineState {
         if let heartbeat = i.watcherHeartbeatAgeS, heartbeat >= 0 {
             out[.read] = Status(text: Say.lastRead(NDFormat.ageText(heartbeat)))
         }
-        // R1.4 changes 13 and 14: "empty" and "working" moved into the popovers; a status shows a number or a fault.
+        // R1.12 (F): Save queue says "empty", or "{n} waiting" while under its threshold (a fault says "stuck {t}").
         if let waiting = i.savesWaiting {
-            if waiting > 0, let queued = i.oldestSaveQueuedAt {
-                out[.queue] = Status(text: Say.waiting(NDFormat.ageText(max(0, c.now.timeIntervalSince(queued)))))
-            }
+            out[.queue] = Status(text: waiting > 0 ? Say.nWaiting(waiting) : Say.empty)
+        }
+        // R1.12 (F): Search says how much of memory is searchable ("99% searchable", the dropdown's value too).
+        if let share = i.searchable, share.isFinite, share >= 0 {
+            out[.search] = Status(text: Say.searchablePercent(Int((share * 100).rounded(.down))))
         }
         // R1.5 change 8 (L45): "{n} kept, newest {t} ago", n the copies actually found; without a count, the newest's age.
         if let mac = age("backup_local") {

@@ -9,7 +9,8 @@ enum NDPipelineLayout {
     /// 820 × 270 inside its surface (R1.4 change 19). The drawing may run 12 pt into the surface's right padding: the
     /// Kept-safe frame keeps 12 pt between its edge and any text (lead, 1.3 build brief).
     /// R1.5 change 23: 820 × 282; the answers lane at y 248 clears Jobs' longer name and its status.
-    static let size = CGSize(width: 820, height: 282)
+    /// R1.12 change 6: 820 × 296; Search sits at the loop's bottom-right corner with its status line under it.
+    static let size = CGSize(width: 820, height: 296)
     static let drawWidth: CGFloat = 832
     static let yTop: CGFloat = 64, ySaves: CGFloat = 134, yAnswers: CGFloat = 248, yRail: CGFloat = 18
     static let stationRadius: CGFloat = 13
@@ -38,10 +39,16 @@ enum NDPipelineLayout {
     /// R1.10: Memory grew 40 pt, so the frame starts 16 pt right of it; its two stations sit 137 pt apart, the least that
     /// keeps their widest statuses ("2 kept, newest 30 h ago", "last upload 30 h ago") 16 pt apart (the lead's 1.3 rule;
     /// the comp's 110 let them overlap), and the frame keeps 12 pt to them.
-    static let keptSafe = CGRect(x: 521, y: 38, width: 283, height: 80)
+    /// R1.12 change 6: the frame is 84 tall. The copies stay 137 pt apart (1.10's, already more than the 110 at which their
+    /// statuses ran into each other) and the frame 283 wide: the designer's 140 apart in a 262 frame, at 1.10.4's 32 pt
+    /// insets, would leave the widest statuses ("3 kept, newest 30 h ago", "last upload 27 h ago", Semibold) 2.5 and
+    /// −1.5 pt from the frame, against the lead's 12 pt rule (testKeptSafeTextKeepsItsSpacing).
+    static let keptSafe = CGRect(x: 521, y: 38, width: 283, height: 84)
 
+    /// R1.12 change 6: Search moves under Google Drive, to the loop's bottom-right corner; Memory → Search runs right
+    /// along the saves lane and down, and the answers return straight along y 248.
     static let stations: [NDStation: CGPoint] = [
-        .read: CGPoint(x: 215, y: 64), .queue: CGPoint(x: 215, y: 134), .search: CGPoint(x: 585, y: 248),
+        .read: CGPoint(x: 215, y: 64), .queue: CGPoint(x: 215, y: 134), .search: CGPoint(x: 736, y: 248),
         .mac: CGPoint(x: 599, y: 64), .drive: CGPoint(x: 736, y: 64), .jobs: CGPoint(x: 377, y: 186), .weekly: CGPoint(x: 493, y: 186),
     ]
     static let symbols: [NDStation: String] = [
@@ -232,6 +239,12 @@ enum NDPipelineLayout {
     /// footer's two lines below it, in chart coordinates (surface padding 16 / 12, heading row 22 + 8, page padding 20,
     /// footer 28, page sides 24).
     static var footerTop: CGFloat { size.height + 12 + 20 }
+    /// R1.12 (§ B): the Activity card's bottom edge in chart coordinates (surface padding 16, heading row 22 + 8, the
+    /// 32 pt gap): no panel reaches into the card, its bars or its axis labels.
+    static var activityBottom: CGFloat { -16 - 8 - 22 - NDGrid.activityToPipeline }
+    /// The Activity card's axis labels end its 16 pt bottom padding above its edge: a panel may cover that empty padding
+    /// (the comps do), never the bars or the labels.
+    static var activityLabelsBottom: CGFloat { activityBottom - 16 }
     static var pipelineHeading: CGRect {
         let w = textWidth(Say.pipeline, size: 13, weight: .semibold)
         return CGRect(x: -16 + 2, y: -16 - 8 - 22, width: w, height: 22)
@@ -244,7 +257,7 @@ enum NDPipelineLayout {
     }
     /// R2A item 1: a panel keeps 12 pt inside the window's content edge. In chart coordinates the window runs 40 pt past
     /// each side of the chart (page side 24, surface padding 16) and 60 pt below it (surface 12, page 20, footer 28).
-    static let windowInside = (minX: CGFloat(-28), maxX: CGFloat(848), maxY: CGFloat(282 + 60 - 12))
+    static let windowInside = (minX: CGFloat(-28), maxX: CGFloat(848), maxY: size.height + 60 - 12)
     static let arrowHalfWidth: CGFloat = 9
     /// The arrow keeps at least this far from the body's ends (its corner radius plus the arrow's half width).
     static let arrowInset: CGFloat = 18
@@ -259,24 +272,37 @@ enum NDPipelineLayout {
     }
 
     /// Where each station's panel opens, its width, and how far the body slides along the edge from centred.
+    /// R1.12 (CHANGES-R1.12 § B, 9 of 9): every panel inside the window, covering no station's icon, name or status, no
+    /// Activity bar or axis label and no footer text. The five top-lane panels open above into the 136 pt the wider
+    /// Activity-to-Pipeline gap gives them; the three inside the loop open into it; Search's opens left under the jobs.
+    /// `slide` moves the body along its edge from centred on the arrow (the designer's x, relative to the station).
     static func panelSide(_ s: NDStation, hasAction: Bool) -> (edge: Edge, width: CGFloat, slide: CGFloat) {
-        // R1.5 change 2: one card for every station, 288 wide.
         switch s {
-        // R1.7 item 2: right of the agents' column, arrow pointing left, above Read's words (never over a label, never
-        // past the window's left edge).
-        case .agents: (.trailing, 288, 0)
-        case .read: (.top, 288, 0)
-        case .memory: (.top, 288, 0)
-        case .mac: (.top, 288, 0)
-        case .drive: (.top, 288, -60)
-        case .search: (.trailing, 288, 0)
-        // Save queue's slides left of the nightly check-up's name. R1.10.4: both job stations open below their words
-        // (L39: a panel may pass the window's bottom edge, inside the screen), over the loop line and no station: the
-        // nightly check-up's straight down, the weekly clean's slid left so it ends (at x 513) before Search's widest words
-        // ("by meaning 25 h behind" starts at 519.5), its arrow still on the station.
-        case .queue: (.bottom, 288, -64)
-        case .jobs: (.bottom, 288, 0)
-        case .weekly: (.bottom, 288, -124)
+        case .agents: (.top, 300, 300 / 2 - agentsFrame.midX)  // 5a: from the chart's left edge, notch down at the agents
+        case .read: (.top, 300, 10)  // 5b: 140 left of the station, 160 right
+        case .memory: (.top, 300, 0)  // 5c
+        case .mac: (.top, 320, 0)  // 5d
+        case .drive: (.top, 320, -108)  // 5e: ends 52 right of the station, inside the window
+        case .queue: (.bottom, 262, -35)  // 5f: below-left inside the loop, its right edge clear of the nightly check-up's name
+        case .jobs: (.leading, 262, 0)  // 5g: left, inside the loop, under Save queue's status
+        case .weekly: (.trailing, 264, 0)  // 5h: up-right, between the Kept-safe frame and Search
+        // 5i, as built: the designer's place (left, under the job stations' words, 238 to the footer) holds 86 pt and the
+        // panel needs about 98, and its corner meets the footer's right line. One panel shows at a time, so Search's opens
+        // above it instead, in the weekly clean's room: right of the job stations' words, under the Kept-safe frame.
+        case .search: (.top, 264, searchPanelMinX + 132 - point(.search).x)
+        }
+    }
+
+    /// 5i, as built: the Search panel's left edge, clear of the weekly clean's widest words ("failed 2 weeks").
+    static var searchPanelMinX: CGFloat { point(.weekly).x + 52 }
+
+    /// R1.12 5g, 5h, 5i: the side panels' tops, and where their arrows meet the station (inside its ring, 18 pt below the
+    /// body's top so the arrow keeps off the rounded corner).
+    static func sideTop(_ s: NDStation) -> CGFloat? {
+        switch s {
+        case .jobs: point(.queue).y + 48  // 182: under Save queue's status line
+        case .weekly: keptSafe.maxY + 2  // 124: under the Kept-safe frame
+        default: nil
         }
     }
 
@@ -303,9 +329,19 @@ enum NDPipelineLayout {
         let tip: CGPoint
         var body: CGRect
         switch side.edge {
+        case .top where s == .agents:
+            // 5a: the notch points down at the agents' column's top edge; the body covers the rail line above it (a pipe).
+            tip = CGPoint(x: own.midX, y: own.minY)
+            body = CGRect(x: tip.x - w / 2 + side.slide, y: tip.y - a - height, width: w, height: height)
         case .top:
             tip = CGPoint(x: own.midX, y: anchor.minY)
             body = CGRect(x: tip.x - w / 2 + side.slide, y: tip.y - a - height, width: w, height: height)
+        case .leading where sideTop(s) != nil, .trailing where sideTop(s) != nil:
+            let top = sideTop(s) ?? 0
+            let y = s == .weekly ? own.midY : min(own.maxY, top + arrowInset)
+            tip = CGPoint(x: side.edge == .leading ? anchor.minX : anchor.maxX, y: y)
+            let x = side.edge == .leading ? tip.x - a - w : tip.x + a
+            body = CGRect(x: x, y: top, width: w, height: height)
         case .bottom:
             // The agents' arrow sits left of the answers line rising into the group's bottom edge at its centre.
             tip = CGPoint(x: s == .agents ? own.minX + 10 : own.midX, y: anchor.maxY)
@@ -329,7 +365,9 @@ enum NDPipelineLayout {
             if s != .agents { body.origin.x = min(max(body.minX, windowInside.minX), windowInside.maxX - w) }
             body.origin.x = min(max(body.minX, tip.x - w + arrowInset), tip.x - arrowInset)
         case .leading, .trailing:
-            body.origin.y = min(body.minY, footerTop - 4 - height)
+            // R1.12: a side panel may cover the footer's empty middle, never its texts, and stays inside the window.
+            let clearsFooter = !footerTexts.contains { $0.minX < body.maxX && body.minX < $0.maxX }
+            body.origin.y = min(body.minY, (clearsFooter ? windowInside.maxY : footerTop - 4) - height)
             body.origin.y = min(max(body.minY, tip.y - height + arrowInset), tip.y - arrowInset)
         }
         let arrowBox: CGRect = switch side.edge {

@@ -20,8 +20,9 @@ struct NDStationPanelBody: View {
             .padding(.bottom, 6)
             ForEach(Array(Self.paragraphs(model.lines).enumerated()), id: \.offset) { index, line in
                 // R1.7 item 10: body 12 pt in the secondary colour, at most two lines a paragraph.
+                // R1.12 (§ B): 2 pt between paragraphs, so the top-lane panels fit the room above their stations.
                 Text(keepingUnits(line)).font(NDType.panelBody).foregroundStyle(ND.t2)
-                    .fixedSize(horizontal: false, vertical: true).padding(.top, index == 0 ? 0 : 4)
+                    .fixedSize(horizontal: false, vertical: true).padding(.top, index == 0 ? 0 : 2)
             }
             if !model.rows.isEmpty {
                 VStack(spacing: 0) {
@@ -41,13 +42,14 @@ struct NDStationPanelBody: View {
                 .padding(.top, 8)
             }
             if let action = model.action {
-                ND.hair2.frame(height: 0.5).padding(.horizontal, -14).padding(.top, 12)
+                // R1.12 (§ B): 10 and 8 pt around the hairline, so a fault panel fits the room above its station.
+                ND.hair2.frame(height: 0.5).padding(.horizontal, -14).padding(.top, 10)
                 actionButton(action)
-                    .padding(.top, 10)
+                    .padding(.top, 8)
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)  // R1.12 (§ B)
         .onAppear { if focusAction, model.action != nil { actionFocused = true } }
     }
 

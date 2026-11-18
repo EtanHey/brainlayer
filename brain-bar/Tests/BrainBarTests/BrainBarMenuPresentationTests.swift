@@ -63,7 +63,7 @@ final class BrainBarMenuPresentationTests: XCTestCase {
         var c32 = try capture("C32")
         c32.maintenanceNightFailures = 3
         XCTAssertEqual(titles(c32), ["Google Drive is signed out", "Conversation backups can’t upload either until Drive is reconnected.",
-                                     "Nightly check-up failed 3 nights in a row"])
+                                     "Nightly check-up failed 3 nights"])
         var c14 = try capture("S11")
         c14.verdict = with(c14.verdict!, "backup_local", .red, age: 200_000)
         c14.backupDailyFailures = 2
@@ -111,7 +111,9 @@ final class BrainBarMenuPresentationTests: XCTestCase {
     /// titles take the window's names, and a needs headline carries no mark (one mark per problem).
     static func r111(_ p: P) -> P {
         var p = p
+        // R1.12 (I 6): "in a row" goes from the nightly fault's sentence.
         let swaps = [("Google Drive is disconnected", "Google Drive is signed out"), ("Nightly upkeep failed", "Nightly check-up failed"),
+                     (" nights in a row", " nights"),
                      ("BrainBar hasn’t seen the memories waiting for it go down", "Its queue hasn’t shrunk")]
         let pairs = [(["BrainBar can’t fix this itself.", "Give the report to an agent."], "An agent needs to look at this."),
                      (["If this backup doesn’t finish, BrainBar can’t fix it itself.", "Give the report to an agent."],

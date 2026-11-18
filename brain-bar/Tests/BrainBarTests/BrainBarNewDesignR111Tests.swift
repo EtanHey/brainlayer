@@ -95,7 +95,7 @@ final class BrainBarNewDesignR111Tests: XCTestCase {
                 title: Say.localRunningLate.text, line: "The newest is 22 hours old.", action: nil, agent: false, needs: false),
             Row(id: "C7", c: with(["disk": .red]), title: Say.noRoom.text, line: nil, action: .openStorageSettings, agent: false, needs: true),
             Row(id: "C8", c: with(["disk": .amber]), title: Say.roomTight.text, line: nil, action: nil, agent: false, needs: false),
-            Row(id: "D1", c: with([:]) { $0.maintenanceNightFailures = 3 }, title: "Nightly check-up failed 3 nights in a row",
+            Row(id: "D1", c: with([:]) { $0.maintenanceNightFailures = 3 }, title: "Nightly check-up failed 3 nights",
                 line: Say.stillSaved.text, action: .copyReport, agent: true, needs: true),
             Row(id: "D2", c: with(["monitor": .red]), title: Say.checksStopped.text,
                 line: "The last one ran today at 12:20, so nothing since then is confirmed.", action: .copyReport, agent: true, needs: true),

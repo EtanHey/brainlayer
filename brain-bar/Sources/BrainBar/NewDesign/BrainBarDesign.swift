@@ -73,6 +73,8 @@ enum NDColor {
     static let t3 = dynamic("t3", dark: rgb(0x8A8A92), light: rgb(0x64646C))
     static let hair = dynamic("hair", dark: white(0.08), light: black(0.09))
     static let hair2 = dynamic("hair2", dark: white(0.14), light: black(0.17))
+    /// R1.12 (§ D): the tab badge, a neutral count pill: `t1` on white 16 % (dark, 8.19 : 1) / black 10 % (light, 11.37 : 1).
+    static let badge = dynamic("badge", dark: white(0.16), light: black(0.10))
     static let pipe = dynamic("pipe", dark: rgb(0x6E6E77), light: rgb(0x6E6E77))
     static let quiet = dynamic("quiet", dark: rgb(0x45454C), light: rgb(0xCACACF))
     static let accent = dynamic("accent", dark: rgb(0x2E6FE8), light: rgb(0x1F5FD6))
@@ -185,22 +187,43 @@ enum NDMenuMaterial {
     static let light = (tint: CGFloat(246), alpha: CGFloat(0.549))
 }
 
-/// R1 type (§ 1.2): one face, three sizes, no condensed width; figures tabular on every number.
+/// R1.12 (L54, CHANGES-R1.12 § A): the type scale is 24 / 17 / 13 / 11, and every word the new surfaces set takes one
+/// of these four sizes through `NDType`.
+enum NDScale {
+    /// The window's headline and the Backups and Jobs page titles.
+    static let headline: CGFloat = 24
+    /// The one big number per card (the Activity totals), and the dropdown's headline.
+    static let total: CGFloat = 17
+    /// Row titles, station names, section labels, body text.
+    static let body: CGFloat = 13
+    /// Statuses, captions, axis labels, panel text.
+    static let caption: CGFloat = 11
+    static let all: [CGFloat] = [headline, total, body, caption]
+}
+
+/// R1 type (§ 1.2): one face, the four sizes of `NDScale`, no condensed width; figures tabular on every number.
 enum NDType {
-    static let title = Font.system(size: 17, weight: .semibold)
-    static let body = Font.system(size: 13)
-    static let bodyMedium = Font.system(size: 13, weight: .medium)
-    static let bodyStrong = Font.system(size: 13, weight: .semibold)
-    /// R1.7 item 10: a hover panel's body and its rows' values.
-    static let panelBodySize: CGFloat = 12
-    static let panelBody = Font.system(size: 12)
-    static let panelValue = Font.system(size: 12, weight: .semibold).monospacedDigit()
-    static let caption = Font.system(size: 11)
-    static let captionMedium = Font.system(size: 11, weight: .medium)
-    static let captionStrong = Font.system(size: 11, weight: .semibold)
-    static let number = Font.system(size: 13).monospacedDigit()
-    static let numberStrong = Font.system(size: 13, weight: .semibold).monospacedDigit()
-    static let captionNumber = Font.system(size: 11).monospacedDigit()
+    /// R1.12 change 1: 24 pt Semibold, a 30 pt line, tracking −0.4, `t1`.
+    static let windowHeadline = Font.system(size: NDScale.headline, weight: .semibold)
+    static let headlineTracking: CGFloat = -0.4
+    static let headlineLine: CGFloat = 30
+    /// R1.12 change 2: "Activity" and "Pipeline", 13 Semibold in `t2`, a step below the headline in size and colour.
+    static let section = Font.system(size: NDScale.body, weight: .semibold)
+    static let title = Font.system(size: NDScale.total, weight: .semibold)
+    static let body = Font.system(size: NDScale.body)
+    static let bodyMedium = Font.system(size: NDScale.body, weight: .medium)
+    static let bodyStrong = Font.system(size: NDScale.body, weight: .semibold)
+    /// R1.7 item 10: a hover panel's body and its rows' values. R1.12: on the scale's caption step.
+    static let panelBodySize: CGFloat = NDScale.caption
+    static let panelBody = Font.system(size: NDScale.caption)
+    static let panelValue = Font.system(size: NDScale.caption, weight: .semibold).monospacedDigit()
+    static let caption = Font.system(size: NDScale.caption)
+    static let captionMedium = Font.system(size: NDScale.caption, weight: .medium)
+    static let captionStrong = Font.system(size: NDScale.caption, weight: .semibold)
+    static let number = Font.system(size: NDScale.body).monospacedDigit()
+    static let numberStrong = Font.system(size: NDScale.body, weight: .semibold).monospacedDigit()
+    static let captionNumber = Font.system(size: NDScale.caption).monospacedDigit()
+    static let total = Font.system(size: NDScale.total, weight: .semibold).monospacedDigit()
 
     // Earlier names, on the three R1 sizes.
     static let headline = title
@@ -233,6 +256,10 @@ enum NDGrid {
     static let windowSize = NSSize(width: 900, height: 716)
     static let windowMinimum = NSSize(width: 900, height: 480)
     static let titleBar: CGFloat = 52
+    /// R1.12 (changes 4 and B): the Overview's vertical rhythm.
+    static let headlineToRows: CGFloat = 14
+    static let toActivity: CGFloat = 24
+    static let activityToPipeline: CGFloat = 32
     static let footer: CGFloat = 28
     static let pageSide: CGFloat = 24
     static let pageTop: CGFloat = 20

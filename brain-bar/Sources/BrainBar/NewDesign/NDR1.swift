@@ -140,8 +140,7 @@ struct NDR1: Equatable, Sendable {
                                       : BrainBarMenuPresenter.Say.s13Detail.text,
                                   action: action, strip: Strip(from: Say.stageMac, to: Say.stageDrive, side: .target, severity: .red),
                                   menuDetail: driveAges(verdict).min().map { Say.lastDriveUpload(NDFormat.ageText($0)) },
-                                  concerns: ["drive_auth", "backup_offsite", "transcripts"], station: .drive,
-                                  rowTitle: Say.rowDriveSignedOut))
+                                  concerns: ["drive_auth", "backup_offsite", "transcripts"], station: .drive))  // R1.12: one wording
                 covered.formUnion(["drive_auth", "backup_offsite", "transcripts"])
             }
             // One agent's sessions not read, or the reader itself.
@@ -150,7 +149,7 @@ struct NDR1: Equatable, Sendable {
                 if let first = agents.first {
                     items.append(Item(id: "agent", severity: sev, title: Say.agentNotRead(NDProvider.name(first)), detail: Say.agentNotReadDetail,
                                       action: sev == .red ? copyReport : nil, strip: Strip(from: NDProvider.name(first), to: Say.stageRead, side: .source, severity: sev),
-                                      concerns: ["ingest"], station: .agents, rowTitle: Say.providerNotRead(NDProvider.name(first))))
+                                      concerns: ["ingest"], station: .agents))  // R1.12: one wording; Read's status is the tail
                 } else if sev == .red, BrainBarMenuPresenter.Say.lagShown(c) {
                     // R1.11 (A1): a red reader that is only behind names the lag, says how far, and has no button; its
                     // severity is the presenter's one switch.
@@ -175,7 +174,7 @@ struct NDR1: Equatable, Sendable {
                 items.append(Item(id: "saves", severity: sev, title: Say.savesStuck,
                                   detail: Say.savesWaited(i.savesWaiting.flatMap { $0 > 0 ? $0 : nil }, age), action: sev == .red ? copyReport : nil,
                                   strip: Strip(from: Say.stageQueue, to: Say.stageMemory, side: .target, severity: sev), concerns: ["stores"],
-                                  station: .queue, rowTitle: Say.rowQueueWaiting(age)))
+                                  station: .queue))  // R1.12: "Saves are stuck" everywhere; the station says "stuck {t}"
                 covered.insert("stores")
             }
             // The nightly check-up failing (c12, source).
@@ -184,16 +183,15 @@ struct NDR1: Equatable, Sendable {
                 items.append(Item(id: "nightly", severity: .red, title: Say.nightlyFailed(nights),
                                   detail: since ?? BrainBarMenuPresenter.Say.agent.text, action: copyReport,
                                   strip: Strip(from: Say.jobs, to: Say.stageMemory, side: .source, severity: .red),
-                                  menuTitle: Say.nightlyFailedShort(nights),
                                   menuDetail: lastNightly(i).map { Say.notCheckedSinceShort(weekday($0, c)) },
-                                  concerns: ["maintenanceNightly", "nightly"], station: .jobs, rowTitle: Say.rowNightlyFailing))
+                                  concerns: ["maintenanceNightly", "nightly"], station: .jobs))  // R1.12: one wording
                 covered.formUnion(["maintenanceNightly", "nightly"])
             }
             // R1.10 (L49, L51): the weekly clean failing, from its own job's failure streak (c13, source).
-            if let weekly = i.jobs?.first(where: { $0.job == .maintenanceWeekly }), NDPipelineState.weeklyFailures(weekly) != nil {
-                items.append(Item(id: "weekly", severity: .red, title: Say.rowWeeklyFailing, detail: nil, action: copyReport, strip: nil,
-                                  menuTitle: Say.rowWeeklyFailing, concerns: ["maintenanceWeekly", "weekly"], station: .weekly,
-                                  rowTitle: Say.rowWeeklyFailing))
+            if let weekly = i.jobs?.first(where: { $0.job == .maintenanceWeekly }), let weeks = NDPipelineState.weeklyFailures(weekly) {
+                // R1.12: "Weekly clean failed {n} weeks" everywhere; the station says "failed {n} weeks".
+                items.append(Item(id: "weekly", severity: .red, title: Say.weeklyFailed(weeks), detail: nil, action: copyReport, strip: nil,
+                                  concerns: ["maintenanceWeekly", "weekly"], station: .weekly))
                 covered.formUnion(["maintenanceWeekly", "weekly"])
             }
         }
@@ -208,10 +206,14 @@ struct NDR1: Equatable, Sendable {
                 guard !amber.isEmpty else { continue }
                 // R2 item 5: a late copy says it is late (only when the local-copy check is amber for age).
                 let localAge = (verdict?.checks ?? []).first { $0.name == "backup_local" && $0.state == .amber }?.ageS
-                let title = station == .mac && amber.contains("backup_local") && localAge.map({ $0.isFinite && $0 >= 0 }) == true
-                    ? Say.macLate(NDFormat.ageText(localAge!)) : Say.stationSays(NDPipelineLayout.name(station), status)
+                // R1.12 (E3, L53 C4): the local copy running late is the menu's sentence, with its second line: how old the
+                // newest is and, when the schedule says, when the next is due. It is one notice; Drive's older upload is its
+                // consequence, not a second problem.
+                let late = station == .mac && amber.contains("backup_local") && localAge.map({ $0.isFinite && $0 >= 0 }) == true
+                let title = late ? BrainBarMenuPresenter.Say.localRunningLate.text : Say.stationSays(NDPipelineLayout.name(station), status)
+                let detail = late ? Say.localLateLine(NDFormat.ageText(localAge!), nextDue(c)) : nil
                 items.append(Item(id: "notice." + station.rawValue, severity: .orange,
-                                  title: title, detail: nil, action: nil,
+                                  title: title, detail: detail, action: nil,
                                   strip: nil, concerns: Set(amber), station: station))
                 covered.formUnion(amber)
             }
@@ -284,6 +286,7 @@ struct NDR1: Equatable, Sendable {
                 detail = only.detail
             } else if only.id.hasPrefix("notice.") {
                 headline = only.title
+                detail = only.detail  // R1.12 (E3): the late copy's second line, when it has one
             } else if let station = only.station, let status = pipeline.status[station]?.text {
                 headline = Say.stationSays(NDPipelineLayout.name(station), status)
             } else {
@@ -373,6 +376,29 @@ struct NDR1: Equatable, Sendable {
         return f.string(from: date)
     }
 
+    /// R1.12 (E3): when the next database backup is due, from the job's schedule: "tonight at 03:15" for a run in the
+    /// coming night, "today at 14:00" for one later today; nil when the schedule is not read or the run is a day off.
+    static func nextDue(_ c: BrainBarMenuCapture) -> String? {
+        guard let next = c.backupDailyNextRunAt, next > c.now, next.timeIntervalSince(c.now) < 86_400 else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = c.timeZone
+        let hour = calendar.component(.hour, from: next)
+        if hour < 6 || hour >= 18 { return Say.tonightAt(hhmm(next, c)) }
+        return calendar.isDate(next, inSameDayAs: c.now) ? Say.dayTodayAt(hhmm(next, c)) : nil
+    }
+
+    /// R1.12 (E2): a last-known moment as a clock time, with its weekday when it is not today ("06:59", "Sun 04:00").
+    static func clockOn(_ date: Date, _ c: BrainBarMenuCapture) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = c.timeZone
+        if calendar.isDate(date, inSameDayAs: c.now) { return hhmm(date, c) }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = c.timeZone
+        f.dateFormat = "EEE"
+        return f.string(from: date) + " " + hhmm(date, c)
+    }
+
     /// The dropdown's four rows (§ 2.2): what each area is doing, in one value.
     static func menuRows(_ i: NDInputs, _ m: NDModel, items: [Item], pipeline: NDPipelineState) -> [MenuRow] {
         let c = i.capture
@@ -395,7 +421,7 @@ struct NDR1: Equatable, Sendable {
         // Search: the share searchable by meaning, when search by meaning and search read fine.
         let percent = i.searchable.map { Int(($0 * 100).rounded(.down)) }
         // R2 item 14: say what is ready.
-        var searchValue = percent.map { Say.searchableByMeaning($0) } ?? NDModel.Number.unknown.value
+        var searchValue = percent.map { Say.searchablePercent($0) } ?? NDModel.Number.unknown.value  // R1.12 (F): one wording
         var searchTone: NDModel.Tone = .fine
         switch worst([.search]) {
         case .fine: break

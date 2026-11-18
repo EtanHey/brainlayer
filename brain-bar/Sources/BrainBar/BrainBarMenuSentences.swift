@@ -269,7 +269,7 @@ extension BrainBarMenuPresenter {
             !verdictIsFresh(c) && c.verdict.map { $0.evaluatedAt <= c.now && sayable($0.evaluatedAt) && at($0.evaluatedAt, c) == v[0] } == true
         }
 
-        static let u03 = S("U03", .claim, "Nightly check-up failed {N3} nights in a row", .upkeep) { c, _, v in
+        static let u03 = S("U03", .claim, "Nightly check-up failed {N3} nights", .upkeep) { c, _, v in  // R1.12 (I 6)
             appEscalationCauses(c).contains(appNotificationCause("maintenance"))
                 && c.maintenanceNightFailures.map { String($0) == v[0] } == true
         }
@@ -656,15 +656,18 @@ extension BrainBarMenuPresenter {
         static let agentNotReadDetail = "Its new work isn\u{2019}t reaching memory. An agent needs to look at this."  // R1.11 (L53)
         static let readerNotReading = "New conversations aren\u{2019}t being read"
         static let driveSignedOut = "Google Drive is signed out"
-        static let savesStuck = "Saves are stuck in the queue"
+        static let savesStuck = "Saves are stuck"  // R1.12 (§ C, L53): one wording on every surface
         static func savesWaited(_ count: Int?, _ age: String) -> String {
             count.map { "\($0) saves have waited \(age) and aren\u{2019}t in memory yet." }
                 ?? "Saves have waited \(age) and aren\u{2019}t in memory yet."
         }
         static func meaningBehind(_ age: String) -> String { "Search by meaning is \(age) behind" }
         static let meaningBehindDetail = "New memories are found by words until it catches up."
-        static func nightlyFailed(_ n: Int) -> String { "Nightly check-up failed \(n) nights in a row" }
-        static func nightlyFailedShort(_ n: Int) -> String { "Nightly check-up failed \(n) nights" }
+        /// R1.12 (§ C, I 6): "in a row" and "failing" go; one sentence on the row, page, dropdown and panel.
+        static func nightlyFailed(_ n: Int) -> String { "Nightly check-up failed \(n) nights" }
+        static func nightlyFailedShort(_ n: Int) -> String { nightlyFailed(n) }
+        /// R1.12 (I 7): the weekly clean's fault, on its own job's streak (L51).
+        static func weeklyFailed(_ n: Int) -> String { "Weekly clean failed \(n) weeks" }
         static let notConfirmed = "Not confirmed"
         static func lastCheckWas(_ age: String) -> String { "The last check was \(age) ago, so this may be out of date." }
 
@@ -680,9 +683,11 @@ extension BrainBarMenuPresenter {
         static let newest = "Newest"
         static let next = "Next"
         static let laneMac = "Local copy"  // R1.10.5 (L50)
-        static let laneDrive = "Copy in Google Drive"
-        static let laneConversations = "Conversations in Drive"
-        static let laneCheck = "Database check"
+        static let laneDrive = "Database in Google Drive"  // R1.12 (I 3)
+        static let laneConversations = "Sessions in Google Drive"  // R1.12 (I 1)
+        /// R1.12 (E1, I 5): the row checks the local COPY (`local_integrity`); the nightly check-up checks memory itself.
+        static let laneCheck = "Local copy check"
+        static let laneCheckHelp = "Checks that last night\u{2019}s local copy opens and is complete. The nightly check-up checks memory itself."
         static let passed = "passed"
         static let signedIn = "Signed in"
         static let signedOutValue = "Signed out"
@@ -703,8 +708,9 @@ extension BrainBarMenuPresenter {
         static func inAge(_ age: String) -> String { "in \(age)" }
         /// Keyed by the job's launchd raw value, so the copy deck stays free of the settings types.
         static let jobNames: [String: String] = [
-            "watch": "Read new conversations", "hotlane": "Keep search ready", "drain": "Save waiting memories",
-            "walCheckpoint": "Tidy up storage", "backupDaily": "Back up the database", "jsonlBackup": "Back up conversations",
+            // R1.12 (§ C): the stages' names on the Jobs page too ("Read", "Save queue"), and "sessions" for the files.
+            "watch": "Read", "hotlane": "Keep search ready", "drain": "Save queue",
+            "walCheckpoint": "Tidy up storage", "backupDaily": "Back up the database", "jsonlBackup": "Back up sessions",
             "maintenanceNightly": "Nightly check-up", "maintenanceWeekly": "Weekly clean", "decay": "Fade old memories",
             "repairFTS": "Repair word search",
         ]
@@ -722,8 +728,8 @@ extension BrainBarMenuPresenter {
         ]
 
         // Station popovers
-        static let databaseCopy = "Database copy"
-        static let conversationsCopy = "Conversations copy"
+        static let databaseCopy = "Database"  // R1.12 (§ C): the Drive panel's two rows
+        static let conversationsCopy = "Sessions"
         static let account = "Account"
         static let openBackups = "Open Backups"
         static let openJobs = "Open Jobs"
@@ -752,7 +758,7 @@ extension BrainBarMenuPresenter {
         static func lastBackup(_ age: String) -> String { "last backup \(age) ago" }
         static func lastCheckUp(_ age: String) -> String { "last check-up \(age) ago" }
         static func driveAgo(_ age: String) -> String { "Drive \(age) ago" }
-        static func macAgo(_ age: String) -> String { "Mac \(age) ago" }
+        static func macAgo(_ age: String) -> String { "Local copy \(age) ago" }  // R1.12 (§ C): the dropdown's Backups value
         static let lastKnown = "last known"
         /// D8.3: each half's scale, said as a scale ("up to 4/min"), not a bare number that reads like an axis floor.
         static func upTo(_ value: String, minutes: Int) -> String { minutes == 1 ? "up to \(value) / min" : "up to \(value) / \(minutes) min" }
@@ -832,10 +838,6 @@ extension BrainBarMenuPresenter {
         static let jobsPanelTitle = "Jobs that work on memory"
         static let jobsPanelLine = "They read memory, check it and tidy it in place. They add no new memories."
         static func keptNewest(_ n: Int, _ age: String) -> String { "\(n) kept, newest \(age) ago" }
-        static func macKeepsNewest(_ keep: String) -> String {
-            "Every night a checked copy of the database is saved on this Mac. It keeps the \(keep) newest."
-        }
-        static let macOlderRemoved = "An older copy is removed only after Google Drive holds a checked copy of it."
         static let keptRow = "Kept"
         static let newestRow = "Newest"
         static let copiedLabel = "Copied"
@@ -849,16 +851,10 @@ extension BrainBarMenuPresenter {
         }
 
         // Round 2 decisions (R2-DECISIONS "Taken", approved copy).
-        static func macLate(_ age: String) -> String { "Local copy is late: newest \(age) ago" }  // R1.10.5 (L50)
         static func noDataSince(_ time: String) -> String { "no data since \(time)" }
-        static func failedInARow(_ n: Int) -> String { "Failed \(n) nights in a row" }
-        static func searchableByMeaning(_ p: Int) -> String { "\(p)% searchable by meaning" }
-        // Revision 1.10 (L48 to L51), approved in CHANGES-R1.10 § D.
+        // Revision 1.10 (L48 to L51), approved in CHANGES-R1.10 § D. R1.12 (§ C) retires the rows' own short words: each
+        // row says its fault's one sentence.
         static let oneThingNeedsYou = "1 thing needs you"
-        static let rowDriveSignedOut = "Google Drive signed out"
-        static let rowNightlyFailing = "Nightly check-up failing"
-        static let rowWeeklyFailing = "Weekly clean failing"
-        static func rowQueueWaiting(_ age: String) -> String { "Save queue waiting \(age)" }
         static let stationNightly = "Nightly check-up"
         static let stationWeekly = "Weekly clean"
         static func lastRunAgo(_ age: String) -> String { "last run \(age) ago" }
@@ -870,6 +866,34 @@ extension BrainBarMenuPresenter {
         static func dayYesterdayAt(_ time: String) -> String { "yesterday at \(time)" }
         static func dayWeekdayAt(_ day: String, _ time: String) -> String { "\(day) at \(time)" }
         static let localCopyStillMade = "The local copy is still made every night."
+
+        // Revision 1.12 (L54, CHANGES-R1.12 § I; the 12 approved strings and § C's table).
+        /// F: Save queue's status: "stuck {t}" (red), "{n} waiting" under its threshold, "empty".
+        static func stuckFor(_ age: String) -> String { "stuck \(age)" }
+        static func nWaiting(_ n: Int) -> String { "\(n) waiting" }
+        /// F: Search's status, its panel row and the dropdown value.
+        static func searchablePercent(_ p: Int) -> String { "\(p)% searchable" }
+        static let catchingUp = "catching up"
+        static func failedChecks(_ n: Int) -> String { "failed \(n) checks" }
+        /// F (I 10): the Search panel; its second sentence only while the `search` check is green.
+        static let searchFinds = "Finds memories by meaning and by matching words."
+        static let searchLastWorked = "Its last check worked."
+        /// E3 (I 11): the Drive panel while the local copy is late: nothing new was made to upload.
+        static let nothingNewToUpload = "Nothing new to upload: the local copy is late."
+        /// I 12: the Local copy panel, shorter (the same facts as L45).
+        static func localCopyPanel(_ keep: String) -> String {
+            "Saved every night. The \(keep) newest are kept until Google Drive holds a checked copy."
+        }
+        /// E3 (L53 C4): the late copy's second line; the next run only when the schedule says.
+        static func localLateLine(_ age: String, _ due: String?) -> String {
+            due.map { "The newest is \(age) old; the next one is due \($0)." } ?? "The newest is \(age) old."
+        }
+        static func tonightAt(_ time: String) -> String { "tonight at \(time)" }
+        /// E2: last-known values as clock times (in `t3`).
+        static func lastReadClock(_ time: String) -> String { "last read \(time)" }
+        static func keptNewestClock(_ n: Int, _ time: String) -> String { "\(n) kept, newest \(time)" }
+        static func lastUploadClock(_ time: String) -> String { "last upload \(time)" }
+        static func lastRunClock(_ time: String) -> String { "last run \(time)" }
         /// R1.10.1: Google Drive's station status while it waits for the browser: the approved word "Waiting" (the row
         /// label), lower case as every station status is.
         static let stationWaiting = "waiting"

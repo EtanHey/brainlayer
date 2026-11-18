@@ -312,11 +312,12 @@ struct NDPipelineChart: View {
         // R2A item 8: the count carries its unit ("297,412 memories"), on two lines when one would crowd the box.
         let count = memories ?? NDModel.Number.unknown.value
         let words = Say.memoriesCount(count)
+        let tint = state.allUnconfirmed ? ND.t3 : ND.t2  // R1.12 (E2): the Memory count follows the last-known rule
         if NDPipelineLayout.textWidth(words, size: 11) <= hub.width - 16 {
-            put(ctx, text(words, size: 11, color: ND.t2, mono: true), x: hub.midX, baseline: hub.minY + 72, size: 11, anchor: .middle)
+            put(ctx, text(words, size: 11, color: tint, mono: true), x: hub.midX, baseline: hub.minY + 72, size: 11, anchor: .middle)
         } else {
-            put(ctx, text(count, size: 11, color: ND.t2, mono: true), x: hub.midX, baseline: hub.minY + 72, size: 11, anchor: .middle)
-            put(ctx, text(Say.memoriesWord, size: 11, color: ND.t2), x: hub.midX, baseline: hub.minY + 86, size: 11, anchor: .middle)
+            put(ctx, text(count, size: 11, color: tint, mono: true), x: hub.midX, baseline: hub.minY + 72, size: 11, anchor: .middle)
+            put(ctx, text(Say.memoriesWord, size: 11, color: tint), x: hub.midX, baseline: hub.minY + 86, size: 11, anchor: .middle)
         }
     }
 
@@ -394,7 +395,8 @@ struct NDPipelineChart: View {
                 // A status can carry its own severity on a calm station: Read's "Cursor not read" (R1.4 change 3).
                 let own: NDModel.Tone = state.allUnconfirmed ? .fine : status.severity == .red ? .fault : status.severity == .orange ? .warn : .fine
                 let tone = m.statusTone == .fine ? own : m.statusTone
-                let color: Color = tone == .fault ? ND.redText : tone == .warn ? ND.orangeText : ND.t2
+                // R1.12 (E2): not confirmed, the stations keep their last-known values in `t3`, as clock times.
+                let color: Color = state.allUnconfirmed ? ND.t3 : tone == .fault ? ND.redText : tone == .warn ? ND.orangeText : ND.t2
                 put(ctx, text(status.text, size: 11, color: color, weight: tone == .fine ? .regular : .semibold, mono: true),
                     x: p.x, baseline: p.y + 43, size: 11, anchor: .middle)
             }
@@ -779,7 +781,8 @@ struct NDStationPopover: View {
         }
         let fault = faultLines(station, item: item, i, p)
         // A notice the station says in its own words (backup-late): its title, then what the station is and does.
-        let showOwn = fault.isEmpty
+        // R1.12 (5e): Drive's fault panel is its title, the two rows and Reconnect, so it fits the room above it.
+        let showOwn = fault.isEmpty && !(station == .drive && item.id == "drive")
         return Model(mark: item.severity == .red ? .fault : .notice, title: faultTitle(station, item, i),
                      lines: showOwn ? ownLines : fault, firstLineStrong: !showOwn,
                      rows: showOwn || station == .drive ? ownRows : [], action: item.action)
@@ -787,20 +790,28 @@ struct NDStationPopover: View {
 
     /// R2 item 11: the jobs fault panel's title, short (the station is named above it). R1.10 keeps it short: comp 59's
     /// two-line "Nightly check-up failed 3 nights in a row" makes the panel too tall for the room under Save queue.
-    static func faultTitle(_ station: NDStation, _ item: NDR1.Item, _ i: NDInputs) -> String {
-        if station == .jobs, item.id == "nightly", let nights = i.capture.maintenanceNightFailures { return Say.failedInARow(nights) }
-        return item.title
-    }
+    /// R1.12 (§ C): one wording per fault: the panel's title is the item's, the same sentence as its row, its page and its
+    /// dropdown block ("Nightly check-up failed 3 nights").
+    static func faultTitle(_ station: NDStation, _ item: NDR1.Item, _ i: NDInputs) -> String { item.title }
 
     static func title(_ station: NDStation) -> String { NDPipelineLayout.name(station) }  // R1.10: each job its own panel
 
     /// A station's own lines: its explanation (§ F), the providers for the agents, the copies' truth for the Mac (L42),
     /// what the jobs do for Jobs.
     static func lines(_ station: NDStation, _ i: NDInputs, _ p: NDPipelineState) -> [String] {
+        let checks = i.capture.verdict?.checks ?? []
         switch station {
-        case .agents: [Say.agentsLine, Say.explainAgents]
-        case .mac: [Say.macKeepsNewest(Say.countWord(NDBackupFacts.keepNewest)), Say.macOlderRemoved]
-        default: [explanation(station)]
+        case .agents: return [Say.agentsLine, Say.explainAgents]
+        // R1.12 (I 12): shorter, the same facts as L45.
+        case .mac: return [Say.localCopyPanel(Say.countWord(NDBackupFacts.keepNewest))]
+        // R1.12 (E3, I 11): with the local copy late, nothing new was made to upload.
+        case .drive where checks.contains(where: { $0.name == "backup_local" && $0.state == .amber }):
+            return [Say.nothingNewToUpload]
+        // R1.12 (F, I 10): the second sentence only while the search check is green.
+        case .search:
+            let worked = checks.contains { $0.name == "search" && $0.state == .green }
+            return [Say.searchFinds + (worked ? " " + Say.searchLastWorked : "")]
+        default: return [explanation(station)]
         }
     }
 
@@ -844,10 +855,7 @@ struct NDStationPopover: View {
             let others = NDPipelineLayout.agentRows.map(\.0).filter { !named.contains($0) }.map(NDProvider.name)
             return others.isEmpty ? [Say.agentNotReadDetail] : [Say.othersStillRead(list(others))]
         case (.drive, "drive"):
-            var out: [String] = []
-            if let newest = NDR1.driveAges(i.capture.verdict).min() { out.append(Say.lastDriveUpload(NDFormat.ageText(newest))) }
-            if green("backup_local") { out.append(Say.localCopyStillMade) }  // R1.10: one thing, one name
-            return out
+            return []  // R1.12 (5e): the title, the two rows (Database, Sessions) and Reconnect
         default:
             return [item.detail].compactMap { $0 }.filter { !$0.isEmpty }
         }
@@ -874,7 +882,9 @@ struct NDStationPopover: View {
             // R1.10 (L50): the newest copy as a clock time on its day.
             if let at = i.newestLocalCopyAt { out.append(Line(label: Say.newestRow, value: NDR1.dayAt(at, i.capture))) }
             return out
-        case .jobs, .weekly:
+        case .weekly:
+            return []  // R1.12 (5h): its rows go; its status shows the last run and the Jobs page the next
+        case .jobs:
             // R1.10 (comp 59): the job's own last and next run, from what the Jobs page reads.
             let job: BrainLayerLaunchdJob = station == .jobs ? .maintenanceNightly : .maintenanceWeekly
             let input = i.jobs?.first { $0.job == job }
@@ -886,12 +896,9 @@ struct NDStationPopover: View {
             let nextValue = input?.nextRun.map { Say.inAge(NDFormat.ageText(max(60, $0.timeIntervalSince(now)))) } ?? NDModel.Number.unknown.value
             return [Line(label: Say.lastRun, value: lastValue), Line(label: Say.nextRunHead, value: nextValue)]
         case .search:
-            var out: [Line] = []
-            if i.capture.verdict?.checks.first(where: { $0.name == "search" })?.state == .green {
-                out.append(Line(label: Say.lastCheck, value: Say.working))
-            }
-            out.append(Line(label: Say.searchByWordsNotChecked, value: ""))
-            return out
+            // R1.12 (F; Fable 11): the row the station and the dropdown say, "By meaning 99% searchable"; no row for the
+            // word index under "All good".
+            return i.searchable.map { [Line(label: Say.stageMeaning, value: Say.searchablePercent(Int(($0 * 100).rounded(.down))))] } ?? []
         default:
             return []
         }
