@@ -1072,6 +1072,11 @@ No results found.
         XCTAssertTrue(optedIn.contains("thinking-said"), optedIn)
         XCTAssertTrue(optedIn.contains("thinking-thought"), optedIn)
         XCTAssertFalse(optedIn.contains("thinking-worker"), optedIn)
+        // Re-check R4: the opted-in thinking row is labelled; the said row is not.
+        XCTAssertEqual(optedIn.components(separatedBy: "K: agent thinking, not said aloud").count, 2, optedIn)
+        XCTAssertFalse(byDefault.contains("agent thinking"), byDefault)
+        let exactThought = try search(["query": "thinking-thought", "include_hidden_source_classes": true])
+        XCTAssertTrue(exactThought.contains("K: agent thinking, not said aloud"), exactThought)
 
         // Unadvertised: neither the schema nor the description names the switch.
         let tool = try XCTUnwrap(listedTools(router).first { ($0["name"] as? String) == "brain_search" })

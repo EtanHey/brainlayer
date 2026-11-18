@@ -1600,7 +1600,8 @@ final class BrainDatabase: @unchecked Sendable {
         let orderByClause = unreadOnly ? "c.rowid ASC" : "f.rank"
         let sql = """
             SELECT c.rowid, c.id, c.content, c.source_file, c.project, c.content_type, c.importance,
-                   c.created_at, c.summary, c.tags, c.conversation_id, c.source, f.rank
+                   c.created_at, c.summary, c.tags, c.conversation_id, c.source, f.rank,
+                   \(try sourceClassSelectExpression(on: db))
             FROM \(tableName) f
             JOIN chunks c ON c.id = f.chunk_id
             WHERE \(conditions.joined(separator: " AND "))
@@ -1651,7 +1652,7 @@ final class BrainDatabase: @unchecked Sendable {
             // FTS5 rank is negative (lower = better match). Negate for a positive score.
             let rawRank = sqlite3_column_double(stmt, 12)
             let score = max(0, -rawRank)
-            results.append(searchRow(from: stmt, score: score))
+            results.append(searchRow(from: stmt, score: score, sourceClassColumn: 13))
         }
 
         return (results, maxRowID)
@@ -3422,7 +3423,7 @@ final class BrainDatabase: @unchecked Sendable {
 
         let sql = """
             SELECT c.rowid, c.id, c.content, c.source_file, c.project, c.content_type, c.importance,
-                   c.created_at, c.summary, c.tags, c.conversation_id, c.source
+                   c.created_at, c.summary, c.tags, c.conversation_id, c.source, \(try sourceClassSelectExpression(on: db))
             FROM chunks c
             WHERE \(conditions.joined(separator: " AND "))
             LIMIT 1
@@ -3453,7 +3454,7 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         if sqlite3_step(stmt) == SQLITE_ROW {
-            return [searchRow(from: stmt, score: 1.0)]
+            return [searchRow(from: stmt, score: 1.0, sourceClassColumn: 12)]
         }
 
         return try chunkExists(id: query) ? [] : nil
@@ -3470,9 +3471,16 @@ final class BrainDatabase: @unchecked Sendable {
         return sqlite3_step(stmt) == SQLITE_ROW
     }
 
-    private func searchRow(from stmt: OpaquePointer?, score: Double) -> [String: Any] {
+    /// SELECT expression for a row's class; NULL on a DB that predates the column.
+    private func sourceClassSelectExpression(on db: OpaquePointer) throws -> String {
+        try tableColumns(name: "chunks", on: db).contains("source_class") ? "c.source_class" : "NULL"
+    }
+
+    private func searchRow(from stmt: OpaquePointer?, score: Double, sourceClassColumn: Int32) -> [String: Any] {
         let rowID = sqlite3_column_int64(stmt, 0)
         return [
+            // Only an opted-in search can return a hidden class; the formatter labels thinking rows.
+            "source_class": columnText(stmt, sourceClassColumn) as Any,
             "rowid": Int(rowID),
             "chunk_id": columnText(stmt, 1) as Any,
             "content": columnText(stmt, 2) as Any,

@@ -313,17 +313,20 @@ def _visibility_clause(conn: Any, hidden: bool | None) -> str:
     """Keep dedupe on one side of the default-search line (#1824).
 
     ``hidden=None`` is the legacy, unscoped lookup. Otherwise a candidate must sit in
-    the same bucket as the incoming row: a reply never folds into a hidden thinking
-    row, and thinking is never appended into a visible one.
+    the same visibility tier as the incoming row: a reply never folds into a hidden
+    thinking row, and thinking is never appended into a visible one. A hidden write
+    (thinking, desktop) matches only the opt-in tier, never an always-hidden
+    brain-worker row, which the opt-in could not reach (#1824 re-check R2).
     """
     if hidden is None:
         return "1=1"
     if "source_class" not in {row[1] for row in conn.cursor().execute("PRAGMA table_info(chunks)")}:
         return "1=1"
-    from .source_visibility import hidden_source_class_sql
+    from .source_visibility import OPT_IN_HIDDEN_SOURCE_CLASSES, hidden_source_class_sql
 
-    visible = hidden_source_class_sql("source_class")
-    return f"NOT {visible}" if hidden else visible
+    if hidden:
+        return "source_class IN (" + ", ".join(f"'{value}'" for value in OPT_IN_HIDDEN_SOURCE_CLASSES) + ")"
+    return hidden_source_class_sql("source_class")
 
 
 def find_duplicate(

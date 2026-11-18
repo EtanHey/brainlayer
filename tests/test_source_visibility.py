@@ -249,6 +249,35 @@ def test_thinking_near_duplicate_of_earlier_said_text_stays_hidden(writer):
     assert _default_hits(writer.db, "RedteamThinkOnly") == [], _rows(writer.db)
 
 
+def test_thinking_never_folds_into_an_always_hidden_brain_worker_row(writer):
+    """Re-check R2: brain-worker is a different tier from thinking; the opt-in could never reach it."""
+    from brainlayer.dedupe import compute_dedupe_fields
+
+    fields = compute_dedupe_fields(THINK, "2026-11-17T11:00:00Z")
+    store = VectorStore(writer.db)
+    store.conn.cursor().execute(
+        """
+        INSERT INTO chunks (id, content, metadata, source_file, project, content_type, char_count, created_at,
+                            source_class, dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2,
+                            simhash_band_3)
+        VALUES ('worker-row', ?, '{}', '/subagents/agent-x.jsonl', 'myproject', 'assistant_text', ?,
+                '2026-11-17T11:00:00Z', 'brain-worker', ?, ?, ?, ?, ?, ?)
+        """,
+        (THINK, len(THINK), fields.dedupe_hash, fields.simhash, *fields.bands),
+    )
+    store.close()
+
+    writer.write(_entry(_thinking(THINK)))
+
+    store = VectorStore(writer.db)
+    try:
+        opt_in = store.search(query_text="RedteamThinkNeedle", n_results=10, include_hidden_source_classes=True)
+    finally:
+        store.close()
+    assert [row[1] for row in _rows(writer.db)] == ["agent-thinking"]
+    assert opt_in["ids"][0] and "worker-row" not in opt_in["ids"][0]
+
+
 # ── 3. Same chunk id: a thinking write never relabels a row that exists (both paths) ──
 
 

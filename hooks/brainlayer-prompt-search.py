@@ -44,7 +44,8 @@ def visible_source_class_sql(conn, alias="c"):
 
     Injection is default search: it runs on every prompt, so it hides what search hides.
     """
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+    # list(), not .fetchall(): it works on a sqlite3 cursor, an apsw cursor, and a test fake's list.
+    columns = {row[1] for row in list(conn.execute("PRAGMA table_info(chunks)"))}
     return hidden_source_class_sql(f"{alias}.source_class") if "source_class" in columns else "1=1"
 
 
