@@ -18,13 +18,13 @@ import numpy as np
 from . import search_profile
 from ._helpers import _escape_fts5_query, _is_sqlite_busy_error, serialize_f32
 from .agent_profiles import boost_weight, source_weight, validate_agent_profile
-from .agent_provenance import hidden_source_classes
 from .archive_lifecycle import lifecycle_active_clauses
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from .content_class import DEFAULT_CONTENT_CLASS, normalize_content_class
 from .dedupe import resolve_chunk_id
 from .ingest_guard import recursive_mcp_output_reason
 from .scoping import ConsumerScope
+from .source_visibility import THINKING_SOURCE_CLASS, hidden_source_class_sql, hidden_source_classes
 
 _sleep = time.sleep
 
@@ -425,9 +425,12 @@ def _source_class_where(
     if not getattr(store, "_has_source_class", False):
         return None
     column = f"{alias}.source_class" if alias else "source_class"
-    values = hidden_source_classes(include_hidden_source_classes=include_hidden_source_classes)
-    hidden = "(" + ", ".join(f"'{value}'" for value in values) + ")"
-    return f"({column} IS NULL OR {column} NOT IN {hidden})"
+    return hidden_source_class_sql(column, include_hidden_source_classes=include_hidden_source_classes)
+
+
+def _context_class_fields(source_class: Any) -> dict[str, Any]:
+    """Label a context row's class: thinking is shown in expand, never passed off as said aloud."""
+    return {"source_class": source_class, "thinking": source_class == THINKING_SOURCE_CLASS}
 
 
 def _effective_project_filter(project_filter: Optional[str], consumer_scope: ConsumerScope | None) -> Optional[str]:
@@ -2698,12 +2701,16 @@ class SearchMixin:
         read_conn = self._get_read_conn()
         cursor = read_conn.cursor()
         chunk_id = resolve_chunk_id(read_conn, chunk_id)
+        # Expand shows hidden classes, as it always has for desktop rows; a thinking row
+        # carries a label so it is never read as something the assistant said.
+        source_class_select = "source_class" if getattr(self, "_has_source_class", False) else "NULL"
 
         # Get the target chunk's conversation_id and position
         target = list(
             cursor.execute(
-                """
-            SELECT conversation_id, position, content, metadata, content_type, tags, chunk_origin, project, source_file
+                f"""
+            SELECT conversation_id, position, content, metadata, content_type, tags, chunk_origin, project, source_file,
+                   {source_class_select}
             FROM chunks WHERE id = ?
         """,
                 (chunk_id,),
@@ -2713,7 +2720,19 @@ class SearchMixin:
         if not target:
             return {"target": None, "context": [], "error": "Chunk not found"}
 
-        conv_id, position, content, metadata, content_type, tags, chunk_origin, project, source_file = target[0]
+        (
+            conv_id,
+            position,
+            content,
+            metadata,
+            content_type,
+            tags,
+            chunk_origin,
+            project,
+            source_file,
+            source_class,
+        ) = target[0]
+        class_fields = _context_class_fields(source_class)
         if not _metadata_matches_project_scope({"project": project}, None, consumer_scope):
             return {"target": None, "context": [], "error": "Chunk not found"}
         if self._context_chunk_is_filtered(
@@ -2736,6 +2755,7 @@ class SearchMixin:
                     "position": None,
                     "project": project,
                     "source_file": source_file,
+                    **class_fields,
                 },
                 "context": [
                     {
@@ -2746,6 +2766,7 @@ class SearchMixin:
                         "project": project,
                         "source_file": source_file,
                         "is_target": True,
+                        **class_fields,
                     }
                 ],
             }
@@ -2753,8 +2774,8 @@ class SearchMixin:
         # Get surrounding chunks
         context_rows = list(
             cursor.execute(
-                """
-            SELECT id, content, position, content_type, tags, chunk_origin, project, source_file
+                f"""
+            SELECT id, content, position, content_type, tags, chunk_origin, project, source_file, {source_class_select}
             FROM chunks
             WHERE conversation_id = ?
               AND position BETWEEN ? AND ?
@@ -2786,6 +2807,7 @@ class SearchMixin:
                     "project": row_project,
                     "source_file": row[7],
                     "is_target": row[0] == chunk_id,
+                    **_context_class_fields(row[8]),
                 }
             )
 
@@ -2796,6 +2818,7 @@ class SearchMixin:
                 "position": position,
                 "project": project,
                 "source_file": source_file,
+                **class_fields,
             },
             "context": context,
         }

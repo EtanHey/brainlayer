@@ -278,6 +278,7 @@ def test_t3_thinking_part_is_stored_with_the_hidden_agent_thinking_class():
 
     assert thinking and {chunk.metadata.get("source_class") for chunk in thinking} == {"agent-thinking"}
     assert all(chunk.metadata.get("thinking") is True for chunk in thinking)
+    assert all(chunk.metadata.get("thinking_source_class") == "cli-agent" for chunk in thinking)
     assert said and all("source_class" not in chunk.metadata for chunk in said)
     assert all(not chunk.metadata.get("thinking") for chunk in said)
 

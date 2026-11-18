@@ -607,7 +607,7 @@ def _is_thinking_message(message: T3Message) -> bool:
 
 
 def _message_chunks(thread: T3Thread, message: T3Message) -> list:
-    from ..agent_provenance import THINKING_SOURCE_CLASS
+    from ..agent_provenance import THINKING_SOURCE_CLASS, derive_source_class
     from ..pipeline.chunk import Chunk, chunk_content
     from ..pipeline.classify import ClassifiedContent, ContentType, ContentValue
 
@@ -634,7 +634,16 @@ def _message_chunks(thread: T3Thread, message: T3Message) -> list:
     if _is_thinking_message(message):
         # Stored, hidden from default search (Etan, 2026-11-17, choice A). Rows written
         # before this change keep their class until an owner-approved reclassification.
-        base_metadata.update({"source_class": THINKING_SOURCE_CLASS, "thinking": True})
+        base_metadata.update(
+            {
+                "source_class": THINKING_SOURCE_CLASS,
+                "thinking": True,
+                # The class this row would carry if it were not thinking, as the watcher records it.
+                "thinking_source_class": derive_source_class(
+                    "", provenance_class=T3_PROVENANCE_CLASS, source=T3_SOURCE
+                ),
+            }
+        )
     classified = ClassifiedContent(
         content=message.text,
         content_type=content_type,

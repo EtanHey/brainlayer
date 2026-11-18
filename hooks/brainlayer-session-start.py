@@ -19,6 +19,15 @@ import time
 from brainlayer.archive_lifecycle import lifecycle_active_clauses_present
 from brainlayer.scoping import canonical_workspace_path
 
+try:
+    from brainlayer.source_visibility import hidden_source_class_sql
+except ImportError:  # A keg older than this hook: these files are copies, deployed on their own.
+
+    def hidden_source_class_sql(column, *, include_hidden_source_classes=False):
+        # Pinned to source_visibility.DEFAULT_HIDDEN_SOURCE_CLASSES by tests/test_source_visibility.py.
+        return f"({column} IS NULL OR {column} NOT IN ('desktop', 'agent-thinking', 'brain-worker'))"
+
+
 # Budget: abort if we're taking too long
 DEADLINE_MS = 450
 DEGRADED_PREFIX = "⚠️ DEGRADED: BrainLayer"
@@ -258,6 +267,9 @@ def main():
     try:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
         active_sql = " AND ".join(lifecycle_active_clauses_present(columns, "c")) or "1=1"
+        if "source_class" in columns:
+            # Injection is default search: hidden classes (agents' thinking, desktop, brain-workers) stay out.
+            active_sql = f"{active_sql} AND {hidden_source_class_sql('c.source_class')}"
         # Single combined query: decisions + milestones for this project
         # Uses both tags: prefix (catches brain_store'd tagged chunks)
         # and plain content search (catches mentions in conversation)

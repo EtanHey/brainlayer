@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ..dedupe import _active_clause, _scope_clause, find_duplicate, normalized_exact_hash
 from ..ingest_denylist import is_denylisted
+from ..source_visibility import is_hidden_source_class
 from ..t3_provenance import compact_codex_header
 from ..watcher import CodexTurnContext, OffsetRegistry, fold_codex_turn_context, normalize_provider_entry
 from ..watcher_bridge import create_flush_callback
@@ -148,6 +149,7 @@ def _resolved_candidate(db, row):
             created_at=row.get("created_at"),
             project=row.get("project"),
             content_type=row.get("content_type"),
+            hidden=is_hidden_source_class(row.get("source_class")),
         )
         match = (
             db.execute("SELECT id, source_file FROM chunks WHERE id = ?", (hit.canonical_chunk_id,)).fetchone()

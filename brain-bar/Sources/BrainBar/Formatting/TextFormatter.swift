@@ -109,6 +109,9 @@ enum TextFormatter {
             lines.append("")
             lines.append("### Chunk \(index + 1) - \(source.isEmpty ? "unknown" : source)")
             lines.append("- ID: \(result.chunkID)")
+            if result.isThinking {
+                lines.append("- Kind: \(SearchResult.thinkingLabel)")
+            }
             let content = result.snippet.isEmpty ? result.displayText : result.snippet
             let fullText = content.trimmingCharacters(in: .whitespacesAndNewlines)
             if fullText.count <= 1500 {

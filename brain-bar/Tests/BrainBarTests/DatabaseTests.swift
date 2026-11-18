@@ -973,6 +973,14 @@ final class DatabaseTests: XCTestCase {
         XCTAssertFalse(resultIDs.contains("source-class-brain-worker"))
         XCTAssertTrue(try db.search(query: "source-class-desktop", limit: 1).isEmpty)
         XCTAssertTrue(try db.search(query: "source-class-agent-thinking", limit: 1).isEmpty)
+
+        // The unadvertised opt-in reveals desktop and thinking, never brain-workers (#1824).
+        let optedIn = Set(try db.search(query: "SwiftSourceClassNeedle", limit: 20, includeHiddenSourceClasses: true)
+            .compactMap { $0["chunk_id"] as? String })
+        XCTAssertEqual(optedIn, expected.union(["source-class-desktop", "source-class-agent-thinking"]))
+        XCTAssertTrue(
+            try db.search(query: "source-class-brain-worker", limit: 1, includeHiddenSourceClasses: true).isEmpty
+        )
         XCTAssertTrue(try db.search(query: "source-class-brain-worker", limit: 1).isEmpty)
     }
 

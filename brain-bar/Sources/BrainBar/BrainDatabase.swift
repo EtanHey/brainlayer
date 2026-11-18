@@ -967,6 +967,9 @@ final class BrainDatabase: @unchecked Sendable {
     private(set) var isOpen = false
     private(set) var lastOpenError: Error?
     private static let maximumConversationContextPerSide = 40
+    /// Mirrors src/brainlayer/source_visibility.py (OPT_IN_ / ALWAYS_HIDDEN_SOURCE_CLASSES).
+    static let optInHiddenSourceClasses = ["desktop", SearchResult.thinkingSourceClass]
+    static let alwaysHiddenSourceClasses = ["brain-worker"]
     private static let maximumConversationContentCharacters = 4_000
 
     init(path: String, openConfiguration: OpenConfiguration = OpenConfiguration()) {
@@ -1477,7 +1480,8 @@ final class BrainDatabase: @unchecked Sendable {
         tag: String? = nil,
         importanceMin: Double? = nil,
         subscriberID: String? = nil,
-        unreadOnly: Bool = false
+        unreadOnly: Bool = false,
+        includeHiddenSourceClasses: Bool = false
     ) throws -> [[String: Any]] {
         guard db != nil else { throw DBError.notOpen }
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1496,7 +1500,8 @@ final class BrainDatabase: @unchecked Sendable {
                project: project,
                source: source,
                tag: tag,
-               importanceMin: importanceMin
+               importanceMin: importanceMin,
+               includeHiddenSourceClasses: includeHiddenSourceClasses
            ) {
             return exact
         }
@@ -1517,7 +1522,8 @@ final class BrainDatabase: @unchecked Sendable {
                 importanceMin: importanceMin,
                 subscribedTags: subscribedTags,
                 ackFloor: ackFloor,
-                unreadOnly: unreadOnly
+                unreadOnly: unreadOnly,
+                includeHiddenSourceClasses: includeHiddenSourceClasses
             )
             maxRowID = max(maxRowID, searchResult.maxRowID)
             appendDeduped(searchResult.rows, to: &results, seenChunkIDs: &seenChunkIDs, limit: limit)
@@ -1538,7 +1544,8 @@ final class BrainDatabase: @unchecked Sendable {
                     importanceMin: importanceMin,
                     subscribedTags: subscribedTags,
                     ackFloor: ackFloor,
-                    unreadOnly: unreadOnly
+                    unreadOnly: unreadOnly,
+                    includeHiddenSourceClasses: includeHiddenSourceClasses
                 )
                 maxRowID = max(maxRowID, searchResult.maxRowID)
                 appendDeduped(searchResult.rows, to: &results, seenChunkIDs: &seenChunkIDs, limit: limit)
@@ -1563,7 +1570,8 @@ final class BrainDatabase: @unchecked Sendable {
         importanceMin: Double?,
         subscribedTags: [String],
         ackFloor: Int64,
-        unreadOnly: Bool
+        unreadOnly: Bool,
+        includeHiddenSourceClasses: Bool = false
     ) throws -> (rows: [[String: Any]], maxRowID: Int64) {
         guard let db else { throw DBError.notOpen }
         let allowedTables = ["chunks_fts", "chunks_fts_trigram"]
@@ -1573,7 +1581,7 @@ final class BrainDatabase: @unchecked Sendable {
         let sourceFilter = normalizedSourceFilter(source)
         var conditions = [
             "\(tableName) MATCH ?",
-            try searchableChunkWhereClause(alias: "c"),
+            try searchableChunkWhereClause(alias: "c", includeOptInHiddenSources: includeHiddenSourceClasses),
         ]
         if project != nil { conditions.append("(c.project = ? OR c.project IS NULL)") }
         if sourceFilter != nil { conditions.append("c.source = ?") }
@@ -2615,7 +2623,14 @@ final class BrainDatabase: @unchecked Sendable {
         """)
     }
 
-    private func searchableChunkWhereClause(alias: String, includeHiddenSources: Bool = false) throws -> String {
+    /// `includeHiddenSources` drops the class gate entirely (dashboard coverage counts only).
+    /// `includeOptInHiddenSources` is brain_search's unadvertised opt-in: it reveals desktop
+    /// and agent-thinking rows, while brain-workers stay hidden.
+    private func searchableChunkWhereClause(
+        alias: String,
+        includeHiddenSources: Bool = false,
+        includeOptInHiddenSources: Bool = false
+    ) throws -> String {
         guard let db else { throw DBError.notOpen }
         let columns = try tableColumns(name: "chunks", on: db)
         var clauses: [String] = []
@@ -2633,11 +2648,13 @@ final class BrainDatabase: @unchecked Sendable {
             clauses.append("\(alias).archived_at IS NULL")
         }
         if !includeHiddenSources && columns.contains("source_class") {
-            // Same list as agent_provenance.DEFAULT_HIDDEN_SOURCE_CLASSES: desktop apps and agents'
-            // thinking are stored but kept out of default search; brain-workers never show.
-            clauses.append(
-                "(\(alias).source_class IS NULL OR \(alias).source_class NOT IN ('desktop', 'agent-thinking', 'brain-worker'))"
-            )
+            // Same lists as source_visibility.py: desktop apps and agents' thinking are stored but
+            // kept out of default search (the opt-in reveals them); brain-workers never show.
+            let hidden = includeOptInHiddenSources
+                ? Self.alwaysHiddenSourceClasses
+                : Self.optInHiddenSourceClasses + Self.alwaysHiddenSourceClasses
+            let values = hidden.map { "'\($0)'" }.joined(separator: ", ")
+            clauses.append("(\(alias).source_class IS NULL OR \(alias).source_class NOT IN (\(values)))")
         }
         return clauses.isEmpty ? "1 = 1" : clauses.joined(separator: " AND ")
     }
@@ -3385,7 +3402,8 @@ final class BrainDatabase: @unchecked Sendable {
         project: String?,
         source: String?,
         tag: String?,
-        importanceMin: Double?
+        importanceMin: Double?,
+        includeHiddenSourceClasses: Bool = false
     ) throws -> [[String: Any]]? {
         guard let db else { throw DBError.notOpen }
         guard limit > 0, !query.contains(where: { $0.isWhitespace }), query.contains("-") else {
@@ -3393,7 +3411,10 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         let sourceFilter = normalizedSourceFilter(source)
-        var conditions = ["c.id = ?", try searchableChunkWhereClause(alias: "c")]
+        var conditions = [
+            "c.id = ?",
+            try searchableChunkWhereClause(alias: "c", includeOptInHiddenSources: includeHiddenSourceClasses),
+        ]
         if project != nil { conditions.append("(c.project = ? OR c.project IS NULL)") }
         if sourceFilter != nil { conditions.append("c.source = ?") }
         if tag != nil { conditions.append("c.tags LIKE ?") }
@@ -5473,9 +5494,12 @@ final class BrainDatabase: @unchecked Sendable {
             ? "source_end_offset"
             : "NULL AS source_end_offset"
         let targetContentSelect = includeFullTargetContent ? "content" : "substr(content, 1, ?)"
+        // Expand shows hidden classes, as it always has for desktop rows; the class rides along
+        // so a thinking row is labelled and never read as something the assistant said.
+        let sourceClassSelect = chunkColumns.contains("source_class") ? "source_class" : "NULL AS source_class"
 
         // Get the target chunk with its session_id and rowid
-        let targetSQL = "SELECT rowid, id, \(targetContentSelect), conversation_id, project, content_type, \(senderSelect), importance, created_at, summary, tags, \(sourceFileSelect), \(sourceEndOffsetSelect) FROM chunks WHERE id = ?"
+        let targetSQL = "SELECT rowid, id, \(targetContentSelect), conversation_id, project, content_type, \(senderSelect), importance, created_at, summary, tags, \(sourceFileSelect), \(sourceEndOffsetSelect), \(sourceClassSelect) FROM chunks WHERE id = ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, targetSQL, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
@@ -5505,7 +5529,8 @@ final class BrainDatabase: @unchecked Sendable {
             "source_file": columnText(stmt, 11) as Any,
             "source_end_offset": sqlite3_column_type(stmt, 12) == SQLITE_NULL
                 ? NSNull()
-                : sqlite3_column_int64(stmt, 12)
+                : sqlite3_column_int64(stmt, 12),
+            "source_class": columnText(stmt, 13) as Any
         ]
 
         // Get surrounding chunks from same session using two separate queries
@@ -5513,7 +5538,7 @@ final class BrainDatabase: @unchecked Sendable {
         var afterContext: [[String: Any]] = []
 
         // Before chunks (reverse order, then flip)
-        let beforeSQL = "SELECT id, substr(content, 1, ?), content_type, \(senderSelect), importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?"
+        let beforeSQL = "SELECT id, substr(content, 1, ?), content_type, \(senderSelect), importance, created_at, summary, \(sourceClassSelect) FROM chunks WHERE conversation_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?"
         var beforeStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, beforeSQL, -1, &beforeStmt, nil) == SQLITE_OK {
             defer { sqlite3_finalize(beforeStmt) }
@@ -5530,14 +5555,15 @@ final class BrainDatabase: @unchecked Sendable {
                     "sender": columnText(beforeStmt, 3) as Any,
                     "importance": sqlite3_column_double(beforeStmt, 4),
                     "created_at": columnText(beforeStmt, 5) as Any,
-                    "summary": columnText(beforeStmt, 6) as Any
+                    "summary": columnText(beforeStmt, 6) as Any,
+                    "source_class": columnText(beforeStmt, 7) as Any
                 ])
             }
             beforeContext = beforeChunks.reversed()
         }
 
         // After chunks
-        let afterSQL = "SELECT id, substr(content, 1, ?), content_type, \(senderSelect), importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?"
+        let afterSQL = "SELECT id, substr(content, 1, ?), content_type, \(senderSelect), importance, created_at, summary, \(sourceClassSelect) FROM chunks WHERE conversation_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?"
         var afterStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, afterSQL, -1, &afterStmt, nil) == SQLITE_OK {
             defer { sqlite3_finalize(afterStmt) }
@@ -5553,7 +5579,8 @@ final class BrainDatabase: @unchecked Sendable {
                     "sender": columnText(afterStmt, 3) as Any,
                     "importance": sqlite3_column_double(afterStmt, 4),
                     "created_at": columnText(afterStmt, 5) as Any,
-                    "summary": columnText(afterStmt, 6) as Any
+                    "summary": columnText(afterStmt, 6) as Any,
+                    "source_class": columnText(afterStmt, 7) as Any
                 ])
             }
         }
@@ -5982,8 +6009,13 @@ final class BrainDatabase: @unchecked Sendable {
 
     func recallSession(sessionId: String, limit: Int = 20) throws -> [[String: Any]] {
         guard let db else { throw DBError.notOpen }
+        // Session recall shows hidden classes, as it always has for desktop rows; a thinking
+        // row is labelled by the formatter (SearchResult.isThinking).
+        let sourceClassSelect = try tableColumns(name: "chunks", on: db).contains("source_class")
+            ? "source_class"
+            : "NULL AS source_class"
         let sql = """
-            SELECT id, content, project, content_type, importance, created_at, summary, tags
+            SELECT id, content, project, content_type, importance, created_at, summary, tags, \(sourceClassSelect)
             FROM chunks WHERE conversation_id = ? ORDER BY rowid DESC LIMIT ?
         """
         var stmt: OpaquePointer?
@@ -6005,6 +6037,7 @@ final class BrainDatabase: @unchecked Sendable {
                 "created_at": columnText(stmt, 5) as Any,
                 "summary": columnText(stmt, 6) as Any,
                 "tags": columnText(stmt, 7) as Any,
+                "source_class": columnText(stmt, 8) as Any,
                 "score": 1.0  // session recall has no relevance scoring
             ])
         }

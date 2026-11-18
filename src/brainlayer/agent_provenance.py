@@ -17,25 +17,24 @@ from typing import Literal, cast
 from .agy_attribution import agy_conversation, read_conversation_agent
 from .content_class import normalize_content_class
 from .ingest_denylist import MEMORY_READER_ATTRIBUTIONS, is_denylisted, memory_reader_attribution
+from .source_visibility import (  # noqa: F401  (re-exported: the shared visibility list)
+    ALWAYS_HIDDEN_SOURCE_CLASSES,
+    DEFAULT_HIDDEN_SOURCE_CLASSES,
+    OPT_IN_HIDDEN_SOURCE_CLASSES,
+    hidden_source_class_sql,
+    hidden_source_classes,
+    is_hidden_source_class,
+)
+from .source_visibility import THINKING_SOURCE_CLASS as _THINKING_SOURCE_CLASS
 from .t3_provenance import T3_APP_SESSION, CompactCodexHeader, is_t3_app_initiated_codex_session
 
 SearchPolicy = Literal["KEEP", "ISOLATE", "OUT"]
 EffectiveVisibility = Literal["default", "operational", "cold"]
 SourceClass = Literal["cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination", "agent-thinking"]
 SOURCE_CLASSES = frozenset({"cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination", "agent-thinking"})
-# Agents' thinking (reasoning) blocks: stored, hidden from default search, opt-in only
-# (Etan, 2026-11-17, choice A) -- the same visibility the letter gives desktop apps.
-# The class a thinking chunk would otherwise carry is kept in its metadata.
-THINKING_SOURCE_CLASS: SourceClass = "agent-thinking"
-# The single search-visibility list: the unadvertised opt-in reveals these...
-OPT_IN_HIDDEN_SOURCE_CLASSES: tuple[SourceClass, ...] = ("desktop", THINKING_SOURCE_CLASS)
-# ...and never these.
-ALWAYS_HIDDEN_SOURCE_CLASSES: tuple[SourceClass, ...] = ("brain-worker",)
-DEFAULT_HIDDEN_SOURCE_CLASSES: tuple[SourceClass, ...] = OPT_IN_HIDDEN_SOURCE_CLASSES + ALWAYS_HIDDEN_SOURCE_CLASSES
-
-
-def hidden_source_classes(*, include_hidden_source_classes: bool = False) -> tuple[SourceClass, ...]:
-    return ALWAYS_HIDDEN_SOURCE_CLASSES if include_hidden_source_classes else DEFAULT_HIDDEN_SOURCE_CLASSES
+# Thinking chunks keep the class they would otherwise carry in metadata.thinking_source_class.
+# The visibility list lives in source_visibility (dependency-free, so the hooks can read it).
+THINKING_SOURCE_CLASS: SourceClass = cast(SourceClass, _THINKING_SOURCE_CLASS)
 
 
 ProvenanceClass = Literal[

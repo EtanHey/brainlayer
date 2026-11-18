@@ -27,7 +27,12 @@ from typing import Any
 
 import apsw
 
-from .agent_provenance import THINKING_SOURCE_CLASS, classify_provenance, effective_visibility
+from .agent_provenance import (
+    THINKING_SOURCE_CLASS,
+    classify_provenance,
+    effective_visibility,
+    is_hidden_source_class,
+)
 from .agy_attribution import STATE_FILE_NAME, AgyAttributionGate
 from .alarm import BrainLayerAlarm
 from .chunk_origin import detect_chunk_origin
@@ -374,7 +379,7 @@ def _content_class_for_visibility(base_content_class: str, visibility: str) -> s
     return "cold"
 
 
-def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, project, content_type):
+def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, project, content_type, *, hidden=None):
     """A reread of acknowledged archive bytes is not another sighting."""
     import sqlite3
     from contextlib import closing
@@ -391,6 +396,7 @@ def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, proje
                     created_at=created_at,
                     project=project,
                     content_type=content_type,
+                    hidden=hidden,
                 )[0]
                 is not None
             )
@@ -674,7 +680,13 @@ def create_flush_callback(
 
                 if entry.get("_archive_reconciliation") and preview_chunks is None:
                     if _archive_reconciliation_stored(
-                        db_path or get_db_path(), chunk_id, clean_content, created_at, project, chunk.content_type.value
+                        db_path or get_db_path(),
+                        chunk_id,
+                        clean_content,
+                        created_at,
+                        project,
+                        chunk.content_type.value,
+                        hidden=is_hidden_source_class(source_class),
                     ):
                         skipped += 1
                         continue
@@ -725,6 +737,7 @@ def create_flush_callback(
                                 created_at=created_at,
                                 project=project,
                                 content_type=chunk.content_type.value,
+                                hidden=is_hidden_source_class(source_class),
                             )
                             if duplicate is not None:
                                 merge_duplicate_chunk(
@@ -757,8 +770,8 @@ def create_flush_callback(
                                     "tags": tags,
                                     "created_at": created_at,
                                     "last_seen_at": created_at,
-                                    # A thinking write never relabels a row that already exists.
-                                    "source_class": None if is_thinking else source_class,
+                                    # merge_existing_chunk_seen never relabels an existing row as thinking.
+                                    "source_class": source_class,
                                 },
                             ):
                                 record_direct_liveness(chunk_id, ingested_at)

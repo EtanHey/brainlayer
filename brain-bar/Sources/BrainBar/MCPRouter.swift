@@ -841,6 +841,12 @@ final class MCPRouter: @unchecked Sendable {
         let tag = args["tag"] as? String
         let subscriberID = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String)
         let unreadOnly = args["unread_only"] as? Bool ?? false
+        // Unadvertised opt-in (Etan's letter: hidden classes are "opt-in only, and the opt-in
+        // switch stays unadvertised"): reveals agents' thinking and desktop rows, never
+        // brain-workers. Same name as the Python path's flag. Deliberately absent from the
+        // tool's inputSchema and description. Answered by BrainBar's own search, as
+        // agent_id/unread_only searches already are.
+        let includeHiddenSourceClasses = args["include_hidden_source_classes"] as? Bool ?? false
         let sourceCountsAsFilter: Bool
         if let source {
             let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -892,7 +898,8 @@ final class MCPRouter: @unchecked Sendable {
                 tag: tag,
                 importanceMin: importanceMin,
                 subscriberID: subscriberID,
-                unreadOnly: unreadOnly
+                unreadOnly: unreadOnly,
+                includeHiddenSourceClasses: includeHiddenSourceClasses
             )
             let typedResults = results.map(SearchResult.init(payload:))
             return (
@@ -910,7 +917,7 @@ final class MCPRouter: @unchecked Sendable {
         let textSection: String
         let metadata: [String: Any]
         let kgSection: String
-        if hybridSearchClient != nil, subscriberID == nil, !unreadOnly {
+        if hybridSearchClient != nil, subscriberID == nil, !unreadOnly, !includeHiddenSourceClasses {
             do {
                 let response = try hybridSearchWithinBudget(arguments: hybridSearchArguments(
                     query: query,
@@ -1566,9 +1573,16 @@ final class MCPRouter: @unchecked Sendable {
         let context = expanded["context"] as? [[String: Any]] ?? []
         var lines: [String] = []
         lines.append("\u{250c}\u{2500} brain_expand: \(chunkId)")
+        // Thinking rows are shown here, as desktop rows always were, but labelled so an agent
+        // never reads an agent's thinking as something it said.
+        func isThinking(_ row: [String: Any]) -> Bool {
+            (row["source_class"] as? String) == SearchResult.thinkingSourceClass
+        }
         let targetContent = (target["content"] as? String) ?? ""
         if !targetContent.isEmpty {
-            lines.append("\u{251c}\u{2500} Target")
+            lines.append(isThinking(target)
+                ? "\u{251c}\u{2500} Target (\(SearchResult.thinkingLabel))"
+                : "\u{251c}\u{2500} Target")
             lines.append("\u{2502} \(targetContent)")
         }
         if !context.isEmpty {
@@ -1576,7 +1590,8 @@ final class MCPRouter: @unchecked Sendable {
             for c in context {
                 let cid = c["chunk_id"] as? String ?? ""
                 let snippet = String(((c["content"] as? String) ?? "").prefix(80))
-                lines.append("\u{2502}  [\(cid)] \(snippet)")
+                let label = isThinking(c) ? "(\(SearchResult.thinkingLabel)) " : ""
+                lines.append("\u{2502}  [\(cid)] \(label)\(snippet)")
             }
         }
         lines.append("\u{2514}\u{2500}")
