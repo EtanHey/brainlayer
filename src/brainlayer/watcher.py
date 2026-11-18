@@ -44,6 +44,7 @@ except ImportError:  # pragma: no cover - unavailable on POSIX
     msvcrt = None  # type: ignore[assignment]
 
 from .alarm import BrainLayerAlarm, raise_alarm
+from .claude_paths import UUID_RE
 from .ingest_denylist import _match_parts as match_glob_parts
 from .ingest_denylist import is_denylisted, is_directory_denylisted
 from .zstd_stream import logical_jsonl_path
@@ -72,6 +73,11 @@ _MAX_HEALTH_QUARANTINE_DETAILS = 100
 _SOURCE_ANCHOR_BYTES = 256
 _SOURCE_HEAD_BYTES = 4096
 _MAX_PENDING_FINGERPRINTS = 4096
+# Records a tailer's skip_record predicate drops (a fork's copies of a held parent) do not count
+# toward max_lines, so one read keeps going through them -- up to this many per read, and never
+# past the byte window. 25,000 copied records clear the 63,085-record /side fork in 3 polls.
+_MAX_SKIPPED_RECORDS_PER_READ = 25_000
+_MAX_HEALTH_FORK_FILES = 100
 
 
 def _source_fingerprint(offset: int, head_digest: bytes, tail: bytes) -> str:
@@ -1322,6 +1328,10 @@ class JSONLTailer:
         self._fingerprints: dict[int, str] = {}
         self.observed_inode = self.get_inode()
         self.codex_turn_context: CodexTurnContext | None = None
+        # A record this returns True for is consumed (offset, anchor, fingerprint) but never
+        # emitted, and counts as a neutral source line. The watcher sets it per poll.
+        self.skip_record: Callable[[dict], bool] | None = None
+        self.skipped_records_total = 0
 
     def snapshot(self) -> tuple[int, bytes, bytes | None, Any, int]:
         """Capture everything a failed read must roll back, identity included."""
@@ -1411,49 +1421,77 @@ class JSONLTailer:
         if self.max_record_bytes is not None and self._partial_record_bytes() > self.max_record_bytes:
             return self.read_buffered_lines(max_lines=max_lines)
 
+        lines: list[dict] = []
+        skipped_at_start = self.skipped_records_total
         try:
             with self._open_window(max_bytes) as (f, remaining_bytes):
                 if f is None:
                     return []
-                complete_lines = self._buffer.count(b"\n")
-                current_record_bytes = self._partial_record_bytes()
-                combined = bytearray(self._buffer)
-                while remaining_bytes is None or remaining_bytes > 0:
-                    if max_lines is not None and complete_lines >= max_lines:
+                # One pass without a skip_record predicate, exactly as before. A pass that
+                # skipped records (fork copies) read fewer than max_lines emittable lines, so
+                # read on through the same open window, the same byte budget, until a pass
+                # skips nothing, max_lines are emitted, an error stops parsing, or the per-read
+                # skip budget is spent. Every pass parses what it buffered before the next reads.
+                while True:
+                    wanted = None if max_lines is None else max_lines - len(lines)
+                    remaining_bytes = self._fill_buffer(f, wanted, remaining_bytes)
+                    if not self._buffer:
                         break
-                    chunk_bytes = _WATCH_READ_CHUNK_BYTES
-                    if remaining_bytes is not None:
-                        chunk_bytes = min(chunk_bytes, remaining_bytes)
-                    if self.max_record_bytes is not None:
-                        record_capacity = self.max_record_bytes - current_record_bytes + 1
-                        if record_capacity <= 0:
-                            break
-                        chunk_bytes = min(chunk_bytes, record_capacity)
-                    new_data = f.read(chunk_bytes)
-                    if not new_data:
+                    skipped_before = self.skipped_records_total
+                    lines.extend(self.read_buffered_lines(max_lines=wanted))
+                    if (
+                        self.last_error is not None
+                        or self.skipped_records_total == skipped_before
+                        or (max_lines is not None and len(lines) >= max_lines)
+                        or self.skipped_records_total - skipped_at_start >= _MAX_SKIPPED_RECORDS_PER_READ
+                    ):
                         break
-                    combined.extend(new_data)
-                    if remaining_bytes is not None:
-                        remaining_bytes -= len(new_data)
-
-                    cursor = 0
-                    while True:
-                        newline_index = new_data.find(b"\n", cursor)
-                        if newline_index < 0:
-                            current_record_bytes += len(new_data) - cursor
-                            break
-                        current_record_bytes += newline_index - cursor
-                        complete_lines += 1
-                        current_record_bytes = 0
-                        cursor = newline_index + 1
-                self._buffer = bytes(combined)
         except OSError as error:
+            # Lines a previous pass already consumed must still reach the caller.
             self.last_error = error
-            return []
+            return lines
 
-        if b"\n" not in self._buffer and not self._buffer:
-            return []
-        return self.read_buffered_lines(max_lines=max_lines)
+        return lines
+
+    def _fill_buffer(self, f, max_lines: int | None, remaining_bytes: int | None) -> int | None:
+        """Read from `f` until the buffer holds `max_lines` complete records or a bound stops it.
+
+        Returns what is left of the byte window. The buffer changes only after every read
+        succeeded, so an OSError leaves it as it was.
+        """
+        complete_lines = self._buffer.count(b"\n")
+        current_record_bytes = self._partial_record_bytes()
+        combined = bytearray(self._buffer)
+        while remaining_bytes is None or remaining_bytes > 0:
+            if max_lines is not None and complete_lines >= max_lines:
+                break
+            chunk_bytes = _WATCH_READ_CHUNK_BYTES
+            if remaining_bytes is not None:
+                chunk_bytes = min(chunk_bytes, remaining_bytes)
+            if self.max_record_bytes is not None:
+                record_capacity = self.max_record_bytes - current_record_bytes + 1
+                if record_capacity <= 0:
+                    break
+                chunk_bytes = min(chunk_bytes, record_capacity)
+            new_data = f.read(chunk_bytes)
+            if not new_data:
+                break
+            combined.extend(new_data)
+            if remaining_bytes is not None:
+                remaining_bytes -= len(new_data)
+
+            cursor = 0
+            while True:
+                newline_index = new_data.find(b"\n", cursor)
+                if newline_index < 0:
+                    current_record_bytes += len(new_data) - cursor
+                    break
+                current_record_bytes += newline_index - cursor
+                complete_lines += 1
+                current_record_bytes = 0
+                cursor = newline_index + 1
+        self._buffer = bytes(combined)
+        return remaining_bytes
 
     def _verify_anchor(self, f) -> None:
         """Restart from 0 when the bytes we already consumed are no longer at our offset (#732).
@@ -1577,9 +1615,14 @@ class JSONLTailer:
                 from .t3_provenance import compact_codex_header
 
                 self.first_record = compact_codex_header(parsed, nl_idx + 1)
-            self._count_source_line(starting_offset + nl_idx + 1)
+            skipped = isinstance(parsed, dict) and self.skip_record is not None and self.skip_record(parsed)
+            # A skipped record is neutral: it is neither unrecognised growth nor indexable input.
+            self._count_source_line(starting_offset + nl_idx + 1, neutral=skipped)
             line_end_offset = starting_offset + nl_idx + 1
             consumed_bytes = nl_idx + 1
+            if skipped:
+                self.skipped_records_total += 1
+                continue
             if isinstance(parsed, dict):
                 parsed["_line_end_offset"] = line_end_offset
                 parsed["_ingest_observed_at"] = time.time()
@@ -1927,6 +1970,11 @@ class JSONLWatcher:
         # a path leaves the set when discovery sees it again (#732).
         self._vanished_sources: set[str] = set()
         self._vanished_source_count_total = 0
+        # Claude Code fork copies (entries carrying forkedFrom) skipped because BrainLayer
+        # already holds the parent session. Parent verdicts are cached for one poll only.
+        self._fork_parent_held: dict[str, bool] = {}
+        self._fork_copies_skipped_total = 0
+        self._fork_copy_files: dict[str, dict[str, Any]] = {}
         self.log_destinations = {"stdout": describe_stream_destination(1), "stderr": describe_stream_destination(2)}
         self._stop = threading.Event()
         self._last_registry_flush = time.monotonic()
@@ -2354,6 +2402,136 @@ class JSONLWatcher:
                 entry["_author_model_source"] = line.get("_author_model_source")
             normalized.append(entry)
         return normalized
+
+    def _parent_session_held(self, session_id: str) -> bool:
+        """Whether the WATCHER already wrote rows for `session_id`; cached for the current poll.
+
+        Only watcher rows count (source='realtime_watcher', or a recorded source_end_offset):
+        the Stop hook writes a source='realtime' row for every session at every Stop, before
+        the watcher has read a line of it, so any-row would vouch for a transcript never indexed.
+        Read-only and fail-closed: no DB path, a missing table or column, a locked or unreadable
+        DB all answer False, so the fork's copies are ingested as before. Never skip on a guess.
+        """
+        cached = self._fork_parent_held.get(session_id)
+        if cached is not None:
+            return cached
+        held = False
+        if self.db_path is not None:
+            try:
+                conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=1)
+                try:
+                    held = (
+                        conn.execute(
+                            "SELECT 1 FROM chunks WHERE conversation_id = ?"
+                            " AND (source = 'realtime_watcher' OR source_end_offset IS NOT NULL) LIMIT 1",
+                            (session_id,),
+                        ).fetchone()
+                        is not None
+                    )
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                logger.debug("Fork parent lookup failed for %s; ingesting its copies", session_id, exc_info=True)
+                held = False
+        self._fork_parent_held[session_id] = held
+        return held
+
+    def _parent_transcript_intact(self, parent_path: str) -> bool:
+        """Whether the parent file on disk is still the one the registry has been reading.
+
+        A parent rewritten, truncated or deleted before the watcher finished it no longer
+        holds the turns its fork copied, so skipping those copies would lose them (red-team
+        1828 R1; CodeRabbit r4617993065). Skip only when the parent is FULLY READ: its
+        confirmed offset equals its current size, so every turn the fork copied is already
+        indexed and a later loss of the parent takes nothing away. A partly read parent
+        (behind, or a live one with new bytes) ingests the copies as before, and content
+        dedupe merges them. Also refuse when a rewind generation was ever recorded for it
+        (mark_rewind) or when the registry has no inode for it or a different one than this
+        poll's stat (never registered, or replaced).
+        """
+        stats = self._current_file_stats.get(parent_path)
+        if stats is None:
+            return False
+        confirmed_offset, registry_inode = self.registry.get(parent_path)
+        return (
+            self.registry.generation(parent_path) == 0
+            and registry_inode != 0
+            and registry_inode == stats[2]
+            # Fully read: the copies then add nothing a later parent loss could take away.
+            and confirmed_offset == stats[1]
+        )
+
+    def _fork_copy_skipper(self, filepath: str) -> Callable[[dict], bool] | None:
+        """The skip_record predicate for a Claude transcript: drop copies of a held parent.
+
+        Claude Code writes a fork (/side, a resumed fork) as the parent's entries copied under
+        the new sessionId, each stamped forkedFrom={sessionId: <immediate parent>, messageUuid},
+        followed by the fork's own entries without it. The copies are the parent's content,
+        already in BrainLayer under the parent's conversation_id when the parent was indexed;
+        reading them again only feeds content dedupe. A copy is skipped only when ALL hold:
+        the parent transcript <fork dir>/<parent>.jsonl was discovered this poll and is not
+        denylisted; it is still the file the registry has been reading AND the watcher has
+        confirmed it to its current size (_parent_transcript_intact); and the watcher has
+        written rows for the parent. Otherwise the copies ingest as before, so a fork that is
+        the only remaining copy -- parent file gone, elsewhere, excluded, rewritten, or not yet
+        fully read -- is never lost.
+        """
+        if self.provider_for_file(filepath) != "claude" or self.db_path is None:
+            return None
+        file_stem = Path(filepath).stem
+        fork_dir = Path(filepath).parent
+
+        def skip(entry: dict) -> bool:
+            forked_from = entry.get("forkedFrom")
+            if not isinstance(forked_from, dict):
+                return False
+            parent = forked_from.get("sessionId")
+            if not isinstance(parent, str) or not UUID_RE.match(parent):
+                return False
+            # A record naming its own session as its parent is not a copy of another one.
+            if parent in (entry.get("sessionId"), file_stem):
+                return False
+            # Discovery stat'd every live file this poll: membership is the per-poll stat.
+            parent_path = str(fork_dir / f"{parent}.jsonl")
+            if parent_path not in self._current_file_stats or self._denylisted(parent_path):
+                return False
+            if not self._parent_transcript_intact(parent_path):
+                return False
+            if not self._parent_session_held(parent):
+                return False
+            self._fork_copies_skipped_total += 1
+            progress = self._fork_copy_files.setdefault(filepath, {"skipped": 0})
+            progress["parent_session_id"] = parent
+            progress["parent_path"] = parent_path
+            progress["skipped"] += 1
+            return True
+
+        return skip
+
+    def _fork_copy_health(self, files: list[str]) -> list[dict[str, Any]]:
+        live = set(files)
+        for filepath in [path for path in self._fork_copy_files if path not in live]:
+            self._fork_copy_files.pop(filepath, None)
+        rows = []
+        for filepath, progress in sorted(self._fork_copy_files.items()):
+            tailer = self._tailers.get(filepath)
+            stats = self._current_file_stats.get(filepath)
+            parent_path = progress.get("parent_path")
+            parent_stats = self._current_file_stats.get(parent_path) if parent_path else None
+            rows.append(
+                {
+                    "path": filepath,
+                    "parent_session_id": progress.get("parent_session_id"),
+                    "copies_skipped": progress.get("skipped", 0),
+                    "offset": tailer.offset if tailer else self.registry.get(filepath)[0],
+                    "size": stats[1] if stats else None,
+                    # The skip relies on the watcher reading the parent in full: show how far it is.
+                    "parent_path": parent_path,
+                    "parent_confirmed_offset": self.registry.get(parent_path)[0] if parent_path else None,
+                    "parent_size": parent_stats[1] if parent_stats else None,
+                }
+            )
+        return rows[:_MAX_HEALTH_FORK_FILES]
 
     def _annotate_codex_author_context(
         self,
@@ -2845,6 +3023,8 @@ class JSONLWatcher:
             "quarantined_record_count_total": self._quarantined_record_count_total,
             "quarantined_records": list(self._quarantined_records),
             "vanished_source_count_total": self._vanished_source_count_total,
+            "fork_copies_skipped_total": self._fork_copies_skipped_total,
+            "fork_copy_files": self._fork_copy_health(files),
             **({"held_archives": self.archive_status()["represented_cold"]} if self._zst_enabled else {}),
             "log_destinations": self.log_destinations,
             **watchdog,
@@ -3075,6 +3255,7 @@ class JSONLWatcher:
         files: list[str] = []
         self._growth_poll = {}
         self._growth_activity = {}
+        self._fork_parent_held = {}
         self.poll_count += 1
         self.last_poll_made_progress = False
 
@@ -3202,6 +3383,8 @@ class JSONLWatcher:
                     first_ingest = tailer is None and self.registry.get(filepath)[0] == 0
                     if not drain_buffer:
                         tailer = self._ensure_tailer(filepath)
+                    if not compressed:
+                        tailer.skip_record = self._fork_copy_skipper(filepath)
                     lines_before = getattr(tailer, "lines_read_total", 0)
                     neutral_before = getattr(tailer, "neutral_lines_total", 0)
                     eligible_before = getattr(tailer, "growth_lines_total", 0)
