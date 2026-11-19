@@ -763,6 +763,15 @@ struct NDButtonStyle: ButtonStyle {
         NDButtonBody(configuration: configuration, filled: filled, small: small, compact: compact)
     }
 
+    /// R1.13.1: the area a click lands on is the button's whole rectangle, whose path has a vertex only at its four
+    /// corners. The drawn shape's path (a continuous rounded rectangle) starts and closes at (width, height / 2), a vertex
+    /// exactly on the button's centre line: the M1 capture's click there, on the window row's Reconnect laid out on whole
+    /// points, was not taken, while 0.5 pt above or below was. The corners it adds are 6 pt rounds the pointer reads as the
+    /// button anyway.
+    struct HitShape: Shape {
+        func path(in rect: CGRect) -> Path { Path(rect) }
+    }
+
     private struct NDButtonBody: View {
         let configuration: Configuration
         let filled: Bool
@@ -792,7 +801,7 @@ struct NDButtonStyle: ButtonStyle {
                         RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(hovering ? ND.t3 : ND.hair2, lineWidth: 0.5)
                     }
                 }
-                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(HitShape())
                 .onHover { hovering = $0 }
         }
     }

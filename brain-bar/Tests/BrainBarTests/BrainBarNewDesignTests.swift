@@ -1901,8 +1901,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 guard let action = item.action, let station = item.station else { continue }
                 let panel = NDStationPopover.model(station, item: r1.stationItems[station], store.inputs, store.model, r1.pipeline)
                 XCTAssertEqual(panel.action, action, "\(name.rawValue): \(item.title)'s action is in its panel")
-                XCTAssertTrue(menu.items.contains { ($0.representedObject as? BrainBarMenuAction) == .row(action.kind) && $0.isEnabled },
-                              "\(name.rawValue): and in the dropdown")
+                // R1.13.1: while a sign-in waits, the dropdown's item reads the waiting words and offers no Reconnect.
+                let offered = menu.items.contains { ($0.representedObject as? BrainBarMenuAction) == .row(action.kind) && $0.isEnabled }
+                XCTAssertEqual(offered, !NDDriveWaiting.shows(store.inputs, for: action), "\(name.rawValue): and in the dropdown")
             }
         }
         // The chart's own view code lays out stations and hover regions, never a button.
@@ -2238,8 +2239,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             let reachable = menu.items.filter { $0.isEnabled && $0.action != nil && $0.target != nil }
             for item in store.r1.items {
                 guard let action = item.action, store.r1.showsProblemRows else { continue }
-                XCTAssertTrue(reachable.contains { ($0.representedObject as? BrainBarMenuAction) == .row(action.kind) },
-                              "\(name.rawValue): \(action.label) is a keyboard-reachable menu item")
+                // R1.13.1: a Reconnect that is already waiting is not offered again (its item reads the waiting words).
+                XCTAssertEqual(reachable.contains { ($0.representedObject as? BrainBarMenuAction) == .row(action.kind) },
+                               !NDDriveWaiting.shows(store.inputs, for: action),
+                               "\(name.rawValue): \(action.label) is a keyboard-reachable menu item")
             }
         }
         let two = NDStore(fixture: Fixture.inputs(.twoFaults), page: .overview)
@@ -2983,8 +2986,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 guard let action = row.action, let station = row.station else { continue }
                 let panel = NDStationPopover.model(station, item: r1.stationItems[station], store.inputs, store.model, r1.pipeline)
                 XCTAssertEqual(panel.action, action, "\(name.rawValue): \(row.words): the panel's action")
-                XCTAssertTrue(menu.items.contains { ($0.representedObject as? BrainBarMenuAction) == .row(action.kind) },
-                              "\(name.rawValue): \(row.words): the dropdown's action")
+                // R1.13.1: while a sign-in waits, the dropdown's item reads the waiting words instead.
+                XCTAssertEqual(menu.items.contains { ($0.representedObject as? BrainBarMenuAction) == .row(action.kind) },
+                               !NDDriveWaiting.shows(store.inputs, for: action), "\(name.rawValue): \(row.words): the dropdown's action")
             }
             if !r1.problemRows.isEmpty {
                 let host = NSHostingView(rootView: NDProblemRows(store: store, rows: r1.problemRows).frame(width: card))
@@ -3242,8 +3246,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertTrue(menu.items.filter { $0.view == nil && $0.title.isEmpty }.allSatisfy(\.isSeparatorItem), "system separators")
     }
 
-    /// R1.12 (5a): the agents' panel opens above the column, from the chart's left edge, its notch down at the agents:
-    /// inside the window, over no station's words, the keyboard-opened panel (same layout, clamped to the screen) too.
+    /// R1.12 (5a): the agents' panel opens above the column, its notch down at the agents: inside the window, over no
+    /// station's words, the keyboard-opened panel (same layout, clamped to the screen) too. R1.13.1: it starts right of the
+    /// "Pipeline" heading, so it covers no heading (the notch stays on the column, under the body's straight edge).
     func testR17AgentsPanelOpensRightOfTheColumn() {
         let L = NDPipelineLayout.self
         for name in Fixture.Name.allCases {
@@ -3251,8 +3256,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
             let panel = chart.panel(.agents, content: AnyView(NDStationPopover(store: store, station: .agents)))
             XCTAssertEqual(panel.edge, .top, name.rawValue)
-            XCTAssertEqual(panel.tip.x, L.agentsFrame.midX, accuracy: 0.5, "\(name.rawValue): the notch at the column")
-            XCTAssertEqual(panel.body.minX, 0, accuracy: 0.5, "\(name.rawValue): from the chart's left edge")
+            XCTAssertTrue((L.agentsFrame.minX...L.agentsFrame.maxX).contains(panel.tip.x), "\(name.rawValue): the notch at the column")
+            XCTAssertGreaterThanOrEqual(panel.tip.x - panel.body.minX, L.arrowInset - 0.01, "\(name.rawValue): under the straight edge")
+            XCTAssertFalse(panel.outer.intersects(L.pipelineHeading), "\(name.rawValue): over the Pipeline heading \(panel.outer)")
+            XCTAssertEqual(panel.body.minX, L.agentsPanelMinX, accuracy: 0.5, "\(name.rawValue): right of the heading")
             XCTAssertLessThan(panel.body.maxY, L.agentsFrame.minY, "\(name.rawValue): above the column")
             XCTAssertGreaterThanOrEqual(panel.outer.minX, L.windowInside.minX, "\(name.rawValue): inside the window")
             for station in NDStation.allCases {

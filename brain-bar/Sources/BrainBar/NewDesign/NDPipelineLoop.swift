@@ -278,7 +278,7 @@ enum NDPipelineLayout {
     /// `slide` moves the body along its edge from centred on the arrow (the designer's x, relative to the station).
     static func panelSide(_ s: NDStation, hasAction: Bool) -> (edge: Edge, width: CGFloat, slide: CGFloat) {
         switch s {
-        case .agents: (.top, 300, 300 / 2 - agentsFrame.midX)  // 5a: from the chart's left edge, notch down at the agents
+        case .agents: (.top, 300, 0)  // 5a: right of the "Pipeline" heading (agentsPanelMinX), notch down at the agents
         case .read: (.top, 300, 10)  // 5b: 140 left of the station, 160 right
         case .memory: (.top, 300, 0)  // 5c
         case .mac: (.top, 320, 0)  // 5d
@@ -292,6 +292,9 @@ enum NDPipelineLayout {
         case .search: (.top, 264, searchPanelMinX + 132 - point(.search).x)
         }
     }
+
+    /// R1.13.1: the agents' panel's left edge, 2 pt right of the "Pipeline" heading's words, so it covers no heading.
+    static var agentsPanelMinX: CGFloat { pipelineHeading.maxX + 2 }
 
     /// 5i, as built: the Search panel's left edge, clear of the weekly clean's widest words ("failed 2 weeks").
     static var searchPanelMinX: CGFloat { point(.weekly).x + 52 }
@@ -331,8 +334,12 @@ enum NDPipelineLayout {
         switch side.edge {
         case .top where s == .agents:
             // 5a: the notch points down at the agents' column's top edge; the body covers the rail line above it (a pipe).
-            tip = CGPoint(x: own.midX, y: own.minY)
-            body = CGRect(x: tip.x - w / 2 + side.slide, y: tip.y - a - height, width: w, height: height)
+            // R1.13.1: the body starts 2 pt right of the "Pipeline" heading (from the chart's left edge it covered the
+            // heading's left), and the notch moves right along the column's top edge to stay under the body's straight
+            // edge, still on the column.
+            let minX = agentsPanelMinX
+            tip = CGPoint(x: min(max(own.midX, minX + arrowInset), own.maxX), y: own.minY)
+            body = CGRect(x: minX, y: tip.y - a - height, width: w, height: height)
         case .top:
             tip = CGPoint(x: own.midX, y: anchor.minY)
             body = CGRect(x: tip.x - w / 2 + side.slide, y: tip.y - a - height, width: w, height: height)

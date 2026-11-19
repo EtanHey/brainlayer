@@ -126,16 +126,35 @@ extension EnvironmentValues {
 }
 
 /// R1.5 change 3: Copy report, which shows a tick and "Copied" for 1.5 s after a click, at the same size, with a 120 ms
-/// cross-fade of its label and no other motion.
+/// change of its label and no other motion.
+/// R1.13.1: the change is two halves, never a cross-fade: the old face fades out (60 ms), the face swaps with no
+/// animation, the new face fades in (60 ms), so no frame shows both labels (the M1 capture caught one that did). Under
+/// Reduce Motion the face swaps at once.
 struct NDCopyReportButton: View {
     typealias Say = BrainBarMenuPresenter.SurfaceSay
     let label: String
     let spoken: String
     let action: () -> Void
     @State private var copied = false
+    @State private var faceOpacity: Double = 1
     @Environment(\.ndPreviewCopied) private var previewCopied
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     static let copiedFor: Duration = .milliseconds(1500)
-    static let fade = Animation.easeInOut(duration: 0.12)
+    static let half = Animation.easeInOut(duration: 0.06)
+
+    /// The steps of one change of face: fade out, swap, fade in; or the swap alone under Reduce Motion.
+    enum Step: Equatable { case fadeOut, swap, fadeIn }
+    static func steps(reduceMotion: Bool) -> [Step] { reduceMotion ? [.swap] : [.fadeOut, .swap, .fadeIn] }
+
+    private func show(copied value: Bool) {
+        guard !reduceMotion else { copied = value; return }
+        withAnimation(Self.half) { faceOpacity = 0 } completion: {
+            var swap = Transaction()
+            swap.disablesAnimations = true
+            withTransaction(swap) { copied = value }
+            withAnimation(Self.half) { faceOpacity = 1 }
+        }
+    }
 
     /// What the button reads: its label at rest, "Copied" with a tick for 1.5 s after a click.
     static func face(copied: Bool, label: String) -> (text: String, tick: Bool) {
@@ -146,10 +165,10 @@ struct NDCopyReportButton: View {
         let face = Self.face(copied: copied || previewCopied, label: label)
         Button {
             action()
-            withAnimation(Self.fade) { copied = true }
+            show(copied: true)
             Task { @MainActor in
                 try? await Task.sleep(for: Self.copiedFor)
-                withAnimation(Self.fade) { copied = false }
+                show(copied: false)
             }
         } label: {
             ZStack {
@@ -161,6 +180,7 @@ struct NDCopyReportButton: View {
                     if face.tick { Image(systemName: "checkmark").font(.system(size: 12, weight: .semibold)) }
                     Text(face.text)
                 }
+                .opacity(faceOpacity)
             }
         }
         .buttonStyle(NDButtonStyle(small: true))

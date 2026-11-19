@@ -48,7 +48,11 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
             let row = hosted(NDMenuFaultBlock(store: store, item: item, filled: index == filled, state: state) { [weak self] kind in
                 self?.perform(.row(kind))
             }, label: [item.title, item.detail].compactMap { $0 }.joined(separator: ". "), state: state)
-            if let action = item.action {
+            if let action = item.action, NDDriveWaiting.shows(store.inputs, for: action) {
+                // R1.13.1: while a sign-in started anywhere waits, the item offers no Reconnect to type-select, Return or
+                // VoiceOver either: it reads the waiting words its view draws.
+                row.title = Say.waitingForBrowser
+            } else if let action = item.action {
                 row.title = action.label  // type-select and VoiceOver reach the action; the view draws the block
                 row.target = self
                 row.action = #selector(performItem)
