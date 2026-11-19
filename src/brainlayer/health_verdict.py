@@ -235,6 +235,9 @@ class _Raw:
     evidence: bool = True  # False: nothing new was observed, so this tick cannot show recovery
     graced: bool = False  # the state is milder than the real age only because the monitor was not running
     typed: dict[str, Any] = field(default_factory=dict)  # display-only fields; never read by the policy
+    # The amber is measured progress (the watcher's catching_up: a lag at a new low over its
+    # window, with an ETA under its ceiling). Only such an amber may step a red check down.
+    progress: bool = False
 
 
 def _age_state(age: float, amber: float, red: float) -> str:
@@ -383,6 +386,21 @@ class _Stall:
     state: str | None
     note: str
     keep: dict[str, Any]
+    progress: bool = False  # the amber is the watcher's measured catch-up (see _Raw.progress)
+
+
+CATCHING_UP_PREFIX = "catching_up:"  # health_facts.catching_up_code: catching_up:<bytes>:<eta s>
+
+
+def _catching_up_note(code: str) -> str:
+    """'watcher catching up: 107.0 MB behind, about 12 min left' from a catching_up code."""
+    _, behind, eta = (code.split(":") + ["?", "?"])[:3]
+    parts = []
+    if behind.isdigit():
+        parts.append(f"{int(behind) / 1_000_000:.1f} MB behind")
+    if eta.isdigit():
+        parts.append(f"about {max(1, round(int(eta) / 60))} min left")
+    return "watcher catching up" + (": " + ", ".join(parts) if parts else "")
 
 
 def _ingest_stall(facts: Facts, before: Mapping[str, Any], watcher: datetime | None, t: Thresholds) -> _Stall:
@@ -399,13 +417,20 @@ def _ingest_stall(facts: Facts, before: Mapping[str, Any], watcher: datetime | N
     blind = int(before.get("stall_blind_ticks") or 0)
     codes = facts.watcher_stall_codes
     read = watcher is not None and isinstance(codes, tuple)
+    # catching_up is the watcher's measured progress (a lag at a new low over its window, ETA
+    # under its ceiling). A snapshot carrying only it HOLDS the count: it neither adds nor resets
+    # (#1827 round 1: a reset let a lag that flickered to catching_up stay amber forever). It
+    # reads amber, and may step a red check down (progress); the next stall snapshot continues
+    # the held count, so a stall after a catch-up is red again at once if it was red before.
+    catching_up = [c for c in codes if c.startswith(CATCHING_UP_PREFIX)] if read else []
     if read:
+        codes = tuple(c for c in codes if not c.startswith(CATCHING_UP_PREFIX))
         blind = 0
         if facts.stores_paused:
             codes = tuple(c for c in codes if c != "coverage_drop")  # the paused drain writes nothing
         snapshot = [watcher.astimezone(UTC).isoformat(), facts.watcher_poll_count]
         if seen != snapshot:
-            ticks, seen = (ticks + 1 if codes else 0), snapshot
+            ticks, seen = (ticks + 1 if codes else ticks if catching_up else 0), snapshot
     elif not isinstance(codes, tuple):
         blind += 1
     keep: dict[str, Any] = {}
@@ -413,6 +438,9 @@ def _ingest_stall(facts: Facts, before: Mapping[str, Any], watcher: datetime | N
         keep.update(alert_ticks=ticks, alert_seen=seen)
     if blind:
         keep["stall_blind_ticks"] = blind
+    if catching_up and not codes:
+        held = f" ({ticks} stall checks held)" if ticks else ""
+        return _Stall(read, AMBER, _catching_up_note(catching_up[0]) + held, keep, progress=True)
     if ticks:
         what = ", ".join(codes) if read and codes else "a stall"
         state = RED if ticks >= t.ingest_alert_red_ticks else AMBER
@@ -502,6 +530,9 @@ def _raw_checks(
             if _RANK[stall.state] > _RANK[r.state]:
                 r.state, r.amber_s = stall.state, None
             r.note = "; ".join(x for x in (r.note, stall.note) if x)
+            # Measured progress only when the catch-up amber IS the state (a stale heartbeat's
+            # own red or amber is not progress).
+            r.progress = stall.progress and r.state == AMBER and stall.state == AMBER
         if facts.ingest_paused and r.state == RED:
             r.state, r.note = AMBER, r.note + " (watcher paused by maintenance)"
     r.keep.update(stall.keep)
@@ -683,7 +714,9 @@ def evaluate(facts: Facts, prior: Mapping[str, Any] | None = None, thresholds: T
                 # Nothing new was observed (or the age only looks fresh because the monitor was
                 # not running): a known amber or red holds, and this is not a good tick.
                 state, note = prior_state, f"{note}; {prior_state} holds until positive evidence".lstrip("; ")
-            elif name in _HYSTERESIS and prior_state == RED and state == AMBER:
+            elif name in _HYSTERESIS and prior_state == RED and state == AMBER and not r.progress:
+                # A measured catch-up (r.progress) steps red down to amber: positive evidence that
+                # ingest is moving, with an ETA (lead decision on Etan's 18 Nov words, #1827 r1).
                 state, note = RED, f"{note}; red holds until consecutive observed good checks"
             elif name in _HYSTERESIS and state == GREEN and prior_state in (AMBER, RED):
                 good_ticks += 1
