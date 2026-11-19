@@ -268,7 +268,7 @@ struct NDMenuFaultBlock: View {
             if let action = item.action {
                 NDWaitingSwap(waiting: NDDriveWaiting.shows(store.inputs, for: action), alignment: .leading) {
                     NDButton(label: action.label, filled: filled, small: true, takesFocus: false) { perform(action.kind) }
-                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .ndDecoration(RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 3).padding(-3)
                             .opacity(state.keyboard ? 1 : 0))
                 } line: {

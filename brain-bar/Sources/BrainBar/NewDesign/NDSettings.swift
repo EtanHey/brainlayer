@@ -111,7 +111,7 @@ struct NDSettingsView: View {
                     }
                 }
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(ND.raised))
-                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(ND.hair2, lineWidth: 0.5))
+                .ndDecoration(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(ND.hair2, lineWidth: 0.5))
                 Text(Say.classicCaption).font(NDType.caption).foregroundStyle(ND.t3)
                     .padding(.horizontal, 12).padding(.top, 8)
             }

@@ -446,12 +446,12 @@ struct NDStationButton: View {
         .focusable(interactions: .activate)
         .focused($focused)
         .focusEffectDisabled()
-        .overlay {
+        .ndDecoration(Group {
             if focused {
                 NDStationHitShape(circle: shape.circle.insetBy(dx: -4.5, dy: -4.5), label: nil, round: shape.label != nil)
                     .stroke(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 3)
             }
-        }
+        })
         .onKeyPress(keys: [.return, .space, .escape]) { press in
             Self.handle(press.key, station: station, presenter: presenter) { open(pinned: true, focusAction: true) } ? .handled : .ignored
         }
