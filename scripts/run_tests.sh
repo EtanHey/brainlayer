@@ -285,9 +285,23 @@ map_changed_files_to_pytests() {
           fi
         done
         ;;
+      src/brainlayer/health_verdict.py|src/brainlayer/health_facts.py)
+        # The ingest verdict is also pinned by the stall-alert and catch-up suites; a verdict-only
+        # change must run them, not just test_<module>.py.
+        # Mapped only when BOTH ingest suites exist (a renamed suite falls back to the full run).
+        if [ -f "$TEST_ROOT/test_ingest_stall_alerts.py" ] && [ -f "$TEST_ROOT/test_watcher_catch_up.py" ]; then
+          test_path="$TEST_ROOT/test_$(basename "$changed" .py).py"
+          if [ -f "$test_path" ]; then
+            append_unique "$test_path"
+          fi
+          append_unique "$TEST_ROOT/test_ingest_stall_alerts.py"
+          append_unique "$TEST_ROOT/test_watcher_catch_up.py"
+          mapped=1
+        fi
+        ;;
       src/brainlayer/watcher.py|src/brainlayer/watcher_bridge.py)
         if [ "$changed" = "src/brainlayer/watcher.py" ]; then
-          zst_tests=(test_jsonl_watcher.py test_codex_realtime_author_model.py test_codex_zst_author_model.py test_codex_zst_quarantine_context.py test_codex_zst_watcher.py test_codex_zst_admission_guards.py test_codex_zst_prefix.py test_codex_zst_checkpoint_guards.py test_codex_zst_legacy_replay.py test_codex_zst_restart.py test_codex_zst_resume_registry.py test_codex_zst_lifecycle.py test_codex_zst_conversations.py test_codex_zst_header_retention.py test_codex_zst_acceptance.py test_retirement_ratchet.py)
+          zst_tests=(test_jsonl_watcher.py test_codex_realtime_author_model.py test_codex_zst_author_model.py test_codex_zst_quarantine_context.py test_codex_zst_watcher.py test_codex_zst_admission_guards.py test_codex_zst_prefix.py test_codex_zst_checkpoint_guards.py test_codex_zst_legacy_replay.py test_codex_zst_restart.py test_codex_zst_resume_registry.py test_codex_zst_lifecycle.py test_codex_zst_conversations.py test_codex_zst_header_retention.py test_codex_zst_acceptance.py test_retirement_ratchet.py test_watcher.py test_watcher_catch_up.py test_ingest_growth_review.py)
         else
           zst_tests=(test_watcher_bridge.py test_codex_realtime_author_model.py test_codex_zst_author_model.py test_codex_zst_quarantine_context.py test_codex_zst_reconcile_failure.py test_codex_zst_conversations.py test_codex_zst_manifest.py test_codex_zst_provenance.py test_codex_zst_acceptance.py)
         fi

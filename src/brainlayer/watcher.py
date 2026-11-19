@@ -44,6 +44,7 @@ except ImportError:  # pragma: no cover - unavailable on POSIX
     msvcrt = None  # type: ignore[assignment]
 
 from .alarm import BrainLayerAlarm, raise_alarm
+from .claude_paths import UUID_RE
 from .ingest_denylist import _match_parts as match_glob_parts
 from .ingest_denylist import is_denylisted, is_directory_denylisted
 from .zstd_stream import logical_jsonl_path
@@ -55,6 +56,13 @@ _DEFAULT_WATCH_MAX_FILE_BYTES = 100 * 1024 * 1024
 _WATCH_MAX_RECORD_BYTES_ENV = "BRAINLAYER_WATCH_MAX_RECORD_BYTES"
 _DEFAULT_WATCH_MAX_RECORD_BYTES = 128 * 1024 * 1024
 _WATCH_READ_CHUNK_BYTES = 64 * 1024
+# Per-poll wall-clock budget for catch-up rounds: after every discovered file has had its normal
+# turn, files still behind their size keep reading, round-robin, until they catch up or this is
+# spent. One 146 MB resumed transcript otherwise drained at max_lines_per_file per 30 s poll,
+# about 7 hours (2026-11-18, M4). 0 disables catch-up. A third of the 30 s poll floor, so the
+# loop still sleeps most of each cycle and the discovery walk the floor protects is never re-run.
+_WATCH_CATCHUP_BUDGET_ENV = "BRAINLAYER_WATCH_CATCHUP_BUDGET_S"
+_DEFAULT_WATCH_CATCHUP_BUDGET_S = 10.0
 _MAX_HEALTH_FAILURE_DETAILS = 100
 _MAX_HEALTH_QUARANTINE_DETAILS = 100
 # A tailer's evidence that a path under the same inode (renamed back, or a new file handed a
@@ -65,6 +73,11 @@ _MAX_HEALTH_QUARANTINE_DETAILS = 100
 _SOURCE_ANCHOR_BYTES = 256
 _SOURCE_HEAD_BYTES = 4096
 _MAX_PENDING_FINGERPRINTS = 4096
+# Records a tailer's skip_record predicate drops (a fork's copies of a held parent) do not count
+# toward max_lines, so one read keeps going through them -- up to this many per read, and never
+# past the byte window. 25,000 copied records clear the 63,085-record /side fork in 3 polls.
+_MAX_SKIPPED_RECORDS_PER_READ = 25_000
+_MAX_HEALTH_FORK_FILES = 100
 
 
 def _source_fingerprint(offset: int, head_digest: bytes, tail: bytes) -> str:
@@ -197,6 +210,26 @@ def _watch_read_window_bytes() -> int:
             _DEFAULT_WATCH_MAX_FILE_BYTES,
         )
         return _DEFAULT_WATCH_MAX_FILE_BYTES
+    return parsed_value
+
+
+def _watch_catch_up_budget_s() -> float:
+    """Load the per-poll catch-up budget; a bad value falls back to the default, loudly."""
+    raw_value = os.environ.get(_WATCH_CATCHUP_BUDGET_ENV, str(_DEFAULT_WATCH_CATCHUP_BUDGET_S))
+    try:
+        parsed_value = float(raw_value)
+    except ValueError:
+        parsed_value = math.nan
+    # isfinite first: nan and inf survive `< 0`, and an infinite budget would let one file
+    # hold the poll loop for as long as it keeps growing.
+    if not math.isfinite(parsed_value) or parsed_value < 0:
+        logger.warning(
+            "Invalid %s=%r; using default %s",
+            _WATCH_CATCHUP_BUDGET_ENV,
+            raw_value,
+            _DEFAULT_WATCH_CATCHUP_BUDGET_S,
+        )
+        return _DEFAULT_WATCH_CATCHUP_BUDGET_S
     return parsed_value
 
 
@@ -667,6 +700,9 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
 ROOT_EXPECTED_FOR_S = 14 * 24 * 3600.0  # a vanished root alarms only if it was active this recently
 
 
+CATCH_UP_NONE, CATCH_UP_BEHIND, CATCH_UP_CATCHING_UP, CATCH_UP_STALLED = "none", "behind", "catching_up", "stalled"
+
+
 class CoverageWatchdog:
     def __init__(
         self,
@@ -674,14 +710,73 @@ class CoverageWatchdog:
         coverage_ratio_threshold: float = 0.25,
         lag_threshold_bytes: int = 1_048_576,
         alert_after_s: float = 300.0,
+        progress_span_s: float = 60.0,
+        rate_window_s: float = 300.0,
+        max_eta_s: float = 6 * 3600.0,
         now_fn: Callable[[], float] = time.monotonic,
     ):
         self.coverage_ratio_threshold = coverage_ratio_threshold
         self.lag_threshold_bytes = lag_threshold_bytes
         self.alert_after_s = alert_after_s
+        # Catching up = net progress over the WHOLE rate_window_s (the 300 s alert window): every
+        # lagging file below every sample of it (a new low), with at least progress_span_s of
+        # history, and an ETA no longer than max_eta_s. A sawtooth that grows overall, a reader
+        # re-reading from 0, or a lag shrinking a few bytes a poll is a stall (#1827 round 1).
+        self.progress_span_s = progress_span_s
+        self.rate_window_s = max(rate_window_s, progress_span_s)
+        self.max_eta_s = max_eta_s
         self.now_fn = now_fn
         self._coverage_bad_since: float | None = None
         self._lag_bad_since: float | None = None
+        # (time, {file: lag}, {file: (confirmed offset, generation)}) for files over the lag
+        # threshold only, oldest first.
+        self._lag_samples: list[tuple[float, dict[str, int], dict[str, tuple[int, int]] | None]] = []
+
+    def _catch_up(
+        self, now: float, over: dict[str, int], progress: dict[str, tuple[int, int]] | None
+    ) -> tuple[bool, float | None, float | None]:
+        """(shrinking, eta_s, drain_bytes_per_s) for the files over the lag threshold.
+
+        Shrinking means EVERY such file is behind by less than in EVERY sample of the last
+        rate_window_s (a new low over the window), the window spans at least progress_span_s, and
+        each file's ETA at its window rate is at most max_eta_s. A file absent from a sample was
+        under the threshold then, so it grew: not shrinking. One stalled file therefore keeps
+        offset_lag even while a bigger file drains beside it.
+
+        When the caller supplies ``progress`` (the watcher always does), each lagging file must
+        also have a CONFIRMED offset that advanced since the window's oldest sample, in the same
+        registry generation. A lag that falls only because the file shrank (truncation, rewrite:
+        a new generation) or because an archive's decoder read ahead with nothing confirmed is not
+        progress. A file with no progress entry (an archive: no confirmed decoded checkpoint to
+        compare) can never be catching up (#1827 CodeRabbit round).
+        """
+        window = [(t, s, p) for t, s, p in self._lag_samples if now - t <= self.rate_window_s]
+        if not over or not window or now - window[0][0] < self.progress_span_s:
+            return False, None, None
+        then, oldest, oldest_progress = window[0]
+        eta_s = 0.0
+        rate_total = 0.0
+        for filepath, lag in over.items():
+            past = [sample.get(filepath) for _t, sample, _p in window]
+            if any(p is None or lag >= p for p in past):
+                return False, None, None
+            if progress is not None:
+                now_confirmed = progress.get(filepath)
+                then_confirmed = (oldest_progress or {}).get(filepath)
+                if (
+                    now_confirmed is None
+                    or then_confirmed is None
+                    or now_confirmed[1] != then_confirmed[1]
+                    or now_confirmed[0] <= then_confirmed[0]
+                ):
+                    return False, None, None
+            rate = (oldest[filepath] - lag) / (now - then)
+            eta = lag / rate
+            if eta > self.max_eta_s:
+                return False, None, None
+            rate_total += rate
+            eta_s = max(eta_s, eta)
+        return True, eta_s, rate_total
 
     def evaluate(
         self,
@@ -689,6 +784,8 @@ class CoverageWatchdog:
         active_entries_per_minute: float,
         realtime_inserts_per_minute: float,
         max_offset_lag_bytes: int,
+        lag_by_file: dict[str, int] | None = None,
+        progress_by_file: dict[str, tuple[int, int]] | None = None,
     ) -> dict[str, Any]:
         now = self.now_fn()
         reasons = []
@@ -704,14 +801,42 @@ class CoverageWatchdog:
             self._coverage_bad_since = None
 
         lag_bad = max_offset_lag_bytes > self.lag_threshold_bytes
+        over = (
+            {f: lag for f, lag in lag_by_file.items() if lag > self.lag_threshold_bytes}
+            if lag_by_file is not None
+            else {}
+        )
+        progress = (
+            {f: progress_by_file[f] for f in over if f in progress_by_file} if progress_by_file is not None else None
+        )
+        shrinking, eta_s, drain_rate = self._catch_up(now, over, progress) if lag_bad else (False, None, None)
+        self._lag_samples = [(t, s, p) for t, s, p in self._lag_samples if now - t <= self.rate_window_s]
+        self._lag_samples.append((now, over, progress))
+        state = CATCH_UP_NONE
         if lag_bad:
             self._lag_bad_since = now if self._lag_bad_since is None else self._lag_bad_since
+            state = CATCH_UP_BEHIND
             if now - self._lag_bad_since >= self.alert_after_s:
-                reasons.append("offset_lag")
+                # Net progress (see _catch_up) is published as catch_up.state = catching_up,
+                # never as an alert reason (BrainBar and the health verdict make an unknown alert
+                # reason a "needs you"). Anything else is offset_lag at once, because the episode
+                # clock kept running throughout.
+                state = CATCH_UP_CATCHING_UP if shrinking else CATCH_UP_STALLED
+                if not shrinking:
+                    reasons.append("offset_lag")
         else:
             self._lag_bad_since = None
 
-        return {"alerting": bool(reasons), "alert_reasons": reasons}
+        return {
+            "alerting": bool(reasons),
+            "alert_reasons": reasons,
+            "catch_up": {
+                "state": state,
+                "eta_s": eta_s if shrinking else None,
+                "drain_bytes_per_s": drain_rate if shrinking else None,
+                "lagging_files": len(over),
+            },
+        }
 
 
 # ── Offset Registry ──────────────────────────────────────────────────────────
@@ -1225,6 +1350,10 @@ class JSONLTailer:
         self._fingerprints: dict[int, str] = {}
         self.observed_inode = self.get_inode()
         self.codex_turn_context: CodexTurnContext | None = None
+        # A record this returns True for is consumed (offset, anchor, fingerprint) but never
+        # emitted, and counts as a neutral source line. The watcher sets it per poll.
+        self.skip_record: Callable[[dict], bool] | None = None
+        self.skipped_records_total = 0
 
     def snapshot(self) -> tuple[int, bytes, bytes | None, Any, int]:
         """Capture everything a failed read must roll back, identity included."""
@@ -1314,49 +1443,77 @@ class JSONLTailer:
         if self.max_record_bytes is not None and self._partial_record_bytes() > self.max_record_bytes:
             return self.read_buffered_lines(max_lines=max_lines)
 
+        lines: list[dict] = []
+        skipped_at_start = self.skipped_records_total
         try:
             with self._open_window(max_bytes) as (f, remaining_bytes):
                 if f is None:
                     return []
-                complete_lines = self._buffer.count(b"\n")
-                current_record_bytes = self._partial_record_bytes()
-                combined = bytearray(self._buffer)
-                while remaining_bytes is None or remaining_bytes > 0:
-                    if max_lines is not None and complete_lines >= max_lines:
+                # One pass without a skip_record predicate, exactly as before. A pass that
+                # skipped records (fork copies) read fewer than max_lines emittable lines, so
+                # read on through the same open window, the same byte budget, until a pass
+                # skips nothing, max_lines are emitted, an error stops parsing, or the per-read
+                # skip budget is spent. Every pass parses what it buffered before the next reads.
+                while True:
+                    wanted = None if max_lines is None else max_lines - len(lines)
+                    remaining_bytes = self._fill_buffer(f, wanted, remaining_bytes)
+                    if not self._buffer:
                         break
-                    chunk_bytes = _WATCH_READ_CHUNK_BYTES
-                    if remaining_bytes is not None:
-                        chunk_bytes = min(chunk_bytes, remaining_bytes)
-                    if self.max_record_bytes is not None:
-                        record_capacity = self.max_record_bytes - current_record_bytes + 1
-                        if record_capacity <= 0:
-                            break
-                        chunk_bytes = min(chunk_bytes, record_capacity)
-                    new_data = f.read(chunk_bytes)
-                    if not new_data:
+                    skipped_before = self.skipped_records_total
+                    lines.extend(self.read_buffered_lines(max_lines=wanted))
+                    if (
+                        self.last_error is not None
+                        or self.skipped_records_total == skipped_before
+                        or (max_lines is not None and len(lines) >= max_lines)
+                        or self.skipped_records_total - skipped_at_start >= _MAX_SKIPPED_RECORDS_PER_READ
+                    ):
                         break
-                    combined.extend(new_data)
-                    if remaining_bytes is not None:
-                        remaining_bytes -= len(new_data)
-
-                    cursor = 0
-                    while True:
-                        newline_index = new_data.find(b"\n", cursor)
-                        if newline_index < 0:
-                            current_record_bytes += len(new_data) - cursor
-                            break
-                        current_record_bytes += newline_index - cursor
-                        complete_lines += 1
-                        current_record_bytes = 0
-                        cursor = newline_index + 1
-                self._buffer = bytes(combined)
         except OSError as error:
+            # Lines a previous pass already consumed must still reach the caller.
             self.last_error = error
-            return []
+            return lines
 
-        if b"\n" not in self._buffer and not self._buffer:
-            return []
-        return self.read_buffered_lines(max_lines=max_lines)
+        return lines
+
+    def _fill_buffer(self, f, max_lines: int | None, remaining_bytes: int | None) -> int | None:
+        """Read from `f` until the buffer holds `max_lines` complete records or a bound stops it.
+
+        Returns what is left of the byte window. The buffer changes only after every read
+        succeeded, so an OSError leaves it as it was.
+        """
+        complete_lines = self._buffer.count(b"\n")
+        current_record_bytes = self._partial_record_bytes()
+        combined = bytearray(self._buffer)
+        while remaining_bytes is None or remaining_bytes > 0:
+            if max_lines is not None and complete_lines >= max_lines:
+                break
+            chunk_bytes = _WATCH_READ_CHUNK_BYTES
+            if remaining_bytes is not None:
+                chunk_bytes = min(chunk_bytes, remaining_bytes)
+            if self.max_record_bytes is not None:
+                record_capacity = self.max_record_bytes - current_record_bytes + 1
+                if record_capacity <= 0:
+                    break
+                chunk_bytes = min(chunk_bytes, record_capacity)
+            new_data = f.read(chunk_bytes)
+            if not new_data:
+                break
+            combined.extend(new_data)
+            if remaining_bytes is not None:
+                remaining_bytes -= len(new_data)
+
+            cursor = 0
+            while True:
+                newline_index = new_data.find(b"\n", cursor)
+                if newline_index < 0:
+                    current_record_bytes += len(new_data) - cursor
+                    break
+                current_record_bytes += newline_index - cursor
+                complete_lines += 1
+                current_record_bytes = 0
+                cursor = newline_index + 1
+        self._buffer = bytes(combined)
+        return remaining_bytes
 
     def _verify_anchor(self, f) -> None:
         """Restart from 0 when the bytes we already consumed are no longer at our offset (#732).
@@ -1480,9 +1637,14 @@ class JSONLTailer:
                 from .t3_provenance import compact_codex_header
 
                 self.first_record = compact_codex_header(parsed, nl_idx + 1)
-            self._count_source_line(starting_offset + nl_idx + 1)
+            skipped = isinstance(parsed, dict) and self.skip_record is not None and self.skip_record(parsed)
+            # A skipped record is neutral: it is neither unrecognised growth nor indexable input.
+            self._count_source_line(starting_offset + nl_idx + 1, neutral=skipped)
             line_end_offset = starting_offset + nl_idx + 1
             consumed_bytes = nl_idx + 1
+            if skipped:
+                self.skipped_records_total += 1
+                continue
             if isinstance(parsed, dict):
                 parsed["_line_end_offset"] = line_end_offset
                 parsed["_ingest_observed_at"] = time.time()
@@ -1759,6 +1921,7 @@ class JSONLWatcher:
         health_path: str | Path | None = None,
         coverage_watchdog: CoverageWatchdog | None = None,
         max_lines_per_file: int = 100,
+        catch_up_budget_s: float | None = None,
     ):
         from .codex_zst import zst_enabled, zst_limits
 
@@ -1786,6 +1949,17 @@ class JSONLWatcher:
         self.poll_interval_s = poll_interval_s
         self.registry_flush_interval_s = registry_flush_interval_s
         self.max_lines_per_file = max(1, max_lines_per_file)
+        if catch_up_budget_s is None:
+            self.catch_up_budget_s = _watch_catch_up_budget_s()
+        elif math.isfinite(catch_up_budget_s):
+            self.catch_up_budget_s = max(0.0, catch_up_budget_s)
+        else:  # nan/inf would set no deadline at all: the env path's fallback, loudly
+            logger.warning(
+                "Invalid catch_up_budget_s=%r; using default %s", catch_up_budget_s, _DEFAULT_WATCH_CATCHUP_BUDGET_S
+            )
+            self.catch_up_budget_s = _DEFAULT_WATCH_CATCHUP_BUDGET_S
+        self._catch_up_rounds = 0
+        self._catch_up_s = 0.0
         self.max_read_bytes_per_file = _watch_read_window_bytes()
         self.max_record_bytes = _watch_max_record_bytes()
         self._tailers: dict[str, JSONLTailer] = {}
@@ -1818,6 +1992,11 @@ class JSONLWatcher:
         # a path leaves the set when discovery sees it again (#732).
         self._vanished_sources: set[str] = set()
         self._vanished_source_count_total = 0
+        # Claude Code fork copies (entries carrying forkedFrom) skipped because BrainLayer
+        # already holds the parent session. Parent verdicts are cached for one poll only.
+        self._fork_parent_held: dict[str, bool] = {}
+        self._fork_copies_skipped_total = 0
+        self._fork_copy_files: dict[str, dict[str, Any]] = {}
         self.log_destinations = {"stdout": describe_stream_destination(1), "stderr": describe_stream_destination(2)}
         self._stop = threading.Event()
         self._last_registry_flush = time.monotonic()
@@ -1908,6 +2087,26 @@ class JSONLWatcher:
                     archive=archive,
                 )
                 self._advance_quarantined_offsets(filepath, source_inode, source_generation)
+
+    def _prune_persisted_growth_backfill(self) -> None:
+        """Drop a plain file's backfill marker once offsets.json holds an offset past its frontier.
+
+        Called right after a registry flush. The marker lives in watcher-health.json and the
+        checkpoint in offsets.json, flushed on different clocks. Dropping the marker on a READ (or
+        an unflushed confirmed) offset let a restart re-read from the on-disk offset with no marker,
+        take the whole file as a fresh backfill, and miss every line after the original frontier
+        (#1827 round 1; catch-up made a full read in one poll reachable for any file size).
+        """
+        for filepath, marker in list(self._growth_backfill.items()):
+            # A known frontier is a logical (decoded) offset for both representations, the same
+            # unit as the registry checkpoint. An unknown archive frontier is left to decoded EOF.
+            if not marker.get("frontier_known", not marker.get("compressed", False)):
+                continue
+            if (
+                self.registry.generation(filepath) == marker["generation"]
+                and self.registry.get(filepath)[0] >= marker["frontier"]
+            ):
+                self._growth_backfill.pop(filepath, None)
 
     def _confirmed_fingerprint(self, filepath: str, offset: int, source_inode: int) -> str | None:
         tailer = self._tailers.get(filepath)
@@ -2112,6 +2311,81 @@ class JSONLWatcher:
             and filepath not in self._file_ingestion_failures
         )
 
+    def _catch_up_position(self, filepath: str) -> tuple[int, int] | None:
+        """(offset, buffered bytes) when this file may take a catch-up round, else None.
+
+        Only a plain JSONL file already read this poll, behind its discovered size or holding
+        a complete buffered line, with nothing pending against it. Compressed archives keep their
+        own per-poll admission budget (zst files/bytes) and never take catch-up rounds; a file
+        with a recorded failure or quarantined offsets waits for its normal turn, so a file that
+        fails every read cannot spin the budget.
+        """
+        tailer = self._tailers.get(filepath)
+        stats = self._current_file_stats.get(filepath)
+        if (
+            tailer is None
+            or stats is None
+            or hasattr(tailer, "decoder")
+            or self._physical_files.get(filepath, filepath).endswith(".zst")
+            or tailer.filepath != self._physical_files.get(filepath, filepath)
+            or filepath in self._file_ingestion_failures
+            or self._pending_quarantined_offsets.get(filepath)
+            or filepath in self._vanished_sources
+            or self._denylisted(filepath)
+        ):
+            return None
+        if tailer.offset < stats[1] or tailer.has_complete_buffered_line():
+            return tailer.offset, len(tailer._buffer)
+        return None
+
+    def _poll_order(self, files: list[str]) -> Iterator[str]:
+        """Every discovered file once, then catch-up rounds over only the files still behind.
+
+        The first pass is the poll as it always was, so every file gets its turn before any
+        file gets a second one. Then, while catch_up_budget_s lasts, each file still behind its
+        discovered size gets one more max_lines_per_file slice per round, round-robin. No new
+        discovery walk: admission to a round uses this poll's stats, so a live file stops taking
+        rounds once it reaches the size it had at discovery. The last slice may still read records
+        appended since (same slice code, same checkpoint rules, so they simply arrive early). A
+        file whose round moved nothing leaves the rounds for this poll.
+
+        No rounds while the indexer holds failed writes (the queue or DB write path is down):
+        reading ahead into a failing write path only grows retained memory and retries, and gains
+        nothing (#1827 round 1). Each round rescans only the previous round's behind files.
+        """
+        self._catch_up_rounds = 0
+        self._catch_up_s = 0.0
+        yield from files
+        if self.catch_up_budget_s <= 0:
+            return
+        started = time.monotonic()
+        deadline = started + self.catch_up_budget_s
+        behind = files
+        try:
+            while True:
+                behind = [f for f in behind if self._catch_up_position(f) is not None]
+                if not behind or self.indexer.retained_failed_input_count() > 0 or self._stop.is_set():
+                    return
+                self._catch_up_rounds += 1
+                moved = []
+                for filepath in behind:
+                    # stop() ends the rounds: the slice in flight finished, the final flush follows.
+                    if (
+                        time.monotonic() >= deadline
+                        or self.indexer.retained_failed_input_count() > 0
+                        or self._stop.is_set()
+                    ):
+                        return
+                    before = self._catch_up_position(filepath)
+                    if before is None:
+                        continue
+                    yield filepath
+                    if self._catch_up_position(filepath) not in (before, None):
+                        moved.append(filepath)
+                behind = moved
+        finally:
+            self._catch_up_s = time.monotonic() - started
+
     def _normalize_lines(self, filepath: str, new_lines: list[dict]) -> list[dict]:
         provider = self.provider_for_file(filepath)
         compressed = provider == "codex" and self._physical_files.get(filepath, filepath).endswith(".zst")
@@ -2150,6 +2424,136 @@ class JSONLWatcher:
                 entry["_author_model_source"] = line.get("_author_model_source")
             normalized.append(entry)
         return normalized
+
+    def _parent_session_held(self, session_id: str) -> bool:
+        """Whether the WATCHER already wrote rows for `session_id`; cached for the current poll.
+
+        Only watcher rows count (source='realtime_watcher', or a recorded source_end_offset):
+        the Stop hook writes a source='realtime' row for every session at every Stop, before
+        the watcher has read a line of it, so any-row would vouch for a transcript never indexed.
+        Read-only and fail-closed: no DB path, a missing table or column, a locked or unreadable
+        DB all answer False, so the fork's copies are ingested as before. Never skip on a guess.
+        """
+        cached = self._fork_parent_held.get(session_id)
+        if cached is not None:
+            return cached
+        held = False
+        if self.db_path is not None:
+            try:
+                conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=1)
+                try:
+                    held = (
+                        conn.execute(
+                            "SELECT 1 FROM chunks WHERE conversation_id = ?"
+                            " AND (source = 'realtime_watcher' OR source_end_offset IS NOT NULL) LIMIT 1",
+                            (session_id,),
+                        ).fetchone()
+                        is not None
+                    )
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                logger.debug("Fork parent lookup failed for %s; ingesting its copies", session_id, exc_info=True)
+                held = False
+        self._fork_parent_held[session_id] = held
+        return held
+
+    def _parent_transcript_intact(self, parent_path: str) -> bool:
+        """Whether the parent file on disk is still the one the registry has been reading.
+
+        A parent rewritten, truncated or deleted before the watcher finished it no longer
+        holds the turns its fork copied, so skipping those copies would lose them (red-team
+        1828 R1; CodeRabbit r4617993065). Skip only when the parent is FULLY READ: its
+        confirmed offset equals its current size, so every turn the fork copied is already
+        indexed and a later loss of the parent takes nothing away. A partly read parent
+        (behind, or a live one with new bytes) ingests the copies as before, and content
+        dedupe merges them. Also refuse when a rewind generation was ever recorded for it
+        (mark_rewind) or when the registry has no inode for it or a different one than this
+        poll's stat (never registered, or replaced).
+        """
+        stats = self._current_file_stats.get(parent_path)
+        if stats is None:
+            return False
+        confirmed_offset, registry_inode = self.registry.get(parent_path)
+        return (
+            self.registry.generation(parent_path) == 0
+            and registry_inode != 0
+            and registry_inode == stats[2]
+            # Fully read: the copies then add nothing a later parent loss could take away.
+            and confirmed_offset == stats[1]
+        )
+
+    def _fork_copy_skipper(self, filepath: str) -> Callable[[dict], bool] | None:
+        """The skip_record predicate for a Claude transcript: drop copies of a held parent.
+
+        Claude Code writes a fork (/side, a resumed fork) as the parent's entries copied under
+        the new sessionId, each stamped forkedFrom={sessionId: <immediate parent>, messageUuid},
+        followed by the fork's own entries without it. The copies are the parent's content,
+        already in BrainLayer under the parent's conversation_id when the parent was indexed;
+        reading them again only feeds content dedupe. A copy is skipped only when ALL hold:
+        the parent transcript <fork dir>/<parent>.jsonl was discovered this poll and is not
+        denylisted; it is still the file the registry has been reading AND the watcher has
+        confirmed it to its current size (_parent_transcript_intact); and the watcher has
+        written rows for the parent. Otherwise the copies ingest as before, so a fork that is
+        the only remaining copy -- parent file gone, elsewhere, excluded, rewritten, or not yet
+        fully read -- is never lost.
+        """
+        if self.provider_for_file(filepath) != "claude" or self.db_path is None:
+            return None
+        file_stem = Path(filepath).stem
+        fork_dir = Path(filepath).parent
+
+        def skip(entry: dict) -> bool:
+            forked_from = entry.get("forkedFrom")
+            if not isinstance(forked_from, dict):
+                return False
+            parent = forked_from.get("sessionId")
+            if not isinstance(parent, str) or not UUID_RE.match(parent):
+                return False
+            # A record naming its own session as its parent is not a copy of another one.
+            if parent in (entry.get("sessionId"), file_stem):
+                return False
+            # Discovery stat'd every live file this poll: membership is the per-poll stat.
+            parent_path = str(fork_dir / f"{parent}.jsonl")
+            if parent_path not in self._current_file_stats or self._denylisted(parent_path):
+                return False
+            if not self._parent_transcript_intact(parent_path):
+                return False
+            if not self._parent_session_held(parent):
+                return False
+            self._fork_copies_skipped_total += 1
+            progress = self._fork_copy_files.setdefault(filepath, {"skipped": 0})
+            progress["parent_session_id"] = parent
+            progress["parent_path"] = parent_path
+            progress["skipped"] += 1
+            return True
+
+        return skip
+
+    def _fork_copy_health(self, files: list[str]) -> list[dict[str, Any]]:
+        live = set(files)
+        for filepath in [path for path in self._fork_copy_files if path not in live]:
+            self._fork_copy_files.pop(filepath, None)
+        rows = []
+        for filepath, progress in sorted(self._fork_copy_files.items()):
+            tailer = self._tailers.get(filepath)
+            stats = self._current_file_stats.get(filepath)
+            parent_path = progress.get("parent_path")
+            parent_stats = self._current_file_stats.get(parent_path) if parent_path else None
+            rows.append(
+                {
+                    "path": filepath,
+                    "parent_session_id": progress.get("parent_session_id"),
+                    "copies_skipped": progress.get("skipped", 0),
+                    "offset": tailer.offset if tailer else self.registry.get(filepath)[0],
+                    "size": stats[1] if stats else None,
+                    # The skip relies on the watcher reading the parent in full: show how far it is.
+                    "parent_path": parent_path,
+                    "parent_confirmed_offset": self.registry.get(parent_path)[0] if parent_path else None,
+                    "parent_size": parent_stats[1] if parent_stats else None,
+                }
+            )
+        return rows[:_MAX_HEALTH_FORK_FILES]
 
     def _annotate_codex_author_context(
         self,
@@ -2389,7 +2793,16 @@ class JSONLWatcher:
         return True
 
     def _max_offset_lag_bytes(self, files: list[str]) -> int:
-        max_lag = 0
+        return max(self._offset_lags(files).values(), default=0)
+
+    def _offset_lags(self, files: list[str]) -> dict[str, int]:
+        """Bytes each file is behind its discovered size; files with no lag are left out.
+
+        A plain file is measured from its CONFIRMED offset (the registry checkpoint), not the read
+        offset: bytes read into memory whose writes fail are not progress, so a failing write path
+        can never read as catching up (#1827 round 1). Archives keep the tailer's decoded offset.
+        """
+        lags: dict[str, int] = {}
         for filepath in files:
             # Discovery stat'd every one of these moments ago; re-statting the whole corpus
             # here would double the syscall cost of every poll for no new information.
@@ -2402,9 +2815,11 @@ class JSONLWatcher:
                 except OSError:
                     continue
             tailer = self._tailers.get(filepath)
-            offset = tailer.offset if tailer else self.registry.get(filepath)[0]
-            max_lag = max(max_lag, max(size - offset, 0))
-        return max_lag
+            compressed = self._physical_files.get(filepath, filepath).endswith(".zst")
+            offset = tailer.offset if tailer and compressed else self.registry.get(filepath)[0]
+            if size > offset:
+                lags[filepath] = size - offset
+        return lags
 
     def _db_realtime_inserts_since_window_start(self) -> int | None:
         if not self.db_path:
@@ -2556,12 +2971,33 @@ class JSONLWatcher:
             self._db_probe_failed_since = now
         db_probe_failed_for_s = now - self._db_probe_failed_since if db_probe_failed else 0.0
         roots_missing = self._missing_roots(now)
-        max_lag = self._max_offset_lag_bytes(files)
+        lags = self._offset_lags(files)
+        max_lag = max(lags.values(), default=0)
+        # Measured progress: a plain file's confirmed offset and its registry generation. An
+        # archive has no confirmed decoded checkpoint comparable to its physical size, so it gets
+        # no entry and can never read as catching up; its lag still raises offset_lag (#1827).
+        progress = {
+            filepath: (self.registry.get(filepath)[0], self.registry.generation(filepath))
+            for filepath in lags
+            if not self._physical_files.get(filepath, filepath).endswith(".zst")
+        }
         watchdog = self.coverage_watchdog.evaluate(
             active_entries_per_minute=active_entries_per_min,
             realtime_inserts_per_minute=watchdog_inserts_per_min,
             max_offset_lag_bytes=max_lag,
+            lag_by_file=lags,
+            progress_by_file=progress,
         )
+        # The honest catch-up surface (BrainBar: "catching up, about N minutes"): total bytes
+        # behind, the estimate while the lag shrinks, and what this poll's catch-up rounds did.
+        watchdog["catch_up"] = {
+            **watchdog.get("catch_up", {}),
+            "bytes_behind": sum(lags.values()),
+            "files_behind": len(lags),
+            "last_poll_rounds": self._catch_up_rounds,
+            "last_poll_s": round(self._catch_up_s, 3),
+            "budget_s": self.catch_up_budget_s,
+        }
         all_failure_payloads = [
             {key: value for key, value in failure.items() if key != "_fingerprint"}
             for _filepath, failure in sorted(self._file_ingestion_failures.items())
@@ -2609,6 +3045,8 @@ class JSONLWatcher:
             "quarantined_record_count_total": self._quarantined_record_count_total,
             "quarantined_records": list(self._quarantined_records),
             "vanished_source_count_total": self._vanished_source_count_total,
+            "fork_copies_skipped_total": self._fork_copies_skipped_total,
+            "fork_copy_files": self._fork_copy_health(files),
             **({"held_archives": self.archive_status()["represented_cold"]} if self._zst_enabled else {}),
             "log_destinations": self.log_destinations,
             **watchdog,
@@ -2839,6 +3277,7 @@ class JSONLWatcher:
         files: list[str] = []
         self._growth_poll = {}
         self._growth_activity = {}
+        self._fork_parent_held = {}
         self.poll_count += 1
         self.last_poll_made_progress = False
 
@@ -2875,6 +3314,8 @@ class JSONLWatcher:
                     self._file_providers.pop(filepath, None)
                     self._pending_quarantined_offsets.pop(filepath, None)
                     self.registry.remove(filepath)
+                    # its persisted offset is gone, so the marker could never be pruned (#1827)
+                    self._growth_backfill.pop(filepath, None)
 
             from .codex_zst import queue_has_capacity
 
@@ -2890,7 +3331,7 @@ class JSONLWatcher:
                         )
                     )
                 )
-            for filepath in files:
+            for filepath in self._poll_order(files):
                 compressed = self._physical_files.get(filepath, filepath).endswith(".jsonl.zst")
                 if compressed:
                     if filepath in self._tailers:
@@ -2922,6 +3363,7 @@ class JSONLWatcher:
                     self._file_providers.pop(filepath, None)
                     self._pending_quarantined_offsets.pop(filepath, None)
                     self.registry.remove(filepath)
+                    self._growth_backfill.pop(filepath, None)  # see the retirement above (#1827)
                     continue
                 self._vanished_sources.discard(filepath)
                 if self._can_skip_unchanged(filepath):
@@ -2963,6 +3405,8 @@ class JSONLWatcher:
                     first_ingest = tailer is None and self.registry.get(filepath)[0] == 0
                     if not drain_buffer:
                         tailer = self._ensure_tailer(filepath)
+                    if not compressed:
+                        tailer.skip_record = self._fork_copy_skipper(filepath)
                     lines_before = getattr(tailer, "lines_read_total", 0)
                     neutral_before = getattr(tailer, "neutral_lines_total", 0)
                     eligible_before = getattr(tailer, "growth_lines_total", 0)
@@ -3047,9 +3491,19 @@ class JSONLWatcher:
                         read + raw_count - classes.count("neutral") - blanks,
                         recognised + classes.count("recognised"),
                     )
-                    if filepath in self._growth_backfill and (
-                        (compressed and tailer.decoded_eof and not tailer._buffer)
-                        or (not compressed and tailer.offset >= frontier)
+                    # A plain file's backfill ends only once a PERSISTED offset reaches its frontier
+                    # (_prune_persisted_growth_backfill, after each registry flush), never at a read
+                    # offset: a restart re-reads from offsets.json and must still find the original
+                    # frontier (#1827 round 1).
+                    # An archive whose decoded frontier is still unknown has no offset to compare,
+                    # so it keeps the decoded-EOF rule.
+                    marker = self._growth_backfill.get(filepath)
+                    if (
+                        marker is not None
+                        and compressed
+                        and not marker.get("frontier_known", False)
+                        and tailer.decoded_eof
+                        and not tailer._buffer
                     ):
                         self._growth_backfill.pop(filepath, None)
                     reconcile_through = getattr(tailer, "_archive_reconcile_through", 0)
@@ -3120,7 +3574,8 @@ class JSONLWatcher:
             # Periodic registry flush
             now = time.monotonic()
             if now - self._last_registry_flush >= self.registry_flush_interval_s:
-                self.registry.flush()
+                if self.registry.flush():  # offsets.json now holds every in-memory checkpoint
+                    self._prune_persisted_growth_backfill()
                 self._last_registry_flush = now
 
             # Remember what we saw this pass so the next poll can skip files whose bytes

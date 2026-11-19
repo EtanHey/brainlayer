@@ -815,6 +815,54 @@ def test_changed_only_scope_maps_watcher_source_to_jsonl_watcher_tests(tmp_path:
     assert f"{test_root}/ -v" not in logged
 
 
+def _pytest_args(pytest_log: Path) -> list[list[str]]:
+    """Each logged pytest call as its own argument list (the stub logs one call per line)."""
+    return [line.split() for line in pytest_log.read_text().splitlines() if line.strip()]
+
+
+@pytest.mark.parametrize("changed", ["src/brainlayer/health_verdict.py", "src/brainlayer/health_facts.py"])
+@pytest.mark.parametrize("missing", [None, "test_watcher_catch_up.py"], ids=["both suites", "catch-up suite renamed"])
+def test_changed_only_scope_maps_the_ingest_verdict_to_its_stall_and_catch_up_suites(
+    tmp_path: Path, changed: str, missing: str | None
+) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    owners = (
+        "test_health_verdict.py",
+        "test_health_facts.py",
+        "test_ingest_stall_alerts.py",
+        "test_watcher_catch_up.py",
+    )
+    for owner in owners:
+        if owner != missing:
+            (test_root / owner).write_text("test placeholder\n")
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = changed
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    args = [arg for call in _pytest_args(pytest_log) for arg in call]
+    whole_suite = {str(test_root), f"{test_root}/"} & set(args)
+    if missing:  # a renamed suite never counts as mapped: the loud unmapped path (smoke + CI) runs
+        assert f"WARNING: unmapped: {changed}" in result.stdout
+        return
+    own = test_root / f"test_{Path(changed).stem}.py"
+    for expected in (own, test_root / "test_ingest_stall_alerts.py", test_root / "test_watcher_catch_up.py"):
+        assert str(expected) in args  # a complete argument, not a prefix of `path::test`
+    assert not whole_suite
+
+
 def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp_path: Path) -> None:
     test_root = tmp_path / "tests"
     test_root.mkdir()
