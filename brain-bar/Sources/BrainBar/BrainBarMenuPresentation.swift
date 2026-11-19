@@ -58,16 +58,6 @@ struct BrainBarMenuCapture: Sendable {
     var lagSeverity: BrainBarMenuPresenter.LagSeverity = BrainBarMenuPresenter.lagSeverity
 }
 
-/// `catch_up` in watcher-health.json (BrainLayer #1827): `state` is none, behind, catching_up (a lag at a new low over
-/// its window, with an estimate; `offset_lag` is then NOT an alert reason) or stalled (`offset_lag` raised). Each part is
-/// read on its own; a part the file does not carry, or carries in another type, is nil: unknown, never guessed. Declared
-/// here, with the menu's own types, because the presentation reads it (CI's menu filter covers this file).
-struct WatcherCatchUp: Sendable, Equatable {
-    var state: String? = nil
-    var bytesBehind: Int? = nil
-    var etaS: Double? = nil
-}
-
 /// Everything the M menu and icon show for one capture (phase-8 PRESENTATION-SPEC.md).
 struct BrainBarMenuPresentation: Equatable, Sendable {
     enum Form: String, Sendable { case calm, needs }
