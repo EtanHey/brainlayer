@@ -40,6 +40,14 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.6] - 2026-11-19
+
+### A /side fork no longer re-reads its parent's copied transcript; the watcher shows catch-up as amber, not red
+
+- perf(t3-ingest): bounded fallback after T3 prunes the event log; per-phase timing (#1822)
+- perf(watcher): catch up on a large transcript in minutes while every other session keeps its turn (#1827)
+- fix(watcher): a forked chat starts at its fork point; the shared part is not read again (#1828)
+
 ## [1.6.5] - 2026-11-17
 
 ### t3-ingest reads only what changed; amber checks are notices, not needs-you; the backup sweep sees recovery staging
