@@ -286,12 +286,12 @@ def _diff(cursor: Any, plan: dict[str, Any]) -> list[tuple[tuple, set[tuple], bo
     by_thread: dict[str, set[tuple]] = {}
     for session in plan["sessions"]:
         by_thread.setdefault(session[0], set()).add(tuple(session))
-    existing_threads, existing_sessions = _existing(cursor, [row[0] for row in plan["threads"]])
+    stored_threads, stored_rows_by_thread = _existing(cursor, [row[0] for row in plan["threads"]])
     changes = []
     for row in plan["threads"]:
         planned_sessions = by_thread.get(row[0], set())
-        thread_changed = existing_threads.get(row[0]) != tuple(row)
-        sessions_changed = existing_sessions.get(row[0], set()) != planned_sessions
+        thread_changed = stored_threads.get(row[0]) != tuple(row)
+        sessions_changed = stored_rows_by_thread.get(row[0], set()) != planned_sessions
         if thread_changed or sessions_changed:
             changes.append((tuple(row), planned_sessions, thread_changed, sessions_changed))
     return changes
