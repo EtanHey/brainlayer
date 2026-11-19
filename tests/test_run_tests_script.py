@@ -2251,7 +2251,16 @@ IDX_FOCUSED_MAPPINGS = (
             "test_index_calendar_deferrals.py",
         ),
     ),
-    ("ingest/t3", ("test_ingest_t3.py", "test_health_check.py", "test_paths.py")),
+    (
+        "ingest/t3",
+        (
+            "test_ingest_t3.py",
+            "test_health_check.py",
+            "test_paths.py",
+            "test_t3_thread_tables.py",
+            "test_t3_ingest_bookmark.py",
+        ),
+    ),
     (
         "index_new",
         (
@@ -2287,6 +2296,41 @@ def test_changed_only_scope_maps_idx_cohort_modules(tmp_path: Path, module, expe
         assert str(test_root / name) in logged
     assert "falling back to full pytest unit suite" not in result.stdout
     assert f"{test_root}/ -v" not in logged
+
+
+T3_SIDE_TABLE_SUITES = (
+    "test_t3_thread_tables.py",
+    "test_runtime_store.py",
+    "test_runtime_ddl_ledger.py",
+    "test_index_first_calendar_bootstrap.py",
+    "test_ingest_t3.py",
+)
+
+
+@pytest.mark.parametrize("module", ["t3_thread_tables", "runtime_store"])
+def test_changed_only_side_table_modules_run_the_writer_contract_and_bootstrap(tmp_path: Path, module) -> None:
+    """T3 PR 3.1: the side-table DDL and its runtime pin must run all five suites, or escalate."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    for name in T3_SIDE_TABLE_SUITES:
+        (test_root / name).write_text("test placeholder\n")
+    env, pytest_log = _cli_root_env(tmp_path, test_root)
+    env["BRAINLAYER_CHANGED_FILES"] = f"src/brainlayer/{module}.py"
+    result = _run_cli_root_script(env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    logged = pytest_log.read_text()
+    for name in T3_SIDE_TABLE_SUITES:
+        assert str(test_root / name) in logged
+    assert f"{test_root}/ -v" not in logged
+
+    # A missing companion must not narrow the gate: the module is reported unmapped.
+    (test_root / "test_runtime_ddl_ledger.py").unlink()
+    (tmp_path / "missing").mkdir()
+    escalated, _escalated_log = _cli_root_env(tmp_path / "missing", test_root)
+    escalated["BRAINLAYER_CHANGED_FILES"] = f"src/brainlayer/{module}.py"
+    result = _run_cli_root_script(escalated)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"unmapped: src/brainlayer/{module}.py" in result.stdout
 
 
 @pytest.mark.parametrize(

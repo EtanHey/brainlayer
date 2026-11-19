@@ -1026,6 +1026,11 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._has_source_class = "source_class" in existing_cols
         self._has_superseded_by = True
         ensure_dedupe_schema(self.conn)
+        # T3 PR 3.1 side tables. Fresh, bootstrapped and offline-migrated databases get them here;
+        # the live database gets them only from the reviewed `brainlayer.t3_thread_tables` migration.
+        from .t3_thread_tables import ensure_t3_thread_tables
+
+        ensure_t3_thread_tables(cursor)
 
         migration_name = "2026_05_16_fm6_chunk_origin"
         migration_done = cursor.execute(

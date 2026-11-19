@@ -5469,9 +5469,13 @@ final class BrainDatabase: @unchecked Sendable {
             ? "source_end_offset"
             : "NULL AS source_end_offset"
         let targetContentSelect = includeFullTargetContent ? "content" : "substr(content, 1, ?)"
+        // A t3 chunk names its thread in metadata; this covers ids digested for storage safety.
+        let t3ThreadIdSelect = chunkColumns.contains("metadata")
+            ? "CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.t3_thread_id') END"
+            : "NULL"
 
         // Get the target chunk with its session_id and rowid
-        let targetSQL = "SELECT rowid, id, \(targetContentSelect), conversation_id, project, content_type, \(senderSelect), importance, created_at, summary, tags, \(sourceFileSelect), \(sourceEndOffsetSelect) FROM chunks WHERE id = ?"
+        let targetSQL = "SELECT rowid, id, \(targetContentSelect), conversation_id, project, content_type, \(senderSelect), importance, created_at, summary, tags, \(sourceFileSelect), \(sourceEndOffsetSelect), \(t3ThreadIdSelect) FROM chunks WHERE id = ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, targetSQL, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
@@ -5503,6 +5507,7 @@ final class BrainDatabase: @unchecked Sendable {
                 ? NSNull()
                 : sqlite3_column_int64(stmt, 12)
         ]
+        let t3Thread = t3ThreadInfo(conversationId: sessionId, t3ThreadId: columnText(stmt, 13))
 
         // Get surrounding chunks from same session using two separate queries
         var beforeContext: [[String: Any]] = []
@@ -5554,11 +5559,61 @@ final class BrainDatabase: @unchecked Sendable {
             }
         }
 
-        return [
+        var expanded: [String: Any] = [
             "target": target,
             "before_context": beforeContext,
             "after_context": afterContext,
             "context": beforeContext + afterContext
+        ]
+        if let t3Thread {
+            expanded["t3_thread"] = t3Thread
+        }
+        return expanded
+    }
+
+    /// The T3 thread a chunk belongs to, from the side tables t3-ingest writes (T3 PR 3.1).
+    ///
+    /// One guarded lookup: a database the lead has not migrated has no side tables, and
+    /// any SQLite error here returns nil rather than failing the expand. A session chunk
+    /// matches through `t3_thread_sessions.conversation_id`; a t3 chunk's conversation id
+    /// (or its metadata `t3_thread_id`) is the thread id itself. Several matches order as
+    /// live before deleted, active session first, then the newest thread.
+    func t3ThreadInfo(conversationId: String?, t3ThreadId: String?) -> [String: Any]? {
+        guard let db else { return nil }
+        let conversation = conversationId ?? ""
+        if conversation.isEmpty && (t3ThreadId ?? "").isEmpty { return nil }
+        guard (try? tableExists("t3_threads")) == true,
+              (try? tableExists("t3_thread_sessions")) == true else { return nil }
+        let sql = """
+            SELECT thread_id, title, project_name, project_id FROM (
+                SELECT t.thread_id, t.title, t.project_name, t.project_id, 0 AS tier,
+                       (t.deleted_at IS NOT NULL) AS gone, s.is_active AS active, t.created_at AS created
+                  FROM t3_thread_sessions AS s JOIN t3_threads AS t ON t.thread_id = s.thread_id
+                 WHERE s.conversation_id = ?1
+                UNION ALL
+                SELECT thread_id, title, project_name, project_id, 1, (deleted_at IS NOT NULL), 0, created_at
+                  FROM t3_threads WHERE thread_id = ?1 OR thread_id = ?2
+            ) ORDER BY tier, gone, active DESC, created DESC LIMIT 1
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            sqlite3_finalize(stmt)
+            return nil
+        }
+        defer { sqlite3_finalize(stmt) }
+        bindText(conversation, to: stmt, index: 1)
+        if let t3ThreadId, !t3ThreadId.isEmpty {
+            bindText(t3ThreadId, to: stmt, index: 2)
+        } else {
+            sqlite3_bind_null(stmt, 2)
+        }
+        guard sqlite3_step(stmt) == SQLITE_ROW, let threadId = columnText(stmt, 0) else { return nil }
+        let project = columnText(stmt, 2) ?? columnText(stmt, 3)
+        return [
+            "id": threadId,
+            "title": columnText(stmt, 1) ?? "",
+            "project": project.map { $0 as Any } ?? NSNull(),
+            "link": "t3://thread/\(threadId)"
         ]
     }
 
