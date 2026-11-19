@@ -22,8 +22,12 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 
 
 def _child_env():
-    # A child must import THIS checkout: an editable install can point at another one.
-    return {**os.environ, "PYTHONPATH": str(SRC), "BRAINLAYER_FORBID_EMBEDDING_MODEL": "1"}
+    # A child must import THIS checkout first (an editable install can point at another
+    # one), and keep the suite's own PYTHONPATH entries, such as the socket-guard
+    # sitecustomize directory that tests/conftest.py adds (red team a F3).
+    inherited = os.environ.get("PYTHONPATH", "")
+    pythonpath = os.pathsep.join([str(SRC), inherited]) if inherited else str(SRC)
+    return {**os.environ, "PYTHONPATH": pythonpath, "BRAINLAYER_FORBID_EMBEDDING_MODEL": "1"}
 
 
 def _vector_ids(db_path):
@@ -210,8 +214,12 @@ def test_change_check_and_write_share_one_writer_hold(tmp_path, monkeypatch):
     """Race guard for the new order (main re-checked after releasing the writer to embed).
 
     With no embed step, the change check and the write run under one writer hold, so
-    another indexer process cannot land these IDs in between: it is refused.
+    another indexer process cannot land these IDs in between. The probes sit in the
+    WRITE: the store that writes must be the very store that ran the check, never
+    closed in between, and another process must be refused at that moment. A split
+    hold (release after the check, reopen for the write) fails here (red team b F1).
     """
+    from brainlayer import index_new
     from brainlayer.ingest import t3
     from brainlayer.vector_store import VectorStore
 
@@ -219,6 +227,9 @@ def test_change_check_and_write_share_one_writer_hold(tmp_path, monkeypatch):
     destination = tmp_path / "destination.db"
     VectorStore(destination).close()
     real_changed = t3._changed_chunks
+    real_index = index_new.index_chunks_to_sqlite
+    checked_stores = []
+    closed_stores = []
     other_writer = []
     probe = (
         "import sys\n"
@@ -232,8 +243,20 @@ def test_change_check_and_write_share_one_writer_hold(tmp_path, monkeypatch):
         "    print('refused')\n"
     )
 
-    def changed_while_another_process_tries_to_write(chunks, store):
-        changed = real_changed(chunks, store)
+    def tracked_check(chunks, store):
+        checked_stores.append(store)
+        real_close = store.close
+
+        def close(*args, **kwargs):
+            closed_stores.append(store)
+            return real_close(*args, **kwargs)
+
+        store.close = close
+        return real_changed(chunks, store)
+
+    def write_while_another_process_tries_to_write(chunks, *args, store=None, **kwargs):
+        assert checked_stores and store is checked_stores[-1], "the write must reuse the check's writer hold"
+        assert store not in closed_stores, "the writer was released between the check and the write"
         completed = subprocess.run(
             [sys.executable, "-c", probe, str(destination)],
             capture_output=True,
@@ -242,9 +265,10 @@ def test_change_check_and_write_share_one_writer_hold(tmp_path, monkeypatch):
             env=_child_env(),
         )
         other_writer.append(completed.stdout.strip() or completed.stderr)
-        return changed
+        return real_index(chunks, *args, store=store, **kwargs)
 
-    monkeypatch.setattr(t3, "_changed_chunks", changed_while_another_process_tries_to_write)
+    monkeypatch.setattr(t3, "_changed_chunks", tracked_check)
+    monkeypatch.setattr(index_new, "index_chunks_to_sqlite", write_while_another_process_tries_to_write)
     result = t3.ingest_t3(state, db_path=destination, health_path=None, projection_version=2)
     assert other_writer == ["refused"]
     assert result.chunks_indexed == 2

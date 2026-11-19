@@ -525,9 +525,11 @@ def _index_chunks(
     with ExitStack() as writers:
         # One writer hold covers the change check and the write, so no other indexer
         # can land these IDs in between (main released the writer to embed and had to
-        # re-check). A connection that holds no pidfile could still land the same body
-        # in the gap before BEGIN IMMEDIATE, exactly as on main: its vector is kept and
-        # the upsert counts one more sighting. Only t3-ingest writes t3: ids.
+        # re-check). Other writers can still touch a t3 row without the pidfile: the
+        # drain appends originals when a watcher near-duplicate lands on a t3 canonical
+        # row (dedupe.merge_duplicate_chunk). Correctness rests on upsert_chunks reading
+        # the stored body again inside BEGIN IMMEDIATE (`previous`): an unchanged
+        # embedding input keeps the vector, a changed one drops it for the hotlane.
         with _timed_phase(budget.timings, "change_check_ms"):
             store = writers.enter_context(open_writer_store(db_path))
             changed = _changed_chunks(eligible, store)
