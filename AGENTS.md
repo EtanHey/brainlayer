@@ -387,6 +387,12 @@ brainlayer search "how did I implement authentication"
   never lag. Unread bytes and holds past the window stay lag (`offset_lag`, red as before). A late
   link: new entries are `t3-app-session` at once; already-indexed rows are relabelled in place by
   `scripts/retag_t3_app_provenance.py --apply` (reversible, lead-run). `tests/test_t3_linkage_hold.py`.
+- **A finished file's no-entry tail is confirmed once the entries before it are.** Bytes after a
+  file's last message (tool output, token counts) are confirmed as discarded progress only when
+  nothing of the file is buffered. If its last entries were still buffered (or held), the
+  frontier is remembered and `_retry_discarded_progress` confirms it after the poll's flush,
+  never past the read end. Before this, such a tail stayed unconfirmed forever at EOF and counted
+  as lag (9 of 15 real held sessions, 19 Nov).
 - Source: `watcher.py` (tailer + indexer), `watcher_bridge.py` (pipeline integration)
 
 <!-- ARCHITECTURE: chunk lifecycle columns superseded_by/aggregated_into/archived_at; brain_supersede has safety gate for personal data; brain_archive is soft-delete -->

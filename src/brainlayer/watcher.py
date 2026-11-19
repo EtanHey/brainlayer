@@ -1983,6 +1983,9 @@ class JSONLWatcher:
         self._quarantined_record_count_total = 0
         self._quarantined_records: list[dict[str, Any]] = []
         self._pending_quarantined_offsets: dict[str, list[tuple[int, int, int, int]]] = {}
+        # {file: (read end, offset that must be confirmed first, inode, generation)}: a no-entry
+        # tail whose checkpoint waits for the entries ahead of it (_retry_discarded_progress).
+        self._pending_discarded_progress: dict[str, tuple[int, int, int, int]] = {}
         # Sources confirmed gone (lstat ENOENT). Their tailer and registry checkpoint are kept;
         # a path leaves the set when discovery sees it again (#732).
         self._vanished_sources: set[str] = set()
@@ -2059,6 +2062,33 @@ class JSONLWatcher:
         self.offset_prune_retry_interval_s = _watch_offset_prune_retry_interval_s()
         self._last_offset_prune_attempt = float("-inf")
         self._last_prune_parent_dirs: frozenset[str] | None = None
+
+    def _retry_discarded_progress(self) -> None:
+        """Confirm a remembered no-entry tail once every entry ahead of it is confirmed.
+
+        Same rule as _checkpoint_discarded_progress, applied after a flush: nothing of the file
+        still buffered, the confirmed offset at the last indexable line, and the same tailer, inode
+        and generation that read the bytes. Never past the read end the tailer recorded.
+        """
+        for filepath, (read_end, required, inode, generation) in list(self._pending_discarded_progress.items()):
+            tailer = self._tailers.get(filepath)
+            if (
+                tailer is None
+                or self.registry.generation(filepath) != generation
+                or tailer.observed_inode not in (0, inode)
+                or tailer.offset < read_end
+            ):
+                self._pending_discarded_progress.pop(filepath, None)
+                continue
+            if (
+                self.indexer.has_buffered_source(filepath)
+                or self._pending_quarantined_offsets.get(filepath)
+                or filepath in self._file_ingestion_failures
+                or self.registry.get(filepath)[0] < required
+            ):
+                continue
+            self._pending_discarded_progress.pop(filepath, None)
+            self._advance_confirmed_offsets({filepath: (read_end, inode, generation)})
 
     def _advance_confirmed_offsets(self, confirmations: dict[str, tuple[int, int, int]]) -> None:
         for filepath, (offset, source_inode, source_generation) in confirmations.items():
@@ -2588,17 +2618,38 @@ class JSONLWatcher:
         source_inode: int,
         source_generation: int,
     ) -> None:
-        """Confirm intentionally discarded bytes without crossing indexable work."""
-        required_confirmed_offset = max(
+        """Confirm intentionally discarded bytes without crossing indexable work.
+
+        When entries ahead of these bytes are still unconfirmed (buffered for the next flush, or
+        held for T3 linkage), the frontier is remembered and retried after a flush
+        (_retry_discarded_progress) instead of dropped: a finished file's no-entry tail would
+        otherwise never be confirmed, because a reader at EOF reads nothing more, and since #1827
+        that tail counts as lag no catch-up round can drain. A later slice with no indexable line
+        extends a contiguous remembered frontier; it never confirms past what the reader read.
+        """
+        slice_required = max(
             (line["_line_end_offset"] for line in normalized_lines if isinstance(line.get("_line_end_offset"), int)),
-            default=read_start_offset,
+            default=None,
         )
+        pending = self._pending_discarded_progress.pop(filepath, None)
+        if slice_required is not None:
+            required_confirmed_offset = slice_required
+        elif (
+            pending is not None and pending[0] == read_start_offset and pending[2:] == (source_inode, source_generation)
+        ):
+            required_confirmed_offset = pending[1]
+        else:
+            required_confirmed_offset = read_start_offset
         if read_end_offset <= required_confirmed_offset:
             return
-        if self.indexer.has_buffered_source(filepath):
-            return
         confirmed_offset, _confirmed_inode = self.registry.get(filepath)
-        if confirmed_offset < required_confirmed_offset:
+        if self.indexer.has_buffered_source(filepath) or confirmed_offset < required_confirmed_offset:
+            self._pending_discarded_progress[filepath] = (
+                read_end_offset,
+                required_confirmed_offset,
+                source_inode,
+                source_generation,
+            )
             return
         self._advance_confirmed_offsets(
             {
@@ -3622,6 +3673,7 @@ class JSONLWatcher:
                     self._record_file_ingestion_failure(filepath, error)
 
             self.indexer.tick()
+            self._retry_discarded_progress()
             if self.on_tick:
                 try:
                     self.on_tick()

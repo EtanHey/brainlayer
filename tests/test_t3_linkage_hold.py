@@ -388,6 +388,104 @@ def test_the_hold_never_confirms_a_byte_the_reader_has_not_consumed(tmp_path, mo
         assert watcher._tailers[str(source)].offset == size
 
 
+def _append_no_entry_tail(source: Path, records: int) -> None:
+    """Records no parser turns into an entry: token counts and tool output, as a Codex session ends."""
+    with source.open("a", encoding="utf-8") as handle:
+        for i in range(records):
+            handle.write(
+                json.dumps(
+                    {"type": "event_msg", "payload": {"type": "token_count", "info": {"total": i}, "pad": "z" * 200}}
+                )
+                + "\n"
+            )
+
+
+def _confirming(items):
+    confirmed: dict[str, int] = {}
+    for item in items:
+        confirmed[item["_source_file"]] = max(confirmed.get(item["_source_file"], 0), item["_line_end_offset"])
+    return confirmed
+
+
+def test_a_finished_files_no_entry_tail_is_confirmed_once_its_last_entries_flush(tmp_path, monkeypatch):
+    """Live check, 19 Nov: 9 of 15 released sessions confirmed short of EOF (e.g. 179,949 of
+    3,025,612 B), because the tail after the last message holds no entry and was skipped while that
+    message was still buffered; a reader at EOF never read again. Fails on main 6f7f7ae4.
+    """
+    source = tmp_path / "home" / ".codex" / "sessions" / "2026" / "11" / "rollout-2026-11-19T10-00-00-plain.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": "plain", "cwd": "/fixture/repo"}})
+        + "\n"
+        + "".join(
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": f"plain message {i} " + "q" * 80}],
+                    },
+                }
+            )
+            + "\n"
+            for i in range(9)  # under batch_size 10: still buffered when the tail is read
+        ),
+        encoding="utf-8",
+    )
+    _append_no_entry_tail(source, 40)
+    clock = [0.0]
+    watcher = _watcher(tmp_path, source, tmp_path / "watcher-health.json", clock, on_flush=_confirming)
+
+    for _ in range(3):
+        watcher.poll_once()
+
+    assert watcher._tailers[str(source)].offset == source.stat().st_size
+    assert watcher.registry.get(str(source))[0] == source.stat().st_size
+    health = json.loads(watcher.health_path.read_text())
+    assert health["catch_up"]["bytes_behind"] == 0
+
+
+def test_a_released_sessions_no_entry_tail_is_confirmed_to_eof(tmp_path, monkeypatch):
+    session = _uuid7(time.time() - 7 * DAY_S)
+    source = _rollout(tmp_path, session, lines=13)
+    _append_no_entry_tail(source, 40)
+    _env(monkeypatch, tmp_path, _projection(tmp_path, linked=[]))
+    clock = [0.0]
+    watcher = _watcher(tmp_path, source, tmp_path / "watcher-health.json", clock)
+
+    for _ in range(3):
+        watcher.poll_once()
+
+    assert watcher.registry.get(str(source))[0] == source.stat().st_size
+    health = json.loads(watcher.health_path.read_text())
+    assert (health["catch_up"]["bytes_behind"], health["catch_up"]["files_behind"]) == (0, 0)
+
+
+def test_a_held_sessions_no_entry_tail_is_held_for_linkage_then_confirmed_on_release(tmp_path, monkeypatch):
+    """Inside the window the whole read range, tail included, is held_for_linkage (never lag);
+    once the window ends the tail is confirmed with the entries, never left behind."""
+    session = _uuid7(time.time() - 2 * 3600)
+    source = _rollout(tmp_path, session, lines=13)
+    _append_no_entry_tail(source, 40)
+    _env(monkeypatch, tmp_path, _projection(tmp_path, linked=[]))
+    clock = [0.0]
+    watcher = _watcher(tmp_path, source, tmp_path / "watcher-health.json", clock)
+
+    watcher.poll_once()
+    health = json.loads(watcher.health_path.read_text())
+    assert health["catch_up"]["held_for_linkage"]["bytes"] == source.stat().st_size
+    assert health["catch_up"]["bytes_behind"] == 0
+    assert watcher.registry.get(str(source))[0] == 0
+
+    monkeypatch.setenv("BRAINLAYER_T3_LINKAGE_HOLD_S", "3600")  # the window ends
+    for _ in range(2):
+        watcher.poll_once()
+    assert watcher.registry.get(str(source))[0] == source.stat().st_size
+    health = json.loads(watcher.health_path.read_text())
+    assert health["catch_up"]["bytes_behind"] == 0 and health["catch_up"]["held_for_linkage"]["files"] == 0
+
+
 def test_a_shorter_window_releases_a_younger_session(tmp_path, monkeypatch):
     session = _uuid7(time.time() - 2 * 3600)
     source = _rollout(tmp_path, session)
