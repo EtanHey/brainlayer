@@ -1761,7 +1761,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             let m = NDModel.make(i)
             return NDIcon.state(m, NDR1.make(i, m))
         }
-        XCTAssertEqual(dotted, ["meaning-behind", "backup-late"], "the fixtures with the dot")
+        XCTAssertEqual(dotted, ["meaning-behind", "backup-late", "lag-behind"], "the fixtures with the dot (L55: the draining lag too)")
         XCTAssertEqual(state(.meaningBehind), .amber, "L47: catching up on search by meaning carries the dot")
         XCTAssertEqual(state(.backupLate), .amber, "a late copy: the amber dot")
         // The other catching-up state: new conversations (an amber ingest lag under 30 min).

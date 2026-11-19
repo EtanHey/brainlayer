@@ -57,8 +57,9 @@ enum BrainBarMenuPresenter {
     /// rule (R20, R31): past 30 minutes it needs him, red, in true words with no button. `noticeWhileDraining` is the
     /// designer's: an amber notice while it drains, red only once it stops draining or the reader stops.
     enum LagSeverity: Sendable { case needsYouPastLimit, noticeWhileDraining }
-    /// THE switch. His answer is this one line.
-    static let lagSeverity: LagSeverity = .needsYouPastLimit
+    /// THE switch. L55 (his option A): a lag that drains by itself is a calm notice; it needs him only once it is not
+    /// draining (another watcher alert, past R20/R31's 30-minute clock) or the reader stops.
+    static let lagSeverity: LagSeverity = .noticeWhileDraining
 
     /// The lag is shown as a notice: the switch says so and the lag drains by itself (A1's "catching up by itself").
     static func lagIsNotice(_ c: Capture) -> Bool { c.lagSeverity == .noticeWhileDraining && Say.lagDraining(c) }

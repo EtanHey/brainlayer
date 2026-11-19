@@ -1182,7 +1182,8 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         "R31": { f, _ in f.p.count == 0
             && f.c.maintenanceNightFailures.map({ $0 >= 3 }) != true
             && !(f.c.watcher.map { $0.readable && $0.fresh && $0.alertReasons.contains("offset_lag") } == true
-                 && f.c.lagEpisodeStart.map { f.c.now.timeIntervalSince($0) > 1800 } == true)
+                 && f.c.lagEpisodeStart.map { f.c.now.timeIntervalSince($0) > 1800 } == true
+                 && !(f.c.lagSeverity == .noticeWhileDraining && f.draining))  // L55: a draining lag does not escalate
             && (f.c.verdict?.checks.contains { $0.state == .amber } == true
             || f.c.watcher.map { w in w.readable && w.fresh && w.alertReasons.contains { !["offset_lag", "quarantined_record"].contains($0) && !($0 == "coverage_drop" && w.dbProbeFailed) } } == true) },
         "R02.headline": { f, _ in f.catchingUp },

@@ -151,8 +151,22 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertEqual(status.dashboardStatus.headline, "Check soon")
     }
 
+    /// L55: a red or 30-minute lag that drains by itself is a calm notice and posts nothing; one that is not draining (the
+    /// lag beside another watcher alert) still needs him and notifies.
     func testLagRedAndThirtyMinuteEscalationStillNeedYou() async {
         for c in [lagCapture(state: .red), lagCapture(age: 1801)] {
+            let p = BrainBarMenuPresenter.present(c)
+            XCTAssertEqual(p.form, .calm)
+            XCTAssertEqual(p.count, 0)
+            XCTAssertEqual(p.headline, BrainBarMenuPresenter.Say.lagBehind.text)
+            let center = Center()
+            await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c)
+            XCTAssertTrue(center.posts.isEmpty, "L55: no notification while it drains")
+        }
+        var red = lagCapture(state: .red), late = lagCapture(age: 1801)
+        red.watcher?.alertReasons.append("file_ingestion_failure")
+        late.watcher?.alertReasons.append("file_ingestion_failure")
+        for c in [red, late] {
             let p = BrainBarMenuPresenter.present(c)
             XCTAssertEqual(p.form, .needs)
             XCTAssertEqual(p.icon, .marked)

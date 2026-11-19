@@ -230,7 +230,7 @@ final class BrainBarNewDesignR111Tests: XCTestCase {
             XCTAssertEqual(p.rows.first { $0.kind == .headline }?.mark, .notice)
         }
         // The window follows the same rule: the Overview and dropdown headlines carry no mark over their problem rows.
-        for name in [BrainBarDesignFixture.Name.twoFaults, .driveSignedOut, .lagBehind, .searchFailing] {
+        for name in [BrainBarDesignFixture.Name.twoFaults, .driveSignedOut, .searchFailing] {  // L55: lag-behind is a notice
             let i = BrainBarDesignFixture.inputs(name)
             let m = NDModel.make(i), r1 = NDR1.make(i, m)
             XCTAssertGreaterThan(r1.redCount, 0, "\(name)")
@@ -242,9 +242,44 @@ final class BrainBarNewDesignR111Tests: XCTestCase {
 
     // MARK: the lag's severity, one named switch
 
+    /// L55 (his option A): the switch defaults to the calm notice.
     func testTheSeveritySwitchDefaultsToTodaysRule() {
-        XCTAssertEqual(BrainBarMenuPresenter.lagSeverity, .needsYouPastLimit, "R20/R31 until he answers")
+        XCTAssertEqual(BrainBarMenuPresenter.lagSeverity, .noticeWhileDraining, "L55: a lag that drains by itself is a notice")
         XCTAssertEqual(BrainBarMenuCapture(now: Self.now, timeZone: .current).lagSeverity, BrainBarMenuPresenter.lagSeverity)
+    }
+
+    /// L55, with the default capture (no switch set by the test), one deterministic capture per state: draining past 30
+    /// minutes is a notice (no count, no notification); not draining past 30 minutes, or the reader stopped, needs him.
+    func testL55EachStateOnTheDefault() {
+        func lag(_ reasons: [String], fresh: Bool = true) -> BrainBarMenuCapture {
+            Self.capture(["ingest": .amber]) {
+                $0.watcher = .init(fresh: fresh, alertReasons: reasons, lagBytes: Self.mb117, lastReadAt: Self.now.addingTimeInterval(-2400))
+                $0.lagEpisodeStart = Self.now.addingTimeInterval(-2400)
+            }
+        }
+        let draining = lag(["offset_lag"])
+        let p = BrainBarMenuPresenter.present(draining)
+        XCTAssertEqual(p.form, .calm)
+        XCTAssertEqual(p.count, 0)
+        XCTAssertEqual(p.headline, Say.lagBehind.text)
+        XCTAssertEqual(p.rows.first { $0.kind == .headline }?.mark, .notice)
+        XCTAssertTrue(BrainBarMenuPresenter.notificationFaults(draining).isEmpty, "no notification while it drains")
+        XCTAssertEqual(BrainBarMenuInvariantTests.violations(draining, p), [])
+
+        let notDraining = lag(["offset_lag", "file_ingestion_failure"])
+        let q = BrainBarMenuPresenter.present(notDraining)
+        XCTAssertEqual(q.form, .needs)
+        XCTAssertEqual(q.count, 1)
+        XCTAssertEqual(q.rows.first { $0.kind == .needsYou }?.strings.first, Say.lagBehind.text)
+        XCTAssertFalse(BrainBarMenuPresenter.notificationFaults(notDraining).isEmpty, "past 30 minutes and not draining: it notifies")
+        XCTAssertEqual(BrainBarMenuInvariantTests.violations(notDraining, q), [])
+
+        var stopped = Self.capture(["ingest": .red])
+        stopped.watcher = .init(fresh: false, alertReasons: ["offset_lag"], lastReadAt: Self.now.addingTimeInterval(-3000))
+        let r = BrainBarMenuPresenter.present(stopped)
+        XCTAssertEqual(r.form, .needs)
+        XCTAssertEqual(r.rows.first { $0.kind == .needsYou }?.strings.first, Say.stopped.text)
+        XCTAssertEqual(BrainBarMenuInvariantTests.violations(stopped, r), [])
     }
 
     /// Today's side (R20, R31): past its limit the lag needs him, red, true words, no button, and it notifies.
@@ -283,11 +318,11 @@ final class BrainBarNewDesignR111Tests: XCTestCase {
             XCTAssertEqual(p.form, .needs, "\(p.rows.map(\.strings))")
             XCTAssertEqual(BrainBarMenuInvariantTests.violations(c, p), [])
         }
-        // The window takes the same decision: the reader's item is amber on this side and red on today's.
+        // The window takes the same decision: the reader's item is amber on this side (L55's default) and red on the other.
         var i = BrainBarDesignFixture.inputs(.lagBehind)
-        XCTAssertEqual(NDR1.make(i, NDModel.make(i)).items.first { $0.id == "reader" }?.severity, .red)
-        i.capture.lagSeverity = .noticeWhileDraining
         XCTAssertEqual(NDR1.make(i, NDModel.make(i)).items.first { $0.id == "reader" }?.severity, .orange)
+        i.capture.lagSeverity = .needsYouPastLimit
+        XCTAssertEqual(NDR1.make(i, NDModel.make(i)).items.first { $0.id == "reader" }?.severity, .red)
     }
 
     // MARK: the classic menu reads the same rows

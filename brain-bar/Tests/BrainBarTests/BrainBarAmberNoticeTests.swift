@@ -98,13 +98,14 @@ final class BrainBarAmberNoticeTests: XCTestCase {
     }
     func testNoDuplicateAtAmberLagTimeEscalation() {
         var c = capture("ingest", .amber)
-        c.watcher?.alertReasons = ["offset_lag"]
+        // L55: the 30-minute clock escalates only a lag that is not draining (here, beside another watcher alert).
+        c.watcher?.alertReasons = ["offset_lag", "file_ingestion_failure"]
         c.lagEpisodeStart = c.now.addingTimeInterval(-1801)
         assertOneRow(c, titled: BrainBarMenuPresenter.Say.lagBehind.text)
         let p = BrainBarMenuPresenter.present(c)
         XCTAssertEqual(p.rows.filter { $0.kind == .needsYou }.count, 1)
         XCTAssertEqual(p.rows.first { $0.kind == .needsYou }?.strings.first, BrainBarMenuPresenter.Say.lagBehind.text)
-        XCTAssertNil(p.rows.first { $0.kind == .needsYou }?.action, "R1.11: nobody acts on a lag that drains by itself")
+        XCTAssertNil(p.rows.first { $0.kind == .needsYou }?.action, "R1.11: the lag row itself carries no button")
         XCTAssertEqual(p.count, 1)
         XCTAssertEqual(p.icon, .marked)
     }

@@ -225,7 +225,10 @@ extension NDPipelineState {
         }
 
         // c1: one agent's sessions not read (its row in the group), or the reader itself stalled (the Read station).
-        if let ingest = check("ingest"), let sev = severity(ingest) {
+        if let ingest = check("ingest"), var sev = severity(ingest) {
+            // L55: a red reader that is only the lag draining by itself is drawn as the notice the menu says (the one
+            // switch's decision), never as a fault.
+            if sev == .red, BrainBarMenuPresenter.lagIsNotice(c) { sev = .orange }
             let agents = agentCodes(ingest)
             if agents.isEmpty {
                 mark(.read, sev)
