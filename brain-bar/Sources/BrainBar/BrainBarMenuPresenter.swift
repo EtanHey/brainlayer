@@ -87,13 +87,26 @@ enum BrainBarMenuPresenter {
         if let size, let span { said.append(Say.lagLeftFor(size, span)) } else if let size { said.append(Say.lagLeft(size)) } else if let span {
             said.append(Say.lagFor(span))
         }
-        if Say.lagDraining(c) { said.append(Say.byItself.text) }
+        // A2 (R1.13): with BrainLayer's estimate, how long it has to go.
+        if Say.lagDraining(c) { said.append(Say.lagEta(c).map { Say.byItselfEta($0) } ?? Say.byItself.text) }
         return said.isEmpty ? nil : said.joined(separator: " ")
     }
 
+    /// R1.13: A3's title when the producer says the lag stopped shrinking, else A1's.
+    static func lagTitle(_ c: Capture) -> String { Say.producerStalled(c) ? Say.notCatchingUp.text : Say.lagBehind.text }
+
+    /// The lag needs him when the one escalation decision says so (past R20/R31's clock and not draining), or the reader is
+    /// red and that red is not only the draining lag. Everything else is a notice (L55).
+    static func lagNeedsYou(_ c: Capture) -> Bool {
+        appEscalationCauses(c).contains(appNotificationCause("offset_lag"))
+            || ((c.verdict?.checks ?? []).contains { $0.name == "ingest" && $0.state == .red } && !lagExcusesRed(c))
+    }
+
     private static func lagLine(_ c: Capture) -> Line {
-        Line(thing: .remembering, level: lagIsNotice(c) ? .notice : .needs, strings: [Say.lagBehind.text] + (lagDetail(c).map { [$0] } ?? []),
-             headline: Say.lagBehind.text, action: nil, handoff: [])
+        // A3 (stalled): an agent needs to look, with the report; A1 and A2: nobody acts.
+        let stalled = Say.producerStalled(c)
+        return Line(thing: .remembering, level: lagNeedsYou(c) ? .needs : .notice, strings: [lagTitle(c)] + (lagDetail(c).map { [$0] } ?? []),
+                    headline: lagTitle(c), action: stalled ? .copyReport : nil, handoff: stalled ? [Say.agent.text] : [])
     }
 
     /// A5 to A7: a watcher alert, named. Nil for an alert this BrainBar cannot name.
@@ -332,6 +345,8 @@ enum BrainBarMenuPresenter {
     static func ingestLagDisposition(_ c: Capture) -> IngestLagDisposition {
         guard let w = c.watcher, w.readable, w.fresh, w.alertReasons.contains("offset_lag") else { return .unconfirmed }
         if lagPastLimit(c) { return .escalated }
+        // R1.13: the producer says it stopped shrinking; under the clock it is not "catching up" (R02), it is A3's notice.
+        if Say.producerStalled(c) { return .unconfirmed }
         let ingest = c.verdict?.checks.filter { $0.name == "ingest" } ?? []
         guard !w.dbProbeFailed, !ingest.isEmpty,
               ingest.allSatisfy({ $0.state == .green || $0.state == .amber }) else { return .unconfirmed }

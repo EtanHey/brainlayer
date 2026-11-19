@@ -85,6 +85,13 @@ final class BrainBarMenuInvariantTests: XCTestCase {
             // R1.11 (A1): base 2 knows the bytes left (117 MB); on profile 3 it has no episode clock, so only the bytes are said.
             c.watcher = .init(alertReasons: ["offset_lag"], lagBytes: input.base == 2 ? 122_683_392 : nil)
             c.lagEpisodeStart = input.base == 2 && input.profile == 3 ? nil : now.addingTimeInterval(input.base == 4 ? -1860 : -480)
+            // R1.13 (#1827): on profile 4 the producer writes `catch_up`: base 2's lag is catching up (no offset_lag, an
+            // estimate of 25 min); base 4's stopped shrinking past the clock (offset_lag, stalled).
+            if input.profile == 4, input.base == 2 {
+                c.watcher = .init(alertReasons: [], lagBytes: 122_683_392,
+                                  catchUp: .init(state: "catching_up", bytesBehind: 122_683_392, etaS: 1500))
+            }
+            if input.profile == 4, input.base == 4 { c.watcher?.catchUp = .init(state: "stalled", bytesBehind: 122_683_392) }
         }
         if input.base == 3 {
             // R1.11: A6 on most profiles; A5 (coverage) on 2, A7 (a provider) on 3, and on 4 a file gone stale (A4, last read 50 min ago).
@@ -1059,6 +1066,7 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         var catchingUp: Bool {
             c.watcher.map { $0.readable && $0.fresh && !$0.dbProbeFailed && $0.alertReasons.contains("offset_lag") } == true
                 && c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } != true && every("ingest") { $0.state == .green || $0.state == .amber }
+                && !producerStalled  // R1.13: a lag BrainLayer says stopped shrinking is not catching up
         }
         /// A time the words can name (Foundation's own range; NaN is in no range).
         func nameable(_ d: Date) -> Bool { Self.nameable(d) }
@@ -1142,15 +1150,28 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         /// A watcher alert on a file that is readable and fresh.
         func alert(_ reason: String) -> Bool { c.watcher.map { $0.readable && $0.fresh && $0.alertReasons.contains(reason) } == true }
         /// A1: lag on a fresh file, past 30 minutes on the app's clock, or `ingest` red.
-        var lagShown: Bool { alert("offset_lag") && (c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } == true || red("ingest")) }
+        /// R1.13 (#1827): the producer's own measure on a fresh file: catching up (a new low, an estimate) or stalled
+        /// (`offset_lag` raised again).
+        var producerCatchingUp: Bool { c.watcher.map { $0.readable && $0.fresh && $0.catchUp?.state == "catching_up" } == true }
+        var producerStalled: Bool { alert("offset_lag") && c.watcher?.catchUp?.state == "stalled" }
+        var lagShown: Bool {
+            (alert("offset_lag") && (c.lagEpisodeStart.map { c.now.timeIntervalSince($0) > 1800 } == true || red("ingest") || producerStalled))
+                || producerCatchingUp
+        }
+        /// The estimate as `{span}` words, while the producer says it is catching up.
+        var lagEta: String? { producerCatchingUp ? c.watcher?.catchUp?.etaS.flatMap(BrainBarMenuInvariantTests.spanWords) : nil }
         /// A1's "catching up by itself": the lag is the only alert but R10's.
-        var draining: Bool { lagShown && c.watcher!.alertReasons.allSatisfy { $0 == "offset_lag" || $0 == "quarantined_record" } }
+        /// L55 with R1.13: the producer's catching_up when it writes `catch_up`; for an older one, the lag as the only alert.
+        var draining: Bool {
+            if c.watcher?.catchUp != nil { return producerCatchingUp }
+            return lagShown && c.watcher!.alertReasons.allSatisfy { $0 == "offset_lag" || $0 == "quarantined_record" }
+        }
         /// The notice side of the one switch holds, and the only red is that lag's.
         var lagNotice: Bool {
             c.lagSeverity == .noticeWhileDraining && draining && (c.verdict?.checks ?? []).allSatisfy { $0.state != .red || $0.name == "ingest" }
         }
         var stopped: Bool { red("ingest") && c.watcher.map { $0.readable && !$0.fresh } == true }
-        var lagSize: String? { c.watcher?.lagBytes.flatMap(BrainBarMenuInvariantTests.sizeWords) }
+        var lagSize: String? { (c.watcher?.catchUp?.bytesBehind ?? c.watcher?.lagBytes).flatMap(BrainBarMenuInvariantTests.sizeWords) }
         var lagSpan: String? { c.lagEpisodeStart.flatMap { BrainBarMenuInvariantTests.spanWords(c.now.timeIntervalSince($0)) } }
         /// A7: a provider named by `growth_not_indexed:` on a red or amber `ingest` check's context, or as a fresh watcher alert.
         var providers: [String] {
@@ -1230,6 +1251,8 @@ final class BrainBarMenuInvariantTests: XCTestCase {
         "A1.left": { f, v in f.lagShown && f.lagSize == v[0] },
         "A1.for": { f, v in f.lagShown && f.lagSpan == v[0] },
         "A1.byItself": { f, _ in f.draining },
+        "A2.byItself": { f, v in f.draining && f.lagEta == v[0] },  // R1.13: with BrainLayer's estimate
+        "A3": { f, _ in f.producerStalled },  // R1.13: BrainLayer says the lag stopped shrinking
         "A4": { f, _ in f.stopped },
         "A4.lastRead": { f, v in f.stopped && f.c.watcher?.lastReadAt.map { $0 <= f.c.now && f.nameable($0) && f.dayWords($0) == v[0] } == true },
         "A5": { f, _ in f.alert("coverage_drop") && f.c.watcher?.dbProbeFailed == false },

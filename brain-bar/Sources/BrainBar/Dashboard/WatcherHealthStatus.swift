@@ -17,6 +17,9 @@ struct WatcherHealthFile: Sendable, Equatable {
     /// How many quarantined records the producer listed in detail (capped at 100). nil = not reported.
     var quarantinedRecordsListed: Int?
     var earliestQuarantinedRecordAt: Date?
+    /// BrainLayer #1827 (release 1.6.6): `catch_up`, the watcher's measured catch-up. nil when the producer is older and
+    /// writes none.
+    var catchUp: WatcherCatchUp? = nil
 }
 
 enum WatcherHealthFileRead: Sendable, Equatable {
@@ -400,8 +403,19 @@ enum WatcherHealthReader {
             earliestFileIngestionFailureAt: earliestObservedAt(payload["file_ingestion_failures"]),
             quarantinedRecordCount: integers["quarantined_record_count_total"] ?? 0,
             quarantinedRecordsListed: (payload["quarantined_records"] as? [Any])?.count,
-            earliestQuarantinedRecordAt: earliestObservedAt(payload["quarantined_records"])
+            earliestQuarantinedRecordAt: earliestObservedAt(payload["quarantined_records"]),
+            catchUp: payload["catch_up"].map(catchUp)
         ))
+    }
+
+    /// #1827's `catch_up`, read part by part (it is newer and optional, so a bad part never makes the whole file
+    /// unreadable): a block that is not an object, or a part of another type, leaves that part unknown.
+    static func catchUp(_ raw: Any) -> WatcherCatchUp {
+        guard let block = raw as? [String: Any] else { return WatcherCatchUp() }
+        let behind = block["bytes_behind"].flatMap(strictInteger).flatMap { $0 >= 0 ? $0 : nil }
+        let eta = (block["eta_s"] as? NSNumber).flatMap { CFGetTypeID($0) == CFBooleanGetTypeID() ? nil : $0.doubleValue }
+            .flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        return WatcherCatchUp(state: block["state"] as? String, bytesBehind: behind, etaS: eta)
     }
 
     /// JSON numbers arrive as NSNumber. Swift can bridge both booleans and whole-valued

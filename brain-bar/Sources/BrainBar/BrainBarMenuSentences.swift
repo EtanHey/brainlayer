@@ -139,16 +139,30 @@ extension BrainBarMenuPresenter {
         }
         /// D2: the health check itself is late.
         static func monitorLate(_ c: Capture) -> Bool { !states(c, "monitor", [.red, .amber]).isEmpty }
-        /// A1: lag on a readable, fresh watcher file, past the app’s 30-minute clock or with `ingest` red.
-        static func lagShown(_ c: Capture) -> Bool { fresh(c, "offset_lag") && (lagPastLimit(c) || red(c, "ingest")) }
-        /// A1’s “catching up by itself”: the lag is the watcher’s only alert (R10’s quarantined records aside).
-        static func lagDraining(_ c: Capture) -> Bool {
-            lagShown(c) && c.watcher?.alertReasons.allSatisfy { ["offset_lag", "quarantined_record"].contains($0) } == true
+        /// R1.13 (#1827): the producer measures the lag at a new low over its window, with an estimate (`offset_lag` is
+        /// then not an alert reason).
+        static func producerCatchingUp(_ c: Capture) -> Bool {
+            c.watcher.map { $0.readable && $0.fresh && $0.catchUp?.state == "catching_up" } == true
         }
+        /// R1.13 (#1827): the producer says the lag stopped shrinking (`catch_up.state` stalled, `offset_lag` raised again).
+        static func producerStalled(_ c: Capture) -> Bool { fresh(c, "offset_lag") && c.watcher?.catchUp?.state == "stalled" }
+        /// A1: lag on a readable, fresh watcher file, past the app’s 30-minute clock or with `ingest` red; R1.13: or the
+        /// producer’s catch-up, catching up or stalled.
+        static func lagShown(_ c: Capture) -> Bool {
+            (fresh(c, "offset_lag") && (lagPastLimit(c) || red(c, "ingest") || producerStalled(c))) || producerCatchingUp(c)
+        }
+        /// A1’s “catching up by itself”. R1.13: from a producer with `catch_up`, its own measure (catching_up); from an
+        /// older one, L55’s approximation: the lag is the watcher’s only alert (R10’s quarantined records aside).
+        static func lagDraining(_ c: Capture) -> Bool {
+            if c.watcher?.catchUp != nil { return producerCatchingUp(c) }
+            return lagShown(c) && c.watcher?.alertReasons.allSatisfy { ["offset_lag", "quarantined_record"].contains($0) } == true
+        }
+        /// A2: the producer’s estimate as `{span}` words, only while it is catching up.
+        static func lagEta(_ c: Capture) -> String? { producerCatchingUp(c) ? c.watcher?.catchUp?.etaS.flatMap(span) : nil }
         /// A4: `ingest` red, and the watcher file readable but no longer fresh.
         static func readerStopped(_ c: Capture) -> Bool { red(c, "ingest") && c.watcher.map { $0.readable && !$0.fresh } == true }
         /// The words for the bytes left to read and the episode’s length, or nil when the fact is not in the capture.
-        static func lagSize(_ c: Capture) -> String? { c.watcher?.lagBytes.flatMap(size) }
+        static func lagSize(_ c: Capture) -> String? { (c.watcher?.catchUp?.bytesBehind ?? c.watcher?.lagBytes).flatMap(size) }
         static func lagSpan(_ c: Capture) -> String? { c.lagEpisodeStart.flatMap { span(c.now.timeIntervalSince($0)) } }
 
         // MARK: the calm form (A2)
@@ -213,6 +227,12 @@ extension BrainBarMenuPresenter {
         static let lagLeft = S("A1.left", .claim, "{size} left to read.") { c, _, v in lagShown(c) && lagSize(c) == v[0] }
         static let lagFor = S("A1.for", .claim, "Behind for {span}.") { c, _, v in lagShown(c) && lagSpan(c) == v[0] }
         static let byItself = S("A1.byItself", .claim, "It’s catching up by itself.") { c, _, _ in lagDraining(c) }
+        /// A2 (approved words #3): with the producer’s estimate.
+        static let byItselfEta = S("A2.byItself", .claim, "It’s catching up by itself, about {span} to go.") { c, _, v in
+            lagDraining(c) && lagEta(c) == v[0]
+        }
+        /// A3 (approved words #4, its title): the producer says the lag stopped shrinking.
+        static let notCatchingUp = S("A3", .claim, "Reading new conversations isn’t catching up", .remembering) { c, _, _ in producerStalled(c) }
         /// A4: `ingest` red and the watcher file readable but not fresh.
         static let stopped = S("A4", .claim, "Reading new conversations has stopped", .remembering) { c, _, _ in readerStopped(c) }
         static let lastRead = S("A4.lastRead", .claim, "It last read {at}.") { c, _, v in
@@ -340,7 +360,7 @@ extension BrainBarMenuPresenter {
             fineIs, fineAre, everythingElse, countOne, countMany, d5, d5Line, agent, ifNotFinished, u03, stillSaved, s19,
             checkSoon, s19Memory, f07, f07Since, exactWords, noRecord, nothingInDrive, s32, s32Progress, s32On, s32ProgressOn, s06, s06Newest, s06Confirmed, r15, s13,
             s13Missing, s13Detail, s13DetailMissing, d13, d13Missing, reconnect, connect, copyReport, storage, settings, quit, restart,
-            lagBehind, lagLeftFor, lagLeft, lagFor, byItself, stopped, lastRead, coverage, coverageLine, unreadFiles, unreadFilesLine,
+            lagBehind, lagLeftFor, lagLeft, lagFor, byItself, byItselfEta, notCatchingUp, stopped, lastRead, coverage, coverageLine, unreadFiles, unreadFilesLine,
             providerUnread, providerUnreadLine, savesStuck, savesStuckLine, savesSlow, savesSlowLine, searchDown, searchFails, searchCheck,
             searchOneOff, localLate, driveLate, conversationsLate, newestIs, localRunningLate, driveRunningLate, conversationsRunningLate,
             noRoom, roomTight, checksStopped, checksLastRan, unknownCheck, newerLayer, updateNames, asOf,

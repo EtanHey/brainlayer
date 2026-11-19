@@ -318,8 +318,10 @@ final class BrainBarNewDesignR111Tests: XCTestCase {
             XCTAssertEqual(p.form, .needs, "\(p.rows.map(\.strings))")
             XCTAssertEqual(BrainBarMenuInvariantTests.violations(c, p), [])
         }
-        // The window takes the same decision: the reader's item is amber on this side (L55's default) and red on the other.
-        var i = BrainBarDesignFixture.inputs(.lagBehind)
+        // The window takes the same decision: an older producer's red, draining reader is amber on this side (L55's
+        // default) and red on the other.
+        var i = BrainBarDesignFixture.inputs(.lagStalled)
+        i.capture.watcher?.catchUp = nil
         XCTAssertEqual(NDR1.make(i, NDModel.make(i)).items.first { $0.id == "reader" }?.severity, .orange)
         i.capture.lagSeverity = .needsYouPastLimit
         XCTAssertEqual(NDR1.make(i, NDModel.make(i)).items.first { $0.id == "reader" }?.severity, .red)

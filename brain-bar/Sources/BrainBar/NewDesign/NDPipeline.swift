@@ -232,9 +232,17 @@ extension NDPipelineState {
             let agents = agentCodes(ingest)
             if agents.isEmpty {
                 mark(.read, sev)
-                // D6: amber is late, not stopped: the last-read time in amber; red says it is not being read.
-                s.status[.read] = sev == .red ? Status(text: Say.notBeingRead, severity: .red)
-                    : s.status[.read].map { Status(text: $0.text, severity: .orange) }
+                // R1.13: the lag's own words, as the menu's: "catching up" while BrainLayer measures it draining, else how
+                // far behind ("117 MB behind") once it stopped; never "not being read" for a reader that is reading.
+                if BrainBarMenuPresenter.Say.lagDraining(c) {
+                    s.status[.read] = Status(text: Say.catchingUp, severity: sev)
+                } else if BrainBarMenuPresenter.Say.producerStalled(c), let size = BrainBarMenuPresenter.Say.lagSize(c) {
+                    s.status[.read] = Status(text: Say.behind(size), severity: sev)
+                } else {
+                    // D6: amber is late, not stopped: the last-read time in amber; red says it is not being read.
+                    s.status[.read] = sev == .red ? Status(text: Say.notBeingRead, severity: .red)
+                        : s.status[.read].map { Status(text: $0.text, severity: .orange) }
+                }
             } else {
                 // R1.4 change 3 (L38): only the providers the check names; Read's status names them. R1.5 change 6 (L41):
                 // in plain words, the normal status colour: the fault is marked once, on the agent's icon.

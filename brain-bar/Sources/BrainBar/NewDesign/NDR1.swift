@@ -150,12 +150,18 @@ struct NDR1: Equatable, Sendable {
                     items.append(Item(id: "agent", severity: sev, title: Say.agentNotRead(NDProvider.name(first)), detail: Say.agentNotReadDetail,
                                       action: sev == .red ? copyReport : nil, strip: Strip(from: NDProvider.name(first), to: Say.stageRead, side: .source, severity: sev),
                                       concerns: ["ingest"], station: .agents))  // R1.12: one wording; Read's status is the tail
-                } else if sev == .red, BrainBarMenuPresenter.Say.lagShown(c) {
-                    // R1.11 (A1): a red reader that is only behind names the lag, says how far, and has no button; its
-                    // severity is the presenter's one switch.
-                    let lagSeverity: NDSeverity = BrainBarMenuPresenter.lagIsNotice(c) ? .orange : .red
+                } else if BrainBarMenuPresenter.Say.lagShown(c), sev == .red || BrainBarMenuPresenter.Say.lagDraining(c)
+                            || BrainBarMenuPresenter.Say.producerStalled(c) {
+                    // R1.11 (A1), R1.13 (A2, A3): the lag named, how far, BrainLayer's estimate when it has one; its severity
+                    // and its button are the presenter's one decision (a stalled lag carries the report).
+                    let lagSeverity: NDSeverity = BrainBarMenuPresenter.lagNeedsYou(c) ? .red : .orange
+                    let stalled = BrainBarMenuPresenter.Say.producerStalled(c)
                     items.append(Item(id: "reader", severity: lagSeverity,
-                                      title: BrainBarMenuPresenter.Say.lagBehind.text, detail: BrainBarMenuPresenter.lagDetail(c), action: nil,
+                                      title: BrainBarMenuPresenter.lagTitle(c),
+                                      // A3: who acts, as the menu's row says it.
+                                      detail: ([BrainBarMenuPresenter.lagDetail(c)] + (stalled ? [BrainBarMenuPresenter.Say.agent.text] : []))
+                                          .compactMap { $0 }.joined(separator: " "),
+                                      action: stalled && lagSeverity == .red ? copyReport : nil,
                                       strip: Strip(from: Say.yourAgents, to: Say.stageRead, side: .target, severity: lagSeverity),
                                       concerns: ["ingest"], station: .read))
                 } else {

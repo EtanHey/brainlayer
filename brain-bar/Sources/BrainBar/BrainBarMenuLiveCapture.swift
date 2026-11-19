@@ -37,7 +37,8 @@ enum BrainBarMenuLiveCapture {
             c.watcher = .init(readable: true,
                 fresh: watcherAwakeAgeS.map { (0.0...WatcherHealthStatus.staleHeartbeatSeconds).contains($0) } ?? false,
                 alertReasons: file.alertReasons, dbProbeFailed: file.dbProbeFailed,
-                lagBytes: file.maxOffsetLagBytes > 0 ? file.maxOffsetLagBytes : nil, lastReadAt: file.updatedAt)
+                lagBytes: file.maxOffsetLagBytes > 0 ? file.maxOffsetLagBytes : nil, lastReadAt: file.updatedAt,
+                catchUp: file.catchUp)
         }
         let daily = observations?[.backupDaily]
         c.backupDailyFailures = daily?.calendarHistoryDamaged == true ? nil : daily?.calendarConsecutiveFailures

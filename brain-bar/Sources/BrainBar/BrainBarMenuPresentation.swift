@@ -12,6 +12,8 @@ struct BrainBarMenuCapture: Sendable {
         var lagBytes: Int? = nil
         /// R1.11 (A4): the file's `updated_at`, when the reader last reported.
         var lastReadAt: Date? = nil
+        /// R1.13: BrainLayer #1827's `catch_up`; nil from an older producer (L55's approximation then stands).
+        var catchUp: WatcherCatchUp? = nil
     }
 
     /// `localSnapshot.uploadState == "in_progress"`, with `uploadProcessStartedAt` / `uploadProcessLive`.
@@ -54,6 +56,16 @@ struct BrainBarMenuCapture: Sendable {
     /// R1.11: how a lag that drains by itself is shown. Production takes the one named switch,
     /// `BrainBarMenuPresenter.lagSeverity`; a test sets either side here.
     var lagSeverity: BrainBarMenuPresenter.LagSeverity = BrainBarMenuPresenter.lagSeverity
+}
+
+/// `catch_up` in watcher-health.json (BrainLayer #1827): `state` is none, behind, catching_up (a lag at a new low over
+/// its window, with an estimate; `offset_lag` is then NOT an alert reason) or stalled (`offset_lag` raised). Each part is
+/// read on its own; a part the file does not carry, or carries in another type, is nil: unknown, never guessed. Declared
+/// here, with the menu's own types, because the presentation reads it (CI's menu filter covers this file).
+struct WatcherCatchUp: Sendable, Equatable {
+    var state: String? = nil
+    var bytesBehind: Int? = nil
+    var etaS: Double? = nil
 }
 
 /// Everything the M menu and icon show for one capture (phase-8 PRESENTATION-SPEC.md).

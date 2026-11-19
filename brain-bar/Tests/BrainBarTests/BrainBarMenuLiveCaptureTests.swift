@@ -21,6 +21,7 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         "watcher.dbProbeFailed": "mapped from WatcherHealthFile.dbProbeFailed",
         "watcher.lagBytes": "mapped from WatcherHealthFile.maxOffsetLagBytes when above zero; zero -> nil (R1.11 A1)",
         "watcher.lastReadAt": "mapped from WatcherHealthFile.updatedAt (R1.11 A4)",
+        "watcher.catchUp": "mapped from WatcherHealthFile.catchUp, BrainLayer #1827's catch_up; absent from an older producer -> nil (R1.13)",
         "lagSeverity": "mapped from BrainBarMenuPresenter.lagSeverity, the one named switch (R1.11)",
         "upload": "mapped from measured backups.localSnapshot in_progress with both process fields",
         "upload.startedAt": "mapped from localSnapshot.uploadProcessStartedAt",
