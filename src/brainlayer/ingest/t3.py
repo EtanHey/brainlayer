@@ -13,9 +13,11 @@ import hashlib
 import json
 import logging
 import sqlite3
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from ..alarm import BrainLayerAlarm, raise_alarm
@@ -30,6 +32,26 @@ DEFAULT_T3_MAX_CHANGED_CHUNKS = 200
 T3_SOURCE = "t3"
 T3_PROVENANCE_CLASS = "t3-thread"
 DEFAULT_T3_HEALTH_PATH = Path("~/.local/share/brainlayer/t3-health.json").expanduser()
+
+_PHASES = ("read_ms", "chunk_ms", "change_check_ms", "embed_ms", "write_ms")
+
+
+@contextmanager
+def _timed_phase(timings, phase):
+    started = perf_counter()
+    try:
+        yield
+    finally:
+        timings[phase] = timings.get(phase, 0.0) + (perf_counter() - started) * 1000
+
+
+def _legacy_fingerprint(path):
+    stat = path.stat()
+    fingerprint = {**t3_bookmark.identity(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    wal = Path(str(path) + "-wal")
+    fingerprint["wal"] = [wal.stat().st_size, wal.stat().st_mtime_ns] if wal.exists() else None
+    return fingerprint
+
 
 _REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
     "projection_threads": frozenset({"thread_id", "project_id", "title", "created_at"}),
@@ -88,6 +110,11 @@ class T3Thread:
 
 @dataclass
 class T3IngestionResult:
+    read_ms: float = 0.0
+    chunk_ms: float = 0.0
+    change_check_ms: float = 0.0
+    embed_ms: float = 0.0
+    write_ms: float = 0.0
     mode: str = "full"
     events_read: int = 0
     bookmark_from: int | None = None
@@ -133,6 +160,7 @@ class T3Reader:
         self.health_path = Path(health_path).expanduser() if health_path is not None else None
         self._last_counts: dict[str, Any] = {}
         self._failures: list[dict[str, Any]] = []
+        self._timings = dict.fromkeys(_PHASES, 0.0)
 
     def read_threads(self, *, report_success: bool = True) -> list[T3Thread]:
         """Read a complete short snapshot of the T3 projections.
@@ -154,7 +182,7 @@ class T3Reader:
                     self._bookmark_info, mids, tids, self._next_bookmark = t3_bookmark.window(
                         conn, self._previous_bookmark, source_identity
                     )
-                    if self._bookmark_info["mode"] == "incremental":
+                    if self._bookmark_info["mode"] in ("incremental", "bounded"):
                         selection = (mids, tids)
                         if getattr(self, "_include_message_identities", False):
                             # Legacy precedence needs all V2 owners, not just touched threads.
@@ -306,15 +334,14 @@ class T3Reader:
     def _read_v2_snapshot(conn: sqlite3.Connection, selection=None) -> list[T3Thread]:
         """Read only the explicitly selected V2 projection; never fall back to legacy rows."""
         # JSON parameters avoid SQLite's bound-variable limit for large replay windows.
-        params = () if selection is None else tuple(json.dumps(sorted(ids)) for ids in selection[:2])
-        selected = (
-            ""
-            if selection is None
-            else """
-            AND (message_id IN (SELECT value FROM json_each(?))
-                 OR thread_id IN (SELECT value FROM json_each(?)))
-        """
-        )
+        params = []
+        clauses = []
+        if selection is not None:
+            for column, ids in zip(("message_id", "thread_id"), selection):
+                if ids:
+                    clauses.append(f"{column} IN (SELECT value FROM json_each(?))")
+                    params.append(json.dumps(sorted(ids)))
+        selected = "" if selection is None else " AND (" + (" OR ".join(clauses) or "0") + ")"
         message_rows = conn.execute(
             "SELECT message_id, thread_id, role, created_at, payload_json "
             "FROM orchestration_v2_projection_messages WHERE streaming = 0 "
@@ -417,6 +444,7 @@ class T3Reader:
             "alerting": alerting,
             "alert_reasons": alert_reasons,
             "failures": list(self._failures),
+            **self._timings,
             **self._last_counts,
         }
         try:
@@ -448,6 +476,7 @@ class _IndexBudget:
     oldest_first: bool = False
     pending_ids: set[str] | None = None
     deferred_ids: set[str] = field(default_factory=set)
+    timings: dict[str, float] = field(default_factory=dict)
 
 
 def _changed_chunks(chunks, store):
@@ -472,46 +501,51 @@ def _index_chunks(
     from ..system_prompt_guard import looks_like_system_prompt
 
     budget = budget if budget is not None else _IndexBudget()
-    eligible = [
-        _scrubbed_chunk(chunk)
-        for chunk in chunks
-        if not chunk.metadata.get("is_system_prompt") and not looks_like_system_prompt(chunk.content)
-    ]
-    # Match index admission before budgeting, change detection, and precomputing
-    # vectors. Empty inputs are handled skips, not pending writes to replay.
-    admitted = [chunk for chunk in eligible if chunk.content.strip()]
-    skipped_empty = len(eligible) - len(admitted)
-    if skipped_empty:
-        logger.info("T3 index admission skipped_empty_chunks=%s source_file=%s", skipped_empty, source_file)
-    eligible = admitted
-    if budget.pending_ids is not None:
-        eligible = [chunk for chunk in eligible if chunk.metadata["chunk_id"] in budget.pending_ids]
-    # Fail fast on an already-busy writer, then release it before model loading.
-    with open_writer_store(db_path) as store:
-        changed = _changed_chunks(eligible, store)
-    changed.sort(key=_newest_chunk_key, reverse=not budget.oldest_first)
-    selected = changed[: budget.remaining]
-    budget.remaining -= len(selected)
-    budget.deferred += len(changed) - len(selected)
-    budget.deferred_ids.update(chunk.metadata["chunk_id"] for chunk in changed[len(selected) :])
+    with _timed_phase(budget.timings, "change_check_ms"):
+        eligible = [
+            _scrubbed_chunk(chunk)
+            for chunk in chunks
+            if not chunk.metadata.get("is_system_prompt") and not looks_like_system_prompt(chunk.content)
+        ]
+        # Match index admission before budgeting, change detection, and precomputing
+        # vectors. Empty inputs are handled skips, not pending writes to replay.
+        admitted = [chunk for chunk in eligible if chunk.content.strip()]
+        skipped_empty = len(eligible) - len(admitted)
+        if skipped_empty:
+            logger.info("T3 index admission skipped_empty_chunks=%s source_file=%s", skipped_empty, source_file)
+        eligible = admitted
+        if budget.pending_ids is not None:
+            eligible = [chunk for chunk in eligible if chunk.metadata["chunk_id"] in budget.pending_ids]
+        # Fail fast on an already-busy writer, then release it before model loading.
+        with open_writer_store(db_path) as store:
+            changed = _changed_chunks(eligible, store)
+        changed.sort(key=_newest_chunk_key, reverse=not budget.oldest_first)
+        selected = changed[: budget.remaining]
+        budget.remaining -= len(selected)
+        budget.deferred += len(changed) - len(selected)
+        budget.deferred_ids.update(chunk.metadata["chunk_id"] for chunk in changed[len(selected) :])
     if not selected:
         return 0
-    computed = embed_chunks(selected)
-    with open_writer_store(db_path) as store:
+    with _timed_phase(budget.timings, "embed_ms"):
+        computed = embed_chunks(selected)
+    with ExitStack() as writers:
         # Another writer may have indexed these IDs while we embedded.
-        changed = _changed_chunks(selected, store)
+        with _timed_phase(budget.timings, "change_check_ms"):
+            store = writers.enter_context(open_writer_store(db_path))
+            changed = _changed_chunks(selected, store)
         if not changed:
             return 0
         admitted = {(chunk.metadata["chunk_id"], chunk.content) for chunk in changed}
         computed = [ec for ec in computed if (ec.chunk.metadata["chunk_id"], ec.chunk.content) in admitted]
-        indexed = index_chunks_to_sqlite(
-            changed,
-            source_file=source_file,
-            project=project,
-            db_path=db_path,
-            store=store,
-            precomputed_embeddings=computed,
-        )
+        with _timed_phase(budget.timings, "write_ms"):
+            indexed = index_chunks_to_sqlite(
+                changed,
+                source_file=source_file,
+                project=project,
+                db_path=db_path,
+                store=store,
+                precomputed_embeddings=computed,
+            )
         if indexed != len(changed):
             raise RuntimeError(
                 f"T3 indexing incomplete: indexed {indexed} of {len(changed)} eligible chunks; retain rows for replay"
@@ -619,6 +653,7 @@ def ingest_t3(
     open a BrainLayer destination. Dry-run state cannot skip a real backfill.
     """
     destination = Path(db_path).expanduser() if db_path is not None else None
+    read_started = perf_counter()
     try:
         sources = resolve_t3_sources(state_db_path, projection_version, tolerate_legacy_failure=True)
     except BrainLayerAlarm as exc:
@@ -641,7 +676,19 @@ def ingest_t3(
         state = {}
     next_state = {"target": target, "sources": {}}
     reader._source_paths = [str(path) for path, _ in sources]
-    reader._include_message_identities = any(version == 1 for _, version in sources)
+    # Decide legacy reads before the V2 snapshot, so unchanged legacy sources
+    # need neither payloads nor the complete V2 ownership set.
+    fingerprints = {}
+    for path, version in sources:
+        if version == 1:
+            try:
+                fingerprints[path] = _legacy_fingerprint(path)
+            except OSError as error:
+                fingerprints[path] = error
+    reader._include_message_identities = any(
+        not isinstance(fingerprint, OSError) and fingerprint != state.get("sources", {}).get(str(path.resolve()), {})
+        for path, fingerprint in fingerprints.items()
+    )
     threads = []
     seen_messages = set()
     source_alerts = []
@@ -653,6 +700,7 @@ def ingest_t3(
             if path == reader.state_db_path
             else T3Reader(path, health_path=health_path, projection_version=version)
         )
+        source_reader._timings = reader._timings
         try:
             key = str(path.resolve())
             previous = state.get("sources", {}).get(key, {})
@@ -660,11 +708,9 @@ def ingest_t3(
                 source_reader._previous_bookmark = previous
             else:
                 try:
-                    stat = path.stat()
-                    fingerprint = {**t3_bookmark.identity(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
-                    # WAL changes must invalidate the legacy skip too.
-                    wal = Path(str(path) + "-wal")
-                    fingerprint["wal"] = [wal.stat().st_size, wal.stat().st_mtime_ns] if wal.exists() else None
+                    fingerprint = fingerprints[path]
+                    if isinstance(fingerprint, OSError):
+                        raise fingerprint
                 except OSError as error:
                     source_reader._fail(
                         "t3_reader_failed",
@@ -679,7 +725,8 @@ def ingest_t3(
                     next_state["sources"].pop(key, None)
                     if previous:
                         next_state["sources"][key] = previous
-            source_threads = source_reader.read_threads(report_success=False)
+            with _timed_phase(reader._timings, "read_ms"):
+                source_threads = source_reader.read_threads(report_success=False)
             if hasattr(source_reader, "_next_bookmark"):
                 next_state["sources"][key] = source_reader._next_bookmark
                 resume_pending &= source_reader._next_bookmark.pop("resume_pending")
@@ -698,6 +745,7 @@ def ingest_t3(
                     messages.append(message)
             threads.append((path, replace(thread, messages=tuple(messages))))
         seen_messages.update(getattr(source_reader, "_message_identities", ()))
+    reader._timings["read_ms"] = (perf_counter() - read_started) * 1000
     result = T3IngestionResult(
         **getattr(reader, "_bookmark_info", {}),
         threads_seen=len({thread.thread_id for _, thread in threads}),
@@ -707,25 +755,30 @@ def ingest_t3(
     )
     chunks = []
     batches = {}
-    for path, thread in threads:
-        for message in thread.messages:
-            if message.role not in {"user", "assistant"}:
-                result.messages_skipped["unsupported_role"] = result.messages_skipped.get("unsupported_role", 0) + 1
-                continue
-            message_chunks = _message_chunks(thread, message)
-            if not message_chunks:
-                result.messages_skipped["empty_text"] = result.messages_skipped.get("empty_text", 0) + 1
-                continue
-            result.messages_ingested += 1
-            chunks.extend(message_chunks)
-            batches.setdefault(path, []).extend(message_chunks)
+    with _timed_phase(reader._timings, "chunk_ms"):
+        for path, thread in threads:
+            for message in thread.messages:
+                if message.role not in {"user", "assistant"}:
+                    result.messages_skipped["unsupported_role"] = result.messages_skipped.get("unsupported_role", 0) + 1
+                    continue
+                message_chunks = _message_chunks(thread, message)
+                if not message_chunks:
+                    result.messages_skipped["empty_text"] = result.messages_skipped.get("empty_text", 0) + 1
+                    continue
+                result.messages_ingested += 1
+                chunks.extend(message_chunks)
+                batches.setdefault(path, []).extend(message_chunks)
     result.chunks_planned = len(chunks)
     if chunks and not dry_run:
         if destination is None:
             from ..paths import DEFAULT_DB_PATH
 
             destination = DEFAULT_DB_PATH
-        budget = _IndexBudget(remaining=DEFAULT_T3_MAX_CHANGED_CHUNKS, oldest_first=hasattr(reader, "_next_bookmark"))
+        budget = _IndexBudget(
+            remaining=DEFAULT_T3_MAX_CHANGED_CHUNKS,
+            oldest_first=hasattr(reader, "_next_bookmark"),
+            timings=reader._timings,
+        )
         if "pending_chunks" in state and resume_pending:
             budget.pending_ids = set(state["pending_chunks"])
         try:
@@ -786,6 +839,12 @@ def ingest_t3(
                         if reader._bookmark_info["mode"] == "incremental"
                         else None
                     ),
+                    # The held sequence and timestamp must describe the same start.
+                    "occurred_at": (
+                        state.get("sources", {}).get(key, {}).get("occurred_at")
+                        if reader._bookmark_info["mode"] == "incremental"
+                        else None
+                    ),
                     "pending_to": candidate["last_sequence"],
                 }
         t3_bookmark.save(state_path, held)
@@ -797,6 +856,8 @@ def ingest_t3(
             reader._fail("t3_bookmark_failed", "T3 replay state could not be saved", {}, error)
     elif state_path is None or (dry_run and bookmark_path is None):
         result.bookmark_held = "state_disabled"
+    for phase, elapsed in reader._timings.items():
+        setattr(result, phase, elapsed)
     if reader.health_path is not None:
         reader._last_counts.update(
             {
