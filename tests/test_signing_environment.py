@@ -1,10 +1,17 @@
 """Signing credentials are gated by main's workflow and exact-tag refusals."""
 
+import os
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _clean_git_env():
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    return env
 
 
 def test_tag_dispatch_has_no_secrets_and_only_main_can_sign():
@@ -41,16 +48,13 @@ def test_tag_dispatch_has_no_secrets_and_only_main_can_sign():
 
 def test_tag_validation_refuses_exclusions_bad_tags_and_off_main_commits(tmp_path):
     """Execute the workflow's real bash gate against an isolated Git history."""
-    import os
     import subprocess
 
     workflow = yaml.safe_load((ROOT / ".github/workflows/brainbar-release.yml").read_text())
     validation = next(s for s in workflow["jobs"]["release"]["steps"] if s.get("id") == "release")
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
 
     def git(*args):
-        return subprocess.check_output(["git", *args], cwd=tmp_path, env=env, text=True).strip()
+        return subprocess.check_output(["git", *args], cwd=tmp_path, env=_clean_git_env(), text=True).strip()
 
     git("init", "-q")
     git("config", "user.email", "fixture@example.invalid")
@@ -75,7 +79,7 @@ def test_tag_validation_refuses_exclusions_bad_tags_and_off_main_commits(tmp_pat
         result = subprocess.run(
             ["bash", "-e", "-o", "pipefail", "-c", validation["run"]],
             cwd=tmp_path,
-            env={**env, "RELEASE_TAG": tag, "GITHUB_OUTPUT": str(output), "GITHUB_ENV": str(github_env)},
+            env={**_clean_git_env(), "RELEASE_TAG": tag, "GITHUB_OUTPUT": str(output), "GITHUB_ENV": str(github_env)},
             capture_output=True,
             text=True,
         )
