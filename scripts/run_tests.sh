@@ -331,7 +331,7 @@ map_changed_files_to_pytests() {
       src/brainlayer/vector_store.py|src/brainlayer/search_repo.py)
         # t3-ingest writes vectorless rows and relies on upsert_chunks dropping a stale vector
         # (#1826), so the deferred-embedding and vector-invalidation suites ride along.
-        for rel in test_source_class.py test_vector_store_schema_flags.py test_vector_store_upsert_transactions.py test_hybrid_search.py test_vector_store_readonly.py test_search_trigram_fts.py test_precompact_chunk_origin.py test_t3_ingest_deferred_embedding.py test_store_vector_invalidation.py; do
+        for rel in test_source_class.py test_vector_store_schema_flags.py test_vector_store_upsert_transactions.py test_hybrid_search.py test_vector_store_readonly.py test_search_trigram_fts.py test_precompact_chunk_origin.py test_runtime_ddl_ledger.py test_t3_thread_tables.py test_t3_ingest_deferred_embedding.py test_store_vector_invalidation.py; do
           test_path="$TEST_ROOT/$rel"
           if [ -f "$test_path" ]; then
             append_unique "$test_path"
@@ -470,7 +470,7 @@ map_changed_files_to_pytests() {
         elif [ "$changed" = "src/brainlayer/index_budget.py" ]; then
           idx_tests=(test_index_calendar_custody.py test_cli_index_calendar.py)
         elif [ "$changed" = "src/brainlayer/ingest/t3.py" ]; then
-          idx_tests=(test_ingest_t3.py test_t3_ingest_deferred_embedding.py test_t3_ingest_bookmark.py test_health_check.py test_paths.py)
+          idx_tests=(test_ingest_t3.py test_t3_ingest_deferred_embedding.py test_t3_ingest_bookmark.py test_health_check.py test_paths.py test_t3_thread_tables.py)
         elif [ "$changed" = "src/brainlayer/ingest/t3_bookmark.py" ]; then
           idx_tests=(test_t3_ingest_bookmark.py test_ingest_t3.py)
         elif [ "$changed" = "src/brainlayer/maintenance_calendar.py" ]; then
@@ -545,6 +545,22 @@ map_changed_files_to_pytests() {
         done
         if [ "$mapped" -eq 1 ]; then
           for rel in test_wal_checkpoint_module.py test_wal_fallback.py test_wal_fallback_consolidation.py test_maintenance_wal_reclaim.py test_cli_enrich.py; do
+            append_unique "$TEST_ROOT/$rel"
+          done
+        fi
+        ;;
+      src/brainlayer/t3_thread_tables.py|src/brainlayer/runtime_store.py)
+        # T3 PR 3.1: the side tables' DDL lives in t3_thread_tables.py and its definitions are
+        # pinned in runtime_store.py, so either edit must run the writer, the contract and the
+        # first-run bootstrap that proves a fresh DB matches the pinned fingerprint.
+        # ALL must exist to count as mapped; a missing sibling escalates.
+        side_tests=(test_t3_thread_tables.py test_runtime_store.py test_runtime_ddl_ledger.py test_index_first_calendar_bootstrap.py test_ingest_t3.py)
+        mapped=1
+        for rel in "${side_tests[@]}"; do
+          [ -f "$TEST_ROOT/$rel" ] || mapped=0
+        done
+        if [ "$mapped" -eq 1 ]; then
+          for rel in "${side_tests[@]}"; do
             append_unique "$TEST_ROOT/$rel"
           done
         fi
