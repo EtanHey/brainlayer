@@ -64,8 +64,8 @@ final class BrainBarNewDesignR111Tests: XCTestCase {
                 line: "117\(nb)MB left to read, behind for 40\(nb)min. It’s catching up by itself.", action: nil, agent: false, needs: true),
             Row(id: "A1 no bytes", c: lag(.amber, bytes: nil, clock: 2400), title: Say.lagBehind.text,
                 line: "Behind for 40\(nb)min. It’s catching up by itself.", action: nil, agent: false, needs: true),
-            Row(id: "A1 beside another alert", c: lag(reasons: ["offset_lag", "file_ingestion_failure"]), title: Say.lagBehind.text,
-                line: "117\(nb)MB left to read.", action: nil, agent: false, needs: true),
+            Row(id: "A1 beside another alert", c: lag(reasons: ["offset_lag", "file_ingestion_failure"]), title: Say.unreadFiles.text,
+                line: Say.unreadFilesLine.text, action: .copyReport, agent: true, needs: true),
             Row(id: "A4", c: with(["ingest": .red]) { $0.watcher = .init(fresh: false, lastReadAt: now.addingTimeInterval(-3000)) },
                 title: Say.stopped.text, line: "It last read today at 11:30.", action: .copyReport, agent: true, needs: true),
             Row(id: "A5 red", c: with(["ingest": .red]) { $0.watcher = .init(alertReasons: ["coverage_drop"]) },
@@ -175,7 +175,7 @@ final class BrainBarNewDesignR111Tests: XCTestCase {
         XCTAssertEqual(line(Self.lag(bytes: nil)), [Say.lagBehind.text, Say.byItself.text], "no bytes, no size; no clock, no span")
         XCTAssertEqual(line(Self.lag(bytes: 500_000))?.last, Say.byItself.text, "under 1 MB the size is left out")
         XCTAssertEqual(line(Self.lag(bytes: 3 * 1_073_741_824 / 2))?.last, "1.5\u{00A0}GB left to read. It’s catching up by itself.")
-        XCTAssertEqual(line(Self.lag(reasons: ["offset_lag", "coverage_drop"]))?.last, "117\u{00A0}MB left to read.")
+        XCTAssertNil(line(Self.lag(reasons: ["offset_lag", "coverage_drop"])), "the distinct coverage fault owns the row; lag must not hide it")
         XCTAssertEqual(line(Self.lag(reasons: ["offset_lag", "quarantined_record"]))?.last, "117\u{00A0}MB left to read. It’s catching up by itself.")
         // No row at all without its condition: a green reader under its limit is R02's, and a stale file is not a lag.
         XCTAssertNil(line(Self.lag(.green, clock: 600)))

@@ -171,7 +171,9 @@ final class BrainBarFaultNotificationTests: XCTestCase {
             XCTAssertEqual(p.form, .needs)
             XCTAssertEqual(p.icon, .marked)
             XCTAssertEqual(p.count, 1)
-            XCTAssertEqual(p.rows.filter { $0.strings.first == BrainBarMenuPresenter.Say.lagBehind.text }.count, 1)  // R1.11: named
+            XCTAssertEqual(p.rows.filter { $0.strings.first == BrainBarMenuPresenter.Say.unreadFiles.text }.count, 1)
+            // The independent lag clock adds its own row only after 30 minutes.
+            XCTAssertEqual(p.rows.filter { $0.strings.first == BrainBarMenuPresenter.Say.lagBehind.text }.count, c.now.timeIntervalSince(c.lagEpisodeStart!) > 1800 ? 1 : 0)
             let center = Center()
             await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c)
             XCTAssertEqual(center.posts.count, 1)

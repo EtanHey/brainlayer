@@ -1341,7 +1341,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertTrue(calm.faults.isEmpty && calm.notices.isEmpty && calm.agentFaults.isEmpty)
         XCTAssertFalse(calm.allUnconfirmed)
         XCTAssertTrue(NDPipe.allCases.allSatisfy { calm.look($0) == .flowing }, "L6: calm stays calm")
-        XCTAssertEqual(calm.status[.read]?.text, Say.lastRead(NDFormat.ageText(48)))
+        XCTAssertNil(calm.status[.read], "the fixture has a poll heartbeat, not a measured successful read")
         XCTAssertEqual(calm.status[.queue]?.text, Say.empty, "R1.12 (F): Save queue says it is empty")
         XCTAssertEqual(calm.status[.mac]?.text, Say.keptNewest(3, NDFormat.ageText(4 * 3600)), "R1.5 change 8: the copies kept")
         XCTAssertEqual(calm.status[.drive]?.text, Say.lastUpload(NDFormat.ageText(3 * 3600)), "Drive's newest upload of either kind")
