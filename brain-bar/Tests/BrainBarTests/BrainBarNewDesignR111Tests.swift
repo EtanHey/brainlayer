@@ -197,7 +197,7 @@ final class BrainBarNewDesignR111Tests: XCTestCase {
         XCTAssertNil(holds("117.0\u{00A0}MB left to read.", c), "only the formatter's own words match")
     }
 
-    /// The live adapter carries the watcher's bytes behind and last read into the capture; a zero is no fact.
+    /// The live adapter carries measured bytes, but never turns a heartbeat into a successful-read time.
     func testBytesBehindReachTheMenuFromTheWatcherFile() {
         func adapt(_ bytes: Int) -> BrainBarMenuCapture {
             BrainBarMenuLiveCapture.capture(status: .checking, verdictAwakeAgeS: nil, wakeCatchUpPending: false, driveAuth: nil,
@@ -206,7 +206,7 @@ final class BrainBarNewDesignR111Tests: XCTestCase {
                 watcherAwakeAgeS: 40, observations: nil, now: Self.now, timeZone: TimeZone(secondsFromGMT: 7200)!)
         }
         XCTAssertEqual(adapt(Self.mb117).watcher?.lagBytes, Self.mb117)
-        XCTAssertEqual(adapt(Self.mb117).watcher?.lastReadAt, Self.now.addingTimeInterval(-40))
+        XCTAssertNil(adapt(Self.mb117).watcher?.lastReadAt)
         XCTAssertNil(adapt(0).watcher?.lagBytes)
     }
 

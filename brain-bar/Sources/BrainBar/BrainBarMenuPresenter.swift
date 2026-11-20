@@ -126,7 +126,7 @@ enum BrainBarMenuPresenter {
 
     /// `ingest` failing or late: the lag (A1), the reader stopped (A4), a named watcher alert (A5 to A7), else D5.
     private static func ingestLine(_ c: Capture) -> Line {
-        if Say.lagShown(c) { return lagLine(c) }
+        if Say.lagShown(c), Say.lagDraining(c) || Say.producerStalled(c) { return lagLine(c) }
         if Say.readerStopped(c) {
             let last = c.watcher?.lastReadAt.flatMap { $0 <= c.now && sayable($0) && hasWords($0, c) ? Say.lastRead(at($0, c)) : nil }
             return worded(.remembering, [Say.stopped.text] + (last.map { [$0] } ?? []), .confirmed)

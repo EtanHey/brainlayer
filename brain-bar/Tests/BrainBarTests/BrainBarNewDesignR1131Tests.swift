@@ -4,7 +4,7 @@ import XCTest
 @testable import BrainBar
 
 /// Revision 1.13.1 (the M1 capture of 1.13): the waiting state after Reconnect is one fact every surface reads, the
-/// dropdown's item included; the window row's Reconnect takes a click on its exact centre line; the agents' panel covers
+/// dropdown's item included; the button hit area is rectangular as hygiene; the agents' panel covers
 /// no heading; Copied never shows two labels in one frame.
 @MainActor
 final class BrainBarNewDesignR1131Tests: XCTestCase {
@@ -127,9 +127,8 @@ final class BrainBarNewDesignR1131Tests: XCTestCase {
         return points
     }
 
-    /// The button's hit area takes its exact centre and has no vertex on its centre line, at every button size. The drawn
-    /// continuous rounded rectangle has one there (its path starts and closes at (width, height / 2)): the M1's click on
-    /// the window row's Reconnect, on whole points, was not taken on that line; 9bcd6388 hit-tested that shape.
+    /// Geometry hygiene only: Path.contains checks the rectangle, not a delivered SwiftUI click.
+    /// The missed centre clicks remain unexplained.
     func testTheButtonTakesAClickOnItsExactCentreLine() throws {
         for height in [20.0, 22.0, 24.0] {
             for width in [60.0, 86.5, 117.0, 196.0] {
@@ -140,7 +139,7 @@ final class BrainBarNewDesignR1131Tests: XCTestCase {
                 for dy in [-0.5, 0.5] { XCTAssertTrue(hit.contains(CGPoint(x: centre.x, y: centre.y + dy))) }
                 XCTAssertFalse(Self.vertices(hit).contains { abs($0.y - rect.midY) < 0.001 }, "\(width)x\(height): a vertex on the centre line")
                 let drawn = RoundedRectangle(cornerRadius: 6, style: .continuous).path(in: rect)
-                XCTAssertTrue(Self.vertices(drawn).contains { abs($0.y - rect.midY) < 0.001 }, "the cause: the drawn shape's seam")
+                XCTAssertTrue(Self.vertices(drawn).contains { abs($0.y - rect.midY) < 0.001 }, "the drawn shape has a centre-line vertex; this does not establish a click failure")
             }
         }
         let source = try Self.source("NDWindow.swift")

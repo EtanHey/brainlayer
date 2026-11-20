@@ -381,13 +381,10 @@ struct NDWaitingSwap<Button: View, Line: View>: View {
 
     var body: some View {
         ZStack(alignment: alignment) {
-            button
-                .environment(\.ndHeldPressed, waiting)
-                .opacity(waiting ? 0 : 1)
-                .scaleEffect(waiting ? 0.97 : 1)
-                .animation(reduceMotion ? nil : waiting ? NDMotion.buttonLeaves : NDMotion.buttonReturns, value: waiting)
-                .allowsHitTesting(!waiting)
-                .accessibilityHidden(waiting)
+            if !waiting {
+                button
+                    .animation(reduceMotion ? nil : NDMotion.buttonReturns, value: waiting)
+            }
             line
                 .opacity(waiting ? 1 : 0)
                 .animation(reduceMotion ? nil : waiting ? NDMotion.waitingEnters : NDMotion.buttonLeaves, value: waiting)

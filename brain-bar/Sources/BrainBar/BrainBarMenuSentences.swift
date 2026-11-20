@@ -154,6 +154,11 @@ extension BrainBarMenuPresenter {
         /// A1’s “catching up by itself”. R1.13: from a producer with `catch_up`, its own measure (catching_up); from an
         /// older one, L55’s approximation: the lag is the watcher’s only alert (R10’s quarantined records aside).
         static func lagDraining(_ c: Capture) -> Bool {
+            guard c.watcher?.alertReasons.allSatisfy({ ["offset_lag", "quarantined_record"].contains($0) }) == true,
+                  states(c, "ingest", [.red, .amber]).allSatisfy({
+                      $0.blind != true && ($0.blindCodes ?? []).isEmpty
+                          && ($0.contextCodes ?? []).allSatisfy { ["offset_lag", "quarantined_record"].contains($0) }
+                  }) else { return false }
             if c.watcher?.catchUp != nil { return producerCatchingUp(c) }
             return lagShown(c) && c.watcher?.alertReasons.allSatisfy { ["offset_lag", "quarantined_record"].contains($0) } == true
         }

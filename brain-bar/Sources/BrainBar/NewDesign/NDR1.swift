@@ -228,12 +228,10 @@ struct NDR1: Equatable, Sendable {
         if !pipeline.allUnconfirmed, check("embedding").flatMap(sev) != nil { covered.insert("embedding") }
         // Every presenter fault the pipeline did not explain, in the presenter's own words.
         for f in m.faults {
-            let explained = !f.concerns.isDisjoint(with: covered)
+            let explained = (!f.concerns.isEmpty && f.concerns.isSubset(of: covered))
                 || (covered.contains("maintenanceNightly") && (f.jobs.contains(.maintenanceNightly) || f.thing == .upkeep))
                 || (covered.contains("maintenanceWeekly") && f.jobs.contains(.maintenanceWeekly))
-                || (covered.contains("embedding") && f.thing == .finding)
             guard !explained else { continue }
-            if f.thing == .finding, check("embedding").flatMap(sev) != nil { continue }  // drawn as "behind" below
             // D6: severity comes from the verdict: red only when a check it concerns is red (or it is not a check's: a job
             // alert or a runtime warning); a fault over amber checks only is late, so amber, and no report button.
             let concerned = (verdict?.checks ?? []).filter { f.concerns.contains($0.name) }
@@ -248,8 +246,8 @@ struct NDR1: Equatable, Sendable {
         }
         // Search by meaning behind (orange, late) or stalled (red): no button, there is nothing to do.
         if !pipeline.allUnconfirmed, let embedding = check("embedding"), let s = sev(embedding) {
-            let age = NDFormat.ageText(max(0, embedding.ageS ?? 0))
-            items.append(Item(id: "meaning", severity: s, title: s == .red ? Say.meaningBehind(age) : Say.meaningCatchingUp,
+            let age = embedding.ageS.flatMap { $0.isFinite && $0 >= 0 ? NDFormat.ageText($0) : nil }
+            items.append(Item(id: "meaning", severity: s, title: s == .red ? age.map(Say.meaningBehind) ?? "Search by meaning is behind" : Say.meaningCatchingUp,
                               detail: Say.meaningBehindDetail, action: nil,
                               strip: Strip(from: Say.stageMemory, to: Say.search, side: .target, severity: s), concerns: ["embedding"],
                               station: .search))

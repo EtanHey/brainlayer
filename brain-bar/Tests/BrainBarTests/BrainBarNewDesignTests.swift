@@ -2417,10 +2417,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         for (station, status) in stale.status {
             XCTAssertFalse(status.text.hasSuffix(" ago"), "\(station): \(status.text)")
         }
-        // The fixture's reader read 48 s ago, after the 06:00 check: no time later than the caption's, so a dash.
-        XCTAssertEqual(stale.status[.read]?.text, NDModel.Number.unknown.value)
+        // A heartbeat is not a successful read: no last-read time is inferred from it.
+        XCTAssertNil(stale.status[.read], "no read time was measured")
         var older = Fixture.inputs(.notConfirmed)
-        older.watcherHeartbeatAgeS = 3 * 3600
+        older.capture.watcher = .init(lastReadAt: older.capture.now.addingTimeInterval(-3 * 3600))
         XCTAssertTrue(NDPipelineState.make(older).status[.read]?.text.hasPrefix("last read ") == true, "a read before the check: its time")
         // R1.12 (E2, replaces R1.7 item 5's dash): each station keeps its last-known value, as a clock time.
         XCTAssertTrue(stale.status[.mac]?.text.hasPrefix("3 kept, newest ") == true, stale.status[.mac]?.text ?? "nil")

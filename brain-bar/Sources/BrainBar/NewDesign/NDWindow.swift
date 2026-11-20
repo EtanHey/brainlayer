@@ -382,12 +382,8 @@ struct NDCard<Content: View>: View {
 }
 
 extension View {
-    /// R1.13.2: a stroke drawn over a surface (a card's border, a focus ring, a hover highlight) is decoration and never
-    /// takes a click. As a plain overlay it sat above the controls it frames and was hit-tested like any shape: on the M1,
-    /// a click exactly on a one-row card's centre line (y 184.0, the row Reconnect's centre) was not taken, 0 of 5 over
-    /// two rounds, while 0.5 pt off it was; that line is where the card border's continuous rounded-rectangle path starts
-    /// and closes. Every place the rule held fits it: row 2's Copy (centre 220) and Settings' Reconnect (centre 287) are
-    /// not on their cards' centre lines.
+    /// R1.13.2 hygiene: decorative strokes ignore hits so the underlying controls own their hit areas.
+    /// The cause of the missed centre clicks remains unknown; this change does not establish a fix.
     func ndDecoration<Decoration: View>(_ decoration: Decoration) -> some View {
         overlay(decoration.allowsHitTesting(false))
     }
@@ -775,9 +771,8 @@ struct NDButtonStyle: ButtonStyle {
         NDButtonBody(configuration: configuration, filled: filled, small: small, compact: compact)
     }
 
-    /// R1.13.1: the area a click lands on is the button's whole rectangle (its 6 pt corners included). This was NOT the
-    /// cause of the row Reconnect's dead centre line (the M1's round 10 on c2821964 still missed it); that was the card's
-    /// border overlay above the row (`ndDecoration`, R1.13.2). Kept: a rectangle is the button's area either way.
+    /// R1.13.1 hygiene: the padded button label has a rectangular hit area, including its corners.
+    /// Neither this nor decoration hit-testing explains the missed centre clicks; their cause remains unknown.
     struct HitShape: Shape {
         func path(in rect: CGRect) -> Path { Path(rect) }
     }

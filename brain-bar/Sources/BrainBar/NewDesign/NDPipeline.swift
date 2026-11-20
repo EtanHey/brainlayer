@@ -341,9 +341,8 @@ extension NDPipelineState {
         var out: [NDStation: Status] = [:]
         for station in lines.keys { out[station] = Status(text: NDModel.Number.unknown.value) }
         func known(_ date: Date?) -> String? { date.flatMap { $0 <= evaluated ? NDR1.clockOn($0, c) : nil } }
-        // The reader's heartbeat is read live, not from the stale verdict: a time later than the caption's would
-        // contradict "values last known at", so it shows only when it is not after the last confirmed check.
-        if let heartbeat = i.watcherHeartbeatAgeS, heartbeat >= 0, let at = known(c.now.addingTimeInterval(-heartbeat)) {
+        // Only a successful-read timestamp supports "last read"; a poll heartbeat does not.
+        if let at = known(c.watcher?.lastReadAt) {
             out[.read] = Status(text: Say.lastReadClock(at))
         }
         let checks = c.verdict?.checks ?? []
@@ -367,8 +366,8 @@ extension NDPipelineState {
         let checks = c.verdict?.checks ?? []
         func age(_ name: String) -> Double? { checks.first { $0.name == name }?.ageS.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } }
         var out: [NDStation: Status] = [:]
-        if let heartbeat = i.watcherHeartbeatAgeS, heartbeat >= 0 {
-            out[.read] = Status(text: Say.lastRead(NDFormat.ageText(heartbeat)))
+        if let read = c.watcher?.lastReadAt, read <= c.now, read.timeIntervalSince1970.isFinite {
+            out[.read] = Status(text: Say.lastRead(NDFormat.ageText(c.now.timeIntervalSince(read))))
         }
         // R1.12 (F): Save queue says "empty", or "{n} waiting" while under its threshold (a fault says "stuck {t}").
         if let waiting = i.savesWaiting {

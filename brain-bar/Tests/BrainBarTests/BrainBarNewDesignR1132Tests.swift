@@ -3,16 +3,9 @@ import SwiftUI
 import XCTest
 @testable import BrainBar
 
-/// Revision 1.13.2: the window row's Reconnect took no click on its exact centre line (the M1, rounds 9 and 10, 0 of 5;
-/// 0.5 pt off it, every time). The line is the one-row card's centre, where the card border overlay's path starts and
-/// closes; the border sat above the row and was hit-tested like any shape. Decorative strokes now never take a click.
-///
-/// What this host can and cannot prove: a synthetic `NSEvent` sent through `window.sendEvent` reaches no SwiftUI button
-/// here (0 presses in 114 clicks over the button's whole height, in a window never shown and in one ordered in off every
-/// screen; it cannot become key under the test's prohibited activation policy, and activating the test process would take
-/// focus on this Mac). So the tests below prove (1) by source that no decorative stroke can take a hit, and (2) by AppKit
-/// hit-testing the real window's frame view that the exact centre reaches the hosted content, no AppKit view over it.
-/// The click itself is proven on the M1.
+/// Revision 1.13.2 hygiene: decorative strokes ignore hits. The missed centre clicks remain unexplained.
+/// Source assertions check the decoration policy; AppKit hit-testing reaches hosted content.
+/// Neither proves a delivered SwiftUI button action or the cause of the earlier misses.
 @MainActor
 final class BrainBarNewDesignR1132Tests: XCTestCase {
     typealias Fixture = BrainBarDesignFixture
