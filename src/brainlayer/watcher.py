@@ -889,6 +889,9 @@ class OffsetRegistry:
         self.mark_rewind(filepath, inode)
         return True
 
+    def is_tombstoned(self, filepath: str) -> bool:
+        return filepath in self._removed
+
     @staticmethod
     def _sanitize_tombstones(raw: object) -> dict[str, dict[str, int | float]]:
         """Load legacy timestamps and validated generation-aware tombstones."""
@@ -2350,6 +2353,7 @@ class JSONLWatcher:
         # chunks. Only a tailer exactly at EOF has provably nothing left to read.
         return (
             tailer is not None
+            and not self.registry.is_tombstoned(filepath)
             and (tailer.decoded_eof and not tailer._buffer if hasattr(tailer, "decoded_eof") else tailer.offset == size)
             and tailer.observed_inode in (0, inode)
             and not tailer.has_complete_buffered_line()
@@ -3229,6 +3233,11 @@ class JSONLWatcher:
         physical = self._physical_files.get(filepath, filepath)
         old = self._tailers.get(filepath)
         if not physical.endswith(".zst") and self.registry.revive(filepath):
+            # A live tailer still carries the old timeline's frontier after pruning.
+            # Preserve its shrink notification before replay replaces that evidence.
+            if old is not None and old.filepath == physical and old.observed_inode == old.get_inode():
+                if old.check_rewind():
+                    self._handle_rewind(filepath, old.rewind_old_offset, old.rewind_new_offset, old.get_inode())
             self._drop_tailer(filepath)
             self._pending_quarantined_offsets.pop(filepath, None)
             old = None
@@ -3514,6 +3523,7 @@ class JSONLWatcher:
                     drain_buffer = False
                     if (
                         tailer is not None
+                        and not self.registry.is_tombstoned(filepath)
                         and tailer.filepath == self._physical_files.get(filepath, filepath)
                         and (
                             not compressed

@@ -59,6 +59,66 @@ def test_refused_checkpoint_is_logged_and_counted(tmp_path, monkeypatch, caplog)
     assert caplog.text.count("Watcher checkpoint refused") == 2
 
 
+def test_live_tombstoned_shorter_return_notifies_rewind(tmp_path, monkeypatch):
+    rewinds = []
+    watcher, sessions, _, _ = _make_watcher(
+        tmp_path, monkeypatch, on_rewind=lambda path, session, old, new: rewinds.append((old, new))
+    )
+    rollout = sessions / "shorter.jsonl"
+    kept = _line("kept")
+    original = kept + _line("reverted " + "z" * 40)
+    rollout.write_text(original)
+    (sessions / "sibling.jsonl").write_text(_line("mount evidence"))
+    _poll(watcher)
+    inode = rollout.stat().st_ino
+    parked = tmp_path / "parked.jsonl"
+    rollout.rename(parked)
+    watcher._offset_prune_complete = False
+    watcher._last_offset_prune_attempt = float("-inf")
+    watcher.poll_once()  # real timer prune, same watcher and retained tailer
+    assert str(rollout) in watcher.registry._removed
+    with parked.open("r+b") as handle:
+        handle.truncate(len(kept))
+    parked.rename(rollout)
+    assert rollout.stat().st_ino == inode
+    _poll(watcher)
+    assert rewinds == [(len(original), len(kept))]
+    assert watcher.registry.get(str(rollout))[0] == len(kept)
+    assert _health(tmp_path)["catch_up"]["files_behind"] == 0
+
+
+@pytest.mark.parametrize("buffered", [False, True])
+def test_same_poll_prune_return_revives_before_skip_or_buffer_drain(tmp_path, monkeypatch, buffered):
+    watcher, sessions, _, _ = _make_watcher(tmp_path, monkeypatch)
+    watcher.catch_up_budget_s = 0
+    if buffered:
+        watcher.max_lines_per_file = 1
+    rollout = sessions / "returned.jsonl"
+    rollout.write_text(_line("one") + _line("two"))
+    (sessions / "sibling.jsonl").write_text(_line("mount evidence"))
+    watcher.poll_once()
+    assert watcher._tailers[str(rollout)].has_complete_buffered_line() == buffered
+    parked = tmp_path / "parked.jsonl"
+    prune = watcher._maybe_prune_offsets
+    tombstones = []
+
+    def prune_during_rename(files):
+        rollout.rename(parked)
+        watcher._offset_prune_complete = False
+        watcher._last_offset_prune_attempt = float("-inf")
+        prune(files)
+        tombstones.append(watcher.registry._removed[str(rollout)]["generation"])
+        parked.rename(rollout)  # same inode, size and mtime as discovery
+
+    monkeypatch.setattr(watcher, "_maybe_prune_offsets", prune_during_rename)
+    watcher.poll_once()
+    monkeypatch.setattr(watcher, "_maybe_prune_offsets", prune)
+    _poll(watcher)
+    assert watcher.registry.generation(str(rollout)) > tombstones[0]
+    assert watcher.registry.get(str(rollout))[0] == rollout.stat().st_size
+    assert _health(tmp_path)["catch_up"]["files_behind"] == 0
+
+
 def _line(content: str) -> str:
     return json.dumps({"role": "user", "content": content}) + "\n"
 
