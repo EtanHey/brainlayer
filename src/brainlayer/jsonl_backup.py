@@ -453,20 +453,25 @@ def reconcile_drive_receipts(
     for path in sorted(_local_archive_paths(staging_dir)):
         if path.name in receipts:
             continue
-        matches = drive_objects.get(path.name, [])
+        candidates = drive_objects.get(path.name, [])
+        if not candidates:
+            continue
+        size = path.stat().st_size
+        sized = []
+        for remote in candidates:
+            try:
+                remote_size = int(remote.get("size"))
+            except (TypeError, ValueError):
+                continue
+            if remote.get("trashed") is False and remote_size == size and remote.get("id"):
+                sized.append(remote)
+        if not sized:
+            continue  # Hash a multi-GB archive only when some live copy has its exact size.
+        md5 = _md5_file(path)
+        matches = [remote for remote in sized if remote.get("md5Checksum") == md5]
         if len(matches) != 1:
             continue
         remote = matches[0]
-        size = path.stat().st_size
-        try:
-            remote_size = int(remote.get("size"))
-        except (TypeError, ValueError):
-            continue
-        if remote.get("trashed") is not False or remote_size != size or not remote.get("id"):
-            continue
-        md5 = _md5_file(path)
-        if not remote.get("md5Checksum") or remote["md5Checksum"] != md5:
-            continue
         receipts[path.name] = {
             "name": path.name,
             "size": size,
@@ -486,7 +491,11 @@ def _local_archive_paths(staging_dir: Path) -> list[Path]:
     parent = staging_dir if staging_dir.name == "jsonl-backups" else staging_dir.parent
     if parent.name == "jsonl-backups":
         roots.add(parent)
-        roots.update(p for p in parent.iterdir() if p.name.startswith("release-") and p.is_dir() and not p.is_symlink())
+        roots.update(
+            p
+            for p in parent.iterdir()
+            if p.name.startswith(("release-", "recovery-")) and p.is_dir() and not p.is_symlink()
+        )
     return [p for root in roots for p in root.glob("claude-jsonl-*.tar.gz") if p.is_file() and not p.is_symlink()]
 
 
