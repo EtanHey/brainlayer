@@ -104,11 +104,11 @@ def test_pending_chunk_query_defers_content_reads_until_after_bounded_id_scan():
                     ("valid-3", "2026-08-01T00:00:04Z", 5),
                 ]
             return [
-                ("valid-3", "three", None, None, None, 0, "active"),
-                ("valid-2", "two", None, None, None, 0, "active"),
-                ("empty", "", None, None, None, 0, "active"),
-                ("archived", "skip me", "2026-08-02T00:00:00Z", None, None, 1, "archived"),
-                ("valid-1", "one", None, None, None, 0, "active"),
+                ("valid-3", "three", None, None, None, "mcp"),
+                ("valid-2", "two", None, None, None, "mcp"),
+                ("empty", "", None, None, None, "mcp"),
+                ("archived", "skip me", "2026-08-02T00:00:00Z", None, None, "mcp"),
+                ("valid-1", "one", None, None, None, "mcp"),
             ]
 
     store = SimpleNamespace(conn=SimpleNamespace(cursor=lambda: FakeCursor()))
@@ -140,7 +140,7 @@ def test_pending_chunk_query_pages_past_a_full_window_of_empty_content(tmp_path,
             superseded_by TEXT,
             aggregated_into TEXT,
             archived INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'active'
+            status TEXT DEFAULT 'active', source TEXT
         );
         CREATE INDEX idx_chunks_created_at ON chunks(created_at);
         CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
@@ -173,7 +173,7 @@ def test_pending_chunk_query_bounds_pages_when_all_remaining_content_is_empty(tm
             superseded_by TEXT,
             aggregated_into TEXT,
             archived INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'active'
+            status TEXT DEFAULT 'active', source TEXT
         );
         CREATE INDEX idx_chunks_created_at ON chunks(created_at);
         CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
@@ -206,7 +206,7 @@ def test_pending_chunk_query_resumes_after_page_budget_on_next_cycle(tmp_path):
             superseded_by TEXT,
             aggregated_into TEXT,
             archived INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'active'
+            status TEXT DEFAULT 'active', source TEXT
         );
         CREATE INDEX idx_chunks_created_at ON chunks(created_at);
         CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
@@ -790,7 +790,7 @@ def test_split_cycle_carries_vectors_over_after_busy_write(tmp_path, monkeypatch
             superseded_by TEXT,
             aggregated_into TEXT,
             archived INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'active'
+            status TEXT DEFAULT 'active', source TEXT
         );
         CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
         """
@@ -877,7 +877,7 @@ def test_split_cycle_retries_row_after_non_lock_write_error(tmp_path, monkeypatc
             superseded_by TEXT,
             aggregated_into TEXT,
             archived INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'active'
+            status TEXT DEFAULT 'active', source TEXT
         );
         CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
         """
@@ -935,7 +935,7 @@ def test_split_cycle_retries_backlog_after_encode_failure(tmp_path, monkeypatch,
         CREATE TABLE chunks (
             id TEXT PRIMARY KEY, content TEXT, created_at TEXT, archived_at TEXT,
             superseded_by TEXT, aggregated_into TEXT, archived INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'active'
+            status TEXT DEFAULT 'active', source TEXT
         );
         CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
         """
@@ -1801,7 +1801,7 @@ def test_hotlane_split_cycle_writes_vectors_without_opening_vectorstore_writer(t
                     return [("hot-1", "hot content", "brainbar-store", "mcp", None, None, None, 0, "active", None)]
                 if "SELECT c.id, c.created_at, c.rowid" in sql:
                     return [("pending-1", "2026-08-01T00:00:00Z", 1)]
-                return [("pending-1", "pending content", None, None, None, 0, "active")]
+                return [("pending-1", "pending content", None, None, None, "mcp")]
             events.append(("sql", sql.strip().splitlines()[0]))
             if sql.strip().startswith("SELECT 1"):
                 return SimpleNamespace(fetchone=lambda: (1,))
