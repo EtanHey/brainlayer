@@ -15,7 +15,16 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from brainlayer.provenance import PROVENANCE_RANK
-from brainlayer.t3_provenance import T3_APP_SESSION, codex_session_id_from_source, t3_app_codex_session_ids
+from brainlayer.t3_provenance import (
+    T3_APP_SESSION,
+    T3_UNLINKED,
+    codex_session_id_from_source,
+    t3_app_codex_session_ids,
+)
+
+# A plain Codex row of a session T3 links, and a row the watcher indexed as t3-unlinked after its
+# linkage hold expired and that T3 linked later: both become t3-app-session. Rows only, in place.
+RETAGGABLE = ("codex-session", T3_UNLINKED)
 
 
 def _candidates(connection: sqlite3.Connection, linked_session_ids: set[str]) -> list[tuple[str, str | None]]:
@@ -31,7 +40,7 @@ def _candidates(connection: sqlite3.Connection, linked_session_ids: set[str]) ->
         (chunk_id, provenance_class)
         for chunk_id, source_file, provenance_class in rows
         if codex_session_id_from_source(source_file) in linked_session_ids
-        and provenance_class == "codex-session"
+        and provenance_class in RETAGGABLE
         and provenance_class not in PROVENANCE_RANK
     ]
 
@@ -114,7 +123,7 @@ def retag_t3_app_chunks(
             batch = candidates[batch_start : batch_start + batch_size]
             cursor = connection.executemany(
                 "UPDATE chunks SET provenance_class = ? WHERE id = ? AND provenance_class = ?",
-                [(T3_APP_SESSION, chunk_id, "codex-session") for chunk_id, _ in batch],
+                [(T3_APP_SESSION, chunk_id, prior) for chunk_id, prior in batch],
             )
             report["matched_chunks"] += cursor.rowcount
             connection.commit()

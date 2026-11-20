@@ -26,7 +26,7 @@ from .source_visibility import (  # noqa: F401  (re-exported: the shared visibil
     is_hidden_source_class,
 )
 from .source_visibility import THINKING_SOURCE_CLASS as _THINKING_SOURCE_CLASS
-from .t3_provenance import T3_APP_SESSION, CompactCodexHeader, is_t3_app_initiated_codex_session
+from .t3_provenance import T3_APP_SESSION, T3_UNLINKED, CompactCodexHeader, is_t3_app_initiated_codex_session
 
 SearchPolicy = Literal["KEEP", "ISOLATE", "OUT"]
 EffectiveVisibility = Literal["default", "operational", "cold"]
@@ -47,6 +47,7 @@ ProvenanceClass = Literal[
     "recon-agent",
     "t3-app-session",
     "t3-thread",
+    "t3-unlinked",
     "unknown",
     "workflow-agent",
 ]
@@ -61,6 +62,7 @@ PROVENANCE_CLASSES = frozenset(
         "recon-agent",
         T3_APP_SESSION,
         "t3-thread",
+        T3_UNLINKED,
         "unknown",
         "workflow-agent",
     }
@@ -282,6 +284,7 @@ def derive_source_class(
     provenance_map: dict[str, SourceClass] = {
         T3_APP_SESSION: "cli-agent",
         "t3-thread": "cli-agent",
+        T3_UNLINKED: "cli-agent",
         "recon-agent": "brain-worker",
         "fleet-subagent": "fleet-coordination",
         "product-subagent": "subagent",
