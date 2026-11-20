@@ -10,8 +10,53 @@ from __future__ import annotations
 import json
 import os
 
+import pytest
+
 from brainlayer.alarm import BrainLayerAlarm
-from brainlayer.watcher import JSONLWatcher, WatchRoot
+from brainlayer.watcher import JSONLWatcher, OffsetRegistry, WatchRoot
+
+
+@pytest.mark.parametrize("same_inode", [True, False])
+def test_tombstoned_plain_return_installs_checkpoint(tmp_path, monkeypatch, same_inode):
+    watcher, sessions, flushed, alarms = _make_watcher(tmp_path, monkeypatch)
+    rollout = sessions / "returned.jsonl"
+    rollout.write_text(_line("returned transcript") + json.dumps({"type": "token_usage_record"}) + "\n")
+    _poll(watcher)
+    inode = rollout.stat().st_ino
+    parked = tmp_path / "parked.jsonl"
+    rollout.rename(parked)
+    watcher.registry.remove(str(rollout))
+    tombstone_generation = watcher.registry._removed[str(rollout)]["generation"]
+    assert watcher.registry.flush()
+    if same_inode:
+        parked.rename(rollout)
+    else:
+        rollout.write_text(parked.read_text())
+    assert (rollout.stat().st_ino == inode) == same_inode
+    watcher, _, flushed, alarms = _make_watcher(tmp_path, monkeypatch)
+    _poll(watcher)
+    assert _texts(flushed) == ["returned transcript"]
+    assert watcher.registry.get(str(rollout))[0] == rollout.stat().st_size
+    assert watcher.registry.generation(str(rollout)) > tombstone_generation
+    assert _health(tmp_path)["catch_up"]["files_behind"] == 0
+    assert alarms == []
+    assert watcher.registry.flush()
+    restarted = OffsetRegistry(tmp_path / "offsets.json")
+    assert restarted.get(str(rollout)) == (rollout.stat().st_size, rollout.stat().st_ino)
+    assert restarted.fingerprint(str(rollout))
+
+
+def test_refused_checkpoint_is_logged_and_counted(tmp_path, monkeypatch, caplog):
+    watcher, sessions, _, _ = _make_watcher(tmp_path, monkeypatch)
+    path = str(sessions / "stale.jsonl")
+    watcher.registry.set(path, 10, 123)
+    watcher.registry.remove(path)
+    watcher.registry.set(path, 20, 123, generation=0)
+    watcher.registry.mark_rewind(path, 123)
+    watcher.registry.set(path, 30, 123, generation=0)
+    watcher.poll_once()
+    assert _health(tmp_path)["checkpoint_refused_count_total"] == 2
+    assert caplog.text.count("Watcher checkpoint refused") == 2
 
 
 def _line(content: str) -> str:
