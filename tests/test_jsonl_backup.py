@@ -615,6 +615,7 @@ def _state_matches(entry, candidate, surviving_archives=None):
                 icloud_dir=icloud_dir,
                 icloud_copy=result.get("icloud_copy"),
                 clear_icloud_verification=bool(icloud_bootstrap_pending and active),
+                credential_scan_failed=scan_error is not None,
             ),
         )
 """

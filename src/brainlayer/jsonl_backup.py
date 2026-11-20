@@ -1700,6 +1700,7 @@ def _update_state_for_uploaded(
     icloud_dir: Path | None = None,
     icloud_copy: dict[str, Any] | None = None,
     clear_icloud_verification: bool = False,
+    credential_scan_failed: bool = False,
 ) -> dict[str, Any]:
     """Record which archive object carries each file, and the bytes it carried.
 
@@ -1719,6 +1720,8 @@ def _update_state_for_uploaded(
         icloud_copy_status = icloud_receipt["status"]
     for candidate in candidates:
         entry: dict[str, Any] = {"mtime": candidate.mtime, "size": candidate.size}
+        if credential_scan_failed:
+            entry["credential_scan_failed"] = True
         if archive_name and archive_id:
             entry["archive"] = archive_name
             entry["archive_id"] = archive_id
@@ -1934,6 +1937,16 @@ def run_backup(
         except Exception as exc:
             retention_receipt["local_retention_error"] = str(exc)
             _retention_warning(log_path, str(exc))
+    # A failed scan-state write cannot queue findings. Re-bundle its sources
+    # even when unchanged, retaining the marker for active/deferred sources.
+    selection_state = {
+        **selection_state,
+        "files": {
+            path: entry
+            for path, entry in (selection_state.get("files") or {}).items()
+            if not (isinstance(entry, dict) and entry.get("credential_scan_failed"))
+        },
+    }
     changed, active, covered, vanished = _select_backup_candidates(
         candidates,
         state=selection_state,
@@ -1974,6 +1987,9 @@ def run_backup(
         )
     except OSError as exc:
         scan_error = scan_error or f"credential scan state unavailable: {type(exc).__name__}"
+    # A successful upload proves byte coverage, not alert persistence. If the
+    # scan state itself is unwritable, no pending finding can be queued there;
+    # invalidate prefix trust in the separately persisted backup state instead.
     if scan_error is not None:
         retention_receipt.setdefault("credential_scan", {})["error"] = scan_error
         print(f"JSONL backup: {scan_error}", file=sys.stderr, flush=True)
@@ -2159,6 +2175,7 @@ def run_backup(
                 icloud_dir=icloud_dir,
                 icloud_copy=result.get("icloud_copy"),
                 clear_icloud_verification=bool(icloud_bootstrap_pending and active),
+                credential_scan_failed=scan_error is not None,
             ),
         )
         try:

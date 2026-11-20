@@ -7,8 +7,8 @@ of the backup. Detection reuses the provider patterns in
 provider to test a key.
 
 No secret value is ever kept: a finding is a provider name, a path relative to
-its source root, a line number and the sha256 of the value. Only fingerprints
-that already alerted are written to disk, so each one alerts at most once.
+its source root, a line number and the sha256 of the value. Pending findings
+are persisted before alert delivery and retried until the alert is recorded.
 
 Cost. A nightly re-bundles whole transcripts that mostly only grew, and a full
 pass of the provider patterns is several times slower than gzip. So when the
@@ -24,7 +24,7 @@ import datetime as dt
 import hashlib
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Any, Mapping
 
@@ -55,6 +55,11 @@ _EMBEDDED_MIN_EXTENSION = 32
 # a placeholder: a real key never has 16 chars of period <= 8.
 _PLACEHOLDER_MAX_PERIOD = 8
 _PLACEHOLDER_MIN_RUN = 16
+# Public OpenSSH security-key algorithm identifiers, never credentials. Match
+# the whole identifier so a credential sharing a prefix is still detected.
+_SSH_ALGORITHMS = frozenset(
+    f"sk-{kind}{cert}@openssh.com" for kind in ("ssh-ed25519", "ecdsa-sha2-nistp256") for cert in ("", "-cert-v01")
+)
 
 
 def is_embedded_in_base64(text: str, start: int, end: int) -> bool:
@@ -199,6 +204,17 @@ class FileScan:
         for span in provider_secret_spans(text):
             if (limit is not None and span.end > limit) or span.start < skip_head:
                 continue
+            if span.provider == "openai" and any(
+                text.startswith(name, span.start)
+                and span.end < span.start + len(name)
+                and (
+                    span.start + len(name) == len(text)
+                    or text[span.start + len(name)]
+                    not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.@+-"
+                )
+                for name in _SSH_ALGORITHMS
+            ):
+                continue
             if is_embedded_in_base64(text, span.start, span.end):
                 self.ignored_embedded += 1
                 continue
@@ -242,7 +258,7 @@ class CredentialScan:
 
     def _prior(self, path: Path) -> PriorSnapshot | None:
         entry = self.priors.get(path.as_posix())
-        if self.scanning_since is None or not isinstance(entry, dict):
+        if self.scanning_since is None or not isinstance(entry, dict) or entry.get("credential_scan_failed"):
             return None
         size, digest, mtime = entry.get("size"), entry.get("sha256"), entry.get("mtime")
         if not (isinstance(size, int) and size > 0 and isinstance(digest, str) and digest):
@@ -353,11 +369,16 @@ def apply_findings(scan: CredentialScan, *, state_path: Path, alert_path: Path) 
     alerted: dict[str, Any] = state["alerted"]
     new: list[CredentialFinding] = []
     new_fingerprints: set[str] = set()
-    for finding in scan.findings:
+    pending = [CredentialFinding(**row) for row in state.get("pending", [])]
+    for finding in pending + scan.findings:
         if finding.current and finding.fingerprint not in alerted and finding.fingerprint not in new_fingerprints:
             new_fingerprints.add(finding.fingerprint)
             new.append(finding)
     if new:
+        # Persist only safe finding metadata before alert I/O. An unchanged file
+        # may never be bundled again, so retry delivery even on a no-op backup.
+        state["pending"] = [asdict(finding) for finding in new]
+        _write(state_path, state)
         message = alert_message(new)
         # job_alerts keeps the first reason of an open episode; a new key must still be seen.
         if active_alerts(alert_path).get(ALERT_KEY) not in (None, message):
@@ -372,6 +393,7 @@ def apply_findings(scan: CredentialScan, *, state_path: Path, alert_path: Path) 
                 "alerted_at": seen_at,
             }
         state["last_new_at"] = now
+        state["pending"] = []
         _write(state_path, state)
     elif state["last_new_at"] is None or now - state["last_new_at"] >= CURRENT_WINDOW_SECONDS:
         report(ALERT_KEY, None, path=alert_path)

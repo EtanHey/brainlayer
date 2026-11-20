@@ -9,6 +9,8 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from brainlayer import backup_credential_scan as scan
 from brainlayer import jsonl_backup as backup
 from brainlayer.job_alerts import active_alerts, report
@@ -357,3 +359,86 @@ def test_repeated_filler_values_are_placeholders_and_never_alert(tmp_path):
     assert result["credential_scan"]["ignored_placeholders"] == len(values)
     assert scan.ALERT_KEY not in _alerts(tmp_path)
     assert not any(scan.is_placeholder(_fake_key(seed)) for seed in ("a", "b", "c", "d"))
+
+
+@pytest.mark.parametrize("failure", ["alert", "scan-state"])
+@pytest.mark.parametrize("grows", [True, False])
+def test_failed_alert_persistence_retries_after_successful_upload(tmp_path, monkeypatch, failure, grows):
+    from brainlayer import job_alerts
+    from tests.test_jsonl_backup import _mock_drive_success
+
+    _mock_drive_success(backup, monkeypatch)
+    monkeypatch.setattr(backup.backup_daily, "resolve_machine_id", lambda: "fixture")
+    monkeypatch.setattr(backup.backup_age, "enabled", lambda: False)
+    state_path = tmp_path / "state" / "state.json"
+    monkeypatch.setattr(
+        backup,
+        "_list_surviving_archives",
+        lambda *a: {
+            name: row.get("archive_id")
+            for name, row in json.loads(state_path.read_text()).get("drive_archives", {}).items()
+        },
+    )
+    now = time.time()
+    source = tmp_path / "sources"
+    path = _transcript(source / "session.jsonl", _fake_key("retry"), mtime=now - 3600)
+
+    def run(when, stamp):
+        return backup.run_backup(
+            source_roots=[source],
+            state_path=state_path,
+            staging_dir=tmp_path / "staging",
+            log_path=tmp_path / "state" / "backup.log",
+            queue_dir=tmp_path / "state" / "queue",
+            now=when,
+            date_stamp=stamp,
+        )
+
+    real_report, real_write = job_alerts.report, scan._write
+    with monkeypatch.context() as fail:
+        if failure == "alert":
+
+            def fail_report(key, *args, **kwargs):
+                if key == scan.ALERT_KEY:
+                    raise PermissionError("fixture")
+                return real_report(key, *args, **kwargs)
+
+            fail.setattr(job_alerts, "report", fail_report)
+        else:
+
+            def fail_write(target, payload):
+                # Allow start's trust-cutoff write, fail the findings write.
+                if payload.get("pending") or payload.get("alerted"):
+                    raise PermissionError("fixture")
+                return real_write(target, payload)
+
+            fail.setattr(scan, "_write", fail_write)
+        first = run(now, "night1")
+    assert first["uploaded"] is True
+    assert "error" in first["credential_scan"]
+    if grows:
+        with path.open("a") as handle:
+            handle.write('{"next":1}\n')
+        os.utime(path, (now + 85000, now + 85000))
+    second = run(now + DAY, "night2")
+    assert second["credential_scan"]["new_alerts"] == 1
+    assert scan.ALERT_KEY in _alerts(tmp_path)
+    assert second["uploaded"] is True
+    assert second["credential_scan"]["proven_prefix_bytes"] == 0
+    assert not json.loads(state_path.read_text())["files"][path.as_posix()].get("credential_scan_failed")
+
+
+def test_public_ssh_algorithm_names_do_not_hide_a_synthetic_key():
+    value = "sk-" + hashlib.sha256(b"ssh-neighbour").hexdigest()[:48]
+    names = [
+        "sk-ssh-ed25519@openssh.com",
+        "sk-ssh-ed25519-cert-v01@openssh.com",
+        "sk-ecdsa-sha2-nistp256@openssh.com",
+        "sk-ecdsa-sha2-nistp256-cert-v01@openssh.com",
+    ]
+    file_scan = scan.FileScan("ssh-config.jsonl")
+    file_scan.feed(json.dumps({"text": ",".join(names) + " " + value}).encode())
+    findings = file_scan.finish()
+    assert len(findings) == 1
+    assert findings[0][0] == "openai"
+    assert findings[0][2] == scan.fingerprint(value)
