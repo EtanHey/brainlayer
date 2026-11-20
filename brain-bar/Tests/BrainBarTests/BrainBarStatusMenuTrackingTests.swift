@@ -204,6 +204,8 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
     func testNativeMenuCallbacksFreezeCollectorUpdatesAcrossCancelEscapeReopenAndStop() throws {
         let fixture = try Fixture()
         defer { fixture.stop() }
+        let removed = expectation(description: "status item removed after stop")
+        fixture.host.didRemove = { removed.fulfill() }
         fixture.pump()
         let menu = fixture.controller.contextMenuForTesting
         let delegate = TrackingDelegate(forwarding: try XCTUnwrap(menu.delegate), button: fixture.host.button)
@@ -282,6 +284,7 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
         print("PRE_OPEN_WRITES=\(delegate.preOpenWrites) NATIVE_WRITES=\(delegate.nativeWrites)")
         XCTAssertEqual(delegate.preOpenWrites, [0, 0, 0])
         XCTAssertEqual(delegate.nativeWrites, [0, 0, 0])
+        wait(for: [removed], timeout: 3)
         XCTAssertEqual(fixture.host.removals, 1)
     }
 
@@ -366,8 +369,13 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
         let item = Item()
         var button: Button { item.recordingButton }
         var removals = 0
+        var didRemove: (() -> Void)?
         func statusItem(withLength _: CGFloat) -> any BrainBarStatusItem { item }
-        func removeStatusItem(_ item: any BrainBarStatusItem) { XCTAssertTrue(item === self.item); removals += 1 }
+        func removeStatusItem(_ item: any BrainBarStatusItem) {
+            XCTAssertTrue(item === self.item)
+            removals += 1
+            didRemove?()
+        }
     }
 
     private final class Provider: @unchecked Sendable {
