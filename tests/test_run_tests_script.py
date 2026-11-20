@@ -875,6 +875,7 @@ def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp
         "test_search_trigram_fts.py",
         "test_precompact_chunk_origin.py",
         "test_ingest_t3.py",
+        "test_t3_ingest_deferred_embedding.py",
         "test_context_pipeline.py",
         "test_index_empty_content.py",
         "test_index_checkpoint_boundary.py",
@@ -913,6 +914,67 @@ def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp
     assert f"{test_root}/ -v" not in logged
     for filename in expected:
         assert str(test_root / filename) in logged
+
+
+_VECTOR_PATH_OWNERS = {
+    "src/brainlayer/vector_store.py": (
+        "test_source_class.py",
+        "test_vector_store_schema_flags.py",
+        "test_vector_store_upsert_transactions.py",
+        "test_hybrid_search.py",
+        "test_vector_store_readonly.py",
+        "test_search_trigram_fts.py",
+        "test_precompact_chunk_origin.py",
+    ),
+    "scripts/hotlane_brainbar_daemon.py": (
+        "test_hotlane_brainbar_daemon.py",
+        "test_hotlane_backpressure.py",
+        "test_hotlane_busy_carryover.py",
+        "test_hotlane_embedding_floor.py",
+    ),
+}
+# t3-ingest's correctness rests on both files (#1826, red team b F5).
+_T3_DEFERRED_EMBEDDING_SUITES = ("test_t3_ingest_deferred_embedding.py", "test_store_vector_invalidation.py")
+
+
+@pytest.mark.parametrize("changed", sorted(_VECTOR_PATH_OWNERS))
+@pytest.mark.parametrize(
+    "missing", [None, "test_t3_ingest_deferred_embedding.py"], ids=["all suites", "deferred suite renamed"]
+)
+def test_changed_only_vector_paths_run_the_t3_deferred_embedding_suites(
+    tmp_path: Path, changed: str, missing: str | None
+) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    owners = (*_VECTOR_PATH_OWNERS[changed], *_T3_DEFERRED_EMBEDDING_SUITES)
+    for owner in owners:
+        if owner != missing:
+            (test_root / owner).write_text("test placeholder\n")
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = changed
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    args = [arg for call in _pytest_args(pytest_log) for arg in call]
+    if missing and changed == "scripts/hotlane_brainbar_daemon.py":
+        # The hotlane arm needs every suite; a renamed one escalates loudly, never narrows.
+        assert f"WARNING: unmapped: {changed}" in result.stdout
+        return
+    for owner in owners:
+        if owner != missing:
+            assert str(test_root / owner) in args  # a complete argument, not a prefix of `path::test`
+    assert not ({str(test_root), f"{test_root}/"} & set(args))
 
 
 def test_changed_only_tag_with_mapped_sources_runs_exact_targeted_set(tmp_path: Path) -> None:
@@ -2282,12 +2344,22 @@ IDX_FOCUSED_MAPPINGS = (
             "test_index_calendar_deferrals.py",
         ),
     ),
-    ("ingest/t3", ("test_ingest_t3.py", "test_health_check.py", "test_paths.py")),
+    (
+        "ingest/t3",
+        (
+            "test_ingest_t3.py",
+            "test_t3_ingest_deferred_embedding.py",
+            "test_t3_ingest_bookmark.py",
+            "test_health_check.py",
+            "test_paths.py",
+        ),
+    ),
     (
         "index_new",
         (
             "test_source_class.py",
             "test_ingest_t3.py",
+            "test_t3_ingest_deferred_embedding.py",
             "test_context_pipeline.py",
             "test_index_empty_content.py",
             "test_index_checkpoint_boundary.py",

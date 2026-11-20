@@ -38,6 +38,7 @@ def index_chunks_to_sqlite(
     deadline_monotonic: float | None = None,
     store: VectorStore | None = None,
     precomputed_embeddings: list[EmbeddedChunk] | None = None,
+    defer_embedding: bool = False,
     start_position: int = 0,
     on_skipped_empty: Callable[[int], None] | None = None,
     on_rejected: Callable[[int], None] | None = None,
@@ -49,7 +50,13 @@ def index_chunks_to_sqlite(
 
     ``on_busy`` admits a busy rollback: it waits and returns to retry the same
     upsert with the embeddings already computed, or raises to end the attempt.
+
+    ``defer_embedding`` writes the rows with no vector and never loads the
+    embedding model. ``upsert_chunks`` drops a stale vector when the embedding
+    input changed, and the hotlane's backlog lane embeds every vectorless row.
     """
+    if defer_embedding and precomputed_embeddings is not None:
+        raise ValueError("defer_embedding and precomputed_embeddings are mutually exclusive")
     if not chunks:
         return 0
 
@@ -114,7 +121,9 @@ def index_chunks_to_sqlite(
         if on_progress is not None:
             on_progress(completed, total)
 
-    if precomputed_embeddings is None:
+    if defer_embedding:
+        embedded_chunks = [EmbeddedChunk(chunk, None) for chunk in filtered_chunks]
+    elif precomputed_embeddings is None:
         embedded_chunks = embed_chunks(
             filtered_chunks,
             on_progress=embedding_progress if deadline_monotonic is not None else on_progress,

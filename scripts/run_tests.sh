@@ -346,7 +346,9 @@ map_changed_files_to_pytests() {
         done
         ;;
       src/brainlayer/vector_store.py|src/brainlayer/search_repo.py)
-        for rel in test_source_class.py test_vector_store_schema_flags.py test_vector_store_upsert_transactions.py test_hybrid_search.py test_vector_store_readonly.py test_search_trigram_fts.py test_precompact_chunk_origin.py; do
+        # t3-ingest writes vectorless rows and relies on upsert_chunks dropping a stale vector
+        # (#1826), so the deferred-embedding and vector-invalidation suites ride along.
+        for rel in test_source_class.py test_vector_store_schema_flags.py test_vector_store_upsert_transactions.py test_hybrid_search.py test_vector_store_readonly.py test_search_trigram_fts.py test_precompact_chunk_origin.py test_t3_ingest_deferred_embedding.py test_store_vector_invalidation.py; do
           test_path="$TEST_ROOT/$rel"
           if [ -f "$test_path" ]; then
             append_unique "$test_path"
@@ -485,13 +487,13 @@ map_changed_files_to_pytests() {
         elif [ "$changed" = "src/brainlayer/index_budget.py" ]; then
           idx_tests=(test_index_calendar_custody.py test_cli_index_calendar.py)
         elif [ "$changed" = "src/brainlayer/ingest/t3.py" ]; then
-          idx_tests=(test_ingest_t3.py test_health_check.py test_paths.py)
+          idx_tests=(test_ingest_t3.py test_t3_ingest_deferred_embedding.py test_t3_ingest_bookmark.py test_health_check.py test_paths.py)
         elif [ "$changed" = "src/brainlayer/ingest/t3_bookmark.py" ]; then
           idx_tests=(test_t3_ingest_bookmark.py test_ingest_t3.py)
         elif [ "$changed" = "src/brainlayer/maintenance_calendar.py" ]; then
           idx_tests=(test_maintenance_calendar.py test_maintenance_calendar_leases.py test_index_calendar_custody.py test_index_calendar_deferrals.py)
         else
-          idx_tests=(test_source_class.py test_ingest_t3.py test_context_pipeline.py test_index_empty_content.py test_index_checkpoint_boundary.py test_index_checkpoint_durability.py test_index_completion.py test_cli_index_calendar.py test_cli_index_writers.py test_index_convergence.py)
+          idx_tests=(test_source_class.py test_ingest_t3.py test_t3_ingest_deferred_embedding.py test_context_pipeline.py test_index_empty_content.py test_index_checkpoint_boundary.py test_index_checkpoint_durability.py test_index_completion.py test_cli_index_calendar.py test_cli_index_writers.py test_index_convergence.py)
         fi
         idx_complete=1
         for rel in "${idx_tests[@]}"; do
@@ -619,6 +621,21 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      scripts/hotlane_brainbar_daemon.py)
+        # The hotlane's backlog lane embeds every vectorless row, including t3-ingest's
+        # (#1826). Unmapped, a changed-only push ran none of these. All must exist to count
+        # as mapped; a missing suite escalates below.
+        hotlane_tests=(test_hotlane_brainbar_daemon.py test_hotlane_backpressure.py test_hotlane_busy_carryover.py test_hotlane_embedding_floor.py test_t3_ingest_deferred_embedding.py test_store_vector_invalidation.py)
+        mapped=1
+        for rel in "${hotlane_tests[@]}"; do
+          [ -f "$TEST_ROOT/$rel" ] || mapped=0
+        done
+        if [ "$mapped" -eq 1 ]; then
+          for rel in "${hotlane_tests[@]}"; do
+            append_unique "$TEST_ROOT/$rel"
+          done
+        fi
+        ;;
       scripts/kg_rebuild.py)
         test_path="$TEST_ROOT/test_kg_rebuild.py"
         if [ -f "$test_path" ]; then
@@ -640,7 +657,7 @@ map_changed_files_to_pytests() {
         # test_release_tag_contains.py must escalate, never narrow to nothing. Mapping it to
         # zero targets and still printing "test gate passed" is the same unchecked-claim
         # fail-open the gate exists to close, one level up.
-        .github/workflows/*.yml|.github/workflows/*.yaml|src/brainlayer/*.py|scripts/launchd/install.sh|scripts/kg_rebuild.py|scripts/release_tag_contains.py|scripts/check_stray_apps.py|scripts/harness_probe_contract.py|scripts/harness_probe.py|scripts/harness_probe_native.py|scripts/harness_probe_t3.py|scripts/harness_probe_aqua.py)
+        .github/workflows/*.yml|.github/workflows/*.yaml|src/brainlayer/*.py|scripts/launchd/install.sh|scripts/hotlane_brainbar_daemon.py|scripts/kg_rebuild.py|scripts/release_tag_contains.py|scripts/check_stray_apps.py|scripts/harness_probe_contract.py|scripts/harness_probe.py|scripts/harness_probe_native.py|scripts/harness_probe_t3.py|scripts/harness_probe_aqua.py)
           changed_source_unmapped=1
           unmapped_changed_files+=("$changed")
           ;;
