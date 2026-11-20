@@ -141,6 +141,29 @@ def side_table_state(db_path: Path) -> str:
         conn.close()
 
 
+def unresolved_thread_ids(db_path: Path) -> dict[str, set[str]]:
+    """Retry eligible sessions whose watcher chunks may have arrived since the last T3 event.
+
+    Scope by source DB so one catalog cannot consume another source's obligation.
+    Planning still resolves Codex UUIDs to rollout conversation ids explicitly.
+    """
+    conn = sqlite3.connect(f"{Path(db_path).absolute().as_uri()}?mode=ro", uri=True, timeout=5.0)
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        pending: dict[str, set[str]] = {}
+        for state_db, thread_id in conn.execute(
+            "SELECT DISTINCT t.state_db, s.thread_id FROM t3_thread_sessions s"
+            " JOIN t3_threads t ON t.thread_id = s.thread_id"
+            " WHERE s.conversation_id IS NULL AND s.native_session_id IS NOT NULL"
+            " AND s.native_session_id != '' AND s.driver IN (SELECT value FROM json_each(?))",
+            (json.dumps(sorted(ELIGIBLE_DRIVERS)),),
+        ):
+            pending.setdefault(state_db, set()).add(thread_id)
+        return pending
+    finally:
+        conn.close()
+
+
 def _active_clause(cursor: Any) -> str:
     from .archive_lifecycle import lifecycle_active_clauses_present
 

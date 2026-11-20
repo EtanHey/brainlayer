@@ -5188,6 +5188,16 @@
         "target": "socket.socket"
       }
     },
+    "be190900208dfd4f78ba7cad2554abdee40aa3f0d5ac82c7cf26c7093c02c83b": {
+      "non_cloud_purpose": "Read-only SQLite lookup of unresolved eligible T3 session links, scoped by source database, for local watcher catch-up; no network or model send.",
+      "site": {
+        "call_sha256": "a206d95c7eeb092dcdb362ec9fdfda68fef7c71dcee90559643014b4634c92cb",
+        "kind": "generic_send",
+        "owner": "<module>.unresolved_thread_ids",
+        "path": "src/brainlayer/t3_thread_tables.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "be2e7bf812f360e6552d1d7ec3ba7c5f5ab9cca8fc768123fbb94c51734e56db": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/setup.py <module>.verify_mcp_transport",
       "site": {

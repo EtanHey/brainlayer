@@ -332,6 +332,77 @@ def test_an_idle_run_takes_no_writer(env, monkeypatch):
     assert result.side_tables["state"] == "populated"
 
 
+@pytest.mark.parametrize("failure", [sqlite3.OperationalError("database is locked"), OSError("probe unavailable")])
+def test_an_unreadable_probe_alerts_holds_the_bookmark_and_replays_the_rename(env, monkeypatch, failure):
+    from brainlayer.ingest import t3
+
+    env()
+    bookmark = env.tmp / "bookmark-brainlayer.json"
+    held = bookmark.read_bytes()
+    _rename(env.source, "th-claude", "Correct renamed title")
+    _event(env.source, "th-claude")
+
+    with monkeypatch.context() as patch:
+
+        def fail(*args, **kwargs):
+            raise failure
+
+        patch.setattr(t3, "_side_table_state", fail)
+        with pytest.raises(type(failure), match=str(failure)):
+            env()
+
+    assert bookmark.read_bytes() == held
+    health = json.loads((env.tmp / "t3-health.json").read_text())
+    assert health["alerting"] is True
+    assert "side_table_failure" in health["alert_reasons"]
+    assert health["bookmark_held"] == "side_table_failure"
+    assert health["t3_side_tables"]["state"] == "unreadable"
+    assert _threads(env.db)["th-claude"][0] == "Claude thread"
+    recovered = env()
+    assert recovered.mode == "incremental" and recovered.events_read == 1
+    assert _threads(env.db)["th-claude"][0] == "Correct renamed title"
+    assert json.loads((env.tmp / "t3-health.json").read_text())["alerting"] is False
+
+
+@pytest.mark.parametrize(
+    "provider_thread_id,native_id,conversation_id",
+    [
+        ("pt-cursor", CURSOR_NATIVE, CURSOR_NATIVE),
+        ("pt-claude", "sess-late-claude", "sess-late-claude"),
+        (
+            "pt-codex",
+            "01a1aaaa-0000-7000-8000-000000000099",
+            "rollout-2026-11-19T12-00-00-01a1aaaa-0000-7000-8000-000000000099",
+        ),
+    ],
+)
+def test_late_session_chunks_resolve_on_an_idle_run(env, monkeypatch, provider_thread_id, native_id, conversation_id):
+    with sqlite3.connect(env.source) as conn:
+        conn.execute(
+            "UPDATE orchestration_v2_projection_provider_threads SET payload_json = ? WHERE provider_thread_id = ?",
+            (json.dumps({"nativeThreadRef": {"nativeId": native_id}}), provider_thread_id),
+        )
+    env()
+    query = "SELECT conversation_id FROM t3_thread_sessions WHERE provider_thread_id = ?"
+    assert _rows(env.db, query, (provider_thread_id,)) == [(None,)]
+    with sqlite3.connect(env.db) as conn:
+        _session_chunk(conn, "arrives-late", conversation_id, "2026-11-19T12:05:00Z")
+
+    result = env()
+    assert result.mode == "incremental" and result.events_read == 0
+    assert result.chunks_indexed == 0
+    assert _rows(env.db, query, (provider_thread_id,)) == [(conversation_id,)]
+    if provider_thread_id == "pt-codex":
+        assert conversation_id != native_id  # Codex must resolve the rollout id, never use the UUID directly.
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("a settled idle run opened the writer")
+
+    monkeypatch.setattr("brainlayer.runtime_store.open_writer_store", forbidden)
+    assert env().events_read == 0
+    assert _rows(env.db, query, (provider_thread_id,)) == [(conversation_id,)]
+
+
 def test_a_side_table_failure_holds_the_bookmark_and_the_next_run_repairs_it(env, monkeypatch):
     from brainlayer import t3_thread_tables
 

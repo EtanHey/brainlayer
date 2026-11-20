@@ -310,6 +310,10 @@ class T3Reader:
                 # other mode (and an empty side table) rebuilds the whole catalog.
                 incremental = getattr(self, "_bookmark_info", {}).get("mode") == "incremental"
                 ids = {thread.thread_id for thread in threads} if request == "touched" and incremental else None
+                if ids is not None:
+                    # Watcher-only arrivals produce no T3 event. Retry unresolved
+                    # eligible sessions without expanding the chunk/event selection.
+                    ids.update(getattr(self, "_catalog_retry_ids", ()))
                 self._catalog, self._catalog_info = _read_v2_catalog(conn, str(self.state_db_path), ids)
                 self._catalog_info["scope"] = "touched" if ids is not None else "all"
         except BrainLayerAlarm:
@@ -828,6 +832,7 @@ def ingest_t3(
     # Side tables (T3 PR 3.1): which T3 thread a session belongs to. Absent until the
     # lead runs the reviewed migration; health says so instead of writing.
     side: dict[str, Any] = {"state": "dry_run"}
+    unresolved: dict[str, set[str]] = {}
     if not dry_run:
         if destination is None:
             from ..paths import DEFAULT_DB_PATH
@@ -835,8 +840,23 @@ def ingest_t3(
             destination = DEFAULT_DB_PATH
         try:
             side = {"state": _side_table_state(destination)}
+            if side["state"] == "populated":
+                from ..t3_thread_tables import unresolved_thread_ids
+
+                unresolved = unresolved_thread_ids(destination)
         except (OSError, sqlite3.Error) as error:
             side = {"state": "unreadable", "error": _scrubbed_error_text(error)[:500]}
+            reader._last_counts.update(bookmark_held="side_table_failure", t3_side_tables=side)
+            reader._failures.append(
+                {
+                    "code": "t3_side_table_failure",
+                    "message": "T3 thread side tables could not be read",
+                    "error_type": type(error).__name__,
+                    "error": side["error"],
+                }
+            )
+            reader._write_health(alerting=True, alert_reasons=["side_table_failure"])
+            raise
     catalog: dict[str, Any] = {}
     # Decide legacy reads before the V2 snapshot, so unchanged legacy sources
     # need neither payloads nor the complete V2 ownership set.
@@ -870,6 +890,7 @@ def ingest_t3(
                 source_reader._previous_bookmark = previous
                 if side["state"] in ("empty", "populated"):
                     source_reader._catalog_request = "all" if side["state"] == "empty" else "touched"
+                    source_reader._catalog_retry_ids = unresolved.get(str(path), set())
             else:
                 try:
                     fingerprint = fingerprints[path]
