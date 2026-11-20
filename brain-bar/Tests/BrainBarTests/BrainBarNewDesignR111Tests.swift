@@ -176,6 +176,9 @@ final class BrainBarNewDesignR111Tests: XCTestCase {
         XCTAssertEqual(line(Self.lag(bytes: 500_000))?.last, Say.byItself.text, "under 1 MB the size is left out")
         XCTAssertEqual(line(Self.lag(bytes: 3 * 1_073_741_824 / 2))?.last, "1.5\u{00A0}GB left to read. It’s catching up by itself.")
         XCTAssertNil(line(Self.lag(reasons: ["offset_lag", "coverage_drop"])), "the distinct coverage fault owns the row; lag must not hide it")
+        XCTAssertTrue(BrainBarMenuPresenter.present(Self.lag(reasons: ["offset_lag", "coverage_drop"])).rows.contains {
+            $0.strings.first == Say.coverage.text && $0.strings.contains(Say.coverageLine.text)
+        }, "the coverage fault and its explanation remain visible")
         XCTAssertEqual(line(Self.lag(reasons: ["offset_lag", "quarantined_record"]))?.last, "117\u{00A0}MB left to read. It’s catching up by itself.")
         // No row at all without its condition: a green reader under its limit is R02's, and a stale file is not a lag.
         XCTAssertNil(line(Self.lag(.green, clock: 600)))

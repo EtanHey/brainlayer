@@ -687,6 +687,7 @@ extension BrainBarMenuPresenter {
                 ?? "Saves have waited \(age) and aren\u{2019}t in memory yet."
         }
         static func meaningBehind(_ age: String) -> String { "Search by meaning is \(age) behind" }
+        static let meaningBehindUnknown = "Search by meaning is behind"
         static let meaningBehindDetail = "New memories are found by words until it catches up."
         /// R1.12 (§ C, I 6): "in a row" and "failing" go; one sentence on the row, page, dropdown and panel.
         static func nightlyFailed(_ n: Int) -> String { "Nightly check-up failed \(n) nights" }

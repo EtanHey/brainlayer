@@ -150,7 +150,8 @@ struct NDR1: Equatable, Sendable {
                     items.append(Item(id: "agent", severity: sev, title: Say.agentNotRead(NDProvider.name(first)), detail: Say.agentNotReadDetail,
                                       action: sev == .red ? copyReport : nil, strip: Strip(from: NDProvider.name(first), to: Say.stageRead, side: .source, severity: sev),
                                       concerns: ["ingest"], station: .agents))  // R1.12: one wording; Read's status is the tail
-                } else if BrainBarMenuPresenter.Say.lagShown(c), sev == .red || BrainBarMenuPresenter.Say.lagDraining(c)
+                    covered.insert("ingest")
+                } else if BrainBarMenuPresenter.Say.lagShown(c), BrainBarMenuPresenter.Say.lagDraining(c)
                             || BrainBarMenuPresenter.Say.producerStalled(c) {
                     // R1.11 (A1), R1.13 (A2, A3): the lag named, how far, BrainLayer's estimate when it has one; its severity
                     // and its button are the presenter's one decision (a stalled lag carries the report).
@@ -164,15 +165,17 @@ struct NDR1: Equatable, Sendable {
                                       action: stalled && lagSeverity == .red ? copyReport : nil,
                                       strip: Strip(from: Say.yourAgents, to: Say.stageRead, side: .target, severity: lagSeverity),
                                       concerns: ["ingest"], station: .read))
-                } else {
+                    covered.insert("ingest")
+                } else if !m.faults.contains(where: { $0.concerns.contains("ingest") }) {
+                    // A named presenter fault owns the row when the lag does not explain the ingest evidence.
                     // D6: amber is late, not stopped: "Catching up on new conversations", no "needs you", no button.
                     items.append(Item(id: "reader", severity: sev,
                                       title: sev == .red ? Say.readerNotReading : BrainBarMenuPresenter.Say.r02Headline.text,
                                       detail: sev == .red ? BrainBarMenuPresenter.Say.agent.text : nil, action: sev == .red ? copyReport : nil,
                                       strip: Strip(from: Say.yourAgents, to: Say.stageRead, side: .target, severity: sev), concerns: ["ingest"],
                                       station: .read))
+                    covered.insert("ingest")
                 }
-                covered.insert("ingest")
             }
             // Saves stuck in the queue (c4, target).
             if let stores = check("stores"), let sev = sev(stores), let queued = i.oldestSaveQueuedAt {
@@ -247,7 +250,7 @@ struct NDR1: Equatable, Sendable {
         // Search by meaning behind (orange, late) or stalled (red): no button, there is nothing to do.
         if !pipeline.allUnconfirmed, let embedding = check("embedding"), let s = sev(embedding) {
             let age = embedding.ageS.flatMap { $0.isFinite && $0 >= 0 ? NDFormat.ageText($0) : nil }
-            items.append(Item(id: "meaning", severity: s, title: s == .red ? age.map(Say.meaningBehind) ?? "Search by meaning is behind" : Say.meaningCatchingUp,
+            items.append(Item(id: "meaning", severity: s, title: s == .red ? age.map(Say.meaningBehind) ?? Say.meaningBehindUnknown : Say.meaningCatchingUp,
                               detail: Say.meaningBehindDetail, action: nil,
                               strip: Strip(from: Say.stageMemory, to: Say.search, side: .target, severity: s), concerns: ["embedding"],
                               station: .search))

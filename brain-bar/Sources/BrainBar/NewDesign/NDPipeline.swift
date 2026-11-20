@@ -236,6 +236,8 @@ extension NDPipelineState {
                 // far behind ("117 MB behind") once it stopped; never "not being read" for a reader that is reading.
                 if BrainBarMenuPresenter.Say.lagDraining(c) {
                     s.status[.read] = Status(text: Say.catchingUp, severity: sev)
+                } else if BrainBarMenuPresenter.Say.producerCatchingUp(c) {
+                    s.status[.read] = Status(text: BrainBarMenuPresenter.Say.lagSize(c).map(Say.behind) ?? Say.catchingUp, severity: sev)
                 } else if BrainBarMenuPresenter.Say.producerStalled(c), let size = BrainBarMenuPresenter.Say.lagSize(c) {
                     s.status[.read] = Status(text: Say.behind(size), severity: sev)
                 } else {

@@ -132,7 +132,8 @@ enum BrainBarMenuPresenter {
             return worded(.remembering, [Say.stopped.text] + (last.map { [$0] } ?? []), .confirmed)
         }
         if let name = Say.providers(c).first { return worded(.remembering, [Say.providerUnread(name), Say.providerUnreadLine.text], .confirmed) }
-        return c.watcher?.alertReasons.lazy.compactMap { reasonLine($0, c) }.first ?? needs(.remembering)
+        if let named = c.watcher?.alertReasons.lazy.compactMap({ reasonLine($0, c) }).first { return named }
+        return Say.lagShown(c) ? lagLine(c) : needs(.remembering)
     }
 
     /// R1.11: the row that names a failing or late check (CHANGES-R1.11 § 1). A name carried more than once is never read

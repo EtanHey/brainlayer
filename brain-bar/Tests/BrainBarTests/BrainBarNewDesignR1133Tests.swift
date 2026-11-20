@@ -33,6 +33,49 @@ final class BrainBarNewDesignR1133Tests: XCTestCase {
         }
     }
 
+    func testCatchUpKeepsNamedIngestFaultAcrossNewSurfaces() throws {
+        let c = R113.capture(ingest: .red, reasons: ["file_ingestion_failure"],
+                            catchUp: .init(state: "catching_up", bytesBehind: R113.mb117, etaS: 600))
+        let i = NDInputs(capture: c)
+        let m = NDModel.make(i), r = NDR1.make(i, m)
+        let notification = try XCTUnwrap(BrainBarMenuPresenter.notificationFaults(c).first)
+        let item = try XCTUnwrap(r.items.first { $0.concerns.contains("ingest") })
+        XCTAssertEqual(item.title, BrainBarMenuPresenter.Say.unreadFiles.text)
+        XCTAssertEqual(item.title, notification.title)
+        XCTAssertEqual(item.detail, BrainBarMenuPresenter.Say.unreadFilesLine.text + " " + BrainBarMenuPresenter.Say.agent.text)
+        XCTAssertEqual(item.action?.kind, .copyReport)
+        XCTAssertEqual(item.severity, .red)
+        XCTAssertEqual(r.items.count, 1)
+        XCTAssertEqual(r.pipeline.status[.read], .init(text: "117\u{00A0}MB behind", severity: .red))
+        XCTAssertEqual(r.problemRows.first?.words, item.title, "Overview uses the named fault")
+        XCTAssertEqual(NDIcon.state(m, r), .red(1))
+        XCTAssertTrue(NDMenuHeadline.text(r).contains("needs you"))
+        XCTAssertTrue(r.headline.contains("needs you"))
+        XCTAssertTrue(m.presentation.rows.contains { $0.strings.first == item.title && $0.action?.kind == .copyReport })
+        var withoutSize = i
+        withoutSize.capture.watcher?.lagBytes = nil
+        withoutSize.capture.watcher?.catchUp?.bytesBehind = nil
+        XCTAssertEqual(NDPipelineState.make(withoutSize).status[.read], .init(text: "catching up", severity: .red))
+        XCTAssertEqual(item.menuTitle ?? item.title, notification.title, "dropdown uses the named fault")
+    }
+
+    func testUnnamedIngestEvidenceKeepsMeasuredLagWithoutByItself() {
+        var c = R113.capture(ingest: .amber, reasons: [],
+                            catchUp: .init(state: "catching_up", bytesBehind: R113.mb117, etaS: 600))
+        let checks = c.verdict!.checks.map { k -> BrainBarHealthVerdict.Check in
+            var k = k
+            if k.name == "ingest" { k.contextCodes = ["unindexed_agent_running"] }
+            return k
+        }
+        c.verdict = .init(dot: .amber, checks: checks, notes: [], evaluatedAt: c.now)
+        let p = BrainBarMenuPresenter.present(c)
+        XCTAssertEqual(p.headline, BrainBarMenuPresenter.Say.lagBehind.text)
+        XCTAssertEqual(p.rows.first { $0.kind == .headlineDetail }?.strings, ["117\u{00A0}MB left to read."])
+        XCTAssertFalse(p.rows.flatMap(\.strings).contains { $0.contains("by itself") || $0.contains("can’t tell which") })
+        XCTAssertEqual(p.count, 0)
+        XCTAssertTrue(BrainBarMenuPresenter.notificationFaults(c).isEmpty)
+    }
+
     func testCatchUpDoesNotExcuseIngestContextOrBlindFailure() {
         for blind in [false, true] {
             var c = R113.capture(ingest: .red, reasons: [], catchUp: .init(state: "catching_up"))
@@ -97,7 +140,7 @@ final class BrainBarNewDesignR1133Tests: XCTestCase {
             let r = NDR1.make(i, NDModel.make(i))
             let item = try XCTUnwrap(r.items.first { $0.id == "meaning" })
             XCTAssertEqual(item.severity, .red)
-            XCTAssertEqual(item.title, "Search by meaning is behind")
+            XCTAssertEqual(item.title, BrainBarMenuPresenter.SurfaceSay.meaningBehindUnknown)
             XCTAssertEqual(r.redCount, 1)
         }
     }
