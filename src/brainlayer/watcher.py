@@ -869,7 +869,28 @@ class OffsetRegistry:
         self._dirty_paths: set[str] = set()
         self._dirty = False
         self._last_prune_complete = True
+        self.checkpoint_refused_count_total = 0
         self._load()
+
+    def _refuse_checkpoint(self, filepath: str, generation: int, barrier: int) -> None:
+        self.checkpoint_refused_count_total += 1
+        logger.warning("Watcher checkpoint refused: %s generation=%s barrier=%s", filepath, generation, barrier)
+
+    def revive(self, filepath: str) -> bool:
+        """Admit a returned source above its tombstone before attaching batch generations."""
+        if filepath not in self._removed:
+            return False
+        try:
+            inode = Path(filepath).stat().st_ino
+        except OSError:
+            return False
+        if inode <= 0:
+            return False
+        self.mark_rewind(filepath, inode)
+        return True
+
+    def is_tombstoned(self, filepath: str) -> bool:
+        return filepath in self._removed
 
     @staticmethod
     def _sanitize_tombstones(raw: object) -> dict[str, dict[str, int | float]]:
@@ -971,11 +992,13 @@ class OffsetRegistry:
         elif not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
             raise ValueError("generation must be a non-negative integer")
         elif generation < current_generation:
+            self._refuse_checkpoint(filepath, generation, current_generation)
             return
         tombstone = self._removed.get(filepath)
         valid_inode = isinstance(inode, int) and not isinstance(inode, bool) and inode > 0
         if tombstone is not None and valid_inode:
             if preserve_generation and generation <= int(tombstone["generation"]):
+                self._refuse_checkpoint(filepath, generation, int(tombstone["generation"]))
                 return
             if not preserve_generation:
                 generation = max(generation, int(tombstone["generation"]) + 1, time.time_ns())
@@ -1045,6 +1068,7 @@ class OffsetRegistry:
                         if tombstone is not None:
                             local_generation = self._entry_generation(local_entry)
                             if local_generation <= int(tombstone["generation"]):
+                                self._refuse_checkpoint(filepath, local_generation, int(tombstone["generation"]))
                                 merged.pop(filepath, None)
                                 continue
                         disk_entry = disk_data.get(filepath)
@@ -1059,6 +1083,7 @@ class OffsetRegistry:
                             tombstones.pop(filepath, None)
                             continue
                         if local_generation < disk_generation:
+                            self._refuse_checkpoint(filepath, local_generation, disk_generation)
                             continue
                         same_inode = local_entry.get("inode", 0) == disk_entry.get("inode", 0)
                         if same_inode:
@@ -2328,6 +2353,7 @@ class JSONLWatcher:
         # chunks. Only a tailer exactly at EOF has provably nothing left to read.
         return (
             tailer is not None
+            and not self.registry.is_tombstoned(filepath)
             and (tailer.decoded_eof and not tailer._buffer if hasattr(tailer, "decoded_eof") else tailer.offset == size)
             and tailer.observed_inode in (0, inode)
             and not tailer.has_complete_buffered_line()
@@ -3154,6 +3180,7 @@ class JSONLWatcher:
             "quarantined_record_count_total": self._quarantined_record_count_total,
             "quarantined_records": list(self._quarantined_records),
             "vanished_source_count_total": self._vanished_source_count_total,
+            "checkpoint_refused_count_total": self.registry.checkpoint_refused_count_total,
             "fork_copies_skipped_total": self._fork_copies_skipped_total,
             "fork_copy_files": self._fork_copy_health(files),
             **({"held_archives": self.archive_status()["represented_cold"]} if self._zst_enabled else {}),
@@ -3205,6 +3232,15 @@ class JSONLWatcher:
         """Get or create a tailer for a file, respecting stored offsets."""
         physical = self._physical_files.get(filepath, filepath)
         old = self._tailers.get(filepath)
+        if not physical.endswith(".zst") and self.registry.revive(filepath):
+            # A live tailer still carries the old timeline's frontier after pruning.
+            # Preserve its shrink notification before replay replaces that evidence.
+            if old is not None and old.filepath == physical and old.observed_inode == old.get_inode():
+                if old.check_rewind():
+                    self._handle_rewind(filepath, old.rewind_old_offset, old.rewind_new_offset, old.get_inode())
+            self._drop_tailer(filepath)
+            self._pending_quarantined_offsets.pop(filepath, None)
+            old = None
         if physical.endswith(".jsonl.zst") or (old is not None and old.filepath != physical):
             from .codex_zst import ZstdTailer
 
@@ -3487,6 +3523,7 @@ class JSONLWatcher:
                     drain_buffer = False
                     if (
                         tailer is not None
+                        and not self.registry.is_tombstoned(filepath)
                         and tailer.filepath == self._physical_files.get(filepath, filepath)
                         and (
                             not compressed
