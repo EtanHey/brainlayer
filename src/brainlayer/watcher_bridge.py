@@ -23,7 +23,7 @@ from typing import Any
 
 import apsw
 
-from .agent_provenance import classify_provenance, effective_visibility
+from .agent_provenance import ProvenanceDecision, classify_provenance, effective_visibility
 from .agy_attribution import STATE_FILE_NAME, AgyAttributionGate
 from .alarm import BrainLayerAlarm
 from .chunk_origin import detect_chunk_origin
@@ -38,7 +38,13 @@ from .pipeline.classify import classify_content
 from .pipeline.correction_detection import build_correction_tags
 from .pipeline.secret_scrub import scrub_secrets
 from .queue_io import enqueue_watcher_chunk
-from .t3_provenance import t3_app_codex_session_ids
+from .t3_provenance import (
+    T3_LINKAGE_HOLD_KEY,
+    T3_UNLINKED,
+    t3_app_codex_session_ids,
+    t3_linkage_hold_started_at,
+    t3_linkage_hold_window_s,
+)
 from .t3_sources import resolve_t3_sources
 from .vector_store import VectorStore
 from .writer_telemetry import IngestMetrics
@@ -415,6 +421,7 @@ def create_flush_callback(
     resolved_source_identities: dict[str, tuple[int, int, int]] = {}
     unresolved_source_versions: dict[str, tuple[int, int] | None] = {}
     agy_gate = AgyAttributionGate(Path(db_path or get_db_path()).expanduser().parent / STATE_FILE_NAME)
+    t3_linkage_released: set[str] = set()  # sources whose hold expired, logged once per process
 
     def ensure_direct_liveness_schema() -> None:
         if liveness_schema_ready or store is None:
@@ -460,6 +467,9 @@ def create_flush_callback(
         source_files_seen: set[str] = set()
         confirmed_offsets: dict[str, int] = {}
         t3_session_identity_cache: dict = {}
+        t3_linkage_hold_window = t3_linkage_hold_window_s()
+        t3_linkage_hold_starts: dict[str, float] = {}
+        flush_wall_now = time.time()
 
         def confirm_entry(entry: dict[str, Any], source_file: str) -> None:
             raw_offset = entry.get("_line_end_offset")
@@ -509,6 +519,8 @@ def create_flush_callback(
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
+            # Recomputed on every attempt: only an entry deferred THIS flush for T3 linkage carries it.
+            entry.pop(T3_LINKAGE_HOLD_KEY, None)
             agy_index_now, agy_agent = agy_gate.resolve(source_file)
             if not agy_index_now:
                 deferred_entries.append(entry)
@@ -529,9 +541,34 @@ def create_flush_callback(
                     t3_session_header=entry.get("_codex_header"),
                     agy_agent=agy_agent,
                 )
-            except BrainLayerAlarm:
-                deferred_entries.append(entry)
-                continue
+            except BrainLayerAlarm as alarm_event:
+                if alarm_event.code != "t3_runtime_linkage_pending":
+                    deferred_entries.append(entry)
+                    continue
+                # A T3-origin session T3 has not linked. Hold it for the window, counted from the
+                # session's own start; T3 links the sessions it adopts within seconds. Past the
+                # window T3 never will (it keeps one Codex session per thread), so index it, labelled
+                # t3-unlinked, and confirm it: a hold must never become a permanent gap or a stall.
+                if source_file not in t3_linkage_hold_starts:
+                    t3_linkage_hold_starts[source_file] = t3_linkage_hold_started_at(
+                        source_file, session_header=entry.get("_codex_header"), cache=t3_session_identity_cache
+                    )
+                hold_started_at = t3_linkage_hold_starts[source_file]
+                if flush_wall_now - hold_started_at <= t3_linkage_hold_window:
+                    entry[T3_LINKAGE_HOLD_KEY] = hold_started_at
+                    deferred_entries.append(entry)
+                    continue
+                if source_file not in t3_linkage_released:
+                    t3_linkage_released.add(source_file)
+                    logger.warning(
+                        "T3 linkage hold expired after %.0f s for %s; indexing it as %s",
+                        flush_wall_now - hold_started_at,
+                        source_file,
+                        T3_UNLINKED,
+                    )
+                provenance_decision = ProvenanceDecision(
+                    T3_UNLINKED, "KEEP", "T3-origin Codex session never linked within the hold window", "cli-agent"
+                )
             project = source_projects.get(source_file)
             if project is None and entry.get("_compressed_archive"):
                 project = _extract_workspace_project(entry)
