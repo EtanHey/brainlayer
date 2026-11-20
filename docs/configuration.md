@@ -179,7 +179,10 @@ writes the health file but does not write the destination database.
 `ingest-t3` never loads the embedding model. It writes new and edited chunks
 without a vector (an edit replaces the body and metadata on the same id and
 drops the stale vector), and the hotlane daemon's backlog lane embeds every
-vectorless row, as it does for watcher rows. Keyword search finds the rows at
+vectorless active row, as it does for watcher rows. T3 history rows (archived,
+superseded, or aggregated) are also embedded so edits remain searchable with
+`include_archived=True`; embedding preserves their lifecycle and default-search
+exclusion. Keyword search finds the rows at
 once; the vector arm finds them once the hotlane fills them in. Each run writes
 at most 200 changed chunks and holds the rest for the next run, which bounds
 that backlog. Health reports `embed_ms` as 0 with `embed_deferred_to: hotlane`.

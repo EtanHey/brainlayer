@@ -292,3 +292,71 @@ def test_defer_embedding_refuses_precomputed_vectors():
             precomputed_embeddings=[EmbeddedChunk(chunk, [0.1])],
             defer_embedding=True,
         )
+
+
+@pytest.mark.parametrize("lifecycle", ["archived_at", "superseded_by", "aggregated_into"])
+def test_edited_lifecycle_t3_message_returns_to_semantic_history(tmp_path, monkeypatch, lifecycle):
+    from brainlayer.ingest.t3 import ingest_t3
+    from brainlayer.vector_store import VectorStore
+
+    state = _create_v2_fixture(tmp_path / "statev2.sqlite")
+    destination = tmp_path / "destination.db"
+    VectorStore(destination).close()
+    ingest_t3(state, db_path=destination, health_path=None, projection_version=2)
+    _hotlane_pass(destination, tmp_path, monkeypatch)
+    value = "2026-11-01T00:00:00Z" if lifecycle == "archived_at" else USER_ID
+    with VectorStore(destination) as store:
+        store.conn.execute(f"UPDATE chunks SET {lifecycle}=? WHERE id=?", (value, ASSISTANT_ID))
+
+    def semantic_ids(include_archived):
+        with VectorStore(destination, readonly=True) as store:
+            return store.search(
+                query_embedding=[1.0] * 1024,
+                source_filter="t3",
+                include_archived=include_archived,
+                n_results=10,
+            )["ids"][0]
+
+    assert ASSISTANT_ID in semantic_ids(True)
+    assert ASSISTANT_ID not in semantic_ids(False)
+    with sqlite3.connect(state) as conn:
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET payload_json=? WHERE message_id='v2-assistant'",
+            (json.dumps({"text": "rewritten answer about zebras"}),),
+        )
+    assert ingest_t3(state, db_path=destination, health_path=None, projection_version=2).chunks_indexed == 1
+    assert _vector_ids(destination) == ({USER_ID}, {USER_ID}), "stale vectors must be removed"
+    assert ASSISTANT_ID not in semantic_ids(True)
+    encoded = _hotlane_pass(destination, tmp_path, monkeypatch)
+    assert ASSISTANT_ID in semantic_ids(True), "edited history must regain its semantic vector"
+    assert encoded == ["rewritten answer about zebras"]
+    assert _vector_ids(destination) == ({USER_ID, ASSISTANT_ID}, {USER_ID, ASSISTANT_ID})
+    assert ASSISTANT_ID not in semantic_ids(False), "embedding must not reactivate history"
+    with VectorStore(destination, readonly=True) as store:
+        assert store.conn.execute(f"SELECT {lifecycle} FROM chunks WHERE id=?", (ASSISTANT_ID,)).fetchone()[0] == value
+
+
+@pytest.mark.parametrize("lifecycle", ["archived_at", "superseded_by", "aggregated_into"])
+@pytest.mark.parametrize("write_by_path", [False, True])
+def test_history_embedding_keeps_source_and_content_guards(tmp_path, lifecycle, write_by_path):
+    from brainlayer.vector_store import VectorStore
+
+    hotlane = importlib.import_module("scripts.hotlane_brainbar_daemon")
+    destination = tmp_path / "destination.db"
+    with VectorStore(destination) as store:
+        for chunk_id, source in [("history-t3", "t3"), ("history-mcp", "mcp")]:
+            store.conn.execute(
+                f"INSERT INTO chunks (id, content, source, source_file, metadata, {lifecycle}) VALUES (?, ?, ?, 'history-test', '{{}}', ?)",
+                (chunk_id, "history body", source, "lifecycle-marker"),
+            )
+        assert hotlane._pending_chunk_rows(store, limit=10) == [hotlane.EmbedCandidate("history-t3", "history body")]
+        target = destination if write_by_path else store
+        vectors = [
+            hotlane.EmbeddedVector(chunk_id, "history body", [1.0] * 1024) for chunk_id in ["history-t3", "history-mcp"]
+        ]
+        # A snapshot whose content changed during encoding must still be refused.
+        store.conn.execute("UPDATE chunks SET content='new history body' WHERE id='history-t3'")
+        assert hotlane._write_embedded_vectors(target, vectors) == 0
+        vectors[0] = hotlane.EmbeddedVector("history-t3", "new history body", [1.0] * 1024)
+        assert hotlane._write_embedded_vectors(target, vectors) == 1
+    assert _vector_ids(destination) == ({"history-t3"}, {"history-t3"})
