@@ -1578,6 +1578,12 @@ final class MCPRouter: @unchecked Sendable {
         func isThinking(_ row: [String: Any]) -> Bool {
             (row["source_class"] as? String) == SearchResult.thinkingSourceClass
         }
+        if let thread = expanded["t3_thread"] as? [String: Any],
+           let link = thread["link"] as? String {
+            let title = (thread["title"] as? String) ?? ""
+            let project = (thread["project"] as? String).map { " \u{00b7} \($0)" } ?? ""
+            lines.append("\u{251c}\u{2500} T3 thread: \(title)\(project) \u{00b7} \(link)")
+        }
         let targetContent = (target["content"] as? String) ?? ""
         if !targetContent.isEmpty {
             lines.append(isThinking(target)

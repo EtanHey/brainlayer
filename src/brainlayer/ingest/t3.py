@@ -38,7 +38,7 @@ T3_SOURCE = "t3"
 T3_PROVENANCE_CLASS = "t3-thread"
 DEFAULT_T3_HEALTH_PATH = Path("~/.local/share/brainlayer/t3-health.json").expanduser()
 
-_PHASES = ("read_ms", "chunk_ms", "change_check_ms", "embed_ms", "write_ms")
+_PHASES = ("read_ms", "chunk_ms", "change_check_ms", "embed_ms", "write_ms", "side_table_ms")
 
 
 @contextmanager
@@ -91,6 +91,114 @@ def _v2_payload(raw: str, row_id: str) -> dict[str, Any]:
     return payload
 
 
+def _v2_native_id(raw: str, provider_thread_id: str) -> str | None:
+    payload = _v2_payload(raw, provider_thread_id)
+    native_ref = payload.get("nativeThreadRef")
+    if native_ref is not None and not isinstance(native_ref, dict):
+        raise T3PayloadError(f"Invalid T3 V2 native thread reference for {provider_thread_id}")
+    native_id = native_ref.get("nativeId") if native_ref is not None else None
+    if native_id is not None and (not isinstance(native_id, str) or not native_id or native_id != native_id.strip()):
+        raise T3PayloadError(f"Invalid T3 V2 native thread ID for {provider_thread_id}")
+    return native_id
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
+
+
+def _read_v2_catalog(conn: sqlite3.Connection, state_db: str, thread_ids: set[str] | None):
+    """Read every provider thread of the selected threads (all threads when ``thread_ids`` is None).
+
+    Feeds the side tables only. A payload this read cannot parse leaves that provider
+    thread's native id empty and is counted; it never stops chunk ingestion, which
+    validates the active provider thread on its own.
+    """
+    from ..t3_thread_tables import T3ProviderThread, T3ThreadCatalogEntry, driver_for
+
+    thread_columns = _table_columns(conn, "orchestration_v2_projection_threads")
+    provider_columns = _table_columns(conn, "orchestration_v2_projection_provider_threads")
+    params: tuple = ()
+    thread_filter = message_filter = provider_filter = ""
+    if thread_ids is not None:
+        params = (json.dumps(sorted(thread_ids)),)
+        thread_filter = " WHERE t.thread_id IN (SELECT value FROM json_each(?))"
+        message_filter = " AND thread_id IN (SELECT value FROM json_each(?))"
+        provider_filter = " WHERE thread_id IN (SELECT value FROM json_each(?))"
+    deleted = "t.deleted_at" if "deleted_at" in thread_columns else "NULL"
+    forked = (
+        "CASE WHEN json_valid(t.payload_json) THEN json_extract(t.payload_json, '$.forkedFrom') END"
+        if "payload_json" in thread_columns
+        else "NULL"
+    )
+    thread_rows = conn.execute(
+        f"SELECT t.thread_id, t.project_id, p.title, t.title, t.created_at, {deleted}, {forked},"  # noqa: S608
+        " t.active_provider_thread_id"
+        " FROM orchestration_v2_projection_threads AS t"
+        " LEFT JOIN projection_projects AS p ON p.project_id = t.project_id" + thread_filter,
+        params,
+    ).fetchall()
+    last_message = dict(
+        conn.execute(
+            "SELECT thread_id, max(created_at) FROM orchestration_v2_projection_messages"
+            " WHERE streaming = 0" + message_filter + " GROUP BY thread_id",
+            params,
+        )
+    )
+    active = {row[7]: row[0] for row in thread_rows if row[7]}
+    driver = "driver" if "driver" in provider_columns else "NULL"
+    if "thread_id" in provider_columns:
+        provider_rows = conn.execute(
+            f"SELECT provider_thread_id, thread_id, provider, {driver}, payload_json"  # noqa: S608
+            " FROM orchestration_v2_projection_provider_threads" + provider_filter,
+            params,
+        ).fetchall()
+        complete = True
+    else:
+        # An older schema cannot say which thread owns an inactive provider thread.
+        provider_rows = [
+            (row[0], active[row[0]], row[1], None, row[2])
+            for row in conn.execute(
+                "SELECT provider_thread_id, provider, payload_json FROM orchestration_v2_projection_provider_threads"
+                " WHERE provider_thread_id IN (SELECT value FROM json_each(?))",
+                (json.dumps(sorted(active)),),
+            )
+        ]
+        complete = False
+    invalid = 0
+    providers: dict[str, list] = {}
+    for provider_thread_id, thread_id, provider, driver_name, raw in provider_rows:
+        try:
+            native_id = _v2_native_id(raw, provider_thread_id)
+        except T3PayloadError:
+            native_id = None
+            invalid += 1
+        providers.setdefault(thread_id, []).append(
+            T3ProviderThread(
+                provider_thread_id=provider_thread_id,
+                provider=provider,
+                driver=driver_for(provider, driver_name),
+                native_session_id=native_id,
+                is_active=active.get(provider_thread_id) == thread_id,
+            )
+        )
+    entries = [
+        T3ThreadCatalogEntry(
+            thread_id=thread_id,
+            state_db=state_db,
+            title=title or "",
+            project_id=project_id,
+            project_name=project_name,
+            forked_from=forked_from,
+            created_at=created_at or "",
+            deleted_at=deleted_at,
+            last_message_at=last_message.get(thread_id),
+            provider_threads=tuple(sorted(providers.get(thread_id, ()), key=lambda p: p.provider_thread_id)),
+        )
+        for thread_id, project_id, project_name, title, created_at, deleted_at, forked_from, _active in thread_rows
+    ]
+    return entries, {"invalid_provider_payloads": invalid, "all_provider_threads": complete}
+
+
 @dataclass(frozen=True)
 class T3Message:
     message_id: str
@@ -120,6 +228,7 @@ class T3IngestionResult:
     change_check_ms: float = 0.0
     embed_ms: float = 0.0
     write_ms: float = 0.0
+    side_table_ms: float = 0.0
     # Why embed_ms is 0: the rows were written without vectors for this embedder.
     embed_deferred_to: str | None = None
     mode: str = "full"
@@ -136,6 +245,7 @@ class T3IngestionResult:
     chunks_deferred: int = 0
     duplicates_accepted: int = 0
     messages_skipped: dict[str, int] = field(default_factory=dict)
+    side_tables: dict[str, Any] = field(default_factory=dict)
 
 
 class T3SchemaError(RuntimeError):
@@ -200,6 +310,19 @@ class T3Reader:
             threads = (
                 self._read_v2_snapshot(conn, selection) if self.projection_version == 2 else self._read_snapshot(conn)
             )
+            request = getattr(self, "_catalog_request", None)
+            if self.projection_version == 2 and request is not None:
+                # Same snapshot as the chunk read. Only an incremental window touches a
+                # known thread set; a bounded window misses rename-only threads, so every
+                # other mode (and an empty side table) rebuilds the whole catalog.
+                incremental = getattr(self, "_bookmark_info", {}).get("mode") == "incremental"
+                ids = {thread.thread_id for thread in threads} if request == "touched" and incremental else None
+                if ids is not None:
+                    # Watcher-only arrivals produce no T3 event. Retry unresolved
+                    # eligible sessions without expanding the chunk/event selection.
+                    ids.update(getattr(self, "_catalog_retry_ids", ()))
+                self._catalog, self._catalog_info = _read_v2_catalog(conn, str(self.state_db_path), ids)
+                self._catalog_info["scope"] = "touched" if ids is not None else "all"
         except BrainLayerAlarm:
             raise
         except T3PayloadError as error:
@@ -381,16 +504,7 @@ class T3Reader:
         ).fetchall()
         providers = {}
         for provider_thread_id, provider, raw in provider_rows:
-            payload = _v2_payload(raw, provider_thread_id)
-            native_ref = payload.get("nativeThreadRef")
-            if native_ref is not None and not isinstance(native_ref, dict):
-                raise T3PayloadError(f"Invalid T3 V2 native thread reference for {provider_thread_id}")
-            native_id = native_ref.get("nativeId") if native_ref is not None else None
-            if native_id is not None and (
-                not isinstance(native_id, str) or not native_id or native_id != native_id.strip()
-            ):
-                raise T3PayloadError(f"Invalid T3 V2 native thread ID for {provider_thread_id}")
-            providers[provider_thread_id] = (provider, native_id)
+            providers[provider_thread_id] = (provider, _v2_native_id(raw, provider_thread_id))
 
         messages: dict[str, list[T3Message]] = {}
         for message_id, thread_id, role, created_at, raw in message_rows:
@@ -559,6 +673,45 @@ def _index_chunks(
         return indexed
 
 
+def _side_table_state(db_path: Path) -> str:
+    from ..t3_thread_tables import side_table_state
+
+    if not db_path.is_file():
+        return "no_database"
+    return side_table_state(db_path)
+
+
+def _write_side_tables(db_path: Path, entries) -> dict[str, Any]:
+    """Plan through a read-only connection, then upsert in one short write transaction.
+
+    Planning reads the session layer's rows (seconds on a full scan) without the
+    writer pidfile or a write lock, so the watcher and BrainBar are not held up.
+    """
+    from ..runtime_store import open_writer_store
+    from ..t3_thread_tables import count_changes, plan_t3_thread_rows, summarize_plan, write_t3_thread_rows
+
+    conn = sqlite3.connect(f"{db_path.absolute().as_uri()}?mode=ro", uri=True, timeout=5.0)
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        plan = plan_t3_thread_rows(conn, entries)
+        pending = count_changes(conn, plan)
+    finally:
+        conn.close()
+    if not pending:
+        # Nothing changed: an idle run takes neither the writer pidfile nor a write lock.
+        return {**summarize_plan(plan), "threads_written": 0, "sessions_written": 0, "threads_unchanged": len(entries)}
+    with open_writer_store(db_path) as store:
+        cursor = store.conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+        try:
+            counts = write_t3_thread_rows(cursor, plan)
+            cursor.execute("COMMIT")
+        except BaseException:
+            cursor.execute("ROLLBACK")
+            raise
+    return {**summarize_plan(plan), **counts}
+
+
 @functools.lru_cache(maxsize=8192)
 def _storage_safe_identity(raw: str, *, digest_of: str, suffix: str = "") -> str:
     """Return ``raw`` unless the at-rest secret scrubber would rewrite it.
@@ -721,6 +874,35 @@ def ingest_t3(
         state = {}
     next_state = {"target": target, "sources": {}}
     reader._source_paths = [str(path) for path, _ in sources]
+    # Side tables (T3 PR 3.1): which T3 thread a session belongs to. Absent until the
+    # lead runs the reviewed migration; health says so instead of writing.
+    side: dict[str, Any] = {"state": "dry_run"}
+    unresolved: dict[str, set[str]] = {}
+    if not dry_run:
+        if destination is None:
+            from ..paths import DEFAULT_DB_PATH
+
+            destination = DEFAULT_DB_PATH
+        try:
+            side = {"state": _side_table_state(destination)}
+            if side["state"] == "populated":
+                from ..t3_thread_tables import unresolved_thread_ids
+
+                unresolved = unresolved_thread_ids(destination)
+        except (OSError, sqlite3.Error) as error:
+            side = {"state": "unreadable", "error": _scrubbed_error_text(error)[:500]}
+            reader._last_counts.update(bookmark_held="side_table_failure", t3_side_tables=side)
+            reader._failures.append(
+                {
+                    "code": "t3_side_table_failure",
+                    "message": "T3 thread side tables could not be read",
+                    "error_type": type(error).__name__,
+                    "error": side["error"],
+                }
+            )
+            reader._write_health(alerting=True, alert_reasons=["side_table_failure"])
+            raise
+    catalog: dict[str, Any] = {}
     # Decide legacy reads before the V2 snapshot, so unchanged legacy sources
     # need neither payloads nor the complete V2 ownership set.
     fingerprints = {}
@@ -751,6 +933,9 @@ def ingest_t3(
             previous = state.get("sources", {}).get(key, {})
             if version == 2:
                 source_reader._previous_bookmark = previous
+                if side["state"] in ("empty", "populated"):
+                    source_reader._catalog_request = "all" if side["state"] == "empty" else "touched"
+                    source_reader._catalog_retry_ids = unresolved.get(str(path), set())
             else:
                 try:
                     fingerprint = fingerprints[path]
@@ -775,6 +960,17 @@ def ingest_t3(
             if hasattr(source_reader, "_next_bookmark"):
                 next_state["sources"][key] = source_reader._next_bookmark
                 resume_pending &= source_reader._next_bookmark.pop("resume_pending")
+            if hasattr(source_reader, "_catalog"):
+                # Newer projections win shared thread ids, as they do for messages.
+                for entry in source_reader._catalog:
+                    catalog.setdefault(entry.thread_id, entry)
+                for name, value in source_reader._catalog_info.items():
+                    if isinstance(value, bool):
+                        side[name] = side.get(name, True) and value
+                    elif isinstance(value, int):
+                        side[name] = side.get(name, 0) + value
+                    else:
+                        side[name] = "all" if "all" in (side.get(name), value) else value
         except BrainLayerAlarm:
             if state_db_path is not None or path == reader.state_db_path or reader.projection_version != 2:
                 raise
@@ -857,6 +1053,35 @@ def ingest_t3(
             reason = "writer_busy" if isinstance(exc, WriterInUseError) else "indexing_failure"
             reader._write_health(alerting=True, alert_reasons=source_alerts + [reason])
             raise
+    if catalog and side["state"] in ("empty", "populated"):
+        # Committed before any bookmark save: a failure here holds the bookmark, so the
+        # same threads are touched again next run. Chunks are untouched by this step.
+        try:
+            with _timed_phase(reader._timings, "side_table_ms"):
+                side.update(_write_side_tables(destination, list(catalog.values())))
+        except BaseException as exc:
+            import apsw
+
+            from ..vector_store import WriterInUseError
+
+            side["error"] = _scrubbed_error_text(exc)[:500]
+            reader._last_counts.update(getattr(reader, "_bookmark_info", {}))
+            reader._last_counts["bookmark_held"] = "side_table_failure"
+            reader._last_counts["t3_side_tables"] = side
+            reader._failures.append(
+                {
+                    "code": "t3_side_table_failure",
+                    "message": "T3 thread side tables were not written",
+                    "error_type": type(exc).__name__,
+                    "error": side["error"],
+                }
+            )
+            busy = isinstance(exc, (WriterInUseError, apsw.BusyError))
+            reader._write_health(
+                alerting=True, alert_reasons=source_alerts + ["writer_busy" if busy else "side_table_failure"]
+            )
+            raise
+    result.side_tables = side
     result.bookmark_held = (
         "chunks_deferred"
         if result.chunks_deferred
@@ -926,6 +1151,7 @@ def ingest_t3(
                 "embed_deferred_to": result.embed_deferred_to,
                 "duplicates_accepted": result.duplicates_accepted,
                 "messages_skipped": sum(result.messages_skipped.values()),
+                "t3_side_tables": side,
             }
         )
         reader._write_health(alerting=bool(source_alerts), alert_reasons=source_alerts)
