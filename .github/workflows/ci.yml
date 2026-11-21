@@ -54,6 +54,7 @@ jobs:
               - 'brain-bar/Sources/BrainBar/BrainBarStatusVerdict.swift'
               - 'brain-bar/Sources/BrainBar/BrainBarDriveAuth.swift'
               - 'brain-bar/Sources/BrainBar/Dashboard/WatcherHealthStatus.swift'
+              - 'brain-bar/Sources/BrainBar/Dashboard/ObservabilityView.swift'
               - 'brain-bar/Tests/BrainBarTests/BrainBarMenu*.swift'
               - 'brain-bar/Tests/BrainBarTests/Fixtures/**'
               - 'brain-bar/Package.swift'
