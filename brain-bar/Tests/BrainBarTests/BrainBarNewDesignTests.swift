@@ -1223,7 +1223,9 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
                 controller.renderStatusIconForTesting(stats: DashboardStats(chunkCount: 1, enrichedChunkCount: 1, pendingEnrichmentCount: 0,
                     enrichmentPercent: 50, enrichmentRatePerMinute: 1, databaseSizeBytes: 0, recentActivityBuckets: zero,
                     recentAgentWriteBuckets: zero, recentWatcherWriteBuckets: zero, recentEnrichmentBuckets: zero), state: .idle)
-                let items = controller.contextMenuForTesting.items
+                // Gap 26, lead ruling 21 Nov 2026: main's golden plus one enabled, unmarked Diagnostics after Settings.
+                // Keep classic-main-golden.json as the independent record; assert everything else against it.
+                let items = try brainBarItemsWithoutApprovedDiagnostics(controller.contextMenuForTesting)
                 let label = "new menu \(newMenu), design \(design ?? "absent")"
                 XCTAssertEqual(items.map(\.title), expected["titles"] as? [String], label)
                 XCTAssertEqual(items.map { ($0.representedObject as? BrainBarMenuAction).map { "\($0)" } ?? "" }, expected["actions"] as? [String], label)

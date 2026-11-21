@@ -52,6 +52,8 @@ import SwiftUI
 
     /// Opens the one Settings window (the same one on every call), front and key.
     static func show(store: NDStore, activationPolicy: BrainBarWindowActivationPolicy? = nil) {
+        store.windowActivationPolicy = activationPolicy
+        store.refreshSettingsFileSummary()
         let controller = current ?? NDSettingsWindowController(store: store)
         current = controller
         if !controller.window.isVisible { controller.window.center() }
@@ -83,6 +85,7 @@ struct NDSettingsView: View {
     private typealias Say = BrainBarMenuPresenter.SurfaceSay
 
     var body: some View {
+        let modelLines = BrainBarSettingsExplanation.model(BrainBarEmbeddingModel.configuredName)
         VStack(spacing: 0) {
             ND.bar.frame(height: NDSettingsWindowController.titleBar)
                 .overlay(alignment: .bottom) { ND.hair.frame(height: 0.5) }
@@ -117,17 +120,19 @@ struct NDSettingsView: View {
                     ND.hair.frame(height: 0.5)
                     row(Say.diagnostics) {
                         Spacer()
-                        NDButton(label: Say.diagnostics, small: true) { store.showDiagnostics() }
+                        NDButton(label: Say.openDiagnostics, small: true) { store.showDiagnostics() }
                     }
                 }
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(ND.raised))
                 .ndDecoration(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(ND.hair2, lineWidth: 0.5))
                 Text(Say.classicCaption).font(NDType.caption).foregroundStyle(ND.t3)
                     .padding(.horizontal, 12).padding(.top, 8)
-                Text(Say.meaningModel).font(NDType.bodyStrong).padding(.top, 16)
-                ForEach(BrainBarSettingsExplanation.model(BrainBarEmbeddingModel.configuredName), id: \.self) { line in
-                    Text(line).font(NDType.caption).foregroundStyle(ND.t2)
-                        .fixedSize(horizontal: false, vertical: true).padding(.top, 4)
+                if !modelLines.isEmpty {
+                    Text(Say.meaningModel).font(NDType.bodyStrong).padding(.top, 16)
+                    ForEach(modelLines, id: \.self) { line in
+                        Text(line).font(NDType.caption).foregroundStyle(ND.t2)
+                            .fixedSize(horizontal: false, vertical: true).padding(.top, 4)
+                    }
                 }
             }
             .padding(20)

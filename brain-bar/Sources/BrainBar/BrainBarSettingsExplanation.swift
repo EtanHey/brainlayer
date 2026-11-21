@@ -2,9 +2,9 @@ import Foundation
 
 /// Only filenames are read. Revealing settings never tidies or changes the owner's files.
 enum BrainBarSettingsExplanation {
-    static func model(_ name: String?) -> [String] {
+    static func model(_ name: String?, namesModel: Bool = true) -> [String] {
         guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return [] }
-        return BrainBarMenuPresenter.SurfaceSay.modelExplanation(name)
+        return BrainBarMenuPresenter.SurfaceSay.modelExplanation(name, namesModel: namesModel)
     }
 
     static func backupLine(for file: URL, fileManager: FileManager = .default) -> String? {

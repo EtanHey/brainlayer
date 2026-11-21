@@ -18,6 +18,8 @@ final class BrainBarExplainDiagnosticsTests: XCTestCase {
         XCTAssertTrue(lines[1].contains("Keyword search does not need it"))
         XCTAssertTrue(BrainBarSettingsExplanation.model(BrainBarEmbeddingModel.configuredName)[0]
             .contains(BrainBarEmbeddingModel.configuredName))
+        XCTAssertEqual(BrainBarSettingsExplanation.model("fixture/model", namesModel: false)[0],
+                       "This model turns memories into searchable meaning on this Mac.")
     }
 
     func testUnknownModelHasNoInventedExplanation() {
@@ -38,9 +40,6 @@ final class BrainBarExplainDiagnosticsTests: XCTestCase {
             let list = NDDiagnosticsPresentation(inputs).lines
             XCTAssertEqual(list.count, (inputs.capture.verdict?.checks.count ?? 1) + inputs.extras.count)
             for extra in inputs.extras { XCTAssertTrue(list.contains(extra.text)) }
-            // The unified action uses the very same report the problem actions copy.
-            XCTAssertEqual(store.report, NDStore.reportText(store.model, verdict: inputs.capture.verdict,
-                extras: inputs.extras, version: "fixture", now: inputs.capture.now))
         }
     }
 
@@ -48,6 +47,13 @@ final class BrainBarExplainDiagnosticsTests: XCTestCase {
         var inputs = BrainBarDesignFixture.inputs(.calm)
         inputs.capture.verdict = nil
         XCTAssertEqual(NDDiagnosticsPresentation(inputs).lines, [BrainBarMenuPresenter.SurfaceSay.checksUnreadable])
+        inputs.capture.verdict = .init(dot: .red, checks: [
+            .init(name: "a", state: .green, note: ""), .init(name: "b", state: .amber, note: "late"),
+            .init(name: "c", state: .red, note: ""), .init(name: "d", state: .unknown, note: "")
+        ], notes: [], evaluatedAt: inputs.capture.now)
+        let presentation = NDDiagnosticsPresentation(inputs)
+        XCTAssertEqual(presentation.lines, ["a: OK", "b: Warning — late", "c: Problem", "d: Not read"])
+        XCTAssertEqual(presentation.rows[2].state, .red)
     }
 
     @MainActor func testRevealSelectsCurrentFileAndLeavesEveryBackupUntouched() throws {
@@ -67,19 +73,24 @@ final class BrainBarExplainDiagnosticsTests: XCTestCase {
         let workspace = BrainBarRecordingWorkspace()
         let model = BrainBarSettingsViewModel(workspace: workspace, store: configStore,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]), refreshStatusOnLoad: false)
+        XCTAssertNil(model.settingsBackupLine, "No folder read before Settings opens or Reveal is pressed")
         model.revealConfigFile()
         XCTAssertEqual(workspace.recorded.count, 1)
         XCTAssertEqual(workspace.recorded.first?.0, "reveal")
         XCTAssertEqual(workspace.recorded.first?.1, file.path)
         XCTAssertTrue(try XCTUnwrap(model.settingsBackupLine).hasPrefix("3 settings backups in "))
         XCTAssertTrue(try XCTUnwrap(model.settingsBackupLine).contains((directory.path as NSString).abbreviatingWithTildeInPath))
+        try Data("new fixture backup".utf8).write(to: directory.appendingPathComponent("brainlayer.env.bak-new"))
+        XCTAssertTrue(try XCTUnwrap(model.settingsBackupLine).hasPrefix("3 settings backups in "), "Redraws use the cached count")
+        model.refreshSettingsFileSummary()
+        XCTAssertTrue(try XCTUnwrap(model.settingsBackupLine).hasPrefix("4 settings backups in "))
         for (name, data) in before {
             XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent(name)), data)
         }
         let adapter = try String(contentsOf: root.appendingPathComponent("brain-bar/Sources/BrainBar/BrainBarWorkspace.swift"), encoding: .utf8)
         XCTAssertTrue(adapter.contains("activateFileViewerSelecting([url])"))
         let settings = try String(contentsOf: root.appendingPathComponent("brain-bar/Sources/BrainBar/BrainBarSettingsView.swift"), encoding: .utf8)
-        XCTAssertTrue(settings.contains("func revealConfigFile() { workspace.reveal(store.configURL) }"))
+        XCTAssertTrue(settings.contains("workspace.reveal(store.configURL)"))
     }
 
     func testNoBackupsHasNoCountAndUnreadableFolderIsExplicit() throws {

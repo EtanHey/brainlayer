@@ -55,7 +55,7 @@ enum BrainBarMenuAction: Equatable, Sendable {
             case .standardItem where row.strings.count == 1 && row.action == nil && row.mark == nil && row.state == nil
                 && !row.spinner && row.progressPercent == nil:
                 standardItems(row).forEach(menu.addItem)
-                if row.keyEquivalent == "⌘,", openDiagnostics != nil {
+                if row.keyEquivalent == BrainBarMenuPresenter.Say.settingsKey, openDiagnostics != nil {
                     let item = NSMenuItem(title: BrainBarMenuPresenter.SurfaceSay.diagnostics,
                                           action: #selector(showDiagnostics), keyEquivalent: "")
                     item.target = self

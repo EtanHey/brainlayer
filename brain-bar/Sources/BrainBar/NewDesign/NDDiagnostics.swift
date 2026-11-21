@@ -3,13 +3,21 @@ import SwiftUI
 
 /// One list from the same accepted capture as the per-problem reports; no probes of its own.
 struct NDDiagnosticsPresentation {
-    let lines: [String]
+    struct Row {
+        let text: String
+        let state: BrainBarHealthVerdict.State
+    }
+    let rows: [Row]
+    var lines: [String] { rows.map(\.text) }
 
     init(_ inputs: NDInputs) {
-        let checks = inputs.capture.verdict?.checks.map {
-            "\(BrainBarHealthVerdict.Check.labels[$0.name] ?? $0.name): \($0.state.rawValue) — \($0.note)"
-        } ?? [BrainBarMenuPresenter.SurfaceSay.checksUnreadable]
-        lines = checks + inputs.extras.map(\.text)
+        let checks = inputs.capture.verdict?.checks.map { check in
+            let label = BrainBarHealthVerdict.Check.labels[check.name] ?? check.name
+            let state = BrainBarMenuPresenter.SurfaceSay.diagnosticState(check.state)
+            // Check.text's empty-note rule: no separator when there is no note.
+            return Row(text: "\(label): \(state)" + (check.note.isEmpty ? "" : " — \(check.note)"), state: check.state)
+        } ?? [Row(text: BrainBarMenuPresenter.SurfaceSay.checksUnreadable, state: .unknown)]
+        rows = checks + inputs.extras.map { Row(text: $0.text, state: $0.level == .fault ? .red : .amber) }
     }
 }
 
@@ -17,6 +25,7 @@ struct NDDiagnosticsPresentation {
     private static var current: NDDiagnosticsWindowController?
     private let window: NSWindow
     private let store: NDStore
+    private var activationPolicy: BrainBarWindowActivationPolicy?
 
     private init(store: NDStore) {
         self.store = store
@@ -30,16 +39,19 @@ struct NDDiagnosticsPresentation {
         window.delegate = self
     }
 
-    static func show(store: NDStore) {
+    static func show(store: NDStore, activationPolicy: BrainBarWindowActivationPolicy?) {
         let controller = current ?? NDDiagnosticsWindowController(store: store)
         current = controller
         controller.store.setDiagnosticsActive(true)
+        activationPolicy?.windowOpened(controller.window)
+        controller.activationPolicy = activationPolicy
         if !controller.window.isVisible { controller.window.center() }
         NSApp.activate(ignoringOtherApps: true)
         controller.window.makeKeyAndOrderFront(nil)
     }
 
     func windowWillClose(_ notification: Notification) {
+        activationPolicy?.windowClosed(window)
         store.setDiagnosticsActive(false)
         Self.current = nil
     }
@@ -54,8 +66,9 @@ private struct NDDiagnosticsView: View {
             Text(store.r1.footerLeft).font(.system(size: 11)).foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    ForEach(Array(NDDiagnosticsPresentation(store.inputs).lines.enumerated()), id: \.offset) { _, line in
-                        Text(line).font(.system(size: 13)).textSelection(.enabled)
+                    ForEach(Array(NDDiagnosticsPresentation(store.inputs).rows.enumerated()), id: \.offset) { _, row in
+                        Text(row.text).font(.system(size: 13)).textSelection(.enabled)
+                            .foregroundStyle(row.state == .red ? Color.red : Color.primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }

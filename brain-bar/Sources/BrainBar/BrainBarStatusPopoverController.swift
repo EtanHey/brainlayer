@@ -71,6 +71,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private var menuRestart: () -> Void = { BrainBarProcessControl.restart() }
     private var menuPasteboard: () -> NSPasteboard = { .general }
     private var menuStorage: ((BrainBarSettingsSection) -> Void)?
+    private var diagnosticsOpener: (() -> Void)?
 
     private lazy var liveMenuActions = BrainBarLiveMenuActions(
         settings: { [weak self] in self?.openSettings(nil) },
@@ -109,6 +110,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
                                         Task { @MainActor [weak self] in self?.dashboardPanelController?.showPage(page) }
                                     })
         builder.menuDismiss = { [weak self] in self?.contextMenuForTesting.cancelTracking() }
+        builder.diagnosticsOpener = { [weak self] in self?.openDiagnostics(nil) }
         return builder
     }()
     private var design: BrainBarDesign { BrainBarDesign.current(in: menuDefaults) }
@@ -707,6 +709,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     func populateLiveMenuForTesting(_ presentation: BrainBarMenuPresentation) {
         liveMenuBuilder.populate(contextMenuForTesting, with: presentation)
     }
+    func setDiagnosticsOpenerForTesting(_ opener: @escaping () -> Void) { diagnosticsOpener = opener }
     func setLogPathsForTesting(_ paths: BrainBarBackupSources.Paths) { logPathsOverride = paths }
 #endif
     func setMenuTrackingForTesting(_ tracking: Bool) { isMenuTracking = tracking }
@@ -902,7 +905,10 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     @objc private func openDiagnostics(_ sender: Any?) {
         contextMenuForTesting.cancelTracking()
-        Task { @MainActor [weak self] in self?.newDesignStore.showDiagnostics() }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if let diagnosticsOpener { diagnosticsOpener() } else { newDesignStore.showDiagnostics() }
+        }
     }
 
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {

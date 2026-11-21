@@ -605,6 +605,10 @@ extension BrainBarMenuPresenter {
 extension BrainBarMenuPresenter {
     enum SurfaceSay {
         static let diagnostics = "Diagnostics"
+        static let openDiagnostics = "Open"
+        static func diagnosticState(_ state: BrainBarHealthVerdict.State) -> String {
+            switch state { case .green: "OK"; case .amber: "Warning"; case .red: "Problem"; case .unknown: "Not read" }
+        }
         static let copyFullReport = "Copy a full report for your agent"
         static let checksUnreadable = "Checks have not been read yet."
         static let settingsBackupsUnreadable = "Settings backups could not be counted."
@@ -612,8 +616,8 @@ extension BrainBarMenuPresenter {
             "\(count) settings \(count == 1 ? "backup" : "backups") in \(path)."
         }
         static let meaningModel = "Search by meaning"
-        static func modelExplanation(_ name: String) -> [String] {
-            ["\(name) turns memories into searchable meaning on this Mac.",
+        static func modelExplanation(_ name: String, namesModel: Bool = true) -> [String] {
+            ["\(namesModel ? name : "This model") turns memories into searchable meaning on this Mac.",
              "Search by meaning uses it. Keyword search does not need it."]
         }
         /// R3: a reconnect in progress.

@@ -50,6 +50,8 @@ import SwiftUI
     private(set) var report = ""
     var onOpenWindow: ((NDPage) -> Void)?
     var onOpenSettings: (() -> Void)?
+    weak var windowActivationPolicy: BrainBarWindowActivationPolicy?
+    @Published private(set) var settingsBackupLine: String?
     var pasteboard: () -> NSPasteboard = { .general }
     /// Where the new design's own preferences (the Design choice in its Settings) are read and written. A capture
     /// fixture gives it a separate suite, so a capture never writes the installed app's preferences (F06).
@@ -478,12 +480,17 @@ import SwiftUI
     func revealSettingsFile() {
         guard !isFixture, let model = runtime?.jobsModel else { return }
         model.revealConfigFile()
+        settingsBackupLine = model.settingsBackupLine
     }
 
     var settingsFileURL: URL? { runtime?.jobsModel?.configFileURL }
-    var settingsBackupLine: String? { runtime?.jobsModel?.settingsBackupLine }
+    func refreshSettingsFileSummary() {
+        guard !isFixture, let model = runtime?.jobsModel else { return }
+        model.refreshSettingsFileSummary()
+        settingsBackupLine = model.settingsBackupLine
+    }
 
-    func showDiagnostics() { NDDiagnosticsWindowController.show(store: self) }
+    func showDiagnostics() { NDDiagnosticsWindowController.show(store: self, activationPolicy: windowActivationPolicy) }
 
     func openWindow(_ page: NDPage) {
         self.page = page

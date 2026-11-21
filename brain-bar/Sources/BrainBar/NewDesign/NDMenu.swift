@@ -14,6 +14,7 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
     private var rowStates: [ObjectIdentifier: NDMenuRowState] = [:]
     /// Ends the menu's tracking before a row's click opens the window.
     var menuDismiss: (@MainActor () -> Void)?
+    var diagnosticsOpener: (@MainActor () -> Void)?
 
     init(store: NDStore, perform: @escaping @MainActor (BrainBarMenuAction) -> Void,
          openWindow: @escaping @MainActor (NDPage) -> Void) {
@@ -125,7 +126,9 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
 
     @objc private func openDiagnostics() {
         menuDismiss?()
-        Task { @MainActor in store.showDiagnostics() }
+        Task { @MainActor in
+            if let diagnosticsOpener { diagnosticsOpener() } else { store.showDiagnostics() }
+        }
     }
 
     /// Each row opens the window at its page (Activity and Search at the Overview).
