@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from collections.abc import Collection
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,6 +15,51 @@ from .t3_bookmark import save
 from .t3_ownership import GRACE_SECONDS, normalized_message_text, session_admits, timestamp
 
 
+class TextCoverageIndex(Collection[str]):
+    """Per-conversation candidate index; the matcher still decides coverage.
+
+    A containing row must contain every interior word of the needle. A row
+    contained by the needle must contribute its own interior-word signature.
+    Edge fragments and short rows fall through, preserving split-word coverage.
+    """
+
+    def __init__(self, texts):
+        self._texts = tuple(dict.fromkeys(texts))
+        self._exact = frozenset(self._texts)
+        self._words = {}
+        self._signatures = {}
+        self._short = set()
+        for index, text in enumerate(self._texts):
+            for word in set(text.split()):
+                self._words.setdefault(word, set()).add(index)
+        for index, text in enumerate(self._texts):
+            interior = text.split()[1:-1]
+            if not interior:
+                self._short.add(index)
+            else:
+                signature = min(interior, key=lambda word: len(self._words[word]))
+                self._signatures.setdefault(signature, set()).add(index)
+
+    def __len__(self):
+        return len(self._texts)
+
+    def __iter__(self):
+        return iter(self._texts)
+
+    def __contains__(self, text):
+        return text in self._exact
+
+    def candidates(self, needle):
+        words = needle.split()
+        if len(words) < 3:
+            return self._texts
+        containing = min((self._words.get(word, ()) for word in words[1:-1]), key=len)
+        selected = self._short.union(containing)
+        for word in set(words):
+            selected.update(self._signatures.get(word, ()))
+        return (self._texts[index] for index in selected)
+
+
 def _text_covered(needle, stored_texts):
     """Cover normalized text across stored chunks, independent of split/order/overlap.
 
@@ -23,6 +69,10 @@ def _text_covered(needle, stored_texts):
     """
     if not needle:
         return False
+    if isinstance(stored_texts, TextCoverageIndex):
+        if needle in stored_texts:
+            return True
+        stored_texts = stored_texts.candidates(needle)
     intervals = []
     for text in stored_texts:
         if needle in text:

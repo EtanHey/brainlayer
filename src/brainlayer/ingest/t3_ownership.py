@@ -1,5 +1,6 @@
 """Conservative, recomputed session ownership for T3 text."""
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -13,7 +14,7 @@ WATERMARK_MARGIN_SECONDS = 5
 @dataclass(frozen=True)
 class SessionCoverage:
     high_water: float | None
-    texts: tuple[str, ...]
+    texts: Collection[str]
 
 
 def normalized_message_text(text):
@@ -58,7 +59,9 @@ def session_admits(message):
 
 
 def ownership_facts(conn, entries):
-    """Use this run's complete catalog and active session rows, never stored ownership."""
+    """Use this run's catalog and stored session rows, never stored ownership."""
+    from .t3_audit import TextCoverageIndex
+
     entries = list(entries)
     plan = plan_t3_thread_rows(conn, entries)
     water = {row[0]: timestamp(row[11]) for row in plan["threads"]}
@@ -73,7 +76,7 @@ def ownership_facts(conn, entries):
                 # A T3 row, alias into T3, or a row in another conversation is
                 # not evidence that the session stored this message. Managed
                 # session rows still prove storage and therefore remain eligible.
-                evidence[conversation] = tuple(
+                evidence[conversation] = TextCoverageIndex(
                     normalize_for_exact_hash(row[0] or "")
                     for row in conn.execute(
                         "SELECT content FROM chunks WHERE conversation_id=? AND source != 't3'",

@@ -111,3 +111,34 @@ def test_coverage_decision_matches_rows_the_real_watcher_stored(tmp_path, monkey
         assert message_owner(message, facts["thread"], now=1795270000) == ("covered" if stored else "session_late")
         assert message_owner(message, facts["thread"], now=timestamp(STAMP) + 60) == ("covered" if stored else "held")
     conn.close()
+
+
+@pytest.mark.parametrize(
+    "needle,texts,expected",
+    [
+        ("alpha beta gamma", ["extra alpha beta gamma tail"], True),
+        ("alpha beta gamma", ["alpha beta", "gamma"], True),
+        ("alpha beta gamma delta", ["alpha be", "ta gamma delta"], True),
+        ("alpha beta middle gamma delta", ["alpha beta mid", "dle gamma delta"], True),
+        ("alpha beta gamma delta", ["gamma delta", "alpha beta gamma"], True),
+        ("alpha beta gamma delta", ["alpha beta", "delta"], False),
+        ("cat", ["concatenate"], True),
+        ("", [""], False),
+        ("alpha beta gamma", ["alpha beta gamma"], True),
+    ],
+)
+def test_candidate_index_preserves_full_partial_and_split_word_coverage(needle, texts, expected):
+    from brainlayer.ingest.t3_audit import TextCoverageIndex, _text_covered
+
+    assert _text_covered(needle, texts) is expected
+    assert _text_covered(needle, TextCoverageIndex(texts)) is expected
+
+
+def test_candidate_index_preserves_coverage_for_every_split_and_missing_character():
+    from brainlayer.ingest.t3_audit import TextCoverageIndex, _text_covered
+
+    needle = "alpha beta gamma delta epsilon"
+    for split in range(1, len(needle)):
+        for gap in (0, 1):
+            texts = [needle[split + gap :], "unrelated stored text", needle[:split]]
+            assert _text_covered(needle, TextCoverageIndex(texts)) == _text_covered(needle, iter(texts))
