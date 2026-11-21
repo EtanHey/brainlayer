@@ -47,6 +47,7 @@ from .alarm import BrainLayerAlarm, raise_alarm
 from .claude_paths import UUID_RE
 from .ingest_denylist import _match_parts as match_glob_parts
 from .ingest_denylist import is_denylisted, is_directory_denylisted
+from .queued_messages import queued_user_text
 from .zstd_stream import logical_jsonl_path
 
 logger = logging.getLogger(__name__)
@@ -565,6 +566,8 @@ def _growth_content_shape(value: Any) -> bool:
 def growth_entry_class(entry: dict, provider: str) -> str:
     """Content shape, deliberately skipped metadata, or unknown format; never type-only content."""
     kind = entry.get("type")
+    if kind == "queue-operation":
+        return "recognised" if queued_user_text(entry) is not None else "neutral"
     if provider == "gemini" and kind in _AGY_STEP_ROLES:
         return "recognised" if "step_index" in entry and isinstance(entry.get("content"), str) else "unrecognised"
     if kind in {"user", "assistant"} and isinstance(entry.get("message"), dict):
@@ -632,6 +635,8 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
         }
 
     entry_type = entry.get("type")
+    if entry_type == "queue-operation":
+        return {**entry, "_provider": provider} if queued_user_text(entry) is not None else None
     if entry_type in {"user", "assistant"} and isinstance(entry.get("message"), dict):
         normalized = dict(entry)
         normalized["_provider"] = provider
