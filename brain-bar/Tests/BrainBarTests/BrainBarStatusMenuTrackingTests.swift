@@ -216,6 +216,7 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
         let begin = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification,
             object: menu, queue: nil) { _ in
             MainActor.assumeIsolated {
+                delegate.isTracking = true
                 delegate.beginWrites = fixture.host.button.imageWrites
                 delegate.beginTooltipWrites = fixture.host.button.tooltipWrites
             }
@@ -224,6 +225,7 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
         let observer = NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification,
             object: menu, queue: nil) { _ in
             MainActor.assumeIsolated {
+                delegate.isTracking = false
                 delegate.ends += 1
                 delegate.nativeWrites.append(fixture.host.button.imageWrites - delegate.beginWrites)
                 XCTAssertEqual(fixture.host.button.tooltipWrites, delegate.beginTooltipWrites)
@@ -232,6 +234,8 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
         }
         defer { NotificationCenter.default.removeObserver(observer) }
         for cycle in 1...3 {
+            delegate.inTrackingRan = false
+            delegate.writesDuringTracking = nil
             delegate.didEnd = expectation(description: "native tracking ends for cycle \(cycle)")
             try fixture.prepareJobAlert(currentReason: cycle == 2 ? "Changed failure" : nil)
             let watchdog = Timer(timeInterval: 2, repeats: false) { _ in
@@ -241,31 +245,43 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
                 }
             }
             RunLoop.main.add(watchdog, forMode: .eventTracking)
-            let timer = Timer(timeInterval: 0.05, repeats: false) { _ in
-                MainActor.assumeIsolated {
-                    XCTAssertEqual(delegate.opens, cycle, "AppKit must invoke the real menuWillOpen callback")
-                    XCTAssertEqual(fixture.controller.contextMenuForTesting.items.first?.title,
-                        cycle == 2 ? "Needs attention: Changed failure" : "Nothing needs attention")
-                    let writes = fixture.host.button.imageWrites
-                    fixture.provider.value = 40 + cycle
-                    fixture.collector.refresh(force: true)
-                    fixture.pump(until: { fixture.collector.stats.chunkCount == 40 + cycle })
-                    delegate.writesDuringTracking = fixture.host.button.imageWrites - writes
-                    if cycle == 3 { fixture.controller.stop() }
-                    else if cycle == 2 {
-                        // App-local posted input, deliberately not described as physical Escape.
-                        let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
-                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0, context: nil,
-                            characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
-                        NSApp.postEvent(escape, atStart: true)
+            delegate.onWillOpen = {
+                // Run as soon as AppKit enters tracking, after the forwarded menuWillOpen.
+                RunLoop.main.perform(inModes: [.eventTracking]) {
+                    MainActor.assumeIsolated {
+                        guard delegate.isTracking, delegate.opens == cycle else {
+                            XCTFail("Cycle \(cycle) ended before its in-tracking work ran")
+                            return
+                        }
+                        delegate.inTrackingRan = true
+                        XCTAssertEqual(delegate.opens, cycle, "AppKit must invoke the real menuWillOpen callback")
+                        XCTAssertEqual(fixture.controller.contextMenuForTesting.items.first?.title,
+                            cycle == 2 ? "Needs attention: Changed failure" : "Nothing needs attention")
+                        let writes = fixture.host.button.imageWrites
+                        fixture.provider.value = 40 + cycle
+                        fixture.collector.refresh(force: true)
+                        fixture.pump(until: { fixture.collector.stats.chunkCount == 40 + cycle })
+                        XCTAssertTrue(delegate.isTracking, "Cycle \(cycle) must remain tracking through the refresh")
+                        delegate.writesDuringTracking = fixture.host.button.imageWrites - writes
+                        if cycle == 3 { fixture.controller.stop() }
+                        else if cycle == 2 {
+                            // App-local posted input, deliberately not described as physical Escape.
+                            let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0, context: nil,
+                                characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
+                            NSApp.postEvent(escape, atStart: true)
+                        }
+                        else { fixture.controller.contextMenuForTesting.cancelTracking() }
                     }
-                    else { fixture.controller.contextMenuForTesting.cancelTracking() }
                 }
             }
-            RunLoop.main.add(timer, forMode: .eventTracking)
             _ = menu.popUp(positioning: nil, at: NSPoint(x: 20, y: 40), in: view)
-            timer.invalidate()
+            delegate.onWillOpen = nil
             watchdog.invalidate()
+            if cycle == 2 {
+                // A posted Escape may outlive this popup. Never let it cancel the reopened menu.
+                NSApp.discardEvents(matching: .keyDown, before: nil)
+            }
             wait(for: [try XCTUnwrap(delegate.didEnd)], timeout: 3)
             delegate.didEnd = nil
             XCTAssertFalse(delegate.watchdogFired, "Cancellation must complete without the safety timeout")
@@ -276,6 +292,7 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
                 // AppKit may finish cancellation after stop has detached the delegate.
                 XCTAssertTrue((2...3).contains(delegate.closes))
             }
+            XCTAssertTrue(delegate.inTrackingRan, "Cycle \(cycle) must refresh and cancel/stop during native tracking")
             XCTAssertEqual(delegate.writesDuringTracking, 0)
             fixture.pump()
         }
@@ -330,7 +347,10 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
         var closes = 0
         var ends = 0
         var didEnd: XCTestExpectation?
-        var writesDuringTracking = 0
+        var writesDuringTracking: Int?
+        var inTrackingRan = false
+        var isTracking = false
+        var onWillOpen: (() -> Void)?
         var watchdogFired = false
         let button: Button
         var beginWrites = 0
@@ -343,6 +363,7 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
             preOpenWrites.append(button.imageWrites - beginWrites)
             opens += 1
             forwarding.menuWillOpen?(menu)
+            onWillOpen?()
         }
         func menuDidClose(_ menu: NSMenu) { closes += 1; forwarding.menuDidClose?(menu) }
     }
@@ -367,7 +388,10 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
         var button: Button { item.recordingButton }
         var removals = 0
         func statusItem(withLength _: CGFloat) -> any BrainBarStatusItem { item }
-        func removeStatusItem(_ item: any BrainBarStatusItem) { XCTAssertTrue(item === self.item); removals += 1 }
+        func removeStatusItem(_ item: any BrainBarStatusItem) {
+            XCTAssertTrue(item === self.item)
+            removals += 1
+        }
     }
 
     private final class Provider: @unchecked Sendable {
