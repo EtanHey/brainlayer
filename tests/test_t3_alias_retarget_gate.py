@@ -1,6 +1,5 @@
-"""The replay gate accepts only a proven T3-to-own-session-twin transition."""
+"""Replay validation includes unchanged redirects shadowing newly inserted rows."""
 
-import copy
 import runpy
 from pathlib import Path
 
@@ -11,90 +10,62 @@ check_alias_retargets = runpy.run_path(str(Path(__file__).parents[1] / "scripts/
 ]
 
 
-def case():
-    common = dict(
-        source_class="cli-agent",
-        project="test",
-        content_type="user_message",
-        dedupe_hash="hash",
-        content_hash="exact-hash",
+def retirement():
+    own = dict(id="incoming-id", source="realtime_watcher", conversation_id="native", source_file="native.jsonl")
+    return dict(
+        id="incoming-id",
+        before=["t3:mirror", "original-date"],
+        after=None,
+        old_target_source="t3",
+        own_row=own,
+        incoming=dict(own),
+        resolved_id="incoming-id",
+        preimage=["incoming-id", "t3:mirror", "original-date"],
     )
-    return {
-        "alias_id": "later-session-alias",
-        "main_alias_target": "t3:mirror",
-        "branch_alias_target": "session-twin",
-        "rows": {
-            "main": dict(common, id="t3:mirror", source="t3", provider_session_id="native"),
-            "branch": dict(
-                common,
-                id="session-twin",
-                source="realtime_watcher",
-                conversation_id="native",
-                source_file="/synthetic/native.jsonl",
-            ),
-        },
-        "same_input_decisions": {
-            f"{clone}_clone_{code}_code": target
-            for clone in ("main", "branch")
-            for code, target in (("main", "t3:mirror"), ("branch", "session-twin"))
-        },
-        **{
-            f"{clone}_latest_audit": dict(
-                chunk_id_dropped="later-session-alias", chunk_id_kept=target, mechanism="sha256", hamming_distance=0
-            )
-            for clone, target in (("main", "t3:mirror"), ("branch", "session-twin"))
-        },
-    }
 
 
-def test_gate_accepts_only_accounted_exact_session_twin_retargets():
-    assert check_alias_retargets(dict(new_t3_aliases=0, changed_existing_t3_aliases=0), []) == 0
-    assert check_alias_retargets(dict(new_t3_aliases=0, changed_existing_t3_aliases=1), [case()]) == 1
+def test_gate_accepts_only_id_matched_reversible_retirement():
+    result = dict(new_t3_aliases=0, new_shadowed_ids=0, changed_alias_rows=1)
+    assert check_alias_retargets(result, [retirement()]) == 1
 
 
 @pytest.mark.parametrize(
     "mutation",
     [
-        "new-alias",
-        "missing-case",
-        "duplicate-case",
+        "shadow",
+        "new-t3",
+        "unaccounted",
+        "duplicate",
+        "retarget",
+        "wrong-id",
         "wrong-session",
         "wrong-file",
-        "wrong-class",
-        "wrong-hash",
-        "wrong-project",
-        "t3-target",
-        "near-match",
-        "wrong-decision",
-        "missing-audit",
+        "wrong-preimage",
+        "still-shadowed",
     ],
 )
-def test_gate_rejects_unexplained_or_non_twin_changes(mutation):
-    result = dict(new_t3_aliases=0, changed_existing_t3_aliases=1)
-    item = copy.deepcopy(case())
-    cases = [item]
-    if mutation == "new-alias":
+def test_gate_rejects_unsafe_alias_changes(mutation):
+    result = dict(new_t3_aliases=0, new_shadowed_ids=0, changed_alias_rows=1)
+    case = retirement()
+    cases = [case]
+    if mutation == "shadow":
+        result.update(changed_alias_rows=0, new_shadowed_ids=1)
+        cases = []
+    elif mutation == "new-t3":
         result["new_t3_aliases"] = 1
-    elif mutation == "missing-case":
-        result["changed_existing_t3_aliases"] = 2
-    elif mutation == "duplicate-case":
-        cases.append(copy.deepcopy(item))
-        result["changed_existing_t3_aliases"] = 2
-    elif mutation in {"wrong-session", "wrong-file", "wrong-class", "wrong-hash", "wrong-project", "t3-target"}:
-        field = {
-            "wrong-session": "conversation_id",
-            "wrong-file": "source_file",
-            "wrong-class": "source_class",
-            "wrong-hash": "content_hash",
-            "wrong-project": "project",
-            "t3-target": "source",
-        }[mutation]
-        item["rows"]["branch"][field] = "different"
-    elif mutation == "near-match":
-        item["branch_latest_audit"]["mechanism"] = "simhash"
-    elif mutation == "wrong-decision":
-        item["same_input_decisions"]["main_clone_main_code"] = "session-twin"
+    elif mutation == "unaccounted":
+        result["changed_alias_rows"] = 2
+    elif mutation == "duplicate":
+        cases.append(retirement())
+        result["changed_alias_rows"] = 2
+    elif mutation == "retarget":
+        case["after"] = ["unrelated-older-session", "today"]
+    elif mutation == "wrong-preimage":
+        case["preimage"][1] = "other"
+    elif mutation == "still-shadowed":
+        case["resolved_id"] = "t3:mirror"
     else:
-        item.pop("branch_latest_audit")
-    with pytest.raises((ValueError, KeyError)):
+        field = {"wrong-id": "id", "wrong-session": "conversation_id", "wrong-file": "source_file"}[mutation]
+        case["own_row"][field] = "other"
+    with pytest.raises(ValueError):
         check_alias_retargets(result, cases)

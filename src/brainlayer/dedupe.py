@@ -329,6 +329,62 @@ def _visibility_clause(conn: Any, hidden: bool | None) -> str:
     return hidden_source_class_sql("source_class")
 
 
+def session_alias_preimage(conn: Any, chunk_id: str) -> tuple | None:
+    if not conn.cursor().execute("SELECT 1 FROM sqlite_master WHERE name='chunk_id_alias'").fetchone():
+        return None
+    return (
+        conn.cursor()
+        .execute(
+            "SELECT old_chunk_id,canonical_chunk_id,deprecated_at FROM chunk_id_alias WHERE old_chunk_id=?",
+            (chunk_id,),
+        )
+        .fetchone()
+    )
+
+
+def session_alias_needs_retirement(conn: Any, chunk_id: str) -> bool:
+    alias = session_alias_preimage(conn, chunk_id)
+    if alias is None:
+        return False
+    return (
+        conn.cursor()
+        .execute("SELECT 1 FROM chunks WHERE id=? OR (id=? AND source='t3') LIMIT 1", (chunk_id, alias[1]))
+        .fetchone()
+        is not None
+    )
+
+
+def session_id_needs_own_row(conn: Any, chunk_id: str) -> bool:
+    """A materialized session id must survive redirects and later text matches."""
+    tables = {
+        row[0]
+        for row in conn.cursor().execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('chunk_id_alias','session_alias_preimage')"
+        )
+    }
+    if (
+        "session_alias_preimage" in tables
+        and conn.cursor().execute("SELECT 1 FROM session_alias_preimage WHERE old_chunk_id=?", (chunk_id,)).fetchone()
+    ):
+        return True
+    return session_alias_needs_retirement(conn, chunk_id)
+
+
+def retire_session_alias(conn: Any, chunk_id: str) -> None:
+    """Inside the writer transaction, preserve the redirect before materializing its id."""
+    row = session_alias_preimage(conn, chunk_id)
+    if row is None:
+        return
+    conn.cursor().execute("""CREATE TABLE IF NOT EXISTS session_alias_preimage (
+        old_chunk_id TEXT PRIMARY KEY, canonical_chunk_id TEXT NOT NULL,
+        deprecated_at TEXT NOT NULL, retired_at TEXT NOT NULL)""")
+    conn.cursor().execute(
+        "INSERT OR IGNORE INTO session_alias_preimage VALUES (?,?,?,?)",
+        (*row, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.cursor().execute("DELETE FROM chunk_id_alias WHERE old_chunk_id=?", (chunk_id,))
+
+
 def find_duplicate(
     conn: Any,
     *,
@@ -349,6 +405,8 @@ def find_duplicate(
     NULL sources remain eligible for ordinary legacy-session dedupe.
     """
     fields = compute_dedupe_fields(content, created_at)
+    if "t3" in exclude_sources and session_id_needs_own_row(conn, chunk_id):
+        return None, fields
     cursor = conn.cursor()
     scope_sql, scope_params = _scope_clause(project, content_type)
     scope_sql = f"{scope_sql} AND {_visibility_clause(conn, hidden)}"

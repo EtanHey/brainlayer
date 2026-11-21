@@ -30,6 +30,7 @@ from .dedupe import (
     merge_duplicate_chunk,
     merge_existing_chunk_content,
     merge_existing_chunk_seen,
+    retire_session_alias,
 )
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
@@ -582,6 +583,7 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
             ensure_schema=False,
         )
         return duplicate.canonical_chunk_id
+    retire_session_alias(conn, chunk_id)
     _merge_watcher_source_position(conn, chunk_id=chunk_id, incoming=values, reactivate=True)
     if merge_existing_chunk_seen(conn, chunk_id=chunk_id, incoming=values, ensure_schema=False):
         return chunk_id

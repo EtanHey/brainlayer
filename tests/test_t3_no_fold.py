@@ -101,26 +101,130 @@ def test_source_exclusion_applies_to_exact_and_simhash(tmp_path, near):
         assert hit is None
 
 
-@pytest.mark.parametrize("route", ["watcher", "drain", "index"])
-def test_replayed_alias_moves_from_t3_to_its_session_twin(tmp_path, monkeypatch, route):
-    """A later session's existing alias follows ordinary dedupe to the mirror's twin."""
+@pytest.mark.parametrize("route", ["watcher", "archive", "drain", "index"])
+@pytest.mark.parametrize("other", ["none", "twin", "older-unrelated"])
+def test_returning_t3_alias_resolves_to_its_own_session_row(tmp_path, monkeypatch, route, other):
+    """Materializing an id retires its redirect, never redirects to another conversation."""
     from brainlayer.dedupe import write_alias
 
     db = tmp_path / "test.db"
     monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
     incoming_id = "rt-12345678-" + normalized_exact_hash(TEXT)[:16]
     with VectorStore(db) as store:
-        seed(store, metadata={"t3_provider_session_id": "original-session"})
-        seed(
-            store,
-            "original-session-twin",
-            "realtime_watcher",
-            created_at="2026-11-17T12:00:01Z",
-            conversation_id="original-session",
-        )
+        seed(store, content_type="user_message", metadata={"t3_provider_session_id": "original-session"})
+        if other != "none":
+            seed(
+                store,
+                other,
+                "realtime_watcher",
+                created_at="2026-10-01T12:00:01Z",
+                conversation_id="original-session" if other == "twin" else "someone-else",
+                content_type="user_message",
+            )
         write_alias(store.conn, old_chunk_id=incoming_id, canonical_chunk_id="t3:mirror")
+        preimage = store.conn.execute("SELECT * FROM chunk_id_alias WHERE old_chunk_id=?", (incoming_id,)).fetchone()
         write_alias(store.conn, old_chunk_id="unrelated", canonical_chunk_id="t3:mirror")
         unrelated = store.conn.execute("SELECT * FROM chunk_id_alias WHERE old_chunk_id='unrelated'").fetchone()
+
+        def replay():
+            if route in {"watcher", "archive"}:
+                create_flush_callback(db, arbitrated=False)(
+                    [
+                        {
+                            "type": "user",
+                            "message": {"role": "user", "content": TEXT},
+                            "timestamp": STAMP,
+                            "_archive_reconciliation": route == "archive",
+                            "_source_file": str(tmp_path / "projects/alpha/12345678-1111-2222-3333-444455556666.jsonl"),
+                        }
+                    ]
+                )
+            elif route == "drain":
+                _insert_or_merge_chunk(store.conn, chunk(incoming_id, content_type="user_message"))
+            else:
+                store.upsert_chunks([chunk(incoming_id, content_type="user_message")], [None])
+
+        replay()
+        assert store.resolve_chunk_id(incoming_id) == incoming_id
+        assert store.get_chunk(incoming_id)["id"] == incoming_id
+        assert store.get_context(incoming_id)["target"]["id"] == incoming_id
+        assert (
+            store.conn.execute(
+                "SELECT canonical_chunk_id FROM chunk_id_alias WHERE old_chunk_id=?", (incoming_id,)
+            ).fetchone()
+            is None
+        )
+        saved = store.conn.execute(
+            "SELECT old_chunk_id,canonical_chunk_id,deprecated_at FROM session_alias_preimage WHERE old_chunk_id=?",
+            (incoming_id,),
+        ).fetchone()
+        assert saved == preimage
+        replay()
+        assert store.resolve_chunk_id(incoming_id) == incoming_id
+        assert store.get_chunk(incoming_id)["id"] == incoming_id
+        assert store.get_context(incoming_id)["target"]["id"] == incoming_id
+        assert store.conn.execute("SELECT * FROM chunk_id_alias WHERE old_chunk_id='unrelated'").fetchone() == unrelated
+        assert store.conn.execute("SELECT seen_count FROM chunks WHERE id='t3:mirror'").fetchone() == (1,)
+
+
+@pytest.mark.parametrize("mode", ["exact", "alias", "reactivate", "own-shadow"])
+@pytest.mark.parametrize("canonical_source", ["t3", "realtime_watcher"])
+def test_codex_manifest_never_treats_a_t3_twin_as_stored(tmp_path, mode, canonical_source):
+    import sqlite3
+
+    from brainlayer.dedupe import write_alias
+    from brainlayer.ingest.codex_manifest import _resolved_candidate
+
+    db = tmp_path / "manifest.db"
+    row = {**chunk("codex-session"), "chunk_id": "codex-session", "source_end_offset": 100}
+    with VectorStore(db) as store:
+        seed(store, source=canonical_source)
+        if mode in {"alias", "own-shadow"}:
+            write_alias(store.conn, old_chunk_id=row["chunk_id"], canonical_chunk_id="t3:mirror")
+        if mode == "own-shadow":
+            seed(store, row["chunk_id"], "realtime_watcher")
+        if mode == "reactivate":
+            seed(store, row["chunk_id"], "realtime_watcher")
+            store.conn.execute("UPDATE chunks SET archived_at='2026-11-18' WHERE id=?", (row["chunk_id"],))
+    with sqlite3.connect(db.as_uri() + "?mode=ro", uri=True) as conn:
+        match = _resolved_candidate(conn, row)
+    if canonical_source == "t3" or mode == "own-shadow":
+        assert match is None
+    else:
+        assert match[0] == "t3:mirror"
+
+
+def test_alias_retirement_rolls_back_with_failed_index_insert(tmp_path, monkeypatch):
+    from brainlayer import vector_store
+    from brainlayer.dedupe import write_alias
+
+    with VectorStore(tmp_path / "rollback.db") as store:
+        seed(store)
+        write_alias(store.conn, old_chunk_id="returning", canonical_chunk_id="t3:mirror")
+        original = store.conn.execute("SELECT * FROM chunk_id_alias WHERE old_chunk_id='returning'").fetchone()
+
+        def fail_prepare(*args, **kwargs):
+            raise RuntimeError("fail after alias retirement")
+
+        monkeypatch.setattr(vector_store, "prepare_canonical_insert", fail_prepare)
+        with pytest.raises(RuntimeError, match="fail after alias retirement"):
+            store.upsert_chunks([chunk("returning")], [None])
+        assert store.conn.execute("SELECT * FROM chunk_id_alias WHERE old_chunk_id='returning'").fetchone() == original
+        assert store.conn.execute("SELECT 1 FROM chunks WHERE id='returning'").fetchone() is None
+        assert store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='session_alias_preimage'").fetchone() is None
+
+
+@pytest.mark.parametrize("route", ["watcher", "drain", "index"])
+def test_unusable_non_t3_alias_cannot_shadow_materialized_session_id(tmp_path, monkeypatch, route):
+    from brainlayer.dedupe import write_alias
+
+    db = tmp_path / "non-t3-shadow.db"
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+    incoming_id = "rt-12345678-" + normalized_exact_hash(TEXT)[:16]
+    with VectorStore(db) as store:
+        seed(store, "archived-session", "realtime_watcher")
+        store.conn.execute("UPDATE chunks SET archived_at='2026-11-18' WHERE id='archived-session'")
+        write_alias(store.conn, old_chunk_id=incoming_id, canonical_chunk_id="archived-session")
         if route == "watcher":
             create_flush_callback(db, arbitrated=False)(
                 [
@@ -136,8 +240,5 @@ def test_replayed_alias_moves_from_t3_to_its_session_twin(tmp_path, monkeypatch,
             _insert_or_merge_chunk(store.conn, chunk(incoming_id))
         else:
             store.upsert_chunks([chunk(incoming_id)], [None])
-        assert store.conn.execute(
-            "SELECT canonical_chunk_id FROM chunk_id_alias WHERE old_chunk_id=?", (incoming_id,)
-        ).fetchone() == ("original-session-twin",)
-        assert store.conn.execute("SELECT * FROM chunk_id_alias WHERE old_chunk_id='unrelated'").fetchone() == unrelated
-        assert store.conn.execute("SELECT seen_count FROM chunks WHERE id='t3:mirror'").fetchone() == (1,)
+        assert store.resolve_chunk_id(incoming_id) == incoming_id
+        assert store.get_chunk(incoming_id)["id"] == incoming_id

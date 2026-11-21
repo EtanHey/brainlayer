@@ -40,7 +40,14 @@ from .chunk_origin import detect_chunk_origin
 from .chunk_write import insert_canonical_chunk
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .content_class import classify_content_class
-from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_seen, normalized_exact_hash
+from .dedupe import (
+    find_duplicate,
+    merge_duplicate_chunk,
+    merge_existing_chunk_seen,
+    normalized_exact_hash,
+    retire_session_alias,
+    session_alias_needs_retirement,
+)
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
 from .pipeline.chunk import chunk_content
@@ -393,6 +400,8 @@ def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, proje
 
     try:
         with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            if session_alias_needs_retirement(db, chunk_id):
+                return False
             if db.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone():
                 return True
             return (
@@ -801,6 +810,7 @@ def create_flush_callback(
                                 transaction_started = False
                                 inserted += 1
                                 break
+                            retire_session_alias(store.conn, chunk_id)
                             if merge_existing_chunk_seen(
                                 store.conn,
                                 chunk_id=chunk_id,

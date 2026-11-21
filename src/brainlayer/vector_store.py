@@ -59,6 +59,7 @@ from .dedupe import (
     merge_duplicate_chunk,
     merge_existing_chunk_seen,
     resolve_chunk_id,
+    retire_session_alias,
 )
 from .embeddings import embedding_input
 from .ingest_guard import reject_recursive_mcp_output
@@ -2748,6 +2749,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                     cursor, duplicate.canonical_chunk_id, chunk["content"], embedding
                                 )
                             continue
+                        if not chunk.get("allow_duplicate"):
+                            retire_session_alias(self.conn, chunk_id)
                         if merge_existing_chunk_seen(
                             self.conn,
                             chunk_id=chunk_id,
