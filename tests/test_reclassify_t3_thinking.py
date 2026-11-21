@@ -75,14 +75,73 @@ def test_live_path_refused_before_open(migration):
         migration.main(["--db", str(Path.home() / ".local/share/brainlayer/brainlayer.db")])
 
 
-def test_undo_refuses_later_edits(migration, db):
+@pytest.mark.parametrize(
+    "edit,fields",
+    [
+        ("metadata='{}'", ["metadata"]),
+        ("source_class='brain-worker'", ["source_class"]),
+        ("source_class='brain-worker',metadata='{}'", ["source_class", "metadata"]),
+    ],
+)
+def test_undo_skips_later_edits_per_row(migration, db, capsys, edit, fields):
+    original = snapshot(db)
     migration.main(["--db", str(db), "--apply", "--run-id", "test"])
     with sqlite3.connect(db) as c:
-        c.execute("UPDATE chunks SET metadata='{}' WHERE id='1'")
+        c.execute(f"UPDATE chunks SET {edit} WHERE id='1'")
     before = snapshot(db)
-    with pytest.raises(ValueError, match="changed since"):
-        migration.main(["--db", str(db), "--undo", "--run-id", "test"])
-    assert snapshot(db) == before
+    assert migration.main(["--db", str(db), "--undo", "--run-id", "test"]) == 0
+    after = snapshot(db)
+    assert after[0] == before[0]
+    assert after[1:] == original[1:]
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert {"undo_skipped": {"id": "1", "fields": fields}} in output
+    with sqlite3.connect(db) as c:
+        assert c.execute("SELECT undone FROM t3_thinking_reclassification WHERE chunk_id='1'").fetchone() == (0,)
+        assert c.execute("SELECT undone FROM t3_thinking_reclassification WHERE chunk_id='2'").fetchone() == (1,)
+
+
+def test_brain_worker_thinking_never_promoted(migration, db):
+    with sqlite3.connect(db) as c:
+        c.execute("UPDATE chunks SET source_class='brain-worker' WHERE id='1'")
+    original = snapshot(db)
+    migration.main(["--db", str(db), "--apply"])
+    assert snapshot(db)[0] == original[0]
+
+
+def test_passive_checkpoint_with_reader_keeps_writer_available(migration, db, capsys):
+    from contextlib import closing
+
+    with closing(sqlite3.connect(db, isolation_level=None)) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        with closing(sqlite3.connect(db, isolation_level=None)) as reader:
+            reader.execute("BEGIN")
+            reader.execute("SELECT * FROM chunks").fetchall()
+            writer.execute("UPDATE chunks SET content='changed' WHERE id='1'")
+            migration.checkpoint(writer, "test")
+            with closing(sqlite3.connect(db, isolation_level=None, timeout=0.025)) as other:
+                other.execute("UPDATE chunks SET content='other' WHERE id='2'")
+            reader.rollback()
+    report = json.loads(capsys.readouterr().out)
+    assert report["checkpoint"]["mode"] == "PASSIVE"
+    assert report["checkpoint"]["status"] == "pending"
+
+
+def test_checkpoint_error_does_not_hide_commit(migration, db, capsys, monkeypatch):
+    connect = migration.sqlite3.connect
+
+    class Connection(sqlite3.Connection):
+        def execute(self, sql, *args):
+            if "wal_checkpoint" in sql:
+                raise sqlite3.OperationalError("checkpoint unavailable")
+            return super().execute(sql, *args)
+
+    monkeypatch.setattr(migration.sqlite3, "connect", lambda *a, **kw: connect(*a, factory=Connection, **kw))
+    assert migration.main(["--db", str(db), "--apply"]) == 0
+    assert snapshot(db)[0][3] == "agent-thinking"
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert any(line.get("committed") and line.get("changed") == 2 for line in output)
+    assert sum(line.get("checkpoint", {}).get("status") == "error" for line in output) == 2
+    assert output[-1]["phase"] == "after"
 
 
 def test_live_hardlink_refused(migration, db, monkeypatch, tmp_path):

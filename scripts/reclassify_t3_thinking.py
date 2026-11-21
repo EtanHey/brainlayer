@@ -5,8 +5,8 @@ Lead runbook: quiesce ALL writers and take a fresh backup before --live --apply.
 Rehearse on an APFS clone first. Dry-run is read-only and the default. Keep the
 printed run ID: --undo --run-id ID restores byte-exact metadata and source_class.
 The journal is committed in the same transaction as each 5,000-row batch; a
-partial run can be undone by that ID. Later edits make undo refuse rather than
-overwrite them. No content, embeddings, lifecycle or provenance is changed.
+partial run can be undone by that ID. Undo skips and reports later edits per row.
+No content, embeddings, lifecycle or provenance is changed.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ JOURNAL = "t3_thinking_reclassification"
 
 
 def retry(operation):
-    """Bounded SQLITE_BUSY retries, including checkpoint's busy result."""
+    """Bounded SQLITE_BUSY retries for write transactions."""
     for attempt in range(6):
         try:
             return operation()
@@ -39,14 +39,20 @@ def retry(operation):
             time.sleep(0.1 * 2**attempt)
 
 
-def checkpoint(c):
-    def full():
-        if c.execute("PRAGMA wal_checkpoint(FULL)").fetchone()[0]:
-            exc = sqlite3.OperationalError("WAL checkpoint busy")
-            exc.sqlite_errorcode = sqlite3.SQLITE_BUSY
-            raise exc
-
-    retry(full)
+def checkpoint(c, phase):
+    """Best-effort PASSIVE checkpoint; readers never turn committed work into failure."""
+    result = {"mode": "PASSIVE", "phase": phase}
+    try:
+        busy, frames, checkpointed = c.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        result.update(
+            status="pending" if busy or checkpointed < frames else "complete",
+            busy=busy,
+            frames=frames,
+            checkpointed=checkpointed,
+        )
+    except sqlite3.Error as exc:
+        result.update(status="error", error=str(exc))
+    print(json.dumps({"checkpoint": result}), flush=True)
 
 
 def candidates(c):
@@ -54,7 +60,7 @@ def candidates(c):
     for row in c.execute(
         "SELECT id, source_class, metadata, source, sender FROM chunks "
         "WHERE source='t3' AND sender='assistant' "
-        "AND source_class IS NOT 'agent-thinking'"
+        "AND source_class IS NOT 'agent-thinking' AND source_class IS NOT 'brain-worker'"
     ):
         metadata = json.loads(row[2])
         if not isinstance(metadata, dict):
@@ -133,7 +139,7 @@ def apply(c, rows, run_id):
 
         transaction(c, batch)
         if (start // BATCH_SIZE + 1) % 3 == 0:
-            checkpoint(c)
+            checkpoint(c, "batch")
     return len(rows)
 
 
@@ -152,30 +158,51 @@ def undo(c, run_id):
         f"FROM {JOURNAL} WHERE run_id=? AND undone=0 ORDER BY chunk_id",
         (run_id,),
     ).fetchall()
-    # Check the whole run before committing any undo batch.
-    for chunk_id, _sc, _raw, changed in rows:
-        if c.execute("SELECT source_class, metadata FROM chunks WHERE id=?", (chunk_id,)).fetchone() != (
-            "agent-thinking",
-            changed,
-        ):
-            raise ValueError(f"Row changed since migration: {chunk_id}; undo refused")
+    restored = 0
+    skipped = 0
     for start in range(0, len(rows), BATCH_SIZE):
+        batch_skipped = []
+        batch_restored = []
 
         def batch():
+            # Retry discards the previous attempt's uncommitted accounting.
+            batch_skipped.clear()
+            batch_restored.clear()
             for chunk_id, sc, raw, changed in rows[start : start + BATCH_SIZE]:
+                current = c.execute("SELECT source_class, metadata FROM chunks WHERE id=?", (chunk_id,)).fetchone()
+                fields = (
+                    ["row"]
+                    if current is None
+                    else [
+                        field
+                        for field, actual, expected in zip(
+                            ("source_class", "metadata"), current, ("agent-thinking", changed), strict=True
+                        )
+                        if actual != expected
+                    ]
+                )
+                if fields:
+                    batch_skipped.append({"id": chunk_id, "fields": fields})
+                    continue
                 cursor = c.execute(
                     "UPDATE chunks SET source_class=?, metadata=? WHERE id=? "
                     "AND source_class='agent-thinking' AND metadata=?",
                     (sc, raw, chunk_id, changed),
                 )
                 if cursor.rowcount != 1:
-                    raise ValueError(f"Row changed since migration: {chunk_id}; undo refused")
+                    raise ValueError(f"Undo update unexpectedly failed under write lock: {chunk_id}")
                 c.execute(f"UPDATE {JOURNAL} SET undone=1 WHERE run_id=? AND chunk_id=?", (run_id, chunk_id))
+                batch_restored.append(chunk_id)
 
         transaction(c, batch)
+        restored += len(batch_restored)
+        skipped += len(batch_skipped)
+        for item in batch_skipped:
+            print(json.dumps({"undo_skipped": item}), flush=True)
         if (start // BATCH_SIZE + 1) % 3 == 0:
-            checkpoint(c)
-    return len(rows)
+            checkpoint(c, "batch")
+    print(json.dumps({"undo": {"run_id": run_id, "restored": restored, "skipped": skipped}}), flush=True)
+    return restored
 
 
 def main(argv=None):
@@ -201,12 +228,15 @@ def main(argv=None):
     ) as c:
         rows = report(c, "before")
         if write:
-            checkpoint(c)
+            checkpoint(c, "before")
             run_id = args.run_id or (str(uuid.uuid4()) if args.apply else None)
             print(json.dumps({"run_id": run_id}), flush=True)
             changed = apply(c, rows, run_id) if args.apply else undo(c, run_id)
-            checkpoint(c)
-            print(json.dumps({"changed": changed, "action": "apply" if args.apply else "undo"}))
+            print(
+                json.dumps({"changed": changed, "action": "apply" if args.apply else "undo", "committed": True}),
+                flush=True,
+            )
+            checkpoint(c, "after")
         report(c, "after")
     return 0
 
