@@ -2503,18 +2503,17 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(L.fitted(jobs, within: CGRect(x: -500, y: -800, width: 2000, height: 2000)), jobs)
     }
 
-    /// R1.5: with no actions on the chart the frame no longer grows, so the Memory-to-Search line leaves the box's right edge
-    /// at the saves lane and turns once, down into Search, at the lines' common 10 pt radius.
+    /// R14: Memory-to-Search leaves the lower port with 8 pt frame clearance and turns once into Search.
     func testMemoryToSearchIsOneCleanRoute() {
         let L = NDPipelineLayout.self
         let line = L.connections.first { $0.pipe == .memorySearch }!
         XCTAssertEqual(line.corner, 10)
         let p = line.line.points
-        XCTAssertEqual(p.count, 5, "M1 fit: route below the copies and above the job links")
-        XCTAssertEqual(p[0].x, L.hub.maxX + L.edgeGap, accuracy: 0.01, "it leaves the right edge")
-        XCTAssertEqual(p[0].y, 88)
+        XCTAssertEqual(p.count, 3, "R14: one clean turn below the copies")
+        XCTAssertEqual(p[0].x, L.hub.maxX - 12, accuracy: 0.01, "R14: it leaves the lower port")
+        XCTAssertEqual(p[0].y, L.hub.maxY + L.edgeGap) // R14: keep the real 8 pt frame clearance.
         XCTAssertEqual(p[1].y, p[0].y)
-        XCTAssertEqual(p[3].x, L.point(.search).x)
+        XCTAssertEqual(p[1].x, L.point(.search).x)
     }
 
     /// 1.4.1 (3): the Pipeline block's height is set by its lowest station (Search's name under the answers lane), so it
@@ -2522,9 +2521,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testPipelineBlockHeightIsSetByItsLowestStation() {
         let L = NDPipelineLayout.self
         let search = L.labelRects(.search, pipeline(.calm)).map(\.maxY).max() ?? 0  // R1.12 (F): with its status line
-        // R13: the compact loop ends here; the added band holds full job panels (L57 grows the page).
-        XCTAssertGreaterThan(search, L.size.height - L.jobPanelRoom - 4, "Search ends the compact loop")
-        XCTAssertLessThanOrEqual(search, L.size.height - L.jobPanelRoom + 0.5)
+        // R14: Search uses the lower loop; no unused band remains below its words.
+        XCTAssertGreaterThan(search, L.size.height - 4, "Search ends the compact loop")
+        XCTAssertLessThanOrEqual(search, L.size.height + 0.5)
     }
 
     /// CI on e89086d2: every fixture is a pure function of its own pinned clock and zone. Built under two process time

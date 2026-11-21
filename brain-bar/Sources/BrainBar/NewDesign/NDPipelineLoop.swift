@@ -6,13 +6,13 @@ import SwiftUI
 enum NDPipelineLayout {
     typealias Say = BrainBarMenuPresenter.SurfaceSay
 
-    /// R13 / gap 79: the 128 pt job body starts at y218; 84 extra points leave 8 pt below its full text.
+    /// R14: wider job panels need less wrapping; Search ends the loop 2 pt above the chart edge.
     /// L57 lets the Overview grow with this space, capped by the visible screen.
-    static let jobPanelRoom: CGFloat = 84
+    static let jobPanelRoom: CGFloat = 75
     static let size = CGSize(width: 820, height: 270 + jobPanelRoom)
     static let verticalPadding: CGFloat = 4
     static let drawWidth: CGFloat = 832
-    static let yTop: CGFloat = 44, ySaves: CGFloat = 114, yAnswers: CGFloat = 222, yRail: CGFloat = 8
+    static let yTop: CGFloat = 44, ySaves: CGFloat = 114, yAnswers: CGFloat = 297, yRail: CGFloat = 8
     static let stationRadius: CGFloat = 13
     /// The fault ring's radius (R1.4 change 16).
     static let ringRadius: CGFloat = 15.5
@@ -27,12 +27,12 @@ enum NDPipelineLayout {
     static func iconCentre(_ family: AgentFamily) -> CGPoint {
         CGPoint(x: agentsFrame.midX, y: agentRows.first { $0.0 == family }?.1 ?? agentsFrame.midY)
     }
-    /// Memory: an outline, 100 × 102 (L5).
+    /// R14: The lower Memory port sits 3 pt below the box, 8 pt below the Kept-safe frame.
     /// R2 item 8: the diagram sits centred in its card, 32 pt from each side: everything right of the agents moved 26 pt
     /// left (the long first-row lines are shorter).
     /// R1.10 (L49): 140 wide, so the two job stations hang under it with straight links. R1.10.4: everything right of the
     /// agents moved 15 pt left (the first-row lines are 15 pt shorter), so the diagram is 32 pt from each side again.
-    static let hub = CGRect(x: 365, y: 24, width: 140, height: 74)
+    static let hub = CGRect(x: 365, y: 24, width: 140, height: 83)
     /// "Kept safe" hugs its two stations (L5), widened by the lead so the two text blocks keep 16 pt between them and
     /// 12 pt to the frame at their widest statuses ("last backup 27 h ago" in Semibold): Copy on this Mac moves to x 630.
     /// R1.5: Copy on this Mac's status grew ("3 kept, newest 30 h ago"), so it moves to x 622 and the frame starts at x 544.
@@ -105,13 +105,11 @@ enum NDPipelineLayout {
         out.append(Connection(pipe: .saves, line: NDPolyline(points: [CGPoint(x: agentsFrame.maxX + g, y: ySaves), queue]).trimmed(end: e)))
         out.append(Connection(pipe: .queueMemory, line: NDPolyline(points: [queue, CGPoint(x: 280, y: ySaves),
                     CGPoint(x: 280, y: 88), CGPoint(x: hub.minX - g, y: 88)]).trimmed(start: e)))
-        // R2A item 5: the Kept-safe frame grows under its actions, so the Memory-to-Search lane leaves the box's bottom
-        // edge and runs below the grown frame (route the lines around the button, never the button around the lines).
-        // R1.5: the Kept-safe frame no longer grows, so the line leaves the box's right edge at the saves lane and turns
-        // once, down into Search's top, at the lines' common 10 pt radius.
-        out.append(Connection(pipe: .memorySearch, line: NDPolyline(points: [CGPoint(x: hub.maxX + g, y: 88),
-                    CGPoint(x: 516, y: 88), CGPoint(x: 516, y: 106), CGPoint(x: search.x, y: 106), search]).trimmed(end: e),
-                              corner: 10))
+        // R14: leave the lower Memory port 8 pt below Kept-safe, then turn once into Search.
+        // The hub ends 3 pt above the port, preserving the endpoint gap and its bottom text padding.
+        let searchLaneY = keptSafe.maxY + 8
+        out.append(Connection(pipe: .memorySearch, line: NDPolyline(points: [CGPoint(x: hub.maxX - 12, y: searchLaneY),
+                    CGPoint(x: search.x, y: searchLaneY), search]).trimmed(end: e), corner: 10))
         out.append(Connection(pipe: .answers, line: NDPolyline(points: [search, CGPoint(x: ax, y: yAnswers),
                                                                          CGPoint(x: ax, y: agentsFrame.maxY + g)]).trimmed(start: e), corner: 12))
         out.append(Connection(pipe: .memoryMac, line: NDPolyline(points: [CGPoint(x: hub.maxX + g, y: yTop), mac]).trimmed(end: e)))
@@ -287,8 +285,8 @@ enum NDPipelineLayout {
         case .mac: (.top, 320, 0)  // 5d
         case .drive: (.top, 320, -108)  // 5e: ends 52 right of the station, inside the window
         case .queue: (.bottom, 262, -100)  // Clear the nightly purpose as well as its name.
-        case .jobs: (.bottom, 262, 0)  // Compact chart: below its words, clear of Save queue.
-        case .weekly: (.bottom, 264, 0)  // R13: both jobs open below their complete labels.
+        case .jobs: (.bottom, 400, 0)  // Compact chart: below its words, clear of Save queue.
+        case .weekly: (.bottom, 400, 0)  // R13: both jobs open below their complete labels.
         // 5i, as built: the designer's place (left, under the job stations' words, 238 to the footer) holds 86 pt and the
         // panel needs about 98, and its corner meets the footer's right line. One panel shows at a time, so Search's opens
         // above it instead, in the weekly clean's room: right of the job stations' words, under the Kept-safe frame.
@@ -368,7 +366,7 @@ enum NDPipelineLayout {
         // R13: clear the native background of Search answers while keeping the arrow on the job words.
         if s == .jobs || s == .weekly {
             let captionRight = laneLabelRects().map { $0.1.maxX + 4 }.max() ?? 0
-            body.origin.x = max(body.minX, captionRight + 12)
+            body.origin.x = captionRight + 12
         }
         let arrowBox: CGRect = switch side.edge {
         case .top: CGRect(x: tip.x - arrowHalfWidth, y: tip.y - a, width: 2 * arrowHalfWidth, height: a)

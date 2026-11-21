@@ -18,6 +18,15 @@ import XCTest
         }
     }
 
+    func testChartEndsAtSearchWithoutAnUnusedLowerBand() {
+        typealias L = NDPipelineLayout
+        XCTAssertLessThanOrEqual(L.size.height, 345, "the tallest measured job panel ends at 344.5 pt")
+        let state = NDPipelineState.make(BrainBarDesignFixture.inputs(.calm))
+        let bottom = L.labelRects(.search, state).map(\.maxY).max() ?? 0
+        XCTAssertGreaterThanOrEqual(L.size.height - bottom, 0)
+        XCTAssertLessThanOrEqual(L.size.height - bottom, 8, "no empty strip below Search")
+    }
+
     func testJobPanelsOpenBelowWordsClearCaptionsAndFitAllTheirText() throws {
         typealias L = NDPipelineLayout
         for name in BrainBarDesignFixture.Name.allCases {
