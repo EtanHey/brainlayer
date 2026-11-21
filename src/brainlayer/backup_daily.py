@@ -4004,8 +4004,17 @@ def run_backup(
                     if key in resume:
                         result[key] = resume[key]
                 resume_state = resume.get("resumable_upload")
+                confirmed = resume.get("bytes_confirmed")
+                if type(confirmed) is int and 0 <= confirmed <= snapshot_size:
+                    result["bytes_confirmed"] = confirmed
+                    if isinstance(resume.get("bytes_confirmed_at"), str):
+                        result["bytes_confirmed_at"] = resume["bytes_confirmed_at"]
             result.update(local_verified=True, local_artifact=_upload_identity(snapshot), upload_state="pending")
-            _append_json_log(resolved_log_path, result)
+            # A completed session resumes verification before any network call; legacy final receipts stay unchanged.
+            _append_json_log(
+                resolved_log_path,
+                {**result, "verification_pending": True} if upload and result["uploaded"] else result,
+            )
             if not upload:
                 break
             if resume is not None and resume.get("uploaded") is True:
@@ -4040,9 +4049,14 @@ def run_backup(
 
             def record_upload_progress(url: str, confirmed: int) -> None:
                 nonlocal resume_state
+                previous = result.get("bytes_confirmed")
+                same_session = resume_state is not None and resume_state.get("url") == url
+                if same_session and type(previous) is int:
+                    # Initialization reports zero before probing. It cannot erase or freshen a saved checkpoint.
+                    confirmed = max(previous, confirmed)
                 next_state = {"url": url, "folder_id": folder_id, **upload_identity}
                 resume_state = next_state
-                if result.get("bytes_confirmed") != confirmed:
+                if not same_session or previous != confirmed:
                     result["bytes_confirmed_at"] = dt.datetime.now(dt.UTC).isoformat()
                 result["bytes_confirmed"] = confirmed
                 _append_json_log(
@@ -4220,11 +4234,16 @@ def run_backup(
         if isinstance(error_code, str):
             result["error_code"] = error_code
         if isinstance(exc, DriveUploadStalledError):
+            confirmed = exc.bytes_confirmed
+            if resume_state is not None and resume_state.get("url") == exc.session_url:
+                previous = result.get("bytes_confirmed")
+                if type(previous) is int:
+                    confirmed = max(previous, confirmed)
             result.update(
                 {
                     "error_type": exc.error_code,
                     "error_code": exc.error_code,
-                    "bytes_confirmed": exc.bytes_confirmed,
+                    "bytes_confirmed": confirmed,
                 }
             )
         raise

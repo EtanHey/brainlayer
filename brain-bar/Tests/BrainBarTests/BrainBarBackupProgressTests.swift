@@ -30,6 +30,32 @@ import XCTest
         XCTAssertEqual(p.lastGoodAt, now.addingTimeInterval(-3600))
     }
 
+    func testSettingsRetainedReadExpiresWithCurrentClock() throws {
+        final class Clock: @unchecked Sendable {
+            var value: Date
+            init(_ value: Date) { self.value = value }
+        }
+        guard case let .readable(base) = BrainBarDashboardFixture.healthyObservabilityResult else { return XCTFail("fixture") }
+        let clock = Clock(now)
+        let document = ObservabilityDocument(schemaVersion: base.schemaVersion, generatedAt: now, dbPath: "/synthetic/private.db",
+            windowHours: base.windowHours, stores: base.stores, emitters: base.emitters, authorUnknown: base.authorUnknown,
+            backups: try backups())
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("progress-clock-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
+        try config.save(.defaultConfig)
+        let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: config,
+            launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+            embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
+            refreshStatusOnLoad: false, now: { clock.value }, initialObservabilityResult: .readable(document))
+        XCTAssertEqual(model.backupProgress?.percentage, 25)
+        clock.value = now.addingTimeInterval(30 * 60)
+        XCTAssertEqual(model.observabilityNow, now, "the read has not completed again")
+        let expired = try XCTUnwrap(model.backupProgress)
+        XCTAssertNil(expired.percentage)
+        XCTAssertTrue(expired.isStalled)
+    }
+
     func testMissingTotalIsIndeterminateWithNoNumber() throws {
         let p = try XCTUnwrap(BrainBarBackupProgress.read(backups(total: nil), now: now))
         XCTAssertNil(p.fraction)

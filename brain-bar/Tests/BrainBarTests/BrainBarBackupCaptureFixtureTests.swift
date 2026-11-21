@@ -41,6 +41,19 @@ import SwiftUI
         XCTAssertTrue(NDPipelineChart.showsProgress(NDR1.make(i, NDModel.make(i)).pipeline, progress: p))
     }
 
+    func testUploadingTitleDatesTheDatabaseCopyWhenSessionsAreNewer() throws {
+        var i = try inputs("upload-drive-stalled")
+        let verdict = try XCTUnwrap(i.capture.verdict)
+        let checks = verdict.checks.map { check in
+            check.name == "transcripts" ? BrainBarHealthVerdict.Check(name: check.name, state: .green, ageS: 3600, note: "") : check
+        }
+        i.capture.verdict = BrainBarHealthVerdict(dot: verdict.dot, checks: checks, notes: verdict.notes, evaluatedAt: verdict.evaluatedAt)
+        let title = try XCTUnwrap(NDR1.make(i, NDModel.make(i)).stationItems[.drive]?.title)
+        XCTAssertTrue(title.contains("database backup"), title)
+        XCTAssertTrue(title.contains("Nov 12 at 07:59"), title)
+        XCTAssertTrue(title.contains("an upload is running"), title)
+    }
+
     func testUploadNoTotal() throws {
         let p = try XCTUnwrap(inputs("upload-no-total").backupProgress)
         XCTAssertNil(p.total)

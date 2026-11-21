@@ -631,7 +631,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     var backupProgress: BrainBarBackupProgress? {
         guard backupTruth.statusNotice == nil, case let .readable(document) = observabilityResult else { return nil }
-        return BrainBarBackupProgress.read(document.backups, now: observabilityNow)
+        return BrainBarBackupProgress.read(document.backups, now: now())
     }
 
     /// The Backups page's checks in plain words (E1), from the same document as `backupStatus`.
