@@ -122,6 +122,8 @@ enum BrainBarDesignFixture {
 
     static func inputs(_ name: Name) -> NDInputs {
         var i = base()
+        i.settingsBackups = BrainBarSettingsBackupSummary(
+            file: URL(fileURLWithPath: "/fixture/settings/brainlayer.env"), count: 3)
         switch name {
         case .calm:
             break

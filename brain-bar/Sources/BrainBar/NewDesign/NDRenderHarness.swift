@@ -262,6 +262,7 @@ import SwiftUI
     }
 
     static func settings(name: String, store: NDStore, appearance: NSAppearance.Name, in directory: URL) throws -> String {
+        store.refreshSettingsFileSummary()
         // Polish 3: the view runs under the transparent 28 pt title bar and draws its hairline; the render adds only the
         // title the system draws there.
         let view = NDSettingsView(store: store)

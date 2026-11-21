@@ -186,13 +186,16 @@ import SwiftUI
             alertsURL: URL(fileURLWithPath: "/tmp/nd-absent-" + UUID().uuidString))
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
         controller.renderStatusIconForTesting(stats: stats(), state: .idle)
-        let items = controller.contextMenuForTesting.items
+        // Gap 26, lead ruling 21 Nov 2026: compare Classic to main after asserting its sole Diagnostics insertion.
+        let items = BrainBarDesign.current(in: d) == .classic
+            ? try brainBarItemsWithoutApprovedDiagnostics(controller.contextMenuForTesting)
+            : controller.contextMenuForTesting.items
         return (items.map(\.title), items.map { ($0.representedObject as? BrainBarMenuAction).map { "\($0)" } ?? "" },
                 try png(host.item.view.image), host.item.view.image?.size ?? .zero,
                 items.filter { $0.view is NDMenuRowHost }.count)
     }
 
-    /// L6: with `classic` (absent or stored), the icon and the menu are main's, byte for byte and title for title.
+    /// L6: Classic keeps main's icon and menu, plus the separately asserted gap-26 Diagnostics insertion.
     func testClassicIsMainsIconAndMenuForBothMenuSettings() throws {
         for newMenu in [nil, false, true] as [Bool?] {
             let absent = try shown(design: nil, newMenu: newMenu)
@@ -381,14 +384,18 @@ import SwiftUI
         XCTAssertNil(controller.windowForTesting.toolbar, "Classic's chrome is main's: no toolbar")
     }
 
-    /// Review blocker 2: Settings is 520 pt wide and as tall as its three rows, fixed before it is shown.
+    /// Gaps 21/26/12: four rows, backup caption, design caption and model explanation; fixed before showing.
     func testSettingsWindowIsSizedToItsRows() {
         _ = defaults()
-        let settings = NDSettingsWindowController(store: NDStore(fixture: BrainBarDesignFixture.inputs(.calm)))
+        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm))
+        store.refreshSettingsFileSummary()  // include the same backup caption as the Settings-open path
+        let settings = NDSettingsWindowController(store: store)
         let size = settings.window.contentRect(forFrameRect: settings.window.frame).size
         XCTAssertEqual(size.width, 480)
-        XCTAssertGreaterThanOrEqual(size.height, 130)
-        XCTAssertLessThanOrEqual(size.height, 200)
+        // The old 200 pt ceiling covered only three rows. Four rows alone, with the bar and insets, need 212 pt;
+        // the backup/design captions and two-line model explanation fit within a 400 pt full-form ceiling.
+        XCTAssertGreaterThanOrEqual(size.height, NDSettingsWindowController.titleBar + 40 + 4 * NDGrid.formRow)
+        XCTAssertLessThanOrEqual(size.height, 400)
         XCTAssertFalse(settings.window.styleMask.contains(.resizable))
         XCTAssertEqual(settings.window.contentMaxSize, size)
         XCTAssertEqual(settings.window.identifier?.rawValue, "brainbar.nd.settings")
@@ -1223,7 +1230,9 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
                 controller.renderStatusIconForTesting(stats: DashboardStats(chunkCount: 1, enrichedChunkCount: 1, pendingEnrichmentCount: 0,
                     enrichmentPercent: 50, enrichmentRatePerMinute: 1, databaseSizeBytes: 0, recentActivityBuckets: zero,
                     recentAgentWriteBuckets: zero, recentWatcherWriteBuckets: zero, recentEnrichmentBuckets: zero), state: .idle)
-                let items = controller.contextMenuForTesting.items
+                // Gap 26, lead ruling 21 Nov 2026: main's golden plus one enabled, unmarked Diagnostics after Settings.
+                // Keep classic-main-golden.json as the independent record; assert everything else against it.
+                let items = try brainBarItemsWithoutApprovedDiagnostics(controller.contextMenuForTesting)
                 let label = "new menu \(newMenu), design \(design ?? "absent")"
                 XCTAssertEqual(items.map(\.title), expected["titles"] as? [String], label)
                 XCTAssertEqual(items.map { ($0.representedObject as? BrainBarMenuAction).map { "\($0)" } ?? "" }, expected["actions"] as? [String], label)
