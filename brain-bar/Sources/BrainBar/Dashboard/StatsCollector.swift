@@ -470,6 +470,16 @@ final class StatsCollector: ObservableObject {
     /// (180 / 1440 minutes) and publish `windowedBuckets` so the charts re-render
     /// with actual history — fixing the prior bug where wider lenses only
     /// relabeled the live buckets.
+    /// The new design's waveforms: any window and bucket count, read off the main thread. It publishes nothing, so the
+    /// classic charts' `windowedBuckets` never change because the new design asked.
+    nonisolated func fetchBuckets(windowMinutes: Int, bucketCount: Int,
+                                  provider: @escaping WindowedBucketsProvider) async -> BrainDatabase.PipelineWindowBuckets? {
+        await Task.detached(priority: .utility) { try? provider(windowMinutes, bucketCount) }.value
+    }
+
+    /// The provider the classic charts use, for `fetchBuckets`.
+    var bucketsProvider: WindowedBucketsProvider { windowedBucketsProvider }
+
     func selectTimeframe(windowMinutes: Int, isLive: Bool) {
         windowedBucketsTask?.cancel()
         windowedBucketsTask = nil

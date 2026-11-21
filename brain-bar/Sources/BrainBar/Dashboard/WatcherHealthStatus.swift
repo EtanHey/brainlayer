@@ -17,6 +17,20 @@ struct WatcherHealthFile: Sendable, Equatable {
     /// How many quarantined records the producer listed in detail (capped at 100). nil = not reported.
     var quarantinedRecordsListed: Int?
     var earliestQuarantinedRecordAt: Date?
+    /// BrainLayer #1827 (release 1.6.6): `catch_up`, the watcher's measured catch-up. nil when the producer is older and
+    /// writes none.
+    var catchUp: WatcherCatchUp? = nil
+}
+
+/// `catch_up` in watcher-health.json (BrainLayer #1827): `state` is none, behind, catching_up (a lag at a new low over
+/// its window, with an estimate; `offset_lag` is then NOT an alert reason) or stalled (`offset_lag` raised). Each part is
+/// read on its own; a part the file does not carry, or carries in another type, is nil: unknown, never guessed. Declared
+/// in the consumer's own file, which the heartbeat probe compiles alone; CI's menu filter lists this file because the
+/// menu reads it.
+struct WatcherCatchUp: Sendable, Equatable {
+    var state: String? = nil
+    var bytesBehind: Int? = nil
+    var etaS: Double? = nil
 }
 
 enum WatcherHealthFileRead: Sendable, Equatable {
@@ -389,7 +403,7 @@ enum WatcherHealthReader {
                 return .unreadable(path: path, reason: "\(key) must be a list of objects")
             }
         }
-        return .readable(WatcherHealthFile(
+        var file = WatcherHealthFile(
             updatedAt: updatedAt,
             pollCount: integers["poll_count"] ?? 0,
             alertReasons: alertReasons,
@@ -401,7 +415,26 @@ enum WatcherHealthReader {
             quarantinedRecordCount: integers["quarantined_record_count_total"] ?? 0,
             quarantinedRecordsListed: (payload["quarantined_records"] as? [Any])?.count,
             earliestQuarantinedRecordAt: earliestObservedAt(payload["quarantined_records"])
-        ))
+        )
+        if let block = payload["catch_up"] {
+            file.catchUp = catchUp(block)
+        }
+        return .readable(file)
+    }
+
+    /// #1827's `catch_up`, read part by part (it is newer and optional, so a bad part never makes the whole file
+    /// unreadable): a block that is not an object, or a part of another type, leaves that part unknown.
+    static func catchUp(_ raw: Any) -> WatcherCatchUp {
+        guard let block = raw as? [String: Any] else { return WatcherCatchUp() }
+        var result = WatcherCatchUp(state: block["state"] as? String)
+        if let raw = block["bytes_behind"], let behind = strictInteger(raw), behind >= 0 {
+            result.bytesBehind = behind
+        }
+        if let number = block["eta_s"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+            let eta = number.doubleValue
+            if eta.isFinite, eta >= 0 { result.etaS = eta }
+        }
+        return result
     }
 
     /// JSON numbers arrive as NSNumber. Swift can bridge both booleans and whole-valued

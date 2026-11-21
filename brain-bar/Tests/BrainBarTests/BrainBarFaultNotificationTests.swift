@@ -87,7 +87,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertEqual(p.count, 0)
         let report = BrainBarMenuReport.text(presentation: p, verdict: c.verdict, version: "test", now: c.now)
         XCTAssertTrue(report.contains(BrainBarMenuPresenter.Say.r02Headline.text))
-        XCTAssertFalse(report.contains(BrainBarMenuPresenter.Say.cantFix.text))
+        XCTAssertFalse(report.contains(BrainBarMenuPresenter.Say.agent.text))
         XCTAssertTrue(BrainBarMenuPresenter.notificationFaults(c).isEmpty)
         let center = Center()
         await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c)
@@ -151,13 +151,29 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         XCTAssertEqual(status.dashboardStatus.headline, "Check soon")
     }
 
+    /// L55: a red or 30-minute lag that drains by itself is a calm notice and posts nothing; one that is not draining (the
+    /// lag beside another watcher alert) still needs him and notifies.
     func testLagRedAndThirtyMinuteEscalationStillNeedYou() async {
         for c in [lagCapture(state: .red), lagCapture(age: 1801)] {
+            let p = BrainBarMenuPresenter.present(c)
+            XCTAssertEqual(p.form, .calm)
+            XCTAssertEqual(p.count, 0)
+            XCTAssertEqual(p.headline, BrainBarMenuPresenter.Say.lagBehind.text)
+            let center = Center()
+            await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c)
+            XCTAssertTrue(center.posts.isEmpty, "L55: no notification while it drains")
+        }
+        var red = lagCapture(state: .red), late = lagCapture(age: 1801)
+        red.watcher?.alertReasons.append("file_ingestion_failure")
+        late.watcher?.alertReasons.append("file_ingestion_failure")
+        for c in [red, late] {
             let p = BrainBarMenuPresenter.present(c)
             XCTAssertEqual(p.form, .needs)
             XCTAssertEqual(p.icon, .marked)
             XCTAssertEqual(p.count, 1)
-            XCTAssertEqual(p.rows.filter { $0.strings.first == BrainBarMenuPresenter.Say.generic.text }.count, 1)
+            XCTAssertEqual(p.rows.filter { $0.strings.first == BrainBarMenuPresenter.Say.unreadFiles.text }.count, 1)
+            // The independent lag clock adds its own row only after 30 minutes.
+            XCTAssertEqual(p.rows.filter { $0.strings.first == BrainBarMenuPresenter.Say.lagBehind.text }.count, c.now.timeIntervalSince(c.lagEpisodeStart!) > 1800 ? 1 : 0)
             let center = Center()
             await BrainBarFaultNotifications(center: center, defaults: defaults()).update(c)
             XCTAssertEqual(center.posts.count, 1)
@@ -173,7 +189,8 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         }, notes: [], evaluatedAt: c.now)
         let p = BrainBarMenuPresenter.present(c)
         XCTAssertEqual(p.form, .calm)
-        XCTAssertEqual(p.rows.first { $0.state == .notice }?.strings.first, BrainBarMenuPresenter.Say.generic.text)
+        // R1.11: an amber reader with no watcher alert and no lag has no words in the deck; D5 says BrainBar can't tell.
+        XCTAssertEqual(p.rows.first { $0.state == .notice }?.strings.first, BrainBarMenuPresenter.Say.d5.text)
     }
 
     func testNewSameGoneAndReturned() async {
@@ -192,7 +209,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         clock.now = clock.now.addingTimeInterval(601)
         await subject.update(c)
         XCTAssertEqual(center.posts.count, count * 2)
-        XCTAssertEqual(center.posts.first?.1, "Memory search needs attention")
+        XCTAssertEqual(center.posts.first?.1, "Agents can’t search memory")  // R1.11: the banner names the thing, as its row does
     }
 
     func testRelaunchKeepsSet() async {
@@ -267,7 +284,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
             if c.verdict != nil, (0...900).contains(c.verdictAwakeAgeS) {
                 XCTAssertLessThanOrEqual(faults.count, rows.count)
                 if !rows.isEmpty { XCTAssertFalse(faults.isEmpty) }
-                XCTAssertFalse(faults.contains { $0.title == "Something BrainBar checks needs attention." })
+                XCTAssertFalse(faults.contains { $0.title == "A check failed, and BrainBar can’t tell which" })
                 XCTAssertEqual(Set(faults.map(\.id)).count, faults.count)
             }
         }
@@ -386,7 +403,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
     func testRound1GenericNotificationNamesThing() async {
         let center = Center()
         await BrainBarFaultNotifications(center: center, defaults: defaults()).update(capture("search"))
-        XCTAssertEqual(center.posts.first?.1, "Memory search needs attention")
+        XCTAssertEqual(center.posts.first?.1, "Agents can’t search memory")  // R1.11: the banner names the thing, as its row does
     }
 
     func testWatcherNoticeUnknownGapNeverNotifies() async {
@@ -610,7 +627,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         }, notes: [], evaluatedAt: c.now)
         await subject.update(c)
         XCTAssertEqual(center.posts.count, 2)
-        XCTAssertEqual(center.posts.last?.1, "Backups need attention")
+        XCTAssertEqual(center.posts.last?.1, "Not enough room for the next backup")  // R1.11: named
         XCTAssertNotEqual(center.posts.first?.1, center.posts.last?.1)
     }
 
@@ -681,7 +698,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
                 }, notes: [], evaluatedAt: c.now)
                 await subject.update(c, jobAlerts: [:])
                 XCTAssertEqual(center.posts.count, 2, key)
-                if state == .red { XCTAssertEqual(center.posts.last?.1, "Backups need attention") }
+                if state == .red { XCTAssertEqual(center.posts.last?.1, "Not enough room for the next backup") }  // R1.11: named
                 else { XCTAssertEqual(center.posts.last?.1, BrainBarMenuPresenter.notificationFaults(c).first?.title) }
             }
         }
@@ -773,7 +790,7 @@ final class BrainBarFaultNotificationTests: XCTestCase {
         await subject.update(capture(), jobAlerts: alerts)
         await subject.update(capture("disk"), jobAlerts: alerts)
         XCTAssertEqual(center.posts.count, 2)
-        XCTAssertEqual(center.posts.last?.1, "Backups need attention")
+        XCTAssertEqual(center.posts.last?.1, "Not enough room for the next backup")  // R1.11: named
     }
 
     func testCodeRabbitCooldownStartsWhenSlowPostSucceedsIncludingAliases() async {

@@ -63,6 +63,7 @@ struct BrainBarMenuRowView: View {
     /// spinner, progress, action). The kind only chooses the type style and the spacing.
     var body: some View {
         HStack(alignment: .top, spacing: BrainBarMenuMetrics.gap) {
+            // L53: a count headline carries no mark; its gutter stays, empty, so its words keep the rows' column.
             Color.clear.frame(width: BrainBarMenuMetrics.gutter, height: gutterHeight).overlay { gutter }.accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 0) {
                 words
@@ -127,10 +128,11 @@ struct BrainBarMenuRowView: View {
         }
     }
 
-    /// The strings in order: the first in the kind's style, the rest as facts, then the presenter's two hand-off lines
-    /// (it appends them to a row whose action is Copy report) in the label colour.
+    /// The strings in order: the first in the kind's style, the rest as facts, then the presenter's one who-acts sentence
+    /// (R1.11: it appends it to a row whose action is Copy report) in the label colour.
     @ViewBuilder private var words: some View {
-        let handoff = row.action?.kind == .copyReport && row.strings.count >= 3 ? 2 : 0
+        let who = [BrainBarMenuPresenter.Say.agent.text, BrainBarMenuPresenter.Say.ifNotFinished.text]
+        let handoff = row.action?.kind == .copyReport && row.strings.count >= 2 && row.strings.last.map(who.contains) == true ? 1 : 0
         let lead = Array(row.strings.dropLast(handoff))
         ForEach(Array(lead.enumerated()), id: \.offset) { index, string in
             let text = Text(Self.keepingNumbersWithUnits(string)).monospacedDigit()
