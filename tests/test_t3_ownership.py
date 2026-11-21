@@ -158,3 +158,120 @@ def test_admission_matches_watcher(role, text):
         not should_skip_chunk_content(c.content) for c in chunk_content(classified)
     )
     assert session_admits(t3.T3Message("m", "t", role, text, "2026-11-21T00:00:00Z")) == expected
+
+
+@pytest.mark.parametrize("stored", ["split", "drift"])
+def test_audit_accepts_stored_coverage_across_chunking_or_t3_revision(lane, monkeypatch, stored):
+    import sqlite3
+
+    from brainlayer.ingest.t3_audit import audit_t3
+
+    _, _, db, source, bookmark = lane
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(bookmark.parent / "alerts.json"))
+    with sqlite3.connect(source) as conn:
+        conn.execute("UPDATE orchestration_v2_projection_messages SET created_at='2026-11-20T12:00:00Z'")
+        text = json.loads(conn.execute("SELECT payload_json FROM orchestration_v2_projection_messages").fetchone()[0])[
+            "text"
+        ]
+    with sqlite3.connect(db) as conn:
+        if stored == "split":
+            # Stored in a different chunk order/shape from today's T3 chunker.
+            for key, content in [("part-z", text[:33]), ("part-a", text[33:])]:
+                _session_chunk(conn, key, "sess-claude", "2026-11-20T12:00:00Z")
+                conn.execute("UPDATE chunks SET content=? WHERE id=?", (content, key))
+        else:
+            _session_chunk(conn, "older-t3-id", "th-claude", "2026-11-20T12:00:00Z", source="t3")
+            conn.execute(
+                "UPDATE chunks SET content=?, metadata=? WHERE id='older-t3-id'",
+                ("The previous revision of this stored message.", json.dumps({"message_id": "m"})),
+            )
+    result = audit_t3(source, db_path=db, health_path=bookmark.parent / "health.json", projection_version=2)
+    assert result["uncovered"] == 0
+
+
+def test_audit_partial_session_text_still_alarms(lane, monkeypatch):
+    import sqlite3
+
+    from brainlayer.ingest.t3_audit import audit_t3
+    from brainlayer.job_alerts import active_alerts
+
+    _, _, db, source, bookmark = lane
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(bookmark.parent / "alerts.json"))
+    with sqlite3.connect(source) as conn:
+        conn.execute("UPDATE orchestration_v2_projection_messages SET created_at='2026-11-20T12:00:00Z'")
+    with sqlite3.connect(db) as conn:
+        _session_chunk(conn, "partial", "sess-claude", "2026-11-20T12:00:00Z")
+        conn.execute("UPDATE chunks SET content='Please preserve this specific turn' WHERE id='partial'")
+    result = audit_t3(source, db_path=db, health_path=bookmark.parent / "health.json", projection_version=2)
+    assert result["uncovered"] == 1
+    assert "t3-audit" in active_alerts(bookmark.parent / "alerts.json")
+
+
+def test_audit_reports_known_index_policy_exclusion_without_alert(lane, monkeypatch):
+    import sqlite3
+
+    from brainlayer.ingest.t3_audit import audit_t3
+    from brainlayer.job_alerts import active_alerts
+
+    run, _, db, source, bookmark = lane
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(bookmark.parent / "alerts.json"))
+    text = "You are Codex.\n# Base context\n" + "Synthetic agent instruction scaffold. " * 8
+    with sqlite3.connect(source) as conn:
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET created_at='2026-11-20T12:00:00Z', payload_json=?",
+            (json.dumps({"text": text}),),
+        )
+    assert run().chunks_indexed == 0  # Real T3 index admission refuses the scaffold.
+    result = audit_t3(source, db_path=db, health_path=bookmark.parent / "health.json", projection_version=2)
+    assert result["uncovered_new"] == 0
+    assert result["uncovered_known"] == 1
+    assert result["known_skip_reasons"] == {"system_prompt_guard": 1}
+    assert "t3-audit" not in active_alerts(bookmark.parent / "alerts.json")
+    from typer.testing import CliRunner
+
+    from brainlayer.cli import app
+
+    cli = CliRunner().invoke(
+        app,
+        ["t3-audit", "--state-db", str(source), "--db", str(db), "--health-path", str(bookmark.parent / "health.json")],
+    )
+    assert cli.exit_code == 0, cli.output
+    assert "uncovered_new = 0" in cli.output
+    assert "uncovered_known = 1" in cli.output
+
+
+@pytest.mark.parametrize("layer", ["t3", "session", "codex-session"])
+@pytest.mark.parametrize("lifecycle", ["archived_at", "superseded_by", "aggregated_into"])
+def test_audit_counts_stored_then_lifecycle_managed_text(lane, monkeypatch, layer, lifecycle):
+    import sqlite3
+
+    from brainlayer.ingest.t3_audit import audit_t3
+
+    _, _, db, source, bookmark = lane
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(bookmark.parent / "alerts.json"))
+    with sqlite3.connect(source) as conn:
+        conn.execute("UPDATE orchestration_v2_projection_messages SET created_at='2026-11-20T12:00:00Z'")
+        text = json.loads(conn.execute("SELECT payload_json FROM orchestration_v2_projection_messages").fetchone()[0])[
+            "text"
+        ]
+        if layer == "codex-session":
+            native = "01a1aaaa-0000-7000-8000-000000000099"
+            conn.execute(
+                "UPDATE orchestration_v2_projection_provider_threads SET driver='codex', provider='codex', payload_json=? WHERE provider_thread_id='pt-claude'",
+                (json.dumps({"nativeThreadRef": {"nativeId": native}}),),
+            )
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM chunks WHERE conversation_id='sess-claude'")
+        conversation = "th-claude" if layer == "t3" else "sess-claude"
+        if layer == "codex-session":
+            conversation = f"rollout-2026-11-20T12-00-00-{native}"
+        _session_chunk(
+            conn, "managed", conversation, "2026-11-20T12:00:00Z", source="t3" if layer == "t3" else "realtime_watcher"
+        )
+        value = "2026-11-20T13:00:00Z" if lifecycle == "archived_at" else "deliberate-replacement"
+        conn.execute(
+            f"UPDATE chunks SET content=?, metadata=?, {lifecycle}=? WHERE id='managed'",
+            (text, json.dumps({"message_id": "m"}), value),
+        )
+    result = audit_t3(source, db_path=db, health_path=bookmark.parent / "health.json", projection_version=2)
+    assert result["uncovered"] == 0

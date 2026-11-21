@@ -4719,8 +4719,10 @@ def t3_audit_command(
         health_path=resolve_t3_health_path(resolved, health_path),
         projection_version=projection_version,
     )
-    rprint(f"uncovered = {result['uncovered']} checked = {result['checked']}")
-    if result["uncovered"]:
+    rprint(
+        f"uncovered_new = {result['uncovered_new']} uncovered_known = {result['uncovered_known']} checked = {result['checked']}"
+    )
+    if result["uncovered_new"]:
         raise typer.Exit(1)
 
 
