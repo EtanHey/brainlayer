@@ -568,6 +568,7 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
         project=values.get("project"),
         content_type=values.get("content_type"),
         hidden=is_hidden_source_class(values.get("source_class")),
+        exclude_sources=("t3",),
     )
     if duplicate is not None:
         _merge_watcher_source_position(conn, chunk_id=duplicate.canonical_chunk_id, incoming=values)
@@ -579,6 +580,7 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
             mechanism=duplicate.mechanism,
             hamming_distance_value=duplicate.hamming_distance,
             ensure_schema=False,
+            preserve_existing_alias=True,
         )
         return duplicate.canonical_chunk_id
     _merge_watcher_source_position(conn, chunk_id=chunk_id, incoming=values, reactivate=True)

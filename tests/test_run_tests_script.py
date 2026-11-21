@@ -2335,6 +2335,7 @@ def test_harness_runtime_mapping_escalates_when_companion_is_missing(tmp_path: P
 
 
 IDX_FOCUSED_MAPPINGS = (
+    ("ingest/t3_bookmark", ("test_t3_ingest_bookmark.py", "test_ingest_t3.py")),
     (
         "maintenance_calendar",
         (
