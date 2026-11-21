@@ -285,6 +285,10 @@ struct NDPipelineChart: View {
         drawStations(ctx, state: state, hovered: hovered)
         if state.allUnconfirmed {
             let words = state.lastKnownAt.map(Say.valuesLastKnownAt) ?? Say.everyPipeNotConfirmed
+            // CodeRabbit: the last-known caption masks the rail just like the other on-line captions.
+            let width = ceil(NSAttributedString(string: words, attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).size().width)
+            ctx.fill(Path(CGRect(x: NDPipelineLayout.size.width - width - 6, y: -2, width: width + 12, height: 16)),
+                     with: .color(ND.card))
             put(ctx, text(words, size: 11, color: ND.t2, weight: .medium), x: NDPipelineLayout.size.width, baseline: 10, size: 11, anchor: .end)
         }
     }

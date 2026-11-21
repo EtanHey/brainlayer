@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import BrainBar
 
@@ -47,6 +48,7 @@ final class BrainBarGapClarityTests: XCTestCase {
     func testRestingCaptionsAndPurposeLinesKeepTheirOwnSpace() throws {
         typealias L = NDPipelineLayout
         typealias Deck = BrainBarMenuPresenter.SurfaceSay
+        try assertUnconfirmedCaptionMasksRail()
         let captions = L.laneLabelRects()
         XCTAssertEqual(captions.map(\.0), [Deck.sessionBackups, Deck.searchAnswers])
         XCTAssertEqual(captions.map { $0.1.midY }, [L.yRail, L.yAnswers])
@@ -68,6 +70,66 @@ final class BrainBarGapClarityTests: XCTestCase {
                 }
             }
         }
+    }
+
+    private func assertUnconfirmedCaptionMasksRail() throws {
+        typealias L = NDPipelineLayout
+        typealias Deck = BrainBarMenuPresenter.SurfaceSay
+        let stale = NDPipelineState.make(BrainBarDesignFixture.inputs(.notConfirmed))
+        XCTAssertTrue(stale.allUnconfirmed)
+        let words = stale.lastKnownAt.map(Deck.valuesLastKnownAt) ?? Deck.everyPipeNotConfirmed
+        let width = ceil(NSAttributedString(string: words, attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).size().width)
+        let left = L.size.width - width - 6
+        func ink(_ state: NDPipelineState, dark: Bool) throws -> Int {
+            let renderer = ImageRenderer(content: Canvas { ctx, _ in
+                NDPipelineChart.draw(ctx, state: state, memories: "297,412")
+            }.frame(width: L.size.width, height: L.size.height).background(ND.card)
+                .environment(\.colorScheme, dark ? .dark : .light))
+            renderer.scale = 2
+            let rep = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+            let background = try XCTUnwrap(rep.colorAt(x: 20, y: 400)?.usingColorSpace(.sRGB))
+            var count = 0
+            // The six points immediately before the glyphs include a whole dashed-rail period.
+            // A real plane mask leaves only card pixels here; the caption itself cannot affect this padding.
+            for x in Int(ceil((left + 0.5) * 2))..<Int(floor((left + 5.5) * 2)) {
+                for y in 15...17 {
+                    let pixel = try XCTUnwrap(rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                    let difference = abs(pixel.redComponent - background.redComponent)
+                        + abs(pixel.greenComponent - background.greenComponent) + abs(pixel.blueComponent - background.blueComponent)
+                    if difference > 0.03 { count += 1 }
+                }
+            }
+            return count
+        }
+        for dark in [false, true] {
+            XCTAssertEqual(try ink(stale, dark: dark), 0, "rail must not show through caption padding")
+            XCTAssertGreaterThan(try ink(NDPipelineState.make(BrainBarDesignFixture.inputs(.calm)), dark: dark), 0,
+                                 "calm rail remains visible in the same region")
+        }
+    }
+
+    func testEscalatedNonDrainingNonStalledLagAgreesAcrossDesignsAndReport() throws {
+        typealias P = BrainBarMenuPresenter
+        var c = BrainBarNewDesignR111Tests.lag(.amber, clock: 2400)
+        c.watcher?.catchUp = .init(state: nil, bytesBehind: BrainBarNewDesignR111Tests.mb117)
+        XCTAssertTrue(P.Say.lagShown(c))
+        XCTAssertFalse(P.Say.lagDraining(c))
+        XCTAssertFalse(P.Say.producerStalled(c))
+        XCTAssertTrue(P.lagNeedsYou(c))
+        XCTAssertTrue(P.lagNeedsReport(c))
+        let classic = P.present(c)
+        let row = try XCTUnwrap(classic.rows.first { $0.kind == .needsYou && $0.action?.kind == .copyReport })
+        let inputs = NDInputs(capture: c), model = NDModel.make(inputs), shown = NDR1.make(inputs, model)
+        let item = try XCTUnwrap(shown.items.first { $0.id == "reader" })
+        XCTAssertEqual(item.severity, .red)
+        XCTAssertEqual(item.title, row.strings.first)
+        XCTAssertEqual(item.action, row.action)
+        XCTAssertTrue(item.detail?.contains(P.Say.agent.text) == true)
+        let classicReport = BrainBarMenuReport.text(presentation: classic, verdict: c.verdict, version: "fixture", now: c.now)
+        let store = NDStore(fixture: inputs)
+        XCTAssertEqual(store.report, classicReport)
+        XCTAssertTrue(store.report.contains(item.title))
+        XCTAssertTrue(store.report.contains(P.Say.agent.text))
     }
 
     func testMenuMarkContrastFromRenderedPixels() throws {

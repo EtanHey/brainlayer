@@ -165,7 +165,8 @@ struct NDR1: Equatable, Sendable {
                                       concerns: ["ingest"], station: .agents))  // R1.12: one wording; Read's status is the tail
                     covered.insert("ingest")
                 } else if BrainBarMenuPresenter.Say.lagShown(c), BrainBarMenuPresenter.Say.lagDraining(c)
-                            || BrainBarMenuPresenter.Say.producerStalled(c) {
+                            || BrainBarMenuPresenter.Say.producerStalled(c)
+                            || BrainBarMenuPresenter.lagNeedsYou(c) {
                     // R1.11 (A1), R1.13 (A2, A3): the lag named, how far, BrainLayer's estimate when it has one; its severity
                     // and its button are the presenter's one decision (a stalled lag carries the report).
                     let lagSeverity: NDSeverity = BrainBarMenuPresenter.lagNeedsYou(c) ? .red : .orange
