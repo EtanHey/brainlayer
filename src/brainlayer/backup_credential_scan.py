@@ -112,8 +112,9 @@ def fingerprint(value: str) -> str:
 class FileScan:
     """Scan of one file's bytes, fed in any chunking; see ``scan_snapshot`` for the bundle path."""
 
-    def __init__(self, relative_path: str, prior: PriorSnapshot | None = None) -> None:
+    def __init__(self, relative_path: str, prior: PriorSnapshot | None = None, *, pending_retry: bool = False) -> None:
         self.relative_path = relative_path
+        self.pending_retry = pending_retry
         self.scanned_bytes = 0
         self.proven_prefix_bytes = 0
         self.ignored_embedded = 0
@@ -254,7 +255,9 @@ class CredentialScan:
             relative = path.relative_to(root).as_posix()
         except ValueError:
             relative = path.name
-        return FileScan(relative, self._prior(path))
+        entry = self.priors.get(path.as_posix())
+        pending_retry = isinstance(entry, dict) and bool(entry.get("credential_scan_failed"))
+        return FileScan(relative, self._prior(path), pending_retry=pending_retry)
 
     def _prior(self, path: Path) -> PriorSnapshot | None:
         entry = self.priors.get(path.as_posix())
@@ -270,7 +273,10 @@ class CredentialScan:
     def commit(self, scan: FileScan, snapshot: IO[bytes], *, mtime: float) -> None:
         """Scan a member's snapshot once it is safely in the bundle, and record its findings."""
         scan.scan_snapshot(snapshot)
-        current = self.now - mtime < CURRENT_WINDOW_SECONDS
+        # A failure marker means delivery is still owed, even if we could not
+        # persist the finding's original eligibility. Conservatively keep all
+        # findings in that source eligible until alert persistence succeeds.
+        current = scan.pending_retry or self.now - mtime < CURRENT_WINDOW_SECONDS
         for provider, line, digest in scan.finish():
             self.findings.append(
                 CredentialFinding(

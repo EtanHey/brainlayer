@@ -364,6 +364,17 @@ def test_repeated_filler_values_are_placeholders_and_never_alert(tmp_path):
 @pytest.mark.parametrize("failure", ["alert", "scan-state"])
 @pytest.mark.parametrize("grows", [True, False])
 def test_failed_alert_persistence_retries_after_successful_upload(tmp_path, monkeypatch, failure, grows):
+    _assert_failed_alert_retry(tmp_path, monkeypatch, failure=failure, grows=grows)
+
+
+@pytest.mark.parametrize("retry_days,initial_age", [(8, 3600), (1, 7 * DAY - 3600)])
+def test_failed_scan_state_finding_does_not_expire_before_delivery(tmp_path, monkeypatch, retry_days, initial_age):
+    _assert_failed_alert_retry(
+        tmp_path, monkeypatch, failure="scan-state", grows=False, retry_days=retry_days, initial_age=initial_age
+    )
+
+
+def _assert_failed_alert_retry(tmp_path, monkeypatch, *, failure, grows, retry_days=1, initial_age=3600):
     from brainlayer import job_alerts
     from tests.test_jsonl_backup import _mock_drive_success
 
@@ -381,7 +392,7 @@ def test_failed_alert_persistence_retries_after_successful_upload(tmp_path, monk
     )
     now = time.time()
     source = tmp_path / "sources"
-    path = _transcript(source / "session.jsonl", _fake_key("retry"), mtime=now - 3600)
+    path = _transcript(source / "session.jsonl", _fake_key("retry"), mtime=now - initial_age)
 
     def run(when, stamp):
         return backup.run_backup(
@@ -416,11 +427,12 @@ def test_failed_alert_persistence_retries_after_successful_upload(tmp_path, monk
         first = run(now, "night1")
     assert first["uploaded"] is True
     assert "error" in first["credential_scan"]
+    assert json.loads(state_path.read_text())["files"][path.as_posix()]["credential_scan_failed"] is True
     if grows:
         with path.open("a") as handle:
             handle.write('{"next":1}\n')
         os.utime(path, (now + 85000, now + 85000))
-    second = run(now + DAY, "night2")
+    second = run(now + retry_days * DAY, "night2")
     assert second["credential_scan"]["new_alerts"] == 1
     assert scan.ALERT_KEY in _alerts(tmp_path)
     assert second["uploaded"] is True

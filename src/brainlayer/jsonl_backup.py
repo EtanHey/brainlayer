@@ -1972,7 +1972,8 @@ def run_backup(
         credential_scan = backup_credential_scan.start(state, state_path=scan_state_path, now=now)
     except OSError as exc:
         scan_error = f"credential scan state unavailable: {type(exc).__name__}"
-        credential_scan = CredentialScan(now=now)  # Still scans in full; nothing is trusted.
+        # Retain failed-delivery markers but no cutoff: prefixes stay untrusted.
+        credential_scan = CredentialScan(now=now, priors=state.get("files") or {})
     if changed:
         archive_path, bundle_digests, bundle_sizes = create_jsonl_bundle_with_digests(
             changed, staging_dir, date_stamp=date_stamp, credential_scan=credential_scan
