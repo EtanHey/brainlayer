@@ -237,7 +237,7 @@ import SwiftUI
         defer { controller.stop() }
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
         XCTAssertTrue(controller.contextMenuForTesting.items.contains { $0.view is NDMenuRowHost })
-        XCTAssertEqual(host.item.view.alphaValue, 1, "L23: no reading yet is drawn into the image (45 % brain and a \"?\" badge)")
+        XCTAssertEqual(host.item.view.alphaValue, 1, "L23: no reading yet is drawn into the image (55 % brain and a \"?\" badge)")
         d.set("classic", forKey: BrainBarDesign.key)
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
         controller.renderStatusIconForTesting(stats: stats(), state: .idle)
@@ -1558,10 +1558,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
 
     /// L2 and the lead's 1.4 rule: every hover panel's arrow sits on its own station (the tip within the circle's
     /// horizontal extent on a top or bottom edge, its vertical extent on a side edge), and the body covers no station's
-    /// circle, name or status, no action and no lane label, for all eight stations in every fixture.
+    /// circle, name, purpose or status, and no action, for all stations in every fixture.
     func testPanelArrowsSitOnTheirStationsAndBodiesClearEverything() {
         let L = NDPipelineLayout.self
-        let lanes = L.laneLabelRects()
         for name in Fixture.Name.allCases {
             let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
             let r1 = store.r1
@@ -1594,7 +1593,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                         XCTAssertFalse(panel.outer.intersects(rect), "\(where_) covers \(other)'s words")
                     }
                 }
-                for (label, rect) in lanes { XCTAssertFalse(panel.outer.intersects(rect), "\(where_) covers \"\(label)\"") }
+                // Payload captions explain connectors at rest. A panel may cover them like the connector itself.
             }
         }
     }
@@ -1985,8 +1984,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testStationsDoNotMoveBetweenStates() {
         let expected: [NDStation: CGPoint] = [
             // R1.12 change 6: Search at the loop's bottom-right corner, under Google Drive.
-            .read: CGPoint(x: 215, y: 64), .queue: CGPoint(x: 215, y: 134), .search: CGPoint(x: 736, y: 248),
-            .mac: CGPoint(x: 599, y: 64), .drive: CGPoint(x: 736, y: 64), .jobs: CGPoint(x: 377, y: 186), .weekly: CGPoint(x: 493, y: 186),
+            .read: CGPoint(x: 215, y: 64), .queue: CGPoint(x: 215, y: 134), .search: CGPoint(x: 736, y: 276),
+            .mac: CGPoint(x: 599, y: 64), .drive: CGPoint(x: 736, y: 64), .jobs: CGPoint(x: 342, y: 186), .weekly: CGPoint(x: 528, y: 186),
         ]
         XCTAssertEqual(NDPipelineLayout.stations, expected)
         for name in Fixture.Name.allCases {

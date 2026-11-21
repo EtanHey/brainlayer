@@ -10,9 +10,10 @@ enum NDPipelineLayout {
     /// Kept-safe frame keeps 12 pt between its edge and any text (lead, 1.3 build brief).
     /// R1.5 change 23: 820 × 282; the answers lane at y 248 clears Jobs' longer name and its status.
     /// R1.12 change 6: 820 × 296; Search sits at the loop's bottom-right corner with its status line under it.
-    static let size = CGSize(width: 820, height: 296)
+    /// Gap clarity: 28 pt more below the jobs for their purpose and timestamp, above the answers return.
+    static let size = CGSize(width: 820, height: 324)
     static let drawWidth: CGFloat = 832
-    static let yTop: CGFloat = 64, ySaves: CGFloat = 134, yAnswers: CGFloat = 248, yRail: CGFloat = 18
+    static let yTop: CGFloat = 64, ySaves: CGFloat = 134, yAnswers: CGFloat = 276, yRail: CGFloat = 18
     static let stationRadius: CGFloat = 13
     /// The fault ring's radius (R1.4 change 16).
     static let ringRadius: CGFloat = 15.5
@@ -48,8 +49,8 @@ enum NDPipelineLayout {
     /// R1.12 change 6: Search moves under Google Drive, to the loop's bottom-right corner; Memory → Search runs right
     /// along the saves lane and down, and the answers return straight along y 248.
     static let stations: [NDStation: CGPoint] = [
-        .read: CGPoint(x: 215, y: 64), .queue: CGPoint(x: 215, y: 134), .search: CGPoint(x: 736, y: 248),
-        .mac: CGPoint(x: 599, y: 64), .drive: CGPoint(x: 736, y: 64), .jobs: CGPoint(x: 377, y: 186), .weekly: CGPoint(x: 493, y: 186),
+        .read: CGPoint(x: 215, y: 64), .queue: CGPoint(x: 215, y: 134), .search: CGPoint(x: 736, y: yAnswers),
+        .mac: CGPoint(x: 599, y: 64), .drive: CGPoint(x: 736, y: 64), .jobs: CGPoint(x: 342, y: 186), .weekly: CGPoint(x: 528, y: 186),
     ]
     static let symbols: [NDStation: String] = [
         .read: "text.bubble", .queue: "tray.full", .memory: "brain", .mac: "laptopcomputer.and.arrow.down", .drive: "icloud",
@@ -117,9 +118,11 @@ enum NDPipelineLayout {
         out.append(Connection(pipe: .macDrive, line: NDPolyline(points: [mac, drive]).trimmed(start: e, end: e)))
         out.append(Connection(pipe: .rail, line: NDPolyline(points: [CGPoint(x: ax, y: agentsFrame.minY - g), CGPoint(x: ax, y: yRail),
                                                                      CGPoint(x: drive.x, y: yRail), drive]).trimmed(end: e)))
-        out.append(Connection(pipe: .jobsMemory, line: NDPolyline(points: [jobs, CGPoint(x: jobs.x, y: hub.maxY + g)]).trimmed(start: e),
+        out.append(Connection(pipe: .jobsMemory, line: NDPolyline(points: [jobs, CGPoint(x: jobs.x, y: 162),
+                    CGPoint(x: hub.minX + 12, y: 162), CGPoint(x: hub.minX + 12, y: hub.maxY + g)]).trimmed(start: e),
                               bothWays: true))
-        out.append(Connection(pipe: .weeklyMemory, line: NDPolyline(points: [weekly, CGPoint(x: weekly.x, y: hub.maxY + g)]).trimmed(start: e),
+        out.append(Connection(pipe: .weeklyMemory, line: NDPolyline(points: [weekly, CGPoint(x: weekly.x, y: 162),
+                    CGPoint(x: hub.maxX - 12, y: 162), CGPoint(x: hub.maxX - 12, y: hub.maxY + g)]).trimmed(start: e),
                               bothWays: true))
         return out
     }()
@@ -283,13 +286,13 @@ enum NDPipelineLayout {
         case .memory: (.top, 300, 0)  // 5c
         case .mac: (.top, 320, 0)  // 5d
         case .drive: (.top, 320, -108)  // 5e: ends 52 right of the station, inside the window
-        case .queue: (.bottom, 262, -35)  // 5f: below-left inside the loop, its right edge clear of the nightly check-up's name
+        case .queue: (.bottom, 262, -100)  // Clear the nightly purpose as well as its name.
         case .jobs: (.leading, 262, 0)  // 5g: left, inside the loop, under Save queue's status
         case .weekly: (.trailing, 264, 0)  // 5h: up-right, between the Kept-safe frame and Search
         // 5i, as built: the designer's place (left, under the job stations' words, 238 to the footer) holds 86 pt and the
         // panel needs about 98, and its corner meets the footer's right line. One panel shows at a time, so Search's opens
         // above it instead, in the weekly clean's room: right of the job stations' words, under the Kept-safe frame.
-        case .search: (.top, 264, searchPanelMinX + 132 - point(.search).x)
+        case .search: (.top, searchPanelWidth, searchPanelMinX + searchPanelWidth / 2 - point(.search).x)
         }
     }
 
@@ -297,7 +300,8 @@ enum NDPipelineLayout {
     static var agentsPanelMinX: CGFloat { pipelineHeading.maxX + 2 }
 
     /// 5i, as built: the Search panel's left edge, clear of the weekly clean's widest words ("failed 2 weeks").
-    static var searchPanelMinX: CGFloat { point(.weekly).x + 52 }
+    static var searchPanelMinX: CGFloat { max(point(.weekly).x + 52, (purposeRect(.weekly)?.maxX ?? 0) + 12) }
+    static var searchPanelWidth: CGFloat { min(264, windowInside.maxX - searchPanelMinX) }
 
     /// R1.12 5g, 5h, 5i: the side panels' tops, and where their arrows meet the station (inside its ring, 18 pt below the
     /// body's top so the arrow keeps off the rounded corner).
@@ -402,6 +406,24 @@ enum NDPipelineLayout {
         ceil(NSAttributedString(string: s, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)]).size().width)
     }
 
+    static func purpose(_ s: NDStation) -> String? {
+        switch s {
+        case .jobs: Say.nightlyPurpose
+        case .weekly: Say.weeklyPurpose
+        default: nil
+        }
+    }
+
+    /// The job purposes occupy separate columns; timestamps remain on their own line, 4 pt below.
+    static func purposeRect(_ s: NDStation) -> CGRect? {
+        guard let words = purpose(s) else { return nil }
+        let p = point(s)
+        let w = textWidth(words, size: 12)
+        return CGRect(x: p.x - w / 2, y: p.y + 37, width: w, height: 16)
+    }
+
+    static func statusTop(_ s: NDStation) -> CGFloat { point(s).y + (purpose(s) == nil ? 33 : 57) }
+
     /// A station's name and status boxes as drawn for `state`.
     static func labelRects(_ s: NDStation, _ state: NDPipelineState) -> [CGRect] {
         guard stations[s] != nil else { return [] }
@@ -410,15 +432,21 @@ enum NDPipelineLayout {
         let nameW = textWidth(name(s), size: 13)  // R2 item 10: the name keeps its normal weight
         _ = t
         var out = [CGRect(x: p.x - nameW / 2, y: p.y + 17, width: nameW, height: 16)]
+        if let purpose = purposeRect(s) { out.append(purpose) }
         if let status = state.status[s] {
             let w = textWidth(status.text, size: 11, weight: t == .fault || t == .notice ? .semibold : .regular)
-            out.append(CGRect(x: p.x - w / 2, y: p.y + 33, width: w, height: 13))
+            out.append(CGRect(x: p.x - w / 2, y: statusTop(s), width: w, height: 13))
         }
         return out
     }
 
-    /// R1.4 change 5 to 10: no words are set in or beside lanes, and the two frames have no caption.
-    static func laneLabelRects() -> [(String, CGRect)] { [] }
+    /// Only the two otherwise ambiguous routes get a short payload caption at rest.
+    static func laneLabelRects() -> [(String, CGRect)] {
+        [(Say.sessionBackups, yRail), (Say.searchAnswers, yAnswers)].map { words, y in
+            let w = textWidth(words, size: 12, weight: .medium)
+            return (words, CGRect(x: 215 - w / 2, y: y - 8, width: w, height: 16))
+        }
+    }
 }
 
 // MARK: - Strokes as tokens (change 9: one meaning per line style)

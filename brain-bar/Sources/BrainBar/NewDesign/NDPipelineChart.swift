@@ -238,6 +238,10 @@ struct NDPipelineChart: View {
 
     static func draw(_ ctx: GraphicsContext, state: NDPipelineState, memories: String?, hovered: NDStation? = nil, keptGrown: Bool = false) {
         drawPipes(ctx, state: state, keptGrown: keptGrown)
+        for (words, rect) in NDPipelineLayout.laneLabelRects() {
+            ctx.fill(Path(rect.insetBy(dx: -4, dy: -4)), with: .color(ND.card))
+            ctx.draw(text(words, size: 12, color: ND.t2, weight: .medium), at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
+        }
         drawAgents(ctx, state: state, hovered: hovered)
         drawHub(ctx, state: state, memories: memories, hovered: hovered)
         drawStations(ctx, state: state, hovered: hovered)
@@ -391,6 +395,9 @@ struct NDPipelineChart: View {
             }
             put(ctx, text(L.name(station), size: 13, color: m.nameRed ? ND.redText : ND.t1, weight: m.nameRed ? .semibold : .regular),
                 x: p.x, baseline: p.y + 29, size: 13, anchor: .middle)
+            if let purpose = L.purpose(station), let rect = L.purposeRect(station) {
+                ctx.draw(text(purpose, size: 12, color: ND.t2), at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
+            }
             if let status = state.status[station] {
                 // A status can carry its own severity on a calm station: Read's "Cursor not read" (R1.4 change 3).
                 let own: NDModel.Tone = state.allUnconfirmed ? .fine : status.severity == .red ? .fault : status.severity == .orange ? .warn : .fine
@@ -398,7 +405,7 @@ struct NDPipelineChart: View {
                 // R1.12 (E2): not confirmed, the stations keep their last-known values in `t3`, as clock times.
                 let color: Color = state.allUnconfirmed ? ND.t3 : tone == .fault ? ND.redText : tone == .warn ? ND.orangeText : ND.t2
                 put(ctx, text(status.text, size: 11, color: color, weight: tone == .fine ? .regular : .semibold, mono: true),
-                    x: p.x, baseline: p.y + 43, size: 11, anchor: .middle)
+                    x: p.x, baseline: L.statusTop(station) + 10, size: 11, anchor: .middle)
             }
         }
     }

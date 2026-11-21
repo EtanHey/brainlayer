@@ -103,10 +103,10 @@ enum BrainBarMenuPresenter {
     }
 
     private static func lagLine(_ c: Capture) -> Line {
-        // A3 (stalled): an agent needs to look, with the report; A1 and A2: nobody acts.
-        let stalled = Say.producerStalled(c)
+        // Every red lag needs a report, including evidence the producer cannot name. Draining notices need no handoff.
+        let needsAgent = lagNeedsYou(c)
         return Line(thing: .remembering, level: lagNeedsYou(c) ? .needs : .notice, strings: [lagTitle(c)] + (lagDetail(c).map { [$0] } ?? []),
-                    headline: lagTitle(c), action: stalled ? .copyReport : nil, handoff: stalled ? [Say.agent.text] : [])
+                    headline: lagTitle(c), action: needsAgent ? .copyReport : nil, handoff: needsAgent ? [Say.agent.text] : [])
     }
 
     /// A5 to A7: a watcher alert, named. Nil for an alert this BrainBar cannot name.
