@@ -240,7 +240,7 @@ launchd_install_usage() {
 }
 
 case "$BRAINLAYER_INSTALL_ACTION" in
-    consolidate|consolidation-rollback|index|t3-ingest|watch|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|log-cap|observability|tier0|tier0-watchdog|throughput-watchdog|fleet|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove)
+    consolidate|consolidation-rollback|index|t3-ingest|t3-audit|watch|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|log-cap|observability|tier0|tier0-watchdog|throughput-watchdog|fleet|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove)
         ;;
     *)
         launchd_install_usage
@@ -956,7 +956,7 @@ if state:
 if version:
     plist["ProgramArguments"] += ["--projection-version", version]
 plist["ProgramArguments"] += ["--db", destination, "--health-path", health]
-if interval is not None:
+if interval is not None and "t3-audit" not in plist["ProgramArguments"]:
     plist.pop("StartCalendarInterval", None)
     plist["StartInterval"] = int(interval)
 with path.open("wb") as handle:
@@ -1009,7 +1009,7 @@ install_plist() {
         -e "s|__HOTLANE_BRAINBAR_DAEMON__|$HOTLANE_BRAINBAR_DST|g" \
         "$src" > "$rendered_plist" || return 1
 
-    if [ "$name" = "t3-ingest" ]; then
+    if [ "$name" = "t3-ingest" ] || [ "$name" = "t3-audit" ]; then
         render_t3_ingest_selection "$rendered_plist" || return 1
     fi
     install_rendered_plist "$rendered_plist" "$dst" || return 1
@@ -1499,7 +1499,10 @@ case "${1:-all}" in
         install_plist p0-counter
         ;;
     t3-ingest)
-        install_plist t3-ingest
+        install_many t3-ingest t3-audit
+        ;;
+    t3-audit)
+        install_plist t3-audit
         ;;
     all)
         remove_plist enrichment
@@ -1508,7 +1511,7 @@ case "${1:-all}" in
         verify_config_file
         verify_gemini_env_file
         failures=0
-        if ! install_many index t3-ingest drain watch hotlane-brainbar; then
+        if ! install_many index t3-ingest t3-audit drain watch hotlane-brainbar; then
             failures=1
         fi
         if ! install_many decay wal-checkpoint repair-fts; then
@@ -1543,6 +1546,7 @@ case "${1:-all}" in
     remove)
         remove_plist index
         remove_plist t3-ingest
+        remove_plist t3-audit
         remove_plist enrich
         remove_plist enrichment
         remove_plist watch

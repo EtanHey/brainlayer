@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>com.brainlayer.t3-audit</string>
+<key>AssociatedBundleIdentifiers</key><array><string>com.brainlayer.brainbar</string></array>
+<key>ProgramArguments</key><array>
+<string>__BRAINLAYER_ENV_RUN__</string><string>__BRAINLAYER_BIN__</string><string>t3-audit</string>
+</array>
+<key>StartInterval</key><integer>86400</integer>
+<key>Nice</key><integer>15</integer>
+<key>ExitTimeOut</key><integer>1800</integer>
+<key>SoftResourceLimits</key><dict><key>NumberOfFiles</key><integer>4096</integer></dict>
+<key>ProcessType</key><string>Background</string>
+<key>LowPriorityIO</key><true/>
+<key>StandardOutPath</key><string>__HOME__/Library/Logs/brainlayer/t3-audit.out.log</string>
+<key>StandardErrorPath</key><string>__HOME__/Library/Logs/brainlayer/t3-audit.err.log</string>
+<key>EnvironmentVariables</key><dict>
+<key>PATH</key><string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
+<key>PYTHONUNBUFFERED</key><string>1</string>
+<key>BRAINLAYER_REPO_ROOT</key><string>__BRAINLAYER_DIR__</string>
+<key>BRAINLAYER_ENV_FILE</key><string>__BRAINLAYER_ENV_FILE__</string>
+<key>BRAINLAYER_LAUNCHD_SERVICE</key><string>t3-audit</string>
+</dict>
+</dict></plist>
