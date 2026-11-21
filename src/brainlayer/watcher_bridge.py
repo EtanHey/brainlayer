@@ -48,6 +48,7 @@ from .pipeline.classify import classify_content, classify_thinking
 from .pipeline.correction_detection import build_correction_tags
 from .pipeline.secret_scrub import scrub_secrets
 from .queue_io import enqueue_watcher_chunk
+from .queued_messages import queued_user_text
 from .t3_provenance import (
     T3_LINKAGE_HOLD_KEY,
     T3_UNLINKED,
@@ -67,7 +68,6 @@ logger = logging.getLogger(__name__)
 SKIP_ENTRY_TYPES = frozenset(
     {
         "progress",
-        "queue-operation",
         "file-history-snapshot",
         "pr-link",
         "last-prompt",
@@ -81,6 +81,7 @@ ALLOWED_ENTRY_TYPES = frozenset(
         "user",
         "assistant",
         "whatsapp_message",
+        "queue-operation",
     }
 )
 
@@ -182,6 +183,8 @@ def _is_pure_deletion_diff(text: str) -> bool:
 def _extract_raw_text(entry: dict) -> str:
     """Extract the raw text content from any JSONL entry type."""
     entry_type = entry.get("type", "")
+    if entry_type == "queue-operation":
+        return queued_user_text(entry) or ""
     if entry_type == "user":
         msg = entry.get("message")
         raw = msg if isinstance(msg, str) else (msg.get("content", "") if isinstance(msg, dict) else "")
@@ -654,6 +657,13 @@ def create_flush_callback(
                 content_hash = normalized_exact_hash(clean_content)[:16]
                 file_stem = _session_file_stem(source_file)
                 chunk_id = _realtime_chunk_id(file_stem, project, content_hash)
+                # Distinct origin IDs let the existing exact dedupe retain an alias in
+                # either arrival order, while the canonical content stays a single row.
+                # queued=true means first seen in the queue, not never delivered:
+                # a later delivered user entry aliases to this canonical enqueue time.
+                # Withdrawn (popAll) drafts stay stored as the words typed at that time.
+                if chunk.metadata.get("queued"):
+                    chunk_id += "-queued"
 
                 # Layer 4: Post-chunk content filter
                 skip_reason = should_skip_chunk_content(clean_content, chunk_id=chunk_id, source_file=source_file)
