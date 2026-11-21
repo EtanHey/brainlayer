@@ -13,15 +13,29 @@ def main() -> None:
     parser.add_argument("--recovery-command", action="store_true")
     args = parser.parse_args()
     if args.recovery_command:
-        template = (
-            "import json,sys; key=sys.stdin.read(); assert key.startswith('AGE-SECRET-KEY-'); "
-            "print(json.dumps({'title':'BrainLayer backup age recovery',"
-            "'category':'SECURE_NOTE','fields':[{'id':'notesPlain','type':'STRING',"
-            "'purpose':'NOTES','value':key}]}))"
-        )
+        # Capture both item output and diagnostics: neither is safe to forward.
+        template = """import json,re,subprocess,sys
+try:
+    key = sys.stdin.read()
+    if not key.startswith('AGE-SECRET-KEY-'):
+        raise ValueError()
+    item = {'title':'BrainLayer backup age recovery','category':'SECURE_NOTE',
+            'fields':[{'id':'identity','type':'CONCEALED','label':'age identity','value':key}]}
+    result = subprocess.run(['op','item','create','-','--format=json'],
+                            input=json.dumps(item),text=True,capture_output=True,check=False)
+    if result.returncode:
+        print('ERROR')
+        sys.exit(result.returncode)
+    item_id = json.loads(result.stdout).get('id')
+    if not isinstance(item_id, str) or not re.fullmatch('[a-z0-9]{26}', item_id):
+        raise ValueError()
+except (OSError, ValueError, AttributeError):
+    print('ERROR')
+    sys.exit(1)
+print('STORED id=' + item_id)
+"""
         print(
-            "/usr/bin/security find-generic-password -s brainlayer-backup-age -w | "
-            f"python3 -c {shlex.quote(template)} | op item create -"
+            f"/usr/bin/security find-generic-password -s brainlayer-backup-age -w | python3 -c {shlex.quote(template)}"
         )
         return
     recipient_path = backup_age.config_dir() / "backup-age-recipient.txt"

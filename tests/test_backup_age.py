@@ -1,6 +1,10 @@
+import io
 import json
 import os
+import runpy
+import shlex
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -10,6 +14,65 @@ from brainlayer import backup_age
 from brainlayer import jsonl_backup as backup
 from brainlayer.job_alerts import active_alerts, report
 from tests.test_jsonl_backup import _mock_drive_success, _write_jsonl
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "bad-id", "bad-json", "missing"])
+def test_recovery_command_suppresses_private_output(monkeypatch, capsys, outcome):
+    """Execute the printed Python stages; all external commands are synthetic."""
+    setup = Path(__file__).resolve().parents[1] / "scripts" / "backup_age_setup.py"
+    monkeypatch.setattr(sys, "argv", [str(setup), "--recovery-command"])
+    runpy.run_path(str(setup), run_name="__main__")
+    stages = shlex.split(capsys.readouterr().out.strip())
+    # Supply synthetic keychain output, never run security or op.
+    assert stages[:7] == [
+        "/usr/bin/security",
+        "find-generic-password",
+        "-s",
+        "brainlayer-backup-age",
+        "-w",
+        "|",
+        "python3",
+    ]
+    assert stages[7] == "-c"
+    secret = "AGE-SECRET-KEY-SYNTHETIC-DO-NOT-USE"
+    item_id = "a" * 26
+    submitted = []
+
+    def create(command, **kwargs):
+        assert command == ["op", "item", "create", "-", "--format=json"]
+        assert kwargs["capture_output"] is True
+        assert kwargs["check"] is False
+        submitted.append(json.loads(kwargs["input"]))
+        if outcome == "missing":
+            raise OSError(secret)
+        value = {"id": secret if outcome == "bad-id" else item_id, "fields": submitted[-1]["fields"]}
+        return subprocess.CompletedProcess(
+            command,
+            23 if outcome == "failure" else 0,
+            stdout=secret if outcome == "bad-json" else json.dumps(value),
+            stderr=secret,
+        )
+
+    monkeypatch.setattr(subprocess, "run", create)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(secret))
+    exit_code = 0
+    try:
+        exec(stages[8], {"__name__": "__main__"})
+    except SystemExit as exc:
+        exit_code = exc.code
+    # The old command ends in bare op: model its item echo without calling it.
+    if stages[9:]:
+        assert stages[9:] == ["|", "op", "item", "create", "-"]
+        payload = capsys.readouterr().out
+        print(payload)
+    outward = capsys.readouterr()
+    assert secret not in outward.out, "private input reached recovery stdout"
+    assert secret not in outward.err, "private input reached recovery stderr"
+    expected = 0 if outcome == "success" else 23 if outcome == "failure" else 1
+    assert exit_code == expected
+    assert outward.out == (f"STORED id={item_id}\n" if outcome == "success" else "ERROR\n")
+    assert outward.err == ""
+    assert submitted[0]["fields"] == [{"id": "identity", "type": "CONCEALED", "label": "age identity", "value": secret}]
 
 
 @pytest.fixture
