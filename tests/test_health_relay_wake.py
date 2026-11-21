@@ -93,3 +93,48 @@ def test_real_cli_reconfirms_after_a_sleep_gap(env):
     assert _status(env)["warnings"] == {"m4-max": ["job-alert:mcp-transport"]}
     assert subprocess.run(command, capture_output=True).returncode == 0
     assert len(_blocked(env)) == 1
+
+
+def test_persistent_remote_fault_survives_alternating_unreachable_reads(relay, env, monkeypatch):
+    _fault(env, "watcher-stale")
+    snapshot = relay._snapshot
+    readings = iter([True, False, True, False, True, False, True])
+    monkeypatch.setattr(relay, "_snapshot", lambda *args: snapshot(*args) if next(readings) else None)
+    counts = []
+    for index in range(7):
+        assert relay.run(env["config"], clock=lambda: 1000 + index * 100) == 0
+        counts.append(len(_blocked(env)))
+    assert counts == [0, 0, 1, 1, 1, 1, 1]  # Confirmed on the second measured reading.
+    assert "watcher-stale" in _blocked(env)[0]
+
+
+def test_alternating_measured_fault_confirms_without_duplicate_episodes(relay, env):
+    counts = []
+    for index in range(12):
+        _fault(env, "job-alert:mcp-transport", active=index % 2 == 0)
+        assert relay.run(env["config"], clock=lambda: 1000 + index * 100) == 0
+        counts.append(len(_blocked(env)))
+    assert counts == [0, 0] + [1] * 10
+    _fault(env, "job-alert:mcp-transport", active=False)
+    for tick in (2200, 2300, 2400):
+        assert relay.run(env["config"], clock=lambda: tick) == 0
+    state = json.loads((env["tmp"] / "state/state.json").read_text())
+    assert state["hosts"]["m4-max"]["episodes"]["job-alert:mcp-transport"]["open"] is False
+    _fault(env, "job-alert:mcp-transport")
+    for tick in (2500, 2600):
+        assert relay.run(env["config"], clock=lambda: tick) == 0
+    assert len(_blocked(env)) == 2  # A genuinely new episode after measured recovery.
+
+
+def test_real_confirmation_defers_overdue_escalation_after_wake(relay, env):
+    escalation = env["tmp"] / "escalation.md"
+    escalation.write_text("# escalation\n")
+    env["raw"]["escalation"] = {"inbox": str(escalation), "after_seconds": 1800}
+    env["config"].write_text(json.dumps(env["raw"]))
+    _fault(env, "job-alert:mcp-transport")
+    for tick in (1000, 1300, 10000):
+        assert relay.run(env["config"], clock=lambda: tick) == 0
+        assert "BLOCKED" not in escalation.read_text()
+    assert _status(env)["warnings"] == {"m4-max": ["job-alert:mcp-transport"]}
+    assert relay.run(env["config"], clock=lambda: 10300) == 0
+    assert escalation.read_text().count("@orc BLOCKED:") == 1

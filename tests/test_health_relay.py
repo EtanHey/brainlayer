@@ -31,9 +31,14 @@ def relay(monkeypatch):
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     monkeypatch.setattr(module.os, "urandom", lambda n: b"\x01" * n)
+
     # Isolate delivery/dedup mechanics from observation confirmation. The real gate
     # is exercised across separate run() calls in test_health_relay_wake.py.
-    monkeypatch.setattr(module, "_confirmed", lambda issues, state: issues)
+    def confirmed(issues, state, measured):
+        state["warnings"] = []
+        return issues
+
+    monkeypatch.setattr(module, "_confirmed", confirmed)
     return module
 
 

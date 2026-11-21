@@ -22,9 +22,14 @@ job inside it are dead. The `com.etanhey.*` label keeps it out of the fleet watc
 
 Any read problem has its own issue: `source-missing|unreadable|oversize|corrupt:<source>`.
 The first observation is a warning in `status.json` (`warnings` by host) and stderr; an issue
-opens only on a second consecutive reading. A relay gap over 900 seconds (three intervals),
+opens on two of the last three measured readings of that issue's source. Unreachable readings
+neither confirm nor clear source faults. A confirmed episode stays open through flapping and
+closes after three healthy measured readings, so one crash loop does not send duplicate alerts.
+A relay gap over 900 seconds (three intervals),
 or a backward clock jump, resets confirmation and unreachable counts before reading again.
-After a wake, the next scheduled reading must confirm the fresh observation before BLOCKED.
+Readings spaced over 900 seconds never confirm. The M4 must stay awake for a full scheduled
+interval (normally at most 300 seconds) after its first reading to confirm a persistent fault.
+M1 faults are not reported while the M4 repeatedly sleeps and wakes with gaps over 900 seconds.
 Existing confirmed episodes retain their delivery identity; warnings defer new escalation.
 A future timestamp counts as corrupt. `host-unreachable` opens after `unreachable_after` (3)
 failed SSH reads in a row and closes on the next successful read. Every other issue closes only

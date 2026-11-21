@@ -24,8 +24,13 @@ def relay(monkeypatch):
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+
     # These cases test signal classification; wake tests exercise the real gate.
-    monkeypatch.setattr(module, "_confirmed", lambda issues, state: issues)
+    def confirmed(issues, state, measured):
+        state["warnings"] = []
+        return issues
+
+    monkeypatch.setattr(module, "_confirmed", confirmed)
     return module
 
 
