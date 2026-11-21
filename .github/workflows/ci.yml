@@ -369,7 +369,9 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    # 60 = the 3000s unit deadline + ~5 min setup (disk, caches, install: ~285s on a passing 3.12 job,
+    # run 44925060329) + ~1 min of post-test gates, with headroom, so the named ci-unit deadline fires first.
+    timeout-minutes: 60
     strategy:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
@@ -440,14 +442,14 @@ jobs:
                       time.sleep(delay)
           PY
 
-      # 3.12 runs reached 98-99% of the old 1800s bound on 2026-11-08 (#1656, #1701), dying at
-      # the deadline with every test passing. 2400s keeps a hard bound; the job timeout leaves setup room.
+      # On 2026-11-21, #1837's 3.12 suite passed in 2390.11s but hit the 2400s deadline
+      # (run 44929496633, job 136922786971). 3000s keeps a hard bound; the 60m job leaves setup room.
       - name: Unit tests
         env:
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
         run: >
-          python scripts/ci/run_with_deadline.py --seconds 2400 --label ci-unit --
+          python scripts/ci/run_with_deadline.py --seconds 3000 --label ci-unit --
           pytest tests/ -v --tb=short --timeout=300 --timeout-method=thread -m "not integration and not live and not crash_sweep" -x
           --ignore=tests/test_eval_framework.py
           --ignore=tests/test_follow_up_rewrite.py
@@ -528,7 +530,7 @@ jobs:
       # Old py3.13 completion intervals: first migration 5.5–13.1s/shard,
       # restart 10.6–20.1s, revert 6.9–18.5s. Observed maxima × all 128 shards
       # estimate 2245s serial; 2400s bounds this gate independently, while
-      # xdist uses available CPUs. The unit job has its own 2400s bound.
+      # xdist uses available CPUs. The unit job has its own 3000s bound.
       # S24 expands restart to 40 shards (136 total) to retain <=30 cuts/item
       # under Python 3.12 pre-push as well as Python 3.13 CI.
       - name: Exhaustive crash sweeps
