@@ -467,6 +467,7 @@ job_display_name() {
         p0-counter) echo "BrainLayer P0 Counter" ;;
         repair-fts) echo "BrainLayer FTS Repair" ;;
         t3-ingest) echo "BrainLayer T3 Ingest" ;;
+        t3-audit) echo "BrainLayer T3 Audit" ;;
         throughput-watchdog) echo "BrainLayer Throughput Watchdog" ;;
         wal-checkpoint) echo "BrainLayer WAL Checkpoint" ;;
         watch) echo "BrainLayer Watcher" ;;
