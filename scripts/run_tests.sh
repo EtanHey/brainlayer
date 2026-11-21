@@ -193,6 +193,19 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      src/brainlayer/backup_credential_scan.py)
+        mapped=1
+        for rel in test_backup_credential_scan.py test_jsonl_backup.py; do
+          if [ -f "$TEST_ROOT/$rel" ]; then append_unique "$TEST_ROOT/$rel"; else mapped=0; fi
+        done
+        ;;
+      src/brainlayer/pipeline/secret_scrub.py)
+        # The backup's anchored detector lives here too; the generic rule would map only test_secret_scrub.py.
+        mapped=1
+        for rel in test_secret_scrub.py test_secret_scrub_anchors.py test_secret_scrub_token_families.py test_secret_scrub_label_regex.py test_backup_credential_scan.py; do
+          if [ -f "$TEST_ROOT/$rel" ]; then append_unique "$TEST_ROOT/$rel"; else mapped=0; fi
+        done
+        ;;
       .github/workflows/*.yml|.github/workflows/*.yaml)
         # Select the workflow's actual owners; unrelated CI guards cannot establish coverage.
         for test_path in "$TEST_ROOT"/test_*.py; do
@@ -274,9 +287,23 @@ map_changed_files_to_pytests() {
           fi
         done
         ;;
+      src/brainlayer/health_verdict.py|src/brainlayer/health_facts.py)
+        # The ingest verdict is also pinned by the stall-alert and catch-up suites; a verdict-only
+        # change must run them, not just test_<module>.py.
+        # Mapped only when BOTH ingest suites exist (a renamed suite falls back to the full run).
+        if [ -f "$TEST_ROOT/test_ingest_stall_alerts.py" ] && [ -f "$TEST_ROOT/test_watcher_catch_up.py" ]; then
+          test_path="$TEST_ROOT/test_$(basename "$changed" .py).py"
+          if [ -f "$test_path" ]; then
+            append_unique "$test_path"
+          fi
+          append_unique "$TEST_ROOT/test_ingest_stall_alerts.py"
+          append_unique "$TEST_ROOT/test_watcher_catch_up.py"
+          mapped=1
+        fi
+        ;;
       src/brainlayer/watcher.py|src/brainlayer/watcher_bridge.py)
         if [ "$changed" = "src/brainlayer/watcher.py" ]; then
-          zst_tests=(test_jsonl_watcher.py test_codex_realtime_author_model.py test_codex_zst_author_model.py test_codex_zst_quarantine_context.py test_codex_zst_watcher.py test_codex_zst_admission_guards.py test_codex_zst_prefix.py test_codex_zst_checkpoint_guards.py test_codex_zst_legacy_replay.py test_codex_zst_restart.py test_codex_zst_resume_registry.py test_codex_zst_lifecycle.py test_codex_zst_conversations.py test_codex_zst_header_retention.py test_codex_zst_acceptance.py test_retirement_ratchet.py)
+          zst_tests=(test_jsonl_watcher.py test_codex_realtime_author_model.py test_codex_zst_author_model.py test_codex_zst_quarantine_context.py test_codex_zst_watcher.py test_codex_zst_admission_guards.py test_codex_zst_prefix.py test_codex_zst_checkpoint_guards.py test_codex_zst_legacy_replay.py test_codex_zst_restart.py test_codex_zst_resume_registry.py test_codex_zst_lifecycle.py test_codex_zst_conversations.py test_codex_zst_header_retention.py test_codex_zst_acceptance.py test_retirement_ratchet.py test_watcher.py test_watcher_catch_up.py test_ingest_growth_review.py)
         else
           zst_tests=(test_watcher_bridge.py test_codex_realtime_author_model.py test_codex_zst_author_model.py test_codex_zst_quarantine_context.py test_codex_zst_reconcile_failure.py test_codex_zst_conversations.py test_codex_zst_manifest.py test_codex_zst_provenance.py test_codex_zst_acceptance.py)
         fi

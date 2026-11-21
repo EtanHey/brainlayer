@@ -182,6 +182,21 @@ def test_restart_at_zero_offset_preserves_the_original_backfill_frontier(rig):
     assert poll(w)["source_growth"]["claude"]["lines_read"] == 200
 
 
+def test_restart_at_zero_offset_preserves_the_frontier_even_when_the_first_read_passed_it(rig):
+    # The first poll READS past the backfill frontier, but confirms nothing (registry offset 0).
+    # The frontier must survive until a confirmed offset reaches it: a restart re-reads from 0 and
+    # must still count only the lines after the ORIGINAL frontier as growth. On main this needs a
+    # file that fits one slice (50 < 100 lines); catch-up rounds reach it for any size (#1827).
+    make, append, poll, *_ = rig
+    append(CHANGED["claude"], 50)
+    w = make("claude", 100)
+    w.indexer.on_flush = lambda _items: None  # no confirmation: registry offset remains zero
+    poll(w)
+    append(CHANGED["claude"], 200)
+    w = make("claude", 1000)
+    assert poll(w)["source_growth"]["claude"]["lines_read"] == 200
+
+
 def test_compressed_history_uses_decoded_backfill_boundary(tmp_path, monkeypatch, compress):
 
     from tests.test_codex_zst_watcher import watcher

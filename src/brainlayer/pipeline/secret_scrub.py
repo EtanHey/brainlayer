@@ -134,6 +134,139 @@ def scrub_secrets(text: str, *, providers: frozenset[str] | None = None) -> Secr
     return SecretScrubResult(text=scrubbed, redactions=spans, quarantine=quarantine)
 
 
+# Literals every match of a provider pattern starts with. A pattern that opens with
+# \b gets no literal-prefix fast path from the regex engine (~180 MB/s each, ~11 MB/s
+# for the whole set), so bulk scans try ``match`` only where one of these occurs:
+# the same matches as ``finditer``, at str.find speed. exa's match starts at the
+# start of the label run that holds an "exa" segment in any case, so it is found
+# once in an ASCII-folded copy and anchored at that run's start instead.
+# tests/test_secret_scrub_anchors.py holds this table to the patterns.
+_EXA_FOLDED_ANCHOR = b"exa"
+_PROVIDER_ANCHORS: dict[str, tuple[str, ...]] = {
+    "context7": ("ctx7sk-",),
+    "exa_labeled": (),
+    "anthropic": ("sk-ant-",),
+    "stripe": ("sk_live_", "sk_test_", "rk_live_", "rk_test_", "whsec_"),
+    "openai": ("sk-",),
+    "aws": ("AKIA", "ASIA"),
+    "github": ("gho_", "ghp_", "ghu_", "ghs_", "ghr_", "github_pat_"),
+    "slack": ("xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-"),
+    "google": ("AIza",),
+    "google_oauth_access": ("ya29.",),
+    "google_oauth_refresh": ("1//",),
+    "google_client_secret": ("GOCSPX-",),
+    "gitlab": ("glpat-",),
+    "supabase": ("sbp_", "sb_secret_"),
+    "sendgrid": ("SG.",),
+    "groq": ("gsk_",),
+    "tailscale": ("tskey-",),
+    "vercel": ("vck_", "vcp_", "vci_"),
+}
+# Each pass of str.find costs about the same whatever the needle, so anchors that
+# share a prefix are found with one pass of that prefix and told apart with
+# startswith. Every anchor starts with exactly one pivot (the test checks it).
+_ANCHOR_PIVOTS = (
+    "sk",
+    "rk_",
+    "whsec_",
+    "ctx7sk-",
+    "AKIA",
+    "ASIA",
+    "AIza",
+    "gh",
+    "github_pat_",
+    "xox",
+    "ya29.",
+    "1//",
+    "GOCSPX-",
+    "glpat-",
+    "sb",
+    "SG.",
+    "gsk_",
+    "tskey-",
+    "vc",
+)
+_PIVOT_TABLE: dict[str, tuple[tuple[str, str], ...]] = {
+    pivot: tuple(
+        (provider, anchor)
+        for provider, anchors in _PROVIDER_ANCHORS.items()
+        for anchor in anchors
+        if anchor.startswith(pivot)
+    )
+    for pivot in _ANCHOR_PIVOTS
+}
+_LABEL_RUN_BYTES = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
+
+
+def _anchor_starts(text: str) -> dict[str, list[int]]:
+    starts: dict[str, set[int]] = {provider: set() for provider in _PROVIDER_ANCHORS}
+    for pivot, entries in _PIVOT_TABLE.items():
+        index = text.find(pivot)
+        while index != -1:
+            for provider, anchor in entries:
+                if text.startswith(anchor, index):
+                    starts[provider].add(index)
+            index = text.find(pivot, index + 1)
+    # One char per byte: offsets in the folded copy are offsets in text, and a
+    # non-ASCII char becomes "?", which is no more a label character than it was.
+    folded = text.encode("ascii", "replace").lower()
+    previous_index = previous_start = -1
+    index = folded.find(_EXA_FOLDED_ANCHOR)
+    while index != -1:
+        # Walk back to the start of the label run, reusing the previous
+        # occurrence's answer when it sits in the same run: linear overall.
+        start = index
+        while start > 0 and folded[start - 1] in _LABEL_RUN_BYTES:
+            start -= 1
+            if start == previous_index:
+                start = previous_start
+                break
+        previous_index, previous_start = index, start
+        starts["exa_labeled"].add(start)
+        index = folded.find(_EXA_FOLDED_ANCHOR, index + 1)
+    return {provider: sorted(positions) for provider, positions in starts.items()}
+
+
+def _anchored_provider_redactions(text: str) -> list[SecretRedaction]:
+    redactions: list[SecretRedaction] = []
+    starts = _anchor_starts(text)
+    for provider_pattern in _PROVIDER_PATTERNS:
+        provider = provider_pattern.provider
+        group = "value" if provider == "exa_labeled" else 0
+        placeholder = f"[REDACTED:{provider}]"
+        resume = 0
+        for position in starts[provider]:
+            if position < resume:
+                continue
+            match = provider_pattern.regex.match(text, position)
+            if match is None:
+                continue
+            resume = match.end()
+            redactions.append(
+                SecretRedaction(
+                    provider=provider,
+                    original=match.group(group),
+                    placeholder=placeholder,
+                    start=match.start(group),
+                    end=match.end(group),
+                )
+            )
+    return redactions
+
+
+def provider_secret_spans(text: str) -> list[SecretRedaction]:
+    """Detect provider-prefixed secrets only; never redacts and skips the entropy rules.
+
+    Same patterns and overlap rule as ``scrub_secrets`` (an anthropic key is not also
+    reported as an openai one), driven from literal anchors so bulk scans stay fast.
+    No scan windows: the caller bounds the text. The caller decides what to do with
+    ``original``.
+    """
+    if not text:
+        return []
+    return _without_overlaps(sorted(_anchored_provider_redactions(text), key=lambda item: (item.start, item.end)))
+
+
 def _scan_windows(text: str) -> list[tuple[int, int]]:
     if len(text) <= MAX_SCAN_BYTES:
         return [(0, len(text))]

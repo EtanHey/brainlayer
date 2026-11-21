@@ -615,6 +615,7 @@ def _state_matches(entry, candidate, surviving_archives=None):
                 icloud_dir=icloud_dir,
                 icloud_copy=result.get("icloud_copy"),
                 clear_icloud_verification=bool(icloud_bootstrap_pending and active),
+                credential_scan_failed=scan_error is not None,
             ),
         )
 """
@@ -1062,6 +1063,7 @@ def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summa
         "bundled_file_count",
         "bytes",
         "content_verified_file_count",
+        "credential_scan",
         "drive_file",
         "encryption",
         "forever_files",
