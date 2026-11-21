@@ -2721,6 +2721,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 project=chunk.get("project"),
                                 content_type=chunk.get("content_type"),
                                 hidden=is_hidden_source_class(chunk.get("source_class")),
+                                exclude_sources=("t3",),
                             )
                         if duplicate is not None:
                             duplicate_row_exists = cursor.execute(
@@ -2739,6 +2740,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 mechanism=duplicate.mechanism,
                                 hamming_distance_value=duplicate.hamming_distance,
                                 archive_existing_duplicate=duplicate_row_exists is not None,
+                                preserve_existing_alias=True,
                             )
                             # The merge owns invalidation by embedding_input. An incoming
                             # vector describes the original, never a changed merged body.
