@@ -47,6 +47,10 @@ enum TextFormatter {
                 lines.append("- ID: \(result.chunkID) | score: \(scoreString(result.score)) | project: \(project) | date: \(date.isEmpty ? "unknown" : date)")
                 if separateSource { lines.append("  Source: \(source)") }
             }
+            // Only an opted-in search returns thinking; never let it read as something said.
+            if result.isThinking {
+                lines.append("\(compact ? "K:" : "  Kind:") \(SearchResult.thinkingLabel)")
+            }
             let preview = truncate(result.snippet.isEmpty ? result.displayText : result.snippet, maxLen: 200)
             let summary = truncate(result.summary, maxLen: 100)
             let summaryAlreadyVisible = compact && preview.contains(truncate(result.summary, maxLen: Int.max))
@@ -109,6 +113,9 @@ enum TextFormatter {
             lines.append("")
             lines.append("### Chunk \(index + 1) - \(source.isEmpty ? "unknown" : source)")
             lines.append("- ID: \(result.chunkID)")
+            if result.isThinking {
+                lines.append("- Kind: \(SearchResult.thinkingLabel)")
+            }
             let content = result.snippet.isEmpty ? result.displayText : result.snippet
             let fullText = content.trimmingCharacters(in: .whitespacesAndNewlines)
             if fullText.count <= 1500 {

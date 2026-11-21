@@ -30,6 +30,25 @@ from brainlayer import paths
 from brainlayer.classify import classify_prompt
 from brainlayer.phonetic import looks_hebrew, phonetic_key, phonetic_tokens
 
+try:
+    from brainlayer.source_visibility import hidden_source_class_sql
+except ImportError:  # A keg older than this hook: these files are copies, deployed on their own.
+
+    def hidden_source_class_sql(column, *, include_hidden_source_classes=False):
+        # Pinned to source_visibility.DEFAULT_HIDDEN_SOURCE_CLASSES by tests/test_source_visibility.py.
+        return f"({column} IS NULL OR {column} NOT IN ('desktop', 'agent-thinking', 'brain-worker'))"
+
+
+def visible_source_class_sql(conn, alias="c"):
+    """Keep hidden classes (agents' thinking, desktop apps, brain-workers) out of injection.
+
+    Injection is default search: it runs on every prompt, so it hides what search hides.
+    """
+    # list(), not .fetchall(): it works on a sqlite3 cursor, an apsw cursor, and a test fake's list.
+    columns = {row[1] for row in list(conn.execute("PRAGMA table_info(chunks)"))}
+    return hidden_source_class_sql(f"{alias}.source_class") if "source_class" in columns else "1=1"
+
+
 # NOT imported at module scope: brainlayer.pipeline.correction_detection pulls
 # brainlayer.pipeline/__init__, and with it vector_store -> numpy/sqlite_vec and
 # requests -- ~105ms this hook pays on every prompt Claude Code submits. Loaded
@@ -858,6 +877,7 @@ def get_entity_chunks(entity_id, conn, limit=3):
             JOIN chunks c ON c.id = ec.chunk_id
             WHERE ec.entity_id = ?
               {relation_filter}
+              AND {visible_source_class_sql(conn)}
               AND COALESCE(c.project, '') != 'eval-sandbox'
               AND COALESCE(c.tags, '') NOT LIKE '%"eval-test"%'
             ORDER BY ec.relevance DESC
@@ -1009,13 +1029,15 @@ def run_hybrid_search(prompt, db_path, keywords, limit):
         fts_query = _escape_fts5_query(query_text)
         if fts_query:
             cursor = store._read_cursor()
+            visible_sql = visible_source_class_sql(cursor)
             fts_results = list(
                 cursor.execute(
-                    """
+                    f"""
                     SELECT f.chunk_id, c.content, c.importance, c.project, c.tags, c.created_at
                     FROM chunks_fts f
                     JOIN chunks c ON c.id = f.chunk_id
                     WHERE chunks_fts MATCH ?
+                      AND {visible_sql}
                       AND COALESCE(c.project, '') != 'eval-sandbox'
                       AND COALESCE(c.tags, '') NOT LIKE '%"eval-test"%'
                       AND c.superseded_by IS NULL
@@ -1072,11 +1094,12 @@ def run_fts_search(db_path, keywords, limit):
         conn.execute("PRAGMA query_only=true")
         fts_query = " OR ".join(f'"{kw}"' for kw in keywords)
         rows = conn.execute(
-            """
+            f"""
             SELECT c.id, c.content, c.importance, c.project, c.tags, c.created_at
             FROM chunks_fts f
             JOIN chunks c ON c.id = f.chunk_id
             WHERE chunks_fts MATCH ?
+              AND {visible_source_class_sql(conn)}
               AND COALESCE(c.project, '') != 'eval-sandbox'
               AND COALESCE(c.tags, '') NOT LIKE '%"eval-test"%'
             ORDER BY rank
@@ -1213,6 +1236,8 @@ def build_fts_query(keywords):
 def fetch_matching_chunks(conn, fts_query, limit, date_from=None):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
     active_sql = " AND ".join(lifecycle_active_clauses_present(columns, "c")) or "1=1"
+    if "source_class" in columns:
+        active_sql = f"{active_sql} AND {hidden_source_class_sql('c.source_class')}"
     extra_sql = ""
     params = [fts_query]
     if date_from:

@@ -2,8 +2,6 @@
 
 import json
 import sqlite3
-import subprocess
-import sys
 from pathlib import Path
 from uuid import UUID
 
@@ -256,6 +254,100 @@ def test_t3_ingestion_keeps_short_messages_and_sets_first_class_provenance(tmp_p
         "t3:thread-1:message-2:0",
         "t3:thread-2:message-3:0",
     }
+
+
+_THINKING_TEXT = (
+    "The profile shows reading takes about ten seconds, so the timeouts came from the write budget, not the read."
+)
+
+
+def _t3_message(message_id: str, role: str = "assistant", text: str = _THINKING_TEXT):
+    from brainlayer.ingest.t3 import T3Message, T3Thread
+
+    thread = T3Thread("thread-1", "project-1", "Thread", "2026-11-17T00:00:00Z", provider_name="claudeAgent")
+    return thread, T3Message(message_id, "thread-1", role, text, "2026-11-17T00:00:01Z")
+
+
+def test_t3_thinking_part_is_stored_with_the_hidden_agent_thinking_class():
+    from brainlayer.ingest.t3 import _message_chunks
+
+    thinking = _message_chunks(*_t3_message("message:provider:claudeAgent:native-item:msg_011Ch9D%3Athinking%3A1"))
+    said = _message_chunks(*_t3_message("message:provider:claudeAgent:native-item:msg_011Ch9D%3Atext%3A0"))
+
+    assert thinking and {chunk.metadata.get("source_class") for chunk in thinking} == {"agent-thinking"}
+    assert all(chunk.metadata.get("thinking") is True for chunk in thinking)
+    assert all(chunk.metadata.get("thinking_source_class") == "cli-agent" for chunk in thinking)
+    assert said and all("source_class" not in chunk.metadata for chunk in said)
+    assert all(not chunk.metadata.get("thinking") for chunk in said)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Check the offset first.",  # under the 50-char assistant-text gate
+        "Now I check the offset before touching the tailer loop here.",  # passes 50, under the 80-char chunk floor
+        "Okay.",
+        _THINKING_TEXT,  # long enough: kept by both paths
+    ],
+)
+def test_t3_thinking_meets_the_same_length_gates_as_the_watcher(text):
+    """Kiro F4: short T3 thinking must not be kept where the watcher drops the same words."""
+    from brainlayer.ingest.t3 import _message_chunks
+    from brainlayer.pipeline.chunk import chunk_content
+    from brainlayer.pipeline.classify import classify_thinking
+
+    watcher = classify_thinking(
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": text}]}}
+    )
+    watcher_kept = bool(watcher and chunk_content(watcher))
+    t3_kept = bool(
+        _message_chunks(*_t3_message("message:provider:claudeAgent:native-item:msg_1%3Athinking%3A1", text=text))
+    )
+    said_kept = bool(
+        _message_chunks(*_t3_message("message:provider:claudeAgent:native-item:msg_1%3Atext%3A0", text=text))
+    )
+
+    assert t3_kept == watcher_kept
+    assert said_kept  # said text keeps T3's short-message fallback, unchanged
+
+
+@pytest.mark.parametrize(
+    ("message_id", "role"),
+    [
+        # A user's delegated task named "thinking-policy": a substring match would hide the user's words.
+        ("message:delegated-task:command%3Amcp%3A15c8%3Adelegate-task%3Athinking-policy-20261117", "user"),
+        ("message:provider:claudeAgent:native-item:msg_011Ch9D%3Athinking%3A1", "user"),
+        ("message:provider:codex:native-item:msg_0265c2dcad01c999", "assistant"),
+        ("message:provider:claudeAgent:native-item:msg_011Ch9D%3Athinking-notes%3A1", "assistant"),
+    ],
+)
+def test_t3_only_an_exact_assistant_thinking_item_is_hidden(message_id, role):
+    from brainlayer.ingest.t3 import _message_chunks
+
+    chunks = _message_chunks(*_t3_message(message_id, role=role))
+
+    assert chunks and all("source_class" not in chunk.metadata for chunk in chunks)
+
+
+def test_indexer_keeps_the_t3_agent_thinking_class_over_the_t3_thread_provenance(monkeypatch):
+    from brainlayer import index_new
+    from brainlayer.ingest.t3 import _message_chunks
+
+    chunks = _message_chunks(*_t3_message("message:provider:claudeAgent:native-item:msg_011Ch9D%3Athinking%3A1"))
+    captured = {}
+
+    class FakeStore:
+        def upsert_chunks(self, rows, embeddings, *, deadline_monotonic=None):
+            captured["rows"] = rows
+            return len(rows)
+
+    monkeypatch.setattr(
+        index_new, "embed_chunks", lambda items, on_progress=None: [EmbeddedChunk(c, [0.1]) for c in items]
+    )
+
+    assert index_new.index_chunks_to_sqlite(chunks, source_file="/missing/statev2.sqlite", store=FakeStore()) == 1
+    assert captured["rows"][0]["provenance_class"] == "t3-thread"
+    assert captured["rows"][0]["source_class"] == "agent-thinking"
 
 
 def test_indexer_preserves_stable_identity_timestamp_and_provenance(monkeypatch):
@@ -569,46 +661,23 @@ def test_v2_index_failure_records_alert_and_preserves_original_exception(tmp_pat
     assert json.loads(health.read_text())["alerting"] is False
 
 
-def test_v2_real_indexer_model_guard_failure_health(tmp_path, monkeypatch):
-    state = _create_v2_fixture(tmp_path / "state.sqlite")
-    health = tmp_path / "health.json"
-    destination = tmp_path / "destination.db"
+def _spy_upserts(monkeypatch):
+    """Record every chunk t3-ingest hands to the real upsert (it never embeds)."""
     from brainlayer.vector_store import VectorStore
 
-    VectorStore(destination).close()
-    monkeypatch.setenv("BRAINLAYER_FORBID_EMBEDDING_MODEL", "1")
-    # Earlier declared model tests may warm the process-global cache. The guard forbids loading,
-    # so use a fresh real CLI process rather than assuming an in-process model is still cold.
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "brainlayer",
-            "ingest-t3",
-            "--state-db",
-            str(state),
-            "--projection-version",
-            "2",
-            "--db",
-            str(destination),
-            "--health-path",
-            str(health),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "refusing to load" in result.stderr
-    snapshot = json.loads(health.read_text())
-    assert snapshot["alerting"] is True and snapshot["alert_reasons"] == ["indexing_failure"]
-    assert snapshot["failures"][-1]["error_type"] == "RuntimeError"
-    with VectorStore(destination, readonly=True) as store:
-        assert store.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
+    upserted = []
+    real_upsert = VectorStore.upsert_chunks
+
+    def upsert(self, chunks, vectors, **kwargs):
+        assert all(vector is None for vector in vectors), "t3-ingest must not write vectors"
+        upserted.extend(chunks)
+        return real_upsert(self, chunks, vectors, **kwargs)
+
+    monkeypatch.setattr(VectorStore, "upsert_chunks", upsert)
+    return upserted
 
 
-def test_v2_partial_embeddings_fail_health_before_write_and_replay(tmp_path, monkeypatch):
-    from brainlayer.embeddings import EmbeddedChunk
+def test_v2_write_failure_alerts_health_and_replays_without_vectors(tmp_path, monkeypatch):
     from brainlayer.ingest.t3 import ingest_t3
     from brainlayer.vector_store import VectorStore
 
@@ -616,31 +685,27 @@ def test_v2_partial_embeddings_fail_health_before_write_and_replay(tmp_path, mon
     destination = tmp_path / "destination.db"
     health = tmp_path / "health.json"
     VectorStore(destination).close()
+    real_upsert = VectorStore.upsert_chunks
 
-    def partial(chunks, **kwargs):
-        target = next(chunk for chunk in chunks if chunk.metadata["chunk_id"] == "t3:v2-a:v2-user:0")
-        return [EmbeddedChunk(chunk=target, embedding=[0.1] * 1024)]
+    def failing_upsert(self, chunks, vectors, **kwargs):
+        raise RuntimeError("write failed")
 
-    monkeypatch.setattr("brainlayer.index_new.embed_chunks", partial)
-    with pytest.raises(ValueError, match="do not match admitted"):
+    monkeypatch.setattr(VectorStore, "upsert_chunks", failing_upsert)
+    with pytest.raises(RuntimeError, match="write failed"):
         ingest_t3(source, db_path=destination, health_path=health, projection_version=2)
-    assert json.loads(health.read_text())["alerting"] is True
-    store = VectorStore(destination)
-    assert list(store.conn.execute("SELECT id FROM chunks")) == []
-    assert list(store.conn.execute("SELECT chunk_id FROM chunk_vectors")) == []
-    store.close()
+    snapshot = json.loads(health.read_text())
+    assert snapshot["alerting"] is True and snapshot["alert_reasons"] == ["indexing_failure"]
+    with VectorStore(destination, readonly=True) as store:
+        assert list(store.conn.execute("SELECT id FROM chunks")) == []
 
-    def complete(chunks, **kwargs):
-        return [EmbeddedChunk(chunk=chunk, embedding=[0.1] * 1024) for chunk in chunks]
-
-    monkeypatch.setattr("brainlayer.index_new.embed_chunks", complete)
+    monkeypatch.setattr(VectorStore, "upsert_chunks", real_upsert)
     result = ingest_t3(source, db_path=destination, health_path=health, projection_version=2)
     assert result.chunks_indexed == 2 and json.loads(health.read_text())["alerting"] is False
-    store = VectorStore(destination, readonly=True)
-    expected = {"t3:v2-a:v2-user:0", "t3:v2-b:v2-assistant:0"}
-    assert {row[0] for row in store.conn.execute("SELECT id FROM chunks")} == expected
-    assert {row[0] for row in store.conn.execute("SELECT chunk_id FROM chunk_vectors")} == expected
-    store.close()
+    with VectorStore(destination, readonly=True) as store:
+        expected = {"t3:v2-a:v2-user:0", "t3:v2-b:v2-assistant:0"}
+        assert {row[0] for row in store.conn.execute("SELECT id FROM chunks")} == expected
+        # Vectors are the hotlane's job (tests/test_t3_ingest_deferred_embedding.py).
+        assert list(store.conn.execute("SELECT chunk_id FROM chunk_vectors")) == []
 
 
 def test_default_sources_prefer_v2_and_keep_legacy(tmp_path, monkeypatch):
@@ -744,8 +809,7 @@ def test_unreadable_default_legacy_source_records_alerting_health(tmp_path, monk
     assert json.loads(health.read_text())["alert_reasons"] == ["source_selection_failure"]
 
 
-def test_unchanged_second_ingest_embeds_and_upserts_zero(tmp_path, monkeypatch):
-    from brainlayer import index_new
+def test_unchanged_second_ingest_upserts_zero(tmp_path, monkeypatch):
     from brainlayer.ingest.t3 import ingest_t3
     from brainlayer.vector_store import VectorStore
 
@@ -753,29 +817,15 @@ def test_unchanged_second_ingest_embeds_and_upserts_zero(tmp_path, monkeypatch):
     destination = tmp_path / "copy.db"
     health = tmp_path / "health.json"
     VectorStore(destination).close()
-    embedded = []
-    upserted = []
-    real_upsert = VectorStore.upsert_chunks
-
-    def embed(chunks, **kwargs):
-        embedded.extend(chunks)
-        return [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks]
-
-    def upsert(self, chunks, vectors, **kwargs):
-        upserted.extend(chunks)
-        return real_upsert(self, chunks, vectors, **kwargs)
-
-    monkeypatch.setattr(index_new, "embed_chunks", embed)
-    monkeypatch.setattr(VectorStore, "upsert_chunks", upsert)
+    upserted = _spy_upserts(monkeypatch)
     assert ingest_t3(source, db_path=destination, health_path=health, projection_version=2).chunks_indexed == 2
     with VectorStore(destination, readonly=True) as store:
         before = list(store.conn.execute("SELECT id,seen_count FROM chunks ORDER BY id"))
         audit_before = store.conn.execute("SELECT COUNT(*) FROM dedupe_audit").fetchone()[0]
-    embedded.clear()
     upserted.clear()
     second = ingest_t3(source, db_path=destination, health_path=health, projection_version=2)
     assert second.chunks_indexed == 0
-    assert embedded == [] and upserted == []
+    assert upserted == []
     with VectorStore(destination, readonly=True) as store:
         assert list(store.conn.execute("SELECT id,seen_count FROM chunks ORDER BY id")) == before
         assert store.conn.execute("SELECT COUNT(*) FROM dedupe_audit").fetchone()[0] == audit_before
@@ -788,12 +838,10 @@ def test_unchanged_second_ingest_embeds_and_upserts_zero(tmp_path, monkeypatch):
         )
     changed = ingest_t3(source, db_path=destination, health_path=health, projection_version=2)
     assert changed.chunks_indexed == 1
-    assert len(embedded) == len(upserted) == 1
-    assert embedded[0].content == "updated prompt"
-    embedded.clear()
+    assert [chunk["content"] for chunk in upserted] == ["updated prompt"]
     upserted.clear()
     assert ingest_t3(source, db_path=destination, health_path=health, projection_version=2).chunks_indexed == 0
-    assert embedded == [] and upserted == []
+    assert upserted == []
 
 
 def test_busy_writer_is_checked_before_embedding(tmp_path, monkeypatch):
@@ -880,10 +928,7 @@ def test_real_v1_v2_overlap_prefers_modern_payload(tmp_path, monkeypatch):
     assert len(overlap) == 1 and overlap[0].content == "u"
 
 
-def test_s2_run_caps_embedding_and_releases_writer_while_embedding(tmp_path, monkeypatch):
-    from contextlib import contextmanager
-
-    from brainlayer import index_new, runtime_store
+def test_s2_run_caps_vectorless_writes_per_run(tmp_path, monkeypatch):
     from brainlayer.ingest.t3 import ingest_t3
     from brainlayer.vector_store import VectorStore
 
@@ -907,68 +952,24 @@ def test_s2_run_caps_embedding_and_releases_writer_while_embedding(tmp_path, mon
     destination = tmp_path / "copy.db"
     health = tmp_path / "health.json"
     VectorStore(destination).close()
-    active = [False]
-    real_open = runtime_store.open_writer_store
-
-    @contextmanager
-    def tracked_open(*args, **kwargs):
-        with real_open(*args, **kwargs) as store:
-            active[0] = True
-            try:
-                yield store
-            finally:
-                active[0] = False
-
-    def embed(chunks, **kwargs):
-        assert not active[0], "writer hold spans embedding"
-        embedded.extend(chunks)
-        return [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks]
-
-    embedded = []
-    monkeypatch.setattr(runtime_store, "open_writer_store", tracked_open)
-    monkeypatch.setattr(index_new, "embed_chunks", embed)
+    # The cap now bounds the vectorless burst the hotlane backlog lane must embed.
+    upserted = _spy_upserts(monkeypatch)
     first = ingest_t3(source, db_path=destination, health_path=health)
-    assert len(embedded) == first.chunks_indexed == 200
+    assert len(upserted) == first.chunks_indexed == 200
     snapshot = json.loads(health.read_text())
     assert snapshot["chunks_deferred"] == 25
     assert snapshot["alerting"] is False
-    embedded.clear()
+    upserted.clear()
     second = ingest_t3(source, db_path=destination, health_path=health)
-    assert len(embedded) == second.chunks_indexed == 25
-    embedded.clear()
+    assert len(upserted) == second.chunks_indexed == 25
+    upserted.clear()
     third = ingest_t3(source, db_path=destination, health_path=health)
-    assert third.chunks_indexed == 0 and embedded == []
+    assert third.chunks_indexed == 0 and upserted == []
     with VectorStore(destination, readonly=True) as store:
         assert store.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 225
 
 
-def test_s2_recheck_skips_chunk_indexed_by_another_writer_during_embedding(tmp_path, monkeypatch):
-    from brainlayer import index_new
-    from brainlayer.ingest.t3 import ingest_t3
-    from brainlayer.vector_store import VectorStore
-
-    source = _create_v2_fixture(tmp_path / "statev2.sqlite")
-    destination = tmp_path / "copy.db"
-    VectorStore(destination).close()
-
-    def embed(chunks, **kwargs):
-        computed = [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks]
-        # A separate writer can persist a selected chunk while T3 has no writer hold.
-        with VectorStore(destination) as other:
-            index_new.index_chunks_to_sqlite([chunks[0]], str(source), store=other, precomputed_embeddings=computed[:1])
-        return computed
-
-    monkeypatch.setattr(index_new, "embed_chunks", embed)
-    result = ingest_t3(source, db_path=destination, health_path=tmp_path / "health.json")
-    assert result.chunks_indexed == 1
-    with VectorStore(destination, readonly=True) as store:
-        assert store.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 2
-        assert store.conn.execute("SELECT seen_count FROM chunks WHERE id='t3:v2-a:v2-user:0'").fetchone()[0] == 1
-        assert store.conn.execute("SELECT COUNT(*) FROM dedupe_audit").fetchone()[0] == 0
-
-
 def test_s2_cap_is_shared_across_modern_and_legacy_sources(tmp_path, monkeypatch):
-    from brainlayer import index_new
     from brainlayer.ingest import t3
     from brainlayer.vector_store import VectorStore
 
@@ -980,19 +981,13 @@ def test_s2_cap_is_shared_across_modern_and_legacy_sources(tmp_path, monkeypatch
     destination = tmp_path / "copy.db"
     VectorStore(destination).close()
     monkeypatch.setattr(t3, "DEFAULT_T3_MAX_CHANGED_CHUNKS", 3)
-    embedded = []
-
-    def embed(chunks, **kwargs):
-        embedded.extend(chunks)
-        return [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks]
-
-    monkeypatch.setattr(index_new, "embed_chunks", embed)
+    upserted = _spy_upserts(monkeypatch)
     first = t3.ingest_t3(db_path=destination, health_path=tmp_path / "health.json")
-    assert len(embedded) == first.chunks_indexed == 3
+    assert len(upserted) == first.chunks_indexed == 3
     assert first.chunks_deferred == 2
-    embedded.clear()
+    upserted.clear()
     second = t3.ingest_t3(db_path=destination, health_path=tmp_path / "health.json")
-    assert len(embedded) == second.chunks_indexed == 2
+    assert len(upserted) == second.chunks_indexed == 2
     assert second.chunks_deferred == 0
 
 
@@ -1046,13 +1041,7 @@ def test_empty_t3_inputs_are_handled_before_embedding_and_budget(tmp_path, monke
             "scrub_for_storage",
             lambda text, metadata: ("", metadata) if text == blank else real_scrub(text, metadata),
         )
-    embedded = []
-
-    def embed(chunks, **kwargs):
-        embedded.extend(chunks)
-        return [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks]
-
-    monkeypatch.setattr(index_new, "embed_chunks", embed)
+    upserted = _spy_upserts(monkeypatch)
     destination = tmp_path / "copy.db"
     VectorStore(destination).close()
     expected = [c for c in chunks if c.content != blank]
@@ -1060,25 +1049,24 @@ def test_empty_t3_inputs_are_handled_before_embedding_and_budget(tmp_path, monke
     assert t3._index_chunks(
         chunks, source_file="fixture.sqlite", project=None, db_path=destination, budget=budget
     ) == len(expected)
-    assert {c.metadata["chunk_id"] for c in embedded} == {c.metadata["chunk_id"] for c in expected}
+    assert {c["id"] for c in upserted} == {c.metadata["chunk_id"] for c in expected}
     assert budget.remaining == 1 and budget.deferred == 0
     with VectorStore(destination, readonly=True) as store:
         assert dict(store.conn.execute("SELECT id, content FROM chunks")) == {
             c.metadata["chunk_id"]: c.content for c in expected
         }
         assert store.conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
-    embedded.clear()
+    upserted.clear()
     replay_budget = t3._IndexBudget(remaining=2)
     assert (
         t3._index_chunks(chunks, source_file="fixture.sqlite", project=None, db_path=destination, budget=replay_budget)
         == 0
     )
-    assert not embedded
+    assert not upserted
     assert replay_budget.remaining == 2 and replay_budget.deferred == 0
 
 
 def test_s2_cap_indexes_newest_messages_first(tmp_path, monkeypatch):
-    from brainlayer import index_new
     from brainlayer.ingest import t3
     from brainlayer.vector_store import VectorStore
 
@@ -1093,15 +1081,9 @@ def test_s2_cap_indexes_newest_messages_first(tmp_path, monkeypatch):
     destination = tmp_path / "copy.db"
     VectorStore(destination).close()
     monkeypatch.setattr(t3, "DEFAULT_T3_MAX_CHANGED_CHUNKS", 1)
-    embedded = []
-
-    def embed(chunks, **kwargs):
-        embedded.extend(chunks)
-        return [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks]
-
-    monkeypatch.setattr(index_new, "embed_chunks", embed)
+    upserted = _spy_upserts(monkeypatch)
     t3.ingest_t3(source, db_path=destination, health_path=None)
-    assert [c.metadata["chunk_id"] for c in embedded] == ["t3:v2-b:v2-assistant:0"]
+    assert [c["id"] for c in upserted] == ["t3:v2-b:v2-assistant:0"]
 
 
 # Production shape from the MBP statev2 projection (2026-10-18, names replaced): the delegate-task name ends in

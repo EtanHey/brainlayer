@@ -8,6 +8,10 @@ Filtering layers:
   2. classify_content: existing pipeline (skip tool JSON, acknowledgments, etc.)
   3. chunk_content: min-length by content type (80 for assistant, 15 for user)
   4. Post-chunk: strip system-reminder injections from content, skip file deletion diffs
+
+Thinking (reasoning) blocks take a parallel path: classify_thinking applies the same
+assistant-text gates, layers 3-4 run unchanged, and the chunk is stored with the hidden
+``agent-thinking`` source class (Etan, 2026-11-17, choice A: stored, opt-in search only).
 """
 
 import hashlib
@@ -23,7 +27,13 @@ from typing import Any
 
 import apsw
 
-from .agent_provenance import classify_provenance, effective_visibility
+from .agent_provenance import (
+    THINKING_SOURCE_CLASS,
+    ProvenanceDecision,
+    classify_provenance,
+    effective_visibility,
+    is_hidden_source_class,
+)
 from .agy_attribution import STATE_FILE_NAME, AgyAttributionGate
 from .alarm import BrainLayerAlarm
 from .chunk_origin import detect_chunk_origin
@@ -34,11 +44,17 @@ from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
 from .pipeline.chunk import chunk_content
-from .pipeline.classify import classify_content
+from .pipeline.classify import classify_content, classify_thinking
 from .pipeline.correction_detection import build_correction_tags
 from .pipeline.secret_scrub import scrub_secrets
 from .queue_io import enqueue_watcher_chunk
-from .t3_provenance import t3_app_codex_session_ids
+from .t3_provenance import (
+    T3_LINKAGE_HOLD_KEY,
+    T3_UNLINKED,
+    t3_app_codex_session_ids,
+    t3_linkage_hold_started_at,
+    t3_linkage_hold_window_s,
+)
 from .t3_sources import resolve_t3_sources
 from .vector_store import VectorStore
 from .writer_telemetry import IngestMetrics
@@ -370,7 +386,7 @@ def _content_class_for_visibility(base_content_class: str, visibility: str) -> s
     return "cold"
 
 
-def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, project, content_type):
+def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, project, content_type, *, hidden=None):
     """A reread of acknowledged archive bytes is not another sighting."""
     import sqlite3
     from contextlib import closing
@@ -387,6 +403,7 @@ def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, proje
                     created_at=created_at,
                     project=project,
                     content_type=content_type,
+                    hidden=hidden,
                 )[0]
                 is not None
             )
@@ -415,6 +432,7 @@ def create_flush_callback(
     resolved_source_identities: dict[str, tuple[int, int, int]] = {}
     unresolved_source_versions: dict[str, tuple[int, int] | None] = {}
     agy_gate = AgyAttributionGate(Path(db_path or get_db_path()).expanduser().parent / STATE_FILE_NAME)
+    t3_linkage_released: set[str] = set()  # sources whose hold expired, logged once per process
 
     def ensure_direct_liveness_schema() -> None:
         if liveness_schema_ready or store is None:
@@ -460,6 +478,9 @@ def create_flush_callback(
         source_files_seen: set[str] = set()
         confirmed_offsets: dict[str, int] = {}
         t3_session_identity_cache: dict = {}
+        t3_linkage_hold_window = t3_linkage_hold_window_s()
+        t3_linkage_hold_starts: dict[str, float] = {}
+        flush_wall_now = time.time()
 
         def confirm_entry(entry: dict[str, Any], source_file: str) -> None:
             raw_offset = entry.get("_line_end_offset")
@@ -509,6 +530,8 @@ def create_flush_callback(
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
+            # Recomputed on every attempt: only an entry deferred THIS flush for T3 linkage carries it.
+            entry.pop(T3_LINKAGE_HOLD_KEY, None)
             agy_index_now, agy_agent = agy_gate.resolve(source_file)
             if not agy_index_now:
                 deferred_entries.append(entry)
@@ -529,9 +552,34 @@ def create_flush_callback(
                     t3_session_header=entry.get("_codex_header"),
                     agy_agent=agy_agent,
                 )
-            except BrainLayerAlarm:
-                deferred_entries.append(entry)
-                continue
+            except BrainLayerAlarm as alarm_event:
+                if alarm_event.code != "t3_runtime_linkage_pending":
+                    deferred_entries.append(entry)
+                    continue
+                # A T3-origin session T3 has not linked. Hold it for the window, counted from the
+                # session's own start; T3 links the sessions it adopts within seconds. Past the
+                # window T3 never will (it keeps one Codex session per thread), so index it, labelled
+                # t3-unlinked, and confirm it: a hold must never become a permanent gap or a stall.
+                if source_file not in t3_linkage_hold_starts:
+                    t3_linkage_hold_starts[source_file] = t3_linkage_hold_started_at(
+                        source_file, session_header=entry.get("_codex_header"), cache=t3_session_identity_cache
+                    )
+                hold_started_at = t3_linkage_hold_starts[source_file]
+                if flush_wall_now - hold_started_at <= t3_linkage_hold_window:
+                    entry[T3_LINKAGE_HOLD_KEY] = hold_started_at
+                    deferred_entries.append(entry)
+                    continue
+                if source_file not in t3_linkage_released:
+                    t3_linkage_released.add(source_file)
+                    logger.warning(
+                        "T3 linkage hold expired after %.0f s for %s; indexing it as %s",
+                        flush_wall_now - hold_started_at,
+                        source_file,
+                        T3_UNLINKED,
+                    )
+                provenance_decision = ProvenanceDecision(
+                    T3_UNLINKED, "KEEP", "T3-origin Codex session never linked within the hold window", "cli-agent"
+                )
             project = source_projects.get(source_file)
             if project is None and entry.get("_compressed_archive"):
                 project = _extract_workspace_project(entry)
@@ -560,30 +608,37 @@ def create_flush_callback(
                         unresolved_source_versions[source_file] = source_version
             claude_conversation_id = metrics.run("provenance", _extract_claude_conversation_id, source_file)
 
+            # Thinking blocks: their own classifier, so layers 1-2 below stay text-only.
+            try:
+                thinking = metrics.run("classify", classify_thinking, entry)
+            except Exception:
+                logger.exception("Thinking classification failed for watcher entry from %s", source_file)
+                thinking = None
+
             # Layer 1: Pre-classify filter
             skip_reason = should_skip_entry(entry, source_file=source_file)
-            if skip_reason:
-                skipped += 1
-                confirm_entry(entry, source_file)
-                continue
 
             # Layer 2: Pipeline classify
-            try:
-                classified = metrics.run("classify", classify_content, entry)
-            except Exception:
-                logger.exception("Classification failed for watcher entry from %s", source_file)
-                skipped += 1
-                confirm_entry(entry, source_file)
-                continue
+            classified = None
+            if not skip_reason:
+                try:
+                    classified = metrics.run("classify", classify_content, entry)
+                except Exception:
+                    logger.exception("Classification failed for watcher entry from %s", source_file)
 
-            if classified is None:
+            if classified is None and thinking is None:
                 skipped += 1
                 confirm_entry(entry, source_file)
                 continue
 
             # Layer 3: Pipeline chunk
             try:
-                chunks = metrics.run("chunk", chunk_content, classified)
+                chunks = [
+                    chunk
+                    for item in (classified, thinking)
+                    if item is not None
+                    for chunk in metrics.run("chunk", chunk_content, item)
+                ]
             except Exception:
                 logger.exception("Chunking failed for watcher entry from %s", source_file)
                 skipped += 1
@@ -652,6 +707,10 @@ def create_flush_callback(
                 if source_class == "brain-worker":
                     skipped += 1
                     continue
+                is_thinking = metadata.get("thinking") is True
+                if is_thinking:
+                    metadata["thinking_source_class"] = source_class
+                    source_class = THINKING_SOURCE_CLASS
                 metadata["provenance_tag"] = provenance_decision.provenance_tag
                 metadata["provenance_search_policy"] = provenance_decision.search_policy
                 metadata["provenance_effective_visibility"] = visibility
@@ -659,7 +718,13 @@ def create_flush_callback(
 
                 if entry.get("_archive_reconciliation") and preview_chunks is None:
                     if _archive_reconciliation_stored(
-                        db_path or get_db_path(), chunk_id, clean_content, created_at, project, chunk.content_type.value
+                        db_path or get_db_path(),
+                        chunk_id,
+                        clean_content,
+                        created_at,
+                        project,
+                        chunk.content_type.value,
+                        hidden=is_hidden_source_class(source_class),
                     ):
                         skipped += 1
                         continue
@@ -710,6 +775,7 @@ def create_flush_callback(
                                 created_at=created_at,
                                 project=project,
                                 content_type=chunk.content_type.value,
+                                hidden=is_hidden_source_class(source_class),
                             )
                             if duplicate is not None:
                                 merge_duplicate_chunk(
@@ -742,6 +808,7 @@ def create_flush_callback(
                                     "tags": tags,
                                     "created_at": created_at,
                                     "last_seen_at": created_at,
+                                    # merge_existing_chunk_seen never relabels an existing row as thinking.
                                     "source_class": source_class,
                                 },
                             ):

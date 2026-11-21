@@ -45,6 +45,7 @@ from .content_class import classify_content_class
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_content, merge_existing_chunk_seen
 from .ingest_guard import reject_recursive_mcp_output
 from .memory_types import VALID_MEMORY_TYPES
+from .source_visibility import is_hidden_source_class
 from .system_prompt_guard import looks_like_system_prompt
 from .vector_store import VectorStore
 from .writer_telemetry import start_writer_span
@@ -274,6 +275,7 @@ def store_memory(
                     created_at=effective_created_at,
                     project=project,
                     content_type=memory_type,
+                    hidden=is_hidden_source_class(incoming.get("source_class")),
                 )
                 if duplicate is not None:
                     content_changed = merge_duplicate_chunk(
