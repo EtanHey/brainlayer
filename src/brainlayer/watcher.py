@@ -639,6 +639,28 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
 
     payload = entry.get("payload")
     payload_entry = payload if isinstance(payload, dict) else None
+    if (
+        provider == "codex"
+        and entry_type == "response_item"
+        and payload_entry
+        and payload_entry.get("type") == "reasoning"
+    ):
+        # Codex reasoning: only its summary is plaintext (the rest is encrypted). It becomes a
+        # thinking block, stored hidden from default search like Claude's thinking.
+        summary = payload_entry.get("summary")
+        text = "\n\n".join(
+            item["text"]
+            for item in (summary if isinstance(summary, list) else [])
+            if isinstance(item, dict) and isinstance(item.get("text"), str) and item["text"].strip()
+        )
+        if not text:
+            return None
+        return {
+            "type": "assistant",
+            "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": text}]},
+            "timestamp": entry.get("timestamp") or datetime.now(timezone.utc).isoformat(),
+            "_provider": provider,
+        }
     if provider == "codex" and entry_type == "response_item":
         if not payload_entry or payload_entry.get("type") != "message":
             return None

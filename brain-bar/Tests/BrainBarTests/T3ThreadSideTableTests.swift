@@ -115,11 +115,25 @@ final class T3ThreadSideTableTests: XCTestCase {
             id: "t3-chunk", content: "A message T3 stored itself",
             sessionId: "t3:sha256:abc", project: "brainlayer", contentType: "user_message", importance: 5
         )
-        try exec("UPDATE chunks SET metadata = '{\"t3_thread_id\": \"th-digested\"}' WHERE id = 't3-chunk'")
+        try exec("ALTER TABLE chunks ADD COLUMN source_class TEXT")
+        try exec("UPDATE chunks SET metadata = '{\"t3_thread_id\": \"th-digested\"}', source_class = 'agent-thinking' WHERE id = 't3-chunk'")
+        let expanded = try database.expandChunk(id: "t3-chunk", before: 0, after: 0)
+        XCTAssertEqual((expanded["target"] as? [String: Any])?["source_class"] as? String, "agent-thinking")
         let thread = try XCTUnwrap(
-            try database.expandChunk(id: "t3-chunk", before: 0, after: 0)["t3_thread"] as? [String: Any]
+            expanded["t3_thread"] as? [String: Any]
         )
         XCTAssertEqual(thread["id"] as? String, "th-digested")
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(database)
+        let response = router.handle([
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": "brain_expand", "arguments": ["chunk_id": "t3-chunk"]] as [String: Any],
+        ])
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = content.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        XCTAssertTrue(text.contains("t3://thread/th-digested"), text)
+        XCTAssertTrue(text.contains(SearchResult.thinkingLabel), text)
     }
 
     func testASharedSessionPrefersTheLiveThread() throws {

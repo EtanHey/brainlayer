@@ -366,6 +366,40 @@ def transcript_author_model(raw: Any) -> str | None:
     return model
 
 
+def classify_thinking(entry: dict) -> ClassifiedContent | None:
+    """Classify an assistant entry's thinking (reasoning) blocks, or return None.
+
+    Kept apart from ``classify_content`` so the text path is unchanged. The result is
+    ordinary assistant text, marked ``thinking`` in its metadata so the writer can give
+    it the hidden ``agent-thinking`` class, and it meets the same filler and length
+    gates as assistant text. Redacted or signature-only blocks carry no plaintext and
+    are skipped.
+    """
+    if entry.get("type") != "assistant":
+        return None
+    message = entry.get("message")
+    blocks = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(blocks, list):
+        return None
+    parts = [
+        block["thinking"]
+        for block in blocks
+        if isinstance(block, dict)
+        and block.get("type") == "thinking"
+        and isinstance(block.get("thinking"), str)
+        and block["thinking"].strip()
+    ]
+    text = "\n\n".join(parts)
+    if not text or not _should_keep_assistant_text(text):
+        return None
+    return ClassifiedContent(
+        content=text,
+        content_type=ContentType.ASSISTANT_TEXT,
+        value=ContentValue.MEDIUM,
+        metadata={**_extract_entry_metadata(entry), "thinking": True},
+    )
+
+
 def classify_content(entry: dict) -> ClassifiedContent | None:
     """
     Classify a JSONL entry by content type and value.

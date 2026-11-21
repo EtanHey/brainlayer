@@ -12,8 +12,15 @@ struct SearchResult: Equatable, Identifiable {
     let contentType: String
     let sessionID: String
     let sourceFile: String
+    let sourceClass: String
+
+    /// The class an agent's thinking (reasoning) is stored under (agent_provenance.py, #1824).
+    static let thinkingSourceClass = "agent-thinking"
+    /// How a thinking row is labelled wherever it is shown (expand, session recall).
+    static let thinkingLabel = "agent thinking, not said aloud"
 
     var id: String { chunkID }
+    var isThinking: Bool { sourceClass == Self.thinkingSourceClass }
     var displayText: String {
         let preferred = summary.isEmpty ? snippet : summary
         let cleaned = preferred.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -59,7 +66,8 @@ struct SearchResult: Equatable, Identifiable {
         tags: [String] = [],
         contentType: String = "",
         sessionID: String = "",
-        sourceFile: String = ""
+        sourceFile: String = "",
+        sourceClass: String = ""
     ) {
         self.chunkID = chunkID
         self.score = score
@@ -72,6 +80,7 @@ struct SearchResult: Equatable, Identifiable {
         self.contentType = contentType
         self.sessionID = sessionID
         self.sourceFile = sourceFile
+        self.sourceClass = sourceClass
     }
 
     init(payload: [String: Any]) {
@@ -100,6 +109,7 @@ struct SearchResult: Equatable, Identifiable {
         contentType = payload["content_type"] as? String ?? ""
         sessionID = payload["session_id"] as? String ?? ""
         sourceFile = payload["source_file"] as? String ?? ""
+        sourceClass = payload["source_class"] as? String ?? ""
     }
 
     init(rowID: String, title: String, metadata: String, tags: [String] = []) {
@@ -114,6 +124,7 @@ struct SearchResult: Equatable, Identifiable {
         contentType = ""
         sessionID = ""
         sourceFile = ""
+        sourceClass = ""
     }
 
     private static func decodeTags(_ raw: Any?) -> [String] {

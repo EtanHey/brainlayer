@@ -186,6 +186,23 @@ map_changed_files_to_pytests() {
         [ -f "$test_path" ] && append_unique "$test_path"
       done
     fi
+    # #1824: the hidden-class policy (agents' thinking) spans the hooks, the writers, dedupe
+    # and search; test_source_visibility.py drives all of them on both writer paths.
+    case "$changed" in
+      hooks/brainlayer-prompt-search.py|hooks/brainlayer-session-start.py)
+        # test_adaptive_injection.py loads the prompt hook with a fake store cursor; leaving it
+        # unmapped let a hook change pass pre-push and fail CI (#1824 re-check R1).
+        for rel in test_source_visibility.py test_conditional_hooks.py test_adaptive_injection.py; do
+          if [ -f "$TEST_ROOT/$rel" ]; then
+            append_unique "$TEST_ROOT/$rel"
+            mapped=1
+          fi
+        done
+        ;;
+      src/brainlayer/dedupe.py|src/brainlayer/drain.py|src/brainlayer/watcher_bridge.py|src/brainlayer/store.py|src/brainlayer/vector_store.py|src/brainlayer/search_repo.py|src/brainlayer/source_class_migration.py|src/brainlayer/agent_provenance.py)
+        [ -f "$TEST_ROOT/test_source_visibility.py" ] && append_unique "$TEST_ROOT/test_source_visibility.py"
+        ;;
+    esac
     case "$changed" in
       .github/workflows/*.yml|.github/workflows/*.yaml)
         # Select the workflow's actual owners; unrelated CI guards cannot establish coverage.

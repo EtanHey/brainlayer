@@ -12,6 +12,7 @@ import functools
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
@@ -743,10 +744,36 @@ def _chunk_id(thread: T3Thread, message: T3Message, index: int) -> str:
     )
 
 
-def _message_chunks(thread: T3Thread, message: T3Message) -> list:
-    from ..pipeline.chunk import Chunk, chunk_content
-    from ..pipeline.classify import ClassifiedContent, ContentType, ContentValue
+_NATIVE_ITEM_PREFIX = re.compile(r"^message:provider:[^:]+:native-item:")
+# The native item id is URL-encoded inside the message id (":" as "%3A"); accept either form.
+_THINKING_ITEM_SUFFIX = re.compile(r"(?::|%3[Aa])thinking(?::|%3[Aa])\d+$")
 
+
+def _is_thinking_message(message: T3Message) -> bool:
+    """True only for a provider's own thinking item.
+
+    T3's payload has no kind field; the only marker is the native item id, URL-encoded
+    inside the message id (``...native-item:msg_X%3Athinking%3A1``). Match it exactly:
+    a substring test would also hide a user's task named "thinking-policy".
+    """
+    if message.role != "assistant":
+        return False
+    prefix = _NATIVE_ITEM_PREFIX.match(message.message_id)
+    if prefix is None:
+        return False
+    return _THINKING_ITEM_SUFFIX.search(message.message_id, prefix.end()) is not None
+
+
+def _message_chunks(thread: T3Thread, message: T3Message) -> list:
+    from ..agent_provenance import THINKING_SOURCE_CLASS, derive_source_class
+    from ..pipeline.chunk import Chunk, chunk_content
+    from ..pipeline.classify import ClassifiedContent, ContentType, ContentValue, _should_keep_assistant_text
+
+    is_thinking = _is_thinking_message(message)
+    # Thinking meets the watcher's gates exactly (classify_thinking): the assistant-text filler
+    # and length filter, and no short-text fallback below. Said text keeps T3's own rules.
+    if is_thinking and not _should_keep_assistant_text(message.text):
+        return []
     content_type = ContentType.USER_MESSAGE if message.role == "user" else ContentType.ASSISTANT_TEXT
     value = ContentValue.HIGH if message.role == "user" else ContentValue.MEDIUM
     base_metadata = {
@@ -767,6 +794,19 @@ def _message_chunks(thread: T3Thread, message: T3Message) -> list:
         "t3_provider_name": thread.provider_name,
         "t3_provider_session_id": thread.provider_session_id,
     }
+    if is_thinking:
+        # Stored, hidden from default search (Etan, 2026-11-17, choice A). Rows written
+        # before this change keep their class until an owner-approved reclassification.
+        base_metadata.update(
+            {
+                "source_class": THINKING_SOURCE_CLASS,
+                "thinking": True,
+                # The class this row would carry if it were not thinking, as the watcher records it.
+                "thinking_source_class": derive_source_class(
+                    "", provenance_class=T3_PROVENANCE_CLASS, source=T3_SOURCE
+                ),
+            }
+        )
     classified = ClassifiedContent(
         content=message.text,
         content_type=content_type,
@@ -775,7 +815,7 @@ def _message_chunks(thread: T3Thread, message: T3Message) -> list:
     )
     chunks = chunk_content(classified)
     if not chunks:
-        if not message.text.strip():
+        if is_thinking or not message.text.strip():
             return []
         chunks = [
             Chunk(
@@ -964,7 +1004,10 @@ def ingest_t3(
                     continue
                 message_chunks = _message_chunks(thread, message)
                 if not message_chunks:
-                    result.messages_skipped["empty_text"] = result.messages_skipped.get("empty_text", 0) + 1
+                    reason = (
+                        "short_thinking" if _is_thinking_message(message) and message.text.strip() else "empty_text"
+                    )
+                    result.messages_skipped[reason] = result.messages_skipped.get(reason, 0) + 1
                     continue
                 result.messages_ingested += 1
                 chunks.extend(message_chunks)

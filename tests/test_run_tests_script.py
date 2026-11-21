@@ -703,6 +703,37 @@ def test_changed_only_scope_maps_the_release_tag_gate_to_its_own_test(tmp_path: 
     assert f"{test_root}/ -v" not in logged
 
 
+@pytest.mark.parametrize("hook", ["hooks/brainlayer-prompt-search.py", "hooks/brainlayer-session-start.py"])
+def test_changed_only_scope_maps_the_injection_hooks_to_every_hook_suite(tmp_path: Path, hook: str) -> None:
+    """#1824 re-check R1: a hook change that skipped test_adaptive_injection.py passed pre-push and failed CI."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    suites = ("test_source_visibility.py", "test_conditional_hooks.py", "test_adaptive_injection.py")
+    for name in suites:
+        (test_root / name).write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = hook
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(  # noqa: S603 - returncode is asserted below
+        ["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False
+    )
+
+    assert result.returncode == 0, result.stdout
+    logged = pytest_log.read_text()
+    for name in suites:
+        assert str(test_root / name) in logged
+    assert f"{test_root}/ -v" not in logged
+
+
 def test_changed_only_scope_escalates_when_the_release_gate_test_is_missing(tmp_path: Path) -> None:
     """A missing test for the release gate must escalate, not silently map to nothing.
 

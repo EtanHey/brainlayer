@@ -45,7 +45,7 @@ from ._helpers import (
 from ._helpers import (
     source_aware_min_chars as source_aware_min_chars,
 )
-from .agent_provenance import normalize_source_class
+from .agent_provenance import is_hidden_source_class, normalize_source_class
 from .chunk_origin import (
     CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,
     CHUNK_ORIGIN_UNKNOWN,
@@ -2720,6 +2720,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 created_at=created_at,
                                 project=chunk.get("project"),
                                 content_type=chunk.get("content_type"),
+                                hidden=is_hidden_source_class(chunk.get("source_class")),
                             )
                         if duplicate is not None:
                             duplicate_row_exists = cursor.execute(
