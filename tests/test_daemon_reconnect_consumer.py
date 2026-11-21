@@ -39,8 +39,18 @@ def run_consumer(source: str, root: Path, *, wrong_db: bool = False) -> dict:
                 "window_seconds": 900,
                 "observed_seconds": 60,
                 "counts": dict.fromkeys(
-                    ["connections_accepted", "connections_closed", "disconnects_with_in_flight", "requests_received",
-                     "requests_answered", "requests_dropped", "accept_errors", "read_errors", "write_errors"], 0
+                    [
+                        "connections_accepted",
+                        "connections_closed",
+                        "disconnects_with_in_flight",
+                        "requests_received",
+                        "requests_answered",
+                        "requests_dropped",
+                        "accept_errors",
+                        "read_errors",
+                        "write_errors",
+                    ],
+                    0,
                 ),
                 "in_flight_requests": 0,
                 "incident": None,
