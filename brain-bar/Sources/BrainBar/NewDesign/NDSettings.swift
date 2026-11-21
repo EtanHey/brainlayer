@@ -51,9 +51,15 @@ import SwiftUI
     }
 
     /// Opens the one Settings window (the same one on every call), front and key.
-    static func show(store: NDStore, activationPolicy: BrainBarWindowActivationPolicy? = nil) {
+    /// `present` injects only presentation for headless tests; preparation is the real OPEN=settings path.
+    static func show(store: NDStore, activationPolicy: BrainBarWindowActivationPolicy? = nil,
+                     present: ((NDSettingsView) -> Void)? = nil) {
         store.windowActivationPolicy = activationPolicy
         store.refreshSettingsFileSummary()
+        if let present {
+            present(NDSettingsView(store: store))
+            return
+        }
         let controller = current ?? NDSettingsWindowController(store: store)
         current = controller
         if !controller.window.isVisible { controller.window.center() }

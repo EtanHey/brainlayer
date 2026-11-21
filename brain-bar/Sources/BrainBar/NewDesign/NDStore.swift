@@ -483,9 +483,13 @@ import SwiftUI
         settingsBackupLine = model.settingsBackupLine
     }
 
-    var settingsFileURL: URL? { runtime?.jobsModel?.configFileURL }
+    var settingsFileURL: URL? { isFixture ? inputs.settingsBackups?.file : runtime?.jobsModel?.configFileURL }
     func refreshSettingsFileSummary() {
-        guard !isFixture, let model = runtime?.jobsModel else { return }
+        if isFixture {
+            settingsBackupLine = inputs.settingsBackups?.line
+            return
+        }
+        guard let model = runtime?.jobsModel else { return }
         model.refreshSettingsFileSummary()
         settingsBackupLine = model.settingsBackupLine
     }

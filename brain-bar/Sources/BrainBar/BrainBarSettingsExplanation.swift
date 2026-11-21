@@ -1,5 +1,15 @@
 import Foundation
 
+/// A file's measured backup count, or an explicitly invented capture fixture. Never inferred from a missing read.
+struct BrainBarSettingsBackupSummary: Sendable {
+    let file: URL
+    let count: Int
+    var line: String {
+        BrainBarMenuPresenter.SurfaceSay.settingsBackups(count,
+            path: (file.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath)
+    }
+}
+
 /// Only filenames are read. Revealing settings never tidies or changes the owner's files.
 enum BrainBarSettingsExplanation {
     static func model(_ name: String?, namesModel: Bool = true) -> [String] {
@@ -18,8 +28,6 @@ enum BrainBarSettingsExplanation {
                 && (suffix.hasPrefix(".bak") || suffix.hasPrefix(".backup") || suffix.hasSuffix(".bak"))
                 && (try? entry.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
         }.count
-        guard count > 0 else { return nil }
-        let path = (folder.path as NSString).abbreviatingWithTildeInPath
-        return BrainBarMenuPresenter.SurfaceSay.settingsBackups(count, path: path)
+        return BrainBarSettingsBackupSummary(file: file, count: count).line
     }
 }

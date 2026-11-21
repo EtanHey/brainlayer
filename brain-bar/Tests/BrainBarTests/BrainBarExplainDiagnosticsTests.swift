@@ -93,11 +93,45 @@ final class BrainBarExplainDiagnosticsTests: XCTestCase {
         XCTAssertTrue(settings.contains("workspace.reveal(store.configURL)"))
     }
 
-    func testNoBackupsHasNoCountAndUnreadableFolderIsExplicit() throws {
+    func testZeroBackupsHasCountAndUnreadableFolderIsExplicit() throws {
         let directory = URL(fileURLWithPath: brainBarTestTemporaryPath()).appendingPathComponent(UUID().uuidString)
         let file = directory.appendingPathComponent("brainlayer.env")
         XCTAssertEqual(BrainBarSettingsExplanation.backupLine(for: file), BrainBarMenuPresenter.SurfaceSay.settingsBackupsUnreadable)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        XCTAssertNil(BrainBarSettingsExplanation.backupLine(for: file))
+        try Data("fixture settings".utf8).write(to: file)
+        XCTAssertEqual(BrainBarSettingsExplanation.backupLine(for: file),
+                       "0 settings backups in \((directory.path as NSString).abbreviatingWithTildeInPath).")
+    }
+
+    @MainActor func testCaptureSettingsOpenCarriesBackupLineWithoutRevealOrWindow() throws {
+        for name in BrainBarDesignFixture.Name.allCases {
+            let store = NDStore(fixture: BrainBarDesignFixture.inputs(name))
+            XCTAssertTrue(store.isFixture)
+            XCTAssertNil(store.settingsBackupLine)
+            var presented: NDSettingsView?
+            // OPEN=settings -> panel.showSettings -> this exact show method, with only presentation injected.
+            NDSettingsWindowController.show(store: store, present: { presented = $0 })
+            XCTAssertEqual(try XCTUnwrap(presented).store.settingsBackupLine,
+                           "3 settings backups in /fixture/settings.", name.rawValue)
+            XCTAssertEqual(store.liveWorkCount, 0, "Opening fixture Settings starts no live work")
+        }
+    }
+
+    @MainActor func testNewSettingsOpenCarriesZeroBackupCountForExistingFile() throws {
+        let directory = URL(fileURLWithPath: brainBarTestTemporaryPath()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("brainlayer.env")
+        try Data("fixture settings".utf8).write(to: file)
+        let workspace = BrainBarRecordingWorkspace()
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        runtime.jobsModel = BrainBarSettingsViewModel(workspace: workspace,
+            store: BrainLayerConfigStore(configURL: file),
+            launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]), refreshStatusOnLoad: false)
+        let store = NDStore(runtime: runtime, workspace: workspace)
+        var presented: NDSettingsView?
+        NDSettingsWindowController.show(store: store, present: { presented = $0 })
+        XCTAssertEqual(try XCTUnwrap(presented).store.settingsBackupLine,
+                       "0 settings backups in \((directory.path as NSString).abbreviatingWithTildeInPath).")
+        XCTAssertTrue(workspace.recorded.isEmpty, "Opening Settings does not reveal or write a file")
     }
 }
