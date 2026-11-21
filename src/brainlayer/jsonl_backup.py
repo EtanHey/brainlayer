@@ -55,7 +55,7 @@ from time import monotonic as _monotonic
 from time import sleep as _sleep
 from typing import Any
 
-from . import backup_daily
+from . import backup_age, backup_daily
 from .queue_io import enqueue_store
 
 DEFAULT_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "claude-jsonl"]
@@ -431,7 +431,59 @@ def _drive_archive_receipt(path: Path, uploaded: dict[str, Any], *, now: float) 
         "verified": uploaded.get("md5Checksum") == md5,
         "verified_at": now,
         "archive_id": uploaded.get("id"),
+        **_encryption_metadata(path),
     }
+
+
+def _encryption_metadata(path: Path) -> dict[str, Any]:
+    if not path.name.endswith(".age"):
+        return {}
+    try:
+        metadata = json.loads(path.with_name(path.name + ".json").read_text())
+        return {key: metadata[key] for key in ("plaintext_sha256", "plaintext_size") if key in metadata}
+    except FileNotFoundError:
+        return {}
+
+
+def _encrypt_archive(path: Path) -> tuple[Path, dict[str, Any]]:
+    encrypted, metadata = backup_age.encrypt(path)
+    _atomic_write_json(encrypted.with_name(encrypted.name + ".json"), metadata)
+    # Persist both ciphertext and recovery metadata before removing our plaintext.
+    path.unlink()
+    return encrypted, metadata
+
+
+def _weekly_decrypt_test(state: dict[str, Any], staging_dir: Path, state_path: Path, now: float) -> None:
+    from .job_alerts import report
+
+    if now - state.get("age_decrypt_test_at", 0) < 7 * 86400:
+        return
+    receipts = state.get("drive_archives", {})
+    available = [
+        p
+        for p in _local_archive_paths(staging_dir)
+        if p.name.endswith(".age") and receipts.get(p.name, {}).get("verified") is True
+    ]
+    if not available:
+        return
+    try:
+        identity = backup_age.private_identity()
+    except Exception:
+        # A locked/unavailable keychain cannot verify ciphertext. Retry next run.
+        return
+    if identity is None:
+        return
+    try:
+        newest = max(available, key=lambda p: receipts[p.name].get("verified_at", 0))
+        expected = receipts[newest.name].get("plaintext_sha256")
+        if not expected or backup_age.decrypted_sha256(newest, identity) != expected:
+            raise RuntimeError("plaintext sha256 mismatch or missing receipt digest")
+    except Exception:
+        report("jsonl-backup-decrypt", "JSONL backup decrypt test failed", path=state_path.parent / "job-alerts.json")
+        return
+    report("jsonl-backup-decrypt", None, path=state_path.parent / "job-alerts.json")
+    state["age_decrypt_test_at"] = now
+    _atomic_write_json(state_path, state)
 
 
 def reconcile_drive_receipts(
@@ -481,6 +533,7 @@ def reconcile_drive_receipts(
             "verified_at": verified_at,
             "archive_id": remote["id"],
             "source": "reconciled",
+            **_encryption_metadata(path),
         }
         reconciled.append(path.name)
     return reconciled
@@ -496,7 +549,13 @@ def _local_archive_paths(staging_dir: Path) -> list[Path]:
             for p in parent.iterdir()
             if p.name.startswith(("release-", "recovery-")) and p.is_dir() and not p.is_symlink()
         )
-    return [p for root in roots for p in root.glob("claude-jsonl-*.tar.gz") if p.is_file() and not p.is_symlink()]
+    return [
+        p
+        for root in roots
+        for pattern in ("claude-jsonl-*.tar.gz", "claude-jsonl-*.tar.gz.age")
+        for p in root.glob(pattern)
+        if p.is_file() and not p.is_symlink()
+    ]
 
 
 def _retention_warning(log_path: Path, error: str) -> None:
@@ -1334,6 +1393,7 @@ def _upload_forever_files(
     staging_dir: Path,
     forever_folder_parts: list[str],
     machine_id: str,
+    encryption_required: bool = False,
 ) -> list[dict[str, Any]]:
     staging_dir = Path(staging_dir).expanduser()
     staging_dir.mkdir(parents=True, exist_ok=True)
@@ -1348,6 +1408,9 @@ def _upload_forever_files(
             forever_name = f"{sha256}{suffix}"
             forever_path = Path(tmp_dir) / forever_name
             os.replace(temp_path, forever_path)
+            if encryption_required:
+                forever_path, _ = _encrypt_archive(forever_path)
+                forever_name = forever_path.name
             folder_parts = [*forever_folder_parts, f"source-{candidate.root_index}"]
             folder_id = folder_ids_by_root_index.get(candidate.root_index)
             if folder_id is None:
@@ -1756,6 +1819,17 @@ def run_backup(
     roots = source_roots or DEFAULT_SOURCE_ROOTS
     state_path = Path(state_path).expanduser()
     state = _load_state(state_path)
+    encryption_required = backup_age.enabled()
+    retention_receipt["encryption"] = "enabled" if encryption_required else "not_enabled"
+    from .job_alerts import report
+
+    report(
+        "jsonl-backup-encryption-setup",
+        None,
+        path=state_path.parent / "job-alerts.json",
+    )
+    if encryption_required and upload:
+        _weekly_decrypt_test(state, Path(staging_dir).expanduser(), state_path, now)
     candidates = _discover_jsonl_candidates(roots)
     selection_state = state
     icloud_bootstrap_pending = False
@@ -1959,6 +2033,23 @@ def run_backup(
         )
     )
     if result["verified"] and upload:
+        if encryption_required:
+            from .job_alerts import report
+
+            try:
+                archive_path, metadata = _encrypt_archive(archive_path)
+            except Exception as exc:
+                # Errors never include subprocess stderr or any key material.
+                reason = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
+                message = f"JSONL backup not encrypted: {reason}"
+                report("jsonl-backup-encryption", message, path=state_path.parent / "job-alerts.json")
+                result.update(status="failed", verified=False, error=message, message=message)
+                _append_json_log(log_path, result)
+                _enqueue_run_summary(result, queue_dir=queue_dir)
+                return result
+            report("jsonl-backup-encryption", None, path=state_path.parent / "job-alerts.json")
+            archive_size = archive_path.stat().st_size
+            result.update(archive=str(archive_path), bytes=archive_size, **metadata)
         try:
             machine_id = backup_daily.resolve_machine_id()
         except backup_daily.InvalidMachineIdError as exc:
@@ -2047,7 +2138,13 @@ def run_backup(
                 _prune_drive_backups_to_trash(
                     service,
                     folder_parts=folder_parts,
-                    retention_policy=JSONL_RETENTION,
+                    retention_policy=(
+                        backup_daily.DriveRetentionPolicy(
+                            keep_latest=30, filename_prefix="claude-jsonl-", filename_suffix=".tar.gz.age"
+                        )
+                        if encryption_required
+                        else JSONL_RETENTION
+                    ),
                 )
                 if retention_enabled
                 else []
@@ -2067,10 +2164,19 @@ def run_backup(
                     staging_dir=staging_dir,
                     forever_folder_parts=forever_folder_parts,
                     machine_id=machine_id,
+                    encryption_required=encryption_required,
                 )
                 result["forever_files"] = forever_files
                 result["forever_uploaded_file_count"] = len(forever_files)
-        except Exception:
+        except Exception as exc:
+            if encryption_required and _forever_enabled():
+                from .job_alerts import report
+
+                report(
+                    "jsonl-backup-encryption",
+                    f"JSONL backup not encrypted: forever backup failed ({type(exc).__name__})",
+                    path=state_path.parent / "job-alerts.json",
+                )
             if retention_enabled:
                 _retention_warning(log_path, "Drive prune interrupted; receipt reconciliation required")
                 from .job_alerts import report

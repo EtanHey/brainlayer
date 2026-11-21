@@ -2596,6 +2596,16 @@
         "target": "urllib.request.Request"
       }
     },
+    "6693860f6909ddac2a2009d54c46f808464bacd3d2c5e5d072f1c1694056e936": {
+      "non_cloud_purpose": "Local age file encryption/decryption or macOS keychain custody for transcript backups; stdin carries private identities, no network or model sender. Site: src/brainlayer/backup_age.py <module>.private_identity subprocess.run.",
+      "site": {
+        "call_sha256": "93ee38569168f466a7a72b0bc2e014c568446583faf582da56f5579cb0ccf948",
+        "kind": "child_process",
+        "owner": "<module>.private_identity",
+        "path": "src/brainlayer/backup_age.py",
+        "target": "subprocess.run"
+      }
+    },
     "66b39fc55a31fe0850420973bc0dc223def7df19e136dd9c5e7075abfcf159e7": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/vector_store.py <module>.VectorStore._pid_start_time",
       "site": {
@@ -3172,6 +3182,16 @@
         "target": "ctypes.CDLL"
       }
     },
+    "780fee93672ebd9b311a7ff2aaa641e3f95597e509845ef18ff0094c95e3c5d8": {
+      "non_cloud_purpose": "Local age file encryption/decryption or macOS keychain custody for transcript backups; stdin carries private identities, no network or model sender. Site: src/brainlayer/backup_age.py <module>.decrypted_sha256 subprocess.Popen.",
+      "site": {
+        "call_sha256": "9bbba552f4da269cb8a3c5b055206fdcf36b42df1c98b4e96fb1bb32199cdd91",
+        "kind": "child_process",
+        "owner": "<module>.decrypted_sha256",
+        "path": "src/brainlayer/backup_age.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "79343417b0e866f661f3af1d34d5a944d56b914d837f420253db5afe270724b4": {
       "non_cloud_purpose": "Stdlib local process custody and Unix peer credentials; imports do not activate commands or connect to cloud endpoints.",
       "site": {
@@ -3180,6 +3200,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/supervisor_guard.py",
         "target": "import ctypes"
+      }
+    },
+    "7a61178737a1cd1c80c33723224ab2bf4810542a9709961f2479e7e8a7451b10": {
+      "non_cloud_purpose": "Local age file encryption/decryption or macOS keychain custody for transcript backups; stdin carries private identities, no network or model sender. Site: scripts/backup_age_setup.py <module>.main subprocess.run.",
+      "site": {
+        "call_sha256": "0c11dd6b49482cdc01c46699ac3f79b89f5e909ec5555476c94066e5a166f409",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/backup_age_setup.py",
+        "target": "subprocess.run"
       }
     },
     "7a8bb12e818170ca589287e033d8c74657b8646a9c413d341ccf273fbf99a19c": {
@@ -3280,6 +3310,16 @@
         "owner": "<module>.load_whatsapp_messages",
         "path": "src/brainlayer/pipeline/unified_timeline.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "7f1fae8aa90149f23432831f3078f2a0bb6425be593dca71d59f853b3b034ce9": {
+      "non_cloud_purpose": "Local age file encryption/decryption or macOS keychain custody for transcript backups; stdin carries private identities, no network or model sender. Site: src/brainlayer/backup_age.py <module>.encrypt subprocess.run.",
+      "site": {
+        "call_sha256": "2db06a2c25613211a7c6c22157acfcaafb56b02f34c1a064779ad5ef7143fa0c",
+        "kind": "child_process",
+        "owner": "<module>.encrypt",
+        "path": "src/brainlayer/backup_age.py",
+        "target": "subprocess.run"
       }
     },
     "7f473b9df716b6697971d1b0573a23c86bcd4cde3438f886459a3fc4d9f0819f": {
@@ -3460,6 +3500,16 @@
         "owner": "<module>._important_usage_capacity_bytes",
         "path": "src/brainlayer/disk_space.py",
         "target": "subprocess.run"
+      }
+    },
+    "8647417cbbc582a96fe3929ab58265648f3dceb95e8f3fd78a6c705b40283cd8": {
+      "non_cloud_purpose": "Local age file encryption/decryption or macOS keychain custody for transcript backups; stdin carries private identities, no network or model sender. Site: src/brainlayer/backup_age.py <module> import subprocess.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/backup_age.py",
+        "target": "import subprocess"
       }
     },
     "8670771ec5de78de96ff3727d306c32b3e13605688ea34ec4fda03639ba0c865": {
@@ -4888,6 +4938,16 @@
         "target": "subprocess.CalledProcessError"
       }
     },
+    "b6b556ff2e9208df425c5c73001c3faa06c1693aaf66fc9757d4533bde767be9": {
+      "non_cloud_purpose": "Local age file encryption/decryption or macOS keychain custody for transcript backups; stdin carries private identities, no network or model sender. Site: scripts/backup_age_setup.py <module>.main subprocess.run.",
+      "site": {
+        "call_sha256": "f8758e7c93ab2348db2bfa582838abfddf9ddd20520f675bfd8c967d2bc670cc",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/backup_age_setup.py",
+        "target": "subprocess.run"
+      }
+    },
     "b6bcbea418b7fed44b98ccd247ec0a8ffb2364ddc0a48a955bf77c99f9f956cd": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/cli/__init__.py <module>.hooks subprocess.CalledProcessError.",
       "site": {
@@ -5898,6 +5958,16 @@
         "target": "subprocess.Popen"
       }
     },
+    "dbe8d98f0cb8e1f7f7931dd638bb47ca0dd24d90357bc523ab79743da0753c6f": {
+      "non_cloud_purpose": "Local age file encryption/decryption or macOS keychain custody for transcript backups; stdin carries private identities, no network or model sender. Site: scripts/backup_age_setup.py <module> import subprocess.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/backup_age_setup.py",
+        "target": "import subprocess"
+      }
+    },
     "dc39cf809d91550920bc9cf822621f7a2520f875e533a4c1cb41e94b50b581c8": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._verify_search_latency",
       "site": {
@@ -6256,6 +6326,16 @@
         "owner": "<module>",
         "path": "scripts/retirement_probe.py",
         "target": "import importlib"
+      }
+    },
+    "ec8286cdf8b305469b6a399811ebf8ce86b76e934311cff349b84424265f26f4": {
+      "non_cloud_purpose": "Local age file encryption/decryption or macOS keychain custody for transcript backups; stdin carries private identities, no network or model sender. Site: scripts/backup_age_setup.py <module>.main subprocess.run.",
+      "site": {
+        "call_sha256": "b44e11e9a25be34d091bc7e340bfbb5539ca5623b04f0785373ac747c2950bd0",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/backup_age_setup.py",
+        "target": "subprocess.run"
       }
     },
     "ed46e56639d4698ff9d9d990c378de6f57eb809422d3f58a54024f053851e041": {
