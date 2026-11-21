@@ -84,6 +84,72 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         copy: { [weak self] in self?.copyMenuReport() },
         dismiss: { [weak self] in self?.contextMenuForTesting.cancelTracking() })
     private lazy var liveMenuBuilder = BrainBarMenuBuilder(actions: liveMenuActions)
+    /// L6: the new design, behind `BrainBarDesign`. Built on first use, so the classic path never creates it.
+    private var shownDesign: BrainBarDesign = .classic
+    private var newDesignCancellables: Set<AnyCancellable> = []
+    private var hasNewDesignStore = false
+    private lazy var newDesignStore: NDStore = {
+        hasNewDesignStore = true
+        let store = dashboardPanelController?.newDesignStore ?? NDStore.shared(for: runtime, workspace: workspace)
+        store.$model.receive(on: RunLoop.main).sink { [weak self] _ in
+            guard let self, self.design == .new else { return }
+            self.renderNewIcon()
+        }.store(in: &newDesignCancellables)
+        return store
+    }()
+    private lazy var newMenuBuilder: NDMenuBuilder = {
+        let builder = NDMenuBuilder(store: newDesignStore, perform: { [weak self] action in self?.performNew(action) },
+                                    openWindow: { [weak self] page in
+                                        // After the menu's tracking ends, as before; a main-actor task, so `self` is
+                                        // never sent across isolation (Swift 6.2 on CI rejected the dispatch closure).
+                                        Task { @MainActor [weak self] in self?.dashboardPanelController?.showPage(page) }
+                                    })
+        builder.menuDismiss = { [weak self] in self?.contextMenuForTesting.cancelTracking() }
+        return builder
+    }()
+    private var design: BrainBarDesign { BrainBarDesign.current(in: menuDefaults) }
+
+    private func performNew(_ action: BrainBarMenuAction) {
+        contextMenuForTesting.cancelTracking()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            switch action {
+            case .settings: self.dashboardPanelController?.showSettings()
+            case .quit: self.menuQuit()
+            // A capture fixture never relaunches anything: Restart only quits it.
+            case .restart: self.newDesignStore.isFixture ? self.menuQuit() : self.menuRestart()
+            case .row(.openStorageSettings): self.dashboardPanelController?.showPage(.backups)
+            case let .row(kind): self.newDesignStore.perform(kind)
+            }
+        }
+    }
+
+    /// The brain in the new design's state: the count beside it, and dimmed before the first reading.
+    private func renderNewIcon() {
+        guard !isStopped else { return }
+        // F04: the store samples only while a surface shows the new design.
+        newDesignStore.setIconActive(true)
+        shownDesign = .new
+        guard !isMenuTracking, let button = statusItemForTesting.button else { return }
+        let model = newDesignStore.model
+        let r1 = newDesignStore.r1
+        button.image = NDIcon.image(for: model, r1)
+        button.alphaValue = 1  // R1.2: the dimmed, badged and dotted states are drawn in the image itself
+        button.setAccessibilityLabel("BrainBar — " + r1.headline)
+        button.toolTip = r1.headline
+    }
+
+    /// Back to classic: forget what the new design drew, so the classic path renders as it always has.
+    private func leaveNewDesignIfNeeded() {
+        guard shownDesign == .new else { return }
+        shownDesign = .classic
+        if hasNewDesignStore { newDesignStore.setIconActive(false) }
+        lastBrainPresentation = nil
+        lastRenderedIcon = nil
+        statusItemForTesting.button?.alphaValue = 1
+        statusItemForTesting.button?.setAccessibilityLabel(nil)
+        statusItemForTesting.button?.image = nil
+    }
 #endif
     private let workspace: any BrainBarWorkspaceActing
     private let runtime: BrainBarRuntime
@@ -140,6 +206,16 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         configureContextMenu()
         configureStatusItem()
         bindRuntime()
+#if BRAINBAR_UI
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification, object: menuDefaults)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.design != self.shownDesign else { return }
+                // Native tracking finishes before the status item changes geometry.
+                DispatchQueue.main.async { self.renderCurrentStatus() }
+            }
+            .store(in: &runtimeCancellables)
+#endif
         dashboardPanelController?.statusItemButton = statusItemForTesting.button
     }
 
@@ -228,6 +304,10 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         runtimeCancellables.removeAll()
         collectorCancellables.removeAll()
         statusModelCancellables.removeAll()
+#if BRAINBAR_UI
+        newDesignCancellables.removeAll()
+        if hasNewDesignStore { newDesignStore.setIconActive(false) }
+#endif
         statusPublisher.flush()
         badgeReadGeneration = UUID()
         appearanceObservation?.invalidate()
@@ -250,7 +330,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         statusItemForTesting.menu = contextMenuForTesting
         guard let button = statusItemForTesting.button else { return }
 #if BRAINBAR_UI
-        if BrainBarNewMenuPreference.isEnabled(in: menuDefaults) {
+        if design == .new {
+            renderNewIcon()
+        } else if BrainBarNewMenuPreference.isEnabled(in: menuDefaults) {
             renderBrainIcon(BrainBarMenuPresenter.present(menuCapture(stats: runtime.collector?.stats)))
         } else {
             button.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "BrainBar")
@@ -324,6 +406,10 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
     private func renderCurrentStatus() {
+#if BRAINBAR_UI
+        if design == .new { return renderNewIcon() }
+        leaveNewDesignIfNeeded()
+#endif
         if let stats = latestStats, let state = latestState {
             renderStatusIcon(stats: stats, state: state)
         } else {
@@ -402,6 +488,10 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         // Setting NSStatusBarButton.image relayouts its variable-length status item.
         // Keep AppKit's tracking anchor stable; collectors still cache the latest state.
         guard !isStopped, !isMenuTracking else { return }
+#if BRAINBAR_UI
+        if design == .new { return renderNewIcon() }
+        leaveNewDesignIfNeeded()
+#endif
         // Three overlapping pipeline lines (Agent stores / JSONL watcher / Enrichment)
         // with an always-visible baseline so the icon stays legible on a dark
         // fullscreen menu bar instead of the old single gray line that vanished.
@@ -591,6 +681,10 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private func updateTooltip() {
         guard !isStopped, !isMenuTracking else { return }
 #if BRAINBAR_UI
+        if design == .new {
+            statusItemForTesting.button?.toolTip = newDesignStore.model.headline
+            return
+        }
         if BrainBarNewMenuPreference.isEnabled(in: menuDefaults), let presentation = lastBrainPresentation {
             statusItemForTesting.button?.toolTip = presentation.headline
             return
@@ -690,6 +784,14 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         reconcileBadgeFromAlertFile()
 #endif
 #if BRAINBAR_UI
+        if design == .new {
+            if legacyMenuItems == nil { legacyMenuItems = menu.items }
+            newDesignStore.refresh()
+            newMenuBuilder.populate(menu)
+            renderNewIcon()
+            return
+        }
+        leaveNewDesignIfNeeded()
         if BrainBarNewMenuPreference.isEnabled(in: menuDefaults) {
             if legacyMenuItems == nil { legacyMenuItems = menu.items }
             let capture = menuCapture(stats: runtime.collector?.stats)
@@ -795,6 +897,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        if design == .new { return newMenuBuilder.menu(menu, willHighlight: item) }
         if legacyMenuItems != nil { liveMenuBuilder.menu(menu, willHighlight: item) }
     }
 #endif

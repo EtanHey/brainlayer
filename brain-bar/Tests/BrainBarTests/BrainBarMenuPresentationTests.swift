@@ -51,24 +51,26 @@ final class BrainBarMenuPresentationTests: XCTestCase {
         func titles(_ c: BrainBarMenuCapture) -> [String] {
             BrainBarMenuPresenter.present(c).rows.filter { [.needsYou, .factLine].contains($0.kind) || $0.state == .notice }.compactMap(\.strings.first)
         }
-        let generic = "Something BrainBar checks needs attention."
+        // R1.11: the rows these variants used to word generically now name their check.
         var s11b = try capture("S11b")
         s11b.verdict = with(s11b.verdict!, "backup_offsite", .green, age: 3600)
-        XCTAssertEqual(titles(s11b), [generic])
+        XCTAssertEqual(titles(s11b).count, 1)
+        XCTAssertFalse(titles(s11b).contains("A check failed, and BrainBar can’t tell which"), "\(titles(s11b))")
         var s5 = try capture("S5")
         s5.upload = .init(startedAt: s5.now.addingTimeInterval(-3420), live: false)
-        XCTAssertEqual(titles(s5), [generic])
+        XCTAssertEqual(titles(s5).count, 1)
+        XCTAssertFalse(titles(s5).contains("A check failed, and BrainBar can’t tell which"), "\(titles(s5))")
         var c32 = try capture("C32")
         c32.maintenanceNightFailures = 3
-        XCTAssertEqual(titles(c32), ["Google Drive is disconnected", "Conversation backups can’t upload either until Drive is reconnected.",
-                                     "Nightly upkeep failed 3 nights in a row"])
+        XCTAssertEqual(titles(c32), ["Google Drive is signed out", "Conversation backups can’t upload either until Drive is reconnected.",
+                                     "Nightly check-up failed 3 nights"])
         var c14 = try capture("S11")
         c14.verdict = with(c14.verdict!, "backup_local", .red, age: 200_000)
         c14.backupDailyFailures = 2
         XCTAssertEqual(BrainBarMenuPresenter.present(c14), Self.expected(cases.first { $0["id"] as? String == "S11" }!))
         // CodeRabbit round 2: a copy's age is counted to `now`, not to `evaluatedAt` (the verdict stays awake-fresh in sleep).
         func driveDetail(_ c: BrainBarMenuCapture) -> String? {
-            BrainBarMenuPresenter.present(c).rows.first { $0.strings.first == "Google Drive is disconnected" }?.strings.last
+            BrainBarMenuPresenter.present(c).rows.first { $0.strings.first == "Google Drive is signed out" }?.strings.last
         }
         var s3 = try capture("S3")
         s3.now = s3.now.addingTimeInterval(86_400)
@@ -101,7 +103,37 @@ final class BrainBarMenuPresentationTests: XCTestCase {
 
     // MARK: expected output, read from the cases file
 
-    static func expected(_ c: [String: Any]) -> P {
+    /// The cases file's expectation with each later ruling applied: R31 (below), then R1.11.
+    static func expected(_ c: [String: Any]) -> P { r111(expectedR31(c)) }
+
+    /// R1.11 (L52, L53) supersedes the frozen file's words and marks, every other byte still checked: the one who-acts
+    /// sentence replaces the two hand-off lines, C5's replaces D10's, the button says "Copy a report for your agent", three
+    /// titles take the window's names, and a needs headline carries no mark (one mark per problem).
+    static func r111(_ p: P) -> P {
+        var p = p
+        // R1.12 (I 6): "in a row" goes from the nightly fault's sentence.
+        let swaps = [("Google Drive is disconnected", "Google Drive is signed out"), ("Nightly upkeep failed", "Nightly check-up failed"),
+                     (" nights in a row", " nights"),
+                     ("BrainBar hasn’t seen the memories waiting for it go down", "Its queue hasn’t shrunk")]
+        let pairs = [(["BrainBar can’t fix this itself.", "Give the report to an agent."], "An agent needs to look at this."),
+                     (["If this backup doesn’t finish, BrainBar can’t fix it itself.", "Give the report to an agent."],
+                      "If it doesn’t finish, an agent needs to look at it.")]
+        p.rows = p.rows.map { row in
+            var row = row
+            row.strings = row.strings.map { s in swaps.reduce(s) { $0.replacingOccurrences(of: $1.0, with: $1.1) } }
+            for (old, new) in pairs {
+                if let i = row.strings.firstIndex(of: old[0]), row.strings.count > i + 1, row.strings[i + 1] == old[1] {
+                    row.strings.replaceSubrange(i...(i + 1), with: [new])
+                }
+            }
+            if row.action?.kind == .copyReport { row.action?.label = "Copy a report for your agent" }
+            if row.kind == .headline, p.form == .needs { row.mark = nil }
+            return row
+        }
+        return p
+    }
+
+    static func expectedR31(_ c: [String: Any]) -> P {
         let rows = (c["rows"] as! [[String: Any]]).map { r -> P.Row in
             var row = P.Row(kind: P.RowKind(rawValue: r["kind"] as! String)!)
             row.strings = (r["strings"] as? [[String: Any]] ?? []).map { $0["text"] as! String }
