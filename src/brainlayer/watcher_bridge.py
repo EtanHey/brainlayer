@@ -45,8 +45,6 @@ from .dedupe import (
     merge_duplicate_chunk,
     merge_existing_chunk_seen,
     normalized_exact_hash,
-    retire_session_alias,
-    session_alias_needs_retirement,
 )
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
@@ -400,8 +398,6 @@ def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, proje
 
     try:
         with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
-            if session_alias_needs_retirement(db, chunk_id):
-                return False
             if db.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone():
                 return True
             return (
@@ -802,6 +798,7 @@ def create_flush_callback(
                                     },
                                     mechanism=duplicate.mechanism,
                                     hamming_distance_value=duplicate.hamming_distance,
+                                    preserve_existing_alias=True,
                                 )
                                 record_direct_liveness(duplicate.canonical_chunk_id, ingested_at)
                                 metrics.run("commit", cursor.execute, "COMMIT")
@@ -810,7 +807,6 @@ def create_flush_callback(
                                 transaction_started = False
                                 inserted += 1
                                 break
-                            retire_session_alias(store.conn, chunk_id)
                             if merge_existing_chunk_seen(
                                 store.conn,
                                 chunk_id=chunk_id,

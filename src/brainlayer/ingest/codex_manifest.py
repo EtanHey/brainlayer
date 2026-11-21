@@ -9,11 +9,11 @@ from pathlib import Path
 
 from ..dedupe import (
     _active_clause,
+    _existing_alias,
     _scope_clause,
     _visibility_clause,
     find_duplicate,
     normalized_exact_hash,
-    session_alias_needs_retirement,
 )
 from ..ingest_denylist import is_denylisted
 from ..source_visibility import is_hidden_source_class
@@ -127,9 +127,6 @@ def _resolved_candidate(db, row):
     if db is None:
         return None
     visibility = _visibility_clause(db, is_hidden_source_class(row.get("source_class")))
-    if session_alias_needs_retirement(db, row["chunk_id"]):
-        # The writer must retire a T3 redirect even when its same-id row already exists.
-        return None
     own = db.execute(
         f"SELECT id, source_file, source, archived_at, ({visibility}) FROM chunks "
         "WHERE id = ? AND (source IS NULL OR source != 't3') AND length(trim(content)) > 0",
@@ -146,6 +143,9 @@ def _resolved_candidate(db, row):
     )
     if own and not reactivate:
         return (*own[:2], "own_id")
+    alias = _existing_alias(db, row["chunk_id"])
+    if alias and db.execute("SELECT 1 FROM chunks WHERE id=? AND source='t3'", (alias[0],)).fetchone():
+        return None
     if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunk_id_alias'").fetchone():
         alias = db.execute(
             f"SELECT c.id, c.source_file FROM chunk_id_alias a JOIN "

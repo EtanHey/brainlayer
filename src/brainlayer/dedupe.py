@@ -329,60 +329,22 @@ def _visibility_clause(conn: Any, hidden: bool | None) -> str:
     return hidden_source_class_sql("source_class")
 
 
-def session_alias_preimage(conn: Any, chunk_id: str) -> tuple | None:
+def active_own_chunk_exists(conn: Any, chunk_id: str) -> bool:
+    """Read identity belongs to an existing lifecycle-active row, before any alias."""
+    active = _active_clause(conn)
+    if "invalid_at" in {row[1] for row in conn.cursor().execute("PRAGMA table_info(chunks)")}:
+        active += " AND invalid_at IS NULL"
+    return conn.cursor().execute(f"SELECT 1 FROM chunks WHERE id=? AND {active}", (chunk_id,)).fetchone() is not None
+
+
+def _existing_alias(conn: Any, chunk_id: str) -> tuple | None:
     if not conn.cursor().execute("SELECT 1 FROM sqlite_master WHERE name='chunk_id_alias'").fetchone():
         return None
     return (
         conn.cursor()
-        .execute(
-            "SELECT old_chunk_id,canonical_chunk_id,deprecated_at FROM chunk_id_alias WHERE old_chunk_id=?",
-            (chunk_id,),
-        )
+        .execute("SELECT canonical_chunk_id,deprecated_at FROM chunk_id_alias WHERE old_chunk_id=?", (chunk_id,))
         .fetchone()
     )
-
-
-def session_alias_needs_retirement(conn: Any, chunk_id: str) -> bool:
-    alias = session_alias_preimage(conn, chunk_id)
-    if alias is None:
-        return False
-    return (
-        conn.cursor()
-        .execute("SELECT 1 FROM chunks WHERE id=? OR (id=? AND source='t3') LIMIT 1", (chunk_id, alias[1]))
-        .fetchone()
-        is not None
-    )
-
-
-def session_id_needs_own_row(conn: Any, chunk_id: str) -> bool:
-    """A materialized session id must survive redirects and later text matches."""
-    tables = {
-        row[0]
-        for row in conn.cursor().execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('chunk_id_alias','session_alias_preimage')"
-        )
-    }
-    if (
-        "session_alias_preimage" in tables
-        and conn.cursor().execute("SELECT 1 FROM session_alias_preimage WHERE old_chunk_id=?", (chunk_id,)).fetchone()
-    ):
-        return True
-    return session_alias_needs_retirement(conn, chunk_id)
-
-
-def retire_session_alias(conn: Any, chunk_id: str) -> None:
-    """Inside the writer transaction, preserve the redirect before materializing its id."""
-    row = session_alias_preimage(conn, chunk_id)
-    if row is None:
-        return
-    conn.cursor().execute("""CREATE TABLE IF NOT EXISTS session_alias_preimage (
-        old_chunk_id TEXT PRIMARY KEY, canonical_chunk_id TEXT NOT NULL,
-        deprecated_at TEXT NOT NULL, retired_at TEXT NOT NULL)""")
-    conn.cursor().execute(
-        "INSERT OR IGNORE INTO session_alias_preimage VALUES (?,?,?,?)",
-        (*row, datetime.now(timezone.utc).isoformat()),
-    )
-    conn.cursor().execute("DELETE FROM chunk_id_alias WHERE old_chunk_id=?", (chunk_id,))
 
 
 def find_duplicate(
@@ -405,8 +367,23 @@ def find_duplicate(
     NULL sources remain eligible for ordinary legacy-session dedupe.
     """
     fields = compute_dedupe_fields(content, created_at)
-    if "t3" in exclude_sources and session_id_needs_own_row(conn, chunk_id):
-        return None, fields
+    if "t3" in exclude_sources:
+        alias = _existing_alias(conn, chunk_id)
+        if alias is not None:
+            if active_own_chunk_exists(conn, chunk_id):
+                return None, fields
+            scope, params = _scope_clause(project, content_type)
+            hit = (
+                conn.cursor()
+                .execute(
+                    f"SELECT id FROM chunks WHERE id=? AND {_active_clause(conn)} AND {scope} "
+                    f"AND {_visibility_clause(conn, hidden)} AND (source IS NULL OR source != 't3')",
+                    (alias[0], *params),
+                )
+                .fetchone()
+            )
+            # Existing aliases are identity, not a reason to pick another text twin.
+            return (DuplicateHit(str(hit[0]), "alias", 0) if hit else None), fields
     cursor = conn.cursor()
     scope_sql, scope_params = _scope_clause(project, content_type)
     scope_sql = f"{scope_sql} AND {_visibility_clause(conn, hidden)}"
@@ -674,8 +651,17 @@ def record_dedupe_audit(
     )
 
 
-def write_alias(conn: Any, *, old_chunk_id: str, canonical_chunk_id: str, deprecated_at: str | None = None) -> None:
+def write_alias(
+    conn: Any,
+    *,
+    old_chunk_id: str,
+    canonical_chunk_id: str,
+    deprecated_at: str | None = None,
+    preserve_existing: bool = False,
+) -> None:
     if old_chunk_id == canonical_chunk_id:
+        return
+    if preserve_existing and _existing_alias(conn, old_chunk_id) is not None:
         return
     conn.cursor().execute(
         """
@@ -704,25 +690,23 @@ def retarget_aliases(conn: Any, *, old_canonical_chunk_id: str, new_canonical_ch
 
 
 def resolve_chunk_id(conn: Any, chunk_id: str) -> str:
-    try:
-        row = (
-            conn.cursor()
-            .execute(
-                "SELECT canonical_chunk_id, deprecated_at FROM chunk_id_alias WHERE old_chunk_id = ?",
-                (chunk_id,),
-            )
-            .fetchone()
-        )
-    except (apsw.SQLError, apsw.ReadOnlyError):
-        return chunk_id
-    if not row:
-        return chunk_id
-    deprecated_at = _parse_datetime(str(row[1]))
-    if deprecated_at is None:
-        return str(row[0])
-    if deprecated_at < datetime.now(timezone.utc) - timedelta(days=ALIAS_GRACE_DAYS):
-        return chunk_id
-    return str(row[0])
+    original = chunk_id
+    visited = set()
+    while chunk_id not in visited:
+        visited.add(chunk_id)
+        if active_own_chunk_exists(conn, chunk_id):
+            return chunk_id
+        try:
+            row = _existing_alias(conn, chunk_id)
+        except (apsw.SQLError, apsw.ReadOnlyError):
+            return chunk_id
+        if not row:
+            return chunk_id
+        deprecated_at = _parse_datetime(str(row[1]))
+        if deprecated_at is not None and deprecated_at < datetime.now(timezone.utc) - timedelta(days=ALIAS_GRACE_DAYS):
+            return chunk_id
+        chunk_id = str(row[0])
+    return original
 
 
 def _rollback_failed_merge(cursor: Any, savepoint: str, original: Exception) -> bool:
@@ -762,6 +746,7 @@ def merge_duplicate_chunk(
     hamming_distance_value: int | None,
     archive_existing_duplicate: bool = False,
     ensure_schema: bool = True,
+    preserve_existing_alias: bool = False,
 ) -> bool:
     if canonical_id == duplicate_id:
         return False
@@ -825,9 +810,14 @@ def merge_duplicate_chunk(
             cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), canonical_id])
             if embedding_changed:
                 _invalidate_merged_vectors(cursor, canonical_id)
-            if archive_existing_duplicate:
+            if archive_existing_duplicate and not preserve_existing_alias:
                 retarget_aliases(conn, old_canonical_chunk_id=duplicate_id, new_canonical_chunk_id=canonical_id)
-            write_alias(conn, old_chunk_id=duplicate_id, canonical_chunk_id=canonical_id)
+            write_alias(
+                conn,
+                old_chunk_id=duplicate_id,
+                canonical_chunk_id=canonical_id,
+                preserve_existing=preserve_existing_alias,
+            )
             record_dedupe_audit(
                 conn,
                 dropped_id=duplicate_id,

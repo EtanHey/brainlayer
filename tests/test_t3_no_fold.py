@@ -104,7 +104,7 @@ def test_source_exclusion_applies_to_exact_and_simhash(tmp_path, near):
 @pytest.mark.parametrize("route", ["watcher", "archive", "drain", "index"])
 @pytest.mark.parametrize("other", ["none", "twin", "older-unrelated"])
 def test_returning_t3_alias_resolves_to_its_own_session_row(tmp_path, monkeypatch, route, other):
-    """Materializing an id retires its redirect, never redirects to another conversation."""
+    """The active own row wins at read time while every original alias stays intact."""
     from brainlayer.dedupe import write_alias
 
     db = tmp_path / "test.db"
@@ -149,16 +149,10 @@ def test_returning_t3_alias_resolves_to_its_own_session_row(tmp_path, monkeypatc
         assert store.get_chunk(incoming_id)["id"] == incoming_id
         assert store.get_context(incoming_id)["target"]["id"] == incoming_id
         assert (
-            store.conn.execute(
-                "SELECT canonical_chunk_id FROM chunk_id_alias WHERE old_chunk_id=?", (incoming_id,)
-            ).fetchone()
-            is None
+            store.conn.execute("SELECT * FROM chunk_id_alias WHERE old_chunk_id=?", (incoming_id,)).fetchone()
+            == preimage
         )
-        saved = store.conn.execute(
-            "SELECT old_chunk_id,canonical_chunk_id,deprecated_at FROM session_alias_preimage WHERE old_chunk_id=?",
-            (incoming_id,),
-        ).fetchone()
-        assert saved == preimage
+        assert store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='session_alias_preimage'").fetchone() is None
         replay()
         assert store.resolve_chunk_id(incoming_id) == incoming_id
         assert store.get_chunk(incoming_id)["id"] == incoming_id
@@ -188,13 +182,15 @@ def test_codex_manifest_never_treats_a_t3_twin_as_stored(tmp_path, mode, canonic
             store.conn.execute("UPDATE chunks SET archived_at='2026-11-18' WHERE id=?", (row["chunk_id"],))
     with sqlite3.connect(db.as_uri() + "?mode=ro", uri=True) as conn:
         match = _resolved_candidate(conn, row)
-    if canonical_source == "t3" or mode == "own-shadow":
+    if mode == "own-shadow":
+        assert match[0] == row["chunk_id"]
+    elif canonical_source == "t3":
         assert match is None
     else:
         assert match[0] == "t3:mirror"
 
 
-def test_alias_retirement_rolls_back_with_failed_index_insert(tmp_path, monkeypatch):
+def test_failed_index_insert_keeps_alias_unchanged(tmp_path, monkeypatch):
     from brainlayer import vector_store
     from brainlayer.dedupe import write_alias
 
@@ -204,10 +200,10 @@ def test_alias_retirement_rolls_back_with_failed_index_insert(tmp_path, monkeypa
         original = store.conn.execute("SELECT * FROM chunk_id_alias WHERE old_chunk_id='returning'").fetchone()
 
         def fail_prepare(*args, **kwargs):
-            raise RuntimeError("fail after alias retirement")
+            raise RuntimeError("fail before insertion")
 
         monkeypatch.setattr(vector_store, "prepare_canonical_insert", fail_prepare)
-        with pytest.raises(RuntimeError, match="fail after alias retirement"):
+        with pytest.raises(RuntimeError, match="fail before insertion"):
             store.upsert_chunks([chunk("returning")], [None])
         assert store.conn.execute("SELECT * FROM chunk_id_alias WHERE old_chunk_id='returning'").fetchone() == original
         assert store.conn.execute("SELECT 1 FROM chunks WHERE id='returning'").fetchone() is None
@@ -242,3 +238,64 @@ def test_unusable_non_t3_alias_cannot_shadow_materialized_session_id(tmp_path, m
             store.upsert_chunks([chunk(incoming_id)], [None])
         assert store.resolve_chunk_id(incoming_id) == incoming_id
         assert store.get_chunk(incoming_id)["id"] == incoming_id
+
+
+@pytest.mark.parametrize("route", ["watcher", "drain", "index"])
+def test_archived_dedupe_loser_still_resolves_to_survivor(tmp_path, monkeypatch, route):
+    from brainlayer.dedupe import merge_duplicate_chunk
+
+    db = tmp_path / "survivor.db"
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+    incoming_id = "rt-12345678-" + normalized_exact_hash(TEXT)[:16]
+    with VectorStore(db) as store:
+        seed(store, "canon-session", "realtime_watcher", created_at="2026-10-01T12:00:00Z")
+        seed(store, incoming_id, "realtime_watcher")
+        merge_duplicate_chunk(
+            store.conn,
+            canonical_id="canon-session",
+            duplicate_id=incoming_id,
+            incoming=chunk(incoming_id),
+            mechanism="sha256",
+            hamming_distance_value=0,
+            archive_existing_duplicate=True,
+        )
+        alias = store.conn.execute("SELECT * FROM chunk_id_alias WHERE old_chunk_id=?", (incoming_id,)).fetchone()
+        seen = store.conn.execute("SELECT seen_count FROM chunks WHERE id='canon-session'").fetchone()[0]
+        if route == "watcher":
+            create_flush_callback(db, arbitrated=False)(
+                [
+                    {
+                        "type": "assistant",
+                        "message": {"role": "assistant", "content": TEXT},
+                        "timestamp": STAMP,
+                        "_source_file": str(tmp_path / "projects/alpha/12345678-1111-2222-3333-444455556666.jsonl"),
+                    }
+                ]
+            )
+        elif route == "drain":
+            _insert_or_merge_chunk(store.conn, chunk(incoming_id))
+        else:
+            store.upsert_chunks([chunk(incoming_id)], [None])
+        assert store.resolve_chunk_id(incoming_id) == "canon-session"
+        assert store.get_chunk(incoming_id)["id"] == "canon-session"
+        assert store.get_context(incoming_id)["target"]["id"] == "canon-session"
+        assert (
+            store.conn.execute("SELECT * FROM chunk_id_alias WHERE old_chunk_id=?", (incoming_id,)).fetchone() == alias
+        )
+        assert store.conn.execute("SELECT seen_count FROM chunks WHERE id='canon-session'").fetchone()[0] > seen
+
+
+@pytest.mark.parametrize("retired", [None, "archived_at", "superseded_by", "aggregated_into", "invalid_at"])
+def test_read_precedence_depends_on_own_lifecycle(tmp_path, retired):
+    from brainlayer.dedupe import write_alias
+
+    with VectorStore(tmp_path / "precedence.db") as store:
+        seed(store, "survivor", "realtime_watcher")
+        seed(store, "own", "realtime_watcher")
+        if retired:
+            store.conn.execute(f"UPDATE chunks SET {retired}='retired' WHERE id='own'")
+        write_alias(store.conn, old_chunk_id="own", canonical_chunk_id="survivor")
+        expected = "own" if retired is None else "survivor"
+        assert store.resolve_chunk_id("own") == expected
+        assert store.get_chunk("own")["id"] == expected
+        assert store.get_context("own")["target"]["id"] == expected

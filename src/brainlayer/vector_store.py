@@ -59,7 +59,6 @@ from .dedupe import (
     merge_duplicate_chunk,
     merge_existing_chunk_seen,
     resolve_chunk_id,
-    retire_session_alias,
 )
 from .embeddings import embedding_input
 from .ingest_guard import reject_recursive_mcp_output
@@ -2741,6 +2740,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 mechanism=duplicate.mechanism,
                                 hamming_distance_value=duplicate.hamming_distance,
                                 archive_existing_duplicate=duplicate_row_exists is not None,
+                                preserve_existing_alias=True,
                             )
                             # The merge owns invalidation by embedding_input. An incoming
                             # vector describes the original, never a changed merged body.
@@ -2749,8 +2749,6 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                     cursor, duplicate.canonical_chunk_id, chunk["content"], embedding
                                 )
                             continue
-                        if not chunk.get("allow_duplicate"):
-                            retire_session_alias(self.conn, chunk_id)
                         if merge_existing_chunk_seen(
                             self.conn,
                             chunk_id=chunk_id,

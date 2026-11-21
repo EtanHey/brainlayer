@@ -1,4 +1,4 @@
-"""Replay validation includes unchanged redirects shadowing newly inserted rows."""
+"""The gate preserves every existing alias and checks effective active-own reads."""
 
 import runpy
 from pathlib import Path
@@ -10,62 +10,36 @@ check_alias_retargets = runpy.run_path(str(Path(__file__).parents[1] / "scripts/
 ]
 
 
-def retirement():
-    own = dict(id="incoming-id", source="realtime_watcher", conversation_id="native", source_file="native.jsonl")
-    return dict(
-        id="incoming-id",
-        before=["t3:mirror", "original-date"],
-        after=None,
-        old_target_source="t3",
-        own_row=own,
-        incoming=dict(own),
-        resolved_id="incoming-id",
-        preimage=["incoming-id", "t3:mirror", "original-date"],
-    )
+def receipt():
+    result = dict(new_t3_aliases=0, deleted_alias_rows=0, changed_existing_alias_rows=0, active_own_rows_checked=1)
+    cases = [dict(id="own", active=True, resolved_id="own", get_chunk_id="own", expanded_id="own")]
+    return result, cases
 
 
-def test_gate_accepts_only_id_matched_reversible_retirement():
-    result = dict(new_t3_aliases=0, new_shadowed_ids=0, changed_alias_rows=1)
-    assert check_alias_retargets(result, [retirement()]) == 1
+def test_gate_accepts_unchanged_alias_and_active_own_reads():
+    result, cases = receipt()
+    assert check_alias_retargets(result, cases) == 1
 
 
 @pytest.mark.parametrize(
     "mutation",
-    [
-        "shadow",
-        "new-t3",
-        "unaccounted",
-        "duplicate",
-        "retarget",
-        "wrong-id",
-        "wrong-session",
-        "wrong-file",
-        "wrong-preimage",
-        "still-shadowed",
-    ],
+    ["new-t3", "delete", "change", "missing", "duplicate", "inactive", "resolved_id", "get_chunk_id", "expanded_id"],
 )
-def test_gate_rejects_unsafe_alias_changes(mutation):
-    result = dict(new_t3_aliases=0, new_shadowed_ids=0, changed_alias_rows=1)
-    case = retirement()
-    cases = [case]
-    if mutation == "shadow":
-        result.update(changed_alias_rows=0, new_shadowed_ids=1)
-        cases = []
-    elif mutation == "new-t3":
-        result["new_t3_aliases"] = 1
-    elif mutation == "unaccounted":
-        result["changed_alias_rows"] = 2
+def test_gate_rejects_alias_mutation_or_wrong_read_precedence(mutation):
+    result, cases = receipt()
+    if mutation in {"new-t3", "delete", "change"}:
+        field = {"new-t3": "new_t3_aliases", "delete": "deleted_alias_rows", "change": "changed_existing_alias_rows"}[
+            mutation
+        ]
+        result[field] = 1
+    elif mutation == "missing":
+        result["active_own_rows_checked"] = 2
     elif mutation == "duplicate":
-        cases.append(retirement())
-        result["changed_alias_rows"] = 2
-    elif mutation == "retarget":
-        case["after"] = ["unrelated-older-session", "today"]
-    elif mutation == "wrong-preimage":
-        case["preimage"][1] = "other"
-    elif mutation == "still-shadowed":
-        case["resolved_id"] = "t3:mirror"
+        cases.append(dict(cases[0]))
+        result["active_own_rows_checked"] = 2
+    elif mutation == "inactive":
+        cases[0]["active"] = False
     else:
-        field = {"wrong-id": "id", "wrong-session": "conversation_id", "wrong-file": "source_file"}[mutation]
-        case["own_row"][field] = "other"
+        cases[0][mutation] = "t3:mirror"
     with pytest.raises(ValueError):
         check_alias_retargets(result, cases)

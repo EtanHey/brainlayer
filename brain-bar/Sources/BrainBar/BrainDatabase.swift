@@ -5483,6 +5483,46 @@ final class BrainDatabase: @unchecked Sendable {
 
     // MARK: - brain_expand: get chunk + surrounding session context
 
+    private func resolveChunkIDForRead(_ requested: String, on db: OpaquePointer) throws -> String {
+        let columns = try tableColumns(name: "chunks", on: db)
+        let active = ["archived_at", "superseded_by", "aggregated_into", "invalid_at"]
+            .filter { columns.contains($0) }.map { "\($0) IS NULL" }.joined(separator: " AND ")
+        let ownSQL = "SELECT 1 FROM chunks WHERE id = ?" + (active.isEmpty ? "" : " AND \(active)")
+        let aliasColumns = try tableColumns(name: "chunk_id_alias", on: db)
+        let hasAliases = ["old_chunk_id", "canonical_chunk_id", "deprecated_at"].allSatisfy { aliasColumns.contains($0) }
+        let aliasSQL = """
+            SELECT canonical_chunk_id FROM chunk_id_alias WHERE old_chunk_id = ?
+              AND (julianday(deprecated_at) IS NULL OR julianday(deprecated_at) >= julianday('now', '-90 days'))
+            """
+        var candidate = requested
+        var visited: Set<String> = []
+        while visited.insert(candidate).inserted {
+            var own: OpaquePointer?
+            guard sqlite3_prepare_v2(db, ownSQL, -1, &own, nil) == SQLITE_OK else {
+                throw DBError.prepare(sqlite3_errcode(db))
+            }
+            defer { sqlite3_finalize(own) }
+            bindText(candidate, to: own, index: 1)
+            let ownResult = sqlite3_step(own)
+            if ownResult == SQLITE_ROW { return candidate }
+            guard ownResult == SQLITE_DONE else { throw DBError.step(ownResult) }
+            if !hasAliases { return candidate }
+            var alias: OpaquePointer?
+            guard sqlite3_prepare_v2(db, aliasSQL, -1, &alias, nil) == SQLITE_OK else {
+                throw DBError.prepare(sqlite3_errcode(db))
+            }
+            defer { sqlite3_finalize(alias) }
+            bindText(candidate, to: alias, index: 1)
+            let aliasResult = sqlite3_step(alias)
+            if aliasResult == SQLITE_DONE { return candidate }
+            guard aliasResult == SQLITE_ROW, let next = columnText(alias, 0) else {
+                throw DBError.step(aliasResult)
+            }
+            candidate = next
+        }
+        return requested
+    }
+
     func expandChunk(
         id: String,
         before: Int = 3,
@@ -5494,6 +5534,7 @@ final class BrainDatabase: @unchecked Sendable {
         let boundedAfter = min(max(after, 0), Self.maximumConversationContextPerSide)
         let contentLimit = Int32(Self.maximumConversationContentCharacters)
         let chunkColumns = try tableColumns(name: "chunks", on: db)
+        let id = try resolveChunkIDForRead(id, on: db)
         let senderSelect = chunkColumns.contains("sender") ? "sender" : "NULL AS sender"
         let sourceFileSelect = chunkColumns.contains("source_file")
             ? "source_file"
@@ -5886,6 +5927,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     func getChunk(id: String) throws -> [String: Any]? {
         guard let db else { throw DBError.notOpen }
+        let id = try resolveChunkIDForRead(id, on: db)
         let sql = """
             SELECT id, content, content_type, source, summary, created_at, archived_at, superseded_by, tags, source_file
             FROM chunks
@@ -6091,6 +6133,16 @@ final class BrainDatabase: @unchecked Sendable {
 
         var results: [[String: Any]] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
+            let requested = columnText(stmt, 0) ?? ""
+            let resolved = try resolveChunkIDForRead(requested, on: db)
+            if resolved != requested {
+                let expanded = try expandChunk(id: resolved, before: 0, after: 0, includeFullTargetContent: true)
+                if var target = expanded["target"] as? [String: Any] {
+                    target["score"] = 1.0
+                    results.append(target)
+                }
+                continue
+            }
             results.append([
                 "chunk_id": columnText(stmt, 0) as Any,
                 "content": columnText(stmt, 1) as Any,
