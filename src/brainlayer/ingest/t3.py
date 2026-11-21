@@ -298,7 +298,10 @@ class T3Reader:
                 if {"orchestration_events", "orchestration_v2_projection_metadata"} <= tables:
                     conn.execute("BEGIN")
                     self._bookmark_info, mids, tids, self._next_bookmark = t3_bookmark.window(
-                        conn, self._previous_bookmark, source_identity
+                        conn,
+                        self._previous_bookmark,
+                        source_identity,
+                        has_pending_chunks=getattr(self, "_has_pending_chunks", False),
                     )
                     if self._bookmark_info["mode"] in ("incremental", "bounded"):
                         tids.update(self._previous_bookmark.get("held_threads", ()))
@@ -874,6 +877,15 @@ def ingest_t3(
     target = "dry-run" if dry_run else str(destination.resolve()) if destination else "default"
     if state.get("target") != target:
         state = {}
+    pending_ids = state.get("pending_chunks")
+    pending_unknown = "pending_chunks" in state and not (
+        isinstance(pending_ids, list)
+        and pending_ids
+        and all(isinstance(chunk_id, str) and chunk_id for chunk_id in pending_ids)
+    )
+    if pending_unknown:
+        logger.warning("Invalid T3 pending_chunks; replaying the full window")
+        pending_ids = None
     next_state = {"target": target, "sources": {}}
     reader._source_paths = [str(path) for path, _ in sources]
     # Side tables (T3 PR 3.1): which T3 thread a session belongs to. Absent until the
@@ -922,6 +934,7 @@ def ingest_t3(
     seen_messages = set()
     source_alerts = []
     resume_pending = True
+    source_windows = {}
     # Read every selected source before indexing. Newer projections win shared IDs.
     for path, version in sources:
         source_reader = (
@@ -934,7 +947,8 @@ def ingest_t3(
             key = str(path.resolve())
             previous = state.get("sources", {}).get(key, {})
             if version == 2:
-                source_reader._previous_bookmark = previous
+                source_reader._previous_bookmark = {} if pending_unknown else previous
+                source_reader._has_pending_chunks = bool(pending_ids)
                 if side["state"] in ("empty", "populated"):
                     source_reader._catalog_request = "all" if side["state"] == "empty" else "touched"
                     source_reader._catalog_retry_ids = unresolved.get(str(path), set())
@@ -960,6 +974,7 @@ def ingest_t3(
             with _timed_phase(reader._timings, "read_ms"):
                 source_threads = source_reader.read_threads(report_success=False)
             if hasattr(source_reader, "_next_bookmark"):
+                source_windows[key] = source_reader._bookmark_info
                 next_state["sources"][key] = source_reader._next_bookmark
                 resume_pending &= source_reader._next_bookmark.pop("resume_pending")
             if hasattr(source_reader, "_catalog"):
@@ -1058,11 +1073,11 @@ def ingest_t3(
             timings=reader._timings,
         )
         if (
-            "pending_chunks" in state
+            pending_ids
             and resume_pending
             and not any(source.get("held_threads") for source in state.get("sources", {}).values())
         ):
-            budget.pending_ids = set(state["pending_chunks"])
+            budget.pending_ids = set(pending_ids)
         try:
             for path, batch in batches.items():
                 result.chunks_indexed += _index_chunks(
@@ -1150,14 +1165,12 @@ def ingest_t3(
                     # Only an incremental window can replay from the old sequence.
                     # Full safety scans must keep reloading all pending threads.
                     "last_sequence": (
-                        reader._bookmark_info["bookmark_from"]
-                        if reader._bookmark_info["mode"] == "incremental"
-                        else None
+                        source_windows[key]["bookmark_from"] if source_windows[key]["mode"] == "incremental" else None
                     ),
                     # The held sequence and timestamp must describe the same start.
                     "occurred_at": (
                         state.get("sources", {}).get(key, {}).get("occurred_at")
-                        if reader._bookmark_info["mode"] == "incremental"
+                        if source_windows[key]["mode"] == "incremental"
                         else None
                     ),
                     "pending_to": candidate["last_sequence"],

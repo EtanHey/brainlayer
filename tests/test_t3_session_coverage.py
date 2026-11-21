@@ -20,7 +20,7 @@ STAMP = "2026-11-20T12:00:00Z"
 @pytest.mark.parametrize(
     "shape,expected_stored",
     [
-        ("queue-operation", False),
+        ("queue-operation", True),
         ("attachment", False),
         ("tool_result", False),
         ("image_text", True),

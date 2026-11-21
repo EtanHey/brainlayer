@@ -1,6 +1,6 @@
 [project]
 name = "brainlayer"
-version = "1.6.8"
+version = "1.6.9"
 description = "Persistent local memory for AI agents — 16 BrainBar MCP tools, semantic search, knowledge graph, SQLite"
 license = {text = "Apache-2.0"}
 readme = "README.md"
