@@ -12,6 +12,10 @@ from brainlayer.ingest import t3
 from tests.test_t3_thread_tables import _brainlayer_db, _session_chunk, _t3_fixture
 
 
+def _clean_git_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 @pytest.fixture
 def lane(tmp_path, monkeypatch):
     module = t3
@@ -19,7 +23,7 @@ def lane(tmp_path, monkeypatch):
         module = types.ModuleType("brainlayer.ingest.t3_baseline")
         module.__package__ = "brainlayer.ingest"
         # Read baseline code without switching or editing the live root checkout.
-        source = subprocess.check_output(["git", "show", "5119839e:src/brainlayer/ingest/t3.py"])
+        source = subprocess.check_output(["git", "show", "5119839e:src/brainlayer/ingest/t3.py"], env=_clean_git_env())
         import sys
 
         monkeypatch.setitem(sys.modules, module.__name__, module)
