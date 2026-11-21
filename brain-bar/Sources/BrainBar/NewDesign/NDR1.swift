@@ -159,12 +159,17 @@ struct NDR1: Equatable, Sendable {
             // One agent's sessions not read, or the reader itself.
             if let ingest = check("ingest"), let sev = sev(ingest) {
                 let agents = NDPipelineState.agentCodes(ingest)
+                // Named presenter faults/notices own ingest before lag. Keep a named fault uncovered here:
+                // the presenter-fault pass below preserves its wording, action and dropdown detail.
+                let lagTitle = BrainBarMenuPresenter.lagTitle(c)
+                let namedFault = m.faults.contains { $0.concerns.contains("ingest") && $0.title != lagTitle }
+                let namedNotice = ingestNotice(m, c)?.strings.first.map { $0 != lagTitle } ?? false
                 if let first = agents.first {
                     items.append(Item(id: "agent", severity: sev, title: Say.agentNotRead(NDProvider.name(first)), detail: Say.agentNotReadDetail,
                                       action: sev == .red ? copyReport : nil, strip: Strip(from: NDProvider.name(first), to: Say.stageRead, side: .source, severity: sev),
                                       concerns: ["ingest"], station: .agents))  // R1.12: one wording; Read's status is the tail
                     covered.insert("ingest")
-                } else if BrainBarMenuPresenter.Say.lagShown(c), BrainBarMenuPresenter.Say.lagDraining(c)
+                } else if !namedFault, !namedNotice, BrainBarMenuPresenter.Say.lagShown(c), BrainBarMenuPresenter.Say.lagDraining(c)
                             || BrainBarMenuPresenter.Say.producerStalled(c)
                             || BrainBarMenuPresenter.lagNeedsYou(c) {
                     // R1.11 (A1), R1.13 (A2, A3): the lag named, how far, BrainLayer's estimate when it has one; its severity
