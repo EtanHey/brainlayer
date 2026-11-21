@@ -59,6 +59,22 @@ final class BrainBarNewDesignR1133Tests: XCTestCase {
         XCTAssertEqual(item.menuTitle ?? item.title, notification.title, "dropdown uses the named fault")
     }
 
+    func testNamedAmberReaderNoticeWinsMeasuredCatchUp() throws {
+        let c = R113.capture(ingest: .amber, reasons: ["file_ingestion_failure"],
+                            catchUp: .init(state: "catching_up", bytesBehind: R113.mb117, etaS: 600))
+        let classic = BrainBarMenuPresenter.present(c)
+        let notice = try XCTUnwrap(classic.rows.first { $0.strings.first == BrainBarMenuPresenter.Say.unreadFiles.text })
+        let inputs = NDInputs(capture: c), model = NDModel.make(inputs), shown = NDR1.make(inputs, model)
+        let item = try XCTUnwrap(shown.items.first { $0.concerns.contains("ingest") })
+        XCTAssertEqual(item.title, BrainBarMenuPresenter.Say.unreadFiles.text)
+        XCTAssertEqual(item.title, notice.strings.first)
+        XCTAssertEqual(item.detail, BrainBarMenuPresenter.Say.unreadFilesLine.text)
+        XCTAssertEqual(item.severity, .orange)
+        XCTAssertNil(item.action)
+        XCTAssertEqual(item.menuTitle ?? item.title, notice.strings.first)
+        XCTAssertEqual(shown.items.count, 1)
+    }
+
     func testUnnamedIngestEvidenceKeepsMeasuredLagWithoutByItself() {
         var c = R113.capture(ingest: .amber, reasons: [],
                             catchUp: .init(state: "catching_up", bytesBehind: R113.mb117, etaS: 600))

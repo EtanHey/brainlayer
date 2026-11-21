@@ -478,3 +478,28 @@ import SwiftUI
         onOpenWindow?(page)
     }
 }
+
+/// L57: one refit after a store transaction, including input-only Jobs and Backups changes.
+/// Listening to objectWillChange also covers content that changes without changing the health headline.
+@MainActor final class NDPageFitObserver {
+    private var subscription: AnyCancellable?
+    private var scheduled = false
+    private let fit: @MainActor () -> Void
+
+    init(store: NDStore, fit: @escaping @MainActor () -> Void) {
+        self.fit = fit
+        subscription = store.objectWillChange.sink { [weak self] in
+            MainActor.assumeIsolated { self?.schedule() }
+        }
+    }
+
+    func schedule() {
+        guard !scheduled else { return }
+        scheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.scheduled = false
+            self.fit()
+        }
+    }
+}

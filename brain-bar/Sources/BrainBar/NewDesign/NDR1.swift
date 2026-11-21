@@ -121,6 +121,19 @@ struct NDR1: Equatable, Sendable {
     }
     static let backupChecks: Set<String> = ["drive_auth", "backup_local", "backup_offsite", "transcripts", "integrity", "disk"]
 
+    private static func ingestNotice(_ m: NDModel, _ c: BrainBarMenuCapture) -> P.Row? {
+        func isIngest(_ title: String) -> Bool {
+            guard let entry = BrainBarMenuPresenter.entry(for: title, c)?.0, entry.thing == .remembering else { return false }
+            return NDModel.concerns(title: title, thing: entry.thing, c).contains("ingest")
+        }
+        if let row = m.presentation.rows.first(where: { $0.state == .notice && $0.kind == .statusLine && $0.strings.first.map(isIngest) == true }) {
+            return row
+        }
+        guard isIngest(m.presentation.headline) else { return nil }
+        let detail = m.presentation.rows.filter { $0.kind == .headlineDetail && $0.state == .notice }.flatMap(\.strings)
+        return P.Row(kind: .statusLine, strings: [m.presentation.headline] + detail, state: .notice)
+    }
+
     static func make(_ i: NDInputs, _ m: NDModel) -> NDR1 {
         let c = i.capture
         let pipeline = NDPipelineState.make(i)
@@ -146,24 +159,36 @@ struct NDR1: Equatable, Sendable {
             // One agent's sessions not read, or the reader itself.
             if let ingest = check("ingest"), let sev = sev(ingest) {
                 let agents = NDPipelineState.agentCodes(ingest)
+                // Named presenter faults/notices own ingest before lag. Keep a named fault uncovered here:
+                // the presenter-fault pass below preserves its wording, action and dropdown detail.
+                let lagTitle = BrainBarMenuPresenter.lagTitle(c)
+                let namedFault = m.faults.contains { $0.concerns.contains("ingest") && $0.title != lagTitle }
+                let namedNotice = ingestNotice(m, c)?.strings.first.map { $0 != lagTitle } ?? false
                 if let first = agents.first {
                     items.append(Item(id: "agent", severity: sev, title: Say.agentNotRead(NDProvider.name(first)), detail: Say.agentNotReadDetail,
                                       action: sev == .red ? copyReport : nil, strip: Strip(from: NDProvider.name(first), to: Say.stageRead, side: .source, severity: sev),
                                       concerns: ["ingest"], station: .agents))  // R1.12: one wording; Read's status is the tail
                     covered.insert("ingest")
-                } else if BrainBarMenuPresenter.Say.lagShown(c), BrainBarMenuPresenter.Say.lagDraining(c)
-                            || BrainBarMenuPresenter.Say.producerStalled(c) {
+                } else if !namedFault, !namedNotice, BrainBarMenuPresenter.Say.lagShown(c), BrainBarMenuPresenter.Say.lagDraining(c)
+                            || BrainBarMenuPresenter.Say.producerStalled(c)
+                            || BrainBarMenuPresenter.lagNeedsYou(c) {
                     // R1.11 (A1), R1.13 (A2, A3): the lag named, how far, BrainLayer's estimate when it has one; its severity
                     // and its button are the presenter's one decision (a stalled lag carries the report).
                     let lagSeverity: NDSeverity = BrainBarMenuPresenter.lagNeedsYou(c) ? .red : .orange
-                    let stalled = BrainBarMenuPresenter.Say.producerStalled(c)
+                    let needsAgent = BrainBarMenuPresenter.lagNeedsReport(c)
                     items.append(Item(id: "reader", severity: lagSeverity,
                                       title: BrainBarMenuPresenter.lagTitle(c),
                                       // A3: who acts, as the menu's row says it.
-                                      detail: ([BrainBarMenuPresenter.lagDetail(c)] + (stalled ? [BrainBarMenuPresenter.Say.agent.text] : []))
+                                      detail: ([BrainBarMenuPresenter.lagDetail(c)] + (needsAgent ? [BrainBarMenuPresenter.Say.agent.text] : []))
                                           .compactMap { $0 }.joined(separator: " "),
-                                      action: stalled && lagSeverity == .red ? copyReport : nil,
+                                      action: needsAgent ? copyReport : nil,
                                       strip: Strip(from: Say.yourAgents, to: Say.stageRead, side: .target, severity: lagSeverity),
+                                      concerns: ["ingest"], station: .read))
+                    covered.insert("ingest")
+                } else if sev == .orange, let notice = ingestNotice(m, c), let title = notice.strings.first {
+                    items.append(Item(id: "reader", severity: .orange, title: title,
+                                      detail: notice.strings.dropFirst().joined(separator: " "), action: nil,
+                                      strip: Strip(from: Say.yourAgents, to: Say.stageRead, side: .target, severity: .orange),
                                       concerns: ["ingest"], station: .read))
                     covered.insert("ingest")
                 } else if !m.faults.contains(where: { $0.concerns.contains("ingest") }) {
