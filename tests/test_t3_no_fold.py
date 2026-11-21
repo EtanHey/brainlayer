@@ -2,7 +2,7 @@
 
 import pytest
 
-from brainlayer.dedupe import find_duplicate
+from brainlayer.dedupe import find_duplicate, normalized_exact_hash
 from brainlayer.drain import _insert_or_merge_chunk
 from brainlayer.vector_store import VectorStore
 from brainlayer.watcher_bridge import _archive_reconciliation_stored, create_flush_callback
@@ -99,3 +99,45 @@ def test_source_exclusion_applies_to_exact_and_simhash(tmp_path, near):
         assert hit.mechanism == ("simhash" if near else "sha256")
         hit, _ = find_duplicate(store.conn, **args, exclude_sources=("t3",))
         assert hit is None
+
+
+@pytest.mark.parametrize("route", ["watcher", "drain", "index"])
+def test_replayed_alias_moves_from_t3_to_its_session_twin(tmp_path, monkeypatch, route):
+    """A later session's existing alias follows ordinary dedupe to the mirror's twin."""
+    from brainlayer.dedupe import write_alias
+
+    db = tmp_path / "test.db"
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+    incoming_id = "rt-12345678-" + normalized_exact_hash(TEXT)[:16]
+    with VectorStore(db) as store:
+        seed(store, metadata={"t3_provider_session_id": "original-session"})
+        seed(
+            store,
+            "original-session-twin",
+            "realtime_watcher",
+            created_at="2026-11-17T12:00:01Z",
+            conversation_id="original-session",
+        )
+        write_alias(store.conn, old_chunk_id=incoming_id, canonical_chunk_id="t3:mirror")
+        write_alias(store.conn, old_chunk_id="unrelated", canonical_chunk_id="t3:mirror")
+        unrelated = store.conn.execute("SELECT * FROM chunk_id_alias WHERE old_chunk_id='unrelated'").fetchone()
+        if route == "watcher":
+            create_flush_callback(db, arbitrated=False)(
+                [
+                    {
+                        "type": "assistant",
+                        "message": {"role": "assistant", "content": TEXT},
+                        "timestamp": STAMP,
+                        "_source_file": str(tmp_path / "projects/alpha/12345678-1111-2222-3333-444455556666.jsonl"),
+                    }
+                ]
+            )
+        elif route == "drain":
+            _insert_or_merge_chunk(store.conn, chunk(incoming_id))
+        else:
+            store.upsert_chunks([chunk(incoming_id)], [None])
+        assert store.conn.execute(
+            "SELECT canonical_chunk_id FROM chunk_id_alias WHERE old_chunk_id=?", (incoming_id,)
+        ).fetchone() == ("original-session-twin",)
+        assert store.conn.execute("SELECT * FROM chunk_id_alias WHERE old_chunk_id='unrelated'").fetchone() == unrelated
+        assert store.conn.execute("SELECT seen_count FROM chunks WHERE id='t3:mirror'").fetchone() == (1,)
