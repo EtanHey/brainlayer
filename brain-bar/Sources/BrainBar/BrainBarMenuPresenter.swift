@@ -102,9 +102,12 @@ enum BrainBarMenuPresenter {
             || ((c.verdict?.checks ?? []).contains { $0.name == "ingest" && $0.state == .red } && !lagExcusesRed(c))
     }
 
+    /// R2-1: a red lag needs a handoff only when it is not draining. The legacy severity switch can mark a draining
+    /// lag red, but cannot turn "catching up by itself" into a request for an agent.
+    static func lagNeedsReport(_ c: Capture) -> Bool { lagNeedsYou(c) && !Say.lagDraining(c) }
+
     private static func lagLine(_ c: Capture) -> Line {
-        // Every red lag needs a report, including evidence the producer cannot name. Draining notices need no handoff.
-        let needsAgent = lagNeedsYou(c)
+        let needsAgent = lagNeedsReport(c)
         return Line(thing: .remembering, level: lagNeedsYou(c) ? .needs : .notice, strings: [lagTitle(c)] + (lagDetail(c).map { [$0] } ?? []),
                     headline: lagTitle(c), action: needsAgent ? .copyReport : nil, handoff: needsAgent ? [Say.agent.text] : [])
     }

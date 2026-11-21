@@ -169,7 +169,7 @@ struct NDR1: Equatable, Sendable {
                     // R1.11 (A1), R1.13 (A2, A3): the lag named, how far, BrainLayer's estimate when it has one; its severity
                     // and its button are the presenter's one decision (a stalled lag carries the report).
                     let lagSeverity: NDSeverity = BrainBarMenuPresenter.lagNeedsYou(c) ? .red : .orange
-                    let needsAgent = BrainBarMenuPresenter.lagNeedsYou(c)
+                    let needsAgent = BrainBarMenuPresenter.lagNeedsReport(c)
                     items.append(Item(id: "reader", severity: lagSeverity,
                                       title: BrainBarMenuPresenter.lagTitle(c),
                                       // A3: who acts, as the menu's row says it.

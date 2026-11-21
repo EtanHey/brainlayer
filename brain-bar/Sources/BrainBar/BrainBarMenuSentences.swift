@@ -661,8 +661,8 @@ extension BrainBarMenuPresenter {
         // Gap clarity: at-rest payloads and job purposes, not additional status claims.
         static let sessionBackups = "Session backups"
         static let searchAnswers = "Search answers"
-        static let nightlyPurpose = "Checks saving; tidies write log"
-        static let weeklyPurpose = "Compacts database"
+        static let nightlyPurpose = "Checks saving, tidies the log"
+        static let weeklyPurpose = "Compacts the database"
         static let stageMac = "Local copy"  // R1.10.5 (L50): one name everywhere
         static let stageDrive = "Google Drive"
         static let stageMeaning = "By meaning"

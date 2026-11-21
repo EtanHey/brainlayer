@@ -3043,14 +3043,16 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         var skipped = Fixture.inputs(.calm)
         skipped.jobs?[index].lastOutcome = .unknown
         XCTAssertNil(NDPipelineState.make(skipped).status[.weekly], "a skipped run says nothing, never \"last run\"")
-        // Both link to Memory both ways: straight up from the station to the box's bottom edge, an arrowhead at each end.
+        // Gap 79 / L56 deliberately spreads the job stations for their purpose lines. The elbow links still reach
+        // Memory's bottom edge, with an arrowhead at each end; their endpoint need not share the station's x.
         let L = NDPipelineLayout.self
         for (pipe, station) in [(NDPipe.jobsMemory, NDStation.jobs), (.weeklyMemory, .weekly)] {
             let link = try XCTUnwrap(L.connections.first { $0.pipe == pipe })
             XCTAssertTrue(link.bothWays, "\(station): both ways")
             XCTAssertEqual(link.line.points.first?.x, L.point(station).x)
-            XCTAssertEqual(link.line.points.last, CGPoint(x: L.point(station).x, y: L.hub.maxY + L.edgeGap))
-            XCTAssertTrue((L.hub.minX...L.hub.maxX).contains(L.point(station).x), "\(station) hangs under Memory")
+            let anchorX = station == .jobs ? L.hub.minX + 12 : L.hub.maxX - 12
+            XCTAssertEqual(link.line.points.last, CGPoint(x: anchorX, y: L.hub.maxY + L.edgeGap))
+            XCTAssertTrue((L.hub.minX...L.hub.maxX).contains(anchorX), "\(station) connects to Memory")
         }
         XCTAssertEqual(NDPipelineGraph.ends[.weeklyMemory]?.from, .weekly)
     }

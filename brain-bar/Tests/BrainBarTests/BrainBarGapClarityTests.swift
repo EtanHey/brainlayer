@@ -8,6 +8,42 @@ final class BrainBarGapClarityTests: XCTestCase {
     typealias R113 = BrainBarNewDesignR113Tests
     typealias Say = BrainBarMenuPresenter.Say
 
+    /// Gap 79 / L56: reproduce the geometry pin without running R1's window-owning test class on the owner's desk.
+    func testJobLinksAndChartHeightAfterPurposeLines() throws {
+        typealias L = NDPipelineLayout
+        for (pipe, station) in [(NDPipe.jobsMemory, NDStation.jobs), (.weeklyMemory, .weekly)] {
+            let link = try XCTUnwrap(L.connections.first { $0.pipe == pipe })
+            let anchorX = station == .jobs ? L.hub.minX + 12 : L.hub.maxX - 12
+            XCTAssertTrue(link.bothWays)
+            XCTAssertEqual(link.line.points.first?.x, L.point(station).x)
+            XCTAssertEqual(link.line.points.last, CGPoint(x: anchorX, y: L.hub.maxY + L.edgeGap))
+            for (a, b) in zip(link.line.points, link.line.points.dropFirst()) {
+                XCTAssertTrue(a.x == b.x || a.y == b.y, "orthogonal elbow")
+            }
+        }
+        // The intended +28 pt height still fits the lowest station's complete status line.
+        XCTAssertEqual(L.size.height, 324)
+        for fixture in BrainBarDesignFixture.Name.allCases {
+            let p = NDPipelineState.make(BrainBarDesignFixture.inputs(fixture))
+            for station in NDStation.allCases {
+                for rect in L.labelRects(station, p) { XCTAssertLessThanOrEqual(rect.maxY, L.size.height) }
+            }
+        }
+    }
+
+    func testDrainingLagNeverAsksForAnAgentOnEitherSeveritySetting() throws {
+        for severity: BrainBarMenuPresenter.LagSeverity in [.needsYouPastLimit, .noticeWhileDraining] {
+            let c = BrainBarNewDesignR111Tests.lag(clock: 2400, severity: severity)
+            let i = NDInputs(capture: c), m = NDModel.make(i), r = NDR1.make(i, m)
+            let item = try XCTUnwrap(r.items.first { $0.id == "reader" })
+            XCTAssertNil(item.action)
+            XCTAssertFalse(item.detail?.contains(Say.agent.text) == true)
+            XCTAssertFalse(m.presentation.rows.flatMap(\.strings).contains(Say.agent.text))
+            // This action fix never changes the severity decision, including the historical red side.
+            XCTAssertEqual(r.redCount, severity == .needsYouPastLimit ? 1 : 0)
+        }
+    }
+
     func testRestingCaptionsAndPurposeLinesKeepTheirOwnSpace() throws {
         typealias L = NDPipelineLayout
         typealias Deck = BrainBarMenuPresenter.SurfaceSay
@@ -38,6 +74,7 @@ final class BrainBarGapClarityTests: XCTestCase {
         for dark in [false, true] {
             // The menu bar can be light over wallpaper while the app is dark (and conversely).
             let appearance = try XCTUnwrap(NSAppearance(named: dark ? .aqua : .darkAqua))
+            let barAppearance = try XCTUnwrap(NSAppearance(named: dark ? .darkAqua : .aqua))
             for fixture: BrainBarDesignFixture.Name in [.calm, .notConfirmed, .meaningBehind, .driveSignedOut, .twoFaults] {
                 let i = BrainBarDesignFixture.inputs(fixture), m = NDModel.make(i), r = NDR1.make(i, m)
                 let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 100, pixelsHigh: 44,
@@ -48,7 +85,7 @@ final class BrainBarGapClarityTests: XCTestCase {
                 NSGraphicsContext.saveGraphicsState()
                 NSGraphicsContext.current = context
                 appearance.performAsCurrentDrawingAppearance {
-                    let image = NDIcon.image(for: m, r, appearance: NSAppearance(named: dark ? .darkAqua : .aqua)!)
+                    let image = NDIcon.image(for: m, r, appearance: barAppearance)
                     image.draw(in: NSRect(origin: .zero, size: image.size))
                     if image.isTemplate {
                         (dark ? NSColor.white : NSColor.black).setFill()
@@ -78,12 +115,10 @@ final class BrainBarGapClarityTests: XCTestCase {
                     return sorted.isEmpty ? 0 : sorted[sorted.count * 3 / 4]
                 }
                 let brain = try contrast(in: 2..<24)
-                print("contrast \(fixture) \(dark ? "dark" : "light") brain=\(brain)")
-                XCTAssertGreaterThanOrEqual(brain, 3)
+                XCTAssertGreaterThanOrEqual(brain, 3, "\(fixture) dark=\(dark)")
                 if r.redCount > 1 {
                     let count = try contrast(in: 50..<90)
-                    print("contrast count=\(count)")
-                    XCTAssertGreaterThanOrEqual(count, 3)
+                    XCTAssertGreaterThanOrEqual(count, 3, "count dark=\(dark)")
                 }
             }
         }

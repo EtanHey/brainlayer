@@ -8,7 +8,7 @@ enum NDPipelineLayout {
 
     /// 820 × 270 inside its surface (R1.4 change 19). The drawing may run 12 pt into the surface's right padding: the
     /// Kept-safe frame keeps 12 pt between its edge and any text (lead, 1.3 build brief).
-    /// R1.5 change 23: 820 × 282; the answers lane at y 248 clears Jobs' longer name and its status.
+    /// Gap 79 / L56: the answers lane at y 276 clears the job names, purpose lines and statuses.
     /// R1.12 change 6: 820 × 296; Search sits at the loop's bottom-right corner with its status line under it.
     /// Gap clarity: 28 pt more below the jobs for their purpose and timestamp, above the answers return.
     static let size = CGSize(width: 820, height: 324)
@@ -47,7 +47,7 @@ enum NDPipelineLayout {
     static let keptSafe = CGRect(x: 521, y: 38, width: 283, height: 84)
 
     /// R1.12 change 6: Search moves under Google Drive, to the loop's bottom-right corner; Memory → Search runs right
-    /// along the saves lane and down, and the answers return straight along y 248.
+    /// along the saves lane and down, and the answers return straight along yAnswers (276; gap 79 / L56).
     static let stations: [NDStation: CGPoint] = [
         .read: CGPoint(x: 215, y: 64), .queue: CGPoint(x: 215, y: 134), .search: CGPoint(x: 736, y: yAnswers),
         .mac: CGPoint(x: 599, y: 64), .drive: CGPoint(x: 736, y: 64), .jobs: CGPoint(x: 342, y: 186), .weekly: CGPoint(x: 528, y: 186),
@@ -418,7 +418,7 @@ enum NDPipelineLayout {
     static func purposeRect(_ s: NDStation) -> CGRect? {
         guard let words = purpose(s) else { return nil }
         let p = point(s)
-        let w = textWidth(words, size: 12)
+        let w = textWidth(words, size: 11)  // Gap 79 / L56 adds a purpose, keeping L54's 24/17/13/11 scale.
         return CGRect(x: p.x - w / 2, y: p.y + 37, width: w, height: 16)
     }
 
@@ -443,7 +443,7 @@ enum NDPipelineLayout {
     /// Only the two otherwise ambiguous routes get a short payload caption at rest.
     static func laneLabelRects() -> [(String, CGRect)] {
         [(Say.sessionBackups, yRail), (Say.searchAnswers, yAnswers)].map { words, y in
-            let w = textWidth(words, size: 12, weight: .medium)
+            let w = textWidth(words, size: 11, weight: .medium)  // Gap 74 captions keep L54's type scale.
             return (words, CGRect(x: 215 - w / 2, y: y - 8, width: w, height: 16))
         }
     }
