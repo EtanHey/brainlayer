@@ -279,7 +279,7 @@ struct NDBackupsPage: View {
                 }
             }
             events = events.filter { $0.hours >= -Self.past }
-            let stalled = stalls && driveDown
+            let stalled = stalls && (driveDown || (id == "backup_offsite" && row?.strong == true && store.inputs.backupProgress?.isStalled == true))
             let last = events.map(\.hours).max()
             if let next, !stalled { events.append(.init(hours: next.timeIntervalSince(now) / 3600, kind: .next)) }
             let count = attempts?.count ?? 0, failed = attempts?.filter { !$0.ok }.count ?? 0

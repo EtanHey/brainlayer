@@ -97,12 +97,12 @@ struct NDPipelineChart: View {
             }
             ForEach(Self.controls(items)) { control in station(control.station) }
             if let backupProgress, Self.showsProgress(state, progress: backupProgress) {
-                let p = NDPipelineLayout.point(.drive)
-                BrainBarBackupProgressView(progress: backupProgress, compact: true)
-                    .frame(width: 152)
+                let frame = Self.progressFrame(state)
+                BrainBarBackupProgressView(progress: backupProgress, compact: true, barOnly: state.status[.drive]?.severity != nil)
+                    .frame(width: frame.width)
                     .background(ND.card)
                     .frame(height: 0, alignment: .top)
-                    .offset(x: p.x - 76, y: p.y + 37)
+                    .offset(x: frame.minX, y: frame.minY)
                     .allowsHitTesting(false)
             }
             // R1.4 change 2: each provider icon's hover and spoken name is its name. 1.5.1: a provider a check names opens the
@@ -137,12 +137,20 @@ struct NDPipelineChart: View {
     }
 
     static func showsProgress(_ state: NDPipelineState, progress: BrainBarBackupProgress?) -> Bool {
-        progress != nil && state.status[.drive]?.severity == nil
+        progress != nil
+    }
+
+    /// Gap 22/23: the fault's baseline is y+43. A 3 pt bar at y+51 stays clear of it and the pipe at y=134.
+    static func progressFrame(_ state: NDPipelineState) -> CGRect {
+        let p = NDPipelineLayout.point(.drive)
+        return state.status[.drive]?.severity != nil
+            ? CGRect(x: p.x - 48, y: p.y + 51, width: 96, height: 3)
+            : CGRect(x: p.x - 76, y: p.y + 37, width: 152, height: 33)
     }
 
     static func drawingState(_ state: NDPipelineState, progress: BrainBarBackupProgress?) -> NDPipelineState {
         var drawn = state
-        if showsProgress(state, progress: progress) { drawn.status[.drive] = nil }
+        if progress != nil && state.status[.drive]?.severity == nil { drawn.status[.drive] = nil }
         return drawn
     }
 

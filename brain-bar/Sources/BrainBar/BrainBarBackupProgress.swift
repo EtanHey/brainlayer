@@ -9,6 +9,7 @@ struct BrainBarBackupProgress: Equatable, Sendable {
     var total: Int64?
     var lastGoodAt: Date?
     var checkpointAt: Date? = nil
+    var isStalled = false
     static let checkpointMaxAgeS: TimeInterval = 20 * 60
 
     static func read(_ backups: ObservabilityDocument.Backups, now: Date) -> Self? {
@@ -24,7 +25,8 @@ struct BrainBarBackupProgress: Equatable, Sendable {
                     identity: "\(local.destination ?? ""):\(started.timeIntervalSince1970)",
                     confirmed: verifying || !fresh ? nil : local.bytesConfirmed, total: verifying ? nil : local.bytesTotal,
                     lastGoodAt: backups.dbSnapshot.flatMap { $0.verified && $0.lastAt <= now ? $0.lastAt : nil },
-                    checkpointAt: fresh && !verifying ? local.bytesConfirmedAt : nil)
+                    checkpointAt: fresh && !verifying ? local.bytesConfirmedAt : nil,
+                    isStalled: !verifying && local.bytesConfirmedAt.map { now.timeIntervalSince($0) > checkpointMaxAgeS } == true)
     }
 
     var fraction: Double? {
@@ -49,17 +51,20 @@ struct BrainBarBackupProgress: Equatable, Sendable {
 struct BrainBarBackupProgressView: View {
     let progress: BrainBarBackupProgress
     var compact = false
+    var barOnly = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shown: BrainBarBackupProgress?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Text(compact ? (progress.phase == .upload ? BrainBarMenuPresenter.SurfaceSay.backupUploadingShort
-                    : BrainBarMenuPresenter.SurfaceSay.backupVerifyingShort) : progress.title).lineLimit(1)
-                Spacer(minLength: 0)
-                if let percent = progress.percentage, let at = progress.checkpointAt {
-                    Text("\(percent)% · " + at.formatted(date: .omitted, time: .shortened)).monospacedDigit().lineLimit(1)
+            if !barOnly {
+                HStack(spacing: 6) {
+                    Text(compact ? (progress.phase == .upload ? BrainBarMenuPresenter.SurfaceSay.backupUploadingShort
+                        : BrainBarMenuPresenter.SurfaceSay.backupVerifyingShort) : progress.title).lineLimit(1)
+                    Spacer(minLength: 0)
+                    if let percent = progress.percentage, let at = progress.checkpointAt {
+                        Text("\(percent)% · " + at.formatted(date: .omitted, time: .shortened)).monospacedDigit().lineLimit(1)
+                    }
                 }
             }
             GeometryReader { geometry in
@@ -73,7 +78,7 @@ struct BrainBarBackupProgressView: View {
                 }
             }
             .frame(height: 3)
-            if let at = progress.lastGoodAt {
+            if !barOnly, let at = progress.lastGoodAt {
                 Text((compact ? BrainBarMenuPresenter.SurfaceSay.backupLastGoodShort : BrainBarMenuPresenter.SurfaceSay.backupLastGood)
                     + " " + at.formatted(date: .abbreviated, time: .shortened))
                     .foregroundStyle(.secondary)

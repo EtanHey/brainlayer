@@ -57,7 +57,7 @@ import XCTest
         let state = NDR1.make(i, NDModel.make(i)).pipeline
         XCTAssertEqual(state.status[.drive]?.severity, .red)
         XCTAssertNotNil(i.backupProgress)
-        XCTAssertFalse(NDPipelineChart.showsProgress(state, progress: i.backupProgress))
+        XCTAssertTrue(NDPipelineChart.showsProgress(state, progress: i.backupProgress))
         XCTAssertEqual(NDPipelineChart.drawingState(state, progress: i.backupProgress).status[.drive], state.status[.drive])
     }
 
@@ -68,8 +68,31 @@ import XCTest
         XCTAssertTrue(lane.strong)
         XCTAssertNotNil(lane.stalledFrom)
         XCTAssertFalse(lane.events.isEmpty)
-        XCTAssertEqual(i.backupProgress?.percentage, 25)
+        XCTAssertNil(i.backupProgress?.percentage, "Gap 22: a stalled checkpoint older than the display limit carries no number")
+        XCTAssertEqual(i.capture.driveAuthModel, .valid)
+        XCTAssertEqual(i.capture.verdict?.checks.first { $0.name == "drive_auth" }?.state, .green)
+        XCTAssertEqual(i.backupProgress?.isStalled, true)
         XCTAssertNotNil(NDBackupsPage.displayedLane(lane, progress: i.backupProgress))
+    }
+
+    func testOverviewFaultFixturesKeepWordsAndAddBarInMeasuredSpace() throws {
+        for name in ["upload-snapshot-red", "upload-drive-signed-out", "upload-drive-stalled"] {
+            let i = try inputs(name)
+            let state = NDR1.make(i, NDModel.make(i)).pipeline
+            XCTAssertNotNil(state.status[.drive]?.severity, name)
+            XCTAssertTrue(NDPipelineChart.showsProgress(state, progress: i.backupProgress), name)
+            XCTAssertEqual(NDPipelineChart.drawingState(state, progress: i.backupProgress).status[.drive], state.status[.drive])
+            XCTAssertEqual(NDPipelineChart.progressFrame(state), CGRect(x: 688, y: 115, width: 96, height: 3))
+        }
+    }
+
+    func testOldByteCheckpointDoesNotCreateANewRedWhenBackupChecksAreGreen() throws {
+        var i = try inputs("upload-progress")
+        i.backupProgress?.isStalled = true
+        let page = NDBackupsPage(store: NDStore(fixture: i))
+        let lane = try XCTUnwrap(page.lanes(NDModel.make(i)).first { $0.id == "backup_offsite" })
+        XCTAssertFalse(lane.strong)
+        XCTAssertNil(lane.stalledFrom)
     }
 }
 #endif

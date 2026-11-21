@@ -99,7 +99,12 @@ import XCTest
             var state = NDPipelineState.calm
             state.status[.drive] = .init(text: severity == .red ? "Signed out" : "Last upload 40 h ago", severity: severity)
             XCTAssertEqual(NDPipelineChart.drawingState(state, progress: p).status[.drive], state.status[.drive])
-            XCTAssertFalse(NDPipelineChart.showsProgress(state, progress: p))
+            // Gap 22/23, round 13: a compact bar accompanies the fault instead of suppressing progress.
+            XCTAssertTrue(NDPipelineChart.showsProgress(state, progress: p))
+            let frame = NDPipelineChart.progressFrame(state)
+            XCTAssertEqual(frame.height, 3)
+            XCTAssertGreaterThan(frame.minY, NDPipelineLayout.point(.drive).y + 46)
+            XCTAssertLessThan(frame.maxY, NDPipelineLayout.point(.queue).y)
         }
         XCTAssertTrue(NDPipelineChart.showsProgress(.calm, progress: p))
     }
@@ -123,6 +128,7 @@ import XCTest
         for age in [TimeInterval?.none, .some(1201)] {
             let p = try XCTUnwrap(BrainBarBackupProgress.read(backups(checkpointAge: age), now: now))
             XCTAssertNil(p.percentage)
+            XCTAssertEqual(p.isStalled, age == .some(1201))
             XCTAssertEqual(p.accessibilityValue, BrainBarMenuPresenter.SurfaceSay.backupInProgress)
         }
     }

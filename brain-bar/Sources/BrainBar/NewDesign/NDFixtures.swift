@@ -188,7 +188,11 @@ enum BrainBarDesignFixture {
                 i.capture = capture(replacing(calmChecks(), check("backup_offsite", .red, age: 72 * 3600, limit: 54 * 3600)), dot: .red)
                 i.backupHistory = history(driveNewestHoursAgo: 72)
                 i.captureBackupChecks = BrainBarBackupChecks.derive(backups, now: now)
-            } else if name == .uploadDriveSignedOut || name == .uploadDriveStalled {
+            } else if name == .uploadDriveStalled {
+                i.capture = capture(replacing(calmChecks(), check("backup_offsite", .red, age: 72 * 3600, limit: 54 * 3600)), dot: .red)
+                i.capture.driveAuthModel = .valid
+                i.backupHistory = history(driveNewestHoursAgo: 72)
+            } else if name == .uploadDriveSignedOut {
                 i.capture = capture(replacing(calmChecks(), check("drive_auth", .red)), dot: .red)
                 i.capture.driveAuthModel = .invalid
                 i.capture = withDriveAge(i.capture, database: 27, conversations: 28)
@@ -204,8 +208,8 @@ enum BrainBarDesignFixture {
     static func backupFacts(_ name: Name) -> ObservabilityDocument.Backups {
         let verifying = name == .verifying
         let stale = name == .uploadSnapshotRed
-        let signedOut = name == .uploadDriveSignedOut || name == .uploadDriveStalled
-        let driveHours: Double = stale ? 72 : signedOut ? 27 : 3
+        let signedOut = name == .uploadDriveSignedOut
+        let driveHours: Double = stale || name == .uploadDriveStalled ? 72 : signedOut ? 27 : 3
         let transcriptHours: Double = signedOut ? 28 : 4
         let local = ObservabilityDocument.LocalSnapshot(
             lastAt: now.addingTimeInterval(-4 * 3600), destination: "capture-copy.db.gz", localVerified: true,
@@ -213,7 +217,7 @@ enum BrainBarDesignFixture {
             uploadProcessLive: true, uploadProcessStartedAt: now.addingTimeInterval(-3600),
             localIntegrity: "ok", localIntegrityPragma: "integrity_check", bytesConfirmed: 25,
             bytesTotal: name == .uploadNoTotal ? nil : 100, verificationPending: verifying,
-            bytesConfirmedAt: now.addingTimeInterval(name == .uploadStalled ? -15 * 60 : -60))
+            bytesConfirmedAt: now.addingTimeInterval(name == .uploadDriveStalled ? -21 * 60 : name == .uploadStalled ? -15 * 60 : -60))
         return ObservabilityDocument.Backups(
             state: "measured", reason: "", inputs: [], freshness: stale ? "stale" : "fresh", thresholdHours: 36,
             retentionInvariant: "PASS", survivingArchives30D: 7, errorType: nil,
