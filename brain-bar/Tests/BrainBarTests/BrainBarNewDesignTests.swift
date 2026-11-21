@@ -1992,14 +1992,28 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     /// No station moves between states; the Kept-safe frame never grows (R1.5: no actions on the chart).
     func testStationsDoNotMoveBetweenStates() {
         let expected: [NDStation: CGPoint] = [
-            // R1.12 change 6: Search at the loop's bottom-right corner, under Google Drive.
-            .read: CGPoint(x: 215, y: 44), .queue: CGPoint(x: 215, y: 114), .search: CGPoint(x: 736, y: 222),
+            // R14 deliberately moved Search to y297 to remove the unused lower band.
+            // Keep a literal pin, independent of the production layout tokens, in every state.
+            .read: CGPoint(x: 215, y: 44), .queue: CGPoint(x: 215, y: 114), .search: CGPoint(x: 736, y: 297),
             .mac: CGPoint(x: 599, y: 44), .drive: CGPoint(x: 736, y: 44), .jobs: CGPoint(x: 342, y: 138), .weekly: CGPoint(x: 528, y: 138),
         ]
         XCTAssertEqual(NDPipelineLayout.stations, expected)
+        let centers = expected.merging([.agents: CGPoint(x: 38, y: 72), .memory: CGPoint(x: 435, y: 65.5)]) { fixed, _ in fixed }
         for name in Fixture.Name.allCases {
             let p = pipeline(name)
+            // Check both axes of every actual station hit area, including Memory and the agents.
+            for (station, point) in centers {
+                let hit = NDPipelineLayout.hitShape(station, p).circle
+                XCTAssertEqual(CGPoint(x: hit.midX, y: hit.midY), point, "\(name.rawValue) \(station): fixed center")
+            }
             for (station, point) in expected {
+                let labels = NDPipelineLayout.labelRects(station, p)
+                XCTAssertEqual(labels.first?.minY, point.y + 17, "\(name.rawValue) \(station): fixed name y")
+                if p.status[station] != nil {
+                    let offset: CGFloat = station == .jobs || station == .weekly ? 57 : 33
+                    XCTAssertEqual(labels.last?.minY, point.y + offset, "\(name.rawValue) \(station): fixed status y")
+                }
+
                 for rect in NDPipelineLayout.labelRects(station, p) {
                     XCTAssertEqual(rect.midX, point.x, accuracy: 0.5, "\(name.rawValue) \(station): its words stay centred on it")
                 }
