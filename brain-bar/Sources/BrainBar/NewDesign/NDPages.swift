@@ -98,6 +98,20 @@ struct NDBackupsPage: View {
     static let pageChecks: Set<String> = ["drive_auth", "backup_local", "backup_offsite", "transcripts", "integrity", "disk"]
 
     var body: some View {
+#if DEBUG
+        if let checks = store.inputs.captureBackupChecks {
+            VStack(alignment: .leading, spacing: 20) {
+                NDPageTop(title: Say.backups, detail: nil)
+                BrainBarBackupChecksCard(checks: checks, hiddenAlert: nil, detailsExpanded: .constant(false),
+                                         copy: { _ in }, progress: store.inputs.backupProgress)
+            }
+        } else { pageBody }
+#else
+        pageBody
+#endif
+    }
+
+    @ViewBuilder private var pageBody: some View {
         let m = store.model
         let r1 = store.r1
         let lanes = lanes(m)

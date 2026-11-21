@@ -708,7 +708,7 @@ enum ObservabilityPresentation {
                 snapshotUpload = .init(text: missingLocalSnapshot, tone: .red)
             } else if pendingState && staleOffsite {
                 snapshotUpload = .init(text: staleText, tone: .red)
-            } else if value.uploaded && value.verificationPending == true && value.uploadProcessLive == true {
+            } else if value.uploaded && value.verificationPending == true && value.uploadProcessLive == true && value.localVerified && value.lastAt.map({ backups.isRecent($0, now: now) }) == true {
                 snapshotUpload = .init(text: backupVerificationText, tone: .neutral)
             } else if backups.localUploadPending(now: now) {
                 let uploadText: String

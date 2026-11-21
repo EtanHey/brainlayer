@@ -6,12 +6,13 @@ import XCTest
 
     private func backups(uploaded: Bool = false, pending: Bool = false, live: Bool = true,
                          total: Int64? = 100, goodAt: Date? = nil, state: String = "in_progress",
-                         checkpointAge: TimeInterval? = 30) throws -> ObservabilityDocument.Backups {
+                         checkpointAge: TimeInterval? = 30, localVerified: Bool = true,
+                         localAge: TimeInterval = 0) throws -> ObservabilityDocument.Backups {
         let data = Data("""
         {"state":"measured","reason":"","inputs":[],"threshold_hours":36,
          "db_snapshot":{"last_at":\((goodAt ?? now.addingTimeInterval(-3600)).timeIntervalSinceReferenceDate),"destination":"old.db.gz","verified":true},
-         "local_snapshot":{"last_at":\(now.timeIntervalSinceReferenceDate),"destination":"new.db.gz",
-           "local_verified":true,"uploaded":\(uploaded),"upload_state":"\(state)",
+         "local_snapshot":{"last_at":\(now.addingTimeInterval(-localAge).timeIntervalSinceReferenceDate),"destination":"new.db.gz",
+           "local_verified":\(localVerified),"uploaded":\(uploaded),"upload_state":"\(state)",
            "upload_process_live":\(live),"upload_process_started_at":\(now.addingTimeInterval(-60).timeIntervalSinceReferenceDate),
            "bytes_confirmed":25,"bytes_total":\(total.map(String.init) ?? "null"),"verification_pending":\(pending),
            "bytes_confirmed_at":\(checkpointAge.map { String(now.addingTimeInterval(-$0).timeIntervalSinceReferenceDate) } ?? "null")}}
@@ -134,5 +135,14 @@ import XCTest
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: b, now: now).snapshotUpload?.text,
                        BrainBarMenuPresenter.SurfaceSay.backupVerifying)
         XCTAssertFalse(ObservabilityPresentation.backupStatus(for: b, now: now).uploadQueued)
+    }
+
+    func testNeutralCheckingRequiresVerifiedRecentLocalCopy() throws {
+        for b in [try backups(uploaded: true, pending: true, state: "pending", localVerified: false),
+                  try backups(uploaded: true, pending: true, state: "pending", localAge: 37 * 3600)] {
+            let row = try XCTUnwrap(ObservabilityPresentation.backupStatus(for: b, now: now).snapshotUpload)
+            XCTAssertEqual(row.tone, .red)
+            XCTAssertNotEqual(row.text, ObservabilityPresentation.backupVerificationText)
+        }
     }
 }

@@ -627,7 +627,8 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
         XCTAssertEqual(BrainBarDesignFixture.Name.allCases.map(\.rawValue),
                        ["calm", "agent-not-read", "drive-signed-out", "saves-stuck", "meaning-behind", "nightly-failing",
                         "not-confirmed", "two-faults", "reconnect-waiting", "backups-failed-upload", "backup-late",
-                        "lag-behind", "lag-stalled", "search-failing"])  // R1.11, R1.13: the lag's states and agent-only
+                        "lag-behind", "lag-stalled", "search-failing", "upload-progress", "upload-no-total", "upload-stalled",
+                        "verifying", "upload-snapshot-red", "upload-drive-signed-out", "upload-drive-stalled"])
     }
 }
 
