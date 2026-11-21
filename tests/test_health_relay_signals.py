@@ -19,11 +19,13 @@ PLIST = ROOT / "scripts" / "health_relay" / "com.etanhey.brainlayer-health-relay
 
 
 @pytest.fixture
-def relay():
+def relay(monkeypatch):
     spec = importlib.util.spec_from_file_location("brainlayer_health_relay", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    # These cases test signal classification; wake tests exercise the real gate.
+    monkeypatch.setattr(module, "_confirmed", lambda issues, state: issues)
     return module
 
 
@@ -361,6 +363,9 @@ def test_malformed_remote_reply_commits_local_events_and_status(relay, env, repl
 def test_new_producer_decode_failures_are_corrupt_and_do_not_abort(relay, env, source, text, python):
     _alerts(env["m4"], {"backup-daily": "x"})
     (env["m4"] / source).write_text(text)
+    if python:
+        # The isolated CLI retains the real two-reading confirmation gate.
+        assert subprocess.run([python, "-I", str(SCRIPT), "--config", str(env["config"])]).returncode == 0
     code = (
         relay.run(env["config"])
         if python is None

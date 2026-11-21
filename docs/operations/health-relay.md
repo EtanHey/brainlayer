@@ -20,7 +20,12 @@ job inside it are dead. The `com.etanhey.*` label keeps it out of the fleet watc
 | `watcher-health.json` | `watcher-stale` when `updated_at` is older than `watcher_max_age_seconds` (600) |
 | `supervisor/jobs.json`, `pause.sentinel` | Nothing by themselves. `enabled: false`, or a current pause naming `com.brainlayer.health-check` / `com.brainlayer.watch`, suppresses that staleness alarm |
 
-Any read problem opens its own issue: `source-missing|unreadable|oversize|corrupt:<source>`.
+Any read problem has its own issue: `source-missing|unreadable|oversize|corrupt:<source>`.
+The first observation is a warning in `status.json` (`warnings` by host) and stderr; an issue
+opens only on a second consecutive reading. A relay gap over 900 seconds (three intervals),
+or a backward clock jump, resets confirmation and unreachable counts before reading again.
+After a wake, the next scheduled reading must confirm the fresh observation before BLOCKED.
+Existing confirmed episodes retain their delivery identity; warnings defer new escalation.
 A future timestamp counts as corrupt. `host-unreachable` opens after `unreachable_after` (3)
 failed SSH reads in a row and closes on the next successful read. Every other issue closes only
 on a **fresh, validated** read of its own source, so switching between unreadable, missing and
