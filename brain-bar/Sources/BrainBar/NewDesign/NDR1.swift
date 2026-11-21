@@ -244,7 +244,11 @@ struct NDR1: Equatable, Sendable {
             let station = f.jobs == [.maintenanceWeekly] ? NDStation.weekly
                 : (!f.jobs.isEmpty || f.thing == .upkeep) ? NDStation.jobs
                 : f.concerns.sorted().compactMap { stationForCheck[$0] }.first
-            items.append(Item(id: "p." + f.title, severity: red ? .red : .orange, title: f.title, detail: f.shownFacts.joined(separator: " "),
+            // Gap 22/23: keep the copy's date and live upload in one row; the progress line carries its checkpoint.
+            let uploadingAge = i.backupProgress?.phase == .upload && f.concerns.contains("backup_offsite")
+                ? verdict.flatMap { BrainBarMenuPresenter.copyAge(check("backup_offsite")?.ageS, c, $0) } : nil
+            let title = uploadingAge.map(Say.driveCopyUploading) ?? f.title
+            items.append(Item(id: "p." + f.title, severity: red ? .red : .orange, title: title, detail: f.shownFacts.joined(separator: " "),
                               action: action, strip: nil, concerns: f.concerns, station: station))
         }
         // Search by meaning behind (orange, late) or stalled (red): no button, there is nothing to do.

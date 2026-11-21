@@ -1,5 +1,6 @@
 #if DEBUG
 import XCTest
+import SwiftUI
 @testable import BrainBar
 
 @MainActor final class BrainBarBackupCaptureFixtureTests: XCTestCase {
@@ -8,6 +9,28 @@ import XCTest
     private func inputs(_ name: String) throws -> NDInputs {
         let fixture = try XCTUnwrap(Fixture.Name(rawValue: name))
         return Fixture.inputs(fixture)
+    }
+
+    func testUploadingFaultHeadlinesFitOneOverviewRow() throws {
+        for name in ["upload-snapshot-red", "upload-drive-stalled"] {
+            let i = try inputs(name)
+            let r1 = NDR1.make(i, NDModel.make(i))
+            XCTAssertEqual(r1.problemRows.count, r1.items.filter { $0.severity == .red }.count)
+            for row in r1.problemRows {
+                let width = 14 + 14 + 10 + NDPipelineLayout.textWidth(row.words, size: 13, weight: .semibold) + 12 + 110 + 14
+                XCTAssertLessThanOrEqual(width, 852, "\(name): \(row.words)")
+                print("backup row \(name): \(width) pt")
+            }
+            let drive = try XCTUnwrap(r1.stationItems[.drive])
+            XCTAssertTrue(drive.title.contains("an upload is running"))
+            XCTAssertTrue(drive.title.contains("Nov 12 at 07:59"))
+            let store = NDStore(fixture: i, page: .overview)
+            let model = NDStationPopover.model(.drive, item: drive, i, store.model, r1.pipeline)
+            let chart = NDPipelineChart(state: r1.pipeline, memories: store.model.memories, items: r1.stationItems)
+            let panel = chart.panel(.drive, content: AnyView(NDStationPopover(store: store, station: .drive)))
+            print("backup panel \(name): top=\(panel.outer.minY) title=\(model.title) lines=\(model.lines)")
+            XCTAssertGreaterThanOrEqual(panel.outer.minY, NDPipelineLayout.activityLabelsBottom)
+        }
     }
 
     func testUploadProgress() throws {

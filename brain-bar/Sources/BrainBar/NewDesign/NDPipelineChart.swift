@@ -161,7 +161,14 @@ struct NDPipelineChart: View {
         // The width first (a side panel narrows to stay inside the window), then the height the content needs at it.
         let width = NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: 100).body.width
         let height = NDStationPopover.measure(content, width: width).height
-        return NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: height)
+        let layout = NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: height)
+        if s == .drive, layout.outer.minY < NDPipelineLayout.activityLabelsBottom {
+            // Gap 22/23: a live-upload fault has more words. Use the room across the top lane, clear of Activity.
+            let wide: CGFloat = 600
+            let fittedHeight = NDStationPopover.measure(content, width: wide).height
+            return NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: fittedHeight, width: wide)
+        }
+        return layout
     }
 
     @ViewBuilder private func station(_ s: NDStation) -> some View {
@@ -799,7 +806,8 @@ struct NDStationPopover: View {
 
     var body: some View {
         NDStationPanelBody(model: Self.model(station, item: store.r1.stationItems[station], store.inputs, store.model, store.r1.pipeline),
-                           waiting: NDDriveWaiting.shows(store.inputs, for: store.r1.stationItems[station]?.action)) { store.perform($0) }
+                           waiting: NDDriveWaiting.shows(store.inputs, for: store.r1.stationItems[station]?.action),
+                           compactRows: station == .drive && store.inputs.backupProgress != nil) { store.perform($0) }
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 

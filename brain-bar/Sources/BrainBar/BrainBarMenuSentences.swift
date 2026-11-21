@@ -611,6 +611,9 @@ extension BrainBarMenuPresenter {
         static let backupVerifyingShort = "Checking copy"
         static let backupLastGoodShort = "Last good"
         static let backupInProgress = "In progress"
+        static func driveCopyUploading(_ age: String) -> String {
+            "Your newest backup in Google Drive is \(age); an upload is running."
+        }
         /// R3: a reconnect in progress.
         static let waitingForBrowser = "Waiting for you to approve in your browser…"
         /// R12: a failed copy leaves the button as it was and says so under it.
