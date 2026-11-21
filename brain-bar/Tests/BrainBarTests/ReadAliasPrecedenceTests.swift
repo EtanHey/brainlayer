@@ -3,7 +3,7 @@ import XCTest
 @testable import BrainBar
 
 final class ReadAliasPrecedenceTests: XCTestCase {
-    func testOwnActiveRowAndRetiredSurvivorAcrossNativeReads() throws {
+    func testNativeReadsKeepOwnRowAndOriginConversationWithoutFollowingAliases() throws {
         for retired in ["active", "archived_at", "superseded_by", "aggregated_into", "invalid_at"] {
             let path = brainBarTestTemporaryPath() + "read-alias-\(UUID().uuidString).db"
             let database = BrainDatabase(path: path)
@@ -19,6 +19,7 @@ final class ReadAliasPrecedenceTests: XCTestCase {
             XCTAssertEqual(sqlite3_exec(db, """
                 CREATE TABLE chunk_id_alias(old_chunk_id TEXT PRIMARY KEY, canonical_chunk_id TEXT, deprecated_at TEXT);
                 INSERT INTO chunk_id_alias VALUES ('own','survivor',datetime('now'));
+                INSERT INTO chunk_id_alias VALUES ('folded-only','survivor',datetime('now'));
                 """, nil, nil, nil), SQLITE_OK)
             if retired != "active" {
                 var columns: OpaquePointer?
@@ -31,12 +32,20 @@ final class ReadAliasPrecedenceTests: XCTestCase {
                 if !present { XCTAssertEqual(sqlite3_exec(db, "ALTER TABLE chunks ADD COLUMN \(retired) TEXT", nil, nil, nil), SQLITE_OK) }
                 XCTAssertEqual(sqlite3_exec(db, "UPDATE chunks SET \(retired)='retired' WHERE id='own'", nil, nil, nil), SQLITE_OK)
             }
-            let expected = retired == "active" ? "own" : "survivor"
+            let expected = "own"
             XCTAssertEqual(try database.getChunk(id: "own")?["id"] as? String, expected, retired)
             let expanded = try database.expandChunk(id: "own", before: 0, after: 0)
             XCTAssertEqual((expanded["target"] as? [String: Any])?["chunk_id"] as? String, expected, retired)
+            XCTAssertEqual((expanded["target"] as? [String: Any])?["session_id"] as? String, "own-session", retired)
             let recalled = try database.recallSession(sessionId: "own-session")
             XCTAssertEqual(recalled.first?["chunk_id"] as? String, expected, retired)
+            XCTAssertEqual(recalled.first?["content"] as? String, "The original session message", retired)
+            XCTAssertNil(try database.getChunk(id: "folded-only"), retired)
+            XCTAssertFalse(try database.archiveChunk(id: "folded-only"), retired)
+            XCTAssertFalse(try database.supersedeChunk(oldChunkID: "folded-only", newChunkID: "survivor"), retired)
+            let survivor = try XCTUnwrap(database.getChunk(id: "survivor"))
+            XCTAssertNil(survivor["archived_at"] as? String, retired)
+            XCTAssertNil(survivor["superseded_by"] as? String, retired)
             var stmt: OpaquePointer?
             XCTAssertEqual(sqlite3_prepare_v2(db, "SELECT canonical_chunk_id FROM chunk_id_alias WHERE old_chunk_id='own'", -1, &stmt, nil), SQLITE_OK)
             XCTAssertEqual(sqlite3_step(stmt), SQLITE_ROW)
