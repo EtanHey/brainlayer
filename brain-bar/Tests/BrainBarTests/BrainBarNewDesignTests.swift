@@ -53,6 +53,7 @@ import SwiftUI
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
                 window.contentView?.layoutSubtreeIfNeeded()
             }
+            controller.fitPage(store.page) // L57: settle the fixture content before stepping tab animations.
             controller.animatesPageSwitchForTesting = true
             var step: ((CGFloat) -> Void)?
             controller.pageFrameAnimatorForTesting = { target, _, _, finish in
@@ -146,7 +147,7 @@ import SwiftUI
         XCTAssertNil(started, "Reduce Motion: nothing animates")
         XCTAssertEqual(store.shownPage, .overview)
         XCTAssertEqual(window.contentRect(forFrameRect: window.frame).height,
-                       NDPageHeight.window(store, page: .overview, screen: controller.fitScreenHeight), accuracy: 0.5, "and the height at once")
+                       NDPageHeight.window(store, page: .overview, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight), accuracy: 0.5, "and the height at once")
         XCTAssertEqual(NDPageSwitch.order(from: 500, to: 800, animates: true), .pageThenFrame)
         XCTAssertEqual(NDPageSwitch.order(from: 800, to: 500, animates: true), .pageThenFrame)
         XCTAssertEqual(NDPageSwitch.order(from: 500, to: 800, animates: false), .together, "Reduce Motion: at once")
@@ -286,7 +287,7 @@ import SwiftUI
             XCTAssertEqual(store.drawnPageForTesting, page, "the window root drew the page the tab names")
             XCTAssertEqual(control.selectedSegment, index, "the selected segment names the same page")
             // L25: the page's height, capped the way the controller caps it (the runner's screen is small: 644 pt).
-            let height = NDPageHeight.window(store, page: page, screen: controller.fitScreenHeight)
+            let height = NDPageHeight.window(store, page: page, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight)
             let held = controller.windowWillResize(window, to: NSSize(width: 1200, height: 300)).height
             for measured in [window.frame.height, held] {
                 XCTAssertGreaterThanOrEqual(measured, height - 0.5, "\(page): the height follows the same page")
@@ -295,7 +296,7 @@ import SwiftUI
         }
     }
 
-    /// L25 on a small screen, injected so no machine decides it: the window is held at the cap (visible height minus 40),
+    /// L57: an injected small screen caps the content at its visible height minus actual AppKit chrome.
     /// the page scrolls inside it, and the footer stays at the window's bottom edge.
     func testASmallScreenCapsTheWindowThePageScrollsTheFooterStays() throws {
         let d = defaults()
@@ -306,10 +307,10 @@ import SwiftUI
         controller.applyDesign()
         controller.fitPage(.overview)
         let store = controller.newDesignStore
-        let cap: CGFloat = 600 - 40
+        let cap: CGFloat = 600 - controller.fitTitleBarHeight
         let page = ceil(NDPageHeight.content(store, page: .overview) + NDPageHeight.chrome)
         XCTAssertGreaterThan(page, cap, "the Overview is taller than this screen allows")
-        XCTAssertEqual(NDPageHeight.window(store, page: .overview, screen: controller.fitScreenHeight), cap)
+        XCTAssertEqual(NDPageHeight.window(store, page: .overview, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight), cap)
         let window = controller.windowForTesting
         let held = controller.windowWillResize(window, to: NSSize(width: 1200, height: 900)).height
         for measured in [window.frame.height, held] {
@@ -356,8 +357,8 @@ import SwiftUI
         // macOS 15, 0 measured on the capture Mac's macOS 26), so heights are pinned to [page, page + one 52 pt row].
         let window = controller.windowForTesting
         func holds(_ page: NDPage, _ line: UInt = #line) {
-            // R1.2 change 22 and L25: the page's measured height, capped at the screen's visible height minus 40 pt.
-            let h = NDPageHeight.window(controller.newDesignStore, page: page, screen: controller.fitScreenHeight)
+            // L57: the measured page, capped at the visible screen minus actual AppKit chrome.
+            let h = NDPageHeight.window(controller.newDesignStore, page: page, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight)
             let held = controller.windowWillResize(window, to: NSSize(width: 1400, height: 200))
             XCTAssertEqual(held.width, 900, "not resizable: the delegate holds the page size", line: line)
             XCTAssertGreaterThanOrEqual(held.height, h, line: line)
@@ -1504,8 +1505,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         // R1.10 (L48): the Overview grows by the problems surface only: 12 pt, then two 36 pt rows and the line between.
         XCTAssertEqual(twoFaults - calm, NDGrid.headlineToRows + 2 * NDProblemRows.rowHeight + 0.5, accuracy: 1.5,
                        "only the problem rows make it taller (R1.12: 14 pt under the headline)")
-        // L25: capped at the screen's visible height minus 40 pt; past it, the page scrolls and the footer stays.
-        XCTAssertEqual(NDPageHeight.window(NDStore(fixture: three, page: .overview), page: .overview, screen: 720), 680)
+        // L57: without AppKit chrome, this offscreen page can use the full visible height.
+        XCTAssertEqual(NDPageHeight.window(NDStore(fixture: three, page: .overview), page: .overview, screen: 720), 720)
         print("Overview heights: " + heights.joined(separator: ", "))
     }
 
@@ -1822,14 +1823,14 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertNil(NDMenuHeadline.detail(r1, lastVerdictHadRed: true), "only when the last confirmed verdict had no red check")
     }
 
-    /// R1.2 change 22 and L25: the window is the page's real height in every fixture, capped at the screen minus 40 pt.
+    /// L57: the page is capped at the visible screen, minus injected AppKit chrome.
     func testWindowIsThePagesHeightCappedByTheScreen() {
         for name in Fixture.Name.allCases {
             for page in NDPage.allCases {
                 let store = NDStore(fixture: Fixture.inputs(name), page: page)
                 let needed = ceil(NDPageHeight.content(store, page: page) + NDPageHeight.chrome)
                 XCTAssertEqual(NDPageHeight.window(store, page: page, screen: nil), needed, "\(name.rawValue) \(page)")
-                XCTAssertEqual(NDPageHeight.window(store, page: page, screen: 600), min(needed, 560), "\(name.rawValue) \(page): L25")
+                XCTAssertEqual(NDPageHeight.window(store, page: page, screen: 600), min(needed, 600), "\(name.rawValue) \(page): L57")
             }
         }
     }
@@ -2436,7 +2437,11 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertTrue(source.contains("NDMotion.pageResize(reduceMotion: reduceMotionForTesting ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)"),
                       "the system's Reduce Motion, unless a test sets it")
         XCTAssertTrue(source.contains("CAMediaTimingFunction(controlPoints: c.0, c.1, c.2, c.3)"), "R1.8 item 1: the strong ease-out")
-        XCTAssertTrue(source.contains("y: top - frameSize.height"), "the top edge stays")
+        // L57: exercise the production frame calculation after moving it out of the controller.
+        let before = NSRect(x: 100, y: 200, width: 900, height: 500)
+        let after = NDPageHeight.frame(size: NSSize(width: 900, height: 600), keeping: before, visibleFrame: nil)
+        XCTAssertEqual(after.maxY, before.maxY, "the top edge stays")
+        XCTAssertEqual(after.minX, before.minX)
     }
 
     /// R2A 8: Memory carries its unit.
