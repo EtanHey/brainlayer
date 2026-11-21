@@ -487,7 +487,7 @@ map_changed_files_to_pytests() {
         elif [ "$changed" = "src/brainlayer/index_budget.py" ]; then
           idx_tests=(test_index_calendar_custody.py test_cli_index_calendar.py)
         elif [ "$changed" = "src/brainlayer/ingest/t3.py" ] || [ "$changed" = "src/brainlayer/ingest/t3_ownership.py" ] || [ "$changed" = "src/brainlayer/ingest/t3_audit.py" ]; then
-          idx_tests=(test_ingest_t3.py test_t3_ingest_deferred_embedding.py test_t3_ingest_bookmark.py test_health_check.py test_paths.py test_t3_thread_tables.py test_t3_ownership.py)
+          idx_tests=(test_ingest_t3.py test_t3_ingest_deferred_embedding.py test_t3_ingest_bookmark.py test_health_check.py test_paths.py test_t3_thread_tables.py test_t3_ownership.py test_t3_session_coverage.py)
         elif [ "$changed" = "src/brainlayer/ingest/t3_bookmark.py" ]; then
           idx_tests=(test_t3_ingest_bookmark.py test_ingest_t3.py)
         elif [ "$changed" = "src/brainlayer/maintenance_calendar.py" ]; then

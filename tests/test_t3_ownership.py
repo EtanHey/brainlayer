@@ -46,6 +46,8 @@ def lane(tmp_path, monkeypatch):
     def watcher():
         with sqlite3.connect(db) as conn:
             _session_chunk(conn, "watcher", "sess-claude", stamp)
+            conn.execute("UPDATE chunks SET content=? WHERE id='watcher'", (text,))
+        conn.close()
 
     return run, watcher, db, source, bookmark
 
@@ -62,11 +64,11 @@ def test_watcher_late_holds_advances_then_retries_without_an_event(lane):
     saved = json.loads(bookmark.read_text())
     state = next(iter(saved["sources"].values()))
     assert state["last_sequence"] == 1
-    assert state["held"] == ["th-claude"]
+    assert state["held_threads"] == ["th-claude"]
     assert "pending_chunks" not in saved
     watcher()
     assert run().chunks_indexed == 0
-    assert next(iter(json.loads(bookmark.read_text())["sources"].values()))["held"] == []
+    assert next(iter(json.loads(bookmark.read_text())["sources"].values()))["held_threads"] == []
 
 
 def test_watcher_never_falls_back_after_grace(lane, monkeypatch):
@@ -84,6 +86,49 @@ def test_watcher_never_falls_back_after_grace(lane, monkeypatch):
             json.loads(conn.execute("SELECT metadata FROM chunks WHERE source='t3'").fetchone()[0])["t3_owner_reason"]
             == "session_late"
         )
+
+
+def test_deferred_run_keeps_held_threads_alongside_per_source_start(lane, monkeypatch):
+    import sqlite3
+
+    run, watcher, db, source, bookmark = lane
+    watcher()
+    run()
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM chunks WHERE id='watcher'")
+    conn.close()
+    with sqlite3.connect(source) as conn:
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_messages VALUES ('budget', 'th-none', 'user', ?, ?, 0, ?)",
+            (
+                "2026-11-19T00:00:00Z",
+                json.dumps({"text": "An older T3-only turn awaiting its bounded write budget."}),
+                "2026-11-19T00:00:00Z",
+            ),
+        )
+        for thread in ["th-claude", "th-none"]:
+            conn.execute(
+                "INSERT INTO orchestration_events(event_type,stream_id,occurred_at,payload_json) VALUES ('message.updated',?,'2026-11-20T00:00:00Z','{}')",
+                (thread,),
+            )
+    conn.close()
+    monkeypatch.setattr(t3, "DEFAULT_T3_MAX_CHANGED_CHUNKS", 0)
+    assert run().chunks_deferred == 1
+    saved = json.loads(bookmark.read_text())
+    state = next(iter(saved["sources"].values()))
+    assert state["held_threads"] == ["th-claude"]
+    assert state["last_sequence"] == 1
+    assert state["occurred_at"] == "2026-11-19T00:00:00Z"
+    assert state["pending_to"] == 3
+    assert saved["pending_chunks"] == ["t3:th-none:budget:0"]
+    monkeypatch.setattr(t3, "DEFAULT_T3_MAX_CHANGED_CHUNKS", 1)
+    assert run().chunks_indexed == 1
+    state = next(iter(json.loads(bookmark.read_text())["sources"].values()))
+    assert state["held_threads"] == ["th-claude"]
+    assert state["last_sequence"] == 3
+    watcher()
+    assert run().chunks_indexed == 0
+    assert next(iter(json.loads(bookmark.read_text())["sources"].values()))["held_threads"] == []
 
 
 def test_absent_side_tables_preserve_main(lane):
@@ -115,6 +160,45 @@ def test_unlinked_session_is_owned_by_t3(lane):
     run, _, _, source, _ = lane
     with sqlite3.connect(source) as conn:
         conn.execute("UPDATE orchestration_v2_projection_provider_threads SET payload_json='{}'")
+    assert run().chunks_indexed == 1
+
+
+def test_user_message_the_session_never_stored_but_a_later_reply_exists(lane):
+    """A later session row is not evidence for an older queued steering message."""
+    import sqlite3
+    from datetime import timedelta
+
+    run, _, db, source, _ = lane
+    later = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
+    old = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    with sqlite3.connect(source) as conn:
+        conn.execute("UPDATE orchestration_v2_projection_messages SET created_at=?", (old,))
+    with sqlite3.connect(db) as conn:
+        _session_chunk(conn, "reply-after-queued-message", "sess-claude", later)
+    assert run().chunks_indexed == 1
+    with sqlite3.connect(db) as conn:
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM chunks WHERE source='t3' AND json_extract(metadata,'$.message_id')='m'"
+            ).fetchone()[0]
+            == 1
+        )
+
+
+def test_last_seen_bump_from_a_merge_moves_the_watermark(lane):
+    """A last_seen bump from another session must not cover this absent message."""
+    import sqlite3
+    from datetime import timedelta
+
+    run, _, db, source, _ = lane
+    later = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
+    old = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    with sqlite3.connect(source) as conn:
+        conn.execute("UPDATE orchestration_v2_projection_messages SET created_at=?", (old,))
+    with sqlite3.connect(db) as conn:
+        _session_chunk(
+            conn, "old-row-bumped-by-other-session", "sess-claude", "2026-11-19T00:00:00Z", last_seen_at=later
+        )
     assert run().chunks_indexed == 1
 
 

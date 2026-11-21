@@ -1,11 +1,26 @@
 """Conservative, recomputed session ownership for T3 text."""
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from ..dedupe import normalize_for_exact_hash
 from ..t3_thread_tables import ELIGIBLE_DRIVERS, plan_t3_thread_rows
 
 GRACE_SECONDS = 30 * 60
 WATERMARK_MARGIN_SECONDS = 5
+
+
+@dataclass(frozen=True)
+class SessionCoverage:
+    high_water: float | None
+    texts: tuple[str, ...]
+
+
+def normalized_message_text(text):
+    from ..pipeline.secret_scrub import scrub_for_storage
+    from ..watcher_bridge import _strip_system_reminders
+
+    return normalize_for_exact_hash(_strip_system_reminders(scrub_for_storage(text)[0]))
 
 
 def timestamp(value):
@@ -47,11 +62,25 @@ def ownership_facts(conn, entries):
     entries = list(entries)
     plan = plan_t3_thread_rows(conn, entries)
     water = {row[0]: timestamp(row[11]) for row in plan["threads"]}
+    conversations = {row[0]: row[5] for row in plan["sessions"] if row[5]}
+    evidence = {}
     facts = {}
     for entry in entries:
         native = [p for p in entry.provider_threads if p.native_session_id]
         if len(native) == 1 and native[0].driver in ELIGIBLE_DRIVERS:
-            facts[entry.thread_id] = water.get(entry.thread_id)
+            conversation = conversations.get(entry.thread_id)
+            if conversation and conversation not in evidence:
+                # A T3 row, alias into T3, or a row in another conversation is
+                # not evidence that the session stored this message. Managed
+                # session rows still prove storage and therefore remain eligible.
+                evidence[conversation] = tuple(
+                    normalize_for_exact_hash(row[0] or "")
+                    for row in conn.execute(
+                        "SELECT content FROM chunks WHERE conversation_id=? AND source != 't3'",
+                        (conversation,),
+                    )
+                )
+            facts[entry.thread_id] = SessionCoverage(water.get(entry.thread_id), evidence.get(conversation, ()))
     return facts
 
 
@@ -68,7 +97,12 @@ def message_owner(message, water, *, now=None):
     created = timestamp(message.created_at)
     if created is None:
         return "uncertain"
-    if water is not None and created <= water + WATERMARK_MARGIN_SECONDS:
-        return "covered"
+    high_water = water.high_water if isinstance(water, SessionCoverage) else water
+    if high_water is not None and created <= high_water + WATERMARK_MARGIN_SECONDS:
+        from .t3_audit import _text_covered
+
+        texts = water.texts if isinstance(water, SessionCoverage) else ()
+        if _text_covered(normalized_message_text(message.text), texts):
+            return "covered"
     now = datetime.now(timezone.utc).timestamp() if now is None else now
     return "held" if now - created < GRACE_SECONDS else "session_late"

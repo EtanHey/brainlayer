@@ -2354,6 +2354,7 @@ IDX_FOCUSED_MAPPINGS = (
             "test_paths.py",
             "test_t3_thread_tables.py",
             "test_t3_ownership.py",
+            "test_t3_session_coverage.py",
         ),
     ),
     (

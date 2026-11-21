@@ -301,7 +301,7 @@ class T3Reader:
                         conn, self._previous_bookmark, source_identity
                     )
                     if self._bookmark_info["mode"] in ("incremental", "bounded"):
-                        tids.update(self._previous_bookmark.get("held", ()))
+                        tids.update(self._previous_bookmark.get("held_threads", ()))
                         selection = (mids, tids)
                         if getattr(self, "_include_message_identities", False):
                             # Legacy precedence needs all V2 owners, not just touched threads.
@@ -1013,7 +1013,7 @@ def ingest_t3(
             facts = ownership_facts(conn, catalog.values())
         finally:
             conn.close()
-    held_by_source = {}
+    held_threads_by_source = {}
     with _timed_phase(reader._timings, "chunk_ms"):
         for path, thread in threads:
             for message in thread.messages:
@@ -1027,7 +1027,7 @@ def ingest_t3(
                     decision = message_owner(message, facts[thread.thread_id])
                     result.ownership[decision] = result.ownership.get(decision, 0) + 1
                     if decision == "held":
-                        held_by_source.setdefault(str(path.resolve()), set()).add(thread.thread_id)
+                        held_threads_by_source.setdefault(str(path.resolve()), set()).add(thread.thread_id)
                     if decision in ("covered", "held", "dropped"):
                         continue
                 message_chunks = _message_chunks(thread, message)
@@ -1046,7 +1046,7 @@ def ingest_t3(
     result.chunks_planned = len(chunks)
     for key, candidate in next_state["sources"].items():
         if "last_sequence" in candidate:
-            candidate["held"] = sorted(held_by_source.get(key, ()))
+            candidate["held_threads"] = sorted(held_threads_by_source.get(key, ()))
     if chunks and not dry_run:
         if destination is None:
             from ..paths import DEFAULT_DB_PATH
@@ -1060,7 +1060,7 @@ def ingest_t3(
         if (
             "pending_chunks" in state
             and resume_pending
-            and not any(source.get("held") for source in state.get("sources", {}).values())
+            and not any(source.get("held_threads") for source in state.get("sources", {}).values())
         ):
             budget.pending_ids = set(state["pending_chunks"])
         try:
@@ -1134,18 +1134,18 @@ def ingest_t3(
         )
     )
     if result.chunks_deferred and state_path is not None and hasattr(reader, "_next_bookmark"):
-        held = {
+        deferred_state = {
             "target": target,
             "sources": dict(state.get("sources", {})),
             "pending_chunks": sorted(budget.deferred_ids),
         }
-        for key, ids in held_by_source.items():
-            held["sources"].setdefault(key, {})["held"] = sorted(ids)
+        for key, ids in held_threads_by_source.items():
+            deferred_state["sources"].setdefault(key, {})["held_threads"] = sorted(ids)
         for path, version in sources:
             key = str(path.resolve())
             candidate = next_state["sources"].get(key)
             if version == 2 and candidate:
-                held["sources"][key] = {
+                deferred_state["sources"][key] = {
                     **candidate,
                     # Only an incremental window can replay from the old sequence.
                     # Full safety scans must keep reloading all pending threads.
@@ -1162,7 +1162,7 @@ def ingest_t3(
                     ),
                     "pending_to": candidate["last_sequence"],
                 }
-        t3_bookmark.save(state_path, held)
+        t3_bookmark.save(state_path, deferred_state)
     if state_path is not None and (not dry_run or bookmark_path) and result.bookmark_held is None:
         try:
             t3_bookmark.save(state_path, next_state)

@@ -1500,6 +1500,7 @@ case "${1:-all}" in
         install_plist p0-counter
         ;;
     t3-ingest)
+        echo "Installing T3 ingestion and its daily read-only t3-audit coverage check."
         install_many t3-ingest t3-audit
         ;;
     t3-audit)

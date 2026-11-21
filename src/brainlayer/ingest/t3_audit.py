@@ -7,13 +7,11 @@ from pathlib import Path
 
 from ..dedupe import normalize_for_exact_hash
 from ..job_alerts import alert_path, report
-from ..pipeline.secret_scrub import scrub_for_storage
 from ..system_prompt_guard import looks_like_system_prompt
 from ..t3_thread_tables import ELIGIBLE_DRIVERS, _codex_conversations
-from ..watcher_bridge import _strip_system_reminders
 from .t3 import T3Reader, _chunk_id, _message_chunks
 from .t3_bookmark import save
-from .t3_ownership import GRACE_SECONDS, session_admits, timestamp
+from .t3_ownership import GRACE_SECONDS, normalized_message_text, session_admits, timestamp
 
 
 def _text_covered(needle, stored_texts):
@@ -124,7 +122,7 @@ def audit_t3(state_db, *, db_path, health_path, projection_version=None):
                         texts = {}
                         for row in rows:
                             texts.setdefault(row[4], []).append(normalize_for_exact_hash(row[1]))
-                    needle = normalize_for_exact_hash(_strip_system_reminders(scrub_for_storage(message.text)[0]))
+                    needle = normalized_message_text(message.text)
                     if not any(_text_covered(needle, values) for values in texts.values()):
                         candidates = _message_chunks(thread, message)
                         if candidates and all(
