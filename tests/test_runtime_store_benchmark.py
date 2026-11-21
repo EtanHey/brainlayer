@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 import scripts.benchmark_runtime_store_open as benchmark_module
@@ -15,18 +17,25 @@ def test_runtime_open_benchmark_refuses_canonical_path(tmp_path, monkeypatch):
         benchmark_runtime_open(canonical, iterations=1, telemetry_path=tmp_path / "telemetry.jsonl")
 
 
-def test_runtime_open_benchmark_reports_percentiles_and_zero_corpus_scans(tmp_path):
+def test_runtime_open_benchmark_reports_percentiles_and_zero_corpus_scans(tmp_path, monkeypatch):
     db_path = tmp_path / "copy" / "brainlayer.db"
     telemetry_path = tmp_path / "runtime-open.jsonl"
     OfflineMigrator(db_path).close()
+
+    # Exercise real opens and telemetry; reporting must not depend on runner load.
+    # Include an above-100ms sample so this also proves slow opens are reported.
+    clock = iter((0, 0.145284, 1, 1.020, 2, 2.030, 3, 3.040, 4, 4.050))
+    monkeypatch.setattr(benchmark_module, "time", SimpleNamespace(perf_counter=lambda: next(clock)))
 
     result = benchmark_runtime_open(db_path, iterations=5, telemetry_path=telemetry_path)
 
     assert result["mode"] == "runtime"
     assert result["iterations"] == 5
     assert result["runtime_open_events"] == 5
-    assert result["p50_ms"] <= result["p99_ms"] <= result["max_ms"]
-    assert result["p99_ms"] < 100
+    assert result["p50_ms"] == 40.0
+    assert result["p95_ms"] == 145.284
+    assert result["p99_ms"] == 145.284
+    assert result["max_ms"] == 145.284
     assert result["schema_fingerprints"]
     assert result["statement_violations"] == []
     assert result["corpus_scan_statements"] == []

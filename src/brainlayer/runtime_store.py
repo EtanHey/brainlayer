@@ -68,6 +68,11 @@ _REQUIRED_SCHEMA_OBJECTS = {
 
 _OPTIONAL_SCHEMA_OBJECTS = {
     "chunk_vectors_binary",
+    # T3 PR 3.1 side tables: optional so a database the lead has not migrated yet
+    # keeps every writer working; their definitions are pinned below when present.
+    "idx_t3_thread_sessions_conversation",
+    "t3_thread_sessions",
+    "t3_threads",
 }
 
 _REQUIRED_CHUNK_COLUMNS = {
@@ -197,6 +202,11 @@ _REQUIRED_SQL_HASHES: dict[str, frozenset[str]] = {
     "idx_chunks_simhash_band_1": frozenset({"3f8901a6bf1dc70f01f8f8b17b2fc68215f45c062a633a48e6832326340899f3"}),
     "idx_chunks_simhash_band_2": frozenset({"1fcdaedbce66e519aa5e25ff55fde96dcc48db507011dd6ec92eb85b030378c2"}),
     "idx_chunks_simhash_band_3": frozenset({"ef9832d08371d0f7afd5e72f868b716e1cb84afd849664d5ff9e0d8d74741e57"}),
+    "idx_t3_thread_sessions_conversation": frozenset(
+        {"7c41a7a4dc92267a17ad502611fbd19de68743481f22527b0361dcf9f946e7b5"}
+    ),
+    "t3_thread_sessions": frozenset({"211fc3629421ffaaddbb4c37122411a3289d1941b724108d93146075b4a7e4c1"}),
+    "t3_threads": frozenset({"8361393bb6e55ddfd956e05e86108b45500a858acc190a542fc87b119d06eb69"}),
 }
 
 

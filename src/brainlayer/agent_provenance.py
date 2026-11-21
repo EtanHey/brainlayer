@@ -17,12 +17,26 @@ from typing import Literal, cast
 from .agy_attribution import agy_conversation, read_conversation_agent
 from .content_class import normalize_content_class
 from .ingest_denylist import MEMORY_READER_ATTRIBUTIONS, is_denylisted, memory_reader_attribution
-from .t3_provenance import T3_APP_SESSION, CompactCodexHeader, is_t3_app_initiated_codex_session
+from .source_visibility import (  # noqa: F401  (re-exported: the shared visibility list)
+    ALWAYS_HIDDEN_SOURCE_CLASSES,
+    DEFAULT_HIDDEN_SOURCE_CLASSES,
+    OPT_IN_HIDDEN_SOURCE_CLASSES,
+    hidden_source_class_sql,
+    hidden_source_classes,
+    is_hidden_source_class,
+)
+from .source_visibility import THINKING_SOURCE_CLASS as _THINKING_SOURCE_CLASS
+from .t3_provenance import T3_APP_SESSION, T3_UNLINKED, CompactCodexHeader, is_t3_app_initiated_codex_session
 
 SearchPolicy = Literal["KEEP", "ISOLATE", "OUT"]
 EffectiveVisibility = Literal["default", "operational", "cold"]
-SourceClass = Literal["cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination"]
-SOURCE_CLASSES = frozenset({"cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination"})
+SourceClass = Literal["cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination", "agent-thinking"]
+SOURCE_CLASSES = frozenset({"cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination", "agent-thinking"})
+# Thinking chunks keep the class they would otherwise carry in metadata.thinking_source_class.
+# The visibility list lives in source_visibility (dependency-free, so the hooks can read it).
+THINKING_SOURCE_CLASS: SourceClass = cast(SourceClass, _THINKING_SOURCE_CLASS)
+
+
 ProvenanceClass = Literal[
     "codex-session",
     "cursor-gather",
@@ -33,6 +47,7 @@ ProvenanceClass = Literal[
     "recon-agent",
     "t3-app-session",
     "t3-thread",
+    "t3-unlinked",
     "unknown",
     "workflow-agent",
 ]
@@ -47,6 +62,7 @@ PROVENANCE_CLASSES = frozenset(
         "recon-agent",
         T3_APP_SESSION,
         "t3-thread",
+        T3_UNLINKED,
         "unknown",
         "workflow-agent",
     }
@@ -261,10 +277,14 @@ def derive_source_class(
     source: str | None = None,
     content: str | None = None,
 ) -> SourceClass | None:
-    """Return the five-value source class only when provenance is unambiguous."""
+    """Return a provenance-derived source class only when provenance is unambiguous.
+
+    Never returns agent-thinking: that class marks content, not provenance, and is supplied by the writer.
+    """
     provenance_map: dict[str, SourceClass] = {
         T3_APP_SESSION: "cli-agent",
         "t3-thread": "cli-agent",
+        T3_UNLINKED: "cli-agent",
         "recon-agent": "brain-worker",
         "fleet-subagent": "fleet-coordination",
         "product-subagent": "subagent",
@@ -292,7 +312,7 @@ def derive_source_class(
 
 
 def normalize_source_class(value: object) -> SourceClass | None:
-    """Accept only an exact member of the five-value taxonomy."""
+    """Accept only an exact member of the source-class taxonomy (``SOURCE_CLASSES``, including agent-thinking)."""
     normalized = str(value or "").strip()
     return cast(SourceClass, normalized) if normalized in SOURCE_CLASSES else None
 
@@ -310,12 +330,21 @@ def resolve_source_class(
     provenance_class: str | None = None,
     source: str | None = None,
 ) -> SourceClass | None:
-    """Prefer independently derived provenance; use only a valid supplied fallback."""
-    return derive_source_class(
+    """Prefer independently derived provenance; use only a valid supplied fallback.
+
+    A supplied ``agent-thinking`` label is the one exception: provenance says who wrote a
+    chunk, not whether it was thinking, so it keeps the label unless provenance says
+    brain-worker (always hidden, which is stricter).
+    """
+    derived = derive_source_class(
         source_file,
         provenance_class=provenance_class,
         source=source,
-    ) or normalize_source_class(supplied_source_class)
+    )
+    supplied = normalize_source_class(supplied_source_class)
+    if supplied == THINKING_SOURCE_CLASS and derived not in ALWAYS_HIDDEN_SOURCE_CLASSES:
+        return supplied
+    return derived or supplied
 
 
 def effective_visibility(decision: ProvenanceDecision, content_class: str | None) -> EffectiveVisibility:

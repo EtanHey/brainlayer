@@ -1034,6 +1034,72 @@ No results found.
         }
     }
 
+    /// #1824: agents' thinking is hidden from default brain_search, revealed only by an
+    /// unadvertised opt-in (never brain-workers), and labelled wherever expand/recall show it.
+    func testThinkingIsOptInOnBrainSearchAndLabelledInExpandAndRecall() throws {
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-thinking-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
+        let database = BrainDatabase(path: tempDB)
+        defer { database.close() }
+        database.exec("ALTER TABLE chunks ADD COLUMN source_class TEXT")
+        let rows = [
+            ("thinking-said", "cli-agent"),
+            ("thinking-thought", "agent-thinking"),
+            ("thinking-worker", "brain-worker"),
+        ]
+        for (chunkID, sourceClass) in rows {
+            try database.insertChunk(
+                id: chunkID, content: "ThinkingOptInNeedle \(chunkID) body",
+                sessionId: "thinking-session", project: "brainlayer",
+                contentType: "assistant_text", importance: 5
+            )
+            database.exec("UPDATE chunks SET source_class = '\(sourceClass)' WHERE id = '\(chunkID)'")
+        }
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(database)
+        func search(_ extra: [String: Any]) throws -> String {
+            var arguments: [String: Any] = ["query": "ThinkingOptInNeedle", "num_results": 10]
+            arguments.merge(extra) { _, new in new }
+            return try toolText(router.handle(toolCall(id: 330, name: "brain_search", arguments: arguments)))
+        }
+
+        let byDefault = try search([:])
+        XCTAssertTrue(byDefault.contains("thinking-said"), byDefault)
+        XCTAssertFalse(byDefault.contains("thinking-thought"), byDefault)
+        XCTAssertFalse(byDefault.contains("thinking-worker"), byDefault)
+
+        let optedIn = try search(["include_hidden_source_classes": true])
+        XCTAssertTrue(optedIn.contains("thinking-said"), optedIn)
+        XCTAssertTrue(optedIn.contains("thinking-thought"), optedIn)
+        XCTAssertFalse(optedIn.contains("thinking-worker"), optedIn)
+        // Re-check R4: the opted-in thinking row is labelled; the said row is not.
+        XCTAssertEqual(optedIn.components(separatedBy: "K: agent thinking, not said aloud").count, 2, optedIn)
+        XCTAssertFalse(byDefault.contains("agent thinking"), byDefault)
+        let exactThought = try search(["query": "thinking-thought", "include_hidden_source_classes": true])
+        XCTAssertTrue(exactThought.contains("K: agent thinking, not said aloud"), exactThought)
+
+        // Unadvertised: neither the schema nor the description names the switch.
+        let tool = try XCTUnwrap(listedTools(router).first { ($0["name"] as? String) == "brain_search" })
+        let schema = try XCTUnwrap(tool["inputSchema"] as? [String: Any])
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        XCTAssertNil(properties["include_hidden_source_classes"])
+        XCTAssertFalse((tool["description"] as? String ?? "").contains("hidden"))
+
+        let expanded = try toolText(router.handle(toolCall(id: 331, name: "brain_expand", arguments: [
+            "chunk_id": "thinking-said", "before": 0, "after": 1
+        ])))
+        XCTAssertTrue(expanded.contains("[thinking-thought] (agent thinking, not said aloud) "), expanded)
+        let expandedThought = try toolText(router.handle(toolCall(id: 332, name: "brain_expand", arguments: [
+            "chunk_id": "thinking-thought", "before": 0, "after": 0
+        ])))
+        XCTAssertTrue(expandedThought.contains("Target (agent thinking, not said aloud)"), expandedThought)
+
+        let recalled = try toolText(router.handle(toolCall(id: 333, name: "brain_recall", arguments: [
+            "mode": "context", "session_id": "thinking-session"
+        ])))
+        XCTAssertEqual(recalled.components(separatedBy: "- Kind: agent thinking, not said aloud").count, 2, recalled)
+    }
+
     func testBrainRecallAdvertisesOnlyImplementedModes() throws {
         let router = MCPRouter(profile: "full")
         let recall = try XCTUnwrap(listedTools(router).first { ($0["name"] as? String) == "brain_recall" })

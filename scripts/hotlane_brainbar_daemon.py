@@ -888,8 +888,7 @@ def _pending_chunk_rows(
                 archived_at,
                 superseded_by,
                 aggregated_into,
-                COALESCE(archived, 0),
-                COALESCE(status, 'active')
+                source
             FROM chunks
             WHERE id IN ({placeholders})
             """,
@@ -898,7 +897,10 @@ def _pending_chunk_rows(
         content_by_id = {
             str(row[0]): str(row[1])
             for row in content_rows
-            if row[1] and row[2] is None and row[3] is None and row[4] is None
+            # T3 imports defer ALL embeddings, including edits to history. Those
+            # rows need fresh vectors for include_archived searches; embedding
+            # does not change their lifecycle or default search visibility.
+            if row[1] and (row[5] == "t3" or (row[2] is None and row[3] is None and row[4] is None))
         }
         for chunk_id in candidate_ids:
             if chunk_id not in content_by_id:
@@ -1166,9 +1168,11 @@ def _write_embedded_vectors_once(
                       AND r.id IS NULL
                       AND c.content IS NOT NULL
                       AND c.content != ''
-                      AND c.archived_at IS NULL
-                      AND c.superseded_by IS NULL
-                      AND c.aggregated_into IS NULL
+                      AND (c.source = 't3' OR (
+                          c.archived_at IS NULL
+                          AND c.superseded_by IS NULL
+                          AND c.aggregated_into IS NULL
+                      ))
                     """,
                     (chunk_id, content),
                 ).fetchone()
@@ -1612,6 +1616,7 @@ def run(
                         adaptive_drain = True
             burst_deadline = now + backlog_budget_seconds
             batch_duration = 0.0
+            result = CycleResult(embedded=0)
             first_batch = True
             while first_batch or (forced_turn and adaptive_drain):
                 if not first_batch:

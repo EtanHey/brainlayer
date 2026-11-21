@@ -309,6 +309,26 @@ def _scope_clause(project: Any, content_type: Any) -> tuple[str, list[Any]]:
     return " AND ".join(clauses), params
 
 
+def _visibility_clause(conn: Any, hidden: bool | None) -> str:
+    """Keep dedupe on one side of the default-search line (#1824).
+
+    ``hidden=None`` is the legacy, unscoped lookup. Otherwise a candidate must sit in
+    the same visibility tier as the incoming row: a reply never folds into a hidden
+    thinking row, and thinking is never appended into a visible one. A hidden write
+    (thinking, desktop) matches only the opt-in tier, never an always-hidden
+    brain-worker row, which the opt-in could not reach (#1824 re-check R2).
+    """
+    if hidden is None:
+        return "1=1"
+    if "source_class" not in {row[1] for row in conn.cursor().execute("PRAGMA table_info(chunks)")}:
+        return "1=1"
+    from .source_visibility import OPT_IN_HIDDEN_SOURCE_CLASSES, hidden_source_class_sql
+
+    if hidden:
+        return "source_class IN (" + ", ".join(f"'{value}'" for value in OPT_IN_HIDDEN_SOURCE_CLASSES) + ")"
+    return hidden_source_class_sql("source_class")
+
+
 def find_duplicate(
     conn: Any,
     *,
@@ -317,10 +337,18 @@ def find_duplicate(
     created_at: str | None,
     project: Any = None,
     content_type: Any = None,
+    hidden: bool | None = None,
 ) -> tuple[DuplicateHit | None, DedupeFields]:
+    """Find the canonical row a new chunk folds into.
+
+    ``hidden`` is the incoming row's side of the default-search line
+    (``agent_provenance.is_hidden_source_class``); writers pass it so a fold never
+    crosses it. It composes with any other candidate filter.
+    """
     fields = compute_dedupe_fields(content, created_at)
     cursor = conn.cursor()
     scope_sql, scope_params = _scope_clause(project, content_type)
+    scope_sql = f"{scope_sql} AND {_visibility_clause(conn, hidden)}"
     exact = cursor.execute(
         f"""
         SELECT id FROM chunks
@@ -837,8 +865,14 @@ def merge_existing_chunk_seen(
     if merged_half_life is not None:
         updates["half_life_days"] = merged_half_life
     from .agent_provenance import normalize_source_class
+    from .source_visibility import THINKING_SOURCE_CLASS
 
     incoming_source_class = normalize_source_class(incoming.get("source_class"))
+    # A thinking write never relabels a row that already exists: on a same-id merge the
+    # existing row (a reply, or a user's message with the same words) keeps its class.
+    # Both writers meet here: the direct watcher path and the production drain.
+    if incoming_source_class == THINKING_SOURCE_CLASS:
+        incoming_source_class = None
     if incoming_source_class is not None and "source_class" in {
         row[1] for row in cursor.execute("PRAGMA table_info(chunks)")
     }:

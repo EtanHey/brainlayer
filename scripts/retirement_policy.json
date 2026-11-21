@@ -1796,6 +1796,16 @@
         "target": "importlib.util.find_spec"
       }
     },
+    "4724ac31ea1960762bcbe9678fa78e531d8cf233623ad8608d0dc8abb6dd52be": {
+      "non_cloud_purpose": "Local read-only (mode=ro, query_only) SQLite open of the BrainLayer database to report whether the T3 thread side tables exist and hold rows; no network or model sender. Site: src/brainlayer/t3_thread_tables.py <module>.side_table_state sqlite3.connect.",
+      "site": {
+        "call_sha256": "a206d95c7eeb092dcdb362ec9fdfda68fef7c71dcee90559643014b4634c92cb",
+        "kind": "generic_send",
+        "owner": "<module>.side_table_state",
+        "path": "src/brainlayer/t3_thread_tables.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "4726129dc24f06c46b2377afd6c513a89f30ecddbdf67a665d74b232ca92c17c": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.check_db urllib.parse.unquote.",
       "site": {
@@ -2970,6 +2980,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/maintenance.py",
         "target": "import subprocess"
+      }
+    },
+    "7141d57f75021dc180ce0891800e1ad8eb12ac3285c6d96717a0346110633c47": {
+      "non_cloud_purpose": "Local read-only (mode=ro, query_only) SQLite open of the BrainLayer database to plan T3 thread side-table rows (session conversation ids and high-water marks) before the short local write; no network or model sender. Site: src/brainlayer/ingest/t3.py <module>._write_side_tables sqlite3.connect.",
+      "site": {
+        "call_sha256": "1d3dda52ac3c994afcd981424e5b7f47ca2f65048c2b3e721bba0acaae806fe5",
+        "kind": "generic_send",
+        "owner": "<module>._write_side_tables",
+        "path": "src/brainlayer/ingest/t3.py",
+        "target": "sqlite3.connect"
       }
     },
     "716a46f8417012142374a6948ce754716e2bf7d6a4a532ad5396dd57fe171ba3": {
@@ -5166,6 +5186,16 @@
         "owner": "<module>.AppSocket.__init__",
         "path": "scripts/harness_probe_native.py",
         "target": "socket.socket"
+      }
+    },
+    "be190900208dfd4f78ba7cad2554abdee40aa3f0d5ac82c7cf26c7093c02c83b": {
+      "non_cloud_purpose": "Read-only SQLite lookup of unresolved eligible T3 session links, scoped by source database, for local watcher catch-up; no network or model send.",
+      "site": {
+        "call_sha256": "a206d95c7eeb092dcdb362ec9fdfda68fef7c71dcee90559643014b4634c92cb",
+        "kind": "generic_send",
+        "owner": "<module>.unresolved_thread_ids",
+        "path": "src/brainlayer/t3_thread_tables.py",
+        "target": "sqlite3.connect"
       }
     },
     "be2e7bf812f360e6552d1d7ec3ba7c5f5ab9cca8fc768123fbb94c51734e56db": {
