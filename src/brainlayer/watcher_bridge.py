@@ -40,7 +40,12 @@ from .chunk_origin import detect_chunk_origin
 from .chunk_write import insert_canonical_chunk
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .content_class import classify_content_class
-from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_seen, normalized_exact_hash
+from .dedupe import (
+    find_duplicate,
+    merge_duplicate_chunk,
+    merge_existing_chunk_seen,
+    normalized_exact_hash,
+)
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
 from .pipeline.chunk import chunk_content
@@ -404,6 +409,7 @@ def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, proje
                     project=project,
                     content_type=content_type,
                     hidden=hidden,
+                    exclude_sources=("t3",),
                 )[0]
                 is not None
             )
@@ -776,6 +782,7 @@ def create_flush_callback(
                                 project=project,
                                 content_type=chunk.content_type.value,
                                 hidden=is_hidden_source_class(source_class),
+                                exclude_sources=("t3",),
                             )
                             if duplicate is not None:
                                 merge_duplicate_chunk(
@@ -791,6 +798,7 @@ def create_flush_callback(
                                     },
                                     mechanism=duplicate.mechanism,
                                     hamming_distance_value=duplicate.hamming_distance,
+                                    preserve_existing_alias=True,
                                 )
                                 record_direct_liveness(duplicate.canonical_chunk_id, ingested_at)
                                 metrics.run("commit", cursor.execute, "COMMIT")
