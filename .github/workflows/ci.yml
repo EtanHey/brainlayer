@@ -369,7 +369,9 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    # 60 = the 3000s unit deadline + ~5 min setup (disk, caches, install: ~285s on a passing 3.12 job,
+    # run 44925060329) + ~1 min of post-test gates, with headroom, so the named ci-unit deadline fires first.
+    timeout-minutes: 60
     strategy:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
@@ -441,7 +443,7 @@ jobs:
           PY
 
       # On 2026-11-21, #1837's 3.12 suite passed in 2390.11s but hit the 2400s deadline
-      # (run 44929496633, job 136922786971). 3000s keeps a hard bound; the 55m job leaves setup room.
+      # (run 44929496633, job 136922786971). 3000s keeps a hard bound; the 60m job leaves setup room.
       - name: Unit tests
         env:
           HF_HUB_OFFLINE: "1"
