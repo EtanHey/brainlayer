@@ -104,3 +104,72 @@ def test_archived_own_with_live_duplicate_resolves_before_reactivation(tmp_path)
                 match = reader._resolved_candidate(db, event)
             assert match is not None and match[:2] == ("live", "elsewhere.jsonl")
         assert store.conn.execute("SELECT seen_count FROM chunks WHERE id='live'").fetchone() == (1,)
+
+
+@pytest.mark.parametrize("shortcut", ["exact_hash", "writer_alias", "own_id"])
+@pytest.mark.parametrize(
+    "existing_class,incoming_class",
+    [
+        ("agent-thinking", "cli-agent"),
+        ("cli-agent", "agent-thinking"),
+        ("brain-worker", "agent-thinking"),
+    ],
+)
+def test_manifest_queues_cross_visibility_candidates_for_the_writer(
+    tmp_path, monkeypatch, shortcut, existing_class, incoming_class
+):
+    from types import SimpleNamespace
+
+    from brainlayer import codex_zst, queue_io
+
+    path = tmp_path / "fixture.db"
+    existing = dict(
+        chunk_id="canonical",
+        content="Manifest visibility recovery must preserve this repeated assistant reply separately.",
+        source_file="old.jsonl",
+        project="repo",
+        content_type="assistant_text",
+        source_class=existing_class,
+    )
+    candidate = dict(existing, chunk_id="incoming", source_file="new.jsonl", source_class=incoming_class)
+    if shortcut == "own_id":
+        candidate["chunk_id"] = existing["chunk_id"]
+    with VectorStore(path) as store:
+        _ensure_watcher_liveness_schema(store.conn)
+        _apply_watcher(store.conn, existing)
+        if shortcut == "writer_alias":
+            store.conn.execute(
+                "INSERT INTO chunk_id_alias(old_chunk_id, canonical_chunk_id, deprecated_at) VALUES(?, ?, '2026-11-20')",
+                (candidate["chunk_id"], existing["chunk_id"]),
+            )
+    queued = []
+    monkeypatch.setattr(codex_zst, "queue_has_capacity", lambda: True)
+    monkeypatch.setattr(queue_io, "enqueue_watcher_chunk", lambda **row: queued.append(row))
+    receipt = dict(
+        filtered=0,
+        would_insert=0,
+        duplicate_content=0,
+        all_duplicate_matches=[],
+        duplicate_matches=[],
+        queued=0,
+        queued_chunk_ids=[],
+    )
+    preview = []
+
+    def plan(entries):
+        preview.append(candidate)
+        return SimpleNamespace(skipped=0, deferred_entries=[])
+
+    with reader._committed(path) as db:
+        reader._plan_window(plan, [], preview, receipt, db, False)
+    assert queued == [candidate]
+    assert receipt["queued"] == 1
+    assert receipt["duplicate_content"] == 0
+    # Real drain writer, not a planner mock: visible same-id input promotes the old thinking row.
+    with VectorStore(path) as store:
+        _apply_watcher(store.conn, queued[0])
+        stored_class = store.conn.execute(
+            "SELECT source_class FROM chunks WHERE id=?", (candidate["chunk_id"],)
+        ).fetchone()[0]
+        expected = existing_class if shortcut == "own_id" and incoming_class == "agent-thinking" else incoming_class
+        assert stored_class == expected

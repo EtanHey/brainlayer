@@ -16,19 +16,14 @@ from typing import Any
 
 import sqlite_vec
 
-from .agent_provenance import derive_source_class
+from .agent_provenance import SOURCE_CLASSES, derive_source_class
 from .paths import get_db_path
 
 MIGRATION_NAME = "2026_08_10_source_class_v1"
 MIGRATION_EVENT_ID = "schema:2026_08_10_source_class_v1"
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-_SOURCE_CLASSES = (
-    "cli-agent",
-    "desktop",
-    "subagent",
-    "brain-worker",
-    "fleet-coordination",
-)
+# The shared taxonomy, so a DB holding a newer class (agent-thinking, #1824) still validates.
+_SOURCE_CLASSES = tuple(sorted(SOURCE_CLASSES))
 
 
 def _utc_now() -> str:

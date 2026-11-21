@@ -40,6 +40,15 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.8] - 2026-11-21
+
+### A returned transcript is revived above its tombstone, so a checkpoint is never dropped in silence
+
+- perf(t3-ingest): stop loading the embedding model; the hotlane embeds new T3 rows (#1826)
+- fix(watcher): revive returned plain transcripts above tombstones (#1835)
+- feat(t3): a session memory shows its T3 thread (title, project, link) through a side table (#1830)
+- feat(ingest): agents' thinking is stored but kept out of default search (both paths) (#1824)
+
 ## [1.6.7] - 2026-11-20
 
 ### A T3 session that T3 never links is indexed after a bounded hold, not counted as a stall

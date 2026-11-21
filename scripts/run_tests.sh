@@ -186,6 +186,23 @@ map_changed_files_to_pytests() {
         [ -f "$test_path" ] && append_unique "$test_path"
       done
     fi
+    # #1824: the hidden-class policy (agents' thinking) spans the hooks, the writers, dedupe
+    # and search; test_source_visibility.py drives all of them on both writer paths.
+    case "$changed" in
+      hooks/brainlayer-prompt-search.py|hooks/brainlayer-session-start.py)
+        # test_adaptive_injection.py loads the prompt hook with a fake store cursor; leaving it
+        # unmapped let a hook change pass pre-push and fail CI (#1824 re-check R1).
+        for rel in test_source_visibility.py test_conditional_hooks.py test_adaptive_injection.py; do
+          if [ -f "$TEST_ROOT/$rel" ]; then
+            append_unique "$TEST_ROOT/$rel"
+            mapped=1
+          fi
+        done
+        ;;
+      src/brainlayer/dedupe.py|src/brainlayer/drain.py|src/brainlayer/watcher_bridge.py|src/brainlayer/store.py|src/brainlayer/vector_store.py|src/brainlayer/search_repo.py|src/brainlayer/source_class_migration.py|src/brainlayer/agent_provenance.py)
+        [ -f "$TEST_ROOT/test_source_visibility.py" ] && append_unique "$TEST_ROOT/test_source_visibility.py"
+        ;;
+    esac
     case "$changed" in
       .github/workflows/*.yml|.github/workflows/*.yaml)
         # Select the workflow's actual owners; unrelated CI guards cannot establish coverage.
@@ -329,7 +346,9 @@ map_changed_files_to_pytests() {
         done
         ;;
       src/brainlayer/vector_store.py|src/brainlayer/search_repo.py)
-        for rel in test_source_class.py test_vector_store_schema_flags.py test_vector_store_upsert_transactions.py test_hybrid_search.py test_vector_store_readonly.py test_search_trigram_fts.py test_precompact_chunk_origin.py; do
+        # t3-ingest writes vectorless rows and relies on upsert_chunks dropping a stale vector
+        # (#1826), so the deferred-embedding and vector-invalidation suites ride along.
+        for rel in test_source_class.py test_vector_store_schema_flags.py test_vector_store_upsert_transactions.py test_hybrid_search.py test_vector_store_readonly.py test_search_trigram_fts.py test_precompact_chunk_origin.py test_runtime_ddl_ledger.py test_t3_thread_tables.py test_t3_ingest_deferred_embedding.py test_store_vector_invalidation.py; do
           test_path="$TEST_ROOT/$rel"
           if [ -f "$test_path" ]; then
             append_unique "$test_path"
@@ -468,13 +487,13 @@ map_changed_files_to_pytests() {
         elif [ "$changed" = "src/brainlayer/index_budget.py" ]; then
           idx_tests=(test_index_calendar_custody.py test_cli_index_calendar.py)
         elif [ "$changed" = "src/brainlayer/ingest/t3.py" ]; then
-          idx_tests=(test_ingest_t3.py test_health_check.py test_paths.py)
+          idx_tests=(test_ingest_t3.py test_t3_ingest_deferred_embedding.py test_t3_ingest_bookmark.py test_health_check.py test_paths.py test_t3_thread_tables.py)
         elif [ "$changed" = "src/brainlayer/ingest/t3_bookmark.py" ]; then
           idx_tests=(test_t3_ingest_bookmark.py test_ingest_t3.py)
         elif [ "$changed" = "src/brainlayer/maintenance_calendar.py" ]; then
           idx_tests=(test_maintenance_calendar.py test_maintenance_calendar_leases.py test_index_calendar_custody.py test_index_calendar_deferrals.py)
         else
-          idx_tests=(test_source_class.py test_ingest_t3.py test_context_pipeline.py test_index_empty_content.py test_index_checkpoint_boundary.py test_index_checkpoint_durability.py test_index_completion.py test_cli_index_calendar.py test_cli_index_writers.py test_index_convergence.py)
+          idx_tests=(test_source_class.py test_ingest_t3.py test_t3_ingest_deferred_embedding.py test_context_pipeline.py test_index_empty_content.py test_index_checkpoint_boundary.py test_index_checkpoint_durability.py test_index_completion.py test_cli_index_calendar.py test_cli_index_writers.py test_index_convergence.py)
         fi
         idx_complete=1
         for rel in "${idx_tests[@]}"; do
@@ -547,6 +566,22 @@ map_changed_files_to_pytests() {
           done
         fi
         ;;
+      src/brainlayer/t3_thread_tables.py|src/brainlayer/runtime_store.py)
+        # T3 PR 3.1: the side tables' DDL lives in t3_thread_tables.py and its definitions are
+        # pinned in runtime_store.py, so either edit must run the writer, the contract and the
+        # first-run bootstrap that proves a fresh DB matches the pinned fingerprint.
+        # ALL must exist to count as mapped; a missing sibling escalates.
+        side_tests=(test_t3_thread_tables.py test_runtime_store.py test_runtime_ddl_ledger.py test_index_first_calendar_bootstrap.py test_ingest_t3.py)
+        mapped=1
+        for rel in "${side_tests[@]}"; do
+          [ -f "$TEST_ROOT/$rel" ] || mapped=0
+        done
+        if [ "$mapped" -eq 1 ]; then
+          for rel in "${side_tests[@]}"; do
+            append_unique "$TEST_ROOT/$rel"
+          done
+        fi
+        ;;
       src/brainlayer/t3_provenance.py)
         # #1628's module has no test_t3_provenance.py; unmapped, the v1.5.90 tag push fell back to
         # the full suite and timed out heavy-suite twice (2026-11-04).
@@ -602,6 +637,21 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      scripts/hotlane_brainbar_daemon.py)
+        # The hotlane's backlog lane embeds every vectorless row, including t3-ingest's
+        # (#1826). Unmapped, a changed-only push ran none of these. All must exist to count
+        # as mapped; a missing suite escalates below.
+        hotlane_tests=(test_hotlane_brainbar_daemon.py test_hotlane_backpressure.py test_hotlane_busy_carryover.py test_hotlane_embedding_floor.py test_t3_ingest_deferred_embedding.py test_store_vector_invalidation.py)
+        mapped=1
+        for rel in "${hotlane_tests[@]}"; do
+          [ -f "$TEST_ROOT/$rel" ] || mapped=0
+        done
+        if [ "$mapped" -eq 1 ]; then
+          for rel in "${hotlane_tests[@]}"; do
+            append_unique "$TEST_ROOT/$rel"
+          done
+        fi
+        ;;
       scripts/kg_rebuild.py)
         test_path="$TEST_ROOT/test_kg_rebuild.py"
         if [ -f "$test_path" ]; then
@@ -623,7 +673,7 @@ map_changed_files_to_pytests() {
         # test_release_tag_contains.py must escalate, never narrow to nothing. Mapping it to
         # zero targets and still printing "test gate passed" is the same unchecked-claim
         # fail-open the gate exists to close, one level up.
-        .github/workflows/*.yml|.github/workflows/*.yaml|src/brainlayer/*.py|scripts/launchd/install.sh|scripts/kg_rebuild.py|scripts/release_tag_contains.py|scripts/check_stray_apps.py|scripts/harness_probe_contract.py|scripts/harness_probe.py|scripts/harness_probe_native.py|scripts/harness_probe_t3.py|scripts/harness_probe_aqua.py)
+        .github/workflows/*.yml|.github/workflows/*.yaml|src/brainlayer/*.py|scripts/launchd/install.sh|scripts/hotlane_brainbar_daemon.py|scripts/kg_rebuild.py|scripts/release_tag_contains.py|scripts/check_stray_apps.py|scripts/harness_probe_contract.py|scripts/harness_probe.py|scripts/harness_probe_native.py|scripts/harness_probe_t3.py|scripts/harness_probe_aqua.py)
           changed_source_unmapped=1
           unmapped_changed_files+=("$changed")
           ;;
