@@ -1,8 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The standard Settings window (⌘,), 520 pt wide, three rows (DESIGN-SPEC § 6.5). Job switches live on the Jobs page;
-/// nothing here repeats it.
+/// Settings (⌘,): account, design, settings file, Diagnostics and the meaning-search explanation.
 @MainActor final class NDSettingsWindowController: NSObject, NSWindowDelegate {
     static let width: CGFloat = 480
     private static var current: NDSettingsWindowController?
@@ -40,14 +39,14 @@ import SwiftUI
 
     /// The 28 pt title bar the content runs under, with its hairline.
     static let titleBar: CGFloat = 28
-    /// 480 pt wide and as tall as its form: 28 pt bar, 20 pt inset, three 36 pt rows and two hairlines, the caption, 20 pt.
-    static let contentHeight: CGFloat = 199
+    /// A fallback before the form's own fitting height is available.
+    static let contentHeight: CGFloat = 355
 
     static func contentSize(of view: NSView) -> NSSize {
         view.frame = NSRect(x: 0, y: 0, width: width, height: contentHeight)
         view.layoutSubtreeIfNeeded()
         let fitting = view.fittingSize
-        let height = fitting.height > 0 && fitting.height < 400 ? ceil(fitting.height) : contentHeight
+        let height = fitting.height.isFinite && fitting.height > 0 ? ceil(fitting.height) : contentHeight
         return NSSize(width: width, height: height)
     }
 
@@ -107,13 +106,29 @@ struct NDSettingsView: View {
                     row(Say.settingsFile) {
                         Spacer()
                         NDButton(label: Say.showInFinder, small: true) { store.revealSettingsFile() }
-                            .help(configPath)
+                            .help(store.settingsFileURL?.path ?? configPath)
+                    }
+                    if let line = store.settingsBackupLine {
+                        Text(line).font(NDType.caption).foregroundStyle(ND.t2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12).padding(.bottom, 10)
+                    }
+                    ND.hair.frame(height: 0.5)
+                    row(Say.diagnostics) {
+                        Spacer()
+                        NDButton(label: Say.diagnostics, small: true) { store.showDiagnostics() }
                     }
                 }
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(ND.raised))
                 .ndDecoration(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(ND.hair2, lineWidth: 0.5))
                 Text(Say.classicCaption).font(NDType.caption).foregroundStyle(ND.t3)
                     .padding(.horizontal, 12).padding(.top, 8)
+                Text(Say.meaningModel).font(NDType.bodyStrong).padding(.top, 16)
+                ForEach(BrainBarSettingsExplanation.model(BrainBarEmbeddingModel.configuredName), id: \.self) { line in
+                    Text(line).font(NDType.caption).foregroundStyle(ND.t2)
+                        .fixedSize(horizontal: false, vertical: true).padding(.top, 4)
+                }
             }
             .padding(20)
         }

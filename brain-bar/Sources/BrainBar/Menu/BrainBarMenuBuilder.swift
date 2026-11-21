@@ -26,6 +26,7 @@ enum BrainBarMenuAction: Equatable, Sendable {
     typealias P = BrainBarMenuPresentation
     let actions: BrainBarMenuActions
     let accessibility: BrainBarMenuAccessibility
+    var openDiagnostics: (@MainActor () -> Void)?
     private var focus: [ObjectIdentifier: BrainBarMenuRowFocus] = [:]
 
     init(actions: BrainBarMenuActions = BrainBarMenuRecordedActions(), accessibility: BrainBarMenuAccessibility = .system) {
@@ -54,6 +55,13 @@ enum BrainBarMenuAction: Equatable, Sendable {
             case .standardItem where row.strings.count == 1 && row.action == nil && row.mark == nil && row.state == nil
                 && !row.spinner && row.progressPercent == nil:
                 standardItems(row).forEach(menu.addItem)
+                if row.keyEquivalent == "⌘,", openDiagnostics != nil {
+                    let item = NSMenuItem(title: BrainBarMenuPresenter.SurfaceSay.diagnostics,
+                                          action: #selector(showDiagnostics), keyEquivalent: "")
+                    item.target = self
+                    item.isEnabled = true
+                    menu.addItem(item)
+                }
             default:
                 let previous = index > 0 ? (row.dividerBefore ? .separator : rows[index - 1].kind) : nil
                 let next = index + 1 < rows.count ? (rows[index + 1].dividerBefore ? .separator : rows[index + 1].kind) : nil
@@ -82,6 +90,8 @@ enum BrainBarMenuAction: Equatable, Sendable {
     @objc private func performItem(_ sender: NSMenuItem) {
         if let action = sender.representedObject as? BrainBarMenuAction { actions.perform(action) }
     }
+
+    @objc private func showDiagnostics() { openDiagnostics?() }
 
     private func hostedItem(_ row: P.Row, previous: P.RowKind?, next: P.RowKind?) -> NSMenuItem {
         let item = NSMenuItem()

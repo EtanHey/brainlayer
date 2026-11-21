@@ -85,11 +85,14 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
         open.image = Self.symbol("macwindow")
         open.isEnabled = true
         let settings = standard(BrainBarMenuPresenter.Say.settings.text, key: ",", action: .settings, symbol: "gearshape")
+        let diagnostics = NSMenuItem(title: Say.diagnostics, action: #selector(openDiagnostics), keyEquivalent: "")
+        diagnostics.target = self
+        diagnostics.isEnabled = true
         let quit = standard(BrainBarMenuPresenter.Say.quit.text, key: "q", action: .quit, symbol: "power")
         let restart = standard(BrainBarMenuPresenter.Say.restart.text, key: "q", action: .restart, symbol: "arrow.clockwise")
         restart.keyEquivalentModifierMask = [.command, .option]
         restart.isAlternate = true
-        [open, settings, quit, restart].forEach(menu.addItem)
+        [open, settings, diagnostics, quit, restart].forEach(menu.addItem)
     }
 
     static func symbol(_ name: String) -> NSImage? {
@@ -119,6 +122,11 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
     }
 
     @objc private func openOverview() { open(.activity) }
+
+    @objc private func openDiagnostics() {
+        menuDismiss?()
+        Task { @MainActor in store.showDiagnostics() }
+    }
 
     /// Each row opens the window at its page (Activity and Search at the Overview).
     private func open(_ kind: NDR1.MenuRow.Kind) {

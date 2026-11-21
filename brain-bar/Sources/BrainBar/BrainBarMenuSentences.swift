@@ -604,6 +604,18 @@ extension BrainBarMenuPresenter {
 // labels and state words are the spec's copy deck). `BrainBarNewDesignWordsTests` keeps sentences out of NewDesign/.
 extension BrainBarMenuPresenter {
     enum SurfaceSay {
+        static let diagnostics = "Diagnostics"
+        static let copyFullReport = "Copy a full report for your agent"
+        static let checksUnreadable = "Checks have not been read yet."
+        static let settingsBackupsUnreadable = "Settings backups could not be counted."
+        static func settingsBackups(_ count: Int, path: String) -> String {
+            "\(count) settings \(count == 1 ? "backup" : "backups") in \(path)."
+        }
+        static let meaningModel = "Search by meaning"
+        static func modelExplanation(_ name: String) -> [String] {
+            ["\(name) turns memories into searchable meaning on this Mac.",
+             "Search by meaning uses it. Keyword search does not need it."]
+        }
         /// R3: a reconnect in progress.
         static let waitingForBrowser = "Waiting for you to approve in your browser…"
         /// R12: a failed copy leaves the button as it was and says so under it.

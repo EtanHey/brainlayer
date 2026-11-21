@@ -83,7 +83,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         },
         copy: { [weak self] in self?.copyMenuReport() },
         dismiss: { [weak self] in self?.contextMenuForTesting.cancelTracking() })
-    private lazy var liveMenuBuilder = BrainBarMenuBuilder(actions: liveMenuActions)
+    private lazy var liveMenuBuilder: BrainBarMenuBuilder = {
+        let builder = BrainBarMenuBuilder(actions: liveMenuActions)
+        builder.openDiagnostics = { [weak self] in self?.openDiagnostics(nil) }
+        return builder
+    }()
     /// L6: the new design, behind `BrainBarDesign`. Built on first use, so the classic path never creates it.
     private var shownDesign: BrainBarDesign = .classic
     private var newDesignCancellables: Set<AnyCancellable> = []
@@ -896,6 +900,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         copyReportFailed = !pasteboard.setString(newMenuReport, forType: .string)
     }
 
+    @objc private func openDiagnostics(_ sender: Any?) {
+        contextMenuForTesting.cancelTracking()
+        Task { @MainActor [weak self] in self?.newDesignStore.showDiagnostics() }
+    }
+
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
         if design == .new { return newMenuBuilder.menu(menu, willHighlight: item) }
         if legacyMenuItems != nil { liveMenuBuilder.menu(menu, willHighlight: item) }
@@ -943,6 +952,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
                 keyEquivalent: ""
             )
         )
+#if BRAINBAR_UI
+        contextMenuForTesting.addItem(NSMenuItem(
+            title: BrainBarMenuPresenter.SurfaceSay.diagnostics,
+            action: #selector(openDiagnostics(_:)), keyEquivalent: ""))
+#endif
         contextMenuForTesting.addItem(NSMenuItem.separator())
         contextMenuForTesting.addItem(
             NSMenuItem(

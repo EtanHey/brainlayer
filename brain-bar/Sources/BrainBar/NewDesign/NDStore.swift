@@ -67,6 +67,7 @@ import SwiftUI
     private(set) var iconActive = false
     /// The new window is open: the hero waveform and the backup history are read too.
     private(set) var windowActive = false
+    private var diagnosticsActive = false
     private var bound = false
     /// Work that is running or subscribed now; zero when neither surface is shown (tests read it).
     var liveWorkCount: Int {
@@ -92,10 +93,16 @@ import SwiftUI
         if active { refresh(); refreshWaves(force: true); refreshBackupHistory(force: true) }
     }
 
+    func setDiagnosticsActive(_ active: Bool) {
+        diagnosticsActive = active
+        updateLifecycle()
+        if active { refresh() }
+    }
+
     /// Nothing runs unless a surface shows the new design: switching to Classic or closing everything stops every
     /// subscription and cancels every task in flight.
     private func updateLifecycle() {
-        let wanted = iconActive || windowActive
+        let wanted = iconActive || windowActive || diagnosticsActive
         if wanted, !bound { bind() }
         if !wanted {
             cancellables.removeAll(); collectorCancellables.removeAll(); modelCancellables.removeAll()
@@ -217,7 +224,7 @@ import SwiftUI
 
     /// Re-sample the cached inputs (no IO).
     func refresh() {
-        guard !isFixture, let runtime, iconActive || windowActive else { return }
+        guard !isFixture, let runtime, iconActive || windowActive || diagnosticsActive else { return }
         let next = Self.sample(runtime: runtime, previous: inputs, now: Date())
         inputs = next
         let model = NDModel.make(next)
@@ -472,6 +479,11 @@ import SwiftUI
         guard !isFixture, let model = runtime?.jobsModel else { return }
         model.revealConfigFile()
     }
+
+    var settingsFileURL: URL? { runtime?.jobsModel?.configFileURL }
+    var settingsBackupLine: String? { runtime?.jobsModel?.settingsBackupLine }
+
+    func showDiagnostics() { NDDiagnosticsWindowController.show(store: self) }
 
     func openWindow(_ page: NDPage) {
         self.page = page

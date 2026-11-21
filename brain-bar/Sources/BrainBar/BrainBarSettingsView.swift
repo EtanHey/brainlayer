@@ -727,6 +727,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     /// The one Config file row (E5): the file this model reads and saves.
     var configFileURL: URL { store.configURL }
+    var settingsBackupLine: String? { BrainBarSettingsExplanation.backupLine(for: store.configURL) }
     func copyConfigFilePath() { workspace.copy(store.configURL.path) }
     func revealConfigFile() { workspace.reveal(store.configURL) }
     func copyText(_ text: String) { workspace.copy(text) }
@@ -1384,6 +1385,10 @@ struct BrainBarSettingsView: View {
                 }.padding(.vertical, 7)
                 Divider()
                 sectionHeading("Embedding model")
+                ForEach(BrainBarSettingsExplanation.model(BrainBarEmbeddingModel.configuredName), id: \.self) { line in
+                    Text(line).font(.system(size: 11)).foregroundStyle(Color.brainBarTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 ForEach(viewModel.modelResidencyPresentation.rows) { row in
                     settingsTruthRow(label: row.label, value: row.value)
                 }
@@ -1416,6 +1421,10 @@ struct BrainBarSettingsView: View {
                 Button("Reveal in Finder") { viewModel.revealConfigFile() }
             }
             .controlSize(.small)
+            if let line = viewModel.settingsBackupLine {
+                Text(line).font(.system(size: 11)).foregroundStyle(Color.brainBarTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("brainbar.settings.config-file")
