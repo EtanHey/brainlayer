@@ -33,7 +33,7 @@ def identity(path):
     return {"path": str(path.resolve()), "dev": stat.st_dev, "inode": stat.st_ino}
 
 
-def window(conn, previous, source_identity):
+def window(conn, previous, source_identity, *, has_pending_chunks=False):
     # First data read in the transaction: later commits belong to the next run.
     head = conn.execute("SELECT coalesce(max(sequence), 0) FROM orchestration_events").fetchone()[0]
     metadata = dict(conn.execute("SELECT projection_name, last_sequence FROM orchestration_v2_projection_metadata"))
@@ -65,6 +65,7 @@ def window(conn, previous, source_identity):
         # Any saved pending replay (resumable or not, e.g. pending_to past a restored
         # head) may predate start-time preservation: reload it from the full read.
         and pending is None
+        and not has_pending_chunks
         and isinstance(previous.get("occurred_at"), str)
         and any(
             row[1] == "updated_at" for row in conn.execute("PRAGMA table_info(orchestration_v2_projection_messages)")
