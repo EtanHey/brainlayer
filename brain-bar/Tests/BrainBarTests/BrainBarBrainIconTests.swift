@@ -78,7 +78,9 @@ import XCTest
             XCTAssertTrue(controller.contextMenuForTesting.items.contains { ($0.representedObject as? BrainBarMenuAction) == .settings })
             XCTAssertFalse(controller.contextMenuForTesting.items.contains { $0.title == "Open Dashboard" })
         } else {
-            XCTAssertEqual(controller.contextMenuForTesting.items.map(\.title),
+            // Gap 26, lead ruling 21 Nov 2026: main's inventory plus one enabled, unmarked Diagnostics after Settings.
+            let mainItems = try brainBarItemsWithoutApprovedDiagnostics(controller.contextMenuForTesting)
+            XCTAssertEqual(mainItems.map(\.title),
                 ["Nothing needs attention", "Show log", "", "", "Open Dashboard", "Settings…", "", "Restart BrainBar", "", "Quit BrainBar"])
             let expected: NSImage = BrainBarStatusPopoverController.statusIconImage(
                 stats: stats(), badgeOn: controller.statusDotForTesting, dot: controller.statusVerdictForTesting.dot)
