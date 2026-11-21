@@ -2646,6 +2646,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "67e3002d71cdca7cdd10e28528527cbce521557844e9324269f2f0985207b00d": {
+      "non_cloud_purpose": "Read-only GitHub Actions workflow-run metadata via fixed gh api argv with pagination and a 120-second timeout, used only to refuse release without exact-SHA successful push-to-main ratchet attestation. No shell, signing secret value access, mutation, enrichment or cloud-model sender.",
+      "site": {
+        "call_sha256": "b90639026c688ea134363d14ad110fd287273c90d626146e0e46d713a9fe0df2",
+        "kind": "child_process",
+        "owner": "<module>.api",
+        "path": "scripts/ci/ratchet_gate.py",
+        "target": "subprocess.run"
+      }
+    },
     "687f8f47f3150084c6ca1964ec8c253ee8b3ceae827e9d9b3b5b3b9d1766b4c2": {
       "non_cloud_purpose": "Owner-only local supervisor recovery, bounded to three seconds: token-checked pause restoration only after exclusive writer lease acquisition; subprocess only reads launchctl operator disabled state. No cloud or model sender.",
       "site": {
@@ -3330,6 +3340,16 @@
         "owner": "<module>.run_bridge",
         "path": "src/brainlayer/mcp_stdio_bridge.py",
         "target": "socket.socket().recv"
+      }
+    },
+    "817e55b551eaf7f858dc555a32ad979ac4dc42c6abdcfb91f157020c6aa851c6": {
+      "non_cloud_purpose": "Read-only GitHub Actions workflow-run metadata via fixed gh api argv with pagination and a 120-second timeout, used only to refuse release without exact-SHA successful push-to-main ratchet attestation. No shell, signing secret value access, mutation, enrichment or cloud-model sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/ci/ratchet_gate.py",
+        "target": "import subprocess"
       }
     },
     "81d7d96247e55a9471b6d63043c836bbf07ba69aec2d999dc2e82b6fd4253c52": {

@@ -30,24 +30,84 @@ on:
       # Python-only disk truth and backup headroom fixes: retain BrainBar 1.5.75.
       - "!v1.5.76"
 
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Full release tag (vX.Y.Z)
+        required: true
+        type: string
+
 permissions:
-  actions: read
-  contents: write
+  contents: read
 
 jobs:
+  dispatch-from-main:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch the release workflow from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run brainbar-release.yml --ref main -f tag="$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+
   release:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: signing
+    permissions:
+      actions: read
+      contents: write
     name: package BrainBar
     runs-on: macos-15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          ref: main
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Validate release tag and main ancestry
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a full release tag vX.Y.Z"
+            exit 1
+          fi
+          # Keep the push exclusions binding on manual dispatch too.
+          case "$RELEASE_TAG" in
+            v1.5.52|v1.5.53|v1.5.56|v1.5.58|v1.5.59|v1.5.62|v1.5.63|v1.5.64|v1.5.65|v1.5.67|v1.5.70|v1.5.76)
+              echo "::error::This tag is excluded from BrainBar releases"
+              exit 1
+              ;;
+          esac
+          release_sha="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+          git merge-base --is-ancestor "$release_sha" origin/main
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          echo "RELEASE_SHA=$release_sha" >> "$GITHUB_ENV"
+
+      - name: Require ratchet attestation on the exact release SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/ratchet_gate.py verify-release "$GITHUB_REPOSITORY" "$RELEASE_SHA"
 
       - name: Require full crash sweep on the exact release SHA
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci/crash_sweep_gate.py verify-release "$GITHUB_REPOSITORY" "$(git rev-parse HEAD)"
+        run: python3 scripts/ci/crash_sweep_gate.py verify-release "$GITHUB_REPOSITORY" "$RELEASE_SHA"
+
+      # Pin the peeled tag commit: a moved tag cannot change the checked payload.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ steps.release.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Verify release tag matches package version
         run: |
@@ -64,8 +124,8 @@ jobs:
             ' pyproject.toml
           })"
           expected_tag="v${package_version}"
-          if [[ -z "$package_version" || "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
-            echo "::error title=Release tag mismatch::Tag '$GITHUB_REF_NAME' must equal '$expected_tag' from pyproject.toml"
+          if [[ -z "$package_version" || "$RELEASE_TAG" != "$expected_tag" ]]; then
+            echo "::error title=Release tag mismatch::Tag '$RELEASE_TAG' must equal '$expected_tag' from pyproject.toml"
             exit 1
           fi
 
@@ -80,9 +140,9 @@ jobs:
       - name: Resolve release metadata
         run: |
           set -euo pipefail
-          release_version="${GITHUB_REF_NAME#v}"
+          release_version="${RELEASE_TAG#v}"
           if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-            echo "::error title=Invalid BrainBar release tag::Expected tag format vX.Y.Z or interim vX.Y.Z.N; got '$GITHUB_REF_NAME'"
+            echo "::error title=Invalid BrainBar release tag::Expected tag format vX.Y.Z or interim vX.Y.Z.N; got '$RELEASE_TAG'"
             exit 1
           fi
           bundle_short_version="$release_version"
@@ -143,8 +203,8 @@ jobs:
           set_plist_string CFBundleShortVersionString "$BRAINBAR_BUNDLE_SHORT_VERSION"
           set_plist_string CFBundleVersion "$BRAINBAR_BUNDLE_BUILD_VERSION"
           set_plist_string BrainLayerReleaseVersion "$BRAINBAR_RELEASE_VERSION"
-          set_plist_string GitCommit "$GITHUB_SHA"
-          set_plist_string GitDescribe "$GITHUB_REF_NAME"
+          set_plist_string GitCommit "$RELEASE_SHA"
+          set_plist_string GitDescribe "$RELEASE_TAG"
           set_plist_string BuildTimeUTC "$BRAINBAR_BUILD_TIME_UTC"
 
           "$plist_buddy" -c "Print :CFBundleShortVersionString" "$plist"
@@ -270,8 +330,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
-          tag_name: ${{ github.ref_name }}
-          name: BrainBar ${{ github.ref_name }}
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: BrainBar ${{ steps.release.outputs.tag }}
           files: dist/BrainBar.zip
           fail_on_unmatched_files: true
           generate_release_notes: true
