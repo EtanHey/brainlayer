@@ -338,17 +338,24 @@ def find_duplicate(
     project: Any = None,
     content_type: Any = None,
     hidden: bool | None = None,
+    exclude_sources: tuple[str, ...] = (),
 ) -> tuple[DuplicateHit | None, DedupeFields]:
     """Find the canonical row a new chunk folds into.
 
     ``hidden`` is the incoming row's side of the default-search line
     (``agent_provenance.is_hidden_source_class``); writers pass it so a fold never
     crosses it. It composes with any other candidate filter.
+    ``exclude_sources`` removes mirror sources from both exact and near matches;
+    NULL sources remain eligible for ordinary legacy-session dedupe.
     """
     fields = compute_dedupe_fields(content, created_at)
     cursor = conn.cursor()
     scope_sql, scope_params = _scope_clause(project, content_type)
     scope_sql = f"{scope_sql} AND {_visibility_clause(conn, hidden)}"
+    if exclude_sources:
+        placeholders = ", ".join("?" for _ in exclude_sources)
+        scope_sql += f" AND (source IS NULL OR source NOT IN ({placeholders}))"
+        scope_params.extend(exclude_sources)
     exact = cursor.execute(
         f"""
         SELECT id FROM chunks

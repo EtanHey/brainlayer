@@ -404,6 +404,7 @@ def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, proje
                     project=project,
                     content_type=content_type,
                     hidden=hidden,
+                    exclude_sources=("t3",),
                 )[0]
                 is not None
             )
@@ -776,6 +777,7 @@ def create_flush_callback(
                                 project=project,
                                 content_type=chunk.content_type.value,
                                 hidden=is_hidden_source_class(source_class),
+                                exclude_sources=("t3",),
                             )
                             if duplicate is not None:
                                 merge_duplicate_chunk(

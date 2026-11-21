@@ -2721,6 +2721,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 project=chunk.get("project"),
                                 content_type=chunk.get("content_type"),
                                 hidden=is_hidden_source_class(chunk.get("source_class")),
+                                exclude_sources=("t3",),
                             )
                         if duplicate is not None:
                             duplicate_row_exists = cursor.execute(
