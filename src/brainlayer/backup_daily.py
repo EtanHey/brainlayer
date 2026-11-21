@@ -4042,6 +4042,8 @@ def run_backup(
                 nonlocal resume_state
                 next_state = {"url": url, "folder_id": folder_id, **upload_identity}
                 resume_state = next_state
+                if result.get("bytes_confirmed") != confirmed:
+                    result["bytes_confirmed_at"] = dt.datetime.now(dt.UTC).isoformat()
                 result["bytes_confirmed"] = confirmed
                 _append_json_log(
                     resolved_log_path,

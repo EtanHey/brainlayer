@@ -195,6 +195,10 @@ struct BrainBarBackupChecksCard: View {
     let copy: (BrainBarBackupChecks.Detail) -> Void
     var progress: BrainBarBackupProgress? = nil
 
+    static func displayedCheck(_ check: BrainBarBackupChecks.Check, progress: BrainBarBackupProgress?) -> BrainBarBackupChecks.Check? {
+        check
+    }
+
     private static func color(_ tone: ObservabilityStatusTone) -> Color {
         switch tone {
         case .green: Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
@@ -238,10 +242,8 @@ struct BrainBarBackupChecksCard: View {
             }
             VStack(spacing: 0) {
                 ForEach(Array(checks.checks.enumerated()), id: \.element.id) { index, check in
-                    Group {
-                        if check.id == "snapshot-upload", let progress {
-                            BrainBarBackupProgressView(progress: progress)
-                        } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let check = Self.displayedCheck(check, progress: progress) {
                             HStack(alignment: .firstTextBaseline, spacing: 10) {
                                 Image(systemName: Self.symbol(check.tone))
                                     .font(.system(size: 11))
@@ -255,6 +257,9 @@ struct BrainBarBackupChecksCard: View {
                                     .foregroundStyle(check.tone == .red ? Self.color(.red) : Color.brainBarTextSecondary)
                                     .multilineTextAlignment(.trailing)
                             }
+                        }
+                        if check.id == "snapshot-upload", let progress {
+                            BrainBarBackupProgressView(progress: progress)
                         }
                     }
                     .padding(.horizontal, 12)

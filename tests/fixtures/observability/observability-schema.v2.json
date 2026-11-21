@@ -697,6 +697,7 @@
             "bytes_confirmed": {"type": ["integer", "null"], "minimum": 0},
             "bytes_total": {"type": ["integer", "null"], "minimum": 1},
             "verification_pending": {"type": "boolean"},
+            "bytes_confirmed_at": {"type": ["string", "null"], "format": "date-time"},
             "local_integrity": {
               "type": [
                 "string",

@@ -82,8 +82,7 @@ struct NDPipelineChart: View {
         let shownHover = previewHover ?? hovered
         ZStack(alignment: .topLeading) {
             Canvas { ctx, _ in
-                var drawn = state
-                if backupProgress != nil { drawn.status[.drive] = nil }
+                let drawn = Self.drawingState(state, progress: backupProgress)
                 Self.draw(ctx, state: drawn, memories: memories, hovered: shownHover, keptGrown: keptGrown)
             }
                 .frame(width: NDPipelineLayout.drawWidth, height: NDPipelineLayout.size.height)
@@ -97,12 +96,13 @@ struct NDPipelineChart: View {
                 }
             }
             ForEach(Self.controls(items)) { control in station(control.station) }
-            if let backupProgress {
+            if let backupProgress, Self.showsProgress(state, progress: backupProgress) {
                 let p = NDPipelineLayout.point(.drive)
                 BrainBarBackupProgressView(progress: backupProgress, compact: true)
                     .frame(width: 152)
                     .background(ND.card)
-                    .position(x: p.x, y: p.y + 50)
+                    .frame(height: 0, alignment: .top)
+                    .offset(x: p.x - 76, y: p.y + 37)
                     .allowsHitTesting(false)
             }
             // R1.4 change 2: each provider icon's hover and spoken name is its name. 1.5.1: a provider a check names opens the
@@ -134,6 +134,16 @@ struct NDPipelineChart: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Say.pipeline)
+    }
+
+    static func showsProgress(_ state: NDPipelineState, progress: BrainBarBackupProgress?) -> Bool {
+        progress != nil && state.status[.drive]?.severity == nil
+    }
+
+    static func drawingState(_ state: NDPipelineState, progress: BrainBarBackupProgress?) -> NDPipelineState {
+        var drawn = state
+        if showsProgress(state, progress: progress) { drawn.status[.drive] = nil }
+        return drawn
     }
 
     /// The station's panel at its content's measured height.

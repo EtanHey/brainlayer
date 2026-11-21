@@ -1355,10 +1355,12 @@ def test_local_snapshot_carries_only_measured_progress(confirmed, total):
         "uploaded": False,
         "upload_state": "in_progress",
         "bytes_confirmed": confirmed,
+        "bytes_confirmed_at": "2026-11-21T00:01:00Z",
         "bytes": total,
         "verification_pending": True,
     }
     local = observability_backup._local_snapshot([row])
-    assert local["bytes_confirmed"] == (confirmed if type(confirmed) is int and confirmed >= 0 else None)
-    assert local["bytes_total"] == (total if type(total) is int and total > 0 else None)
+    assert local.get("bytes_confirmed") == (confirmed if type(confirmed) is int and confirmed >= 0 else None)
+    assert local.get("bytes_total") == (total if type(total) is int and total > 0 else None)
     assert local["verification_pending"] is True
+    assert local["bytes_confirmed_at"] == "2026-11-21T00:01:00Z"

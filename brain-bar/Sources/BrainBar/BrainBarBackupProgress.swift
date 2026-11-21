@@ -8,18 +8,23 @@ struct BrainBarBackupProgress: Equatable, Sendable {
     var confirmed: Int64?
     var total: Int64?
     var lastGoodAt: Date?
+    var checkpointAt: Date? = nil
+    static let checkpointMaxAgeS: TimeInterval = 20 * 60
 
     static func read(_ backups: ObservabilityDocument.Backups, now: Date) -> Self? {
         guard backups.state == "measured", let local = backups.localSnapshot,
-              local.uploadProcessLive == true, local.uploadState == "in_progress",
+              local.uploadProcessLive == true,
               local.uploadError?.isEmpty != false,
               let started = local.uploadProcessStartedAt, started <= now else { return nil }
         let verifying = local.uploaded && local.verificationPending == true
+        guard local.uploadState == "in_progress" || (local.uploadState == "pending" && verifying) else { return nil }
         guard !local.uploaded || verifying else { return nil }
+        let fresh = local.bytesConfirmedAt.map { (0...checkpointMaxAgeS).contains(now.timeIntervalSince($0)) } == true
         return Self(phase: verifying ? .verification : .upload,
                     identity: "\(local.destination ?? ""):\(started.timeIntervalSince1970)",
-                    confirmed: verifying ? nil : local.bytesConfirmed, total: verifying ? nil : local.bytesTotal,
-                    lastGoodAt: backups.dbSnapshot.flatMap { $0.verified && $0.lastAt <= now ? $0.lastAt : nil })
+                    confirmed: verifying || !fresh ? nil : local.bytesConfirmed, total: verifying ? nil : local.bytesTotal,
+                    lastGoodAt: backups.dbSnapshot.flatMap { $0.verified && $0.lastAt <= now ? $0.lastAt : nil },
+                    checkpointAt: fresh && !verifying ? local.bytesConfirmedAt : nil)
     }
 
     var fraction: Double? {
@@ -27,6 +32,7 @@ struct BrainBarBackupProgress: Equatable, Sendable {
         return Double(confirmed) / Double(total)
     }
     var percentage: Int? { fraction.map { Int(($0 * 100).rounded(.down)) } }
+    var accessibilityValue: String { percentage.map { "\($0) percent" } ?? BrainBarMenuPresenter.SurfaceSay.backupInProgress }
     var title: String {
         phase == .upload ? BrainBarMenuPresenter.SurfaceSay.backupUploading : BrainBarMenuPresenter.SurfaceSay.backupVerifying
     }
@@ -52,7 +58,9 @@ struct BrainBarBackupProgressView: View {
                 Text(compact ? (progress.phase == .upload ? BrainBarMenuPresenter.SurfaceSay.backupUploadingShort
                     : BrainBarMenuPresenter.SurfaceSay.backupVerifyingShort) : progress.title).lineLimit(1)
                 Spacer(minLength: 0)
-                if let percent = progress.percentage { Text("\(percent)%").monospacedDigit() }
+                if let percent = progress.percentage, let at = progress.checkpointAt {
+                    Text("\(percent)% · " + at.formatted(date: .omitted, time: .shortened)).monospacedDigit().lineLimit(1)
+                }
             }
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
@@ -73,6 +81,9 @@ struct BrainBarBackupProgressView: View {
             }
         }
         .font(.system(size: compact ? 10 : 11))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(progress.title)
+        .accessibilityValue(progress.accessibilityValue)
         .onAppear { shown = progress }
         .onChange(of: progress) { old, next in
             withAnimation(next.animates(after: old, reduceMotion: reduceMotion) ? .easeOut(duration: 0.25) : nil) {

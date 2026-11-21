@@ -327,6 +327,7 @@ struct ObservabilityDocument: Codable, Sendable {
         var bytesConfirmed: Int64? = nil
         var bytesTotal: Int64? = nil
         var verificationPending: Bool? = nil
+        var bytesConfirmedAt: Date? = nil
     }
     struct Launchd: Codable, Sendable {
         let label: String
@@ -393,7 +394,8 @@ enum ObservabilityReader {
             guard document.windowHours == 24, !document.dbPath.isEmpty else {
                 return .unreadable("Observability root fields are invalid.")
             }
-            if var local = document.backups.localSnapshot, local.uploadState == "in_progress" {
+            if var local = document.backups.localSnapshot,
+               local.uploadState == "in_progress" || (local.uploadState == "pending" && local.uploaded && local.verificationPending == true) {
                 local.uploadProcessStartedAt = backupProcessStartedAt(dbPath: document.dbPath, environment: environment)
                 local.uploadProcessLive = local.uploadProcessStartedAt != nil
                 var backups = document.backups
@@ -550,6 +552,7 @@ struct ObservabilitySnapshot: Sendable {
 }
 
 enum ObservabilityPresentation {
+    static let backupVerificationText = "Checking the Google Drive copy"
     static func snapshot(
         document: ObservabilityDocument,
         now: Date,
@@ -705,6 +708,8 @@ enum ObservabilityPresentation {
                 snapshotUpload = .init(text: missingLocalSnapshot, tone: .red)
             } else if pendingState && staleOffsite {
                 snapshotUpload = .init(text: staleText, tone: .red)
+            } else if value.uploaded && value.verificationPending == true && value.uploadProcessLive == true {
+                snapshotUpload = .init(text: backupVerificationText, tone: .neutral)
             } else if backups.localUploadPending(now: now) {
                 let uploadText: String
                 if value.uploadState == "pending" {
@@ -819,11 +824,12 @@ enum ObservabilityPresentation {
             let kind = value.hasPrefix("jsonl_backup_attempt_") ? "Transcript" : "DB"
             return .init(text: "\(kind) backup error: \(errorText(value))", tone: .red)
         }
+        let verifying = backups.localSnapshot.map { $0.uploaded && $0.verificationPending == true && $0.uploadProcessLive == true } == true
         return .init(
             upload: upload, snapshot: snapshot, job: job, freshness: freshness,
             retention: retention, archives: archives, error: error,
-            errorIsJobAlert: backups.errorType?.hasPrefix(jobAlertPrefix) == true, snapshotUpload: snapshotUpload, uploadInProgress: backups.localUploadPending(now: now) && backups.localSnapshot?.uploadState == "pending",
-            uploadQueued: backups.localSnapshot?.uploadState == "pending",
+            errorIsJobAlert: backups.errorType?.hasPrefix(jobAlertPrefix) == true, snapshotUpload: snapshotUpload, uploadInProgress: verifying || (backups.localUploadPending(now: now) && backups.localSnapshot?.uploadState == "pending"),
+            uploadQueued: backups.localSnapshot?.uploadState == "pending" && !verifying,
             uploadUnconfirmed: backups.localUploadPending(now: now) && backups.localSnapshot?.uploadState == "in_progress",
             freshnessCheckTitle: freshnessCheckTitle, freshnessCheckValue: freshnessCheckValue
         )

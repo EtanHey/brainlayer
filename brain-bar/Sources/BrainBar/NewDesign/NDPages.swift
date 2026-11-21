@@ -137,13 +137,15 @@ struct NDBackupsPage: View {
                         .padding(.top, 12)
                     VStack(spacing: 0) {
                         ForEach(lanes) { lane in
-                            if lane.id == "backup_offsite", let progress = store.inputs.backupProgress {
-                                HStack(spacing: 0) {
-                                    Text(lane.name).font(NDType.body)
-                                        .frame(width: Self.symbolColumn + Self.nameColumn, alignment: .leading)
-                                    BrainBarBackupProgressView(progress: progress).padding(.vertical, 4)
+                            VStack(alignment: .leading, spacing: 0) {
+                                if let lane = Self.displayedLane(lane, progress: store.inputs.backupProgress) {
+                                    NDBackupLaneView(lane: lane)
                                 }
-                            } else { NDBackupLaneView(lane: lane) }
+                                if lane.id == "backup_offsite", let progress = store.inputs.backupProgress {
+                                    BrainBarBackupProgressView(progress: progress)
+                                        .padding(.leading, Self.symbolColumn + Self.nameColumn).padding(.vertical, 4)
+                                }
+                            }
                         }
                     }
                     .padding(.top, 4)
@@ -228,6 +230,10 @@ struct NDBackupsPage: View {
         var number: NDModel.Number
         var strong: Bool
         var accessibility: String
+    }
+
+    static func displayedLane(_ lane: Lane, progress: BrainBarBackupProgress?) -> Lane? {
+        lane
     }
 
     func lanes(_ m: NDModel) -> [Lane] {
