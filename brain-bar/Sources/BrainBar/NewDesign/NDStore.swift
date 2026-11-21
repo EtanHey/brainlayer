@@ -256,6 +256,7 @@ import SwiftUI
         i.agents = agents(collector?.agentActivity, model?.dashboardObservabilityResult)
         if let model {
             i.jobs = jobs(model)
+            i.backupProgress = model.backupProgress
             i.nightlyLastRun = run(model, .maintenanceNightly)
             i.weeklyLastRun = run(model, .maintenanceWeekly)
             if case let .completed(at) = model.maintenanceEvidence.weeklyCompletion {

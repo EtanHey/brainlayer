@@ -268,7 +268,8 @@ struct NDOverviewPage: View {
             NDCard(padding: EdgeInsets(top: 16, leading: 16, bottom: 14, trailing: 16)) {
                 NDPipelineChart(state: r1.pipeline, memories: store.model.memories, items: r1.stationItems,
                                 waiting: NDDriveWaiting.shows(store.inputs, for: nil), perform: { store.perform($0) },
-                                popover: { station in AnyView(NDStationPopover(store: store, station: station)) })
+                                popover: { station in AnyView(NDStationPopover(store: store, station: station)) },
+                                backupProgress: store.inputs.backupProgress)
             }
             .animation(reduceMotion ? nil : NDMotion.breakAppears, value: r1.pipeline)
         }

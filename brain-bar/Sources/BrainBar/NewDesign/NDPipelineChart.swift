@@ -19,6 +19,7 @@ struct NDPipelineChart: View {
     var popover: (NDStation) -> AnyView? = { _ in nil }
     /// Render harness only: one station drawn hovered, its popover drawn where AppKit would open it.
     var previewHover: NDStation? = nil
+    var backupProgress: BrainBarBackupProgress? = nil
     @State private var hovered: NDStation?
     @StateObject private var panels = NDPanelPresenter()
 
@@ -80,7 +81,10 @@ struct NDPipelineChart: View {
     var body: some View {
         let shownHover = previewHover ?? hovered
         ZStack(alignment: .topLeading) {
-            Canvas { ctx, _ in Self.draw(ctx, state: state, memories: memories, hovered: shownHover, keptGrown: keptGrown) }
+            Canvas { ctx, _ in
+                let drawn = Self.drawingState(state, progress: backupProgress)
+                Self.draw(ctx, state: drawn, memories: memories, hovered: shownHover, keptGrown: keptGrown)
+            }
                 .frame(width: NDPipelineLayout.drawWidth, height: NDPipelineLayout.size.height)
                 .allowsHitTesting(false)
             // R1.4 changes 5, 8 and 9: the words that left the chart, on the things they name.
@@ -92,6 +96,15 @@ struct NDPipelineChart: View {
                 }
             }
             ForEach(Self.controls(items)) { control in station(control.station) }
+            if let backupProgress, Self.showsProgress(state, progress: backupProgress) {
+                let frame = Self.progressFrame(state)
+                BrainBarBackupProgressView(progress: backupProgress, compact: true, barOnly: state.status[.drive]?.severity != nil)
+                    .frame(width: frame.width)
+                    .background(ND.card)
+                    .frame(height: 0, alignment: .top)
+                    .offset(x: frame.minX, y: frame.minY)
+                    .allowsHitTesting(false)
+            }
             // R1.4 change 2: each provider icon's hover and spoken name is its name. 1.5.1: a provider a check names opens the
             // agents' fault panel itself (the same panel, with Copy report), not only a tooltip.
             ForEach(NDPipelineLayout.agentRows, id: \.0.rawValue) { family, _ in
@@ -121,6 +134,24 @@ struct NDPipelineChart: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Say.pipeline)
+    }
+
+    static func showsProgress(_ state: NDPipelineState, progress: BrainBarBackupProgress?) -> Bool {
+        progress != nil
+    }
+
+    /// Gap 22/23: the fault's baseline is y+43. A 3 pt bar at y+51 stays clear of it and the pipe at y=134.
+    static func progressFrame(_ state: NDPipelineState) -> CGRect {
+        let p = NDPipelineLayout.point(.drive)
+        return state.status[.drive]?.severity != nil
+            ? CGRect(x: p.x - 48, y: p.y + 51, width: 96, height: 3)
+            : CGRect(x: p.x - 76, y: p.y + 37, width: 152, height: 33)
+    }
+
+    static func drawingState(_ state: NDPipelineState, progress: BrainBarBackupProgress?) -> NDPipelineState {
+        var drawn = state
+        if progress != nil && state.status[.drive]?.severity == nil { drawn.status[.drive] = nil }
+        return drawn
     }
 
     /// The station's panel at its content's measured height.

@@ -604,6 +604,13 @@ extension BrainBarMenuPresenter {
 // labels and state words are the spec's copy deck). `BrainBarNewDesignWordsTests` keeps sentences out of NewDesign/.
 extension BrainBarMenuPresenter {
     enum SurfaceSay {
+        static let backupUploading = "Uploading to Google Drive"
+        static let backupVerifying = ObservabilityPresentation.backupVerificationText
+        static let backupLastGood = "Last good copy"
+        static let backupUploadingShort = "Uploading"
+        static let backupVerifyingShort = "Checking copy"
+        static let backupLastGoodShort = "Last good"
+        static let backupInProgress = "In progress"
         /// R3: a reconnect in progress.
         static let waitingForBrowser = "Waiting for you to approve in your browser…"
         /// R12: a failed copy leaves the button as it was and says so under it.
