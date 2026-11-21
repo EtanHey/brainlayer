@@ -22,6 +22,16 @@
         "target": "ctypes.c_int"
       }
     },
+    "006c5487a5c37ff7176bb0e58dce0bab1b3c11e48f5866a903a24a8bd74844f4": {
+      "non_cloud_purpose": "Local SQLite read-only connection (mode=ro and query_only) for T3 session ownership or text coverage; no network or model sender.",
+      "site": {
+        "call_sha256": "b62be6aff7f5df3cc93f9b1e146eda88037ef0c05fd9abc73d09ee2a18edaa07",
+        "kind": "generic_send",
+        "owner": "<module>.audit_t3",
+        "path": "src/brainlayer/ingest/t3_audit.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "00db5ec85f9abd52c6d5d9ff6ed45c08d7a6b8cc3151b4371a1965a59c0c6dc3": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls socket.socket.",
       "site": {
@@ -1426,6 +1436,16 @@
         "owner": "<module>.peer_uid",
         "path": "src/brainlayer/supervisor_guard.py",
         "target": "ctypes.c_uint"
+      }
+    },
+    "3978338979427d9022da1e8794e49ebdd9efbf228825b00dcdda9eff63b13475": {
+      "non_cloud_purpose": "Local SQLite read-only connection (mode=ro and query_only) for T3 session ownership or text coverage; no network or model sender.",
+      "site": {
+        "call_sha256": "c7f7d622519aeae7f00c7607a3cc72b12f1fe9c0bf93f69de48a49f61f190957",
+        "kind": "generic_send",
+        "owner": "<module>.ingest_t3",
+        "path": "src/brainlayer/ingest/t3.py",
+        "target": "sqlite3.connect"
       }
     },
     "39a53c940c32fe39a821bee7ddcf5a7e8c61ce296ce2e6300e2bd4887c304fa3": {
