@@ -265,7 +265,8 @@ struct NDOverviewPage: View {
             if !r1.problemRows.isEmpty { NDProblemRows(store: store, rows: r1.problemRows).padding(.top, NDGrid.headlineToRows) }
             NDActivitySection(store: store).padding(.top, NDGrid.toActivity)
             NDBlockHeading(title: Say.pipeline).padding(.top, NDGrid.activityToPipeline)
-            NDCard(padding: EdgeInsets(top: 16, leading: 16, bottom: 14, trailing: 16)) {
+            NDCard(padding: EdgeInsets(top: NDPipelineLayout.verticalPadding, leading: 16,
+                                      bottom: NDPipelineLayout.verticalPadding, trailing: 16)) {
                 NDPipelineChart(state: r1.pipeline, memories: store.model.memories, items: r1.stationItems,
                                 waiting: NDDriveWaiting.shows(store.inputs, for: nil), perform: { store.perform($0) },
                                 popover: { station in AnyView(NDStationPopover(store: store, station: station)) },
@@ -810,9 +811,7 @@ struct NDButtonStyle: ButtonStyle {
 
 // MARK: - Page height (L17)
 
-/// The window's height for a page: the title bar, the page's laid-out content with its insets, and the footer; never
-/// below the spec's page height (Overview 716, Backups 480, Jobs 512), capped at the screen. A two-fault headline is
-/// two 24 pt rows taller than the calm one, so the Overview grows with it; past the screen the page scrolls (§ 2.3).
+/// L57: measure the current page and cap its content area at the visible screen minus AppKit chrome.
 @MainActor enum NDPageHeight {
     /// Title bar 52, page padding 20 top and 20 bottom (R1.2 change 2), footer 28.
     static let chrome: CGFloat = NDGrid.titleBar + NDGrid.pageTop + 20 + NDGrid.footer
@@ -829,12 +828,25 @@ struct NDButtonStyle: ButtonStyle {
         return ceil(hosting.sizeThatFits(in: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)).height)
     }
 
-    /// R1.2 change 22 and L25: the page's real height in every state (nothing reserved), up to the screen's visible
-    /// height minus 40 pt; past that the page scrolls inside the window and the footer stays.
-    static func window(_ store: NDStore, page: NDPage, screen: CGFloat?) -> CGFloat {
+    /// L57 replaces the fixed 40 pt allowance with the actual AppKit title-bar height.
+    static func window(_ store: NDStore, page: NDPage, screen: CGFloat?, titleBarHeight: CGFloat = 0) -> CGFloat {
         let needed = ceil(content(store, page: page) + chrome)
-        guard let screen, screen > 0 else { return needed }
-        return min(needed, screen - 40)
+        return fittedHeight(needed: needed, visibleHeight: screen, titleBarHeight: titleBarHeight)
+    }
+
+    static func fittedHeight(needed: CGFloat, visibleHeight: CGFloat?, titleBarHeight: CGFloat) -> CGFloat {
+        guard let visibleHeight, visibleHeight > 0 else { return needed }
+        return min(needed, max(1, visibleHeight - titleBarHeight))
+    }
+
+    /// Keep the top-left unless the new size would leave the visible screen; then move only enough to fit.
+    static func frame(size: NSSize, keeping current: NSRect, visibleFrame: NSRect?) -> NSRect {
+        var target = NSRect(x: current.minX, y: current.maxY - size.height, width: size.width, height: size.height)
+        if let visibleFrame {
+            target.origin.x = max(visibleFrame.minX, min(target.minX, visibleFrame.maxX - size.width))
+            target.origin.y = max(visibleFrame.minY, min(target.minY, visibleFrame.maxY - size.height))
+        }
+        return target
     }
 
     /// What decides the page's height: the page and the headline's lines.

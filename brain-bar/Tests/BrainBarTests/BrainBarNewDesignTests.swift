@@ -53,6 +53,7 @@ import SwiftUI
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
                 window.contentView?.layoutSubtreeIfNeeded()
             }
+            controller.fitPage(store.page) // L57: settle the fixture content before stepping tab animations.
             controller.animatesPageSwitchForTesting = true
             var step: ((CGFloat) -> Void)?
             controller.pageFrameAnimatorForTesting = { target, _, _, finish in
@@ -146,7 +147,7 @@ import SwiftUI
         XCTAssertNil(started, "Reduce Motion: nothing animates")
         XCTAssertEqual(store.shownPage, .overview)
         XCTAssertEqual(window.contentRect(forFrameRect: window.frame).height,
-                       NDPageHeight.window(store, page: .overview, screen: controller.fitScreenHeight), accuracy: 0.5, "and the height at once")
+                       NDPageHeight.window(store, page: .overview, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight), accuracy: 0.5, "and the height at once")
         XCTAssertEqual(NDPageSwitch.order(from: 500, to: 800, animates: true), .pageThenFrame)
         XCTAssertEqual(NDPageSwitch.order(from: 800, to: 500, animates: true), .pageThenFrame)
         XCTAssertEqual(NDPageSwitch.order(from: 500, to: 800, animates: false), .together, "Reduce Motion: at once")
@@ -237,7 +238,7 @@ import SwiftUI
         defer { controller.stop() }
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
         XCTAssertTrue(controller.contextMenuForTesting.items.contains { $0.view is NDMenuRowHost })
-        XCTAssertEqual(host.item.view.alphaValue, 1, "L23: no reading yet is drawn into the image (45 % brain and a \"?\" badge)")
+        XCTAssertEqual(host.item.view.alphaValue, 1, "L23: no reading yet is drawn into the image (55 % brain and a \"?\" badge)")
         d.set("classic", forKey: BrainBarDesign.key)
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
         controller.renderStatusIconForTesting(stats: stats(), state: .idle)
@@ -286,7 +287,7 @@ import SwiftUI
             XCTAssertEqual(store.drawnPageForTesting, page, "the window root drew the page the tab names")
             XCTAssertEqual(control.selectedSegment, index, "the selected segment names the same page")
             // L25: the page's height, capped the way the controller caps it (the runner's screen is small: 644 pt).
-            let height = NDPageHeight.window(store, page: page, screen: controller.fitScreenHeight)
+            let height = NDPageHeight.window(store, page: page, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight)
             let held = controller.windowWillResize(window, to: NSSize(width: 1200, height: 300)).height
             for measured in [window.frame.height, held] {
                 XCTAssertGreaterThanOrEqual(measured, height - 0.5, "\(page): the height follows the same page")
@@ -295,7 +296,7 @@ import SwiftUI
         }
     }
 
-    /// L25 on a small screen, injected so no machine decides it: the window is held at the cap (visible height minus 40),
+    /// L57: an injected small screen caps the content at its visible height minus actual AppKit chrome.
     /// the page scrolls inside it, and the footer stays at the window's bottom edge.
     func testASmallScreenCapsTheWindowThePageScrollsTheFooterStays() throws {
         let d = defaults()
@@ -306,10 +307,10 @@ import SwiftUI
         controller.applyDesign()
         controller.fitPage(.overview)
         let store = controller.newDesignStore
-        let cap: CGFloat = 600 - 40
+        let cap: CGFloat = 600 - controller.fitTitleBarHeight
         let page = ceil(NDPageHeight.content(store, page: .overview) + NDPageHeight.chrome)
         XCTAssertGreaterThan(page, cap, "the Overview is taller than this screen allows")
-        XCTAssertEqual(NDPageHeight.window(store, page: .overview, screen: controller.fitScreenHeight), cap)
+        XCTAssertEqual(NDPageHeight.window(store, page: .overview, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight), cap)
         let window = controller.windowForTesting
         let held = controller.windowWillResize(window, to: NSSize(width: 1200, height: 900)).height
         for measured in [window.frame.height, held] {
@@ -356,8 +357,8 @@ import SwiftUI
         // macOS 15, 0 measured on the capture Mac's macOS 26), so heights are pinned to [page, page + one 52 pt row].
         let window = controller.windowForTesting
         func holds(_ page: NDPage, _ line: UInt = #line) {
-            // R1.2 change 22 and L25: the page's measured height, capped at the screen's visible height minus 40 pt.
-            let h = NDPageHeight.window(controller.newDesignStore, page: page, screen: controller.fitScreenHeight)
+            // L57: the measured page, capped at the visible screen minus actual AppKit chrome.
+            let h = NDPageHeight.window(controller.newDesignStore, page: page, screen: controller.fitScreenHeight, titleBarHeight: controller.fitTitleBarHeight)
             let held = controller.windowWillResize(window, to: NSSize(width: 1400, height: 200))
             XCTAssertEqual(held.width, 900, "not resizable: the delegate holds the page size", line: line)
             XCTAssertGreaterThanOrEqual(held.height, h, line: line)
@@ -1505,8 +1506,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         // R1.10 (L48): the Overview grows by the problems surface only: 12 pt, then two 36 pt rows and the line between.
         XCTAssertEqual(twoFaults - calm, NDGrid.headlineToRows + 2 * NDProblemRows.rowHeight + 0.5, accuracy: 1.5,
                        "only the problem rows make it taller (R1.12: 14 pt under the headline)")
-        // L25: capped at the screen's visible height minus 40 pt; past it, the page scrolls and the footer stays.
-        XCTAssertEqual(NDPageHeight.window(NDStore(fixture: three, page: .overview), page: .overview, screen: 720), 680)
+        // L57: without AppKit chrome, this offscreen page can use the full visible height.
+        XCTAssertEqual(NDPageHeight.window(NDStore(fixture: three, page: .overview), page: .overview, screen: 720), 720)
         print("Overview heights: " + heights.joined(separator: ", "))
     }
 
@@ -1559,10 +1560,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
 
     /// L2 and the lead's 1.4 rule: every hover panel's arrow sits on its own station (the tip within the circle's
     /// horizontal extent on a top or bottom edge, its vertical extent on a side edge), and the body covers no station's
-    /// circle, name or status, no action and no lane label, for all eight stations in every fixture.
+    /// circle, name, purpose or status, and no action, for all stations in every fixture.
     func testPanelArrowsSitOnTheirStationsAndBodiesClearEverything() {
         let L = NDPipelineLayout.self
-        let lanes = L.laneLabelRects()
         for name in Fixture.Name.allCases {
             let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
             let r1 = store.r1
@@ -1595,7 +1595,15 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                         XCTAssertFalse(panel.outer.intersects(rect), "\(where_) covers \(other)'s words")
                     }
                 }
-                for (label, rect) in lanes { XCTAssertFalse(panel.outer.intersects(rect), "\(where_) covers \"\(label)\"") }
+                // R13: both job panels clear the visible caption fields, including their 4 pt native insets.
+                if station == .jobs || station == .weekly {
+                    for (_, rect) in L.laneLabelRects() {
+                        XCTAssertFalse(panel.outer.intersects(rect.insetBy(dx: -4, dy: -4)), where_)
+                    }
+                    let content = NDStationPopover.measure(AnyView(NDStationPopover(store: store, station: station)), width: panel.body.width)
+                    XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, content.height, where_)
+                    XCTAssertFalse(panel.scrolls, where_)
+                }
             }
         }
     }
@@ -1824,14 +1832,14 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertNil(NDMenuHeadline.detail(r1, lastVerdictHadRed: true), "only when the last confirmed verdict had no red check")
     }
 
-    /// R1.2 change 22 and L25: the window is the page's real height in every fixture, capped at the screen minus 40 pt.
+    /// L57: the page is capped at the visible screen, minus injected AppKit chrome.
     func testWindowIsThePagesHeightCappedByTheScreen() {
         for name in Fixture.Name.allCases {
             for page in NDPage.allCases {
                 let store = NDStore(fixture: Fixture.inputs(name), page: page)
                 let needed = ceil(NDPageHeight.content(store, page: page) + NDPageHeight.chrome)
                 XCTAssertEqual(NDPageHeight.window(store, page: page, screen: nil), needed, "\(name.rawValue) \(page)")
-                XCTAssertEqual(NDPageHeight.window(store, page: page, screen: 600), min(needed, 560), "\(name.rawValue) \(page): L25")
+                XCTAssertEqual(NDPageHeight.window(store, page: page, screen: 600), min(needed, 600), "\(name.rawValue) \(page): L57")
             }
         }
     }
@@ -1985,21 +1993,35 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     /// No station moves between states; the Kept-safe frame never grows (R1.5: no actions on the chart).
     func testStationsDoNotMoveBetweenStates() {
         let expected: [NDStation: CGPoint] = [
-            // R1.12 change 6: Search at the loop's bottom-right corner, under Google Drive.
-            .read: CGPoint(x: 215, y: 64), .queue: CGPoint(x: 215, y: 134), .search: CGPoint(x: 736, y: 248),
-            .mac: CGPoint(x: 599, y: 64), .drive: CGPoint(x: 736, y: 64), .jobs: CGPoint(x: 377, y: 186), .weekly: CGPoint(x: 493, y: 186),
+            // R14 deliberately moved Search to y297 to remove the unused lower band.
+            // Keep a literal pin, independent of the production layout tokens, in every state.
+            .read: CGPoint(x: 215, y: 44), .queue: CGPoint(x: 215, y: 114), .search: CGPoint(x: 736, y: 297),
+            .mac: CGPoint(x: 599, y: 44), .drive: CGPoint(x: 736, y: 44), .jobs: CGPoint(x: 342, y: 138), .weekly: CGPoint(x: 528, y: 138),
         ]
         XCTAssertEqual(NDPipelineLayout.stations, expected)
+        let centers = expected.merging([.agents: CGPoint(x: 38, y: 72), .memory: CGPoint(x: 435, y: 65.5)]) { fixed, _ in fixed }
         for name in Fixture.Name.allCases {
             let p = pipeline(name)
+            // Check both axes of every actual station hit area, including Memory and the agents.
+            for (station, point) in centers {
+                let hit = NDPipelineLayout.hitShape(station, p).circle
+                XCTAssertEqual(CGPoint(x: hit.midX, y: hit.midY), point, "\(name.rawValue) \(station): fixed center")
+            }
             for (station, point) in expected {
+                let labels = NDPipelineLayout.labelRects(station, p)
+                XCTAssertEqual(labels.first?.minY, point.y + 17, "\(name.rawValue) \(station): fixed name y")
+                if p.status[station] != nil {
+                    let offset: CGFloat = station == .jobs || station == .weekly ? 57 : 33
+                    XCTAssertEqual(labels.last?.minY, point.y + offset, "\(name.rawValue) \(station): fixed status y")
+                }
+
                 for rect in NDPipelineLayout.labelRects(station, p) {
                     XCTAssertEqual(rect.midX, point.x, accuracy: 0.5, "\(name.rawValue) \(station): its words stay centred on it")
                 }
             }
         }
         XCTAssertEqual(NDPipelineLayout.keptFrame(grown: true), NDPipelineLayout.keptSafe)
-        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 521, y: 38, width: 283, height: 84), "R1.10.4: 32 pt from the right; R1.12: 84 tall")
+        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 521, y: 18, width: 283, height: 84), "R1.10.4: 32 pt from the right; R1.12: 84 tall")
     }
 
     /// Lead (1.3 brief): inside Kept safe, 16 pt between the two stations' text blocks and 12 pt from any text to the frame,
@@ -2438,7 +2460,11 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertTrue(source.contains("NDMotion.pageResize(reduceMotion: reduceMotionForTesting ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)"),
                       "the system's Reduce Motion, unless a test sets it")
         XCTAssertTrue(source.contains("CAMediaTimingFunction(controlPoints: c.0, c.1, c.2, c.3)"), "R1.8 item 1: the strong ease-out")
-        XCTAssertTrue(source.contains("y: top - frameSize.height"), "the top edge stays")
+        // L57: exercise the production frame calculation after moving it out of the controller.
+        let before = NSRect(x: 100, y: 200, width: 900, height: 500)
+        let after = NDPageHeight.frame(size: NSSize(width: 900, height: 600), keeping: before, visibleFrame: nil)
+        XCTAssertEqual(after.maxY, before.maxY, "the top edge stays")
+        XCTAssertEqual(after.minX, before.minX)
     }
 
     /// R2A 8: Memory carries its unit.
@@ -2492,16 +2518,15 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(L.fitted(jobs, within: CGRect(x: -500, y: -800, width: 2000, height: 2000)), jobs)
     }
 
-    /// R1.5: with no actions on the chart the frame no longer grows, so the Memory-to-Search line leaves the box's right edge
-    /// at the saves lane and turns once, down into Search, at the lines' common 10 pt radius.
+    /// R14: Memory-to-Search leaves the lower port with 8 pt frame clearance and turns once into Search.
     func testMemoryToSearchIsOneCleanRoute() {
         let L = NDPipelineLayout.self
         let line = L.connections.first { $0.pipe == .memorySearch }!
         XCTAssertEqual(line.corner, 10)
         let p = line.line.points
-        XCTAssertEqual(p.count, 3, "along, then down: one turn")
-        XCTAssertEqual(p[0].x, L.hub.maxX + L.edgeGap, accuracy: 0.01, "it leaves the right edge")
-        XCTAssertEqual(p[0].y, L.ySaves)
+        XCTAssertEqual(p.count, 3, "R14: one clean turn below the copies")
+        XCTAssertEqual(p[0].x, L.hub.maxX - 12, accuracy: 0.01, "R14: it leaves the lower port")
+        XCTAssertEqual(p[0].y, L.hub.maxY + L.edgeGap) // R14: keep the real 8 pt frame clearance.
         XCTAssertEqual(p[1].y, p[0].y)
         XCTAssertEqual(p[1].x, L.point(.search).x)
     }
@@ -2511,7 +2536,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testPipelineBlockHeightIsSetByItsLowestStation() {
         let L = NDPipelineLayout.self
         let search = L.labelRects(.search, pipeline(.calm)).map(\.maxY).max() ?? 0  // R1.12 (F): with its status line
-        XCTAssertGreaterThan(search, L.size.height - 4, "Search's name reaches the chart's bottom")
+        // R14: Search uses the lower loop; no unused band remains below its words.
+        XCTAssertGreaterThan(search, L.size.height - 4, "Search ends the compact loop")
         XCTAssertLessThanOrEqual(search, L.size.height + 0.5)
     }
 
@@ -2729,15 +2755,16 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         presenter.hide()
     }
 
-    /// R1.6 item 2: a panel fits its content: no scroll view unless the screen limit cuts it.
+    /// M1 calm-fit correction: a panel scrolls only when chart or screen bounds cut its measured content.
     func testR16PanelsFitTheirContent() throws {
         let store = NDStore(fixture: Fixture.inputs(.twoFaults), page: .overview)
         let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
         let roomy = CGRect(x: -2000, y: -2000, width: 4000, height: 4000)
         for station in NDStation.allCases {
             let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
-            XCTAssertFalse(panel.scrolls, "\(station): no scroll bar at its own height")
-            XCTAssertFalse(NDPipelineLayout.fitted(panel, within: roomy).scrolls, "\(station): a roomy screen cuts nothing")
+            let content = NDStationPopover.measure(AnyView(NDStationPopover(store: store, station: station)), width: panel.body.width).height
+            XCTAssertEqual(panel.scrolls, panel.body.height < content, "\(station): only cut content scrolls")
+            XCTAssertEqual(NDPipelineLayout.fitted(panel, within: roomy).scrolls, panel.scrolls, "a roomy screen adds no cut")
         }
         let queue = chart.panel(.queue, content: AnyView(NDStationPopover(store: store, station: .queue)))
         let short = CGRect(x: -2000, y: -2000, width: 4000, height: 2000 + queue.body.minY + 40)
@@ -3045,14 +3072,16 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         var skipped = Fixture.inputs(.calm)
         skipped.jobs?[index].lastOutcome = .unknown
         XCTAssertNil(NDPipelineState.make(skipped).status[.weekly], "a skipped run says nothing, never \"last run\"")
-        // Both link to Memory both ways: straight up from the station to the box's bottom edge, an arrowhead at each end.
+        // Gap 79 / L56 deliberately spreads the job stations for their purpose lines. The elbow links still reach
+        // Memory's bottom edge, with an arrowhead at each end; their endpoint need not share the station's x.
         let L = NDPipelineLayout.self
         for (pipe, station) in [(NDPipe.jobsMemory, NDStation.jobs), (.weeklyMemory, .weekly)] {
             let link = try XCTUnwrap(L.connections.first { $0.pipe == pipe })
             XCTAssertTrue(link.bothWays, "\(station): both ways")
             XCTAssertEqual(link.line.points.first?.x, L.point(station).x)
-            XCTAssertEqual(link.line.points.last, CGPoint(x: L.point(station).x, y: L.hub.maxY + L.edgeGap))
-            XCTAssertTrue((L.hub.minX...L.hub.maxX).contains(L.point(station).x), "\(station) hangs under Memory")
+            let anchorX = station == .jobs ? L.hub.minX + 12 : L.hub.maxX - 12
+            XCTAssertEqual(link.line.points.last, CGPoint(x: anchorX, y: L.hub.maxY + L.edgeGap))
+            XCTAssertTrue((L.hub.minX...L.hub.maxX).contains(anchorX), "\(station) connects to Memory")
         }
         XCTAssertEqual(NDPipelineGraph.ends[.weeklyMemory]?.from, .weekly)
     }
@@ -3273,33 +3302,28 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         }
     }
 
-    /// R1.12 (5g, 5h): the nightly check-up's panel opens left of it inside the loop, under Save queue's status; the weekly
-    /// clean's up-right, between the Kept-safe frame and Search. Each arrow on its station, over no circle, name or status,
-    /// in every fixture, and never over the footer's text.
+    /// R13: both jobs open below their full words, within the chart, without covering a label or caption.
     func testR17JobsPanelOpensBesideItsStation() {
         let L = NDPipelineLayout.self
         for name in Fixture.Name.allCases {
             let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
             let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
             for station in [NDStation.jobs, .weekly] {
-                let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
+                let content = AnyView(NDStationPopover(store: store, station: station))
+                let panel = chart.panel(station, content: content)
                 let where_ = "\(name.rawValue) \(station)"
-                XCTAssertEqual(panel.edge, station == .jobs ? .leading : .trailing, where_)
-                XCTAssertTrue((L.circle(station).minY...L.circle(station).maxY).contains(panel.tip.y), "\(where_): on its station")
-                if station == .jobs {
-                    let queueWords = L.labelRects(.queue, store.r1.pipeline).map(\.maxY).max() ?? 0
-                    XCTAssertGreaterThan(panel.body.minY, queueWords, "\(where_): under Save queue's words")
-                } else {
-                    XCTAssertGreaterThanOrEqual(panel.body.minY, L.keptSafe.maxY, "\(where_): under the Kept-safe frame")
-                    XCTAssertLessThanOrEqual(panel.body.height, 106, "\(where_): 106 pt at most")
-                }
+                XCTAssertEqual(panel.edge, .bottom, where_)
+                XCTAssertTrue((L.circle(station).minX...L.circle(station).maxX).contains(panel.tip.x), where_)
+                let wordsBottom = L.labelRects(station, store.r1.pipeline).map(\.maxY).max() ?? 0
+                XCTAssertGreaterThan(panel.body.minY, wordsBottom, where_)
+                XCTAssertLessThanOrEqual(panel.body.maxY, L.size.height, where_)
+                XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, NDStationPopover.measure(content, width: panel.body.width).height, where_)
                 for other in NDStation.allCases where other != station {
-                    XCTAssertFalse(panel.body.intersects(L.circle(other)), "\(where_): over \(other)'s circle")
-                    for rect in L.labelRects(other, store.r1.pipeline) {
-                        XCTAssertFalse(panel.body.intersects(rect), "\(where_): over \(other)'s words")
-                    }
+                    XCTAssertFalse(panel.body.intersects(L.circle(other)), where_)
+                    for rect in L.labelRects(other, store.r1.pipeline) { XCTAssertFalse(panel.outer.intersects(rect), where_) }
                 }
-                for text in L.footerTexts { XCTAssertFalse(panel.outer.intersects(text), "\(where_): over the footer's text") }
+                for (_, rect) in L.laneLabelRects() { XCTAssertFalse(panel.outer.intersects(rect.insetBy(dx: -4, dy: -4)), where_) }
+                for text in L.footerTexts { XCTAssertFalse(panel.outer.intersects(text), where_) }
             }
         }
     }
