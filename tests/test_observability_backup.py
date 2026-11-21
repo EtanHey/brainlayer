@@ -1343,3 +1343,22 @@ def test_failed_identity_attempt_stays_separate_from_older_verified_snapshot():
     snapshot, error, _ = observability_backup._daily_snapshot([verified, failed])
     assert snapshot["destination"] == "2026-10-28.db.zst"
     assert error == f"BrainBarDatabaseIdentityUnavailableError: {reason}"
+
+
+@pytest.mark.parametrize("confirmed,total", [(25, 100), (0, None), (-1, 0), (True, "100")])
+def test_local_snapshot_carries_only_measured_progress(confirmed, total):
+    row = {
+        "backup_log_provenance": "real",
+        "attempted_at": "2026-11-21T00:00:00Z",
+        "snapshot": "/synthetic/2026-11-21.db.gz",
+        "local_verified": True,
+        "uploaded": False,
+        "upload_state": "in_progress",
+        "bytes_confirmed": confirmed,
+        "bytes": total,
+        "verification_pending": True,
+    }
+    local = observability_backup._local_snapshot([row])
+    assert local["bytes_confirmed"] == (confirmed if type(confirmed) is int and confirmed >= 0 else None)
+    assert local["bytes_total"] == (total if type(total) is int and total > 0 else None)
+    assert local["verification_pending"] is True

@@ -19,6 +19,7 @@ struct NDPipelineChart: View {
     var popover: (NDStation) -> AnyView? = { _ in nil }
     /// Render harness only: one station drawn hovered, its popover drawn where AppKit would open it.
     var previewHover: NDStation? = nil
+    var backupProgress: BrainBarBackupProgress? = nil
     @State private var hovered: NDStation?
     @StateObject private var panels = NDPanelPresenter()
 
@@ -80,7 +81,11 @@ struct NDPipelineChart: View {
     var body: some View {
         let shownHover = previewHover ?? hovered
         ZStack(alignment: .topLeading) {
-            Canvas { ctx, _ in Self.draw(ctx, state: state, memories: memories, hovered: shownHover, keptGrown: keptGrown) }
+            Canvas { ctx, _ in
+                var drawn = state
+                if backupProgress != nil { drawn.status[.drive] = nil }
+                Self.draw(ctx, state: drawn, memories: memories, hovered: shownHover, keptGrown: keptGrown)
+            }
                 .frame(width: NDPipelineLayout.drawWidth, height: NDPipelineLayout.size.height)
                 .allowsHitTesting(false)
             // R1.4 changes 5, 8 and 9: the words that left the chart, on the things they name.
@@ -92,6 +97,14 @@ struct NDPipelineChart: View {
                 }
             }
             ForEach(Self.controls(items)) { control in station(control.station) }
+            if let backupProgress {
+                let p = NDPipelineLayout.point(.drive)
+                BrainBarBackupProgressView(progress: backupProgress, compact: true)
+                    .frame(width: 152)
+                    .background(ND.card)
+                    .position(x: p.x, y: p.y + 50)
+                    .allowsHitTesting(false)
+            }
             // R1.4 change 2: each provider icon's hover and spoken name is its name. 1.5.1: a provider a check names opens the
             // agents' fault panel itself (the same panel, with Copy report), not only a tooltip.
             ForEach(NDPipelineLayout.agentRows, id: \.0.rawValue) { family, _ in

@@ -324,6 +324,9 @@ struct ObservabilityDocument: Codable, Sendable {
         var uploadProcessLive: Bool? = nil
         var uploadProcessStartedAt: Date? = nil
         let localIntegrity, localIntegrityPragma: String?
+        var bytesConfirmed: Int64? = nil
+        var bytesTotal: Int64? = nil
+        var verificationPending: Bool? = nil
     }
     struct Launchd: Codable, Sendable {
         let label: String

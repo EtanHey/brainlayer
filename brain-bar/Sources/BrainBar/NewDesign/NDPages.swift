@@ -136,7 +136,15 @@ struct NDBackupsPage: View {
                                heads: [(Say.newest, Self.valueColumn), (Say.next, Self.valueColumn)])
                         .padding(.top, 12)
                     VStack(spacing: 0) {
-                        ForEach(lanes) { NDBackupLaneView(lane: $0) }
+                        ForEach(lanes) { lane in
+                            if lane.id == "backup_offsite", let progress = store.inputs.backupProgress {
+                                HStack(spacing: 0) {
+                                    Text(lane.name).font(NDType.body)
+                                        .frame(width: Self.symbolColumn + Self.nameColumn, alignment: .leading)
+                                    BrainBarBackupProgressView(progress: progress).padding(.vertical, 4)
+                                }
+                            } else { NDBackupLaneView(lane: lane) }
+                        }
                     }
                     .padding(.top, 4)
                     .background(alignment: .topLeading) { limitLine }

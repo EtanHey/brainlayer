@@ -193,6 +193,7 @@ struct BrainBarBackupChecksCard: View {
     @Binding var detailsExpanded: Bool
     var copiedDetailID: String? = nil
     let copy: (BrainBarBackupChecks.Detail) -> Void
+    var progress: BrainBarBackupProgress? = nil
 
     private static func color(_ tone: ObservabilityStatusTone) -> Color {
         switch tone {
@@ -213,12 +214,12 @@ struct BrainBarBackupChecksCard: View {
     }
 
     var body: some View {
-        let verdictTone = checks.verdictTone
+        let verdictTone: ObservabilityStatusTone = progress != nil && checks.verdictTone != .red ? .neutral : checks.verdictTone
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Recovery checks").font(.system(size: 13, weight: .semibold))
                 Spacer(minLength: 12)
-                Label(checks.summary, systemImage: Self.symbol(verdictTone))
+                Label(verdictTone != .red ? progress?.title ?? checks.summary : checks.summary, systemImage: Self.symbol(verdictTone))
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Self.color(verdictTone))
             }
@@ -237,18 +238,24 @@ struct BrainBarBackupChecksCard: View {
             }
             VStack(spacing: 0) {
                 ForEach(Array(checks.checks.enumerated()), id: \.element.id) { index, check in
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        Image(systemName: Self.symbol(check.tone))
-                            .font(.system(size: 11))
-                            .foregroundStyle(Self.color(check.tone))
-                        Text(check.title)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Color.brainBarTextPrimary)
-                        Spacer(minLength: 12)
-                        Text(check.value)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(check.tone == .red ? Self.color(.red) : Color.brainBarTextSecondary)
-                            .multilineTextAlignment(.trailing)
+                    Group {
+                        if check.id == "snapshot-upload", let progress {
+                            BrainBarBackupProgressView(progress: progress)
+                        } else {
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                Image(systemName: Self.symbol(check.tone))
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Self.color(check.tone))
+                                Text(check.title)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(Color.brainBarTextPrimary)
+                                Spacer(minLength: 12)
+                                Text(check.value)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(check.tone == .red ? Self.color(.red) : Color.brainBarTextSecondary)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                        }
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)

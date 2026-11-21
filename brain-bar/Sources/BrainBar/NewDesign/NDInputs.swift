@@ -37,6 +37,7 @@ struct NDInputs: Sendable {
     /// R1.5 change 8 (L45): the REAL number of compressed database copies found on this Mac (not the keep setting).
     var localCopiesKept: Int? = nil
     var canRevealLocalCopy = false
+    var backupProgress: BrainBarBackupProgress? = nil
     /// A copy of the report failed: the copy row says so until it goes (R12).
     var copyReportFailed = false
 }
