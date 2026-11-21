@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from ..queued_messages import queued_user_text
 from ..system_prompt_guard import looks_like_system_prompt
 
 # =============================================================================
@@ -414,8 +415,21 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
     """
     entry_type = entry.get("type", "")
 
+    if entry_type == "queue-operation":
+        text = queued_user_text(entry)
+        if text is None:
+            return None
+        # Background completion envelopes are machine events, not a person's
+        # words. A nonempty result still follows the existing assistant path.
+        if text.lstrip().startswith("<task-notification") and _extract_task_notification_result(text) is None:
+            return None
+        classified = classify_content({**entry, "type": "user", "message": {"role": "user", "content": text}})
+        if classified is not None:
+            classified.metadata.update(entry_type="queue-operation", queued=True)
+        return classified
+
     # Skip noise types entirely
-    if entry_type in ("progress", "queue-operation"):
+    if entry_type == "progress":
         return None
 
     # Extract conversation context metadata (session_id, timestamp, sender)
