@@ -1594,7 +1594,15 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                         XCTAssertFalse(panel.outer.intersects(rect), "\(where_) covers \(other)'s words")
                     }
                 }
-                // Payload captions explain connectors at rest. A panel may cover them like the connector itself.
+                // R13: both job panels clear the visible caption fields, including their 4 pt native insets.
+                if station == .jobs || station == .weekly {
+                    for (_, rect) in L.laneLabelRects() {
+                        XCTAssertFalse(panel.outer.intersects(rect.insetBy(dx: -4, dy: -4)), where_)
+                    }
+                    let content = NDStationPopover.measure(AnyView(NDStationPopover(store: store, station: station)), width: panel.body.width)
+                    XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, content.height, where_)
+                    XCTAssertFalse(panel.scrolls, where_)
+                }
             }
         }
     }
@@ -2514,8 +2522,9 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testPipelineBlockHeightIsSetByItsLowestStation() {
         let L = NDPipelineLayout.self
         let search = L.labelRects(.search, pipeline(.calm)).map(\.maxY).max() ?? 0  // R1.12 (F): with its status line
-        XCTAssertGreaterThan(search, L.size.height - 4, "Search's name reaches the chart's bottom")
-        XCTAssertLessThanOrEqual(search, L.size.height + 0.5)
+        // R13: the compact loop ends here; the added band holds full job panels (L57 grows the page).
+        XCTAssertGreaterThan(search, L.size.height - L.jobPanelRoom - 4, "Search ends the compact loop")
+        XCTAssertLessThanOrEqual(search, L.size.height - L.jobPanelRoom + 0.5)
     }
 
     /// CI on e89086d2: every fixture is a pure function of its own pinned clock and zone. Built under two process time
@@ -3279,38 +3288,28 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         }
     }
 
-    /// R1.12 (5g, 5h): the nightly check-up's panel opens left of it inside the loop, under Save queue's status; the weekly
-    /// clean's up-right, between the Kept-safe frame and Search. Each arrow on its station, over no circle, name or status,
-    /// in every fixture, and never over the footer's text.
+    /// R13: both jobs open below their full words, within the chart, without covering a label or caption.
     func testR17JobsPanelOpensBesideItsStation() {
         let L = NDPipelineLayout.self
         for name in Fixture.Name.allCases {
             let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
             let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
             for station in [NDStation.jobs, .weekly] {
-                let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
+                let content = AnyView(NDStationPopover(store: store, station: station))
+                let panel = chart.panel(station, content: content)
                 let where_ = "\(name.rawValue) \(station)"
-                // M1 fit: nightly opens below its text instead of over Save queue; weekly still opens beside it.
-                XCTAssertEqual(panel.edge, station == .jobs ? .bottom : .trailing, where_)
-                if station == .jobs {
-                    XCTAssertTrue((L.circle(station).minX...L.circle(station).maxX).contains(panel.tip.x), where_)
-                } else {
-                    XCTAssertTrue((L.circle(station).minY...L.circle(station).maxY).contains(panel.tip.y), "\(where_): on its station")
-                }
-                if station == .jobs {
-                    let queueWords = L.labelRects(.queue, store.r1.pipeline).map(\.maxY).max() ?? 0
-                    XCTAssertGreaterThan(panel.body.minY, queueWords, "\(where_): under Save queue's words")
-                } else {
-                    XCTAssertGreaterThanOrEqual(panel.body.minY, L.keptSafe.maxY, "\(where_): under the Kept-safe frame")
-                    XCTAssertLessThanOrEqual(panel.body.height, 106, "\(where_): 106 pt at most")
-                }
+                XCTAssertEqual(panel.edge, .bottom, where_)
+                XCTAssertTrue((L.circle(station).minX...L.circle(station).maxX).contains(panel.tip.x), where_)
+                let wordsBottom = L.labelRects(station, store.r1.pipeline).map(\.maxY).max() ?? 0
+                XCTAssertGreaterThan(panel.body.minY, wordsBottom, where_)
+                XCTAssertLessThanOrEqual(panel.body.maxY, L.size.height, where_)
+                XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, NDStationPopover.measure(content, width: panel.body.width).height, where_)
                 for other in NDStation.allCases where other != station {
-                    XCTAssertFalse(panel.body.intersects(L.circle(other)), "\(where_): over \(other)'s circle")
-                    for rect in L.labelRects(other, store.r1.pipeline) {
-                        XCTAssertFalse(panel.body.intersects(rect), "\(where_): over \(other)'s words")
-                    }
+                    XCTAssertFalse(panel.body.intersects(L.circle(other)), where_)
+                    for rect in L.labelRects(other, store.r1.pipeline) { XCTAssertFalse(panel.outer.intersects(rect), where_) }
                 }
-                for text in L.footerTexts { XCTAssertFalse(panel.outer.intersects(text), "\(where_): over the footer's text") }
+                for (_, rect) in L.laneLabelRects() { XCTAssertFalse(panel.outer.intersects(rect.insetBy(dx: -4, dy: -4)), where_) }
+                for text in L.footerTexts { XCTAssertFalse(panel.outer.intersects(text), where_) }
             }
         }
     }

@@ -6,11 +6,10 @@ import SwiftUI
 enum NDPipelineLayout {
     typealias Say = BrainBarMenuPresenter.SurfaceSay
 
-    /// 820 × 270 inside its surface (R1.4 change 19). The drawing may run 12 pt into the surface's right padding: the
-    /// Kept-safe frame keeps 12 pt between its edge and any text (lead, 1.3 build brief).
-    /// Gap 79 / L56: compact spacing keeps the purposes and answers inside the 716 pt Overview.
-    /// R1.12 change 6: 820 × 296; Search sits at the loop's bottom-right corner with its status line under it.
-    static let size = CGSize(width: 820, height: 270)
+    /// R13 / gap 79: the 128 pt job body starts at y218; 84 extra points leave 8 pt below its full text.
+    /// L57 lets the Overview grow with this space, capped by the visible screen.
+    static let jobPanelRoom: CGFloat = 84
+    static let size = CGSize(width: 820, height: 270 + jobPanelRoom)
     static let verticalPadding: CGFloat = 4
     static let drawWidth: CGFloat = 832
     static let yTop: CGFloat = 44, ySaves: CGFloat = 114, yAnswers: CGFloat = 222, yRail: CGFloat = 8
@@ -289,7 +288,7 @@ enum NDPipelineLayout {
         case .drive: (.top, 320, -108)  // 5e: ends 52 right of the station, inside the window
         case .queue: (.bottom, 262, -100)  // Clear the nightly purpose as well as its name.
         case .jobs: (.bottom, 262, 0)  // Compact chart: below its words, clear of Save queue.
-        case .weekly: (.trailing, 264, 0)  // 5h: up-right, between the Kept-safe frame and Search
+        case .weekly: (.bottom, 264, 0)  // R13: both jobs open below their complete labels.
         // 5i, as built: the designer's place (left, under the job stations' words, 238 to the footer) holds 86 pt and the
         // panel needs about 98, and its corner meets the footer's right line. One panel shows at a time, so Search's opens
         // above it instead, in the weekly clean's room: right of the job stations' words, under the Kept-safe frame.
@@ -303,16 +302,6 @@ enum NDPipelineLayout {
     /// 5i, as built: the Search panel's left edge, clear of the weekly clean's widest words ("failed 2 weeks").
     static var searchPanelMinX: CGFloat { max(point(.weekly).x + 52, (purposeRect(.weekly)?.maxX ?? 0) + 12) }
     static var searchPanelWidth: CGFloat { min(264, windowInside.maxX - searchPanelMinX) }
-
-    /// R1.12 5g, 5h, 5i: the side panels' tops, and where their arrows meet the station (inside its ring, 18 pt below the
-    /// body's top so the arrow keeps off the rounded corner).
-    static func sideTop(_ s: NDStation) -> CGFloat? {
-        switch s {
-        case .jobs: point(.queue).y + 48  // 182: under Save queue's status line
-        case .weekly: keptSafe.maxY + 2  // 124: under the Kept-safe frame
-        default: nil
-        }
-    }
 
     static func panel(_ s: NDStation, state: NDPipelineState, actions: Set<NDStation>, actionWidths: [NDStation: CGFloat] = [:],
                       height: CGFloat) -> Panel {
@@ -348,12 +337,6 @@ enum NDPipelineLayout {
         case .top:
             tip = CGPoint(x: own.midX, y: anchor.minY)
             body = CGRect(x: tip.x - w / 2 + side.slide, y: tip.y - a - height, width: w, height: height)
-        case .leading where sideTop(s) != nil, .trailing where sideTop(s) != nil:
-            let top = sideTop(s) ?? 0
-            let y = s == .weekly ? own.midY : min(own.maxY, top + arrowInset)
-            tip = CGPoint(x: side.edge == .leading ? anchor.minX : anchor.maxX, y: y)
-            let x = side.edge == .leading ? tip.x - a - w : tip.x + a
-            body = CGRect(x: x, y: top, width: w, height: height)
         case .bottom:
             // The agents' arrow sits left of the answers line rising into the group's bottom edge at its centre.
             tip = CGPoint(x: s == .agents ? own.minX + 10 : own.midX, y: anchor.maxY)
@@ -381,6 +364,11 @@ enum NDPipelineLayout {
             let clearsFooter = !footerTexts.contains { $0.minX < body.maxX && body.minX < $0.maxX }
             body.origin.y = min(body.minY, (clearsFooter ? windowInside.maxY : footerTop - 4) - height)
             body.origin.y = min(max(body.minY, tip.y - height + arrowInset), tip.y - arrowInset)
+        }
+        // R13: clear the native background of Search answers while keeping the arrow on the job words.
+        if s == .jobs || s == .weekly {
+            let captionRight = laneLabelRects().map { $0.1.maxX + 4 }.max() ?? 0
+            body.origin.x = max(body.minX, captionRight + 12)
         }
         let arrowBox: CGRect = switch side.edge {
         case .top: CGRect(x: tip.x - arrowHalfWidth, y: tip.y - a, width: 2 * arrowHalfWidth, height: a)
@@ -434,7 +422,7 @@ enum NDPipelineLayout {
     static func purposeRect(_ s: NDStation) -> CGRect? {
         guard let words = purpose(s) else { return nil }
         let p = point(s)
-        let w = textWidth(words, size: 11)  // Gap 79 / L56 adds a purpose, keeping L54's 24/17/13/11 scale.
+        let w = textWidth(words, size: 11) + 8  // R13: NSTextField adds 4 pt of drawing inset on each side.
         return CGRect(x: p.x - w / 2, y: p.y + 37, width: w, height: 16)
     }
 

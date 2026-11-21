@@ -22,7 +22,7 @@ final class BrainBarGapClarityTests: XCTestCase {
             }
         }
         // The compact M1 layout still fits the lowest station's complete status line.
-        XCTAssertEqual(L.size.height, 270)
+        XCTAssertEqual(L.size.height, 354) // R13: full job panels below the words; L57 fits the page.
         for fixture in BrainBarDesignFixture.Name.allCases {
             let p = NDPipelineState.make(BrainBarDesignFixture.inputs(fixture))
             for station in NDStation.allCases {

@@ -14,7 +14,7 @@ final class BrainBarGapL57Tests: XCTestCase {
         let initial = NSRect(x: 200, y: screen.maxY - calm - titleBar, width: 900, height: calm + titleBar)
         store.setInputsForTesting(BrainBarDesignFixture.inputs(.twoFaults))
         let content = NDPageHeight.content(store, page: .overview) + NDGrid.pageTop + 20
-        XCTAssertEqual(content, 722.5, accuracy: 1, "M1 two-fault content, including page insets")
+        XCTAssertEqual(content, 722.5 + NDPipelineLayout.jobPanelRoom, accuracy: 1, "R13 adds full job-panel room to the M1 content pin (L57)")
         let height = NDPageHeight.window(store, page: .overview, screen: screen.height, titleBarHeight: titleBar)
         XCTAssertGreaterThan(height, calm)
         XCTAssertGreaterThanOrEqual(height - NDGrid.titleBar - NDGrid.footer, content, "no scroll below the screen cap")

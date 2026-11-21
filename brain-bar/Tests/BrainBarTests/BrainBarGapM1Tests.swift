@@ -7,14 +7,14 @@ import XCTest
 @MainActor
 final class BrainBarGapM1Tests: XCTestCase {
     func testCalmOverviewContentFitsViewport() {
-        let viewport = NDGrid.windowSize.height - NDGrid.titleBar - NDGrid.footer
         for fixture: BrainBarDesignFixture.Name in [.calm, .twoFaults] {
             let store = NDStore(fixture: BrainBarDesignFixture.inputs(fixture), page: .overview)
             let width = NDGrid.windowWidth - 2 * NDGrid.pageSide
             let host = NSHostingController(rootView: NDOverviewPage(store: store).frame(width: width).environment(\.ndPalette, .window))
             let height = host.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height + NDGrid.pageTop + 20
-            print("M1_LAYOUT \(fixture.rawValue) content=\(height) viewport=\(viewport) scroll=\(max(0, height - viewport))")
-            if fixture == .calm { XCTAssertLessThanOrEqual(height, viewport) }
+            // R13 adds full job-panel space; L57 fits each current page on a tall screen.
+            let viewport = NDPageHeight.window(store, page: .overview, screen: 2000) - NDGrid.titleBar - NDGrid.footer
+            XCTAssertLessThanOrEqual(height, viewport, fixture.rawValue)
         }
     }
 
