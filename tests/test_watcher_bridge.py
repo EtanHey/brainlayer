@@ -1048,3 +1048,123 @@ class TestRealtimeChunkIdSourceIsolation:
         rows = self._flush_rows(tmp_path, monkeypatch, ["alpha/0a1b2c3d-1111-2222-3333-444455556666.jsonl"], repeat=2)
         expected = f"rt-0a1b2c3d-{normalized_exact_hash(_LONG_TEXT)[:16]}"
         assert rows == [(expected, "alpha")]
+
+
+_THINKING = (
+    "ThinkingPolicyNeedle: the offset was never the cause, so the fix belongs in the classifier and not the tailer."
+)
+
+
+def _thinking_entry(*blocks):
+    return {
+        "type": "assistant",
+        "message": {"role": "assistant", "content": list(blocks)},
+        "timestamp": "2026-11-17T12:00:00Z",
+    }
+
+
+class TestThinkingPolicy:
+    """Etan, 17 Nov (choice A): thinking is stored, hidden from default search, opt-in only."""
+
+    @staticmethod
+    def _session(tmp_path):
+        return str(
+            tmp_path
+            / ".claude"
+            / "projects"
+            / "-Users-example-Gits-myproject"
+            / "0a1b2c3d-1111-2222-3333-444455556666.jsonl"
+        )
+
+    @staticmethod
+    def _rows(db_path):
+        conn = sqlite3.connect(str(db_path))
+        rows = conn.execute(
+            "SELECT content, source_class, content_type, metadata FROM chunks WHERE source = 'realtime_watcher'"
+        ).fetchall()
+        conn.close()
+        return rows
+
+    def _flush_direct(self, tmp_path, monkeypatch, entries):
+        db_path = tmp_path / "test.db"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+        for entry in entries:
+            entry["_source_file"] = self._session(tmp_path)
+        create_flush_callback(db_path, arbitrated=False)(entries)
+        return self._rows(db_path)
+
+    def test_thinking_block_is_stored_as_a_hidden_agent_thinking_chunk(self, tmp_path, monkeypatch):
+        rows = self._flush_direct(tmp_path, monkeypatch, [_thinking_entry({"type": "thinking", "thinking": _THINKING})])
+
+        assert len(rows) == 1
+        content, source_class, content_type, metadata = rows[0]
+        assert content == _THINKING
+        assert source_class == "agent-thinking"
+        assert content_type == "assistant_text"
+        assert json.loads(metadata)["thinking"] is True
+        assert json.loads(metadata)["thinking_source_class"] == "cli-agent"
+
+    def test_thinking_and_text_in_one_entry_are_stored_apart_with_their_own_classes(self, tmp_path, monkeypatch):
+        entry = _thinking_entry({"type": "thinking", "thinking": _THINKING}, {"type": "text", "text": _LONG_TEXT})
+
+        rows = self._flush_direct(tmp_path, monkeypatch, [entry])
+
+        assert {(content, source_class) for content, source_class, _, _ in rows} == {
+            (_THINKING, "agent-thinking"),
+            (_LONG_TEXT, "cli-agent"),
+        }
+
+    def test_queued_thinking_chunk_carries_the_hidden_class(self, tmp_path):
+        preview: list[dict] = []
+        entry = _thinking_entry({"type": "thinking", "thinking": _THINKING})
+        entry["_source_file"] = self._session(tmp_path)
+
+        create_flush_callback(tmp_path / "unused.db", arbitrated=True, preview_chunks=preview)([entry])
+
+        assert [(row["content"], row["source_class"]) for row in preview] == [(_THINKING, "agent-thinking")]
+
+    def test_short_thinking_meets_the_same_length_gates_as_text(self, tmp_path, monkeypatch):
+        short = "Check the offset first."  # 23 chars: passes the 20-char entry gate, fails the 50-char text gate.
+        entries = [
+            _thinking_entry({"type": "thinking", "thinking": short}),
+            _thinking_entry({"type": "text", "text": short}),
+            _thinking_entry({"type": "thinking", "thinking": "", "signature": "opaque"}),
+            _thinking_entry({"type": "redacted_thinking", "data": "opaque-ciphertext"}),
+        ]
+
+        assert self._flush_direct(tmp_path, monkeypatch, entries) == []
+
+    def test_short_line_filters_are_unchanged(self):
+        assert should_skip_entry(_make_jsonl_entry(text="Now the pictures.")) == "too_short"
+        assert should_skip_entry(_thinking_entry({"type": "thinking", "thinking": _THINKING})) == "too_short"
+        assert should_skip_entry(_make_jsonl_entry(text=_LONG_TEXT)) is None
+
+
+class TestCodexReasoningNormalization:
+    def test_codex_reasoning_summary_becomes_a_thinking_block(self):
+        from brainlayer.watcher import normalize_provider_entry
+
+        line = {
+            "timestamp": "2026-11-17T12:00:00Z",
+            "type": "response_item",
+            "payload": {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": _THINKING}],
+                "encrypted_content": "opaque",
+            },
+        }
+
+        entry = normalize_provider_entry(line, "codex")
+
+        assert entry is not None
+        assert entry["type"] == "assistant"
+        assert entry["message"]["content"] == [{"type": "thinking", "thinking": _THINKING}]
+        assert entry["timestamp"] == "2026-11-17T12:00:00Z"
+
+    def test_codex_reasoning_without_plaintext_is_still_dropped(self):
+        from brainlayer.watcher import normalize_provider_entry
+
+        line = {"type": "response_item", "payload": {"type": "reasoning", "summary": [], "encrypted_content": "x"}}
+
+        assert normalize_provider_entry(line, "codex") is None

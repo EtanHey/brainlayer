@@ -175,7 +175,7 @@ def _emitters(connection: sqlite3.Connection, columns: set[str], db_input: dict[
         counts[derive_emitter(*row)] += 1
     by_emitter = [{"emitter": emitter, "derived_from": origin, "count_in_window": count}
                   for (emitter, origin), count in sorted(counts.items())]
-    hidden = connection.execute("SELECT COUNT(*) FROM chunks WHERE source_class IN ('desktop', 'brain-worker')").fetchone()[0]
+    hidden = connection.execute("SELECT COUNT(*) FROM chunks WHERE source_class IN ('desktop', 'agent-thinking', 'brain-worker')").fetchone()[0]
     return _measured(db_input, by_source_class=by_source, by_emitter=by_emitter,
                      derivation_note=DERIVATION_NOTE, hidden_from_default_search=hidden)
 def _author_unknown(connection: sqlite3.Connection, columns: set[str], db_input: dict[str, Any], now: datetime) -> dict[str, Any]:

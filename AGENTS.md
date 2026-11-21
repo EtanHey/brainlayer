@@ -377,6 +377,22 @@ brainlayer search "how did I implement authentication"
   ingest as before. Skipped copies are neutral lines and do not count toward `max_lines_per_file`
   (up to 25,000 per read). Health: `fork_copies_skipped_total`, `fork_copy_files` (with the
   parent's confirmed offset and size). Only Claude has a per-entry fork marker; Codex's is header-level.
+- **A T3 session T3 never links is held for a bounded window, then indexed.** A T3-origin Codex
+  session (`originator: "T3 Code"`) that the T3 projection does not link is held unconfirmed only
+  while its own UUIDv7 start is within `BRAINLAYER_T3_LINKAGE_HOLD_S` (default 24 h). Past it, the
+  flush indexes it with `provenance_class = 't3-unlinked'` and confirms it normally. Evidence for
+  the window (2026-11-19): 0 of 87 M4 sessions that ever raised `t3_runtime_linkage_pending` were
+  linked later, and no linked session ever raised it. Inside the window, the READ held bytes are
+  `catch_up.held_for_linkage {files, bytes, oldest_age_s, window_s}` in `watcher-health.json`,
+  never lag. Unread bytes and holds past the window stay lag (`offset_lag`, red as before). A late
+  link: new entries are `t3-app-session` at once; already-indexed rows are relabelled in place by
+  `scripts/retag_t3_app_provenance.py --apply` (reversible, lead-run). `tests/test_t3_linkage_hold.py`.
+- **A finished file's no-entry tail is confirmed once the entries before it are.** Bytes after a
+  file's last message (tool output, token counts) are confirmed as discarded progress only when
+  nothing of the file is buffered. If its last entries were still buffered (or held), the
+  frontier is remembered and `_retry_discarded_progress` confirms it after the poll's flush,
+  never past the read end. Before this, such a tail stayed unconfirmed forever at EOF and counted
+  as lag (9 of 15 real held sessions, 19 Nov).
 - Source: `watcher.py` (tailer + indexer), `watcher_bridge.py` (pipeline integration)
 
 <!-- ARCHITECTURE: chunk lifecycle columns superseded_by/aggregated_into/archived_at; brain_supersede has safety gate for personal data; brain_archive is soft-delete -->

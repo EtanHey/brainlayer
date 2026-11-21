@@ -3,19 +3,32 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
 from . import t3_linkage_alarm
-from .alarm import build_alarm, raise_alarm
+from .alarm import BrainLayerAlarm, build_alarm, raise_alarm
 from .t3_sources import DEFAULT_T3_STATE_DB as DEFAULT_T3_STATE_DB
 from .t3_sources import resolve_t3_sources
 
 T3_APP_SESSION = "t3-app-session"
+# A T3-origin Codex session T3 never linked within the hold window: indexed, labelled, no thread link.
+T3_UNLINKED = "t3-unlinked"
+# How long a T3-origin Codex session is held for T3 to link it, counted from the session's own start.
+# Evidence (2026-11-19): on the M4, 0 of 87 sessions that ever raised t3_runtime_linkage_pending
+# (16 Oct - 19 Nov) were linked later, and no linked session ever raised it, so T3 links before
+# the watcher's first read (one 30 s poll); on the M1, 0 of 8 in 7 days. 24 h is far above that.
+DEFAULT_T3_LINKAGE_HOLD_S = 24 * 3600.0
+T3_LINKAGE_HOLD_ENV = "BRAINLAYER_T3_LINKAGE_HOLD_S"
+# Set by the flush callback on an entry it defers this flush while its session waits for T3 linkage:
+# the hold's start (epoch seconds). The watcher reads it to report held_for_linkage instead of lag.
+T3_LINKAGE_HOLD_KEY = "_t3_linkage_hold_started_at"
 _CODEX_SESSION_ID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 _REQUIRED_RUNTIME_COLUMNS = frozenset({"thread_id", "provider_name", "resume_cursor_json"})
 _V2_TABLE = "orchestration_v2_projection_provider_threads"
@@ -122,6 +135,49 @@ def codex_header_identity(
             "could not establish bounded Codex session identity",
             {"path": str(path), "error": str(exc)},
         )
+
+
+def t3_linkage_hold_window_s() -> float:
+    """The hold window in seconds; a missing, non-finite or negative value is the default."""
+    raw = os.environ.get(T3_LINKAGE_HOLD_ENV)
+    try:
+        value = float(raw) if raw is not None else DEFAULT_T3_LINKAGE_HOLD_S
+    except ValueError:
+        value = math.nan
+    return value if math.isfinite(value) and value >= 0 else DEFAULT_T3_LINKAGE_HOLD_S
+
+
+def codex_session_started_at(session_id: str) -> float | None:
+    """Epoch seconds embedded in a UUIDv7 Codex session id; None for any other UUID version."""
+    digits = session_id.replace("-", "").lower()
+    if len(digits) != 32 or digits[12] != "7" or not _CODEX_SESSION_ID_RE.fullmatch(session_id):
+        return None
+    return int(digits[:12], 16) / 1000.0
+
+
+def t3_linkage_hold_started_at(
+    source_file: str | Path, *, session_header: CompactCodexHeader | None = None, cache: dict | None = None
+) -> float:
+    """When a session's linkage hold began: the session's own start, read from its header id.
+
+    T3 links a session it adopts within seconds of starting it, so the start is the clock. It lives
+    in the data, so a restart, a copied file or a touched mtime cannot restart the hold. A header
+    without a UUIDv7 id falls back to the file's mtime, which is never earlier than the start, so
+    the fallback only ever holds longer.
+    """
+    started = None
+    try:
+        with t3_linkage_alarm.read_only():
+            session_id, _ = codex_header_identity(source_file, cache, session_header)
+        started = codex_session_started_at(session_id)
+    except BrainLayerAlarm:
+        started = None
+    if started is None:
+        try:
+            started = Path(source_file).stat().st_mtime
+        except OSError:
+            started = time.time()
+    return started
 
 
 def codex_session_id_from_source(source_file: str | Path) -> str | None:

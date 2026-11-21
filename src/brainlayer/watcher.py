@@ -639,6 +639,28 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
 
     payload = entry.get("payload")
     payload_entry = payload if isinstance(payload, dict) else None
+    if (
+        provider == "codex"
+        and entry_type == "response_item"
+        and payload_entry
+        and payload_entry.get("type") == "reasoning"
+    ):
+        # Codex reasoning: only its summary is plaintext (the rest is encrypted). It becomes a
+        # thinking block, stored hidden from default search like Claude's thinking.
+        summary = payload_entry.get("summary")
+        text = "\n\n".join(
+            item["text"]
+            for item in (summary if isinstance(summary, list) else [])
+            if isinstance(item, dict) and isinstance(item.get("text"), str) and item["text"].strip()
+        )
+        if not text:
+            return None
+        return {
+            "type": "assistant",
+            "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": text}]},
+            "timestamp": entry.get("timestamp") or datetime.now(timezone.utc).isoformat(),
+            "_provider": provider,
+        }
     if provider == "codex" and entry_type == "response_item":
         if not payload_entry or payload_entry.get("type") != "message":
             return None
@@ -869,7 +891,28 @@ class OffsetRegistry:
         self._dirty_paths: set[str] = set()
         self._dirty = False
         self._last_prune_complete = True
+        self.checkpoint_refused_count_total = 0
         self._load()
+
+    def _refuse_checkpoint(self, filepath: str, generation: int, barrier: int) -> None:
+        self.checkpoint_refused_count_total += 1
+        logger.warning("Watcher checkpoint refused: %s generation=%s barrier=%s", filepath, generation, barrier)
+
+    def revive(self, filepath: str) -> bool:
+        """Admit a returned source above its tombstone before attaching batch generations."""
+        if filepath not in self._removed:
+            return False
+        try:
+            inode = Path(filepath).stat().st_ino
+        except OSError:
+            return False
+        if inode <= 0:
+            return False
+        self.mark_rewind(filepath, inode)
+        return True
+
+    def is_tombstoned(self, filepath: str) -> bool:
+        return filepath in self._removed
 
     @staticmethod
     def _sanitize_tombstones(raw: object) -> dict[str, dict[str, int | float]]:
@@ -971,11 +1014,13 @@ class OffsetRegistry:
         elif not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
             raise ValueError("generation must be a non-negative integer")
         elif generation < current_generation:
+            self._refuse_checkpoint(filepath, generation, current_generation)
             return
         tombstone = self._removed.get(filepath)
         valid_inode = isinstance(inode, int) and not isinstance(inode, bool) and inode > 0
         if tombstone is not None and valid_inode:
             if preserve_generation and generation <= int(tombstone["generation"]):
+                self._refuse_checkpoint(filepath, generation, int(tombstone["generation"]))
                 return
             if not preserve_generation:
                 generation = max(generation, int(tombstone["generation"]) + 1, time.time_ns())
@@ -1045,6 +1090,7 @@ class OffsetRegistry:
                         if tombstone is not None:
                             local_generation = self._entry_generation(local_entry)
                             if local_generation <= int(tombstone["generation"]):
+                                self._refuse_checkpoint(filepath, local_generation, int(tombstone["generation"]))
                                 merged.pop(filepath, None)
                                 continue
                         disk_entry = disk_data.get(filepath)
@@ -1059,6 +1105,7 @@ class OffsetRegistry:
                             tombstones.pop(filepath, None)
                             continue
                         if local_generation < disk_generation:
+                            self._refuse_checkpoint(filepath, local_generation, disk_generation)
                             continue
                         same_inode = local_entry.get("inode", 0) == disk_entry.get("inode", 0)
                         if same_inode:
@@ -1762,6 +1809,23 @@ class BatchIndexer:
             logger.error("Batch flush failed (%d items), retaining in buffer: %s", count, e)
             self.total_failed_inputs += self._isolate_failed_flush(batch, e)
 
+    def linkage_holds(self) -> dict[str, float]:
+        """{source file: earliest hold start} for entries the flush deferred for T3 linkage.
+
+        Only the last flush's deferral tag counts: the bridge clears it on every attempt, so an
+        entry deferred for any other reason (an unreadable T3 runtime, a failed write) is not here.
+        """
+        from .t3_provenance import T3_LINKAGE_HOLD_KEY
+
+        holds: dict[str, float] = {}
+        with self._lock:
+            for item in self._buffer:
+                started = item.get(T3_LINKAGE_HOLD_KEY)
+                source = item.get("_source_file")
+                if isinstance(source, str) and isinstance(started, (int, float)) and math.isfinite(started):
+                    holds[source] = min(holds.get(source, started), started)
+        return holds
+
     def retained_failed_input_count(self) -> int:
         """Return currently retained flush-failed inputs without counting retry attempts."""
         with self._lock:
@@ -1966,6 +2030,9 @@ class JSONLWatcher:
         self._quarantined_record_count_total = 0
         self._quarantined_records: list[dict[str, Any]] = []
         self._pending_quarantined_offsets: dict[str, list[tuple[int, int, int, int]]] = {}
+        # {file: (read end, offset that must be confirmed first, inode, generation)}: a no-entry
+        # tail whose checkpoint waits for the entries ahead of it (_retry_discarded_progress).
+        self._pending_discarded_progress: dict[str, tuple[int, int, int, int]] = {}
         # Sources confirmed gone (lstat ENOENT). Their tailer and registry checkpoint are kept;
         # a path leaves the set when discovery sees it again (#732).
         self._vanished_sources: set[str] = set()
@@ -2042,6 +2109,33 @@ class JSONLWatcher:
         self.offset_prune_retry_interval_s = _watch_offset_prune_retry_interval_s()
         self._last_offset_prune_attempt = float("-inf")
         self._last_prune_parent_dirs: frozenset[str] | None = None
+
+    def _retry_discarded_progress(self) -> None:
+        """Confirm a remembered no-entry tail once every entry ahead of it is confirmed.
+
+        Same rule as _checkpoint_discarded_progress, applied after a flush: nothing of the file
+        still buffered, the confirmed offset at the last indexable line, and the same tailer, inode
+        and generation that read the bytes. Never past the read end the tailer recorded.
+        """
+        for filepath, (read_end, required, inode, generation) in list(self._pending_discarded_progress.items()):
+            tailer = self._tailers.get(filepath)
+            if (
+                tailer is None
+                or self.registry.generation(filepath) != generation
+                or tailer.observed_inode not in (0, inode)
+                or tailer.offset < read_end
+            ):
+                self._pending_discarded_progress.pop(filepath, None)
+                continue
+            if (
+                self.indexer.has_buffered_source(filepath)
+                or self._pending_quarantined_offsets.get(filepath)
+                or filepath in self._file_ingestion_failures
+                or self.registry.get(filepath)[0] < required
+            ):
+                continue
+            self._pending_discarded_progress.pop(filepath, None)
+            self._advance_confirmed_offsets({filepath: (read_end, inode, generation)})
 
     def _advance_confirmed_offsets(self, confirmations: dict[str, tuple[int, int, int]]) -> None:
         for filepath, (offset, source_inode, source_generation) in confirmations.items():
@@ -2281,6 +2375,7 @@ class JSONLWatcher:
         # chunks. Only a tailer exactly at EOF has provably nothing left to read.
         return (
             tailer is not None
+            and not self.registry.is_tombstoned(filepath)
             and (tailer.decoded_eof and not tailer._buffer if hasattr(tailer, "decoded_eof") else tailer.offset == size)
             and tailer.observed_inode in (0, inode)
             and not tailer.has_complete_buffered_line()
@@ -2571,17 +2666,38 @@ class JSONLWatcher:
         source_inode: int,
         source_generation: int,
     ) -> None:
-        """Confirm intentionally discarded bytes without crossing indexable work."""
-        required_confirmed_offset = max(
+        """Confirm intentionally discarded bytes without crossing indexable work.
+
+        When entries ahead of these bytes are still unconfirmed (buffered for the next flush, or
+        held for T3 linkage), the frontier is remembered and retried after a flush
+        (_retry_discarded_progress) instead of dropped: a finished file's no-entry tail would
+        otherwise never be confirmed, because a reader at EOF reads nothing more, and since #1827
+        that tail counts as lag no catch-up round can drain. A later slice with no indexable line
+        extends a contiguous remembered frontier; it never confirms past what the reader read.
+        """
+        slice_required = max(
             (line["_line_end_offset"] for line in normalized_lines if isinstance(line.get("_line_end_offset"), int)),
-            default=read_start_offset,
+            default=None,
         )
+        pending = self._pending_discarded_progress.pop(filepath, None)
+        if slice_required is not None:
+            required_confirmed_offset = slice_required
+        elif (
+            pending is not None and pending[0] == read_start_offset and pending[2:] == (source_inode, source_generation)
+        ):
+            required_confirmed_offset = pending[1]
+        else:
+            required_confirmed_offset = read_start_offset
         if read_end_offset <= required_confirmed_offset:
             return
-        if self.indexer.has_buffered_source(filepath):
-            return
         confirmed_offset, _confirmed_inode = self.registry.get(filepath)
-        if confirmed_offset < required_confirmed_offset:
+        if self.indexer.has_buffered_source(filepath) or confirmed_offset < required_confirmed_offset:
+            self._pending_discarded_progress[filepath] = (
+                read_end_offset,
+                required_confirmed_offset,
+                source_inode,
+                source_generation,
+            )
             return
         self._advance_confirmed_offsets(
             {
@@ -2799,6 +2915,61 @@ class JSONLWatcher:
                 lags[filepath] = size - offset
         return lags
 
+    def _split_linkage_holds(self, lags: dict[str, int]) -> tuple[dict[str, int], dict[str, int], dict[str, Any]]:
+        """Take bytes held for T3 linkage out of the lag: (drainable lags, read offsets, held_for_linkage).
+
+        A T3-origin Codex session T3 has not linked yet is read but deliberately left unconfirmed
+        until T3 links it or its hold window (t3_linkage_hold_window_s) ends, when the flush
+        indexes it as t3-unlinked. Inside the window those read bytes are not a stall: no catch-up
+        round can drain them and nobody can act on them, so they are published as
+        catch_up.held_for_linkage and never as lag. Bytes not read yet stay ordinary lag, measured
+        from the read offset (returned so the progress check uses it). A hold past its window is
+        not taken out: whatever keeps it unconfirmed is a real fault and stays offset_lag.
+        """
+        from .t3_provenance import t3_linkage_hold_window_s
+
+        window = t3_linkage_hold_window_s()
+        wall_now = time.time()
+        holds = self.indexer.linkage_holds()
+        drainable = dict(lags)
+        read_offsets: dict[str, int] = {}
+        held_files = 0
+        held_bytes = 0
+        oldest_age: float | None = None
+        for filepath, started in holds.items():
+            lag = drainable.get(filepath)
+            tailer = self._tailers.get(filepath)
+            if (
+                lag is None
+                or tailer is None
+                or hasattr(tailer, "decoder")
+                or self._physical_files.get(filepath, filepath).endswith(".zst")
+                or wall_now - started > window
+            ):
+                continue
+            confirmed = self.registry.get(filepath)[0]
+            size = confirmed + lag  # a plain file's lag is measured from its confirmed offset
+            read = min(max(tailer.offset, confirmed), size)
+            held = read - confirmed
+            if held <= 0:
+                continue
+            held_files += 1
+            held_bytes += held
+            age = max(0.0, wall_now - started)
+            oldest_age = age if oldest_age is None else max(oldest_age, age)
+            if size > read:
+                drainable[filepath] = size - read
+                read_offsets[filepath] = read
+            else:
+                drainable.pop(filepath)
+        summary = {
+            "files": held_files,
+            "bytes": held_bytes,
+            "oldest_age_s": round(oldest_age, 1) if oldest_age is not None else None,
+            "window_s": window,
+        }
+        return drainable, read_offsets, summary
+
     def _db_realtime_inserts_since_window_start(self) -> int | None:
         if not self.db_path:
             return None
@@ -2949,13 +3120,19 @@ class JSONLWatcher:
             self._db_probe_failed_since = now
         db_probe_failed_for_s = now - self._db_probe_failed_since if db_probe_failed else 0.0
         roots_missing = self._missing_roots(now)
-        lags = self._offset_lags(files)
+        # Bytes held for T3 linkage inside their window are not lag (see _split_linkage_holds).
+        lags, held_read_offsets, held_for_linkage = self._split_linkage_holds(self._offset_lags(files))
         max_lag = max(lags.values(), default=0)
         # Measured progress: a plain file's confirmed offset and its registry generation. An
         # archive has no confirmed decoded checkpoint comparable to its physical size, so it gets
         # no entry and can never read as catching up; its lag still raises offset_lag (#1827).
+        # A partly read file held for linkage confirms nothing until its hold ends, so its
+        # progress is its read offset: the unread bytes are what is still draining.
         progress = {
-            filepath: (self.registry.get(filepath)[0], self.registry.generation(filepath))
+            filepath: (
+                held_read_offsets.get(filepath, self.registry.get(filepath)[0]),
+                self.registry.generation(filepath),
+            )
             for filepath in lags
             if not self._physical_files.get(filepath, filepath).endswith(".zst")
         }
@@ -2975,6 +3152,8 @@ class JSONLWatcher:
             "last_poll_rounds": self._catch_up_rounds,
             "last_poll_s": round(self._catch_up_s, 3),
             "budget_s": self.catch_up_budget_s,
+            # Visible, never a stall: T3-origin sessions read and waiting for T3 to link them.
+            "held_for_linkage": held_for_linkage,
         }
         all_failure_payloads = [
             {key: value for key, value in failure.items() if key != "_fingerprint"}
@@ -3023,6 +3202,7 @@ class JSONLWatcher:
             "quarantined_record_count_total": self._quarantined_record_count_total,
             "quarantined_records": list(self._quarantined_records),
             "vanished_source_count_total": self._vanished_source_count_total,
+            "checkpoint_refused_count_total": self.registry.checkpoint_refused_count_total,
             "fork_copies_skipped_total": self._fork_copies_skipped_total,
             "fork_copy_files": self._fork_copy_health(files),
             **({"held_archives": self.archive_status()["represented_cold"]} if self._zst_enabled else {}),
@@ -3074,6 +3254,15 @@ class JSONLWatcher:
         """Get or create a tailer for a file, respecting stored offsets."""
         physical = self._physical_files.get(filepath, filepath)
         old = self._tailers.get(filepath)
+        if not physical.endswith(".zst") and self.registry.revive(filepath):
+            # A live tailer still carries the old timeline's frontier after pruning.
+            # Preserve its shrink notification before replay replaces that evidence.
+            if old is not None and old.filepath == physical and old.observed_inode == old.get_inode():
+                if old.check_rewind():
+                    self._handle_rewind(filepath, old.rewind_old_offset, old.rewind_new_offset, old.get_inode())
+            self._drop_tailer(filepath)
+            self._pending_quarantined_offsets.pop(filepath, None)
+            old = None
         if physical.endswith(".jsonl.zst") or (old is not None and old.filepath != physical):
             from .codex_zst import ZstdTailer
 
@@ -3356,6 +3545,7 @@ class JSONLWatcher:
                     drain_buffer = False
                     if (
                         tailer is not None
+                        and not self.registry.is_tombstoned(filepath)
                         and tailer.filepath == self._physical_files.get(filepath, filepath)
                         and (
                             not compressed
@@ -3542,6 +3732,7 @@ class JSONLWatcher:
                     self._record_file_ingestion_failure(filepath, error)
 
             self.indexer.tick()
+            self._retry_discarded_progress()
             if self.on_tick:
                 try:
                     self.on_tick()

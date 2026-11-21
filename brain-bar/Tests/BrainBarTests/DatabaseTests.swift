@@ -942,6 +942,7 @@ final class DatabaseTests: XCTestCase {
         let rows: [(String, String?)] = [
             ("source-class-cli", "cli-agent"),
             ("source-class-desktop", "desktop"),
+            ("source-class-agent-thinking", "agent-thinking"),
             ("source-class-subagent", "subagent"),
             ("source-class-brain-worker", "brain-worker"),
             ("source-class-fleet", "fleet-coordination"),
@@ -968,8 +969,18 @@ final class DatabaseTests: XCTestCase {
 
         XCTAssertEqual(resultIDs, expected)
         XCTAssertFalse(resultIDs.contains("source-class-desktop"))
+        XCTAssertFalse(resultIDs.contains("source-class-agent-thinking"))
         XCTAssertFalse(resultIDs.contains("source-class-brain-worker"))
         XCTAssertTrue(try db.search(query: "source-class-desktop", limit: 1).isEmpty)
+        XCTAssertTrue(try db.search(query: "source-class-agent-thinking", limit: 1).isEmpty)
+
+        // The unadvertised opt-in reveals desktop and thinking, never brain-workers (#1824).
+        let optedIn = Set(try db.search(query: "SwiftSourceClassNeedle", limit: 20, includeHiddenSourceClasses: true)
+            .compactMap { $0["chunk_id"] as? String })
+        XCTAssertEqual(optedIn, expected.union(["source-class-desktop", "source-class-agent-thinking"]))
+        XCTAssertTrue(
+            try db.search(query: "source-class-brain-worker", limit: 1, includeHiddenSourceClasses: true).isEmpty
+        )
         XCTAssertTrue(try db.search(query: "source-class-brain-worker", limit: 1).isEmpty)
     }
 
