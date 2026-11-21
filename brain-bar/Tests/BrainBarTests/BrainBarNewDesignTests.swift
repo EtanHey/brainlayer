@@ -1984,8 +1984,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     func testStationsDoNotMoveBetweenStates() {
         let expected: [NDStation: CGPoint] = [
             // R1.12 change 6: Search at the loop's bottom-right corner, under Google Drive.
-            .read: CGPoint(x: 215, y: 64), .queue: CGPoint(x: 215, y: 134), .search: CGPoint(x: 736, y: 276),
-            .mac: CGPoint(x: 599, y: 64), .drive: CGPoint(x: 736, y: 64), .jobs: CGPoint(x: 342, y: 186), .weekly: CGPoint(x: 528, y: 186),
+            .read: CGPoint(x: 215, y: 44), .queue: CGPoint(x: 215, y: 114), .search: CGPoint(x: 736, y: 222),
+            .mac: CGPoint(x: 599, y: 44), .drive: CGPoint(x: 736, y: 44), .jobs: CGPoint(x: 342, y: 138), .weekly: CGPoint(x: 528, y: 138),
         ]
         XCTAssertEqual(NDPipelineLayout.stations, expected)
         for name in Fixture.Name.allCases {
@@ -1997,7 +1997,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             }
         }
         XCTAssertEqual(NDPipelineLayout.keptFrame(grown: true), NDPipelineLayout.keptSafe)
-        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 521, y: 38, width: 283, height: 84), "R1.10.4: 32 pt from the right; R1.12: 84 tall")
+        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 521, y: 18, width: 283, height: 84), "R1.10.4: 32 pt from the right; R1.12: 84 tall")
     }
 
     /// Lead (1.3 brief): inside Kept safe, 16 pt between the two stations' text blocks and 12 pt from any text to the frame,
@@ -2497,11 +2497,11 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let line = L.connections.first { $0.pipe == .memorySearch }!
         XCTAssertEqual(line.corner, 10)
         let p = line.line.points
-        XCTAssertEqual(p.count, 3, "along, then down: one turn")
+        XCTAssertEqual(p.count, 5, "M1 fit: route below the copies and above the job links")
         XCTAssertEqual(p[0].x, L.hub.maxX + L.edgeGap, accuracy: 0.01, "it leaves the right edge")
-        XCTAssertEqual(p[0].y, L.ySaves)
+        XCTAssertEqual(p[0].y, 88)
         XCTAssertEqual(p[1].y, p[0].y)
-        XCTAssertEqual(p[1].x, L.point(.search).x)
+        XCTAssertEqual(p[3].x, L.point(.search).x)
     }
 
     /// 1.4.1 (3): the Pipeline block's height is set by its lowest station (Search's name under the answers lane), so it
@@ -2727,15 +2727,16 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         presenter.hide()
     }
 
-    /// R1.6 item 2: a panel fits its content: no scroll view unless the screen limit cuts it.
+    /// M1 calm-fit correction: a panel scrolls only when chart or screen bounds cut its measured content.
     func testR16PanelsFitTheirContent() throws {
         let store = NDStore(fixture: Fixture.inputs(.twoFaults), page: .overview)
         let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
         let roomy = CGRect(x: -2000, y: -2000, width: 4000, height: 4000)
         for station in NDStation.allCases {
             let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
-            XCTAssertFalse(panel.scrolls, "\(station): no scroll bar at its own height")
-            XCTAssertFalse(NDPipelineLayout.fitted(panel, within: roomy).scrolls, "\(station): a roomy screen cuts nothing")
+            let content = NDStationPopover.measure(AnyView(NDStationPopover(store: store, station: station)), width: panel.body.width).height
+            XCTAssertEqual(panel.scrolls, panel.body.height < content, "\(station): only cut content scrolls")
+            XCTAssertEqual(NDPipelineLayout.fitted(panel, within: roomy).scrolls, panel.scrolls, "a roomy screen adds no cut")
         }
         let queue = chart.panel(.queue, content: AnyView(NDStationPopover(store: store, station: .queue)))
         let short = CGRect(x: -2000, y: -2000, width: 4000, height: 2000 + queue.body.minY + 40)
@@ -3284,8 +3285,13 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             for station in [NDStation.jobs, .weekly] {
                 let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
                 let where_ = "\(name.rawValue) \(station)"
-                XCTAssertEqual(panel.edge, station == .jobs ? .leading : .trailing, where_)
-                XCTAssertTrue((L.circle(station).minY...L.circle(station).maxY).contains(panel.tip.y), "\(where_): on its station")
+                // M1 fit: nightly opens below its text instead of over Save queue; weekly still opens beside it.
+                XCTAssertEqual(panel.edge, station == .jobs ? .bottom : .trailing, where_)
+                if station == .jobs {
+                    XCTAssertTrue((L.circle(station).minX...L.circle(station).maxX).contains(panel.tip.x), where_)
+                } else {
+                    XCTAssertTrue((L.circle(station).minY...L.circle(station).maxY).contains(panel.tip.y), "\(where_): on its station")
+                }
                 if station == .jobs {
                     let queueWords = L.labelRects(.queue, store.r1.pipeline).map(\.maxY).max() ?? 0
                     XCTAssertGreaterThan(panel.body.minY, queueWords, "\(where_): under Save queue's words")

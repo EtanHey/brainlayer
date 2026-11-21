@@ -265,7 +265,8 @@ struct NDOverviewPage: View {
             if !r1.problemRows.isEmpty { NDProblemRows(store: store, rows: r1.problemRows).padding(.top, NDGrid.headlineToRows) }
             NDActivitySection(store: store).padding(.top, NDGrid.toActivity)
             NDBlockHeading(title: Say.pipeline).padding(.top, NDGrid.activityToPipeline)
-            NDCard(padding: EdgeInsets(top: 16, leading: 16, bottom: 14, trailing: 16)) {
+            NDCard(padding: EdgeInsets(top: NDPipelineLayout.verticalPadding, leading: 16,
+                                      bottom: NDPipelineLayout.verticalPadding, trailing: 16)) {
                 NDPipelineChart(state: r1.pipeline, memories: store.model.memories, items: r1.stationItems,
                                 waiting: NDDriveWaiting.shows(store.inputs, for: nil), perform: { store.perform($0) },
                                 popover: { station in AnyView(NDStationPopover(store: store, station: station)) })

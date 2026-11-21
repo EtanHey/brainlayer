@@ -1,6 +1,45 @@
 import AppKit
 import SwiftUI
 
+/// Visible native static text supplies the four labels Canvas cannot put in the accessibility tree.
+struct NDPipelineLabels: NSViewRepresentable {
+    func makeNSView(context: Context) -> NDPipelineLabelView { NDPipelineLabelView() }
+    func updateNSView(_ view: NDPipelineLabelView, context: Context) {}
+}
+
+final class NDPipelineLabelView: NSView {
+    override var isFlipped: Bool { true }
+
+    init() {
+        super.init(frame: NSRect(origin: .zero, size: NDPipelineLayout.size))
+        var labels: [NSTextField] = []
+        func add(_ words: String, rect: CGRect, caption: Bool) {
+            let field = NSTextField(labelWithString: words)
+            field.font = .systemFont(ofSize: 11, weight: caption ? .medium : .regular)
+            field.textColor = NDColor.t2
+            field.alignment = .center
+            field.frame = caption ? rect.insetBy(dx: -4, dy: -4) : rect
+            field.drawsBackground = caption
+            field.backgroundColor = NDColor.card
+            field.setAccessibilityElement(true)
+            field.setAccessibilityRole(.staticText)
+            field.setAccessibilityLabel(words)
+            addSubview(field)
+            labels.append(field)
+        }
+        for (words, rect) in NDPipelineLayout.laneLabelRects() { add(words, rect: rect, caption: true) }
+        for station: NDStation in [.jobs, .weekly] {
+            if let words = NDPipelineLayout.purpose(station), let rect = NDPipelineLayout.purposeRect(station) {
+                add(words, rect: rect, caption: false)
+            }
+        }
+        setAccessibilityElement(false)
+        setAccessibilityChildren(labels)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
 // MARK: - The chart
 
 /// The pipeline as a loop (R1.3): the agents' group, six stations and the Memory hub, every fault in one language, each
@@ -82,6 +121,9 @@ struct NDPipelineChart: View {
         ZStack(alignment: .topLeading) {
             Canvas { ctx, _ in Self.draw(ctx, state: state, memories: memories, hovered: shownHover, keptGrown: keptGrown) }
                 .frame(width: NDPipelineLayout.drawWidth, height: NDPipelineLayout.size.height)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            NDPipelineLabels().frame(width: NDPipelineLayout.size.width, height: NDPipelineLayout.size.height)
                 .allowsHitTesting(false)
             // R1.4 changes 5, 8 and 9: the words that left the chart, on the things they name.
             ForEach(Self.lineHovers, id: \.title) { hover in
@@ -238,10 +280,6 @@ struct NDPipelineChart: View {
 
     static func draw(_ ctx: GraphicsContext, state: NDPipelineState, memories: String?, hovered: NDStation? = nil, keptGrown: Bool = false) {
         drawPipes(ctx, state: state, keptGrown: keptGrown)
-        for (words, rect) in NDPipelineLayout.laneLabelRects() {
-            ctx.fill(Path(rect.insetBy(dx: -4, dy: -4)), with: .color(ND.card))
-            ctx.draw(text(words, size: 11, color: ND.t2, weight: .medium), at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
-        }
         drawAgents(ctx, state: state, hovered: hovered)
         drawHub(ctx, state: state, memories: memories, hovered: hovered)
         drawStations(ctx, state: state, hovered: hovered)
@@ -311,17 +349,17 @@ struct NDPipelineChart: View {
         if hovered == .memory {
             ctx.stroke(Path(roundedRect: hub.insetBy(dx: -3.5, dy: -3.5), cornerRadius: 15, style: .continuous), with: .color(ND.t2), lineWidth: 1)
         }
-        symbol(ctx, "brain", at: CGPoint(x: hub.midX, y: hub.minY + 27), size: 18, color: ND.t2)
-        put(ctx, text(Say.stageMemory, size: 13, color: ND.t1, weight: .semibold), x: hub.midX, baseline: hub.minY + 57, size: 13, anchor: .middle)
+        symbol(ctx, "brain", at: CGPoint(x: hub.midX, y: hub.minY + 16), size: 16, color: ND.t2)
+        put(ctx, text(Say.stageMemory, size: 13, color: ND.t1, weight: .semibold), x: hub.midX, baseline: hub.minY + 39, size: 13, anchor: .middle)
         // R2A item 8: the count carries its unit ("297,412 memories"), on two lines when one would crowd the box.
         let count = memories ?? NDModel.Number.unknown.value
         let words = Say.memoriesCount(count)
         let tint = state.allUnconfirmed ? ND.t3 : ND.t2  // R1.12 (E2): the Memory count follows the last-known rule
         if NDPipelineLayout.textWidth(words, size: 11) <= hub.width - 16 {
-            put(ctx, text(words, size: 11, color: tint, mono: true), x: hub.midX, baseline: hub.minY + 72, size: 11, anchor: .middle)
+            put(ctx, text(words, size: 11, color: tint, mono: true), x: hub.midX, baseline: hub.minY + 60, size: 11, anchor: .middle)
         } else {
-            put(ctx, text(count, size: 11, color: tint, mono: true), x: hub.midX, baseline: hub.minY + 72, size: 11, anchor: .middle)
-            put(ctx, text(Say.memoriesWord, size: 11, color: tint), x: hub.midX, baseline: hub.minY + 86, size: 11, anchor: .middle)
+            put(ctx, text(count, size: 11, color: tint, mono: true), x: hub.midX, baseline: hub.minY + 54, size: 11, anchor: .middle)
+            put(ctx, text(Say.memoriesWord, size: 11, color: tint), x: hub.midX, baseline: hub.minY + 68, size: 11, anchor: .middle)
         }
     }
 
@@ -395,9 +433,6 @@ struct NDPipelineChart: View {
             }
             put(ctx, text(L.name(station), size: 13, color: m.nameRed ? ND.redText : ND.t1, weight: m.nameRed ? .semibold : .regular),
                 x: p.x, baseline: p.y + 29, size: 13, anchor: .middle)
-            if let purpose = L.purpose(station), let rect = L.purposeRect(station) {
-                ctx.draw(text(purpose, size: 11, color: ND.t2), at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
-            }
             if let status = state.status[station] {
                 // A status can carry its own severity on a calm station: Read's "Cursor not read" (R1.4 change 3).
                 let own: NDModel.Tone = state.allUnconfirmed ? .fine : status.severity == .red ? .fault : status.severity == .orange ? .warn : .fine

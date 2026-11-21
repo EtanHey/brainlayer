@@ -21,8 +21,8 @@ final class BrainBarGapClarityTests: XCTestCase {
                 XCTAssertTrue(a.x == b.x || a.y == b.y, "orthogonal elbow")
             }
         }
-        // The intended +28 pt height still fits the lowest station's complete status line.
-        XCTAssertEqual(L.size.height, 324)
+        // The compact M1 layout still fits the lowest station's complete status line.
+        XCTAssertEqual(L.size.height, 270)
         for fixture in BrainBarDesignFixture.Name.allCases {
             let p = NDPipelineState.make(BrainBarDesignFixture.inputs(fixture))
             for station in NDStation.allCases {
