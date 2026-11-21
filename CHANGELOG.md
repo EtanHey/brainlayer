@@ -40,6 +40,14 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.9] - 2026-11-21
+
+### BrainBar offers the new design behind a Classic/New switch; Classic remains the default
+
+- test(zst): prevent timed flushes from racing the checkpoint guard test (#1834)
+- test(brainbar): drive native menu work from tracking entry (#1832)
+- feat(brainbar): the new design behind a Classic/New switch (#1812)
+
 ## [1.6.8] - 2026-11-21
 
 ### A returned transcript is revived above its tombstone, so a checkpoint is never dropped in silence
