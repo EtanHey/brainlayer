@@ -291,14 +291,21 @@ enum NDPipelineLayout {
 
     static let topRowPanels: Set<NDStation> = [.agents, .read, .memory, .mac, .drive]
 
+    static func panelWords(_ s: NDStation, state: NDPipelineState, displayedWords: [NDStation: [CGRect]]) -> [CGRect] {
+        displayedWords[s] ?? labelRects(s, state)
+    }
+
+    static func panelBodyObstacles(_ s: NDStation, interior: Bool) -> [CGRect] {
+        interior ? NDStation.allCases.filter { $0 != s }.map { circle($0) } : []
+    }
+
     /// L58: body clearance can move the body, never the target-aligned notch.
     static func panelObstacles(_ s: NDStation, state: NDPipelineState, actions: Set<NDStation>,
-                               actionWidths: [NDStation: CGFloat], interior: Bool) -> [CGRect] {
-        var obstacles = [pipelineHeading] + footerTexts + labelRects(s, state) + [circle(s).insetBy(dx: 1, dy: 1)]
+                               actionWidths: [NDStation: CGFloat], interior: Bool, displayedWords: [NDStation: [CGRect]] = [:]) -> [CGRect] {
+        var obstacles = [pipelineHeading] + footerTexts + panelWords(s, state: state, displayedWords: displayedWords) + [circle(s).insetBy(dx: 1, dy: 1)]
         if interior {
             for other in NDStation.allCases where other != s {
-                obstacles.append(circle(other))
-                obstacles += labelRects(other, state)
+                obstacles += panelWords(other, state: state, displayedWords: displayedWords)
             }
             // R13: the two job panels clear the native caption fields, including their drawing insets.
             if s == .jobs || s == .weekly {
@@ -316,9 +323,10 @@ enum NDPipelineLayout {
     /// A full-height candidate at one edge. No narrowing: content is measured at this same width for every candidate.
     static func panelCandidate(_ s: NDStation, edge: Edge, state: NDPipelineState, actions: Set<NDStation>,
                                actionWidths: [NDStation: CGFloat] = [:], height: CGFloat,
-                               width overrideWidth: CGFloat? = nil, allowsInteriorOverlap: Bool = false) -> Panel? {
+                               width overrideWidth: CGFloat? = nil, allowsInteriorOverlap: Bool = false,
+                               displayedWords: [NDStation: [CGRect]] = [:]) -> Panel? {
         let own = circle(s), width = overrideWidth ?? panelSide(s, hasAction: actions.contains(s)).width
-        let words = labelRects(s, state)
+        let words = panelWords(s, state: state, displayedWords: displayedWords)
         let anchor = words.reduce(own) { $0.union($1) }
         let horizontal = edge == .top || edge == .bottom
         let tip: CGPoint
@@ -344,11 +352,12 @@ enum NDPipelineLayout {
         let arrowBox = horizontal
             ? CGRect(x: tip.x - arrowHalfWidth, y: min(tip.y, edge == .top ? body.maxY : body.minY), width: 2 * arrowHalfWidth, height: arrowLength)
             : CGRect(x: min(tip.x, edge == .leading ? body.maxX : body.minX), y: tip.y - arrowHalfWidth, width: arrowLength, height: 2 * arrowHalfWidth)
-        let obstacles = panelObstacles(s, state: state, actions: actions, actionWidths: actionWidths, interior: !allowsInteriorOverlap)
+        let obstacles = panelObstacles(s, state: state, actions: actions, actionWidths: actionWidths, interior: !allowsInteriorOverlap, displayedWords: displayedWords)
+        let bodyObstacles = panelBodyObstacles(s, interior: !allowsInteriorOverlap)
         let desired = horizontal ? body.minX : body.minY
         // The nearest legal point is either the centre, a window limit or an obstacle boundary.
         var positions = [min(max(desired, low), high), low, high]
-        for rect in obstacles {
+        for rect in obstacles + bodyObstacles {
             positions += horizontal ? [rect.minX - width, rect.maxX] : [rect.minY - height, rect.maxY]
         }
         for position in positions.sorted(by: { abs($0 - desired) < abs($1 - desired) }) where position >= low && position <= high {
@@ -357,42 +366,76 @@ enum NDPipelineLayout {
             let outer = placed.union(arrowBox)
             guard placed.minX >= windowInside.minX, placed.maxX <= windowInside.maxX,
                   placed.minY >= ceiling, placed.maxY <= footerTop - 4,
-                  !obstacles.contains(where: { outer.intersects($0) }) else { continue }
+                  !obstacles.contains(where: { outer.intersects($0) }),
+                  !bodyObstacles.contains(where: { placed.intersects($0) }) else { continue }
             return Panel(edge: edge, anchor: anchor, tip: tip, body: placed, outer: outer,
                          clearanceException: allowsInteriorOverlap ? .topRowBelowBothSidesBlocked : nil)
         }
         return nil
     }
 
+    /// L58b: progressively widen above, preserving content measurement and the same window margins.
+    static func widenedPanelWidths(_ s: NDStation) -> [CGFloat] {
+        let normal = panelSide(s, hasAction: false).width
+        let limit = windowInside.maxX - windowInside.minX
+        guard normal < limit else { return [] }
+        return stride(from: normal + 40, to: limit, by: 40).map { $0 } + [limit]
+    }
+
+    @MainActor static func measuredPanel(_ s: NDStation, state: NDPipelineState, displayedWords: [NDStation: [CGRect]] = [:],
+                              heightAtWidth: (CGFloat) -> CGFloat) -> Panel {
+        let normal = panelSide(s, hasAction: false).width
+        let height = heightAtWidth(normal)
+        if topRowPanels.contains(s) {
+            if let above = panelCandidate(s, edge: .top, state: state, actions: [], height: height,
+                                          width: normal, displayedWords: displayedWords) { return above }
+            for width in widenedPanelWidths(s) {
+                if let above = panelCandidate(s, edge: .top, state: state, actions: [], height: heightAtWidth(width),
+                                              width: width, displayedWords: displayedWords) { return above }
+            }
+        }
+        return panel(s, state: state, actions: [], height: height, width: normal, displayedWords: displayedWords)
+    }
+
     static func panel(_ s: NDStation, state: NDPipelineState, actions: Set<NDStation>, actionWidths: [NDStation: CGFloat] = [:],
-                      height: CGFloat, width overrideWidth: CGFloat? = nil) -> Panel {
+                      height: CGFloat, width overrideWidth: CGFloat? = nil, displayedWords: [NDStation: [CGRect]] = [:]) -> Panel {
         let preferred = panelSide(s, hasAction: actions.contains(s)).edge
-        if let panel = panelCandidate(s, edge: preferred, state: state, actions: actions, actionWidths: actionWidths, height: height, width: overrideWidth) {
+        if let panel = panelCandidate(s, edge: preferred, state: state, actions: actions, actionWidths: actionWidths, height: height, width: overrideWidth, displayedWords: displayedWords) {
             return panel
         }
         if topRowPanels.contains(s) {
             for side: Edge in [.trailing, .leading] {
-                if let panel = panelCandidate(s, edge: side, state: state, actions: actions, actionWidths: actionWidths, height: height, width: overrideWidth) {
+                if let panel = panelCandidate(s, edge: side, state: state, actions: actions, actionWidths: actionWidths, height: height, width: overrideWidth, displayedWords: displayedWords) {
                     return panel
                 }
             }
             if let panel = panelCandidate(s, edge: .bottom, state: state, actions: actions, actionWidths: actionWidths,
-                                          height: height, width: overrideWidth, allowsInteriorOverlap: true) {
+                                          height: height, width: overrideWidth, displayedWords: displayedWords) {
+                return panel
+            }
+            if let panel = panelCandidate(s, edge: .bottom, state: state, actions: actions, actionWidths: actionWidths,
+                                          height: height, width: overrideWidth, allowsInteriorOverlap: true, displayedWords: displayedWords) {
                 return panel
             }
         }
         // Content beyond the window capacity retains the screen-fit scrolling behaviour.
-        let ownBottom = labelRects(s, state).reduce(circle(s).maxY) { max($0, $1.maxY) }
+        let ownBottom = panelWords(s, state: state, displayedWords: displayedWords).reduce(circle(s).maxY) { max($0, $1.maxY) }
         let bottomHeight = max(32, min(height, footerTop - 4 - ownBottom - arrowLength))
         if topRowPanels.contains(s), var panel = panelCandidate(s, edge: .bottom, state: state, actions: actions,
                                                                 actionWidths: actionWidths, height: bottomHeight, width: overrideWidth,
-                                                                allowsInteriorOverlap: true) {
+                                                                displayedWords: displayedWords) {
+            panel.scrolls = bottomHeight < height
+            return panel
+        }
+        if topRowPanels.contains(s), var panel = panelCandidate(s, edge: .bottom, state: state, actions: actions,
+                                                                actionWidths: actionWidths, height: bottomHeight, width: overrideWidth,
+                                                                allowsInteriorOverlap: true, displayedWords: displayedWords) {
             panel.scrolls = bottomHeight < height
             return panel
         }
         let room = preferred == .top ? circle(s).minY - arrowLength - (keptSafe.maxY + 4) : footerTop - 4 - ownBottom - arrowLength
         let fittedHeight = max(32, min(height, room))
-        if var panel = panelCandidate(s, edge: preferred, state: state, actions: actions, actionWidths: actionWidths, height: fittedHeight, width: overrideWidth) {
+        if var panel = panelCandidate(s, edge: preferred, state: state, actions: actions, actionWidths: actionWidths, height: fittedHeight, width: overrideWidth, displayedWords: displayedWords) {
             panel.scrolls = fittedHeight < height
             return panel
         }

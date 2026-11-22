@@ -55,13 +55,21 @@ import XCTest
                 let placed = horizontal ? p.body.minX : p.body.minY
                 let delta = desired - placed
                 if abs(delta) > 1 {
-                    let nearer = p.outer.offsetBy(dx: horizontal ? (delta > 0 ? 1 : -1) : 0,
+                    let nearerBody = p.body.offsetBy(dx: horizontal ? (delta > 0 ? 1 : -1) : 0,
                                                  dy: horizontal ? 0 : (delta > 0 ? 1 : -1))
+                    let arrow = horizontal
+                        ? CGRect(x: p.tip.x - L.arrowHalfWidth, y: p.edge == .top ? p.tip.y - L.arrowLength : p.tip.y,
+                                 width: 2 * L.arrowHalfWidth, height: L.arrowLength)
+                        : CGRect(x: p.edge == .leading ? p.tip.x - L.arrowLength : p.tip.x, y: p.tip.y - L.arrowHalfWidth,
+                                 width: L.arrowLength, height: 2 * L.arrowHalfWidth)
+                    let nearer = nearerBody.union(arrow)
                     let obstacles = L.panelObstacles(station, state: state, actions: [], actionWidths: [:],
                                                     interior: p.clearanceException == nil)
+                    let ceiling = station == .search ? L.keptSafe.maxY + 4 : L.activityLabelsBottom + 4
                     let blocked = nearer.minX < L.windowInside.minX || nearer.maxX > L.windowInside.maxX
-                        || nearer.minY < L.activityLabelsBottom + 4 || nearer.maxY > L.footerTop - 4
+                        || nearer.minY < ceiling || nearer.maxY > L.footerTop - 4
                         || obstacles.contains { nearer.intersects($0) }
+                        || L.panelBodyObstacles(station, interior: p.clearanceException == nil).contains { nearerBody.intersects($0) }
                     XCTAssertTrue(blocked, "\(station): moving 1 pt nearer the centre must violate clearance")
                 }
             }
@@ -71,7 +79,7 @@ import XCTest
     func testTopPanelsContainMeasuredContentInsideWindow() {
         for name in BrainBarDesignFixture.Name.allCases {
             let store = NDStore(fixture: BrainBarDesignFixture.inputs(name), page: .overview)
-            let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
+            let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems, backupProgress: store.inputs.backupProgress)
             for station: NDStation in [.agents, .read, .memory, .mac, .drive] {
                 let content = AnyView(NDStationPopover(store: store, station: station))
                 let panel = chart.panel(station, content: content)
@@ -82,16 +90,82 @@ import XCTest
                 XCTAssertFalse(panel.outer.intersects(NDPipelineLayout.pipelineHeading), context)
                 if panel.clearanceException == .topRowBelowBothSidesBlocked {
                     XCTAssertEqual(panel.edge, .bottom, context)
-                    for side: Edge in [.top, .trailing, .leading] {
+                    for side: Edge in [.top, .trailing, .leading, .bottom] {
                         XCTAssertNil(NDPipelineLayout.panelCandidate(station, edge: side, state: store.r1.pipeline,
-                                                                     actions: [], height: measured, width: panel.body.width), context)
+                                                                     actions: [], height: measured, width: panel.body.width,
+                                                                     displayedWords: chart.displayedPanelWords), context)
+                    }
+                    for width in NDPipelineLayout.widenedPanelWidths(station) {
+                        XCTAssertNil(NDPipelineLayout.panelCandidate(station, edge: .top, state: store.r1.pipeline,
+                            actions: [], height: NDStationPopover.measure(content, width: width).height, width: width,
+                            displayedWords: chart.displayedPanelWords), context)
                     }
                 }
-                if name == .calm { print("bubble \(station): edge=\(panel.edge) body=\(panel.body) tip=\(panel.tip) measured=\(measured) exception=\(String(describing: panel.clearanceException))") }
                 XCTAssertGreaterThanOrEqual(panel.body.minY, NDPipelineLayout.activityLabelsBottom + 4, context)
                 XCTAssertLessThanOrEqual(panel.outer.maxY, NDPipelineLayout.windowInside.maxY, context)
                 XCTAssertGreaterThanOrEqual(panel.outer.minX, NDPipelineLayout.windowInside.minX, context)
                 XCTAssertLessThanOrEqual(panel.outer.maxX, NDPipelineLayout.windowInside.maxX, context)
+            }
+        }
+    }
+
+    func testCalmUploadPanelClearsTheDisplayedProgressRow() throws {
+        var inputs = BrainBarDesignFixture.inputs(.calm)
+        inputs.backupProgress = try XCTUnwrap(BrainBarDesignFixture.inputs(.uploadProgress).backupProgress)
+        let store = NDStore(fixture: inputs, page: .overview)
+        let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories,
+                                    items: store.r1.stationItems, backupProgress: inputs.backupProgress)
+        let row = NDPipelineChart.progressFrame(store.r1.pipeline)
+        XCTAssertEqual(row.minY, 81)
+        XCTAssertEqual(row.maxY, 114)
+        XCTAssertTrue(chart.displayedPanelWords[.drive]?.contains(row) == true)
+        let panel = chart.panel(.drive, content: AnyView(NDStationPopover(store: store, station: .drive)))
+        XCTAssertFalse(panel.outer.intersects(row), "the notch and body must clear the words actually drawn")
+        XCTAssertFalse(panel.body.intersects(row))
+        if panel.edge == .bottom {
+            XCTAssertGreaterThanOrEqual(panel.tip.y, row.maxY)
+            XCTAssertGreaterThan(panel.body.minY, row.maxY)
+            XCTAssertEqual(panel.tip.x, NDPipelineLayout.circle(.drive).midX, accuracy: 1)
+        }
+    }
+
+    func testL58bCalmPlacementCases() {
+        let L = NDPipelineLayout.self
+        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .overview)
+        let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
+        for station: NDStation in [.agents, .read, .memory, .mac, .drive] {
+            let content = AnyView(NDStationPopover(store: store, station: station))
+            let normal = L.panelSide(station, hasAction: false).width
+            func candidate(_ edge: Edge, width: CGFloat, overlap: Bool = false) -> NDPipelineLayout.Panel? {
+                L.panelCandidate(station, edge: edge, state: store.r1.pipeline, actions: [],
+                    height: NDStationPopover.measure(content, width: width).height, width: width,
+                    allowsInteriorOverlap: overlap)
+            }
+            let aboveNormal = candidate(.top, width: normal)
+            let aboveWidened = L.widenedPanelWidths(station).compactMap { candidate(.top, width: $0) }.first
+            let expected: NDPipelineLayout.Panel? = aboveNormal ?? aboveWidened ?? candidate(.trailing, width: normal)
+                ?? candidate(.leading, width: normal) ?? candidate(.bottom, width: normal)
+                ?? candidate(.bottom, width: normal, overlap: true)
+            let panel = chart.panel(station, content: content)
+            XCTAssertNotNil(expected, "\(station): a full-height candidate must exist")
+            XCTAssertEqual(Optional(panel), expected, "\(station): normal above, widened above, right, left, below")
+            switch station {
+            case .read:
+                XCTAssertNil(aboveNormal)
+                XCTAssertNotNil(aboveWidened, "Read must reclaim the small height deficit by widening")
+                XCTAssertEqual(panel.edge, .top)
+                XCTAssertGreaterThan(panel.body.width, normal)
+            case .memory:
+                // Separate paragraphs impose a minimum height: widening wins only if its measured content fits.
+                if let above = aboveNormal ?? aboveWidened {
+                    XCTAssertEqual(panel, above)
+                } else {
+                    XCTAssertEqual(panel.edge, .bottom)
+                    XCTAssertEqual(panel.clearanceException, .topRowBelowBothSidesBlocked)
+                }
+            default:
+                XCTAssertEqual(panel.edge, .bottom)
+                XCTAssertEqual(panel.clearanceException, .topRowBelowBothSidesBlocked)
             }
         }
     }

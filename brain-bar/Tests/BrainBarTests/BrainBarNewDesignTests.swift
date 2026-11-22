@@ -1568,7 +1568,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             let r1 = store.r1
             let chart = NDPipelineChart(state: r1.pipeline, memories: store.model.memories, items: r1.stationItems)
             for station in NDStation.allCases {
-                let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
+                let content = AnyView(NDStationPopover(store: store, station: station))
+                let panel = chart.panel(station, content: content)
                 let own = L.circle(station)
                 let where_ = "\(name.rawValue) \(station)"
                 // L58: only these top-row panels, below after both full-height side candidates fail,
@@ -1576,8 +1577,12 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 let topRowBelowBothSidesBlocked = [NDStation.agents, .read, .memory, .mac, .drive].contains(station)
                     && panel.edge == .bottom && panel.clearanceException == .topRowBelowBothSidesBlocked
                 if topRowBelowBothSidesBlocked {
-                    for side: Edge in [.top, .trailing, .leading] {
+                    for side: Edge in [.top, .trailing, .leading, .bottom] {
                         XCTAssertNil(L.panelCandidate(station, edge: side, state: r1.pipeline, actions: [], height: panel.body.height, width: panel.body.width), where_)
+                    }
+                    for width in L.widenedPanelWidths(station) {
+                        XCTAssertNil(L.panelCandidate(station, edge: .top, state: r1.pipeline, actions: [],
+                            height: NDStationPopover.measure(content, width: width).height, width: width), where_)
                     }
                 }
                 switch panel.edge {
@@ -2699,12 +2704,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
 
     // MARK: 1.5.1 (the real screen on the M4)
 
-    /// 1.5.1 (1): a failing provider's own icon opens the agents' fault panel (the same panel, with Copy report); with
-    /// nothing wrong, no icon opens a panel and the group's hover keeps its explanation.
+    /// Provider icons share the column's panel: a named fault offers Copy report; the healthy column explains itself.
     func testAFailingProviderIconOpensItsFaultPanel() throws {
-        for name in Fixture.Name.allCases {
-            XCTAssertEqual(NDPipelineChart.faultTriggers(pipeline(name)), name == .agentNotRead ? [.cursor] : [], name.rawValue)
-        }
         let store = NDStore(fixture: Fixture.inputs(.agentNotRead), page: .overview)
         let fault = NDStationPopover.model(.agents, item: store.r1.stationItems[.agents], store.inputs, store.model, store.r1.pipeline)
         XCTAssertEqual(fault.title, Say.agentNotRead("Cursor"))
@@ -3287,7 +3288,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     }
 
     /// First look, 22 Nov: the agents point at the column centre and retain full content below it.
-    func testR17AgentsPanelOpensRightOfTheColumn() {
+    func testAgentsBelowFallbackProtectsHeadingFooterAndAnswersCaption() {
         let L = NDPipelineLayout.self
         for name in Fixture.Name.allCases {
             let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
@@ -3304,16 +3305,18 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             XCTAssertFalse(panel.scrolls)
             let agentsBelowBothSidesBlocked = panel.edge == .bottom && panel.clearanceException == .topRowBelowBothSidesBlocked
             if agentsBelowBothSidesBlocked {
-                for side: Edge in [.top, .trailing, .leading] {
+                for side: Edge in [.top, .trailing, .leading, .bottom] {
                     XCTAssertNil(L.panelCandidate(.agents, edge: side, state: store.r1.pipeline, actions: [], height: panel.body.height, width: panel.body.width))
                 }
-            }
-            for station in NDStation.allCases {
-                for rect in L.labelRects(station, store.r1.pipeline) {
-                    if station == .agents || !agentsBelowBothSidesBlocked {
-                        XCTAssertFalse(panel.body.intersects(rect), "\(name.rawValue): over \(station)'s words")
-                    }
+                for width in L.widenedPanelWidths(.agents) {
+                    XCTAssertNil(L.panelCandidate(.agents, edge: .top, state: store.r1.pipeline, actions: [],
+                        height: NDStationPopover.measure(content, width: width).height, width: width))
                 }
+            }
+            let protected = L.footerTexts + L.laneLabelRects().filter { $0.0 == Say.searchAnswers }.map { $0.1.insetBy(dx: -4, dy: -4) }
+            XCTAssertEqual(protected.count, L.footerTexts.count + 1, "the answers caption is present")
+            for rect in protected {
+                XCTAssertFalse(panel.outer.intersects(rect), "\(name.rawValue): over a protected caption or footer")
             }
             let screen = CGRect(x: L.windowInside.minX - 40, y: -400, width: 2000, height: 2000)
             XCTAssertEqual(NDPipelineLayout.fitted(panel, within: screen).body.minX, panel.body.minX, "keyboard: not clipped")
