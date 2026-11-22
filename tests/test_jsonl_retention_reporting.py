@@ -39,13 +39,14 @@ def test_keep_report_first_reason_and_next_age_gate(tmp_path):
     log = tmp_path / "log"
     assert backup.prune_local_archives(tmp_path, state_path=state, log_path=log, now=now, surviving_archives={}) == []
     events = [json.loads(line) for line in log.read_text().splitlines()]
-    kept = {e["name"]: e for e in events if e["event"] == "local_retention_kept"}
+    assert len(events) == 1
+    kept = {e["name"]: e for e in events[0]["kept"]}
     date = dt.datetime.fromtimestamp(now + 6 * 86400, dt.UTC).isoformat()
-    assert kept[old.name]["reason"] == "verification_age"
+    assert kept[old.name]["first_reason"] == "verification_age"
     assert kept[old.name]["eligible_at"] == date
-    assert kept[missing.name]["reason"] == "no_receipt"
+    assert kept[missing.name]["first_reason"] == "no_receipt"
     assert kept[missing.name]["eligible_at"] is None
-    assert kept[newest.name]["reason"] == "newest_sibling"
+    assert kept[newest.name]["first_reason"] == "newest_sibling"
     assert kept[newest.name]["eligible_at"] is None
     summary = next(e for e in events if e["event"] == "local_retention_summary")
     assert summary["bytes_held"] == 9
@@ -85,8 +86,8 @@ def test_keep_report_live_drive_gate_before_local_hash(tmp_path, monkeypatch):
     log = tmp_path / "log"
     backup.prune_local_archives(tmp_path, state_path=state, log_path=log, now=now, surviving_archives={})
     events = [json.loads(line) for line in log.read_text().splitlines()]
-    kept = next(e for e in events if e["event"] == "local_retention_kept" and e["name"] == old.name)
-    assert kept["reason"] == "drive_absent"
+    kept = next(e for e in events[0]["kept"] if e["name"] == old.name)
+    assert kept["first_reason"] == "drive_absent"
     assert kept["eligible_at"] is None
     assert old.exists()
 
@@ -140,9 +141,9 @@ def test_first_reason_does_not_fabricate_an_eligibility_date(tmp_path, fault, re
     log = tmp_path / "log"
     assert backup.prune_local_archives(tmp_path, state_path=state, log_path=log, now=now, surviving_archives=live) == []
     events = [json.loads(line) for line in log.read_text().splitlines()]
-    kept = next(e for e in events if e["event"] == "local_retention_kept")
+    kept = events[0]["kept"][0]
     assert kept["name"] == old.name
-    assert kept["reason"] == reason
+    assert kept["first_reason"] == reason
     assert kept["eligible_at"] is None
     summary = next(e for e in events if e["event"] == "local_retention_summary")
     assert summary["bytes_held"] == 3
@@ -185,8 +186,9 @@ def test_blocked_sweep_reports_unknown_date_without_hashing_or_deleting(tmp_path
     else:
         backup._report_blocked_local_archives(tmp_path, log_path=log, now=2_000_000_000, reason=blocked)
     events = [json.loads(line) for line in log.read_text().splitlines()]
-    assert events[0]["reason"] == "sweep_blocked"
-    assert events[0]["eligible_at"] is None
+    assert len(events) == 1
+    assert events[0]["kept"][0]["first_reason"] == "sweep_blocked"
+    assert events[0]["kept"][0]["eligible_at"] is None
     assert events[-1]["bytes_held"] == 3
     assert old.exists()
 
@@ -204,8 +206,7 @@ def test_empty_sweep_still_logs_one_summary(tmp_path):
     assert events[0]["bytes_held"] == 0
 
 
-@pytest.mark.parametrize("fault", ["local_retention_kept", "local_retention_summary", "both"])
-def test_reporting_failure_after_unlink_returns_deleted_list_and_finishes_sweep(tmp_path, monkeypatch, fault):
+def test_reporting_failure_after_unlink_returns_deleted_list_and_finishes_sweep(tmp_path, monkeypatch):
     now = 2_000_000_000
     paths = [tmp_path / f"claude-jsonl-2026-01-0{i}.tar.gz" for i in range(1, 5)]
     for path in paths:
@@ -230,9 +231,7 @@ def test_reporting_failure_after_unlink_returns_deleted_list_and_finishes_sweep(
     append = backup._append_json_log
 
     def fail_reporting(log, entry):
-        if entry["event"] == fault or (
-            fault == "both" and entry["event"] in {"local_retention_kept", "local_retention_summary"}
-        ):
+        if entry["event"] == "local_retention_summary":
             raise OSError("reporting-only write failed")
         append(log, entry)
 
@@ -292,3 +291,21 @@ def test_young_file_with_malformed_receipt_reports_unknown_without_hashing(tmp_p
     assert row["bytes_young"] == 3
     assert row["next_eligible_at"] is None
     assert path.exists()
+
+
+def test_blocked_reporting_has_one_row_with_all_old_archive_reasons(tmp_path):
+    now = 2_000_000_000
+    paths = [tmp_path / f"claude-jsonl-2026-01-0{i}.tar.gz" for i in range(1, 4)]
+    for i, path in enumerate(paths):
+        path.write_bytes(b"old")
+        age = 30 if i < 2 else 2
+        os.utime(path, (now - age * 86400, now - age * 86400))
+    log = tmp_path / "log"
+    backup._report_blocked_local_archives(tmp_path, log_path=log, now=now, reason="Drive unavailable")
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["bytes_held"] == 6 and rows[0]["bytes_young"] == 3
+    assert {e["name"] for e in rows[0]["kept"]} == {p.name for p in paths[:2]}
+    assert all(set(e) == {"name", "bytes", "first_reason", "eligible_at"} for e in rows[0]["kept"])
+    assert all(e["first_reason"] == "sweep_blocked" and e["eligible_at"] is None for e in rows[0]["kept"])
+    assert not {"attempted_at", "uploaded", "verified", "status", "error"}.intersection(rows[0])

@@ -3251,9 +3251,11 @@ def test_retention_metadata_cannot_replace_transcript_last_run(tmp_path, monkeyp
     )
     rows = [json.loads(line) for line in log.read_text().splitlines()]
     reporting = [row for row in rows if row.get("event") in {"local_retention_kept", "local_retention_summary"}]
-    assert any(row["event"] == "local_retention_kept" for row in reporting)
+    assert len(reporting) == 1
+    assert reporting[0]["event"] == "local_retention_summary"
+    assert reporting[0]["kept"]
     assert sum(row["event"] == "local_retention_summary" for row in reporting) == 1
-    assert all(not {"attempted_at", "uploaded", "verified", "status"}.intersection(row) for row in reporting)
+    assert all(not {"attempted_at", "uploaded", "verified", "status", "error"}.intersection(row) for row in reporting)
     assert [row for row in rows if "attempted_at" in row] == [result]
     assert next(row for row in reversed(rows) if "attempted_at" in row) == result
 

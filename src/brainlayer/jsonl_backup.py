@@ -523,6 +523,7 @@ def _report_blocked_local_archives(staging_dir: Path, *, log_path: Path, now: fl
     days = int(os.environ.get("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION_DAYS", "14"))
     held_bytes = 0
     young_bytes = 0
+    kept = []
     for path in _local_archive_paths(staging_dir):
         age = now - path.stat().st_mtime
         if age < days * 86400:
@@ -530,23 +531,13 @@ def _report_blocked_local_archives(staging_dir: Path, *, log_path: Path, now: fl
             continue
         size = path.stat().st_size
         held_bytes += size
-        _log_local_retention_report(
-            log_path,
-            {
-                "event": "local_retention_kept",
-                "name": path.name,
-                "path": str(path),
-                "bytes": size,
-                "age_days": age / 86400,
-                "reason": "sweep_blocked",
-                "blocking_error": reason,
-                "eligible_at": None,
-            },
-        )
+        kept.append({"name": path.name, "bytes": size, "first_reason": "sweep_blocked", "eligible_at": None})
     _log_local_retention_report(
         log_path,
         {
             "event": "local_retention_summary",
+            "kept": kept,
+            "blocking_error": reason,
             "bytes_held": held_bytes,
             "bytes_young": young_bytes,
             "bytes_eligible_next": 0,
@@ -605,9 +596,7 @@ def prune_local_archives(
             except (OverflowError, OSError, ValueError):
                 reason = "verification_date_out_of_range"
         entry = {
-            "event": "local_retention_kept",
             "name": path.name,
-            "path": str(path),
             "bytes": path.stat().st_size,
             "age_days": age / 86400,
             "reason": reason,
@@ -616,8 +605,6 @@ def prune_local_archives(
         if blocked_reason:
             entry["blocking_error"] = blocked_reason
         held.append(entry)
-        if age >= days * 86400:
-            _log_local_retention_report(log_path, entry)
 
     for path in archives:
         age = now - path.stat().st_mtime
@@ -697,6 +684,16 @@ def prune_local_archives(
         log_path,
         {
             "event": "local_retention_summary",
+            "kept": [
+                {
+                    "name": row["name"],
+                    "bytes": row["bytes"],
+                    "first_reason": row["reason"],
+                    "eligible_at": row["eligible_at"],
+                }
+                for row in held
+                if row["age_days"] >= days
+            ],
             "bytes_held": held_bytes,
             "bytes_young": young_bytes,
             "bytes_eligible_next": next_bytes,
