@@ -195,8 +195,8 @@ def test_production_shape_lets_reclamation_and_raw_cleanup_proceed(lane):  # noq
     assert result["verified"] is True
     assert result["receipt_journal_noise_lines"] == PRODUCTION_NOISE
     assert result["receipt_journal_skipped_lines"] == 0
-    assert result["superseded_stalled_deleted"] == [lane.snapshot.name]  # reclamation proceeded
-    assert not lane.snapshot.exists()
+    assert not result.get("superseded_stalled_deleted")
+    assert lane.snapshot.exists()  # No live verified Drive copy of this same day.
     assert not raw.exists()  # raw .db removed once its gzip proved the same bytes
     assert lane.log.read_bytes().startswith(_legacy_progress(PRODUCTION_NOISE))
 

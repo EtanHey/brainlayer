@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 from brainlayer import backup_daily as b
+from brainlayer.backup_retention import select_drive_dailies
 
 
 def daily(day, *, machine="MacBook-Pro", folder="folder", suffix=".db.zst"):
@@ -34,14 +35,11 @@ def receipt(item):
 
 def prune(items, receipts, **kwargs):
     service = Mock()
-    service.files.return_value.list.return_value.execute.return_value = {"files": items}
-    deleted = b.prune_drive_backups(
-        service,
-        machine_id="MacBook-Pro",
-        selected_folder_id="folder",
-        verified_receipts=receipts,
-        **kwargs,
+    policy = kwargs.pop("retention_policy", b.DAILY_RETENTION)
+    selected = select_drive_dailies(
+        items, receipts, machine_id="MacBook-Pro", folder_id="folder", keep_latest=policy.keep_latest, **kwargs
     )
+    deleted = [item["name"] for item in selected]  # Hypothetical only; no service method called.
     service.files.return_value.delete.assert_not_called()
     for call in service.files.return_value.update.call_args_list:
         assert call.kwargs["body"] == {"trashed": True}
@@ -142,7 +140,7 @@ def test_local_counts_verified_not_unknown_newest(tmp_path):
     for name in names:
         (tmp_path / name).write_bytes(b"fixture")
     deleted = b.prune_local_compressed_snapshots(tmp_path, keep_latest=3, verified_drive_names=set(names[:4]))
-    assert deleted == [names[0]]
+    assert deleted == []  # Filename-only legacy entry has no live inventory authority.
     assert all((tmp_path / name).exists() for name in names[1:])
 
 
@@ -158,9 +156,11 @@ def test_local_count_can_be_configured(monkeypatch):
     assert b._local_retention_keep() == 2
 
 
-def test_drive_retention_defaults_on_and_honors_opt_out(monkeypatch):
+def test_drive_retention_stays_disabled_regardless_of_env(monkeypatch):
     monkeypatch.delenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", raising=False)
-    assert b._drive_retention_enabled()
+    assert not b._drive_retention_enabled()
+    monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1")
+    assert not b._drive_retention_enabled()
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "0")
     assert not b._drive_retention_enabled()
 
@@ -170,17 +170,25 @@ def test_real_local_sweep_keeps_host_count_and_unknown_newest(tmp_path, monkeypa
     monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", host)
     log = tmp_path / "receipt.jsonl"
     db = tmp_path / "fixture.db"
-    rows = []
+    rows, files = [], []
     for day in range(1, 8):
         item = daily(day)
         path = tmp_path / item["name"]
         path.write_bytes(b"fixture!")
         item["md5Checksum"] = b._md5_file(path)
         rows.append(dict(receipt(item), db=str(db), snapshot=str(path)))
+        files.append(item)
     log.write_text("".join(json.dumps(row) + "\n" for row in rows))
     unknown = tmp_path / "2026-11-08.db.zst"
     unknown.write_bytes(b"unknown")
-    removed = b._sweep_verified_local_archives(log, tmp_path, {"db": str(db)}, remove_local=True)
+    removed = b._sweep_verified_local_archives(
+        log,
+        tmp_path,
+        {"db": str(db), "machine_id": "MacBook-Pro"},
+        remove_local=True,
+        live_files=files,
+        folder_id="folder",
+    )
     assert len(removed) == 7 - keep
     assert {p.name for p in tmp_path.glob("*.db.zst")} == {unknown.name} | {
         daily(d)["name"] for d in range(8 - keep, 8)
@@ -194,19 +202,21 @@ def test_weekly_pin_remains_protected_after_its_date(tmp_path):
     assert b._protected_snapshot_names(tmp_path) == {"2026-10-29.db.zst"}
 
 
-def test_partial_drive_trash_failure_reports_completed_actions():
+def test_legacy_drive_pruner_never_performs_partial_or_complete_actions():
     items = [daily(day) for day in range(1, 11)]
     service = Mock()
     service.files.return_value.list.return_value.execute.return_value = {"files": items}
     service.files.return_value.update.return_value.execute.side_effect = [{}, OSError("offline")]
-    with pytest.raises(b.BackupRetentionError) as caught:
+    assert (
         b.prune_drive_backups(
             service,
             machine_id="MacBook-Pro",
             selected_folder_id="folder",
             verified_receipts=[receipt(i) for i in items],
         )
-    assert caught.value.trashed == [daily(3)["name"]]
+        == []
+    )
+    service.files.return_value.update.assert_not_called()
     service.files.return_value.delete.assert_not_called()
 
 
@@ -233,6 +243,9 @@ def test_upload_of_older_day_reports_if_the_final_sweep_removed_it(tmp_path, mon
         b, "verify_sqlite_backup_artifact", lambda *a, **kw: {"verified": True, "local_md5": uploaded["md5Checksum"]}
     )
     monkeypatch.setattr(b, "prune_drive_backups", lambda *a, **kw: [])
+    monkeypatch.setattr(b, "ensure_drive_folder_chain", lambda *a, **kw: "folder")
+    monkeypatch.setattr(b, "_find_drive_folder_ids", lambda *a, **kw: ["folder"])
+    monkeypatch.setattr(b, "_list_drive_backup_files", lambda *a, **kw: [r["drive_file"] for r in rows] + [uploaded])
     result = b.run_backup(
         db_path=db, staging_dir=tmp_path, log_path=log, date_stamp="2026-11-01", machine_id="MacBook-Pro"
     )
@@ -261,7 +274,7 @@ def test_one_off_requires_a_newer_verified_backup(tmp_path):
     assert path.exists()
 
 
-def test_drive_trash_failure_is_logged_and_alerted_without_failing_backup(tmp_path, monkeypatch):
+def test_live_inventory_failure_is_logged_and_alerted_without_failing_backup(tmp_path, monkeypatch):
     from brainlayer import job_alerts
     from tests.test_backup_daily import _stub_verified_backup_run
 
@@ -269,8 +282,18 @@ def test_drive_trash_failure_is_logged_and_alerted_without_failing_backup(tmp_pa
     snapshot.write_bytes(b"synthetic")
     service = Mock()
     _stub_verified_backup_run(b, monkeypatch, snapshot, service)
+    db = tmp_path / "fixture.db"
+    old_rows = []
+    for day in range(1, 4):
+        item = daily(day)
+        path = tmp_path / item["name"]
+        path.write_bytes(b"fixture!")
+        item["md5Checksum"] = b._md5_file(path)
+        old_rows.append(dict(receipt(item), db=str(db), snapshot=str(path)))
+    (tmp_path / "log.jsonl").write_text("".join(json.dumps(r) + "\n" for r in old_rows))
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1")
-    monkeypatch.setattr(b, "prune_drive_backups", Mock(side_effect=OSError("trash unavailable")))
+    monkeypatch.setattr(b, "_find_drive_folder_ids", lambda *a, **kw: ["folder"])
+    monkeypatch.setattr(b, "_list_drive_backup_files", Mock(side_effect=OSError("listing unavailable")))
     alert = tmp_path / "alerts.json"
     monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(alert))
     result = b.run_backup(db_path=tmp_path / "fixture.db", staging_dir=tmp_path, log_path=tmp_path / "log.jsonl")

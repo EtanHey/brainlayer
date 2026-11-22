@@ -169,7 +169,7 @@ def test_backup_daily_plist_does_not_override_per_machine_drive_folder():
 
 @pytest.mark.parametrize(
     ("value", "enabled"),
-    (("0", False), ("", False), ("false", False), ("yes", False), ("on", False), ("1", True), ("true", True)),
+    (("0", False), ("", False), ("false", False), ("yes", False), ("on", False), ("1", False), ("true", False)),
 )
 def test_drive_retention_env_is_explicit_only(value, enabled, monkeypatch):
     from brainlayer import backup_daily
@@ -2446,10 +2446,10 @@ def test_run_backup_default_retention_leaves_eight_drive_snapshots_untouched(tmp
     after = snapshot_non_trashed_drive_ids(service, folder_id="folder-id")
 
     assert_non_trashed_drive_files_only_grow_or_are_trashed(before, after)
-    assert result["drive_retention"] == "enabled"
-    assert result["retention_mode"] == "trash"
+    assert result["drive_retention"] == "disabled"
+    assert result["retention_mode"] == "report-only"
     assert result["retention_deleted"] == []
-    assert service.files().list_calls == 3
+    assert service.files().list_calls == 2
     assert service.files().trashed == []
     assert service.files().deleted == []
 
@@ -2489,11 +2489,11 @@ def test_run_backup_opted_in_retention_trashes_older_drive_snapshots(tmp_path, m
     )
     after = snapshot_non_trashed_drive_ids(service, folder_id="folder-id")
 
-    assert_non_trashed_drive_files_only_grow_or_are_trashed(before, after, trashed_ids={"id-1"})
-    assert result["drive_retention"] == "enabled"
-    assert result["retention_mode"] == "trash"
-    assert result["retention_deleted"] == ["2026-05-01.db.gz"]
-    assert service.files().trashed == [("id-1", {"trashed": True})]
+    assert_non_trashed_drive_files_only_grow_or_are_trashed(before, after)
+    assert result["drive_retention"] == "disabled"
+    assert result["retention_mode"] == "report-only"
+    assert result["retention_deleted"] == []
+    assert service.files().trashed == []
     assert service.files().deleted == []
 
 
@@ -2615,7 +2615,7 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
         for line in log_path.read_text(encoding="utf-8").splitlines()
         if json.loads(line).get("event") != "local_sweep"
     ]
-    assert len(lines) == 4
+    assert len(lines) == 5  # Final local-retention observation is durably appended too.
     assert json.loads(lines[-2])["uploaded"] is True and json.loads(lines[-2])["verified"] is True
     assert json.loads(lines[0])["local_verified"] is True
     completed = json.loads(lines[1])

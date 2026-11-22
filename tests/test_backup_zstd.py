@@ -250,8 +250,12 @@ def test_local_retention_counts_verified_dailies_across_formats(tmp_path):
     for name in names:
         (tmp_path / name).write_bytes(name.encode())
     deleted = backup.prune_local_compressed_snapshots(tmp_path, verified_drive_names=set(names))
-    assert deleted == ["2026-10-04.db.zst", "2026-10-03.db.gz", "2026-10-02.db.gz", "2026-10-01.db.gz"]
+    assert deleted == []  # The legacy filename-only API cannot authorize removal.
     assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "2026-10-01.db.gz",
+        "2026-10-02.db.gz",
+        "2026-10-03.db.gz",
+        "2026-10-04.db.zst",
         "2026-10-05.db.zst",
         "2026-10-06.db.zst",
         "2026-10-07.db.zst",
@@ -287,6 +291,7 @@ class _DriveFiles:
 
 
 def _prune(monkeypatch, files, *, keep, verified):
+    from brainlayer.backup_retention import select_drive_dailies
     from tests.test_backup_retention import receipt
 
     files = [
@@ -301,16 +306,15 @@ def _prune(monkeypatch, files, *, keep, verified):
     ]
     drive = _DriveFiles(files)
     monkeypatch.setattr(backup, "ensure_drive_folder_chain", lambda service, parts: "folder")
-    trashed = backup.prune_drive_backups(
-        SimpleNamespace(files=lambda: drive),
-        folder_parts=["x"],
+    selected = select_drive_dailies(
+        files,
+        [receipt(item) for item in files if verified is not ... and verified and item["id"] in verified],
         machine_id="MacBook-Pro",
-        retention_policy=backup.DriveRetentionPolicy(keep_latest=keep),
-        verified_receipts=[
-            receipt(item) for item in files if verified is not ... and verified and item["id"] in verified
-        ],
+        folder_id="folder",
+        keep_latest=keep,
     )
-    return sorted(drive.trashed), sorted(trashed)
+    assert drive.trashed == []
+    return sorted(item["id"] for item in selected), sorted(item["name"] for item in selected)
 
 
 def test_drive_retention_counts_both_formats_and_keeps_newest_verified_of_each(monkeypatch):
@@ -416,7 +420,7 @@ def test_uncertain_line_after_a_verified_receipt_yields_no_evidence_and_trashes_
     assert _prune(monkeypatch, files, keep=2, verified=evidence) == ([], [])
 
 
-def test_run_backup_feeds_full_receipts_to_drive_retention(tmp_path, monkeypatch):
+def test_run_backup_never_routes_to_drive_pruning_even_with_legacy_opt_in(tmp_path, monkeypatch):
     from tests.test_backup_daily import _stub_verified_backup_run
 
     snapshot = tmp_path / "2026-10-20.db.zst"
@@ -429,9 +433,8 @@ def test_run_backup_feeds_full_receipts_to_drive_retention(tmp_path, monkeypatch
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1")
     result = backup.run_backup(db_path=tmp_path / "fixture.db", staging_dir=tmp_path, log_path=log)
     assert result["verified"] is True
-    assert {"old-last-verified", result["drive_file"]["id"]} <= {
-        r["drive_file"]["id"] for r in seen["verified_receipts"] if isinstance(r.get("drive_file"), dict)
-    }
+    assert seen == {}
+    assert result["drive_retention"] == "disabled" and result["retention_deleted"] == []
 
 
 # --- receipt readers ------------------------------------------------------------------------

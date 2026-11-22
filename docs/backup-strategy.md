@@ -18,44 +18,49 @@ Schedule:
 
 Daily at 03:17 local time via `com.brainlayer.backup-daily`.
 
-Retention:
+Retention (owner ruling, 2026-11-22):
 
-Keep the newest **3 verified compressed daily snapshots locally**, or **1 on the M4** once
-Drive has verified that copy or a newer one. A day's only verified local copy is never
-removed until that day's upload has verified. Unknown, changed, unverified or pinned
-files can therefore leave more than the target count. Cleanup hashes a local archive
-again before removing it; a new unverified day cannot displace older verified copies.
-The M4/M1 distinction uses `backup_heavy_gate`'s shared host detection.
+**Drive backups stay unchanged.** Nothing on Drive is trashed, moved, renamed or
+permanently deleted by retention. Additive uploads remain a separate operation.
+`BRAINLAYER_BACKUP_DRIVE_RETENTION` cannot enable remote cleanup.
 
-Drive keeps the newest **7 verified daily snapshots per machine**, across gzip and zstd.
-Weekly and daily runs share this count. Selection requires both the exact machine folder
-and `appProperties.brainlayer_machine`, plus a latest successful receipt whose stored-byte
-MD5, filename and size still match the current Drive object. Prior machine-ID folders are
-available for recovery, but retention does not cross into them. Files without this proof
-are kept and do not count toward the cap. An unverified newest upload never displaces the
-newest verified backup. Daily names must be exactly `YYYY-MM-DD.db.gz` or `YYYY-MM-DD.db.zst`.
-Named one-offs, other machines' objects and the file named by `.weekly-backup-pin.json`
-are protected. A pin remains protected until its owner replaces or removes it.
+**Local copies:** keep the newest **3 verified compressed daily snapshots on the M1**,
+or **1 on the M4**. A local archive can go only when Drive currently holds the **same
+snapshot**, with the exact filename, size and stored-byte MD5 proven by its latest
+receipt and live listing. The current folder and machine property must both match.
+A missing listing, revoked receipt, changed archive or unknown file authorizes no deletion.
+Cleanup hashes the local archive again immediately before unlinking it. Unknown files
+do not displace the verified cohort, so they can leave more files than the target count.
+Host detection comes from `backup_heavy_gate`.
 
-Drive cleanup **trashes**, never permanently deletes; Drive normally retains trashed files
-for 30 days. A cleanup failure does not fail an already verified backup: its receipt
-records the error and any files already trashed, and `backup-retention` stays alerted until
-a later successful cleanup. An unreadable weekly pin refuses cleanup.
-
-Configuration (positive integer counts; invalid values refuse cleanup):
+The file named by `.weekly-backup-pin.json` stays protected until its owner replaces or
+removes the pin. A malformed pin refuses cleanup. One-off `*-pre-*.db` migration copies
+are never automatically deleted. A newer verified snapshot reports older copies by path,
+byte size and `superseded_by` in `one_off_copies[]`; this timestamp comparison does not
+prove the migration's own verification. A person must rule on deleting them.
 
 | Environment variable | Meaning |
 | --- | --- |
-| `BRAINLAYER_BACKUP_LOCAL_KEEP` | Local count on the M1; default above |
-| `BRAINLAYER_BACKUP_LOCAL_KEEP_M4` | Local count on the M4; default above |
-| `BRAINLAYER_BACKUP_DRIVE_KEEP` | Drive count per machine; default above |
-| `BRAINLAYER_BACKUP_DRIVE_RETENTION` | Enabled by default; `0` disables Drive cleanup |
+| `BRAINLAYER_BACKUP_LOCAL_KEEP` | M1 local count; default above |
+| `BRAINLAYER_BACKUP_LOCAL_KEEP_M4` | M4 local count; default above |
 
-Library callers can opt out of local cleanup with `remove_local_after_upload=False`.
-One-off `*-pre-*.db` migration copies are **never automatically deleted**. A verified
-newer snapshot reports older copies by path, byte size and `superseded_by` in
-`one_off_copies[]`. The timestamp comparison does not prove the migration's own
-verification; a person must rule on deletion.
+Counts must be positive integers; invalid values refuse cleanup. Library callers can
+opt out of local cleanup with `remove_local_after_upload=False`. Filename-only legacy
+pruning entrypoints do nothing: filenames cannot establish a live verified Drive copy.
+A newer day's upload never authorizes deleting an unverified older day.
+
+Drive policy comparisons are **read-only reports**, not cleanup plans with authority.
+`backup_retention.drive_retention_report` reports counts, bytes and date ranges for
+keeping seven daily objects, and for keeping those plus the latest daily from each of
+the previous three completed calendar months. Historical dated raw `.db` files can
+appear in that report, but local cleanup covers only exact compressed daily names
+(`YYYY-MM-DD.db.gz` or `YYYY-MM-DD.db.zst`). The report has no service or mutation API.
+The owner must separately choose any future Drive policy.
+
+Local cleanup reads a fresh listing when the receipt-proven local cohort exceeds its
+cap; otherwise `local_retention_inventory=within_cap` explains why no listing was
+needed. Failed measurement records an error and a `backup-retention` alert while the
+verified backup keeps its successful outcome. A changed same-size archive is retained.
 
 ## Why This Approach
 
@@ -103,9 +108,9 @@ whose identity could not be confirmed in `retained_stalled_unconfirmed`.
 
 **Why it does not clear by itself.** When a Drive upload stalls, its compressed snapshot (about
 9.5 GB) stays in the backup staging folder, `~/.local/share/brainlayer/backups/` by default, so the
-next run can resume the same upload. After 36 hours it can no longer be resumed. BrainLayer removes
-it only once a newer, fresh backup has uploaded and verified, and it hashes the file first to prove it
-is the snapshot the receipt describes. That newer backup needs the free space the stalled file is
+next run can resume the same upload. After 36 hours it can no longer be resumed. A newer day's
+upload does not authorize removing this day's only copy. It stays until its own snapshot is
+verified live on Drive or a person moves it. A new backup needs the free space the stalled file is
 using. So while the disk stays full, every run stops here. BrainLayer does not delete the file itself,
 because it has no verified copy of that day anywhere else.
 

@@ -112,7 +112,7 @@ def test_prior_conflict_preserves_confirmed_upload_and_recovery_receipt(tmp_path
     assert result["verified"] and "retention_error" not in result
     receipts = [r for r in b._read_backup_receipts(receipt_path) if r.get("event") != "local_sweep"]
     assert all("snapshot" in r and "attempted_at" in r for r in receipts)
-    assert len(receipts) == 4
+    assert len(receipts) == 5  # Verified outcome plus final local-retention observation.
     assert receipts[2]["uploaded"] is True and receipts[2]["verified"] is True
     assert receipts[0]["local_verified"] is True and receipts[0]["uploaded"] is False
     assert receipts[1]["uploaded"] is True and receipts[1]["verification_pending"] is True

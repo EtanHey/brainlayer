@@ -1,4 +1,4 @@
-"""Receipt-bound archive removal through the job; all files belong to tmp_path."""
+"""Receipt-and-live-Drive-bound LOCAL cleanup; all data belongs to tmp_path."""
 
 import datetime as dt
 import json
@@ -13,10 +13,12 @@ from brainlayer import backup_daily as backup
 @pytest.fixture
 def removal_lane(tmp_path, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m4")
     monkeypatch.setattr(backup, "local_backup_date", lambda *_: dt.date(2026, 10, 26))
     monkeypatch.setattr(backup, "get_drive_credentials", lambda: object())
     monkeypatch.setattr(backup, "build_drive_service", lambda *_: object())
     monkeypatch.setattr(backup, "ensure_drive_folder_chain", lambda *_: "folder")
+    monkeypatch.setattr(backup, "_find_drive_folder_ids", lambda *a, **kw: ["folder"])
     monkeypatch.setattr(backup, "assert_drive_folder_owned_by_machine", lambda *a, **kw: None)
     monkeypatch.setattr(backup, "verify_drive_upload", lambda *a, **kw: None)
     monkeypatch.setattr(
@@ -26,15 +28,18 @@ def removal_lane(tmp_path, monkeypatch):
             "id": path.name,
             "name": path.name,
             "size": str(path.stat().st_size),
-            "md5Checksum": "local-md5",
+            "md5Checksum": backup._md5_file(path),
         },
     )
+    snapshot = tmp_path / "2026-10-26.db.zst"
     monkeypatch.setattr(
         backup,
         "verify_sqlite_backup_artifact",
-        lambda *a, **kw: {"verified": True, "verification_mode": "quick", "local_md5": "local-md5"},
+        lambda *a, **kw: {
+            "verified": True,
+            "local_md5": backup._md5_file(snapshot),
+        },
     )
-    snapshot = tmp_path / "2026-10-26.db.zst"
 
     def create(*args, **kwargs):
         snapshot.write_bytes(b"archive")
@@ -43,42 +48,14 @@ def removal_lane(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(backup, "create_sqlite_backup_artifact", create)
-    return dict(
+    lane = dict(
         db_path=tmp_path / "live.db",
         staging_dir=tmp_path,
         log_path=tmp_path / "receipts.jsonl",
         date_stamp="2026-10-26",
     )
-
-
-@pytest.mark.parametrize(
-    "pin,verified,opt_out,reason",
-    [
-        ("today", True, False, "weekly_pin_pending"),
-        ("past", True, False, None),
-        ("unreadable", True, False, "pin_unreadable"),
-        (None, False, False, "not_verified"),
-        (None, True, True, "opt_out"),
-    ],
-)
-def test_run_records_removal_or_skip(removal_lane, monkeypatch, pin, verified, opt_out, reason):
-    staging = removal_lane["staging_dir"]
-    snapshot = staging / "2026-10-26.db.zst"
-    if pin:
-        (staging / ".weekly-backup-pin.json").write_text(
-            "broken"
-            if pin == "unreadable"
-            else json.dumps({"date": "2026-10-26" if pin == "today" else "2026-10-25", "snapshot": str(snapshot)})
-        )
-    monkeypatch.setattr(
-        backup, "verify_sqlite_backup_artifact", lambda *a, **kw: {"verified": verified, "local_md5": "local-md5"}
-    )
-    result = backup.run_backup(**removal_lane, remove_local_after_upload=not opt_out)
-    assert result["local_removed"] is (reason is None)
-    assert snapshot.exists() is (reason is not None)
-    assert result.get("local_removed_skip_reason") == reason
-    persisted = json.loads(removal_lane["log_path"].read_text().splitlines()[-1])
-    assert persisted.get("local_removed_skip_reason") == reason
+    monkeypatch.setattr(backup, "_list_drive_backup_files", lambda *a, **kw: _live(lane))
+    return lane
 
 
 def _old_receipt(lane, name="2026-10-21.db.zst", **changes):
@@ -99,65 +76,87 @@ def _old_receipt(lane, name="2026-10-21.db.zst", **changes):
     )
 
 
-@pytest.mark.parametrize("pin", [None, "unreadable", "past"])
-def test_upload_only_sweeps_verified_older_archives_after_pin_expiry(removal_lane, pin):
-    staging = removal_lane["staging_dir"]
-    verified = _old_receipt(removal_lane)
-    unverified = _old_receipt(removal_lane, "2026-10-25.db.gz")
-    unverified["verified"] = False
-    today = _old_receipt(removal_lane, "2026-10-26.db.zst")
-    today["verified"] = False
-    raw = staging / "2026-10-21.db"
-    raw.write_bytes(b"raw")
-    removal_lane["db_path"].write_bytes(b"live")
+def _write(lane, rows, *, keeper=True):
+    # Explicit newer verified local copy makes the older target deletion-eligible.
+    if keeper:
+        rows = [*rows, _old_receipt(lane, "2026-10-24.db.zst")]
+    lane["log_path"].write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+
+def _live(lane):
+    if not lane["log_path"].exists():
+        return []
+    rows = backup._read_backup_receipts(lane["log_path"])
+    return [
+        dict(r["drive_file"], parents=["folder"], appProperties={"brainlayer_machine": "test-machine"})
+        for r in rows
+        if r.get("event") != "local_sweep" and isinstance(r.get("drive_file"), dict)
+    ]
+
+
+def _sweep(lane, *, context=None):
+    return backup._sweep_verified_local_archives(
+        lane["log_path"],
+        lane["staging_dir"],
+        context or {"db": str(lane["db_path"]), "machine_id": "test-machine"},
+        remove_local=True,
+        live_files=_live(lane),
+        folder_id="folder",
+    )
+
+
+@pytest.mark.parametrize(
+    "pin,verified,opt_out,reason",
+    [
+        ("today", True, False, "weekly_pin_pending"),
+        ("past", True, False, "weekly_pin_pending"),
+        ("unreadable", True, False, "pin_unreadable"),
+        (None, False, False, "not_verified"),
+        (None, True, True, "opt_out"),
+        (None, True, False, "retention_keep"),
+    ],
+)
+def test_run_records_newest_kept_or_skip(removal_lane, monkeypatch, pin, verified, opt_out, reason):
+    snapshot = removal_lane["staging_dir"] / "2026-10-26.db.zst"
     if pin:
-        (staging / ".weekly-backup-pin.json").write_text(
-            "broken" if pin == "unreadable" else json.dumps({"date": "2026-10-21", "snapshot": verified["snapshot"]})
+        (snapshot.parent / ".weekly-backup-pin.json").write_text(
+            "broken"
+            if pin == "unreadable"
+            else json.dumps({"date": "2026-10-26" if pin == "today" else "2026-10-25", "snapshot": str(snapshot)})
         )
-    removal_lane["log_path"].write_text("".join(json.dumps(r) + "\n" for r in [verified, unverified, today]))
+    monkeypatch.setattr(
+        backup,
+        "verify_sqlite_backup_artifact",
+        lambda *a, **kw: {"verified": verified, "local_md5": backup._md5_file(snapshot)},
+    )
+    result = backup.run_backup(**removal_lane, remove_local_after_upload=not opt_out)
+    assert not result["local_removed"] and snapshot.exists()
+    assert result["local_removed_skip_reason"] == reason
+    assert json.loads(removal_lane["log_path"].read_text().splitlines()[-1])["local_removed_skip_reason"] == reason
+
+
+@pytest.mark.parametrize("pin", [None, "unreadable", "past"])
+def test_upload_only_cleanup_obeys_persistent_pin_and_live_proof(removal_lane, pin):
+    target = _old_receipt(removal_lane)
+    unknown = _old_receipt(removal_lane, "2026-10-25.db.gz")
+    unknown["verified"] = False
+    if pin:
+        (removal_lane["staging_dir"] / ".weekly-backup-pin.json").write_text(
+            "broken" if pin == "unreadable" else json.dumps({"date": "2026-10-21", "snapshot": target["snapshot"]})
+        )
+    _write(removal_lane, [target, unknown])
     result = backup.run_backup(**removal_lane, phase="upload")
     assert result["upload_state"] == "nothing_pending"
-    assert not Path(verified["snapshot"]).exists()
-    assert Path(unverified["snapshot"]).exists()
-    assert Path(today["snapshot"]).exists()
-    assert raw.read_bytes() == b"raw" and removal_lane["db_path"].read_bytes() == b"live"
-    receipts = [json.loads(line) for line in removal_lane["log_path"].read_text().splitlines()]
-    latest = {r["archive"]: r for r in receipts if r.get("event") == "local_sweep"}
-    assert latest[verified["snapshot"]]["local_removed"] is True
-    assert latest[unverified["snapshot"]]["local_removed_skip_reason"] == "not_verified"
-
-
-@pytest.mark.parametrize("damage", ["name", "size", "id", "no_metadata", "revoked", "journal", "symlink", "opt_out"])
-def test_sweep_requires_matching_latest_drive_receipt(removal_lane, damage):
-    receipt = _old_receipt(removal_lane)
-    path = Path(receipt["snapshot"])
-    if damage in {"name", "size"}:
-        receipt["drive_file"][damage] = "wrong"
-    elif damage == "id":
-        receipt["drive_file"]["id"] = ["malformed"]
-    elif damage == "no_metadata":
-        receipt.pop("drive_file")
-    elif damage == "symlink":
-        target = path.with_name("foreign")
-        path.rename(target)
-        path.symlink_to(target)
-    lines = [receipt]
-    if damage == "revoked":
-        lines.append({**receipt, "verified": False})
-    removal_lane["log_path"].write_text(
-        "".join(json.dumps(r) + "\n" for r in lines) + ("uncertain line\n" if damage == "journal" else "")
-    )
-    backup.run_backup(**removal_lane, phase="upload", remove_local_after_upload=damage != "opt_out")
-    assert path.exists()
+    assert Path(target["snapshot"]).exists() is (pin is not None)
+    assert Path(unknown["snapshot"]).exists()
 
 
 def test_sweep_before_capacity_failure(removal_lane, monkeypatch):
-    receipt = _old_receipt(removal_lane)
-    log = removal_lane["log_path"]
-    log.write_text(json.dumps(receipt) + "\n")
+    old = _old_receipt(removal_lane)
+    _write(removal_lane, [old])
 
     def no_capacity(*args, **kwargs):
-        assert not Path(receipt["snapshot"]).exists()
+        assert not Path(old["snapshot"]).exists()
         raise RuntimeError("capacity")
 
     monkeypatch.setattr(backup, "create_sqlite_backup_artifact", no_capacity)
@@ -169,36 +168,55 @@ def test_end_sweep_is_persisted_in_final_receipt(removal_lane, monkeypatch):
     def upload(path, *args, **kwargs):
         old = _old_receipt(removal_lane)
         backup._append_json_log(removal_lane["log_path"], old)
-        return {"id": "uploaded", "name": path.name, "size": str(path.stat().st_size), "md5Checksum": "local-md5"}
+        return {
+            "id": path.name,
+            "name": path.name,
+            "size": str(path.stat().st_size),
+            "md5Checksum": backup._md5_file(path),
+        }
 
     monkeypatch.setattr(backup, "upload_file_to_drive_raw", upload)
     result = backup.run_backup(**removal_lane)
     assert result["local_gzip_retention_deleted"] == ["2026-10-21.db.zst"]
     assert not (removal_lane["staging_dir"] / "2026-10-21.db.zst").exists()
-    final = json.loads(removal_lane["log_path"].read_text().splitlines()[-1])
-    assert final["local_gzip_retention_deleted"] == result["local_gzip_retention_deleted"]
+    assert json.loads(removal_lane["log_path"].read_text().splitlines()[-1]) == result
+
+
+def test_post_upload_inventory_failure_is_persisted_without_masking_success(removal_lane, monkeypatch):
+    from unittest.mock import Mock
+
+    from brainlayer import job_alerts
+
+    # One old verified local is within the cap before upload; only the final
+    # fresh listing can fail after this run adds a second verified local copy.
+    _write(removal_lane, [_old_receipt(removal_lane)], keeper=False)
+    listing = Mock(side_effect=OSError("inventory unavailable after upload"))
+    monkeypatch.setattr(backup, "_list_drive_backup_files", listing)
+    alerts = removal_lane["staging_dir"] / "alerts.json"
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(alerts))
+    result = backup.run_backup(**removal_lane)
+    assert result["uploaded"] and result["verified"] and "error" not in result
+    assert result["retention_error_type"] == "OSError"
+    assert json.loads(removal_lane["log_path"].read_text().splitlines()[-1]) == result
+    assert "backup-retention" in job_alerts.active_alerts(alerts)
+    listing.assert_called_once()
 
 
 @pytest.mark.parametrize("snapshot_key", [None, "prior-machine/2026-10-21.db.zst"])
-def test_drive_id_revocation_is_not_undone_by_either_sweep(removal_lane, snapshot_key):
-    receipt = _old_receipt(removal_lane)
-    revoke = {"drive_file": receipt["drive_file"], "uploaded": True, "verified": False, "verification_error": "md5"}
+def test_live_listing_does_not_undo_latest_receipt_revocation(removal_lane, snapshot_key):
+    old = _old_receipt(removal_lane)
+    revoked = {"drive_file": old["drive_file"], "uploaded": True, "verified": False, "verification_error": "md5"}
     if snapshot_key:
-        revoke["snapshot"] = snapshot_key
-    log = removal_lane["log_path"]
-    log.write_text(json.dumps(receipt) + "\n" + json.dumps(revoke) + "\n")
-    backup.run_backup(**removal_lane, phase="upload")
-    assert Path(receipt["snapshot"]).exists()
-    assert receipt["drive_file"]["id"] not in backup._verified_drive_file_ids(log)
-    events = [json.loads(line) for line in log.read_text().splitlines()][2:]
-    assert len(events) == 1  # Same reason is deduped across start/end sweeps.
-    assert events[0]["event"] == "local_sweep"
-    assert events[0]["local_removed_skip_reason"] == "not_verified"
-    # Even a sweep carrying accidental verification fields cannot supersede remote proof.
-    backup._append_json_log(log, {**receipt, "event": "local_sweep"})
-    assert receipt["drive_file"]["id"] not in backup._verified_drive_file_ids(log)
+        revoked["snapshot"] = snapshot_key
+    _write(removal_lane, [old, revoked])
+    _sweep(removal_lane)
+    assert Path(old["snapshot"]).exists()
+    assert old["drive_file"]["id"] not in backup._verified_drive_file_ids(removal_lane["log_path"])
+    rows = backup._read_backup_receipts(removal_lane["log_path"])
+    event = next(r for r in rows if r.get("archive") == old["snapshot"])
+    assert event["local_removed_skip_reason"] == "not_verified"
     assert not (
-        {"snapshot", "drive_file", "uploaded", "verified", "attempted_at", "backup_log_provenance"} & events[0].keys()
+        {"snapshot", "drive_file", "uploaded", "verified", "attempted_at", "backup_log_provenance"} & event.keys()
     )
 
 
@@ -207,35 +225,19 @@ def test_sweep_does_not_backdate_observability_or_brainbar_log(removal_lane):
 
     old = _old_receipt(removal_lane)
     new = _old_receipt(removal_lane, "2026-10-26.db.zst")
-    for receipt, day in [(old, "2026-10-21"), (new, "2026-10-26")]:
-        receipt.update(
+    for row, day in [(old, "2026-10-21"), (new, "2026-10-26")]:
+        row.update(
             backup_log_provenance="real",
             attempted_at=f"{day}T01:00:00+00:00",
             snapshot_created_at=f"{day}T01:00:00+00:00",
         )
-    log = removal_lane["log_path"]
-    log.write_text(json.dumps(old) + "\n" + json.dumps(new) + "\n")
-    backup._sweep_verified_local_archives(
-        log, removal_lane["staging_dir"], {"db": str(removal_lane["db_path"])}, remove_local=True
-    )
-    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    _write(removal_lane, [old, new], keeper=False)
+    _sweep(removal_lane)
+    rows = backup._read_backup_receipts(removal_lane["log_path"])
     assert not Path(old["snapshot"]).exists()
     assert _daily_snapshot(rows)[0]["last_at"] == "2026-10-26T01:00:00Z"
-    # These are the fields consumed by BackupLogReader.lastRun(.databaseBackup).
-    last_run = next(r for r in reversed(rows) if r.get("backup_log_provenance") == "real" and r.get("attempted_at"))
-    assert last_run["attempted_at"] == new["attempted_at"]
-    assert rows[-1]["event"] == "local_sweep"
-    rows.append(
-        {
-            "attempted_at": "2026-10-27T01:00:00+00:00",
-            "backup_log_provenance": "real",
-            "error_type": "RuntimeError",
-            "error": "capacity",
-            "uploaded": False,
-            "verified": False,
-        }
-    )
-    assert _daily_snapshot(rows)[0]["last_at"] == "2026-10-26T01:00:00Z"
+    last = next(r for r in reversed(rows) if r.get("backup_log_provenance") == "real" and r.get("attempted_at"))
+    assert last["attempted_at"] == new["attempted_at"]
 
 
 @pytest.mark.parametrize(
@@ -255,94 +257,65 @@ def test_sweep_does_not_backdate_observability_or_brainbar_log(removal_lane):
         "archive_date",
     ],
 )
-def test_each_sweep_deletion_guard_retains_archive(removal_lane, monkeypatch, guard):
-    receipt = _old_receipt(removal_lane)
-    path = Path(receipt["snapshot"])
-    context = {"db": str(removal_lane["db_path"])}
+def test_each_sweep_deletion_boundary_retains_archive(removal_lane, guard):
+    old = _old_receipt(removal_lane)
+    path = Path(old["snapshot"])
+    context = {"db": str(removal_lane["db_path"]), "machine_id": "test-machine"}
     if guard in {"verified", "uploaded"}:
-        receipt[guard] = False
-        # Isolate the receipt flag from the separate latest-per-object guard.
-        monkeypatch.setattr(backup, "_verified_drive_file_ids", lambda _: {receipt["drive_file"]["id"]})
+        old[guard] = False
     elif guard in {"drive_name", "drive_size"}:
-        receipt["drive_file"][guard.removeprefix("drive_")] = "wrong"
+        old["drive_file"][guard.removeprefix("drive_")] = "wrong"
     elif guard == "same_db":
-        receipt["db"] = "other-db"
-    elif guard in {"staging_dir", "standard_name", "archive_date"}:
+        old["db"] = "other-db"
+    elif guard in {"staging_dir", "standard_name", "archive_date", "before_today"}:
         destination = path.parent / (
             "elsewhere"
             if guard == "staging_dir"
+            else "2026-10-21-x.db.zst"
+            if guard == "standard_name"
             else "2026-10-21.db"
             if guard == "archive_date"
-            else "2026-10-21-x.db.zst"
+            else "2026-10-26.db.zst"
         )
         if guard == "staging_dir":
             destination.mkdir()
             destination /= path.name
         path.rename(destination)
         path = destination
-        receipt["snapshot"] = str(path)
-        receipt["drive_file"]["name"] = path.name
+        old["snapshot"], old["drive_file"]["name"] = str(path), path.name
     elif guard == "regular_file":
         path.unlink()
         path.mkdir()
-        receipt["drive_file"]["size"] = str(path.stat().st_size)
-    elif guard == "before_today":
-        today = path.with_name("2026-10-26.db.zst")
-        path.rename(today)
-        path = today
-        receipt["snapshot"] = str(path)
-        receipt["drive_file"]["name"] = path.name
+        old["drive_file"]["size"] = str(path.stat().st_size)
     elif guard == "live_db":
-        context["db"] = receipt["db"] = str(path)
-    rows = [receipt]
+        old["db"] = context["db"] = str(path)
+    rows = [old]
     if guard == "drive_id":
-        rows.append({"drive_file": receipt["drive_file"], "verified": False})
-    log = removal_lane["log_path"]
-    log.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    assert backup._sweep_verified_local_archives(log, removal_lane["staging_dir"], context, remove_local=True) == []
+        rows.append({"drive_file": old["drive_file"], "verified": False})
+    _write(removal_lane, rows)
+    assert path.name not in _sweep(removal_lane, context=context)
     assert path.exists()
-    rows = [json.loads(line) for line in log.read_text().splitlines()]
-    assert not any(r.get("local_removed") for r in rows)
-    assert not any(r.get("local_removed_skip_reason") == "delete_failed" for r in rows)
 
 
 @pytest.mark.parametrize("md5", ["match", "mismatch", "missing_local", "missing_drive"])
-@pytest.mark.parametrize("sweep", [False, True])
-def test_deletion_requires_recorded_drive_and_local_md5(removal_lane, monkeypatch, md5, sweep):
-    matching_md5 = backup._md5_file(Path(_old_receipt(removal_lane)["snapshot"])) if sweep else "local-md5"
-    local = {} if md5 == "missing_local" else {"local_md5": matching_md5}
-    drive = {} if md5 == "missing_drive" else {"md5Checksum": "wrong" if md5 == "mismatch" else matching_md5}
-    if sweep:
-        receipt = _old_receipt(removal_lane)
-        receipt.pop("local_md5")
-        receipt.update(local)
-        receipt["drive_file"].pop("md5Checksum")
-        receipt["drive_file"].update(drive)
-        removal_lane["log_path"].write_text(json.dumps(receipt) + "\n")
-        backup.run_backup(**removal_lane, phase="upload")
-        path = Path(receipt["snapshot"])
-        rows = [json.loads(line) for line in removal_lane["log_path"].read_text().splitlines()]
-        result = rows[-1]
-    else:
-        monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", lambda *a, **kw: {"verified": True, **local})
-        monkeypatch.setattr(
-            backup,
-            "upload_file_to_drive_raw",
-            lambda path, *a, **kw: {"id": path.name, "name": path.name, "size": str(path.stat().st_size), **drive},
-        )
-        result = backup.run_backup(**removal_lane)
-        path = removal_lane["staging_dir"] / "2026-10-26.db.zst"
-    assert path.exists() is (md5 != "match")
-    assert result["local_removed"] is (md5 == "match")
-    assert result["local_removed_skip_reason"] == (None if md5 == "match" else "md5_unverified")
+def test_deletion_requires_recorded_and_live_matching_md5(removal_lane, md5):
+    old = _old_receipt(removal_lane)
+    if md5 == "mismatch":
+        old["drive_file"]["md5Checksum"] = "f" * 32
+    elif md5 == "missing_local":
+        old.pop("local_md5")
+    elif md5 == "missing_drive":
+        old["drive_file"].pop("md5Checksum")
+    _write(removal_lane, [old])
+    _sweep(removal_lane)
+    assert Path(old["snapshot"]).exists() is (md5 != "match")
 
 
 @pytest.mark.parametrize("sweep", [False, True])
-def test_unlink_failure_does_not_abort_new_backup(removal_lane, monkeypatch, capsys, sweep):
+def test_unlink_failure_keeps_backup_success_and_local_bytes(removal_lane, monkeypatch, capsys, sweep):
     blocked = removal_lane["staging_dir"] / ("2026-10-21.db.zst" if sweep else "2026-10-26.db.zst")
     if sweep:
-        receipt = _old_receipt(removal_lane)
-        removal_lane["log_path"].write_text(json.dumps(receipt) + "\n")
+        _write(removal_lane, [_old_receipt(removal_lane)])
     unlink = Path.unlink
 
     def refuse(path, *args, **kwargs):
@@ -352,30 +325,23 @@ def test_unlink_failure_does_not_abort_new_backup(removal_lane, monkeypatch, cap
 
     monkeypatch.setattr(Path, "unlink", refuse)
     result = backup.run_backup(**removal_lane)
-    assert result["uploaded"] and result["verified"]
-    assert blocked.exists()
-    rows = [json.loads(line) for line in removal_lane["log_path"].read_text().splitlines()]
-    receipt = next(r for r in reversed(rows) if r.get("archive", r.get("snapshot")) == str(blocked))
-    assert receipt["local_removed"] is False
-    assert receipt["local_removed_skip_reason"] == "delete_failed"
-    assert "test archive locked" in capsys.readouterr().out
+    assert result["uploaded"] and result["verified"] and blocked.exists()
+    rows = backup._read_backup_receipts(removal_lane["log_path"])
+    row = next(r for r in reversed(rows) if r.get("archive", r.get("snapshot")) == str(blocked))
+    assert row["local_removed"] is False
+    assert row["local_removed_skip_reason"] == ("delete_failed" if sweep else "retention_keep")
+    if sweep:
+        assert "test archive locked" in capsys.readouterr().out
 
 
 def test_sweep_retains_same_size_archive_rewritten_after_upload(removal_lane):
-    receipt = _old_receipt(removal_lane)
-    path = Path(receipt["snapshot"])
-    uploaded_md5 = backup._md5_file(path)
-    receipt["local_md5"] = uploaded_md5
-    receipt["drive_file"]["md5Checksum"] = uploaded_md5
-    removal_lane["log_path"].write_text(json.dumps(receipt) + "\n")
+    old = _old_receipt(removal_lane)
+    _write(removal_lane, [old])
+    path = Path(old["snapshot"])
     path.write_bytes(b"OLDER ARCHIVE")
-    assert path.stat().st_size == int(receipt["drive_file"]["size"])
-    assert backup._md5_file(path) != uploaded_md5
-
-    backup.run_backup(**removal_lane, phase="upload")
-
+    assert path.stat().st_size == int(old["drive_file"]["size"])
+    assert _sweep(removal_lane) == []
     assert path.read_bytes() == b"OLDER ARCHIVE"
-    event = json.loads(removal_lane["log_path"].read_text().splitlines()[-1])
-    assert event["event"] == "local_sweep"
-    assert event["local_removed"] is False
-    assert event["local_removed_skip_reason"] == "md5_current_mismatch"
+    rows = backup._read_backup_receipts(removal_lane["log_path"])
+    row = next(r for r in rows if r.get("archive") == str(path))
+    assert row["local_removed_skip_reason"] == "md5_current_mismatch"
