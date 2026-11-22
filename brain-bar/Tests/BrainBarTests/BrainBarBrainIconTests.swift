@@ -24,7 +24,9 @@ import XCTest
         NSApplication.shared.setActivationPolicy(.prohibited)
         let name = "BrainBarBrainIconTests." + UUID().uuidString
         addTeardownBlock { UserDefaults(suiteName: name)?.removePersistentDomain(forName: name) }
-        return UserDefaults(suiteName: name)!
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.set(BrainBarDesign.classic.rawValue, forKey: BrainBarDesign.key)
+        return defaults
     }
     private func stats(active: Bool = false) -> DashboardStats {
         let agent = active ? [0, 1, 0, 2, 1, 0, 1, 0, 2, 1, 0, 1] : Array(repeating: 0, count: 12)
@@ -78,7 +80,9 @@ import XCTest
             XCTAssertTrue(controller.contextMenuForTesting.items.contains { ($0.representedObject as? BrainBarMenuAction) == .settings })
             XCTAssertFalse(controller.contextMenuForTesting.items.contains { $0.title == "Open Dashboard" })
         } else {
-            XCTAssertEqual(controller.contextMenuForTesting.items.map(\.title),
+            // Gap 26, lead ruling 21 Nov 2026: main's inventory plus one enabled, unmarked Diagnostics after Settings.
+            let mainItems = try brainBarItemsWithoutApprovedDiagnostics(controller.contextMenuForTesting)
+            XCTAssertEqual(mainItems.map(\.title),
                 ["Nothing needs attention", "Show log", "", "", "Open Dashboard", "Settings…", "", "Restart BrainBar", "", "Quit BrainBar"])
             let expected: NSImage = BrainBarStatusPopoverController.statusIconImage(
                 stats: stats(), badgeOn: controller.statusDotForTesting, dot: controller.statusVerdictForTesting.dot)

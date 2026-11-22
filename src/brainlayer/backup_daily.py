@@ -500,9 +500,18 @@ class BackupStoppedError(BaseException):
 class DriveUploadStalledError(RuntimeError):
     error_code = "drive_upload_stalled"
 
-    def __init__(self, *, bytes_confirmed: int, total_bytes: int, attempts: int, session_url: str | None = None):
+    def __init__(
+        self,
+        *,
+        bytes_confirmed: int,
+        total_bytes: int,
+        attempts: int,
+        session_url: str | None = None,
+        checkpoint_observed: bool = True,
+    ):
         self.bytes_confirmed = bytes_confirmed
         self.session_url = session_url
+        self.checkpoint_observed = checkpoint_observed
         super().__init__(
             f"{self.error_code}: confirmed {bytes_confirmed}/{total_bytes} bytes after {attempts} stalled attempts"
         )
@@ -2577,6 +2586,7 @@ def upload_file_to_drive_raw(
         _drive_upload_stall_max_attempts() if os.environ.get(DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV) else max_attempts
     )
     sent = stalled_attempts = 0
+    checkpoint_observed = resume_session_url is None
     slept = 0.0
     stall_started: float | None = None
     probe = resume_session_url is not None
@@ -2600,7 +2610,7 @@ def upload_file_to_drive_raw(
                     "upload_bytes_attempted": bytes_attempted,
                 }
             )
-        if progress_callback is not None:
+        if progress_callback is not None and checkpoint_observed:
             progress_callback(upload_url, sent)
 
     def backoff() -> None:
@@ -2608,7 +2618,11 @@ def upload_file_to_drive_raw(
         elapsed = max(slept, time.monotonic() - stall_started) if stall_started is not None else slept
         if stalled_attempts >= stall_limit or elapsed >= budget:
             raise DriveUploadStalledError(
-                bytes_confirmed=sent, total_bytes=total, attempts=stalled_attempts, session_url=upload_url
+                bytes_confirmed=sent,
+                total_bytes=total,
+                attempts=stalled_attempts,
+                session_url=upload_url,
+                checkpoint_observed=checkpoint_observed,
             )
         delay = min(300, 30 * 2 ** min(max(0, stalled_attempts - 1), 4), budget - elapsed, request_deadline(budget))
         print(
@@ -2686,6 +2700,7 @@ def upload_file_to_drive_raw(
                     if response.status_code in {200, 201}:
                         completed = response.json()
                         sent = total
+                        checkpoint_observed = True
                         if not bytes_attempted:
                             rate_base = total  # A completed resume probe transferred no new file bytes.
                         report_progress()
@@ -2705,6 +2720,8 @@ def upload_file_to_drive_raw(
                         raise RuntimeError(
                             f"Drive returned invalid confirmed offset {confirmed}; expected {sent}..{total}"
                         )
+                    first_observation = not checkpoint_observed
+                    checkpoint_observed = True
                     if confirmed > sent:
                         if resume_session_url is not None and not bytes_attempted:
                             rate_base = confirmed  # Existing remote bytes are not this invocation's rate.
@@ -2712,6 +2729,8 @@ def upload_file_to_drive_raw(
                         report_progress()
                         stalled_attempts, slept, stall_started = 0, 0.0, None
                         print(f"drive upload progress: {sent}/{total} bytes", flush=True)
+                    elif first_observation:
+                        report_progress()  # A real zero from Drive replaces any older saved offset too.
                     elif not is_probe or confirmed == total:
                         raise _DriveUploadNeedsProbe("Drive upload returned no newly confirmed bytes")
                     elif recovering:
@@ -3949,6 +3968,11 @@ def run_backup(
         for resume in (
             [candidate] if phase == "upload" or local_resume else [candidate, None] if candidate is not None else [None]
         ):
+            result.pop("bytes_confirmed", None)
+            result.pop("bytes_confirmed_at", None)
+            if resume is None:
+                resume_state = None
+                result.pop("resumable_upload", None)
             artifact = prepare_artifact(resume)
             snapshot = artifact.gzip_path
             snapshot_size = snapshot.stat().st_size
@@ -4005,7 +4029,11 @@ def run_backup(
                         result[key] = resume[key]
                 resume_state = resume.get("resumable_upload")
             result.update(local_verified=True, local_artifact=_upload_identity(snapshot), upload_state="pending")
-            _append_json_log(resolved_log_path, result)
+            # A completed session resumes verification before any network call; legacy final receipts stay unchanged.
+            _append_json_log(
+                resolved_log_path,
+                {**result, "verification_pending": True} if upload and result["uploaded"] else result,
+            )
             if not upload:
                 break
             if resume is not None and resume.get("uploaded") is True:
@@ -4037,11 +4065,21 @@ def run_backup(
                     raise RuntimeError("Saved artifact changed; local snapshot retained")
                 print("Saved artifact changed before resume; preparing a fresh snapshot", flush=True)
                 continue
+            if saved_session is not None:
+                confirmed = resume.get("bytes_confirmed")
+                if type(confirmed) is int and 0 <= confirmed <= snapshot_size:
+                    result["bytes_confirmed"] = confirmed
+                    if isinstance(resume.get("bytes_confirmed_at"), str):
+                        result["bytes_confirmed_at"] = resume["bytes_confirmed_at"]
 
             def record_upload_progress(url: str, confirmed: int) -> None:
                 nonlocal resume_state
+                previous = result.get("bytes_confirmed")
+                same_session = resume_state is not None and resume_state.get("url") == url
                 next_state = {"url": url, "folder_id": folder_id, **upload_identity}
                 resume_state = next_state
+                if not same_session or previous != confirmed:
+                    result["bytes_confirmed_at"] = dt.datetime.now(dt.UTC).isoformat()
                 result["bytes_confirmed"] = confirmed
                 _append_json_log(
                     resolved_log_path,
@@ -4070,6 +4108,10 @@ def run_backup(
                     **({"resume_session_url": saved_session["url"]} if saved_session else {}),
                 )
             except DriveSessionExpiredError:
+                result.pop("bytes_confirmed", None)
+                result.pop("bytes_confirmed_at", None)
+                result.pop("resumable_upload", None)
+                resume_state = None
                 if phase == "upload" or local_resume:
                     # Drive confirmed expiration; restart the session for the SAME bytes.
                     uploaded = upload_file_to_drive_raw(
@@ -4218,11 +4260,14 @@ def run_backup(
         if isinstance(error_code, str):
             result["error_code"] = error_code
         if isinstance(exc, DriveUploadStalledError):
+            if exc.checkpoint_observed:
+                if result.get("bytes_confirmed") != exc.bytes_confirmed:
+                    result["bytes_confirmed_at"] = dt.datetime.now(dt.UTC).isoformat()
+                result["bytes_confirmed"] = exc.bytes_confirmed
             result.update(
                 {
                     "error_type": exc.error_code,
                     "error_code": exc.error_code,
-                    "bytes_confirmed": exc.bytes_confirmed,
                 }
             )
         raise
