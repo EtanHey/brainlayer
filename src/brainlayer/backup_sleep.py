@@ -9,15 +9,33 @@ from __future__ import annotations
 import datetime as dt
 import time
 
+NOTE_JOIN_GAP_SECONDS = 20 * 60
+
+
+def _clock_ids() -> tuple[int, int]:
+    if callable(getattr(time, "clock_gettime", None)):
+        for pair in (("CLOCK_MONOTONIC_RAW", "CLOCK_UPTIME_RAW"), ("CLOCK_BOOTTIME", "CLOCK_MONOTONIC")):
+            if all(hasattr(time, name) for name in pair):
+                return tuple(getattr(time, name) for name in pair)
+    raise RuntimeError(
+        "Backup sleep observation requires Darwin MONOTONIC_RAW/UPTIME_RAW or Linux BOOTTIME/MONOTONIC clocks; "
+        "this platform cannot measure suspend time safely"
+    )
+
+
+def _read_clock(clock: int) -> float:
+    try:
+        return time.clock_gettime(clock)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Cannot measure backup sleep: clock_gettime({clock}) failed: {exc}") from exc
+
 
 def _inclusive() -> float:
-    clock = time.CLOCK_BOOTTIME if hasattr(time, "CLOCK_BOOTTIME") else time.CLOCK_MONOTONIC_RAW
-    return time.clock_gettime(clock)
+    return _read_clock(_clock_ids()[0])
 
 
 def _awake() -> float:
-    clock = time.CLOCK_UPTIME_RAW if hasattr(time, "CLOCK_UPTIME_RAW") else time.CLOCK_MONOTONIC
-    return time.clock_gettime(clock)
+    return _read_clock(_clock_ids()[1])
 
 
 def sleep_note(intervals: list[dict], *, action: str) -> str | None:
@@ -26,9 +44,18 @@ def sleep_note(intervals: list[dict], *, action: str) -> str | None:
     minutes = int(sum(item["seconds"] for item in intervals) // 60)
     hours, minutes = divmod(minutes, 60)
     duration = f"{hours} h {minutes} min" if hours else f"{minutes} min"
+    spans: list[tuple[dt.datetime, dt.datetime]] = []
+    for start, end in sorted(
+        (dt.datetime.fromisoformat(item["from"]), dt.datetime.fromisoformat(item["to"])) for item in intervals
+    ):
+        if spans and (start - spans[-1][1]).total_seconds() <= NOTE_JOIN_GAP_SECONDS:
+            spans[-1] = (spans[-1][0], max(end, spans[-1][1]))
+        else:
+            spans.append((start, end))
     bounds = ", ".join(
-        f"{dt.datetime.fromisoformat(item['from']):%H:%M}-{dt.datetime.fromisoformat(item['to']):%H:%M}"
-        for item in intervals
+        f"{start:{'%Y-%m-%d %H:%M' if start.date() != end.date() else '%H:%M'}}-"
+        f"{end:{'%Y-%m-%d %H:%M' if start.date() != end.date() else '%H:%M'}}"
+        for start, end in spans
     )
     return f"paused {duration} while the Mac slept ({bounds}); {action}"
 
@@ -52,6 +79,7 @@ class SleepTracker:
                     "from": (end - dt.timedelta(seconds=slept)).isoformat(),
                     "to": end.isoformat(),
                     "seconds": round(slept, 3),
+                    "bounds": "inferred",
                 }
             )
         self.previous_inclusive, self.previous_awake = inclusive, awake

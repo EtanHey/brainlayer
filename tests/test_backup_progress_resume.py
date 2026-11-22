@@ -279,6 +279,94 @@ def test_upload_failure_after_sleep_records_pause_without_another_progress_tick(
     assert "uploaded the rest" not in row["sleep_note"]
 
 
+@pytest.mark.parametrize("pause_at", ["archive_hash", "credentials"])
+def test_sleep_between_snapshot_and_upload_is_in_terminal_receipt(local_lane, monkeypatch, pause_at):
+    from brainlayer import backup_sleep
+
+    network(monkeypatch)
+    values = {"inclusive": 0, "awake": 0, "snapshot_finished": False, "paused": False}
+    factory = backup_sleep.SleepTracker
+    monkeypatch.setattr(
+        backup_sleep,
+        "SleepTracker",
+        lambda: factory(inclusive=lambda: values["inclusive"], awake=lambda: values["awake"]),
+    )
+    create = backup.create_sqlite_backup_artifact
+    identity = backup._upload_identity
+
+    def make_snapshot(*args, **kwargs):
+        artifact = create(*args, **kwargs)
+        values["snapshot_finished"] = True
+        return artifact
+
+    def pause():
+        assert values["snapshot_finished"]
+        if not values["paused"]:
+            values.update(inclusive=21600, paused=True)
+
+    def hash_archive(path):
+        if pause_at == "archive_hash" and values["snapshot_finished"]:
+            pause()
+        return identity(path)
+
+    def credentials():
+        if pause_at == "credentials":
+            pause()
+        return object()
+
+    def upload(*args, **kwargs):
+        assert values["paused"]
+        raise RuntimeError("synthetic stop after inter-phase sleep")
+
+    monkeypatch.setattr(backup, "create_sqlite_backup_artifact", make_snapshot)
+    monkeypatch.setattr(backup, "_upload_identity", hash_archive)
+    monkeypatch.setattr(backup, "get_drive_credentials", credentials)
+    monkeypatch.setattr(backup, "upload_file_to_drive_raw", upload)
+    with pytest.raises(RuntimeError, match="inter-phase sleep"):
+        backup.run_backup(**local_lane, phase="all")
+    row = latest(local_lane)
+    assert sum(item["seconds"] for item in row["sleep_intervals"]) == 21600
+    assert row["run_slept_seconds"] == 21600
+    assert row["snapshot_slept_seconds"] == row["upload_slept_seconds"] == 0
+    assert "while the Mac slept" in row["sleep_note"]
+
+
+def test_observability_snapshot_retains_sleep_observations():
+    import jsonschema
+
+    fields = {
+        "sleep_note": "paused 6 h while the Mac slept; backup continued after wake",
+        "snapshot_slept_seconds": 0,
+        "upload_slept_seconds": 21600,
+        "run_slept_seconds": 21600,
+        "upload_wall_seconds": 21630,
+    }
+    row = {
+        "backup_log_provenance": "real",
+        "snapshot": "/synthetic/2026-11-22.db.zst",
+        "snapshot_created_at": "2026-11-22T04:00:00+02:00",
+        "local_verified": True,
+        **fields,
+    }
+    observed = _local_snapshot([row])
+    for key, value in fields.items():
+        assert observed.get(key) == value
+    schema = json.loads((Path(__file__).parent / "fixtures/observability/observability-schema.v2.json").read_text())
+    jsonschema.validate(observed, schema["$defs"]["backups_measured"]["properties"]["local_snapshot"])
+
+
+@pytest.mark.parametrize("value", [True, -1, float("nan"), "21600", None])
+def test_observability_omits_unmeasurable_sleep_seconds(value):
+    row = {
+        "backup_log_provenance": "real",
+        "snapshot": "/synthetic/2026-11-22.db.zst",
+        "snapshot_created_at": "2026-11-22T04:00:00+02:00",
+        "local_verified": True,
+        "upload_slept_seconds": value,
+    }
+    assert "upload_slept_seconds" not in _local_snapshot([row])
+
+
 def test_verification_recovery_retains_completed_upload_sleep(local_lane, monkeypatch):
     prior = saved(local_lane, uploaded=True)
     prior.update(
@@ -301,6 +389,8 @@ def test_verification_recovery_retains_completed_upload_sleep(local_lane, monkey
         "upload_wall_seconds",
         "upload_slept_seconds",
         "sleep_intervals",
-        "sleep_note",
     ):
         assert row[field] == prior[field]
+    assert row["sleep_note"] == backup.backup_sleep.sleep_note(
+        prior["sleep_intervals"], action="uploaded the rest after wake"
+    )

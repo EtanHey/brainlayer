@@ -2578,6 +2578,7 @@ def upload_file_to_drive_raw(
     policy_callback: Callable[[dict[str, Any]], None] | None = None,
     telemetry_callback: Callable[[dict[str, Any]], None] | None = None,
     run_deadline: float | None = None,
+    sleep_observer: backup_sleep.SleepTracker | None = None,
 ) -> dict[str, Any]:
     """Upload unchanged bytes; probe ambiguous writes before retransmitting them."""
     file_path = Path(file_path)
@@ -2614,7 +2615,9 @@ def upload_file_to_drive_raw(
     session = requests.Session()
     started = time.monotonic()
     rate_base = retries = probes = deadlines = requests_started = bytes_attempted = 0
-    sleep_tracker = backup_sleep.SleepTracker()
+    sleep_tracker = sleep_observer
+    if sleep_tracker is None and telemetry_callback is not None:
+        sleep_tracker = backup_sleep.SleepTracker()
 
     def report_progress() -> None:
         elapsed = time.monotonic() - started
@@ -3796,6 +3799,25 @@ def run_backup(
     if re.fullmatch(r"[0-9a-f]{32}", invocation):
         result["backup_invocation_id"] = invocation  # This body runs only after staging-lock admission.
 
+    run_sleep_tracker: backup_sleep.SleepTracker | None = None
+    historical_sleep_intervals: list[dict] = []
+
+    def record_run_sleep() -> None:
+        if run_sleep_tracker is None:
+            return
+        upload_sleep = result.get("upload_slept_seconds", 0)
+        action = "backup continued after wake"
+        if isinstance(upload_sleep, (int, float)) and upload_sleep > 0:
+            action = "uploaded the rest after wake" if result["uploaded"] else "upload resumed after wake"
+        metrics = run_sleep_tracker.tick(prefix="run", action=action)
+        result.update({key: value for key, value in metrics.items() if key not in {"sleep_intervals", "sleep_note"}})
+        result["sleep_intervals"] = historical_sleep_intervals + metrics["sleep_intervals"]
+        note = backup_sleep.sleep_note(result["sleep_intervals"], action=action)
+        if note:
+            result["sleep_note"] = note
+        else:
+            result.pop("sleep_note", None)
+
     def record_reclamation_status(status: str, error: str | None) -> None:
         result["attempt_reclamation"] = status
         result["writer_probe_error"] = error
@@ -3829,6 +3851,7 @@ def run_backup(
         return result
 
     try:
+        run_sleep_tracker = backup_sleep.SleepTracker()
         resolved_machine_id = _validate_machine_id(machine_id) if machine_id is not None else resolve_machine_id()
         resolved_folder_parts = (
             list(folder_parts) if folder_parts is not None else default_drive_folder_parts(resolved_machine_id)
@@ -3929,10 +3952,11 @@ def run_backup(
         candidate = local if local_resume else candidate
 
         def record_snapshot_sleep(metrics: dict[str, Any]) -> None:
-            result.update(metrics)
+            result.update(
+                {key: value for key, value in metrics.items() if key not in {"sleep_intervals", "sleep_note"}}
+            )
             result["snapshot_sleep_intervals"] = metrics["sleep_intervals"]
-            if "sleep_note" not in metrics:
-                result.pop("sleep_note", None)
+            record_run_sleep()
 
         def prepare_artifact(resume: dict[str, Any] | None) -> SQLiteBackupArtifact:
             if resume is not None:
@@ -4049,12 +4073,9 @@ def run_backup(
                     "bytes": snapshot_size,
                 }
             )
-            result["sleep_intervals"] = result["snapshot_sleep_intervals"]
-            note = backup_sleep.sleep_note(result["sleep_intervals"], action="snapshot continued after wake")
-            if note:
-                result["sleep_note"] = note
-            else:
-                result.pop("sleep_note", None)
+            if resume is not None:
+                historical_sleep_intervals = resume.get("sleep_intervals") or result["snapshot_sleep_intervals"]
+            record_run_sleep()
             # create_sqlite_backup_artifact has already proven gzip CRC/ISIZE,
             # SQLite header, sentinel and raw/gzip equality before dropping raw (#1387).
             with snapshot.open("rb") as durable:
@@ -4080,6 +4101,7 @@ def run_backup(
                             result[key] = resume[key]
                 resume_state = resume.get("resumable_upload")
             result.update(local_verified=True, local_artifact=_upload_identity(snapshot), upload_state="pending")
+            record_run_sleep()
             # A completed session resumes verification before any network call; legacy final receipts stay unchanged.
             _append_json_log(
                 resolved_log_path,
@@ -4128,14 +4150,10 @@ def run_backup(
                     **metrics,
                     **upload_sleep_tracker.tick(prefix="upload", action="upload resumed after wake"),
                 }
-                result.update(metrics)
-                intervals = result["snapshot_sleep_intervals"] + metrics.get("sleep_intervals", [])
-                result["sleep_intervals"] = intervals
-                note = backup_sleep.sleep_note(intervals, action="upload resumed after wake")
-                if note:
-                    result["sleep_note"] = note
-                else:
-                    result.pop("sleep_note", None)
+                result.update(
+                    {key: value for key, value in metrics.items() if key not in {"sleep_intervals", "sleep_note"}}
+                )
+                record_run_sleep()
 
             def record_upload_progress(url: str, confirmed: int) -> None:
                 nonlocal resume_state
@@ -4160,6 +4178,7 @@ def run_backup(
             def record_upload_thread_policy(policy: dict[str, Any]) -> None:
                 result["upload_thread_policy"] = policy
 
+            record_run_sleep()
             upload_sleep_tracker = backup_sleep.SleepTracker()
             try:
                 uploaded = upload_file_to_drive_raw(
@@ -4171,6 +4190,7 @@ def run_backup(
                     policy_callback=record_upload_thread_policy,
                     telemetry_callback=record_upload_telemetry,
                     run_deadline=run_deadline,
+                    sleep_observer=upload_sleep_tracker,
                     **({"resume_session_url": saved_session["url"]} if saved_session else {}),
                 )
             except DriveSessionExpiredError:
@@ -4189,6 +4209,7 @@ def run_backup(
                         policy_callback=record_upload_thread_policy,
                         telemetry_callback=record_upload_telemetry,
                         run_deadline=run_deadline,
+                        sleep_observer=upload_sleep_tracker,
                     )
                     break
                 if resume is None:
@@ -4205,9 +4226,7 @@ def run_backup(
             # Drive has completed the session. Persist that fact before verification can
             # fail or its final receipt can be truncated; an older checkpoint must not revive it.
             result.update({"uploaded": True, "drive_file": uploaded})
-            note = backup_sleep.sleep_note(result.get("sleep_intervals", []), action="uploaded the rest after wake")
-            if note:
-                result["sleep_note"] = note
+            record_run_sleep()
             resume_state = None
             result.pop("resumable_upload", None)
             _append_json_log(resolved_log_path, {**result, "verification_pending": True})
@@ -4343,6 +4362,8 @@ def run_backup(
             )
         raise
     finally:
+        if result.get("status") != "reused":
+            record_run_sleep()
         result["retained_raw_snapshots"] = _retained_raw_snapshot_names(Path(staging_dir))
         raw = Path(staging_dir) / f"{resolved_date_stamp}.db"
         if (result.get("error") or result.get("verification_error")) and not (

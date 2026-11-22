@@ -161,6 +161,20 @@ def test_sleep_is_observed_in_upload_telemetry_without_changing_transfer(tmp_pat
     assert "07:09-13:09" in telemetry[-1]["sleep_note"]
 
 
+def test_upload_without_sleep_telemetry_needs_no_observer(tmp_path, upload_server, monkeypatch):
+    from brainlayer import backup_sleep
+
+    def unavailable():
+        raise RuntimeError("observer must not be constructed")
+
+    monkeypatch.setattr(backup_sleep, "SleepTracker", unavailable)
+    upload_server.rtt = 0.001
+    snapshot = tmp_path / "fixture.zst"
+    snapshot.write_bytes(b"fixture")
+    assert _upload(snapshot, upload_server)["id"] == "loopback-file"
+    assert upload_server.confirmed == 7
+
+
 def test_slow_link_completes_without_deadline_probe_loop(tmp_path, upload_server, monkeypatch):
     # Accelerate both link and deadline 100x: an 8 MiB PUT at 45 KiB/s takes
     # ~182s, above the old 120s watchdog, below the fixed 256s byte budget.
