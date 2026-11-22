@@ -650,11 +650,19 @@ receipt, including a legacy one, is never replaced. Runs report the names writte
 ### Hybrid helper keep-warm
 
 `BRAINLAYER_HYBRID_KEEP_WARM_S` sets the idle keep-warm interval (default 60 seconds,
-jittered by 10%). The serial helper embeds a tiny query and reads one vector-index row
+jittered by 10%). The serial helper embeds a tiny query and reads one vector by cached primary key
 between client connections. It never runs a tick concurrently with a request.
 `BRAINLAYER_HYBRID_KEEP_WARM_DEADLINE_S` bounds each tick (default 10 seconds);
 a wedged tick exits with code 75 so BrainBar can respawn the helper. Tick failures are
 logged; successful ticks record CPU and wall time in memory without logging.
+After two consecutive tick overruns, helper respawns defer keep-warm for 5 minutes,
+doubling on further overruns up to 15 minutes. A successful tick resets the streak.
+Real requests keep their normal deadline during this cooldown. The small counter and
+retry time persist per daemon socket under `$XDG_CACHE_HOME/brainlayer/` (default
+`~/.cache/brainlayer/`), so a helper respawn cannot reset the backoff. Persistence failures
+are logged. The vector read warms a bounded sample, not the whole binary KNN index;
+the first tick selects its sample, subsequent ticks use a direct primary-key lookup.
 Both settings require finite positive seconds; invalid values use the defaults.
-On a search-canary timeout, health-check healing pings the daemon. A responsive daemon
+On a search-canary timeout, health-check healing pings the daemon with the same configured
+socket timeout as the canary, allowing for a busy serial request queue. A responsive daemon
 keeps its connections while only its identified hybrid-helper child is recycled.

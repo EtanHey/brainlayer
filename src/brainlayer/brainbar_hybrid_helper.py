@@ -144,19 +144,69 @@ class HybridSearchHelper:
         self._ready = False
         self.keep_warm_interval_seconds = _positive_env_seconds("BRAINLAYER_HYBRID_KEEP_WARM_S", 60.0)
         self.keep_warm_deadline_seconds = _positive_env_seconds("BRAINLAYER_HYBRID_KEEP_WARM_DEADLINE_S", 10.0)
-        self._next_keep_warm = self._keep_warm_at()
         self.last_keep_warm_cost: dict[str, float] | None = None
+        self._keep_warm_vector_id: str | None = None
+        # Cache state is scoped to this daemon's socket, so it survives helper
+        # respawns without coupling different daemons. No database writes.
+        cache = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "brainlayer"
+        key = hashlib.sha256(os.fsencode(self.socket_path)).hexdigest()[:16]
+        self._keep_warm_state_path = cache / f"hybrid-keep-warm-{key}.json"
+        self._keep_warm_overruns = 0
+        self._keep_warm_retry_after = 0.0
+        try:
+            state = json.loads(self._keep_warm_state_path.read_text())
+            count, retry_after = state["overruns"], state["retry_after"]
+            if type(count) is int and 0 <= count <= 10 and math.isfinite(retry_after):
+                self._keep_warm_overruns = count
+                self._keep_warm_retry_after = min(float(retry_after), time.monotonic() + 900)
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+        self._next_keep_warm = self._keep_warm_at()
 
     def _keep_warm_at(self) -> float:
-        return time.monotonic() + self.keep_warm_interval_seconds * random.uniform(0.9, 1.1)
+        return max(
+            time.monotonic() + self.keep_warm_interval_seconds * random.uniform(0.9, 1.1),
+            self._keep_warm_retry_after,
+        )
+
+    def _save_keep_warm_backoff(self) -> None:
+        try:
+            self._keep_warm_state_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._keep_warm_state_path.with_suffix(f".{os.getpid()}.tmp")
+            temporary.write_text(
+                json.dumps(
+                    {
+                        "overruns": self._keep_warm_overruns,
+                        "retry_after": self._keep_warm_retry_after,
+                    }
+                )
+            )
+            temporary.replace(self._keep_warm_state_path)
+        except OSError as exc:
+            LOGGER.warning("hybrid helper keep-warm backoff unavailable: %s", type(exc).__name__)
 
     def _keep_warm_tick(self) -> None:
         from brainlayer.mcp._shared import _get_embedding_model, _get_search_vector_store
 
         _get_embedding_model().embed_query("warm")
         store = _get_search_vector_store()
+        self._touch_vector_sample(store)
+
+    def _touch_vector_sample(self, store: Any) -> None:
         table = "chunk_vectors_binary" if store._binary_index_available else "chunk_vectors"
-        store._read_cursor().execute(f"SELECT rowid FROM {table} LIMIT 1").fetchone()
+        cursor = store._read_cursor()
+        if self._keep_warm_vector_id is None:
+            row = cursor.execute(f"SELECT chunk_id FROM {table} LIMIT 1").fetchone()
+            if row is None:
+                return
+            self._keep_warm_vector_id = row[0]
+        # A cached primary-key lookup reaches vector storage without scanning all
+        # vec0 ids each tick. It warms a sample, not the whole binary KNN index.
+        row = cursor.execute(
+            f"SELECT embedding FROM {table} WHERE chunk_id = ?", (self._keep_warm_vector_id,)
+        ).fetchone()
+        if row is None:
+            self._keep_warm_vector_id = None
 
     def _keep_warm_if_due(self) -> None:
         # Called only by the serial accept loop on an idle timeout. A tick cannot
@@ -164,20 +214,37 @@ class HybridSearchHelper:
         if not self._ready or time.monotonic() < self._next_keep_warm:
             return
         started, cpu_started = time.monotonic(), time.process_time()
-        timer = threading.Timer(
-            self.keep_warm_deadline_seconds,
-            lambda: self._on_deadline_expired(
+        expired = threading.Event()
+
+        def overrun() -> None:
+            expired.set()
+            self._keep_warm_overruns = min(self._keep_warm_overruns + 1, 10)
+            if self._keep_warm_overruns >= 2:
+                delay = min(300 * 2 ** (self._keep_warm_overruns - 2), 900)
+                self._keep_warm_retry_after = time.monotonic() + delay
+            self._save_keep_warm_backoff()
+            self._on_deadline_expired(
                 {
                     "elapsed_seconds": time.monotonic() - started,
                     "deadline_seconds": self.keep_warm_deadline_seconds,
                     "request_descriptor": {"method": "keep_warm"},
                 }
-            ),
+            )
+
+        timer = threading.Timer(
+            self.keep_warm_deadline_seconds,
+            overrun,
         )
         timer.daemon = True
         timer.start()
         try:
             self._keep_warm_tick()
+            timer.cancel()
+            timer.join()
+            if not expired.is_set() and self._keep_warm_overruns:
+                self._keep_warm_overruns = 0
+                self._keep_warm_retry_after = 0.0
+                self._save_keep_warm_backoff()
         except Exception as exc:
             LOGGER.warning("hybrid helper keep-warm failed: %s", type(exc).__name__)
         finally:

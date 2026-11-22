@@ -790,9 +790,9 @@ def _brainbar_request(socket_path: Path, request: dict[str, Any], timeout_second
     return json.loads(data.decode("utf-8"))
 
 
-def _brainbar_answers_ping(socket_path: Path) -> bool:
+def _brainbar_answers_ping(socket_path: Path, timeout_seconds: float) -> bool:
     try:
-        response = _brainbar_request(socket_path, {"jsonrpc": "2.0", "id": 2, "method": "ping"}, 2.0)
+        response = _brainbar_request(socket_path, {"jsonrpc": "2.0", "id": 2, "method": "ping"}, timeout_seconds)
         return (
             isinstance(response, dict)
             and response.get("id") == 2
@@ -990,7 +990,7 @@ def _apply_heals(
             elif (
                 issue_code == "brain_search_canary_failed"
                 and details.get("timeout")
-                and _brainbar_answers_ping(config.socket_path)
+                and _brainbar_answers_ping(config.socket_path, config.socket_timeout_seconds)
             ):
                 action = _recycle_hybrid_helper(label, command_runner)
             else:
@@ -1693,8 +1693,8 @@ def _run_health_check_locked(
             page_size=config.missing_embedding_page_size,
             max_pages=config.missing_embedding_max_pages,
             instruction_limit=config.missing_embedding_instruction_limit,
-            # Leave the canary its timeout plus finalization headroom.
-            deadline_at=deadline_at - config.socket_timeout_seconds - 1,
+            # Reserve a canary plus an equally budgeted recovery ping and finalization.
+            deadline_at=deadline_at - 2 * config.socket_timeout_seconds - 1,
             monotonic_fn=monotonic_fn,
         )
         if result.missing_embedding_scan.completeness == "complete":

@@ -23,7 +23,7 @@
     },
     {
       "path": "src/brainlayer/health_check.py",
-      "sha256": "851fff03c47679f89ec78873128b723613654a4ba6d044dda82b35aa58903d03"
+      "sha256": "4a1b9f03d9924ba07e2effa9b759699cd197f1326ee00d6b5dd18cfc2e79bfd6"
     }
   ],
   "actions": {
