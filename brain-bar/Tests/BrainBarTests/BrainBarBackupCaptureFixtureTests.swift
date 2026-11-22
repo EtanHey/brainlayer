@@ -1,4 +1,5 @@
 #if DEBUG
+import AppKit
 import XCTest
 import SwiftUI
 @testable import BrainBar
@@ -118,7 +119,42 @@ import SwiftUI
             XCTAssertNotNil(state.status[.drive]?.severity, name)
             XCTAssertTrue(NDPipelineChart.showsProgress(state, progress: i.backupProgress), name)
             XCTAssertEqual(NDPipelineChart.drawingState(state, progress: i.backupProgress).status[.drive], state.status[.drive])
-            XCTAssertEqual(NDPipelineChart.progressFrame(state), CGRect(x: 688, y: 115, width: 96, height: 3))
+            typealias L = NDPipelineLayout
+            let frame = NDPipelineChart.progressFrame(state)
+            let drive = L.point(.drive)
+            let wordsBottom = try XCTUnwrap(L.labelRects(.drive, state).map(\.maxY).max())
+            XCTAssertEqual(frame.midX, drive.x)
+            XCTAssertEqual(frame.size, CGSize(width: 96, height: 3))
+            XCTAssertEqual(frame.minY - wordsBottom, 5, accuracy: 0.01, name)
+            XCTAssertTrue(L.keptSafe.contains(frame), name)
+            for station in NDStation.allCases {
+                for rect in L.labelRects(station, state) { XCTAssertFalse(frame.intersects(rect), "\(name): \(station) text") }
+                XCTAssertFalse(frame.intersects(L.circle(station)), "\(name): \(station) glyph")
+            }
+            for (caption, rect) in L.laneLabelRects() {
+                XCTAssertFalse(frame.intersects(rect.insetBy(dx: -4, dy: -4)), "\(name): \(caption)")
+            }
+            // Use the native font sizes and the same baseline-to-centre placement as Canvas.put, independently
+            // of labelRects' allocated boxes. This catches text extending into the bar despite a stale layout box.
+            let nameSize = NSAttributedString(string: L.name(.drive), attributes: [.font: NSFont.systemFont(ofSize: 13)]).size()
+            let status = try XCTUnwrap(state.status[.drive])
+            let statusSize = NSAttributedString(string: status.text,
+                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)]).size()
+            let nativeBottom = max(drive.y + 29 - 13 * 0.36 + nameSize.height / 2,
+                                   L.statusTop(.drive) + 10 - 11 * 0.36 + statusSize.height / 2)
+            XCTAssertGreaterThanOrEqual(frame.minY - nativeBottom, 4, name)
+            XCTAssertFalse(frame.intersects(L.hub), "\(name): Memory text")
+            XCTAssertFalse(frame.intersects(L.agentsFrame), "\(name): agent labels")
+            XCTAssertFalse(frame.intersects(L.pipelineHeading), "\(name): Pipeline heading")
+            for rect in L.footerTexts { XCTAssertFalse(frame.intersects(rect), "\(name): footer text") }
+            for connection in L.connections {
+                for (a, b) in zip(connection.line.points, connection.line.points.dropFirst()) {
+                    let stroke = CGRect(x: min(a.x, b.x) - 1.25, y: min(a.y, b.y) - 1.25,
+                        width: abs(a.x - b.x) + 2.5, height: abs(a.y - b.y) + 2.5)
+                    XCTAssertFalse(frame.intersects(stroke), "\(name): \(connection.pipe) stroke")
+                }
+            }
+            print("backup free space \(name): bar=\(frame), text bottom=\(wordsBottom), native bottom=\(nativeBottom)")
         }
     }
 

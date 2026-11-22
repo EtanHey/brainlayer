@@ -182,12 +182,14 @@ struct NDPipelineChart: View {
         progress != nil
     }
 
-    /// Gap 22/23: the fault's baseline is y+43. A 3 pt bar at y+51 stays clear of it and the pipe at y=134.
+    /// Gap 22/23: leave 5 pt below the station's measured name/status boxes as the Overview layout moves.
     static func progressFrame(_ state: NDPipelineState) -> CGRect {
         let p = NDPipelineLayout.point(.drive)
-        return state.status[.drive]?.severity != nil
-            ? CGRect(x: p.x - 48, y: p.y + 51, width: 96, height: 3)
-            : CGRect(x: p.x - 76, y: p.y + 37, width: 152, height: 33)
+        if state.status[.drive]?.severity != nil {
+            let wordsBottom = NDPipelineLayout.labelRects(.drive, state).map(\.maxY).max() ?? p.y
+            return CGRect(x: p.x - 48, y: wordsBottom + 5, width: 96, height: 3)
+        }
+        return CGRect(x: p.x - 76, y: p.y + 37, width: 152, height: 33)
     }
 
     static func drawingState(_ state: NDPipelineState, progress: BrainBarBackupProgress?) -> NDPipelineState {
