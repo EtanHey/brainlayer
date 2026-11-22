@@ -17,6 +17,14 @@ size and full-verify schedule, using the conservative non-reclaiming peak.
 That helper already includes the backup's 2 GiB raw floor. Raw
 `free_now_bytes` is measured on the staging volume before and under the lock;
 purgeable capacity, future pruning and streaming reclamation do not count.
+Peak allocation is phase-aware. Snapshot-only reserves raw plus compressed
+space, with no Drive download/restore. Upload-only creates neither file: the
+existing archive is already counted in measured free space. Pending receipt
+metadata selects its verification budget without hashing payloads or changing
+the journal. Streaming hash verification allocates no local payload; legacy
+verification reserves a DB-sized restore and, on full verification, a downloaded
+archive. A batch reserves the largest candidate's additional space; an explicit
+recovery target reserves only that target. The existing 2 GiB floor is retained.
 The 44 GiB build/install floor does not apply to backups.
 Failed or unreadable probes defer work. Pressure is probed before taking a lock,
 then rechecked under it; only admitted work logs took/released. A held lock is
@@ -32,13 +40,18 @@ continues to defer past the pressure window and alerts with "needs N GiB, has
 M GiB". The lock remains held through upload.
 The first deferral raises a durable `backup-daily` (or `backup-snapshot`) job
 alert naming its reason and start time. It survives a stop, SIGKILL or power
-loss; only a later successful backup clears it. Disk shortages atomically
-refresh the same alert's reason without clearing it or sending repeat notices.
+loss; only a later successful backup clears it. Every deferral atomically
+refreshes the same alert to its current disk, pressure, lock or time-window
+cause without clearing it or sending repeat notices.
 A calendar admission deadline
 can still return exit 75 while preserving the alert: pressure overrides cannot
-extend the calendar's hard budget or preempt another lane's lock. Admission reserves at least
-60 seconds of work (or the initial computed budget, if smaller) beside the
-snapshot receipt reserve. Time spent waiting is subtracted from the child's
+extend the calendar's hard budget or preempt another lane's lock. Admission
+reserves the phase's expected work duration beside the snapshot receipt
+reserve: 40 minutes for snapshot, 30 for upload, 70 for all. These configurable
+estimates cover the review's observed snapshot/verify/compression and upload
+ranges; actual network completion remains variable. A smaller available budget
+defers to the next window with an alert; it never shrinks the expected duration
+to fit the remaining time. Time spent waiting is subtracted from the child's
 timeout so it cannot overrun the calendar's outer budget. A weekly snapshot
 can spend its budget waiting and cause later maintenance steps to defer past
 the quiet window; this preserves fleet admission even on that night. Signals
@@ -58,6 +71,9 @@ reserve which also accepts zero):
 | `BRAINLAYER_BACKUP_HEAVY_SWAP_GIB` | 9 |
 | `BRAINLAYER_BACKUP_HEAVY_LOAD` | 12 |
 | `BRAINLAYER_BACKUP_HEAVY_HOST_FREE_GIB` | 40 on M4, 0 on M1; extra reserve above peak |
+| `BRAINLAYER_BACKUP_HEAVY_EXPECTED_SNAPSHOT_SECONDS` | 2400 |
+| `BRAINLAYER_BACKUP_HEAVY_EXPECTED_UPLOAD_SECONDS` | 1800 |
+| `BRAINLAYER_BACKUP_HEAVY_EXPECTED_ALL_SECONDS` | 4200 |
 
 Focused tests use fake resource probes and deterministic time with real lock
 directories inside `.build.noindex/pytest`. They never run a real backup or open

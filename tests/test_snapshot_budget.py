@@ -29,6 +29,7 @@ def db_of_size(tmp_path, monkeypatch):
     from contextlib import nullcontext
 
     monkeypatch.setattr("brainlayer.backup_heavy_gate.backup_heavy_gate", lambda **kw: nullcontext())
+    monkeypatch.setattr("brainlayer.backup_heavy_gate.expected_phase_seconds", lambda: 1)
     monkeypatch.delenv("BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", raising=False)
     monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "missing.env"))
 

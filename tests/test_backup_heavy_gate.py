@@ -15,6 +15,7 @@ from brainlayer import backup_heavy_gate as gate
 from brainlayer import job_alerts
 
 REAL_DISK_REASON = gate._disk_reason
+REAL_EXPECTED_PHASE_SECONDS = gate.expected_phase_seconds
 
 
 @pytest.fixture
@@ -31,11 +32,14 @@ def admission(monkeypatch):
         monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(path / "alerts.json"))
         monkeypatch.delenv(backup.BACKUP_SUPERVISED_CHILD_ENV, raising=False)
         monkeypatch.delenv("BRAINLAYER_BACKUP_PHASE", raising=False)
+        monkeypatch.delenv("BRAINLAYER_BACKUP_UPLOAD_SNAPSHOT", raising=False)
+        monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(path / "journal.log"))
         clock = [0.0]
         monkeypatch.setattr(gate.time, "monotonic", lambda: clock[0])
         monkeypatch.setattr(gate.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
         monkeypatch.setattr(gate, "_pressure_reason", lambda *args: None)
         monkeypatch.setattr(gate, "_disk_reason", lambda host: None)
+        monkeypatch.setattr(gate, "expected_phase_seconds", lambda: 60)
         monkeypatch.setattr(backup, "_configured_backup_timeout_seconds", lambda: 3600)
         yield path, clock
 
@@ -104,7 +108,7 @@ def test_held_lock_expires_with_durable_alert_and_is_never_removed(admission, mo
     assert backup.main() == 75
     assert clock[0] == 20
     assert lock.is_dir()
-    assert "behind the heavy-work gate since " in job_alerts.active_alerts()["backup-daily"]
+    assert "remaining phase window exhausted" in job_alerts.active_alerts()["backup-daily"]
     assert "took" not in (path / "heavy.log").read_text()
 
 
@@ -307,6 +311,127 @@ def test_disk_boundary_accepts_exact_peak_plus_reserve(disk_admission):
     assert REAL_DISK_REASON("m4") is None
     free_gib[0] -= 1 / 1024**3
     assert REAL_DISK_REASON("m4") is not None
+
+
+def upload_receipt(path, *, streaming=False, name="2026-11-22.db.zst"):
+    archive = path / name
+    with archive.open("wb") as stream:
+        stream.truncate(8 * 1024**3)  # Sparse metadata fixture; no payload is read or uploaded.
+    row = {
+        "snapshot": str(archive),
+        "db": str(path / "synthetic.db"),
+        "local_verified": True,
+        "raw_sha256": "a" * 64 if streaming else None,
+    }
+    backup._append_json_log(backup._backup_log_path(None, db_path=path / "synthetic.db"), row)
+    return archive
+
+
+@pytest.mark.parametrize(("phase", "expected"), [("upload", 0), ("all", 75), ("snapshot", 75)])
+def test_upload_at_60_gib_is_admitted_but_snapshot_is_not(disk_admission, monkeypatch, phase, expected):
+    path, _, free_gib = disk_admission
+    free_gib[0] = 60
+    upload_receipt(path)
+    monkeypatch.setenv("BRAINLAYER_BACKUP_PHASE", phase)
+    monkeypatch.setattr(backup, "_configured_backup_timeout_seconds", lambda: 100)
+    monkeypatch.setattr(backup, "_supervise_backup_process", lambda seconds: 0)
+    assert backup.main() == expected
+
+
+def test_upload_streaming_full_verification_needs_no_new_payload_files(disk_admission, monkeypatch):
+    path, _, free_gib = disk_admission
+    free_gib[0] = 43
+    upload_receipt(path, streaming=True)
+    monkeypatch.setenv("BRAINLAYER_BACKUP_PHASE", "upload")
+    monkeypatch.setattr(backup, "_should_run_full_verify", lambda date: True)
+    monkeypatch.setattr(backup, "_database_logical_size_bytes", lambda db: pytest.fail("upload opened DB"))
+    monkeypatch.setattr(backup, "_estimated_gzip_bytes", lambda *args: pytest.fail("upload budgeted compression"))
+    assert REAL_DISK_REASON("m4") is None
+
+
+def test_upload_legacy_full_verification_reserves_only_new_restore_and_download(disk_admission, monkeypatch):
+    path, _, free_gib = disk_admission
+    free_gib[0] = 60
+    upload_receipt(path)
+    monkeypatch.setenv("BRAINLAYER_BACKUP_PHASE", "upload")
+    monkeypatch.setattr(backup, "_should_run_full_verify", lambda date: True)
+    assert "needs 66.001 GiB" in REAL_DISK_REASON("m4")  # 16 restore + 8 download + 2 + 40.
+
+
+def test_upload_budget_covers_batch_candidates_but_honors_selected_target(disk_admission, monkeypatch):
+    path, _, free_gib = disk_admission
+    free_gib[0] = 60
+    selected = upload_receipt(path, streaming=True)
+    upload_receipt(path, name="2026-11-21.db.zst")
+    monkeypatch.setenv("BRAINLAYER_BACKUP_PHASE", "upload")
+    monkeypatch.setattr(backup, "_should_run_full_verify", lambda date: True)
+    assert "needs 66.001 GiB" in REAL_DISK_REASON("m4")
+    monkeypatch.setenv("BRAINLAYER_BACKUP_UPLOAD_SNAPSHOT", selected.name)
+    assert REAL_DISK_REASON("m4") is None
+
+
+def test_alert_tracks_disk_then_pressure_then_lock(disk_admission, monkeypatch):
+    path, clock, free_gib = disk_admission
+    lock = path / "lock"
+    lock.mkdir()
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_WINDOW_SECONDS", "100")
+    monkeypatch.setattr(gate, "_pressure_reason", lambda *args: "swap too high" if clock[0] < 20 else None)
+
+    def sleep(seconds):
+        assert {0: "needs", 10: "swap too high", 20: "lock held"}[clock[0]] in job_alerts.active_alerts()[
+            "backup-daily"
+        ]
+        clock[0] += seconds
+        free_gib[0] = 100
+        if clock[0] == 30:
+            lock.rmdir()
+
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    monkeypatch.setattr(backup, "_supervise_backup_process", lambda seconds: 0)
+    assert backup.main() == 0
+    assert not job_alerts.active_alerts()
+
+
+@pytest.mark.parametrize(("phase", "seconds"), [("snapshot", 2400), ("upload", 1800), ("all", 4200)])
+def test_expected_duration_is_phase_specific(admission, monkeypatch, phase, seconds):
+    monkeypatch.setenv("BRAINLAYER_BACKUP_PHASE", phase)
+    monkeypatch.delenv(f"BRAINLAYER_BACKUP_HEAVY_EXPECTED_{phase.upper()}_SECONDS", raising=False)
+    assert REAL_EXPECTED_PHASE_SECONDS() == seconds
+    monkeypatch.setenv(f"BRAINLAYER_BACKUP_HEAVY_EXPECTED_{phase.upper()}_SECONDS", "123")
+    assert REAL_EXPECTED_PHASE_SECONDS() == 123
+
+
+def test_late_lock_release_cannot_start_a_phase_without_its_expected_budget(admission, monkeypatch):
+    path, clock = admission
+    lock = path / "lock"
+    lock.mkdir()
+    monkeypatch.setenv("BRAINLAYER_BACKUP_PHASE", "upload")
+    monkeypatch.delenv("BRAINLAYER_BACKUP_HEAVY_EXPECTED_UPLOAD_SECONDS", raising=False)
+    monkeypatch.setattr(gate, "expected_phase_seconds", REAL_EXPECTED_PHASE_SECONDS)
+    monkeypatch.setattr(backup, "_configured_backup_timeout_seconds", lambda: 2000)
+
+    def sleep(seconds):
+        clock[0] += seconds
+        if clock[0] >= 210:
+            lock.rmdir()
+
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    monkeypatch.setattr(backup, "_supervise_backup_process", lambda seconds: 0)
+    assert backup.main() == 75
+    assert clock[0] == 200  # Reserve 1800 seconds for upload, never the old 60-second tail.
+    assert "phase window exhausted" in job_alerts.active_alerts()["backup-daily"]
+    assert lock.is_dir()
+
+
+def test_initial_budget_shorter_than_expected_phase_defers_and_alerts(admission, monkeypatch):
+    path, _ = admission
+    monkeypatch.delenv("BRAINLAYER_BACKUP_HEAVY_EXPECTED_ALL_SECONDS", raising=False)
+    monkeypatch.setattr(gate, "expected_phase_seconds", REAL_EXPECTED_PHASE_SECONDS)
+    monkeypatch.setattr(backup, "_configured_backup_timeout_seconds", lambda: 1000)
+    monkeypatch.setattr(backup, "_supervise_backup_process", lambda seconds: pytest.fail("short run started"))
+    assert backup.main() == 75
+    assert "needs 4200s expected work, has 1000s" in job_alerts.active_alerts()["backup-daily"]
+    assert not (path / "lock").exists()
 
 
 def test_unmeasurable_disk_is_not_waived_past_window(disk_admission, monkeypatch):

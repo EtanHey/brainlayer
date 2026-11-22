@@ -69,10 +69,15 @@ def _disk_reason(host: str) -> str | None:
         raise ValueError("BRAINLAYER_BACKUP_HEAVY_HOST_FREE_GIB must be finite and nonnegative")
     try:
         staging = Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(backup.DEFAULT_STAGING_DIR))).expanduser()
-        db_size = backup._database_logical_size_bytes(backup.get_db_path())
-        compressed = backup._estimated_gzip_bytes(staging, db_size) if staging.exists() else db_size
-        # Budget the non-reclaiming peak; never rely on future pruning or raw reclamation.
-        peak = backup._peak_backup_required_bytes(db_size, compressed, full=backup._should_run_full_verify(None))
+        phase = os.environ.get("BRAINLAYER_BACKUP_PHASE", "all")
+        full = backup._should_run_full_verify(None)
+        if phase == "upload":
+            peak = _upload_peak_bytes(staging, full=full)
+        else:
+            db_size = backup._database_logical_size_bytes(backup.get_db_path())
+            compressed = backup._estimated_gzip_bytes(staging, db_size) if staging.exists() else db_size
+            # Snapshot-only has no Drive download/restore phase.
+            peak = backup._peak_backup_required_bytes(db_size, compressed, full=full and phase != "snapshot")
         required = peak + math.ceil(floor_gib * 1024**3)
         volume_path = staging
         while not volume_path.exists():
@@ -86,6 +91,47 @@ def _disk_reason(host: str) -> str | None:
             f"(peak plus {floor_gib:g} GiB host floor)"
         )
     return None
+
+
+def _upload_peak_bytes(staging: Path, *, full: bool) -> int:
+    """Count only NEW verification files; existing local archives already occupy free space.
+
+    Inspect receipt metadata, never hash payloads or mutate the journal before admission.
+    Budget all possible pending candidates because upload-only can drain them sequentially.
+    """
+    from . import backup_daily as backup
+
+    db = backup.get_db_path()
+    log = backup._backup_log_path(None, db_path=db)
+    rows = backup._read_backup_receipts(log) if log.exists() else []
+    latest = {row["snapshot"]: row for row in rows if isinstance(row.get("snapshot"), str)}
+    target = os.environ.get("BRAINLAYER_BACKUP_UPLOAD_SNAPSHOT")
+    extra = []
+    for row in latest.values():
+        path = Path(row["snapshot"])
+        if (
+            row.get("db") != str(db)
+            or row.get("local_verified") is not True
+            or (row.get("uploaded") is True and row.get("verified") is True)
+            or path.parent.resolve() != staging.resolve()
+            or (target is not None and path.name != target)
+            or path.is_symlink()
+            or not path.is_file()
+        ):
+            continue
+        if row.get("raw_sha256") is not None:
+            extra.append(0)  # verify_sqlite_backup_artifact streams hashes, including Drive.
+        else:
+            extra.append(backup._database_logical_size_bytes(db) + (path.stat().st_size if full else 0))
+    return max(extra, default=0) + backup.MIN_RAW_FREE_BYTES + backup.COPY_CHUNK_BYTES
+
+
+def expected_phase_seconds() -> float:
+    phase = os.environ.get("BRAINLAYER_BACKUP_PHASE", "all")
+    defaults = {"snapshot": 2400, "upload": 1800, "all": 4200}
+    if phase not in defaults:
+        raise ValueError("backup phase must be all, snapshot, or upload")
+    return _number(f"EXPECTED_{phase.upper()}_SECONDS", defaults[phase])
 
 
 def _log(path: Path, action: str) -> None:
@@ -120,7 +166,6 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
     last_reason = "pressure admission window elapsed"
     owned = False
     admitted = False
-    alerted = False
     previous = {}
 
     def stopped(signum, _frame):
@@ -132,7 +177,10 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
         while True:
             if time.monotonic() >= expires:
                 hours = (time.monotonic() - started) / 3600
-                raise BackupGateDeferred(f"backup deferred {hours:g} h by the heavy-work gate")
+                raise BackupGateDeferred(
+                    f"backup deferred {hours:g} h by the heavy-work gate since {since}: remaining phase window exhausted; "
+                    f"last cause: {last_reason}"
+                )
             past_window = time.monotonic() >= pressure_window_end
             disk_reason = _disk_reason(host)
             reason = disk_reason or (None if past_window else _pressure_reason(swap_limit, load_limit))
@@ -156,13 +204,11 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                         reason = "calendar admission deadline elapsed during resource probe"
                     lock.rmdir()
                     owned = False
-            if not alerted or disk_reason:
-                report(
-                    job_key,
-                    f"backup waiting behind the heavy-work gate since {since}: {reason}",
-                    replace_reason=bool(disk_reason),
-                )
-                alerted = True
+            report(
+                job_key,
+                f"backup waiting behind the heavy-work gate since {since}: {reason}",
+                replace_reason=True,
+            )
             last_reason = reason
             _log(log, f"deferred: {reason}; retry in {retry:g}s")
             print(f"brainlayer backup deferred: {reason}", flush=True)

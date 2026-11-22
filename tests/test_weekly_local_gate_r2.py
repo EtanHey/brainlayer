@@ -358,6 +358,7 @@ def test_snapshot_entrypoint_uses_own_alert_and_timeout(monkeypatch):
     from contextlib import nullcontext
 
     monkeypatch.setattr("brainlayer.backup_heavy_gate.backup_heavy_gate", lambda **kwargs: nullcontext())
+    monkeypatch.setattr("brainlayer.backup_heavy_gate.expected_phase_seconds", lambda: 1)
     monkeypatch.setenv("BRAINLAYER_BACKUP_PHASE", "snapshot")
     monkeypatch.setenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "28800")
     monkeypatch.setenv("BRAINLAYER_BACKUP_CALENDAR_SNAPSHOT_BUDGET_SECONDS", "58")

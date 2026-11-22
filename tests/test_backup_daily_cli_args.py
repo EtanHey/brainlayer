@@ -54,6 +54,7 @@ def test_bare_and_run_invocations_still_run(monkeypatch, argv):
     from brainlayer import backup_heavy_gate
 
     monkeypatch.setattr(backup_heavy_gate, "backup_heavy_gate", lambda **kw: nullcontext())
+    monkeypatch.setattr(backup_heavy_gate, "expected_phase_seconds", lambda: 1)
     ran: list[int] = []
     monkeypatch.setattr(sys, "argv", ["pytest", "--help"])  # library callers never read sys.argv
     monkeypatch.setattr(job_alerts, "report", lambda key, reason: None)

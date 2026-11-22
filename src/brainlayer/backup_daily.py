@@ -4570,6 +4570,11 @@ def main(argv: list[str] | None = None) -> int:
             # Startup so far is charged against the calendar's clock, not added on top of it.
             work = math.floor(deadline - time.monotonic() - SNAPSHOT_RECEIPT_RESERVE_SECONDS)
             if work < 1:
+                from .job_alerts import report
+
+                report(
+                    "backup-snapshot", "Backup deferred: no work budget before calendar deadline", replace_reason=True
+                )
                 print(
                     "brainlayer backup-snapshot deferred: no positive work budget plus the "
                     f"{SNAPSHOT_RECEIPT_RESERVE_SECONDS}s receipt reserve fits before the calendar deadline",
@@ -4579,13 +4584,18 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds = min(timeout_seconds, work)
     if _env_flag_enabled(BACKUP_SUPERVISED_CHILD_ENV):
         return _run_backup_process(timeout_seconds)
-    from .backup_heavy_gate import BackupGateDeferred, backup_heavy_gate
+    from .backup_heavy_gate import BackupGateDeferred, backup_heavy_gate, expected_phase_seconds
     from .job_alerts import report
 
     key = "backup-snapshot" if snapshot_phase else "backup-daily"
     try:
         admission_started = time.monotonic()
-        minimum_work = min(timeout_seconds, 60)
+        minimum_work = expected_phase_seconds()
+        if timeout_seconds < minimum_work:
+            raise BackupGateDeferred(
+                f"backup phase {os.environ.get('BRAINLAYER_BACKUP_PHASE', 'all')} deferred: "
+                f"needs {minimum_work:g}s expected work, has {timeout_seconds:g}s in this window"
+            )
         admission_deadline = (
             deadline - SNAPSHOT_RECEIPT_RESERVE_SECONDS - minimum_work
             if deadline is not None
@@ -4598,7 +4608,7 @@ def main(argv: list[str] | None = None) -> int:
             )
     except BackupGateDeferred as exc:
         print(str(exc), flush=True)
-        report(key, str(exc))
+        report(key, str(exc), replace_reason=True)
         return BACKUP_DEFERRED_EXIT_CODE
     except Exception:
         report(key, "Database backup failed; check the backup log")

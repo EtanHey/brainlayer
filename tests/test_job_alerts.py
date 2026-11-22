@@ -162,6 +162,7 @@ def test_database_backup_exit_reports_and_clears(monkeypatch):
     from brainlayer import backup_daily, job_alerts
 
     monkeypatch.setattr("brainlayer.backup_heavy_gate.backup_heavy_gate", lambda **kwargs: nullcontext())
+    monkeypatch.setattr("brainlayer.backup_heavy_gate.expected_phase_seconds", lambda: 1)
     notices = []
     monkeypatch.setattr(job_alerts, "report", lambda key, reason: notices.append((key, reason)))
     monkeypatch.setattr(backup_daily, "_env_flag_enabled", lambda key: False)
