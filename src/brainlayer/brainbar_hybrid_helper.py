@@ -12,7 +12,9 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
+import random
 import re
 import signal
 import socket
@@ -41,6 +43,14 @@ LOGGER = logging.getLogger(__name__)
 # a warm 0%-CPU replacement), so recycling costs a warmup and loses no durable state.
 _DEFAULT_REQUEST_DEADLINE_SECONDS = 90.0
 _REQUEST_DEADLINE_EXIT_CODE = 75  # EX_TEMPFAIL -- "retryable", not a config error
+
+
+def _positive_env_seconds(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, default))
+        return value if math.isfinite(value) and value > 0 else default
+    except ValueError:
+        return default
 
 
 def _request_deadline_default() -> float:
@@ -132,6 +142,51 @@ class HybridSearchHelper:
         self._stopped = False
         self._warm_called = False
         self._ready = False
+        self.keep_warm_interval_seconds = _positive_env_seconds("BRAINLAYER_HYBRID_KEEP_WARM_S", 60.0)
+        self.keep_warm_deadline_seconds = _positive_env_seconds("BRAINLAYER_HYBRID_KEEP_WARM_DEADLINE_S", 10.0)
+        self._next_keep_warm = self._keep_warm_at()
+        self.last_keep_warm_cost: dict[str, float] | None = None
+
+    def _keep_warm_at(self) -> float:
+        return time.monotonic() + self.keep_warm_interval_seconds * random.uniform(0.9, 1.1)
+
+    def _keep_warm_tick(self) -> None:
+        from brainlayer.mcp._shared import _get_embedding_model, _get_search_vector_store
+
+        _get_embedding_model().embed_query("warm")
+        store = _get_search_vector_store()
+        table = "chunk_vectors_binary" if store._binary_index_available else "chunk_vectors"
+        store._read_cursor().execute(f"SELECT rowid FROM {table} LIMIT 1").fetchone()
+
+    def _keep_warm_if_due(self) -> None:
+        # Called only by the serial accept loop on an idle timeout. A tick cannot
+        # overlap a request or another tick, even when embedding releases the GIL.
+        if not self._ready or time.monotonic() < self._next_keep_warm:
+            return
+        started, cpu_started = time.monotonic(), time.process_time()
+        timer = threading.Timer(
+            self.keep_warm_deadline_seconds,
+            lambda: self._on_deadline_expired(
+                {
+                    "elapsed_seconds": time.monotonic() - started,
+                    "deadline_seconds": self.keep_warm_deadline_seconds,
+                    "request_descriptor": {"method": "keep_warm"},
+                }
+            ),
+        )
+        timer.daemon = True
+        timer.start()
+        try:
+            self._keep_warm_tick()
+        except Exception as exc:
+            LOGGER.warning("hybrid helper keep-warm failed: %s", type(exc).__name__)
+        finally:
+            timer.cancel()
+            self.last_keep_warm_cost = {
+                "wall_seconds": time.monotonic() - started,
+                "cpu_seconds": time.process_time() - cpu_started,
+            }
+            self._next_keep_warm = self._keep_warm_at()
 
     def _dispatch_with_deadline(self, request: dict[str, Any]) -> dict[str, Any]:
         """Run one request under a hard wall-clock deadline.
@@ -177,6 +232,7 @@ class HybridSearchHelper:
         warmup_query = "brainbar hybrid helper warmup"
         model.embed_query(warmup_query)
         self._ready = True
+        self._next_keep_warm = self._keep_warm_at()
 
     def serve_forever(self) -> None:
         if self.socket_path.exists():
@@ -194,6 +250,7 @@ class HybridSearchHelper:
                 try:
                     conn, _ = server.accept()
                 except TimeoutError:
+                    self._keep_warm_if_due()
                     continue
                 except OSError:
                     if self._stopped:

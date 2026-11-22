@@ -646,3 +646,15 @@ one only when the listing holds exactly one untrashed object of the same name, s
 reconciliation and it cannot delete anything in the run that writes it. An existing
 receipt, including a legacy one, is never replaced. Runs report the names written in
 `local_retention_reconciled`.
+
+### Hybrid helper keep-warm
+
+`BRAINLAYER_HYBRID_KEEP_WARM_S` sets the idle keep-warm interval (default 60 seconds,
+jittered by 10%). The serial helper embeds a tiny query and reads one vector-index row
+between client connections. It never runs a tick concurrently with a request.
+`BRAINLAYER_HYBRID_KEEP_WARM_DEADLINE_S` bounds each tick (default 10 seconds);
+a wedged tick exits with code 75 so BrainBar can respawn the helper. Tick failures are
+logged; successful ticks record CPU and wall time in memory without logging.
+Both settings require finite positive seconds; invalid values use the defaults.
+On a search-canary timeout, health-check healing pings the daemon. A responsive daemon
+keeps its connections while only its identified hybrid-helper child is recycled.
