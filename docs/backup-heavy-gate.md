@@ -17,11 +17,16 @@ then rechecked under it; only admitted work logs took/released. A held lock is
 never removed, including a stale one.
 Only orc may clear another lane's stale lock after its age/process checks.
 
-The parent retries every ten minutes for up to six hours, logging each reason.
+The parent retries every ten minutes within a six-hour pressure window, logging
+each reason. At the end of that window it runs despite swap/load pressure, but
+still waits for and takes the host lock. It logs that it is running past the
+window and the last deferral reason. This prevents pressure alone from causing
+a missed nightly backup. The lock remains held through upload.
 The first deferral raises a durable `backup-daily` (or `backup-snapshot`) job
 alert naming its reason and start time. It survives a stop, SIGKILL or power
-loss; only a later successful backup clears it. Expiry logs the elapsed wait
-and returns exit 75, retaining that first alert. Admission reserves at least
+loss; only a later successful backup clears it. A calendar admission deadline
+can still return exit 75 while preserving the alert: pressure overrides cannot
+extend the calendar's hard budget or preempt another lane's lock. Admission reserves at least
 60 seconds of work (or the initial computed budget, if smaller) beside the
 snapshot receipt reserve. Time spent waiting is subtracted from the child's
 timeout so it cannot overrun the calendar's outer budget. A weekly snapshot

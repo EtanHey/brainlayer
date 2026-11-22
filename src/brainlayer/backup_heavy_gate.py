@@ -88,7 +88,9 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
     load_limit = _number("LOAD", 12)
     started = time.monotonic()
     since = datetime.now().astimezone().isoformat(timespec="seconds")
-    expires = min(started + window, deadline) if deadline is not None else started + window
+    pressure_window_end = started + window
+    expires = deadline if deadline is not None else float("inf")
+    last_reason = "pressure admission window elapsed"
     owned = False
     admitted = False
     alerted = False
@@ -104,7 +106,8 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
             if time.monotonic() >= expires:
                 hours = (time.monotonic() - started) / 3600
                 raise BackupGateDeferred(f"backup deferred {hours:g} h by the heavy-work gate")
-            reason = _pressure_reason(swap_limit, load_limit)
+            past_window = time.monotonic() >= pressure_window_end
+            reason = None if past_window else _pressure_reason(swap_limit, load_limit)
             if reason is None:
                 try:
                     lock.mkdir()
@@ -112,22 +115,26 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                     reason = "heavy lock held by another lane (never cleared by backup)"
                 else:
                     owned = True
-                    reason = _pressure_reason(swap_limit, load_limit)
+                    reason = None if past_window else _pressure_reason(swap_limit, load_limit)
                     if reason is None and time.monotonic() < expires:
                         admitted = True
                         _log(log, "took")
+                        if past_window:
+                            _log(log, f"running past window after {window:g}s; ignoring swap/load: {last_reason}")
                         yield
                         return
                     if reason is None:
-                        reason = "admission window elapsed during resource probe"
+                        reason = "calendar admission deadline elapsed during resource probe"
                     lock.rmdir()
                     owned = False
             if not alerted:
                 report(job_key, f"backup waiting behind the heavy-work gate since {since}: {reason}")
                 alerted = True
+            last_reason = reason
             _log(log, f"deferred: {reason}; retry in {retry:g}s")
             print(f"brainlayer backup deferred: {reason}", flush=True)
-            time.sleep(min(retry, max(0, expires - time.monotonic())))
+            wake_at = expires if past_window else min(expires, pressure_window_end)
+            time.sleep(min(retry, max(0, wake_at - time.monotonic())))
     finally:
         try:
             if owned:

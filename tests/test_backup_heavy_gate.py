@@ -74,6 +74,7 @@ def test_held_lock_expires_with_durable_alert_and_is_never_removed(admission, mo
     path, clock = admission
     lock = path / "lock"
     lock.mkdir()
+    monkeypatch.setattr(backup, "_configured_backup_timeout_seconds", lambda: 80)  # hard budget, 60s reserved
     monkeypatch.setattr(backup, "_supervise_backup_process", lambda *a, **kw: pytest.fail("backup started"))
     assert backup.main() == 75
     assert clock[0] == 20
@@ -133,17 +134,47 @@ def test_probe_failure_is_closed(monkeypatch):
     assert gate._pressure_reason(9, 12) == "swap usage unavailable"
 
 
-def test_closed_pressure_expires_releases_and_recovers(admission, monkeypatch):
-    path, _ = admission
+def test_pressure_window_ends_runs_under_lock_and_clears_alert_on_success(admission, monkeypatch):
+    path, clock = admission
     monkeypatch.setattr(gate, "_pressure_reason", lambda *args: "swap too high")
-    monkeypatch.setattr(backup, "_supervise_backup_process", lambda *args: pytest.fail("backup started"))
-    assert backup.main() == 75
-    assert not (path / "lock").exists()
-    assert "backup-daily" in job_alerts.active_alerts()
-    monkeypatch.setattr(gate, "_pressure_reason", lambda *args: None)
-    monkeypatch.setattr(backup, "_supervise_backup_process", lambda *args: 0)
+
+    def run(seconds):
+        assert clock[0] == 20
+        assert (path / "lock").is_dir()
+        assert "swap too high" in job_alerts.active_alerts()["backup-daily"]
+        assert seconds == 3580
+        return 0
+
+    monkeypatch.setattr(backup, "_supervise_backup_process", run)
     assert backup.main() == 0
     assert not job_alerts.active_alerts()
+    assert not (path / "lock").exists()
+    assert "running past window" in (path / "heavy.log").read_text()
+    assert "ignoring swap/load: swap too high" in (path / "heavy.log").read_text()
+
+
+def test_past_window_still_waits_for_another_lanes_lock(admission, monkeypatch):
+    path, clock = admission
+    lock = path / "lock"
+    lock.mkdir()
+    monkeypatch.setattr(gate, "_pressure_reason", lambda *args: "load too high")
+
+    def sleep(seconds):
+        clock[0] += seconds
+        if clock[0] == 30:
+            lock.rmdir()  # The simulated owner releases, never the backup.
+
+    def run(seconds):
+        assert clock[0] == 30
+        assert lock.is_dir()
+        assert "backup-daily" in job_alerts.active_alerts()
+        return 1
+
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    monkeypatch.setattr(backup, "_supervise_backup_process", run)
+    assert backup.main() == 1
+    assert not lock.exists()
+    assert "backup-daily" in job_alerts.active_alerts()  # A failed forced run never clears it.
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "0", "-1"])
@@ -191,6 +222,7 @@ REAL_PRESSURE_REASON = gate._pressure_reason
 def test_no_lock_churn_when_pressure_is_closed(admission, monkeypatch):
     path, _ = admission
     monkeypatch.setattr(gate, "_pressure_reason", lambda *args: "swap too high")
+    monkeypatch.setattr(backup, "_configured_backup_timeout_seconds", lambda: 80)
     assert backup.main() == 75
     log = (path / "heavy.log").read_text()
     assert "took" not in log and "released" not in log
