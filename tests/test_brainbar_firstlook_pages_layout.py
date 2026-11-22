@@ -78,7 +78,9 @@ def test_activity_header_stays_22_points_and_scale_stays_inline():
     source = (ROOT / "NewDesign/NDWindow.swift").read_text()
     assert "static let headerHeight: CGFloat = 22" in source
     assert ".frame(height: Self.headerHeight)" in source
-    header = source.split("@ViewBuilder private func chart(", 1)[1].split(".accessibilityElement(children: .combine)", 1)[0]
+    header = source.split("@ViewBuilder private func chart(", 1)[1].split(
+        ".accessibilityElement(children: .combine)", 1
+    )[0]
     assert ".lineLimit(1)" in header
     legend = source.split("private func legend(color:", 1)[1].split("/// The hover readout", 1)[0]
     assert "VStack" not in legend
@@ -122,7 +124,7 @@ def test_retention_errors_cannot_be_housekeeping():
     producer = (ROOT.parents[2] / "src/brainlayer/jsonl_backup.py").read_text()
     assert 'report("jsonl-retention", result.get("local_retention_error"))' in producer
     notifications = (ROOT / "BrainBarFaultNotifications.swift").read_text()
-    assert 'next[id] = .init(id: id, title: message, causes: [cause])' in notifications
+    assert "next[id] = .init(id: id, title: message, causes: [cause])" in notifications
 
 
 def test_invented_retention_error_stays_in_log_and_active_job_alert(tmp_path):

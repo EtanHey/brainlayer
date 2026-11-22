@@ -340,7 +340,7 @@ import SwiftUI
     }
 
     /// The window: classic keeps main's hosting controller and root type; new swaps in its own and swaps back.
-    func testWindowRootIsMainsInClassicAndSwapsLive() throws {
+    func testWindowRootIsMainsInClassicAndSwapsLive() async throws {
         _ = defaults()
         let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
                                                           designDefaults: brainBarLegacyMenuDefaults())
@@ -353,7 +353,11 @@ import SwiftUI
         let d = defaults()
         d.set("new", forKey: BrainBarDesign.key)
         controller.designDefaults = d
-        controller.applyDesign()
+        NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: d)
+        XCTAssertTrue(controller.windowForTesting.contentViewController === classic, "defaults notifications never swap reentrantly")
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
         let new = try XCTUnwrap(controller.windowForTesting.contentViewController)
         XCTAssertTrue(String(describing: type(of: new)).contains("NDWindowRoot"), String(describing: type(of: new)))
         // Review blocker 1: one unified 52 pt row, the pages control centred in the toolbar.
@@ -384,7 +388,11 @@ import SwiftUI
         XCTAssertFalse(controller.isShownForTesting, "a design switch never opens the window")
 
         d.set("classic", forKey: BrainBarDesign.key)
-        controller.applyDesign()
+        NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: d)
+        XCTAssertTrue(controller.windowForTesting.contentViewController === new, "the current mutation completes before swapping")
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
         XCTAssertTrue(controller.windowForTesting.contentViewController === classic)
         XCTAssertEqual(controller.windowForTesting.minSize, BrainBarDashboardPanelController.minSize)
         XCTAssertNil(controller.windowForTesting.toolbar, "Classic's chrome is main's: no toolbar")

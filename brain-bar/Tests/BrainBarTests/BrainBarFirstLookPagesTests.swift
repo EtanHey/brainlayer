@@ -184,6 +184,13 @@ import XCTest
             input.scheduleInterval = 82800
             XCTAssertTrue(NDJobLaneView.jobHelp(input, job: job, capture: capture).hasSuffix("Runs daily at 04:00."),
                           "a daylight-saving transition does not turn a calendar job into a 23-hour timer")
+            for calendar in [DateComponents(minute: 0), DateComponents(day: 1, hour: 4), DateComponents(hour: 4, weekday: 2)] {
+                input.scheduleCalendar = calendar
+                input.scheduleInterval = 3600
+                let help = NDJobLaneView.jobHelp(input, job: job, capture: capture)
+                XCTAssertTrue(help.hasSuffix("Runs every 1\u{00A0}h."), help)
+                XCTAssertFalse(help.contains("Runs daily"), help)
+            }
         }
     }
 

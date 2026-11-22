@@ -283,7 +283,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         applyDesign()
         designObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil,
                                                                 queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.applyDesign() }
+            DispatchQueue.main.async { [weak self] in self?.applyDesign() }
         }
 #endif
     }

@@ -350,12 +350,12 @@ import SwiftUI
     /// selection starts next. Periodic ticks cannot replace a pending user selection.
     func refreshWaves(force: Bool = false, applyWhileHeld: Bool = false) {
         guard iconActive || windowActive else { return }
-        let fetch: @Sendable (Int, Int) async -> BrainDatabase.PipelineWindowBuckets?
-        if let injected = fetchWaveBuckets { fetch = injected }
+        let readBuckets: @Sendable (Int, Int) async -> BrainDatabase.PipelineWindowBuckets?
+        if let injected = fetchWaveBuckets { readBuckets = injected }
         else {
             guard !isFixture, let collector = runtime?.collector else { return }
             let provider = collector.bucketsProvider
-            fetch = { minutes, count in await collector.fetchBuckets(windowMinutes: minutes, bucketCount: count, provider: provider) }
+            readBuckets = { minutes, count in await collector.fetchBuckets(windowMinutes: minutes, bucketCount: count, provider: provider) }
         }
         let now = waveNow()
         if !force, waveTask != nil { return }
@@ -374,8 +374,8 @@ import SwiftUI
             let sampledAt = self.waveNow()
             self.lastWaveFetch = sampledAt
             let read = Task<(WaveBuckets, WaveBuckets), Never> {
-                async let menu = fetch(60, 24)
-                async let hero = wantsHero ? fetch(range.minutes, 60) : nil
+                async let menu = readBuckets(60, 24)
+                async let hero = wantsHero ? readBuckets(range.minutes, 60) : nil
                 return await (menu, hero)
             }
             self.waveRead = (generation, read)
