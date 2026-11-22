@@ -2229,6 +2229,15 @@ def test_drive_upload_that_blocks_forever_fails_loudly_with_confirmed_bytes(tmp_
     assert logged["error_type"] == "drive_upload_stalled"
     assert logged["error_code"] == "drive_upload_stalled"
     assert logged["bytes_confirmed"] == 3
+    checkpoint = datetime.fromisoformat(logged["bytes_confirmed_at"])
+    assert checkpoint.tzinfo is not None
+    checkpoints = [
+        row["bytes_confirmed_at"]
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if (row := json.loads(line)).get("bytes_confirmed") == 3
+    ]
+    assert len(checkpoints) > 1
+    assert len(set(checkpoints)) == 1, "A stalled heartbeat must not freshen the last byte movement"
     assert logged["uploaded"] is False
     assert logged["verified"] is False
     assert _daily_snapshot([{**logged, "backup_log_provenance": "real"}])[1] == "drive_upload_stalled"
