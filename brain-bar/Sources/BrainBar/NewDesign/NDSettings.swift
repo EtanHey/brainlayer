@@ -90,6 +90,11 @@ struct NDSettingsView: View {
     var configPath: String = "~/.config/brainlayer/brainlayer.env"
     private typealias Say = BrainBarMenuPresenter.SurfaceSay
 
+    static func designIndex(for stored: String) -> Int {
+        let resolved = BrainBarDesign(rawValue: stored) ?? BrainBarDesign.defaultValue
+        return BrainBarDesign.allCases.firstIndex(of: resolved)!
+    }
+
     var body: some View {
         let modelLines = BrainBarSettingsExplanation.model(BrainBarEmbeddingModel.configuredName)
         VStack(spacing: 0) {
@@ -100,7 +105,7 @@ struct NDSettingsView: View {
                     row(Say.design) {
                         Spacer()
                         NDSegments(titles: BrainBarDesign.allCases.map(\.title),
-                                   selection: Binding(get: { BrainBarDesign.allCases.firstIndex { $0.rawValue == design } ?? 0 },
+                                   selection: Binding(get: { Self.designIndex(for: design) },
                                                       set: { design = BrainBarDesign.allCases[$0].rawValue }),
                                    accessibilityLabel: Say.design, fontSize: 11, padding: 10, controlSize: .small)
                             .fixedSize()

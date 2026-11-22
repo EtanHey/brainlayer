@@ -1283,7 +1283,12 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
                 controller.stop()
             }
         }
-        let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
+        let suite = "BrainBarClassicGoldenPanel." + UUID().uuidString
+        let panelDefaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { panelDefaults.removePersistentDomain(forName: suite) }
+        panelDefaults.set("classic", forKey: BrainBarDesign.key)
+        let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
+                                                     designDefaults: panelDefaults)
         // The root's type, structurally everywhere (main's hosting controller around main's root view); its exact spelling,
         // which follows the Swift toolchain's type printing, only where the golden was recorded.
         let rootType = String(describing: type(of: panel.contentViewControllerForTesting))
@@ -2129,8 +2134,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertEqual(NDPipelineLayout.agentRows.map { NDProvider.name($0.0) }, ["Claude", "Codex", "Cursor", "Antigravity"])
         let chart = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDPipelineChart.swift"), encoding: .utf8)
-        XCTAssertTrue(chart.contains(".help(NDProvider.name(family))"))
-        XCTAssertTrue(chart.contains(".accessibilityLabel(NDProvider.name(family))"))
+        let providers = try XCTUnwrap(chart.components(separatedBy: "ForEach(NDPipelineLayout.agentRows").last?.components(separatedBy: ".position(c)").first)
+        XCTAssertTrue(providers.contains(".allowsHitTesting(false)"))
+        XCTAssertFalse(providers.contains(".help(NDProvider.name(family))"))
+        XCTAssertTrue(providers.contains(".accessibilityLabel(NDProvider.name(family))"))
         for family in AgentFamily.allCases {
             let icon = NDProvider.icon(family)
             let path = NDSVGPath.path(icon.path, viewBox: icon.viewBox, in: CGRect(x: 0, y: 0, width: 16, height: 16))

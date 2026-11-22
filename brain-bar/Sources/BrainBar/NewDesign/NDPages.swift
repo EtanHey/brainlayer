@@ -579,7 +579,7 @@ struct NDJobLaneView: View {
         let cadence: String
         if input?.runsFrequently == true {
             cadence = Say.runsEveryFewMinutes
-        } else if let calendar = input?.scheduleCalendar, calendar.hour != nil, calendar.day == nil,
+        } else if let calendar = input?.scheduleCalendar, calendar.hour != nil, calendar.month == nil, calendar.day == nil,
                   calendar.weekday == nil, let next = input?.nextRun {
             let clock = NDR1.hhmm(next, capture)
             cadence = Say.runsDailyAt(clock)

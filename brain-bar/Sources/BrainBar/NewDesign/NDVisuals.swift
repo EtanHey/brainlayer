@@ -504,14 +504,27 @@ struct NDRail: View {
     var olderLabel: String? = nil
     var nowLine = true
 
-    static func baselineFrame(width: CGFloat, olderLabelWidth: CGFloat) -> CGRect {
-        let start = olderLabelWidth > 0 ? min(width, olderLabelWidth + 8) : 0
-        return CGRect(x: start, y: 6.5, width: max(0, width - start), height: 1)
+    static let olderLabelGap: CGFloat = 8
+
+    static func olderLabelFrame(width: CGFloat) -> CGRect {
+        CGRect(x: -width - olderLabelGap, y: 0, width: width, height: 14)
+    }
+
+    static func baselineFrame(width: CGFloat) -> CGRect {
+        CGRect(x: 0, y: 6.5, width: max(0, width), height: 1)
     }
 
     var body: some View {
         Canvas { ctx, size in draw(ctx, size) }
             .frame(height: 14)
+            .overlay(alignment: .leading) {
+                if let older = events.first(where: { $0.hours < -past }), let words = olderLabel {
+                    Text(words).font(older.kind == .fail ? NDType.captionStrong : NDType.caption)
+                        .foregroundStyle(older.kind == .fail ? ND.redText : palette.ink2)
+                        .fixedSize()
+                        .alignmentGuide(.leading) { size in -Self.olderLabelFrame(width: size.width).minX }
+                }
+            }
             .overlay {
                 GeometryReader { geo in
                     ForEach(Array(events.enumerated()), id: \.offset) { _, event in
@@ -526,7 +539,13 @@ struct NDRail: View {
             .accessibilityHidden(true)
     }
 
-    private func x(_ h: Double, _ w: CGFloat) -> CGFloat { CGFloat((h + past) / (past + ahead)) * w }
+    static func timePosition(_ hours: Double, width: CGFloat, past: Double, ahead: Double) -> CGFloat {
+        CGFloat((hours + past) / (past + ahead)) * width
+    }
+
+    private func x(_ h: Double, _ w: CGFloat) -> CGFloat {
+        Self.timePosition(h, width: w, past: past, ahead: ahead)
+    }
 
     /// Fix 15: when the last run and the next run both sit within 6 pt of now, the rail draws only the next-run ring
     /// (the two marks would overprint); the lane's sentence still says both.
@@ -538,17 +557,9 @@ struct NDRail: View {
 
     private func draw(_ ctx: GraphicsContext, _ size: CGSize) {
         let w = size.width, mid: CGFloat = 7, nowX = x(0, w)
-        let olderEvent = events.first { $0.hours < -past }
-        let label = olderEvent.flatMap { event in
-            olderLabel.map { words in
-                ctx.resolve(Text(words).font(event.kind == .fail ? NDType.captionStrong : NDType.caption)
-                    .foregroundColor(event.kind == .fail ? ND.redText : palette.ink2))
-            }
-        }
-        let line = Self.baselineFrame(width: w, olderLabelWidth: label?.measure(in: size).width ?? 0)
+        let line = Self.baselineFrame(width: w)
         let start = line.minX
         ctx.fill(Path(line), with: .color(ND.hair2))
-        if let label { ctx.draw(label, at: CGPoint(x: 0, y: mid), anchor: .leading) }
         if unknown {
             var p = Path(); p.move(to: CGPoint(x: start, y: mid)); p.addLine(to: CGPoint(x: max(start, nowX), y: mid))
             ctx.stroke(p, with: .color(palette.ink2), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))

@@ -126,10 +126,59 @@ import XCTest
         }
     }
 
-    func testOlderLabelAndBaselineDoNotOverlap() {
-        let line = NDRail.baselineFrame(width: 200, olderLabelWidth: 36)
-        XCTAssertGreaterThan(line.minX, 36)
+    func testOlderLabelAndBaselineDoNotOverlap() throws {
+        let line = NDRail.baselineFrame(width: 200)
+        let label = NDRail.olderLabelFrame(width: 36)
+        XCTAssertLessThan(label.maxX, line.minX)
+        XCTAssertEqual(line.minX, 0)
         XCTAssertEqual(line.maxX, 200)
+        var inputs = BrainBarDesignFixture.inputs(.nightlyFailing)
+        inputs.jobs = [.init(job: .maintenanceNightly, enabled: true, continuous: false,
+                            lastRun: inputs.capture.now.addingTimeInterval(-11 * 3600), nextRun: nil,
+                            loaded: true, lastOutcome: .failed)]
+        let store = NDStore(fixture: inputs)
+        let lane = try XCTUnwrap(NDJobsPage(store: store).lanes(store.model).first)
+        XCTAssertEqual(lane.streak, 3)
+        XCTAssertNotNil(lane.olderLabel)
+        let dot = try XCTUnwrap(lane.events.first { $0.kind == .fail && $0.hours == -35 })
+        let dotX = NDRail.timePosition(dot.hours, width: 200, past: NDJobsPage.past, ahead: NDJobsPage.ahead)
+        XCTAssertEqual(dotX, 200 / 48, accuracy: 0.01, "time coordinates stay on the shared axis")
+        XCTAssertLessThan(label.maxX, dotX - 3.5, "older-count slot clears the left-edge failure dot")
+    }
+
+    func testInvalidStoredDesignSelectsTheResolvedDefaultSegment() {
+        for raw in ["invalid", "", "classic", "new"] {
+            let defaults = DesignDefaults(choice: raw)
+            let index = NDSettingsView.designIndex(for: raw)
+            XCTAssertEqual(BrainBarDesign.allCases[index], BrainBarDesign.current(in: defaults))
+        }
+    }
+
+    func testInstalledCalendarRetainsMonthlyConstraints() throws {
+        let directory = brainBarTestTemporaryDirectory().appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let label = "invented.monthly"
+        let capture = BrainBarDesignFixture.inputs(.calm).capture
+        for fields in [["Day": 1, "Hour": 4, "Minute": 0],
+                       ["Month": 2, "Day": 1, "Weekday": 1, "Hour": 4, "Minute": 0]] {
+            let plist: [String: Any] = ["StartCalendarInterval": fields]
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: directory.appendingPathComponent(label + ".plist"))
+            let schedule = try XCTUnwrap(BrainLayerLaunchdStatusProvider.readSchedule(label: label, in: directory))
+            XCTAssertEqual(schedule.month, fields["Month"])
+            XCTAssertEqual(schedule.day, 1)
+            XCTAssertEqual(schedule.weekday, fields["Weekday"].map { ($0 % 7) + 1 })
+            XCTAssertEqual(schedule.hour, 4)
+            for job in [BrainLayerLaunchdJob.drain, .walCheckpoint] {
+                let input = NDJobInput(job: job, enabled: true, continuous: false, lastRun: nil,
+                                       nextRun: capture.now.addingTimeInterval(3600), loaded: true,
+                                       scheduleInterval: 86400, scheduleCalendar: schedule)
+                let help = NDJobLaneView.jobHelp(input, job: job, capture: capture)
+                XCTAssertFalse(help.contains("Runs daily"), help)
+                XCTAssertTrue(help.contains("Runs every"), help)
+            }
+        }
     }
 
     func testDottedRailFollowsScheduleRatherThanJobName() throws {

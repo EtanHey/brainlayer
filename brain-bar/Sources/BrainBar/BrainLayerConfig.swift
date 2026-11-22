@@ -914,7 +914,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
               let interval = plist["StartCalendarInterval"] as? [String: Int],
               let hour = interval["Hour"], let minute = interval["Minute"] else { return nil }
-        var components = DateComponents(hour: hour, minute: minute)
+        var components = DateComponents(month: interval["Month"], day: interval["Day"], hour: hour, minute: minute)
         if let weekday = interval["Weekday"] { components.weekday = (weekday % 7) + 1 }
         return components
     }
