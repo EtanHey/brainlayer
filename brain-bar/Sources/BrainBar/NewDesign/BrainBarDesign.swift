@@ -2,12 +2,12 @@ import AppKit
 import SwiftUI
 
 /// L6: one preference decides the whole UI, read live by the status item, the dropdown, the window and Settings.
-/// Absent means `classic` until the owner approves the new design; flipping the default is a one-line change here.
+/// An absent preference selects New; an explicit stored choice keeps precedence.
 enum BrainBarDesign: String, CaseIterable, Sendable {
     case classic, new
 
     static let key = "BrainBarDesign"
-    static let defaultValue: BrainBarDesign = .classic
+    static let defaultValue: BrainBarDesign = .new
 
     /// The design to draw now. A DEBUG capture fixture forces `new`; nothing else does. Reading never writes a value.
     static func current(in defaults: UserDefaults = .standard) -> BrainBarDesign {

@@ -1356,6 +1356,7 @@ struct BrainBarSettingsView: View {
         switch navigation.selected {
         case .jobs:
             VStack(alignment: .leading, spacing: 16) {
+                designRow
                 BrainBarBackupFailureLogs(model: viewModel)
                 jobsGrid
             }
@@ -1381,15 +1382,6 @@ struct BrainBarSettingsView: View {
         case .advanced:
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Text("Design").font(.system(size: 12, weight: .semibold))
-                    Spacer()
-                    Picker("Design", selection: $design) {
-                        ForEach(BrainBarDesign.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
-                    }
-                    .labelsHidden().pickerStyle(.segmented).fixedSize()
-                }.padding(.vertical, 7)
-                Divider()
-                HStack {
                     Text("Use the new menu").font(.system(size: 12, weight: .semibold))
                     Spacer()
                     Toggle("Use the new menu", isOn: $newMenuEnabled)
@@ -1413,6 +1405,17 @@ struct BrainBarSettingsView: View {
                 configFileRow
             }
         }
+    }
+
+    private var designRow: some View {
+        HStack {
+            Text("Design").font(.system(size: 12, weight: .semibold))
+            Spacer()
+            Picker("Design", selection: $design) {
+                ForEach(BrainBarDesign.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+            }
+            .labelsHidden().pickerStyle(.segmented).fixedSize()
+        }.padding(.vertical, 7)
     }
 
     /// E5: the one place the config file appears, with what it is and Copy / Reveal.

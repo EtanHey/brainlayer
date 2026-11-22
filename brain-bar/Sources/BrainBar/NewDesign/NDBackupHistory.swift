@@ -64,6 +64,29 @@ enum NDBackupHistoryReader {
         var skipped: Int
     }
 
+    enum RowKind {
+        case skip
+        case damage
+        case attempt
+    }
+
+    /// A missing attempt clock is not evidence of age. Only a dated legacy row outside the window can be ignored.
+    static func rowKind(_ row: [String: Any], now: Date) -> RowKind {
+        let hasError: Bool = {
+            guard let error = row["error"], !(error is NSNull) else { return false }
+            return (error as? String).map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? true
+        }()
+        if hasError, row["event"] != nil || row["attempted_at"] == nil { return .damage }
+        if row["event"] != nil { return .skip }
+        if row["attempted_at"] == nil {
+            if let dated = BackupLogReader.isoDate(row["ts"] ?? row["created_at"]), now.timeIntervalSince(dated) > windowS {
+                return .skip
+            }
+            return .damage
+        }
+        return .attempt
+    }
+
     /// `backup-daily.log`: one row per attempt, `backup_log_provenance == "real"` only, grouped by invocation (the newest
     /// row of an invocation speaks for it). Nil lanes when the log is unreadable or damaged inside the window.
     static func parseDatabase(_ log: Log, now: Date) -> DatabaseLanes? {
@@ -73,6 +96,12 @@ enum NDBackupHistoryReader {
         var order: [String] = []
         for (index, line) in log.lines.enumerated() {
             guard let row = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { skipped += 1; continue }
+            if let provenance = row["backup_log_provenance"] as? String, provenance != "real" { continue }
+            switch rowKind(row, now: now) {
+            case .skip: continue
+            case .damage: skipped += 1; continue
+            case .attempt: break
+            }
             guard row["backup_log_provenance"] as? String == "real" else { continue }
             guard let at = BackupLogReader.isoDate(row["attempted_at"]) else { skipped += 1; continue }
             guard now.timeIntervalSince(at) <= windowS else { continue }
@@ -107,6 +136,11 @@ enum NDBackupHistoryReader {
         var attempts: [NDAttempt] = []
         for line in log.lines {
             guard let row = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { skipped += 1; continue }
+            switch rowKind(row, now: now) {
+            case .skip: continue
+            case .damage: skipped += 1; continue
+            case .attempt: break
+            }
             guard let at = BackupLogReader.isoDate(row["attempted_at"]) else { skipped += 1; continue }
             guard now.timeIntervalSince(at) <= windowS else { continue }
             if row["status"] as? String == "pending" { continue }

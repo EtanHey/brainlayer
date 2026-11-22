@@ -129,6 +129,8 @@ struct NDWave: Equatable, Sendable {
 
     var savesTotal: Int { saves.reduce(0, +) }
     var readsTotal: Int { reads.reduce(0, +) }
+    var savesPeak: Int { max(saves.max() ?? 0, outgoing?.saves ?? 0) }
+    var readsPeak: Int { max(reads.max() ?? 0, outgoing?.reads ?? 0) }
     var count: Int { max(saves.count, reads.count) }
 
     /// The bucket grid index of a wave ending at `end` with `count` buckets over `minutes`.
@@ -181,6 +183,11 @@ struct NDJobInput: Equatable, Sendable, Identifiable {
     /// R1.10: the job's own run-failure streak from its calendar history (nil when the history is damaged or unread);
     /// the weekly clean's "failed {n} weeks" reads it.
     var failureStreak: Int? = nil
+    /// The sampled schedule's interval; nil when no cadence was confirmed.
+    var scheduleInterval: TimeInterval? = nil
+    var scheduleCalendar: DateComponents? = nil
+
+    var runsFrequently: Bool { scheduleInterval.map { $0 > 0 && $0 < 3600 } ?? false }
 }
 
 /// A job's last run as its records show it.
