@@ -62,7 +62,7 @@ final class BrainBarWakeRefreshTests: XCTestCase {
             watcherHealthURL: source == nil ? nil : URL(fileURLWithPath: "/fixture/health"),
             watcherHealthRead: { source!.sample($0) },
             awakeClock: { clock.uptime }, sleepHistory: BrainBarSleepHistory(uptime: { clock.uptime }),
-            statusDeadlineScheduler: scheduler, lifecycleLog: log)
+            statusDeadlineScheduler: scheduler, lifecycleLog: log, observeSystemLifecycle: false)
     }
 
     func testWakeImmediatelySamplesOnceForRepeatedNotices() async {
@@ -117,10 +117,12 @@ final class BrainBarWakeRefreshTests: XCTestCase {
         let clock = Clock()
         let model = model(clock, source: source)
         model.systemWillSleep()
+        XCTAssertEqual(model.sleepStartedAt, clock.date)
         clock.date.addTimeInterval(600)
         model.applicationDidBecomeActive()
         model.applicationDidBecomeActive()
         await fulfillment(of: [read], timeout: 1)
+        XCTAssertNil(model.sleepStartedAt)
         XCTAssertEqual(source.reads, 1)
     }
 

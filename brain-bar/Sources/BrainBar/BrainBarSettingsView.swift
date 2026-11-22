@@ -45,7 +45,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private let sleepHistory: BrainBarSleepHistory
     private let statusDeadlineScheduler: @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void
     private var wakeGeneration = 0
-    private var sleepStartedAt: Date?
+    private(set) var sleepStartedAt: Date?
     private var wakeStartedAt: Date?
     private var wakeStartedUptime: Double?
     private var wakeOutcomeLogged = false
@@ -152,7 +152,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
         statusDeadlineScheduler: @escaping @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void = { delay, action in
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
         },
-        lifecycleLog: BrainBarLogFile? = nil
+        lifecycleLog: BrainBarLogFile? = nil,
+        observeSystemLifecycle: Bool = true
     ) {
         self.awakeClock = awakeClock
         self.sleepHistory = sleepHistory
@@ -202,31 +203,33 @@ final class BrainBarSettingsViewModel: ObservableObject {
                 ? initialLaunchdStates
                 : initialLaunchdObservations.mapValues(\.loadState)
         )
-        let notifications = NSWorkspace.shared.notificationCenter
-        notifications.publisher(for: NSWorkspace.willSleepNotification)
-            .handleEvents(receiveOutput: { _ in sleepHistory.sleeping(at: Date()) })
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.systemWillSleep()
-                }
-            }.store(in: &sleepSubscriptions)
-        notifications.publisher(for: NSWorkspace.didWakeNotification)
-            .handleEvents(receiveOutput: { _ in sleepHistory.woke(at: Date()) })
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.systemDidWake()
-                }
-            }.store(in: &sleepSubscriptions)
-        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.applicationDidBecomeActive()
-                }
-            }.store(in: &sleepSubscriptions)
+        if observeSystemLifecycle {
+            let notifications = NSWorkspace.shared.notificationCenter
+            notifications.publisher(for: NSWorkspace.willSleepNotification)
+                .handleEvents(receiveOutput: { _ in sleepHistory.sleeping(at: Date()) })
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.systemWillSleep()
+                    }
+                }.store(in: &sleepSubscriptions)
+            notifications.publisher(for: NSWorkspace.didWakeNotification)
+                .handleEvents(receiveOutput: { _ in sleepHistory.woke(at: Date()) })
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        self.systemDidWake()
+                    }
+                }.store(in: &sleepSubscriptions)
+            NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.applicationDidBecomeActive()
+                    }
+                }.store(in: &sleepSubscriptions)
+        }
         refreshObservabilityStatus()
         if refreshStatusOnLoad {
             refreshLaunchdStatus()
