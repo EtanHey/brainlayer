@@ -4,6 +4,7 @@ import Foundation
 struct NDAttempt: Equatable, Sendable {
     var at: Date
     var ok: Bool
+    var isErrorEvent = false
 }
 
 /// A week of backup attempts (L2). A lane whose log could not be read, or held a damaged line inside the window, is
@@ -134,8 +135,22 @@ enum NDBackupHistoryReader {
         guard !log.unreadable else { return nil }
         var skipped = 0
         var attempts: [NDAttempt] = []
-        for line in log.lines {
-            guard let row = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { skipped += 1; continue }
+        let rows = log.lines.map { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
+        let dated = rows.enumerated().compactMap { index, row -> (index: Int, at: Date)? in
+            guard let row, let at = BackupLogReader.isoDate(row["attempted_at"] ?? row["at"] ?? row["ts"] ?? row["created_at"]) else { return nil }
+            return (index, at)
+        }
+        for (index, value) in rows.enumerated() {
+            guard let row = value else { skipped += 1; continue }
+            if row["event"] as? String == "local_retention_error" {
+                // An append-only event is readable evidence, not log damage. Without a clock its nearest dated
+                // neighbour locates it; ties prefer the preceding row. Undatable events still use job-alerts.
+                let at = dated.first { $0.index == index }?.at ?? dated.min {
+                    abs($0.index - index) < abs($1.index - index)
+                }?.at
+                if let at, now.timeIntervalSince(at) <= windowS { attempts.append(.init(at: at, ok: false, isErrorEvent: true)) }
+                continue
+            }
             switch rowKind(row, now: now) {
             case .skip: continue
             case .damage: skipped += 1; continue

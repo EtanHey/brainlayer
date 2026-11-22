@@ -284,7 +284,7 @@ struct NDBackupsPage: View {
             var skip: Set<Int> = []
             for (index, attempt) in sorted.enumerated() where !skip.contains(index) {
                 let hours = attempt.at.timeIntervalSince(now) / 3600
-                if !attempt.ok, let retry = sorted.indices.first(where: { $0 > index && sorted[$0].ok
+                if !attempt.ok, !attempt.isErrorEvent, let retry = sorted.indices.first(where: { $0 > index && sorted[$0].ok
                         && sorted[$0].at.timeIntervalSince(attempt.at) <= 12 * 3600 }) {
                     skip.insert(retry)
                     events.append(.init(hours: hours, kind: .retried))
