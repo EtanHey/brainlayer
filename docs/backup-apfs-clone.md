@@ -2,7 +2,7 @@
 
 Daily snapshots use an APFS clone when the source and staging directory share an APFS volume.
 `BRAINLAYER_BACKUP_SNAPSHOT_METHOD=vacuum` selects the existing VACUUM path explicitly; the default
-is `auto`. Unsupported filesystems, a busy writer, an oversized WAL, or a failed clone log a reason
+is `auto`. Unsupported filesystems, a busy writer, an outgrown WAL budget, or a failed clone log a reason
 and use VACUUM only after checking its larger peak plus the host reserve again.
 
 ## Consistent DB and WAL
@@ -29,16 +29,32 @@ documents PASSIVE versus writer-locking checkpoint modes.
 
 ## Space budget and verification
 
-The clone budget is compressed bytes plus 320 MiB: at most 64 MiB of WAL recovery and a 256 MiB CoW
-margin. The existing 2 GiB raw floor and 1 MiB copy allowance are additional; the gate also retains
-the M4's configurable 40 GiB host reserve (M1: zero extra). A source WAL larger than 64 MiB uses the
-capacity-checked VACUUM fallback instead of claiming a small recovery peak.
+The clone budget is compressed bytes plus the observed WAL size, 64 MiB of WAL growth slack, and a
+divergence allowance: planned write bytes/second times expected snapshot seconds. The existing
+2 GiB raw floor and 1 MiB copy allowance are additional. The gate retains the M4's configurable
+40 GiB host reserve (M1: zero extra). A WAL that outgrows its admission budget triggers a rechecked
+VACUUM fallback rather than unbudgeted private recovery.
 
-Clones pin extents when the source changes. A volume-free-space guard checks during integrity,
-hashing and compression, stopping if growth beyond the archive exceeds the margin or the reserve
-is breached. This is a conservative sampled volume measurement, including unrelated writes; it is
-not an attribution of every allocated block, nor a guarantee against arbitrary concurrent disk
-writers. A stopped run follows the existing failure/alert path. Clone attempts never hole-punch
+`BRAINLAYER_BACKUP_CLONE_WRITE_BYTES_PER_SECOND` defaults to 2 MiB/s, from the read-only M4 sample
+on 2026-11-22 04:42:15–04:45:15 UTC: 1,733,624 B/s average, rounded up. The sampler used DB/WAL
+stat metadata and `proc_pid_rusage` v4 for processes observed holding the files, comparing logical
+write-byte ledger increases with physical write-byte increases every five seconds. It never opened
+a database. WAL size remained 97,920,072 bytes while its and the DB's mtimes advanced. The largest
+five-second write rate was 18,175,039 B/s. Process-wide counters include other files, and newly seen
+holders and short-lived processes limit attribution; this is a planning sample, not a future bound.
+Apple's [kernel ledger definition](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c)
+specifies logical-write units as bytes. Physical counters alone miss cached writes.
+
+Expected duration uses `BRAINLAYER_BACKUP_HEAVY_EXPECTED_SNAPSHOT_SECONDS` (default 2400): this gives
+4.6875 GiB divergence allowance. For a 12 GiB archive and the sampled WAL, the allocation plan is
+about 16.84 GiB, before the separate raw/host floors. Real write activity makes a zero-divergence
+13 GB promise inappropriate. Operators can remeasure and configure the rate/time estimate.
+
+Clones pin extents when the source changes. During integrity, hashing and compression an absolute
+free-space guard preserves 40 GiB plus the existing 2 GiB raw floor on M4, or 2 GiB on M1. Whole-volume
+growth is recorded for observation and never used as an abort threshold. A floor breach removes this
+attempt's owned clone/partial archive and rechecks VACUUM capacity. If that fits, backup continues;
+otherwise the job defers with a durable alert, returning exit 75. Clone attempts never hole-punch
 shared extents.
 
 Both ordinary and weekly clone verification stream the archive without restoring a DB file.
@@ -58,4 +74,7 @@ source connection that must not checkpoint, non-APFS fallback, and the fallback 
 The M1 copy-only acceptance check bootstraps an APFS copy through a read-only canonical connection,
 rejecting changed DB/WAL identities or data versions. Snapshotting, private checkpointing, full
 integrity and compression run only against that copy. A separate restore checks full integrity and
-row counts for every table. The restore is acceptance work, not part of the production peak.
+row counts for every table. A separate writer updates an owned synthetic table at the planned
+2 MiB/s payload rate, including a five-second burst at the observed 18,175,039 B/s peak. Sequence and
+payload checks on the restored synthetic rows supplement full integrity and table counts. The
+restore is acceptance work, not part of the production peak.

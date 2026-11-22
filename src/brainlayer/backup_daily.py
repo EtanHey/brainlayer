@@ -1175,7 +1175,14 @@ def _raw_bytes_pruned_before_verify(output_dir: Path, date_stamp: str, keep_late
 
 
 def _backup_phase_peaks(
-    db_size: int, gzip_size: int, *, full: bool, reclaim_raw: bool = False, clone_mode: bool = False
+    db_size: int,
+    gzip_size: int,
+    *,
+    full: bool,
+    reclaim_raw: bool = False,
+    clone_mode: bool = False,
+    clone_wal_bytes: int = 0,
+    clone_divergence_bytes: int | None = None,
 ) -> dict[str, int]:
     """New bytes each backup phase holds at once; existing files are already in measured free space.
 
@@ -1183,7 +1190,9 @@ def _backup_phase_peaks(
     and the restored copy never coexist (2026-10-19: summing them failed a run with ~16 GB slack).
     """
     if clone_mode:
-        margin = backup_clone.MAX_WAL_BYTES + backup_clone.COW_MARGIN_BYTES
+        margin = clone_wal_bytes + (
+            backup_clone.divergence_allowance_bytes() if clone_divergence_bytes is None else clone_divergence_bytes
+        )
         return {"clone_recovery": margin, "compression": gzip_size + margin, "stream_verify": gzip_size}
     if reclaim_raw:
         # Each frame is capped before writing. Budget worst-case expansion, even when the
@@ -1204,10 +1213,27 @@ def _backup_phase_peaks(
 
 
 def _peak_backup_required_bytes(
-    db_size: int, gzip_size: int, *, full: bool, reclaim_raw: bool = False, clone_mode: bool = False
+    db_size: int,
+    gzip_size: int,
+    *,
+    full: bool,
+    reclaim_raw: bool = False,
+    clone_mode: bool = False,
+    clone_wal_bytes: int = 0,
+    clone_divergence_bytes: int | None = None,
 ) -> int:
     return (
-        max(_backup_phase_peaks(db_size, gzip_size, full=full, reclaim_raw=reclaim_raw, clone_mode=clone_mode).values())
+        max(
+            _backup_phase_peaks(
+                db_size,
+                gzip_size,
+                full=full,
+                reclaim_raw=reclaim_raw,
+                clone_mode=clone_mode,
+                clone_wal_bytes=clone_wal_bytes,
+                clone_divergence_bytes=clone_divergence_bytes,
+            ).values()
+        )
         + MIN_RAW_FREE_BYTES
         + COPY_CHUNK_BYTES
     )
@@ -1868,6 +1894,7 @@ def create_sqlite_backup_artifact(
     capacity_status_callback: Callable[[int, int | None, int, int], None] | None = None,
     integrity_full: bool | None = None,
     integrity_status_callback: Callable[[str, str, float], None] | None = None,
+    _vacuum_fallback_reason: str | None = None,
 ) -> SQLiteBackupArtifact:
     """Create an integrity-tested archive (.db.zst by default, .db.gz with
     BRAINLAYER_BACKUP_COMPRESSOR=gzip). Unsupported filesystems retain the legacy raw on failure;
@@ -1890,13 +1917,14 @@ def create_sqlite_backup_artifact(
         raise ValueError("Backup requires a dated snapshot in a non-symlink backup directory")
     _cleanup_consumed_raw_remnants(output_dir)
     compressor, zstd_binary, compressor_fallback = _selected_compressor()
-    clone_mode = backup_clone.supported(db_path, output_dir)
+    clone_mode = _vacuum_fallback_reason is None and backup_clone.supported(db_path, output_dir)
+    clone_budget = backup_clone.budget(db_path) if clone_mode else {}
     reclaim_raw, reclaim_fallback = (False, "APFS clone") if clone_mode else _probe_raw_reclamation(output_dir)
-    clone_fallback = None
+    clone_fallback = _vacuum_fallback_reason
     snapshot_method = "apfs_clone" if clone_mode else "vacuum"
     clone_guard = None
     if not clone_mode:
-        clone_fallback = (
+        clone_fallback = clone_fallback or (
             "forced VACUUM snapshot method"
             if os.environ.get("BRAINLAYER_BACKUP_SNAPSHOT_METHOD") == "vacuum"
             else "APFS clone support not confirmed for source/staging volume"
@@ -1942,7 +1970,7 @@ def create_sqlite_backup_artifact(
     # are never budgeted as forthcoming room.
     full_verify = _should_run_full_verify(date_stamp)
     phase_peaks = _backup_phase_peaks(
-        db_size, estimated_gzip, full=full_verify, reclaim_raw=reclaim_raw, clone_mode=clone_mode
+        db_size, estimated_gzip, full=full_verify, reclaim_raw=reclaim_raw, clone_mode=clone_mode, **clone_budget
     )
 
     def describe_phases(peaks: dict[str, int]) -> tuple[int, str]:
@@ -1953,9 +1981,10 @@ def create_sqlite_backup_artifact(
     _, capacity_detail = describe_phases(phase_peaks)
     required_bytes = (
         _peak_backup_required_bytes(
-            db_size, estimated_gzip, full=full_verify, reclaim_raw=reclaim_raw, clone_mode=clone_mode
+            db_size, estimated_gzip, full=full_verify, reclaim_raw=reclaim_raw, clone_mode=clone_mode, **clone_budget
         )
         + surviving_attempt_growth_reserve_bytes
+        + (backup_clone.host_reserve_bytes() if _vacuum_fallback_reason is not None else 0)
     )
     space = disk_space.measure_disk_space(output_dir)
     raw_before_purge = space.free_now_bytes
@@ -1995,7 +2024,12 @@ def create_sqlite_backup_artifact(
             if important_free_bytes is None or important_free_bytes < required_bytes
             else "macOS reclaimed too little purgeable space"
         )
-        raise RuntimeError(
+        error_type = RuntimeError
+        if _vacuum_fallback_reason is not None:
+            from .backup_heavy_gate import BackupGateDeferred
+
+            error_type = BackupGateDeferred
+        raise error_type(
             f"Insufficient free space for backup in {output_dir}: "
             f"needs {required_bytes / 1e9:.1f} GB; {space.describe()}; "
             f"purge freed {max(0, raw_free_bytes - raw_before_purge) / 1e9:.1f} GB; source={space.source}; "
@@ -2063,7 +2097,12 @@ def create_sqlite_backup_artifact(
                     clone_validation.update(integrity=check, seconds=time.monotonic() - started)
 
                 try:
-                    promoted = backup_clone.snapshot(db_path, raw_snapshot, validate=validate_clone)
+                    promoted = backup_clone.snapshot(
+                        db_path,
+                        raw_snapshot,
+                        validate=validate_clone,
+                        max_recovery_bytes=clone_budget["clone_wal_bytes"],
+                    )
                     clone_guard(force=True)
                 except backup_clone.CloneUnavailable as exc:
                     clone_fallback = str(exc)
@@ -2086,7 +2125,9 @@ def create_sqlite_backup_artifact(
                     )
                     free = disk_space.measure_disk_space(output_dir, include_available=False).free_now_bytes
                     if free < fallback_need:
-                        raise RuntimeError(
+                        from .backup_heavy_gate import BackupGateDeferred
+
+                        raise BackupGateDeferred(
                             f"VACUUM fallback needs {fallback_need} bytes, has {free}; {clone_fallback}"
                         ) from exc
             if not clone_mode:
@@ -2103,9 +2144,7 @@ def create_sqlite_backup_artifact(
             sentinel_chunks = _validate_backup_target(raw_snapshot)
             pragma = (
                 "integrity_check"
-                if reclaim_raw
-                or clone_mode
-                or (integrity_full if integrity_full is not None else _should_run_full_verify(date_stamp))
+                if reclaim_raw or clone_mode or full_verify or integrity_full is True
                 else "quick_check"
             )
             integrity_started = time.monotonic()
@@ -2198,9 +2237,26 @@ def create_sqlite_backup_artifact(
             elif not reclaim_raw:
                 _remove_raw_with_verified_archive(output_dir, final_raw, own_run=True, archive_name=final_archive.name)
             deleted.append(final_raw.name)
-    except BaseException:
+    except BaseException as exc:
         if (clone_mode or (orphan_cleanup and not raw_settled)) and owned_raw is not None:
             _remove_owned_raw(final_raw, owned_raw)
+        if clone_mode and (
+            isinstance(exc, backup_clone.CloneUnavailable) or "raw free space floor breached" in str(exc)
+        ):
+            print(f"Backup clone stopped: {exc}; checking VACUUM fallback capacity", flush=True)
+            return create_sqlite_backup_artifact(
+                db_path,
+                output_dir,
+                date_stamp,
+                socket_path,
+                keep_uncompressed,
+                local_uncompressed_keep,
+                reclamation_status_callback,
+                capacity_status_callback,
+                integrity_full,
+                integrity_status_callback,
+                _vacuum_fallback_reason=str(exc),
+            )
         raise
 
     return SQLiteBackupArtifact(
@@ -4090,6 +4146,10 @@ def run_backup(
                     integrity_status_callback=record_integrity,
                 )
             except RuntimeError as exc:
+                from .backup_heavy_gate import BackupGateDeferred
+
+                if isinstance(exc, BackupGateDeferred):
+                    raise
                 reason = _redact_upload_secrets(str(exc))
                 floor_breach = "raw free space floor breached" in reason
                 if "Insufficient free space" in reason or floor_breach:
@@ -4446,6 +4506,8 @@ def run_backup(
 def _run_backup_process(timeout_seconds: int) -> int:
     from brainlayer.supervisor_child import backup_io_policy
 
+    from .backup_heavy_gate import BackupGateDeferred
+
     io_policy = backup_io_policy()
     previous_alarm_handler = None
     previous_alarm_handler = signal.getsignal(signal.SIGALRM)
@@ -4509,6 +4571,13 @@ def _run_backup_process(timeout_seconds: int) -> int:
                 },
             )
         return 128 + exc.signum
+    except BackupGateDeferred as exc:
+        from .job_alerts import report
+
+        key = "backup-snapshot" if os.environ.get("BRAINLAYER_BACKUP_PHASE") == "snapshot" else "backup-daily"
+        report(key, str(exc), replace_reason=True)
+        print(f"brainlayer backup deferred: {exc}", flush=True)
+        return BACKUP_DEFERRED_EXIT_CODE
     except BackupTimeoutError:
         print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
         return 124

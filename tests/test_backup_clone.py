@@ -182,10 +182,9 @@ def test_non_apfs_never_opens_source(source_actor, monkeypatch):
 
 def test_large_wal_falls_back_without_copying(source_actor, monkeypatch):
     source, target, actor = source_actor
-    monkeypatch.setattr(clone, "MAX_WAL_BYTES", 1)
     monkeypatch.setattr(clone, "_copy", lambda *a: pytest.fail("unbounded WAL cloned"))
-    with pytest.raises(clone.CloneUnavailable, match="bounded clone recovery"):
-        clone.snapshot(source, target)
+    with pytest.raises(clone.CloneUnavailable, match="outgrew admitted clone recovery"):
+        clone.snapshot(source, target, max_recovery_bytes=1)
     assert ask(actor, "write") == "COMMITTED"
 
 
@@ -251,15 +250,11 @@ def test_clone_peak_does_not_charge_a_raw_database_or_restore():
 
     db_size, compressed = 26 * 1024**3, 12 * 1024**3
     for full in (False, True):
-        peak = backup._peak_backup_required_bytes(db_size, compressed, full=full, clone_mode=True)
-        assert (
-            peak
-            == compressed
-            + clone.MAX_WAL_BYTES
-            + clone.COW_MARGIN_BYTES
-            + backup.MIN_RAW_FREE_BYTES
-            + backup.COPY_CHUNK_BYTES
+        wal, divergence = 100 * 1024**2, 2 * 1024**3
+        peak = backup._peak_backup_required_bytes(
+            db_size, compressed, full=full, clone_mode=True, clone_wal_bytes=wal, clone_divergence_bytes=divergence
         )
+        assert peak == compressed + wal + divergence + backup.MIN_RAW_FREE_BYTES + backup.COPY_CHUNK_BYTES
         assert peak < backup._peak_backup_required_bytes(db_size, compressed, full=full)
 
 
@@ -320,7 +315,9 @@ def test_clone_failure_falls_back_to_vacuum_with_reason(artifact_lane, monkeypat
 def test_weekly_vacuum_fallback_also_streams_without_restore(artifact_lane, monkeypatch):
     backup, source, output, _ = artifact_lane
     monkeypatch.setattr(clone, "supported", lambda *args: False)
-    artifact = backup.create_sqlite_backup_artifact(source, output, socket_path=source.parent / "unused.sock")
+    artifact = backup.create_sqlite_backup_artifact(
+        source, output, socket_path=source.parent / "unused.sock", integrity_full=False
+    )
     assert artifact.raw_sha256 is not None
     monkeypatch.setattr(backup, "_decompress_archive_to", lambda *args: pytest.fail("restored payload allocated"))
     monkeypatch.setattr(backup, "download_drive_file_raw", lambda *args, **kwargs: pytest.fail("download allocated"))
@@ -367,7 +364,7 @@ def test_fallback_rechecks_legacy_peak_plus_host_floor_before_vacuum(artifact_la
         backup.disk_space,
         "measure_disk_space",
         lambda *args, **kwargs: SimpleNamespace(
-            free_now_bytes=20 * 1024**3, available_bytes=20 * 1024**3, source="fixture"
+            free_now_bytes=30 * 1024**3, available_bytes=30 * 1024**3, source="fixture"
         ),
     )
     monkeypatch.setattr(
@@ -380,15 +377,90 @@ def test_fallback_rechecks_legacy_peak_plus_host_floor_before_vacuum(artifact_la
         backup.create_sqlite_backup_artifact(source, output, socket_path=source.parent / "unused.sock")
 
 
-def test_cow_growth_guard_fails_closed(artifact_lane, monkeypatch):
+def test_large_volume_growth_is_allowed_until_absolute_host_reserve(artifact_lane, monkeypatch):
     from types import SimpleNamespace
 
     backup, source, output, _ = artifact_lane
-    free = [10 * 1024**3]
+    free = [100 * 1024**3]
     monkeypatch.setattr(
         backup.disk_space, "measure_disk_space", lambda *args, **kwargs: SimpleNamespace(free_now_bytes=free[0])
     )
-    guard = clone.SpaceGuard(output, output / "archive.zst", minimum_free=2 * 1024**3)
-    free[0] -= clone.COW_MARGIN_BYTES + clone.MAX_WAL_BYTES + 1
-    with pytest.raises(clone.CloneUnavailable, match="CoW growth"):
+    guard = clone.SpaceGuard(output, output / "archive.zst", minimum_free=42 * 1024**3)
+    free[0] = 50 * 1024**3
+    guard(force=True)
+    assert guard.peak_bytes == 50 * 1024**3
+    free[0] = 42 * 1024**3 - 1
+    with pytest.raises(clone.CloneUnavailable, match="free-space reserve breached"):
         guard(force=True)
+
+
+def test_divergence_budget_is_write_rate_times_expected_snapshot_seconds(source_actor, monkeypatch):
+    source, _, _ = source_actor
+    monkeypatch.setenv("BRAINLAYER_BACKUP_CLONE_WRITE_BYTES_PER_SECOND", "8192")
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_EXPECTED_SNAPSHOT_SECONDS", "120")
+    budget = clone.budget(source)
+    assert budget["clone_divergence_bytes"] == 8192 * 120
+    assert budget["clone_wal_bytes"] == Path(f"{source}-wal").stat().st_size + clone.WAL_GROWTH_SLACK_BYTES
+
+
+def test_floor_trip_during_compression_retries_capacity_checked_vacuum(artifact_lane, monkeypatch):
+    backup, source, output, _ = artifact_lane
+    copy = backup._copy_with_raw_floor
+    calls = []
+
+    def floor_once(*args, **kwargs):
+        calls.append(True)
+        copy(*args, **kwargs)
+        if len(calls) == 1:
+            raise clone.CloneUnavailable("absolute free-space reserve breached")
+
+    monkeypatch.setattr(backup, "_copy_with_raw_floor", floor_once)
+    artifact = backup.create_sqlite_backup_artifact(source, output, socket_path=source.parent / "unused.sock")
+    assert artifact.snapshot_method == "vacuum"
+    assert "absolute free-space reserve" in artifact.clone_fallback
+    assert len(calls) == 2
+    assert backup.verify_sqlite_backup_artifact(artifact)["verified"] is True
+
+
+def test_floor_trip_without_fallback_capacity_defers(artifact_lane, monkeypatch):
+    from types import SimpleNamespace
+
+    from brainlayer.backup_heavy_gate import BackupGateDeferred
+
+    backup, source, output, _ = artifact_lane
+    monkeypatch.setenv("BRAINLAYER_DB", str(source))
+    free = [10**12]
+    monkeypatch.setattr(
+        backup.disk_space,
+        "measure_disk_space",
+        lambda *a, **kw: SimpleNamespace(
+            free_now_bytes=free[0], available_bytes=free[0], source="fixture", describe=lambda: "fixture volume"
+        ),
+    )
+
+    def floor(*args, **kwargs):
+        free[0] = 1024**2
+        raise clone.CloneUnavailable("absolute free-space reserve breached")
+
+    monkeypatch.setattr(backup, "_copy_with_raw_floor", floor)
+    monkeypatch.setattr(backup, "request_brainbar_vacuum_into", lambda *a, **kw: pytest.fail("unfunded fallback"))
+    with pytest.raises(BackupGateDeferred, match="Insufficient free space"):
+        backup.run_backup(source, staging_dir=output, upload=False)
+    assert not list(output.glob("*.db"))
+
+
+def test_supervised_capacity_deferral_keeps_durable_job_alert(artifact_lane, monkeypatch):
+    from brainlayer import job_alerts
+    from brainlayer.backup_heavy_gate import BackupGateDeferred
+
+    backup, source, output, _ = artifact_lane
+    monkeypatch.setenv(backup.BACKUP_SUPERVISED_CHILD_ENV, "1")
+    monkeypatch.setenv("BRAINLAYER_DB", str(source))
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(output / "alerts.json"))
+
+    def deferred(*args, **kwargs):
+        raise BackupGateDeferred("absolute reserve: needs 66 GiB, has 60 GiB")
+
+    monkeypatch.setattr(backup, "run_backup", deferred)
+    assert backup._run_backup_process(100) == 75
+    assert "needs 66 GiB, has 60 GiB" in job_alerts.active_alerts()["backup-daily"]

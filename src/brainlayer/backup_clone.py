@@ -16,12 +16,31 @@ import tempfile
 import time
 from pathlib import Path
 
-MAX_WAL_BYTES = 64 * 1024**2
-COW_MARGIN_BYTES = 256 * 1024**2
+WAL_GROWTH_SLACK_BYTES = 64 * 1024**2
+# M4 read-only 180 s sample (2026-11-22): 1,733,624 B/s mean logical/disk
+# process-write increments; round up to 2 MiB/s for the planning allowance.
+DEFAULT_WRITE_BYTES_PER_SECOND = 2 * 1024**2
 
 
 class CloneUnavailable(RuntimeError):
-    """No clone was published; the caller may use its capacity-checked VACUUM path."""
+    """Stop this clone attempt; clean owned files before a capacity-checked fallback."""
+
+
+def divergence_allowance_bytes() -> int:
+    from .backup_heavy_gate import _number
+
+    rate = float(os.environ.get("BRAINLAYER_BACKUP_CLONE_WRITE_BYTES_PER_SECOND", DEFAULT_WRITE_BYTES_PER_SECOND))
+    if not math.isfinite(rate) or rate < 0:
+        raise ValueError("BRAINLAYER_BACKUP_CLONE_WRITE_BYTES_PER_SECOND must be finite and nonnegative")
+    return math.ceil(rate * _number("EXPECTED_SNAPSHOT_SECONDS", 2400))
+
+
+def budget(source: Path) -> dict[str, int]:
+    wal = Path(f"{source}-wal")
+    return {
+        "clone_wal_bytes": (wal.stat().st_size if wal.exists() else 0) + WAL_GROWTH_SLACK_BYTES,
+        "clone_divergence_bytes": divergence_allowance_bytes(),
+    }
 
 
 def host_reserve_bytes() -> int:
@@ -34,7 +53,7 @@ def host_reserve_bytes() -> int:
 
 
 class SpaceGuard:
-    """Abort if source CoW divergence escapes the promised small clone margin."""
+    """Protect an absolute reserve; volume deltas are observations, never a cutoff."""
 
     def __init__(self, directory: Path, archive: Path, *, minimum_free: int):
         from .disk_space import measure_disk_space
@@ -53,13 +72,10 @@ class SpaceGuard:
             return
         self.last_check = now
         free = measure_disk_space(self.directory, include_available=False).free_now_bytes
-        archive_bytes = self.archive.stat().st_size if self.archive.exists() else 0
         used = max(0, self.initial_free - free)
         self.peak_bytes = max(self.peak_bytes, used)
         if free < self.minimum_free:
             raise CloneUnavailable(f"clone host free-space reserve breached: has {free}, needs {self.minimum_free}")
-        if used - archive_bytes > COW_MARGIN_BYTES + MAX_WAL_BYTES:
-            raise CloneUnavailable("source CoW growth exceeded bounded clone margin")
 
 
 def supported(source: Path, directory: Path) -> bool:
@@ -105,7 +121,7 @@ def _copy(source: Path, destination: Path) -> None:
     subprocess.run(["/bin/cp", "-c", str(source), str(destination)], check=True, capture_output=True, timeout=5)
 
 
-def snapshot(source: Path, target: Path, *, validate=None) -> os.stat_result:
+def snapshot(source: Path, target: Path, *, validate=None, max_recovery_bytes: int | None = None) -> os.stat_result:
     """Publish a standalone clone, or nothing. Never checkpoint/change the SOURCE.
 
     BEGIN IMMEDIATE prevents commits and WAL restart throughout both clonefile
@@ -136,8 +152,8 @@ def snapshot(source: Path, target: Path, *, validate=None) -> os.stat_result:
                 if _identity(source)[:2] != initial[:2]:
                     raise CloneUnavailable("source inode changed before writer admission")
                 wal_before = _identity(wal) if wal.exists() else None
-                if wal_before is not None and wal_before[2] > MAX_WAL_BYTES:
-                    raise CloneUnavailable("WAL exceeds bounded clone recovery budget")
+                if wal_before is not None and max_recovery_bytes is not None and wal_before[2] > max_recovery_bytes:
+                    raise CloneUnavailable("WAL outgrew admitted clone recovery budget")
                 _copy(source, private)
                 if wal_before is not None:
                     _copy(wal, Path(f"{private}-wal"))

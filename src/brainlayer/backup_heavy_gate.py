@@ -76,12 +76,14 @@ def _disk_reason(host: str) -> str | None:
         else:
             db_size = backup._database_logical_size_bytes(backup.get_db_path())
             compressed = backup._estimated_gzip_bytes(staging, db_size) if staging.exists() else db_size
+            clone_mode = backup.backup_clone.supported(backup.get_db_path(), staging)
             # Snapshot-only has no Drive download/restore phase.
             peak = backup._peak_backup_required_bytes(
                 db_size,
                 compressed,
                 full=full and phase != "snapshot",
-                clone_mode=backup.backup_clone.supported(backup.get_db_path(), staging),
+                clone_mode=clone_mode,
+                **(backup.backup_clone.budget(backup.get_db_path()) if clone_mode else {}),
             )
         required = peak + math.ceil(floor_gib * 1024**3)
         volume_path = staging
