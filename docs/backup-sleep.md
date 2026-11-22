@@ -6,8 +6,10 @@ with `from`, `to`, and `seconds`. Snapshot receipts carry `snapshot_wall_seconds
 `snapshot_slept_seconds`, and `snapshot_sleep_intervals`; the terminal `sleep_intervals` list includes
 both phases. A run-level observer also covers archive hashes, fsyncs, credential refresh, folder
 checks and other work between phases. `run_wall_seconds` and `run_slept_seconds` measure this
-invocation, including failed or abandoned attempts. On recovery, historical intervals remain in
-`sleep_intervals` beside this invocation's observations. Failed snapshots and uploads retain
+invocation, including failed or abandoned attempts; run and phase seconds overlap, so do not add
+them together. On recovery, historical intervals follow the reused artifact in `sleep_intervals`.
+Switching to a fresh snapshot drops earlier-invocation history while preserving pauses observed
+in this invocation. Failed snapshots and uploads retain
 observed sleep even without another progress tick. Verification-only recovery keeps completed
 upload counters and intervals; its note is rendered with the current span rules.
 
@@ -21,6 +23,8 @@ Supported clock pairs are required explicitly. Missing clocks or a failed clock 
 `RuntimeError` explaining that sleep observation is unavailable, rather than an attribute error or
 an invented zero. Darwin and Linux are supported; other platforms need a proven clock pair first.
 Uploads without telemetry (including the JSONL callers) construct no sleep observer.
+The final run sample is best-effort: a clock failure records `sleep_observation_error` and preserves
+the original outcome/error and terminal receipt, rather than letting observation prevent the receipt.
 DarkWake time when the CPU is awake counts as awake time, so the observed suspended duration can
 be shorter than the span between closing the lid and full wake.
 

@@ -100,6 +100,10 @@ def test_fresh_snapshot_never_inherits_resumed_checkpoint(local_lane, local_cloc
     local_clock("UTC", dt.datetime(2026, 11, 20, 12))
     prior = saved(local_lane)
     prior["bytes_confirmed_at"] = "2026-11-21T08:00:00+00:00"
+    prior["sleep_intervals"] = [
+        {"from": "2026-11-20T02:00:00+00:00", "to": "2026-11-20T08:00:00+00:00", "seconds": 21600}
+    ]
+    prior["sleep_note"] = "synthetic historical pause from the abandoned snapshot"
     if change == "destination":
         prior["resumable_upload"]["folder_id"] = "old-folder"
     backup._append_json_log(local_lane["log_path"], prior)
@@ -128,6 +132,8 @@ def test_fresh_snapshot_never_inherits_resumed_checkpoint(local_lane, local_cloc
     for row in fresh:
         assert "bytes_confirmed" not in row, row
         assert "bytes_confirmed_at" not in row, row
+        assert row["sleep_intervals"] == []
+        assert "sleep_note" not in row
     displayed = _local_snapshot(fresh)
     assert "bytes_confirmed" not in displayed
     assert "bytes_confirmed_at" not in displayed
@@ -365,6 +371,41 @@ def test_observability_omits_unmeasurable_sleep_seconds(value):
         "upload_slept_seconds": value,
     }
     assert "upload_slept_seconds" not in _local_snapshot([row])
+
+
+@pytest.mark.parametrize("clock_fails", [False, True])
+def test_final_observation_records_sleep_or_clock_failure_without_losing_receipt(local_lane, monkeypatch, clock_fails):
+    from brainlayer import backup_sleep
+
+    saved(local_lane)
+    network(monkeypatch)
+    values = {"inclusive": 0, "fail": False}
+    factory = backup_sleep.SleepTracker
+
+    def inclusive():
+        if values["fail"]:
+            raise RuntimeError("synthetic final sleep clock failure")
+        return values["inclusive"]
+
+    monkeypatch.setattr(backup_sleep, "SleepTracker", lambda: factory(inclusive=inclusive, awake=lambda: 0))
+
+    def credentials():
+        values.update(inclusive=21600, fail=clock_fails)
+        raise RuntimeError("synthetic credentials expired after sleep")
+
+    monkeypatch.setattr(backup, "get_drive_credentials", credentials)
+    with pytest.raises(RuntimeError, match="credentials expired after sleep"):
+        backup.run_backup(**local_lane, phase="upload")
+    row = latest(local_lane)
+    assert row["error"] == "synthetic credentials expired after sleep"
+    assert row["upload_state"] == "failed"
+    assert "retained_raw_snapshots" in row
+    if clock_fails:
+        assert row["sleep_observation_error"] == "synthetic final sleep clock failure"
+    else:
+        assert row["run_slept_seconds"] == 21600
+        assert len(row["sleep_intervals"]) == 1
+        assert "while the Mac slept" in row["sleep_note"]
 
 
 def test_verification_recovery_retains_completed_upload_sleep(local_lane, monkeypatch):

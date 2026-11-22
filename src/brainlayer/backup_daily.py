@@ -4073,8 +4073,9 @@ def run_backup(
                     "bytes": snapshot_size,
                 }
             )
-            if resume is not None:
-                historical_sleep_intervals = resume.get("sleep_intervals") or result["snapshot_sleep_intervals"]
+            historical_sleep_intervals = (
+                (resume.get("sleep_intervals") or result["snapshot_sleep_intervals"]) if resume is not None else []
+            )
             record_run_sleep()
             # create_sqlite_backup_artifact has already proven gzip CRC/ISIZE,
             # SQLite header, sentinel and raw/gzip equality before dropping raw (#1387).
@@ -4363,7 +4364,10 @@ def run_backup(
         raise
     finally:
         if result.get("status") != "reused":
-            record_run_sleep()
+            try:
+                record_run_sleep()
+            except RuntimeError as exc:
+                result["sleep_observation_error"] = _redact_upload_secrets(str(exc))
         result["retained_raw_snapshots"] = _retained_raw_snapshot_names(Path(staging_dir))
         raw = Path(staging_dir) / f"{resolved_date_stamp}.db"
         if (result.get("error") or result.get("verification_error")) and not (
