@@ -4579,11 +4579,20 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds = min(timeout_seconds, work)
     if _env_flag_enabled(BACKUP_SUPERVISED_CHILD_ENV):
         return _run_backup_process(timeout_seconds)
+    from .backup_heavy_gate import BackupGateDeferred, backup_heavy_gate
     from .job_alerts import report
 
     key = "backup-snapshot" if snapshot_phase else "backup-daily"
     try:
-        code = _supervise_backup_process(timeout_seconds, **({"deadline": deadline} if deadline is not None else {}))
+        admission_deadline = deadline - SNAPSHOT_RECEIPT_RESERVE_SECONDS - 1 if deadline is not None else None
+        with backup_heavy_gate(deadline=admission_deadline):
+            code = _supervise_backup_process(
+                timeout_seconds, **({"deadline": deadline} if deadline is not None else {})
+            )
+    except BackupGateDeferred as exc:
+        print(str(exc), flush=True)
+        report(key, str(exc))
+        return BACKUP_DEFERRED_EXIT_CODE
     except Exception:
         report(key, "Database backup failed; check the backup log")
         raise
