@@ -29,6 +29,12 @@ or **1 on the M4**. A local archive can go only when Drive currently holds the *
 snapshot**, with the exact filename, size and stored-byte MD5 proven by its latest
 receipt and live listing. The current folder and machine property must both match.
 A missing listing, revoked receipt, changed archive or unknown file authorizes no deletion.
+Host selection uses the shared detector in strict mode: an explicit `m1`/`m4` override
+or a recognised Apple M1/M4 CPU brand on macOS. Any other host keeps everything
+and raises `backup-retention`. An unreadable weekly pin also keeps everything and alerts.
+Stalled uploads without their own verified live Drive copy remain until a person moves
+them (about 9.5 GB each on the M4). They can exceed the local count; the disk gate
+then defers and alerts rather than consuming the M4's 40 GiB reserve.
 Cleanup hashes the local archive again immediately before unlinking it. Unknown files
 do not displace the verified cohort, so they can leave more files than the target count.
 Host detection comes from `backup_heavy_gate`.

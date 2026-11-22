@@ -2927,7 +2927,7 @@ def _retention_count(name: str, default: int) -> int:
 def _local_retention_keep() -> int:
     from .backup_heavy_gate import _host
 
-    if _host() == "m4":
+    if _host(strict=True) == "m4":
         return _retention_count("BRAINLAYER_BACKUP_LOCAL_KEEP_M4", 1)
     return _retention_count("BRAINLAYER_BACKUP_LOCAL_KEEP", DEFAULT_LOCAL_COMPRESSED_KEEP)
 
@@ -3288,6 +3288,27 @@ def _archive_drive_md5_matches(receipt: Mapping[str, Any]) -> bool:
     )
 
 
+def _local_retention_deferred(context: Mapping[str, Any], error: Exception) -> None:
+    from . import job_alerts
+
+    reason = _redact_upload_secrets(str(error))
+    if isinstance(context, dict):
+        context.update(
+            local_retention_inventory="unmeasurable", retention_error_type=type(error).__name__, retention_error=reason
+        )
+    print(f"Local retention deferred; archives kept: {reason}", flush=True)
+    try:
+        job_alerts.report(
+            "backup-retention",
+            "Local retention deferred: " + reason,
+            path=job_alerts.alert_path(db_path=Path(context["db"])),
+            replace_reason=True,
+        )
+    except Exception as exc:
+        if isinstance(context, dict):
+            context["retention_alert_error"] = _redact_upload_secrets(str(exc))
+
+
 def _sweep_verified_local_archives(
     log_path: Path,
     staging_dir: Path,
@@ -3326,7 +3347,7 @@ def _sweep_verified_local_archives(
     from .backup_retention import local_keep_names
 
     if pin_reason == "pin_unreadable":
-        print("Cannot read weekly pin; retaining all local archives", flush=True)
+        _local_retention_deferred(context, ValueError("Cannot read weekly pin; retaining all local archives"))
         return []
     try:
         verified_names = {
@@ -3344,8 +3365,8 @@ def _sweep_verified_local_archives(
             and str(r["drive_file"].get("size")) == str(Path(r["snapshot"]).stat().st_size)
         }
         keep = local_keep_names(verified_names, verified_names, keep_latest=_local_retention_keep())
-    except (ValueError, OSError) as exc:
-        print(f"Cannot select local retention; retaining all archives: {exc}", flush=True)
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        _local_retention_deferred(context, exc)
         return []
     removed = []
     for receipt in latest.values():
@@ -3790,6 +3811,9 @@ def run_backup(
             if not remove_local_after_upload:
                 result["local_retention_inventory"] = "opt_out"
                 return None, None
+            keep_latest = _local_retention_keep()
+            if _weekly_pin_protection(Path(staging_dir))[1] == "pin_unreadable":
+                raise ValueError("Cannot read weekly pin; retaining all local archives")
             receipts = _read_backup_receipts(resolved_log_path, strict=True) if resolved_log_path.exists() else []
             proven_names = {
                 Path(r["snapshot"]).name
@@ -3801,7 +3825,7 @@ def run_backup(
                 and Path(r["snapshot"]).is_file()
                 and not Path(r["snapshot"]).is_symlink()
             }
-            if len(proven_names) <= _local_retention_keep():
+            if len(proven_names) <= keep_latest:
                 result["local_retention_inventory"] = "within_cap"
                 return None, None  # A live listing cannot authorize deleting the kept cohort.
             inventory_service = build_drive_service()

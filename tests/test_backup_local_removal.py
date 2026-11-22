@@ -9,6 +9,59 @@ import pytest
 
 from brainlayer import backup_daily as backup
 
+REAL_LIST_DRIVE_BACKUP_FILES = backup._list_drive_backup_files
+
+
+@pytest.mark.parametrize("platform,brand", [("linux", "Apple M4"), ("darwin", "Apple M3 Pro")])
+def test_unknown_host_keeps_everything_and_alerts(removal_lane, monkeypatch, platform, brand):
+    from brainlayer import backup_heavy_gate, job_alerts
+
+    _write(removal_lane, [_old_receipt(removal_lane)])
+    monkeypatch.delenv("BRAINLAYER_BACKUP_HEAVY_HOST")
+    monkeypatch.setattr(backup_heavy_gate.sys, "platform", platform)
+    monkeypatch.setattr(backup_heavy_gate, "_sysctl", lambda *_: brand)
+    alerts = removal_lane["staging_dir"] / "alerts.json"
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(alerts))
+    result = backup.run_backup(**removal_lane)
+    assert len(list(removal_lane["staging_dir"].glob("*.db.zst"))) == 3
+    assert "Unknown backup retention host" in result["retention_error"]
+    assert "Unknown backup retention host" in job_alerts.active_alerts(alerts)["backup-retention"]
+    assert json.loads(removal_lane["log_path"].read_text().splitlines()[-1]) == result
+
+
+def test_unreadable_pin_keeps_everything_and_alerts(removal_lane, monkeypatch):
+    from brainlayer import job_alerts
+
+    _write(removal_lane, [_old_receipt(removal_lane)])
+    (removal_lane["staging_dir"] / ".weekly-backup-pin.json").write_text("broken")
+    alerts = removal_lane["staging_dir"] / "alerts.json"
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(alerts))
+    result = backup.run_backup(**removal_lane)
+    assert len(list(removal_lane["staging_dir"].glob("*.db.zst"))) == 3
+    assert result["local_retention_inventory"] == "unmeasurable"
+    assert "weekly pin" in job_alerts.active_alerts(alerts)["backup-retention"]
+    assert json.loads(removal_lane["log_path"].read_text().splitlines()[-1]) == result
+
+
+def test_run_backup_retention_service_has_no_write_authority(removal_lane, monkeypatch):
+    from unittest.mock import Mock
+
+    target = _old_receipt(removal_lane)
+    _write(removal_lane, [target])
+    service = Mock()
+    resource = service.files.return_value
+    resource.list.return_value.execute.side_effect = lambda: {"files": _live(removal_lane)}
+    for verb in ("update", "delete", "patch", "emptyTrash", "create", "copy"):
+        getattr(resource, verb).side_effect = AssertionError("Drive write attempted: " + verb)
+    monkeypatch.setattr(backup, "build_drive_service", lambda *_: service)
+    monkeypatch.setattr(backup, "_list_drive_backup_files", REAL_LIST_DRIVE_BACKUP_FILES)
+    result = backup.run_backup(**removal_lane)
+    assert result["uploaded"] and result["verified"]
+    assert not Path(target["snapshot"]).exists()
+    assert resource.list.called
+    for verb in ("update", "delete", "patch", "emptyTrash", "create", "copy"):
+        getattr(resource, verb).assert_not_called()
+
 
 @pytest.fixture
 def removal_lane(tmp_path, monkeypatch):

@@ -12,16 +12,16 @@
       "sha256": "a10214bfcb11b57aa01041f22408ccabd56fa7ef89e1e233ffc9d4b595b872a6"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "ed6c0d5ec9fd2444ae9b4118b9af1b9a30062f58 (local-only retention; Drive actor removed)",
-      "sha256": "d0976cbbe8147265f6ee9327630d465a829291c79fde07de3f24ea37413138dc"
+      "sha": "local-retention R1 (unknown host/pin errors keep all and alert; receipt facts unchanged)",
+      "sha256": "dbee4a373d8ba2eca74439301f8537cdcdfe04fb96adafc5980e041d3de5c31e"
     },
     "src/brainlayer/backup_retention.py": {
       "sha": "ed6c0d5ec9fd2444ae9b4118b9af1b9a30062f58 (live same-copy proof and report-only policy comparisons)",
       "sha256": "179c14e88b007dcf5deccceb0a185569f2f1db2d53f55ad7c7019759491f35b8"
     },
     "src/brainlayer/backup_heavy_gate.py": {
-      "sha": "9fd83723 (phase-aware peak/current cause/expected phase time)",
-      "sha256": "d39464055c56e2e35f3dd3a82ce1a8fe240d6921aa470a3d98a77c8a345d7113"
+      "sha": "local-retention R1 (strict opt-in host resolver; existing heavy admission unchanged)",
+      "sha256": "adcec5a047a4cce2ea1156adbfefe57de617f58db29da3410411cc50f1ceac1e"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "5882de81",

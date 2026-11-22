@@ -13,6 +13,62 @@ from brainlayer.backup_retention_invariant import inspect_backup_daily_retention
 from tests.test_backup_retention import daily, receipt
 
 
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "from .jsonl_backup import _prune_drive_backups_to_trash as prune; prune(service)",
+        "f = service.files; f().update(fileId='x', body={'trashed': True})",
+        "files.update(fileId='x', body={'trashed': True})",
+    ],
+)
+@pytest.mark.parametrize("policy_module", [False, True])
+def test_guard_rejects_cross_lane_and_indirect_writes(statement, policy_module):
+    from brainlayer import backup_retention
+
+    module = backup_retention if policy_module else b
+    source = Path(module.__file__).read_text() + "\ndef forbidden(service, files):\n    " + statement + "\n"
+    assert inspect_backup_daily_retention_invariant(source, policy_module=policy_module)
+
+
+def test_pure_retention_module_has_no_drive_writes():
+    from brainlayer import backup_retention
+
+    assert (
+        inspect_backup_daily_retention_invariant(Path(backup_retention.__file__).read_text(), policy_module=True) == []
+    )
+
+
+@pytest.mark.parametrize("brand,expected", [("Apple M1 Pro", "m1"), ("Apple M4 Max", "m4")])
+def test_strict_host_accepts_recognised_families(monkeypatch, brand, expected):
+    from brainlayer import backup_heavy_gate
+
+    monkeypatch.delenv("BRAINLAYER_BACKUP_HEAVY_HOST", raising=False)
+    monkeypatch.setattr(backup_heavy_gate.sys, "platform", "darwin")
+    monkeypatch.setattr(backup_heavy_gate, "_sysctl", lambda *_: brand)
+    assert backup_heavy_gate._host(strict=True) == expected
+
+
+def test_second_host_probe_failure_keeps_archives_and_alerts(tmp_path, monkeypatch):
+    import subprocess
+
+    from brainlayer import backup_heavy_gate, job_alerts
+
+    log, context, files = local_lane(tmp_path, monkeypatch)
+    monkeypatch.delenv("BRAINLAYER_BACKUP_HEAVY_HOST")
+    monkeypatch.setattr(backup_heavy_gate.sys, "platform", "darwin")
+    monkeypatch.setattr(backup_heavy_gate, "_sysctl", Mock(side_effect=subprocess.TimeoutExpired("sysctl", 5)))
+    alerts = tmp_path / "alerts.json"
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(alerts))
+    assert (
+        b._sweep_verified_local_archives(
+            log, tmp_path, context, remove_local=True, live_files=files, folder_id="folder"
+        )
+        == []
+    )
+    assert len(list(tmp_path.glob("*.db.zst"))) == 8
+    assert "backup-retention" in job_alerts.active_alerts(alerts)
+
+
 def local_lane(tmp_path, monkeypatch, host="m4"):
     machine = "MacBook-Pro" if host == "m4" else "Locals-MacBook-Pro"
     monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", host)
@@ -153,7 +209,7 @@ def test_local_inventory_stat_error_keeps_archives_and_logs_reason(tmp_path, mon
         )
         == []
     )
-    assert target.exists() and "Cannot select local retention" in capsys.readouterr().out
+    assert target.exists() and "Local retention deferred" in capsys.readouterr().out
 
 
 def test_archive_replaced_during_hash_is_never_unlinked(tmp_path, monkeypatch):
