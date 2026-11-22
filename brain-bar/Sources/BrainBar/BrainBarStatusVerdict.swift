@@ -14,6 +14,7 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
 
     var dotOverride: BrainBarRenderedDot? = nil
     var healthVerdictIsStale = false
+    var wakeCatchUpPending = false
     /// Active run failures are independent of the age of the last verified copy.
     var backupRunFailures: [BrainBarBackupRunFailure] = []
     var dot: BrainBarRenderedDot { dotOverride ?? (needsAttention ? .red : .green) }
@@ -22,6 +23,9 @@ struct BrainBarStatusVerdict: Equatable, Sendable {
 
     /// Only attention rows count as things that need you. Notices remain neutral.
     var dashboardStatus: BrainBarOnePageStatus {
+        if wakeCatchUpPending, !needsAttention {
+            return .init(headline: "Checking after sleep…", reason: nil, tone: .neutral)
+        }
         if let dotOverride {
             let headline = overrideHeadline(dotOverride)
             let details = attention + notices + oldNotices
@@ -216,5 +220,6 @@ struct BrainBarWakeCatchUp {
     private var deadline: Double? = nil
     mutating func sleeping(uptime: Double = Double(DispatchTime.now().uptimeNanoseconds) / 1e9) { deadline = uptime + 180 }
     mutating func woke(uptime: Double, grace: Double = 180) { deadline = uptime + grace }
+    mutating func finished() { deadline = nil }
     func isPending(uptime: Double) -> Bool { deadline.map { uptime < $0 } ?? false }
 }
