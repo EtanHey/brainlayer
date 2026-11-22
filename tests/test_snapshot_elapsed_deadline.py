@@ -71,6 +71,9 @@ class SyntheticChild:
 
 @pytest.fixture
 def harness(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+
+    monkeypatch.setattr("brainlayer.backup_heavy_gate.backup_heavy_gate", lambda **kw: nullcontext())
     db = tmp_path / "brainlayer.db"
     with db.open("wb") as handle:
         handle.truncate(21 * GB)  # sparse; sizes the snapshot budget at 4200 s

@@ -26,6 +26,9 @@ HEALTHY_WEEKLY_S = 815  # 10-17: maintenance-weekly ok, 04:21:19 -> 04:34:54
 
 @pytest.fixture
 def db_of_size(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+
+    monkeypatch.setattr("brainlayer.backup_heavy_gate.backup_heavy_gate", lambda **kw: nullcontext())
     monkeypatch.delenv("BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", raising=False)
     monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "missing.env"))
 
