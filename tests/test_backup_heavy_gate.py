@@ -14,6 +14,8 @@ from brainlayer import backup_daily as backup
 from brainlayer import backup_heavy_gate as gate
 from brainlayer import job_alerts
 
+REAL_DISK_REASON = gate._disk_reason
+
 
 @pytest.fixture
 def admission(monkeypatch):
@@ -33,8 +35,31 @@ def admission(monkeypatch):
         monkeypatch.setattr(gate.time, "monotonic", lambda: clock[0])
         monkeypatch.setattr(gate.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
         monkeypatch.setattr(gate, "_pressure_reason", lambda *args: None)
+        monkeypatch.setattr(gate, "_disk_reason", lambda host: None)
         monkeypatch.setattr(backup, "_configured_backup_timeout_seconds", lambda: 3600)
         yield path, clock
+
+
+@pytest.fixture
+def disk_admission(admission, monkeypatch):
+    path, clock = admission
+    free_gib = [58]
+    monkeypatch.delenv("BRAINLAYER_BACKUP_HEAVY_HOST_FREE_GIB", raising=False)
+    monkeypatch.setenv("BRAINLAYER_BACKUP_STAGING_DIR", str(path))
+    monkeypatch.setattr(backup, "get_db_path", lambda: path / "synthetic.db")
+    monkeypatch.setattr(backup, "_database_logical_size_bytes", lambda db: 16 * 1024**3)
+    monkeypatch.setattr(backup, "_estimated_gzip_bytes", lambda staging, size: 8 * 1024**3)
+    monkeypatch.setattr(backup, "_should_run_full_verify", lambda date: False)
+
+    def space(volume, *, include_available):
+        assert volume == path
+        assert include_available is False  # Purgeable capacity cannot satisfy the reserve.
+        free = int(free_gib[0] * 1024**3)
+        return backup.disk_space.DiskSpace(200 * 1024**3, free, 200 * 1024**3 - free, "fake", "fake")
+
+    monkeypatch.setattr(backup.disk_space, "measure_disk_space", space)
+    monkeypatch.setattr(gate, "_disk_reason", REAL_DISK_REASON)
+    return path, clock, free_gib
 
 
 @pytest.mark.parametrize("closed", ["lock", "pressure"])
@@ -195,18 +220,14 @@ def test_cpu_detection(monkeypatch, brand, host):
     assert gate._host() == host
 
 
-def test_m1_at_37_gib_still_runs_backup(admission, monkeypatch):
-    import shutil
-
-    path, _ = admission
+def test_m1_at_37_gib_still_runs_backup(disk_admission, monkeypatch):
+    path, _, free_gib = disk_admission
+    free_gib[0] = 37
     monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m1")
     monkeypatch.setattr(gate.sys, "platform", "darwin")
     monkeypatch.setattr(gate, "_sysctl", lambda key: "used = 1M")
     monkeypatch.setattr(gate.os, "getloadavg", lambda: (1, 0, 0))
-    from collections import namedtuple
-
-    usage = namedtuple("Usage", "free")
-    monkeypatch.setattr(shutil, "disk_usage", lambda path: usage(37 * 1024**3))
+    monkeypatch.setattr(backup, "_should_run_full_verify", lambda date: True)  # peak 34 GiB, no extra M1 reserve
     # Remove the fixture's pressure fake: exercise the production resource check.
     monkeypatch.setattr(gate, "_pressure_reason", REAL_PRESSURE_REASON)
     ran = []
@@ -217,6 +238,96 @@ def test_m1_at_37_gib_still_runs_backup(admission, monkeypatch):
 
 
 REAL_PRESSURE_REASON = gate._pressure_reason
+
+
+def test_m4_disk_floor_defers_and_alerts_even_past_pressure_window(disk_admission, monkeypatch):
+    path, clock, _ = disk_admission
+    monkeypatch.setattr(backup, "_configured_backup_timeout_seconds", lambda: 100)
+    monkeypatch.setattr(backup, "_supervise_backup_process", lambda *args: pytest.fail("disk floor waived"))
+    assert backup.main() == 75
+    assert clock[0] == 40  # Includes retries beyond the 20-second pressure window.
+    assert "needs 66.001 GiB, has 58.000 GiB" in job_alerts.active_alerts()["backup-daily"]
+    assert not (path / "lock").exists()
+    assert "running past window" not in (path / "heavy.log").read_text()
+
+
+def test_full_verify_peak_includes_second_compressed_copy(disk_admission, monkeypatch):
+    _, _, free_gib = disk_admission
+    free_gib[0] = 70
+    assert REAL_DISK_REASON("m4") is None  # ordinary: 16 raw + 8 compressed + 2 floor + 40 reserve
+    monkeypatch.setattr(backup, "_should_run_full_verify", lambda date: True)
+    assert "needs 74.001 GiB, has 70.000 GiB" in REAL_DISK_REASON("m4")
+
+
+def test_disk_floor_rechecks_under_lock(disk_admission, monkeypatch):
+    path, clock, free_gib = disk_admission
+    free_gib[0] = 100
+    real_measure = backup.disk_space.measure_disk_space
+    observations = []
+
+    def measure(volume, **kwargs):
+        observations.append((path / "lock").exists())
+        free_gib[0] = 58 if len(observations) == 2 else 100
+        return real_measure(volume, **kwargs)
+
+    monkeypatch.setattr(backup.disk_space, "measure_disk_space", measure)
+    monkeypatch.setattr(backup, "_supervise_backup_process", lambda seconds: 0)
+    assert backup.main() == 0
+    assert observations == [False, True, False, True]
+    assert clock[0] == 10
+    assert not job_alerts.active_alerts()
+
+
+def test_disk_shortage_refreshes_existing_pressure_alert_without_clearing(disk_admission, monkeypatch):
+    _, clock, free_gib = disk_admission
+    free_gib[0] = 100
+    monkeypatch.setattr(gate, "_pressure_reason", lambda *args: "swap too high")
+    monkeypatch.setattr(backup, "_configured_backup_timeout_seconds", lambda: 100)
+
+    def sleep(seconds):
+        assert "backup-daily" in job_alerts.active_alerts()
+        clock[0] += seconds
+        free_gib[0] = 58
+
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    assert backup.main() == 75
+    assert "needs 66.001 GiB, has 58.000 GiB" in job_alerts.active_alerts()["backup-daily"]
+
+
+def test_host_floor_is_configurable_and_zero_is_valid(disk_admission, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST_FREE_GIB", "0")
+    assert REAL_DISK_REASON("m4") is None
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST_FREE_GIB", "60")
+    assert "needs 86.001 GiB" in REAL_DISK_REASON("m4")
+
+
+def test_disk_boundary_accepts_exact_peak_plus_reserve(disk_admission):
+    _, _, free_gib = disk_admission
+    free_gib[0] = 66 + 1 / 1024  # Includes the peak helper's 1 MiB copy allowance.
+    assert REAL_DISK_REASON("m4") is None
+    free_gib[0] -= 1 / 1024**3
+    assert REAL_DISK_REASON("m4") is not None
+
+
+def test_unmeasurable_disk_is_not_waived_past_window(disk_admission, monkeypatch):
+    monkeypatch.setattr(backup, "_configured_backup_timeout_seconds", lambda: 100)
+    monkeypatch.setattr(backup, "_supervise_backup_process", lambda *args: pytest.fail("unknown disk admitted"))
+
+    def fail(*args, **kwargs):
+        raise OSError("synthetic disk probe failure")
+
+    monkeypatch.setattr(backup.disk_space, "measure_disk_space", fail)
+    assert backup.main() == 75
+    assert "disk space measurement unavailable" in job_alerts.active_alerts()["backup-daily"]
+
+
+@pytest.mark.parametrize("floor", ["-1", "nan", "inf"])
+def test_invalid_host_floor_fails_closed(disk_admission, monkeypatch, floor):
+    path, _, _ = disk_admission
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST_FREE_GIB", floor)
+    with pytest.raises(ValueError):
+        backup.main()
+    assert not (path / "lock").exists()
 
 
 def test_no_lock_churn_when_pressure_is_closed(admission, monkeypatch):
@@ -272,6 +383,7 @@ def test_sigkill_mid_wait_leaves_durable_alert(admission):
 import os, signal
 from brainlayer import backup_daily as backup, backup_heavy_gate as gate
 gate._pressure_reason = lambda *args: 'swap too high'
+gate._disk_reason = lambda host: None
 def wait(seconds):
     os.write(int(os.environ['BACKUP_TEST_READY_FD']), b'w')
     signal.pause()

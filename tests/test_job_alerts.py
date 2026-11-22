@@ -43,6 +43,23 @@ def test_failure_episode_and_recovery(tmp_path):
     assert path.stat().st_mode & 0o777 == 0o600
 
 
+def test_explicit_reason_refresh_retains_episode_without_renotifying(tmp_path):
+    path = tmp_path / "alerts.json"
+    notifications = []
+    assert report("backup-daily", "waiting for pressure", path=path, notify=notifications.append)
+    assert report(
+        "backup-daily",
+        "disk needs 80 GiB, has 58",
+        path=path,
+        notify=notifications.append,
+        replace_reason=True,
+    )
+    assert active_alerts(path) == {"backup-daily": "disk needs 80 GiB, has 58"}
+    assert notifications == ["waiting for pressure"]
+    assert report("backup-daily", None, path=path, notify=notifications.append)
+    assert active_alerts(path) == {}
+
+
 def test_active_alerts_keep_a_readable_occurrence_time_and_read_legacy_values(tmp_path):
     path = tmp_path / "alerts.json"
     path.write_text(json.dumps({"legacy": "old failure"}), encoding="utf-8")
@@ -140,8 +157,11 @@ def test_identical_message_posts_again_once_the_other_key_cleared(tmp_path):
 
 
 def test_database_backup_exit_reports_and_clears(monkeypatch):
+    from contextlib import nullcontext
+
     from brainlayer import backup_daily, job_alerts
 
+    monkeypatch.setattr("brainlayer.backup_heavy_gate.backup_heavy_gate", lambda **kwargs: nullcontext())
     notices = []
     monkeypatch.setattr(job_alerts, "report", lambda key, reason: notices.append((key, reason)))
     monkeypatch.setattr(backup_daily, "_env_flag_enabled", lambda key: False)

@@ -61,6 +61,33 @@ def _pressure_reason(swap_limit: float, load_limit: float) -> str | None:
     return None
 
 
+def _disk_reason(host: str) -> str | None:
+    from . import backup_daily as backup
+
+    floor_gib = float(os.environ.get("BRAINLAYER_BACKUP_HEAVY_HOST_FREE_GIB", 40 if host == "m4" else 0))
+    if not math.isfinite(floor_gib) or floor_gib < 0:
+        raise ValueError("BRAINLAYER_BACKUP_HEAVY_HOST_FREE_GIB must be finite and nonnegative")
+    try:
+        staging = Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(backup.DEFAULT_STAGING_DIR))).expanduser()
+        db_size = backup._database_logical_size_bytes(backup.get_db_path())
+        compressed = backup._estimated_gzip_bytes(staging, db_size) if staging.exists() else db_size
+        # Budget the non-reclaiming peak; never rely on future pruning or raw reclamation.
+        peak = backup._peak_backup_required_bytes(db_size, compressed, full=backup._should_run_full_verify(None))
+        required = peak + math.ceil(floor_gib * 1024**3)
+        volume_path = staging
+        while not volume_path.exists():
+            volume_path = volume_path.parent
+        free = backup.disk_space.measure_disk_space(volume_path, include_available=False).free_now_bytes
+    except (OSError, RuntimeError, ValueError) as exc:
+        return f"disk space measurement unavailable: {type(exc).__name__}"
+    if free < required:
+        return (
+            f"disk space needs {required / 1024**3:.3f} GiB, has {free / 1024**3:.3f} GiB "
+            f"(peak plus {floor_gib:g} GiB host floor)"
+        )
+    return None
+
+
 def _log(path: Path, action: str) -> None:
     with path.open("a", encoding="utf-8") as stream:
         stream.write(f"brainlayer backup_daily {action} {datetime.now():%H:%M}\n")
@@ -107,7 +134,8 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                 hours = (time.monotonic() - started) / 3600
                 raise BackupGateDeferred(f"backup deferred {hours:g} h by the heavy-work gate")
             past_window = time.monotonic() >= pressure_window_end
-            reason = None if past_window else _pressure_reason(swap_limit, load_limit)
+            disk_reason = _disk_reason(host)
+            reason = disk_reason or (None if past_window else _pressure_reason(swap_limit, load_limit))
             if reason is None:
                 try:
                     lock.mkdir()
@@ -115,7 +143,8 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                     reason = "heavy lock held by another lane (never cleared by backup)"
                 else:
                     owned = True
-                    reason = None if past_window else _pressure_reason(swap_limit, load_limit)
+                    disk_reason = _disk_reason(host)
+                    reason = disk_reason or (None if past_window else _pressure_reason(swap_limit, load_limit))
                     if reason is None and time.monotonic() < expires:
                         admitted = True
                         _log(log, "took")
@@ -127,8 +156,12 @@ def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-d
                         reason = "calendar admission deadline elapsed during resource probe"
                     lock.rmdir()
                     owned = False
-            if not alerted:
-                report(job_key, f"backup waiting behind the heavy-work gate since {since}: {reason}")
+            if not alerted or disk_reason:
+                report(
+                    job_key,
+                    f"backup waiting behind the heavy-work gate since {since}: {reason}",
+                    replace_reason=bool(disk_reason),
+                )
                 alerted = True
             last_reason = reason
             _log(log, f"deferred: {reason}; retry in {retry:g}s")
