@@ -6,8 +6,8 @@
       "sha256": "a10214bfcb11b57aa01041f22408ccabd56fa7ef89e1e233ffc9d4b595b872a6"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "85c94f6eb3730260cdae0fb36a5db7d862c4ddc3 (receipt-preserving final sleep sample)",
-      "sha256": "cfe0c565d33483a650e30fdf7a35484205d1955bac51a001068a90bb1d64486b"
+      "sha": "1f620a52f6e6b40c271f5797d9b925cae21ecde3 (all final observer exceptions isolated)",
+      "sha256": "0e5ed1dcf39eb976171bfb0258ee9b02732c05bb59ec419674c607417afcb5c2"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "5882de81",
@@ -149,6 +149,7 @@
   "sleep_exit_note": "2026-11-22: 1eaf31a7 samples the same additive observer in upload exit cleanup, including permanent failure before another progress tick. No uploaded/verified/local_removed fact, receipt time, retry or deadline changes; model unchanged. Fail-first missing upload_wall_seconds regression and 19 progress/recovery tests passed.",
   "sleep_r1_note": "2026-11-22: 887b6fd4 keeps observer metadata additive. A whole-run clock pair covers inter-phase hashes/auth and retains current-attempt pauses; a shared phase observer preserves upload-wall origin over session replacement. New bounds tags, note-only 20-minute joining, checked clock capabilities, and optional observability-v2 fields do not change receipt facts, original active-time counters, verified times, retry/deadline or gate decisions. The default clock-route mutation fails Darwin/Linux sleep tests; gap and producer regressions fail on f0dc6b5a. BackupVerdict/DotTable models unchanged; re-run the two current cases against these pins.",
   "sleep_final_note": "2026-11-22: 85c94f6e makes the final optional clock sample best-effort so a RuntimeError records sleep_observation_error without preventing the existing terminal receipt or masking the original backup error. Fresh snapshots clear earlier-invocation interval history; current-invocation observations remain. No receipt verdict fact, reader, verification timestamp, retry/deadline or admission changes. Dropping the final observation turns two behavioral tests red; the original source also fails three fresh-history cases and the raising-clock receipt case. Model unchanged; current cases rechecked with updated pin.",
+  "sleep_final_exception_note": "2026-11-22: 1f620a52 widens only the optional final observer guard to Exception and records TypeName plus redacted message, preserving receipt bookkeeping and the original backup outcome. RuntimeError and KeyError tracker regressions fail before the widening and pass after it. No verdict facts, original counters, verification timestamps, reader or gate semantics change; model unchanged.",
   "bounds": {
     "BackupVerdict": {
       "snapshots": 2,
