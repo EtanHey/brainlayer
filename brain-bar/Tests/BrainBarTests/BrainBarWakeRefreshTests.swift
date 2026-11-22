@@ -118,7 +118,8 @@ final class BrainBarWakeRefreshTests: XCTestCase {
         let model = model(clock, source: source)
         model.systemWillSleep()
         clock.date.addTimeInterval(600)
-        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        model.applicationDidBecomeActive()
+        model.applicationDidBecomeActive()
         await fulfillment(of: [read], timeout: 1)
         XCTAssertEqual(source.reads, 1)
     }

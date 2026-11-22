@@ -224,8 +224,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated {
-                    guard let self, self.sleepStartedAt != nil else { return }
-                    self.systemDidWake()
+                    self?.applicationDidBecomeActive()
                 }
             }.store(in: &sleepSubscriptions)
         refreshObservabilityStatus()
@@ -521,6 +520,11 @@ final class BrainBarSettingsViewModel: ObservableObject {
         wakeCatchUp.sleeping(uptime: awakeUptime)
         scheduleWakeExpiry(after: 180)
         republishStatus()
+    }
+
+    func applicationDidBecomeActive() {
+        guard sleepStartedAt != nil else { return }
+        systemDidWake()
     }
 
     func systemDidWake() {
