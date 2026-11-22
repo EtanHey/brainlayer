@@ -32,12 +32,17 @@ The foreground script owns its build or venv setup. It can also read
 environment. The runner performs no fetch, tag creation, push or installation itself.
 
 The command gets its own process group. SIGINT or SIGTERM sent to the runner
-alone is forwarded to that whole group. The runner waits up to five seconds,
+alone is forwarded to that whole group. The runner waits up to 15 seconds
+(`SIGNAL_GRACE_SECONDS`, longer than the pre-push supervisors' 10-second grace),
 then sends SIGKILL if needed and waits up to two more seconds. It reaps the direct
 child and checks for live descendants before cleanup; zombies cannot execute and
 do not hold cleanup open. If the group is still live or cannot be measured, the
-worktree is preserved and the runner returns nonzero. Foreground commands must
-not daemonize or move descendants to another process group.
+worktree is preserved and the runner returns nonzero. Descendants in other
+sessions are invisible to this group check. The pre-push supervisors use separate
+sessions and must forward signals and finish their suites within the runner's
+grace; arbitrary detached background jobs are not supported. On Darwin, EPERM
+from a zombie-only group falls through to the process-state check rather than
+changing the command's outcome. A failed process-state check still preserves the tree.
 
 After the command finishes and its group has stopped, plain `git worktree remove` removes a clean checkout
 and its ignored build/venv output. Dirty tracked files or untracked artifacts

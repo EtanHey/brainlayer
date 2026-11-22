@@ -17,6 +17,8 @@ import time
 import uuid
 from pathlib import Path
 
+SIGNAL_GRACE_SECONDS = 15  # Inner pre-push supervisors need 10 seconds plus kill/reap time.
+
 
 def git_env() -> dict[str, str]:
     # Hooks can export repository locators. Keep config/auth policy inherited,
@@ -45,6 +47,9 @@ def signal_group(pgid: int, signum: int) -> None:
         os.killpg(pgid, signum)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        if group_running(pgid):
+            raise  # A live or unmeasurable group must not be silently ignored.
 
 
 def group_running(pgid: int) -> bool:
@@ -52,6 +57,8 @@ def group_running(pgid: int) -> bool:
         os.killpg(pgid, 0)
     except ProcessLookupError:
         return False
+    except PermissionError:
+        pass  # Darwin can return EPERM for a group containing only unreaped zombies.
     # Orphaned zombies can outlive the command until launchd/init reaps them.
     # They cannot execute a push or access the checkout. Unknown state is live.
     try:
@@ -116,7 +123,7 @@ def run(repo: Path, ref: str, command: list[str]) -> int:
             while child.poll() is None and not received:
                 time.sleep(0.05)
             if received:
-                if not wait_for_group(child, 5):
+                if not wait_for_group(child, SIGNAL_GRACE_SECONDS):
                     print("release-worktree: signal grace expired; killing command group", file=sys.stderr)
                     signal_group(child.pid, signal.SIGKILL)
                     wait_for_group(child, 2)

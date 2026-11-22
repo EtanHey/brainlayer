@@ -1,7 +1,9 @@
 """Real Git scratch repositories; never fetch, build, tag, or push a fleet repo."""
 
+import errno
 import json
 import os
+import runpy
 import signal
 import subprocess
 import sys
@@ -213,7 +215,7 @@ def test_signal_to_runner_waits_for_grandchild_before_cleanup(scratch, tmp_path,
             time.sleep(0.02)
         assert receipt is not None, "grandchild did not start"
         os.kill(runner.pid, signum)  # Signal the runner alone, not its session.
-        stdout, stderr = runner.communicate(timeout=10)
+        stdout, stderr = runner.communicate(timeout=25)
         assert runner.returncode == 128 + signum, (stdout, stderr)
         if ignore:
             assert "signal grace expired; killing command group" in stderr
@@ -233,5 +235,108 @@ def test_signal_to_runner_waits_for_grandchild_before_cleanup(scratch, tmp_path,
             try:
                 os.killpg(group, signal.SIGKILL)
             except ProcessLookupError:
+                pass
+        runner.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("state,expected", [("Z", False), ("S", True), (None, True)])
+def test_group_eperm_uses_ps_to_distinguish_zombies_from_live_or_unknown(monkeypatch, state, expected):
+    module = runpy.run_path(str(SCRIPT))
+
+    def denied(*args):
+        raise PermissionError(errno.EPERM, "Darwin zombie group")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "killpg", denied)
+        patch.setattr(
+            subprocess,
+            "run",
+            lambda *a, **k: subprocess.CompletedProcess(a, 1 if state is None else 0, f"123 {state}\n", ""),
+        )
+        assert module["group_running"](123) is expected
+
+
+@pytest.mark.parametrize("state", ["Z", "S"])
+def test_signalling_eperm_ignores_only_confirmed_zombies(monkeypatch, state):
+    module = runpy.run_path(str(SCRIPT))
+
+    def denied(*args):
+        raise PermissionError(errno.EPERM, "Darwin zombie group")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "killpg", denied)
+        patch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, f"123 {state}\n", ""))
+        if state == "Z":
+            module["signal_group"](123, signal.SIGTERM)
+        else:
+            with pytest.raises(PermissionError):
+                module["signal_group"](123, signal.SIGTERM)
+
+
+def test_signal_waits_for_supervisor_with_suite_in_another_session(scratch, tmp_path):
+    repo, env, git, _ = scratch
+    ready, stopped = tmp_path / "suite-ready.json", tmp_path / "suite-stopped.json"
+    suite = tmp_path / "suite.py"
+    suite.write_text(
+        "import json,os,signal,sys,time\nfrom pathlib import Path\n"
+        "cwd=Path.cwd()\n"
+        "def stop(*args):\n    time.sleep(7)\n"
+        "    Path(sys.argv[2]).write_text(json.dumps({'exists': cwd.exists()}))\n    raise SystemExit(0)\n"
+        "signal.signal(signal.SIGTERM,stop)\n"
+        "Path(sys.argv[1]).write_text(json.dumps({'group':os.getpgrp(),'cwd':str(cwd)}))\n"
+        "time.sleep(60)\n"
+    )
+    supervisor = tmp_path / "supervisor.py"
+    supervisor.write_text(
+        "import os,signal,subprocess,sys,time\n"
+        "child=subprocess.Popen(sys.argv[1:],start_new_session=True)\n"
+        "def stop(*args):\n    os.killpg(child.pid,signal.SIGTERM)\n    child.wait(timeout=10)\n    raise SystemExit(0)\n"
+        "signal.signal(signal.SIGTERM,stop)\n"
+        "while child.poll() is None: time.sleep(.05)\n"
+    )
+    runner = subprocess.Popen(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "v-test",
+            "--",
+            sys.executable,
+            str(supervisor),
+            sys.executable,
+            str(suite),
+            str(ready),
+            str(stopped),
+        ],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    receipt = None
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                receipt = json.loads(ready.read_text())
+                break
+            except (FileNotFoundError, json.JSONDecodeError):
+                time.sleep(0.02)
+        assert receipt
+        os.kill(runner.pid, signal.SIGTERM)
+        stdout, stderr = runner.communicate(timeout=25)
+        assert runner.returncode == 143, (stdout, stderr)
+        assert json.loads(stopped.read_text()) == {"exists": True}
+        assert "signal grace expired" not in stderr
+        assert not Path(receipt["cwd"]).exists()
+        assert git("worktree", "list", "--porcelain").count("worktree ") == 1
+    finally:
+        for group in {runner.pid, *([receipt["group"]] if receipt else [])}:
+            assert group != os.getpgrp()
+            try:
+                os.killpg(group, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
                 pass
         runner.communicate(timeout=5)
