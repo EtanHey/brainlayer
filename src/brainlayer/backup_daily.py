@@ -42,7 +42,7 @@ from xml.parsers.expat import ExpatError
 
 import requests
 
-from . import disk_space, drive_credentials
+from . import backup_sleep, disk_space, drive_credentials
 from .paths import get_db_path, resolve_db_path
 from .socket_hygiene import refuse_production_brainbar_socket
 
@@ -191,6 +191,9 @@ class SQLiteBackupArtifact:
     raw_sha256: str | None = None
     reclaim_basis: str | None = None
     chunk_stage_seconds: dict[str, Any] | None = None
+    snapshot_wall_seconds: float | None = None
+    snapshot_slept_seconds: float = 0
+    snapshot_sleep_intervals: list[dict] | None = None
 
     @property
     def archive_path(self) -> Path:
@@ -1827,6 +1830,7 @@ def create_sqlite_backup_artifact(
     capacity_status_callback: Callable[[int, int | None, int, int], None] | None = None,
     integrity_full: bool | None = None,
     integrity_status_callback: Callable[[str, str, float], None] | None = None,
+    snapshot_telemetry_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> SQLiteBackupArtifact:
     """Create an integrity-tested archive (.db.zst by default, .db.gz with
     BRAINLAYER_BACKUP_COMPRESSOR=gzip). Unsupported filesystems retain the legacy raw on failure;
@@ -1836,6 +1840,14 @@ def create_sqlite_backup_artifact(
     caller compatibility; they cannot authorize retaining duplicates or pruning only copies.
     """
     snapshot_started = time.monotonic()
+    sleep_tracker = backup_sleep.SleepTracker()
+
+    def observe_sleep() -> dict[str, Any]:
+        metrics = sleep_tracker.tick(prefix="snapshot", action="snapshot continued after wake")
+        if snapshot_telemetry_callback is not None:
+            snapshot_telemetry_callback(metrics)
+        return metrics
+
     db_path = Path(db_path).expanduser()
     output_dir = Path(output_dir).expanduser()
     date_stamp = date_stamp or _today()
@@ -1934,6 +1946,7 @@ def create_sqlite_backup_artifact(
         flush=True,
     )
     if raw_free_bytes < required_bytes:
+        observe_sleep()
         reason = purge_error or (
             "important-usage capacity unavailable or below required"
             if important_free_bytes is None or important_free_bytes < required_bytes
@@ -1997,6 +2010,7 @@ def create_sqlite_backup_artifact(
                 retry_capacity_check=require_retry_capacity,
                 expected_db_path=db_path,
             )
+            observe_sleep()
             if isinstance(promoted, os.stat_result):
                 owned_raw = (promoted.st_dev, promoted.st_ino)
             _require_raw_floor(output_dir)
@@ -2013,6 +2027,7 @@ def create_sqlite_backup_artifact(
             except sqlite3.Error as exc:
                 integrity = f"{type(exc).__name__}: {exc}"
             integrity_duration = time.monotonic() - integrity_started
+            observe_sleep()
             if integrity_status_callback is not None:
                 integrity_status_callback(integrity, pragma, integrity_duration)
             # Past this point a raw is either verified or retained on purpose; the existing
@@ -2061,10 +2076,12 @@ def create_sqlite_backup_artifact(
                 _remove_raw_with_verified_archive(output_dir, final_raw, own_run=True, archive_name=final_archive.name)
             deleted.append(final_raw.name)
     except BaseException:
+        observe_sleep()
         if orphan_cleanup and not raw_settled and owned_raw is not None:
             _remove_owned_raw(final_raw, owned_raw)
         raise
 
+    sleep_metrics = observe_sleep()
     return SQLiteBackupArtifact(
         gzip_path=final_archive,
         uncompressed_path=None,
@@ -2080,6 +2097,9 @@ def create_sqlite_backup_artifact(
         local_integrity=integrity,
         local_integrity_pragma=pragma,
         snapshot_duration_seconds=time.monotonic() - snapshot_started,
+        snapshot_wall_seconds=sleep_metrics["snapshot_wall_seconds"],
+        snapshot_slept_seconds=sleep_metrics["snapshot_slept_seconds"],
+        snapshot_sleep_intervals=sleep_metrics["sleep_intervals"],
         integrity_duration_seconds=integrity_duration,
         compressor=compressor,
         compressor_fallback=compressor_fallback,
@@ -2594,6 +2614,7 @@ def upload_file_to_drive_raw(
     session = requests.Session()
     started = time.monotonic()
     rate_base = retries = probes = deadlines = requests_started = bytes_attempted = 0
+    sleep_tracker = backup_sleep.SleepTracker()
 
     def report_progress() -> None:
         elapsed = time.monotonic() - started
@@ -2602,6 +2623,7 @@ def upload_file_to_drive_raw(
                 {
                     "upload_updated_at": dt.datetime.now(dt.UTC).isoformat(),
                     "upload_elapsed_seconds": round(elapsed, 3),
+                    **sleep_tracker.tick(prefix="upload", action="upload resumed after wake"),
                     "upload_rate_bps": max(0, sent - rate_base) / elapsed if elapsed > 0 else 0.0,
                     "retries": retries,
                     "upload_probes": probes,
@@ -3906,6 +3928,12 @@ def run_backup(
         local_resume = local is not None and not (local.get("uploaded") and local.get("verified"))
         candidate = local if local_resume else candidate
 
+        def record_snapshot_sleep(metrics: dict[str, Any]) -> None:
+            result.update(metrics)
+            result["snapshot_sleep_intervals"] = metrics["sleep_intervals"]
+            if "sleep_note" not in metrics:
+                result.pop("sleep_note", None)
+
         def prepare_artifact(resume: dict[str, Any] | None) -> SQLiteBackupArtifact:
             if resume is not None:
                 raw_deleted, _ = _cleanup_raw_snapshots(Path(staging_dir))
@@ -3924,6 +3952,9 @@ def run_backup(
                     local_integrity=resume.get("local_integrity"),
                     local_integrity_pragma=resume.get("local_integrity_pragma"),
                     snapshot_duration_seconds=resume.get("snapshot_duration_seconds"),
+                    snapshot_wall_seconds=resume.get("snapshot_wall_seconds"),
+                    snapshot_slept_seconds=resume.get("snapshot_slept_seconds", 0),
+                    snapshot_sleep_intervals=resume.get("snapshot_sleep_intervals", []),
                     integrity_duration_seconds=resume.get("integrity_duration_seconds"),
                     raw_sha256=resume.get("raw_sha256"),
                     reclaim_basis=resume.get("reclaim_basis"),
@@ -3944,6 +3975,7 @@ def run_backup(
                     capacity_status_callback=record_capacity,
                     integrity_full=True if phase == "snapshot" else None,
                     integrity_status_callback=record_integrity,
+                    snapshot_telemetry_callback=record_snapshot_sleep,
                 )
             except RuntimeError as exc:
                 reason = _redact_upload_secrets(str(exc))
@@ -3998,6 +4030,9 @@ def run_backup(
                     "local_integrity": getattr(artifact, "local_integrity", None),
                     "local_integrity_pragma": getattr(artifact, "local_integrity_pragma", None),
                     "snapshot_duration_seconds": getattr(artifact, "snapshot_duration_seconds", None),
+                    "snapshot_wall_seconds": getattr(artifact, "snapshot_wall_seconds", None),
+                    "snapshot_slept_seconds": getattr(artifact, "snapshot_slept_seconds", 0),
+                    "snapshot_sleep_intervals": getattr(artifact, "snapshot_sleep_intervals", None) or [],
                     "integrity_duration_seconds": getattr(artifact, "integrity_duration_seconds", None),
                     "raw_sha256": getattr(artifact, "raw_sha256", None),
                     "reclaim_basis": getattr(artifact, "reclaim_basis", None),
@@ -4014,6 +4049,12 @@ def run_backup(
                     "bytes": snapshot_size,
                 }
             )
+            result["sleep_intervals"] = result["snapshot_sleep_intervals"]
+            note = backup_sleep.sleep_note(result["sleep_intervals"], action="snapshot continued after wake")
+            if note:
+                result["sleep_note"] = note
+            else:
+                result.pop("sleep_note", None)
             # create_sqlite_backup_artifact has already proven gzip CRC/ISIZE,
             # SQLite header, sentinel and raw/gzip equality before dropping raw (#1387).
             with snapshot.open("rb") as durable:
@@ -4027,6 +4068,16 @@ def run_backup(
                 for key in ("uploaded", "drive_file", "resumable_upload"):
                     if key in resume:
                         result[key] = resume[key]
+                if resume.get("uploaded"):
+                    for key in (
+                        "upload_elapsed_seconds",
+                        "upload_wall_seconds",
+                        "upload_slept_seconds",
+                        "sleep_intervals",
+                        "sleep_note",
+                    ):
+                        if key in resume:
+                            result[key] = resume[key]
                 resume_state = resume.get("resumable_upload")
             result.update(local_verified=True, local_artifact=_upload_identity(snapshot), upload_state="pending")
             # A completed session resumes verification before any network call; legacy final receipts stay unchanged.
@@ -4072,6 +4123,20 @@ def run_backup(
                     if isinstance(resume.get("bytes_confirmed_at"), str):
                         result["bytes_confirmed_at"] = resume["bytes_confirmed_at"]
 
+            def record_upload_telemetry(metrics: dict[str, Any]) -> None:
+                metrics = {
+                    **metrics,
+                    **upload_sleep_tracker.tick(prefix="upload", action="upload resumed after wake"),
+                }
+                result.update(metrics)
+                intervals = result["snapshot_sleep_intervals"] + metrics.get("sleep_intervals", [])
+                result["sleep_intervals"] = intervals
+                note = backup_sleep.sleep_note(intervals, action="upload resumed after wake")
+                if note:
+                    result["sleep_note"] = note
+                else:
+                    result.pop("sleep_note", None)
+
             def record_upload_progress(url: str, confirmed: int) -> None:
                 nonlocal resume_state
                 previous = result.get("bytes_confirmed")
@@ -4095,6 +4160,7 @@ def run_backup(
             def record_upload_thread_policy(policy: dict[str, Any]) -> None:
                 result["upload_thread_policy"] = policy
 
+            upload_sleep_tracker = backup_sleep.SleepTracker()
             try:
                 uploaded = upload_file_to_drive_raw(
                     snapshot,
@@ -4103,7 +4169,7 @@ def run_backup(
                     machine_id=resolved_machine_id,
                     progress_callback=record_upload_progress,
                     policy_callback=record_upload_thread_policy,
-                    telemetry_callback=result.update,
+                    telemetry_callback=record_upload_telemetry,
                     run_deadline=run_deadline,
                     **({"resume_session_url": saved_session["url"]} if saved_session else {}),
                 )
@@ -4121,7 +4187,7 @@ def run_backup(
                         machine_id=resolved_machine_id,
                         progress_callback=record_upload_progress,
                         policy_callback=record_upload_thread_policy,
-                        telemetry_callback=result.update,
+                        telemetry_callback=record_upload_telemetry,
                         run_deadline=run_deadline,
                     )
                     break
@@ -4137,6 +4203,9 @@ def run_backup(
             # Drive has completed the session. Persist that fact before verification can
             # fail or its final receipt can be truncated; an older checkpoint must not revive it.
             result.update({"uploaded": True, "drive_file": uploaded})
+            note = backup_sleep.sleep_note(result.get("sleep_intervals", []), action="uploaded the rest after wake")
+            if note:
+                result["sleep_note"] = note
             resume_state = None
             result.pop("resumable_upload", None)
             _append_json_log(resolved_log_path, {**result, "verification_pending": True})

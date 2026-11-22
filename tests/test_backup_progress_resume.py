@@ -228,3 +228,57 @@ def test_expired_session_replacement_has_no_checkpoint_before_it_starts(local_la
     row = latest(local_lane)
     assert "bytes_confirmed" not in row
     assert "bytes_confirmed_at" not in row
+
+
+def test_sleep_observation_survives_upload_session_replacement(local_lane, monkeypatch):
+    from brainlayer import backup_sleep
+
+    saved(local_lane)
+    network(monkeypatch)
+    values = {"inclusive": 0, "awake": 0}
+    tracker = backup_sleep.SleepTracker(inclusive=lambda: values["inclusive"], awake=lambda: values["awake"])
+    monkeypatch.setattr(backup_sleep, "SleepTracker", lambda: tracker)
+
+    def upload(path, *args, **kwargs):
+        if kwargs.get("resume_session_url"):
+            values["inclusive"] = 21600
+            kwargs["telemetry_callback"]({"upload_elapsed_seconds": 0})
+            raise backup.DriveSessionExpiredError("synthetic expiry after sleep")
+        values.update(inclusive=21630, awake=30)
+        kwargs["telemetry_callback"]({"upload_elapsed_seconds": 30, "sleep_intervals": []})
+        raise RuntimeError("synthetic stop after replacement telemetry")
+
+    monkeypatch.setattr(backup, "upload_file_to_drive_raw", upload)
+    with pytest.raises(RuntimeError, match="after replacement telemetry"):
+        backup.run_backup(**local_lane, phase="upload")
+    row = latest(local_lane)
+    assert row["upload_wall_seconds"] == 21630
+    assert row["upload_slept_seconds"] == 21600
+    assert len(row["sleep_intervals"]) == 1
+
+
+def test_verification_recovery_retains_completed_upload_sleep(local_lane, monkeypatch):
+    prior = saved(local_lane, uploaded=True)
+    prior.update(
+        upload_elapsed_seconds=30,
+        upload_wall_seconds=21630,
+        upload_slept_seconds=21600,
+        sleep_intervals=[{"from": "2026-11-22T07:09:00+02:00", "to": "2026-11-22T13:09:00+02:00", "seconds": 21600}],
+        sleep_note="paused 6 h while the Mac slept; uploaded the rest after wake",
+    )
+    backup._append_json_log(local_lane["log_path"], prior)
+    network(monkeypatch)
+    monkeypatch.setattr(
+        backup, "build_drive_service", lambda: (_ for _ in ()).throw(RuntimeError("synthetic verification stop"))
+    )
+    with pytest.raises(RuntimeError, match="verification stop"):
+        backup.run_backup(**local_lane, phase="upload")
+    row = latest(local_lane)
+    for field in (
+        "upload_elapsed_seconds",
+        "upload_wall_seconds",
+        "upload_slept_seconds",
+        "sleep_intervals",
+        "sleep_note",
+    ):
+        assert row[field] == prior[field]
