@@ -25,7 +25,7 @@ struct BrainBarBackupProgress: Equatable, Sendable {
                     identity: "\(local.destination ?? ""):\(started.timeIntervalSince1970)",
                     confirmed: verifying || !fresh ? nil : local.bytesConfirmed, total: verifying ? nil : local.bytesTotal,
                     lastGoodAt: backups.dbSnapshot.flatMap { $0.verified && $0.lastAt <= now ? $0.lastAt : nil },
-                    checkpointAt: fresh && !verifying ? local.bytesConfirmedAt : nil,
+                    checkpointAt: !verifying ? local.bytesConfirmedAt : nil,
                     isStalled: !verifying && local.bytesConfirmedAt.map { now.timeIntervalSince($0) > checkpointMaxAgeS } == true)
     }
 
@@ -34,9 +34,13 @@ struct BrainBarBackupProgress: Equatable, Sendable {
         return Double(confirmed) / Double(total)
     }
     var percentage: Int? { fraction.map { Int(($0 * 100).rounded(.down)) } }
-    var accessibilityValue: String { percentage.map { "\($0) percent" } ?? BrainBarMenuPresenter.SurfaceSay.backupInProgress }
+    var accessibilityValue: String {
+        if isStalled, let checkpointAt { return checkpointAt.formatted(date: .abbreviated, time: .shortened) }
+        return percentage.map { "\($0) percent" } ?? BrainBarMenuPresenter.SurfaceSay.backupInProgress
+    }
     var title: String {
-        phase == .upload ? BrainBarMenuPresenter.SurfaceSay.backupUploading : BrainBarMenuPresenter.SurfaceSay.backupVerifying
+        if isStalled { return BrainBarMenuPresenter.SurfaceSay.notUploadingSince }
+        return phase == .upload ? BrainBarMenuPresenter.SurfaceSay.backupUploading : BrainBarMenuPresenter.SurfaceSay.backupVerifying
     }
     func animates(after previous: Self?, reduceMotion: Bool) -> Bool {
         guard !reduceMotion, let previous, phase == .upload, previous.phase == phase,
@@ -55,15 +59,25 @@ struct BrainBarBackupProgressView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shown: BrainBarBackupProgress?
 
+    var lastGoodText: String? {
+        guard !barOnly, let at = progress.lastGoodAt else { return nil }
+        return (compact ? BrainBarMenuPresenter.SurfaceSay.backupLastGoodShort : BrainBarMenuPresenter.SurfaceSay.backupLastGood)
+            + " " + at.formatted(date: .abbreviated, time: .shortened)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             if !barOnly {
                 HStack(spacing: 6) {
-                    Text(compact ? (progress.phase == .upload ? BrainBarMenuPresenter.SurfaceSay.backupUploadingShort
+                    Text(compact && !progress.isStalled ? (progress.phase == .upload ? BrainBarMenuPresenter.SurfaceSay.backupUploadingShort
                         : BrainBarMenuPresenter.SurfaceSay.backupVerifyingShort) : progress.title).lineLimit(1)
                     Spacer(minLength: 0)
-                    if let percent = progress.percentage, let at = progress.checkpointAt {
-                        Text("\(percent)% · " + at.formatted(date: .omitted, time: .shortened)).monospacedDigit().lineLimit(1)
+                    if let at = progress.checkpointAt {
+                        if progress.isStalled {
+                            Text(at.formatted(date: .omitted, time: .shortened)).monospacedDigit().lineLimit(1)
+                        } else if let percent = progress.percentage {
+                            Text("\(percent)% · " + at.formatted(date: .omitted, time: .shortened)).monospacedDigit().lineLimit(1)
+                        }
                     }
                 }
             }
@@ -78,9 +92,8 @@ struct BrainBarBackupProgressView: View {
                 }
             }
             .frame(height: 3)
-            if !barOnly, let at = progress.lastGoodAt {
-                Text((compact ? BrainBarMenuPresenter.SurfaceSay.backupLastGoodShort : BrainBarMenuPresenter.SurfaceSay.backupLastGood)
-                    + " " + at.formatted(date: .abbreviated, time: .shortened))
+            if let lastGoodText {
+                Text(lastGoodText)
                     .foregroundStyle(.secondary)
                     .lineLimit(1).minimumScaleFactor(0.8)
             }

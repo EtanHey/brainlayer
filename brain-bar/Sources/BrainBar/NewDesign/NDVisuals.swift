@@ -547,12 +547,15 @@ struct NDRail: View {
         Self.timePosition(h, width: w, past: past, ahead: ahead)
     }
 
-    /// Fix 15: when the last run and the next run both sit within 6 pt of now, the rail draws only the next-run ring
-    /// (the two marks would overprint); the lane's sentence still says both.
+    /// Failures win over same-time successes. Near now, a next-run ring may replace a successful run, never a failure.
     static func shown(_ events: [Event], width: CGFloat, past: Double, ahead: Double) -> [Event] {
         func nearNow(_ e: Event) -> Bool { abs(CGFloat(e.hours / (past + ahead)) * width) <= 6 }
-        guard events.contains(where: { $0.kind == .next && nearNow($0) }) else { return events }
-        return events.filter { $0.kind == .next || !nearNow($0) }
+        let failures = Set(events.filter { $0.kind == .fail }.map(\.hours))
+        let visible = events.filter { $0.kind != .ok || !failures.contains($0.hours) }
+        let shown = visible.contains(where: { $0.kind == .next && nearNow($0) })
+            ? visible.filter { $0.kind == .next || $0.kind == .fail || !nearNow($0) } : visible
+        // Nearby rings cannot paint over a failure, even when their clocks differ slightly.
+        return shown.filter { $0.kind != .fail } + shown.filter { $0.kind == .fail }
     }
 
     private func draw(_ ctx: GraphicsContext, _ size: CGSize) {

@@ -219,7 +219,7 @@ enum BrainBarDesignFixture {
             uploadProcessLive: true, uploadProcessStartedAt: now.addingTimeInterval(-3600),
             localIntegrity: "ok", localIntegrityPragma: "integrity_check", bytesConfirmed: 25,
             bytesTotal: name == .uploadNoTotal ? nil : 100, verificationPending: verifying,
-            bytesConfirmedAt: now.addingTimeInterval(name == .uploadDriveStalled ? -21 * 60 : name == .uploadStalled ? -15 * 60 : -60))
+            bytesConfirmedAt: now.addingTimeInterval(name == .uploadDriveStalled || name == .uploadStalled ? -21 * 60 : -60))
         return ObservabilityDocument.Backups(
             state: "measured", reason: "", inputs: [], freshness: stale ? "stale" : "fresh", thresholdHours: 36,
             retentionInvariant: "PASS", survivingArchives30D: 7, errorType: nil,
