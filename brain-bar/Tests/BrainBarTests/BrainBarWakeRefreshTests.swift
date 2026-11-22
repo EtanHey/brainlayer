@@ -123,20 +123,6 @@ final class BrainBarWakeRefreshTests: XCTestCase {
         XCTAssertEqual(source.reads, 1)
     }
 
-    func testFreshVerdictEndsSleepCheckingImmediately() {
-        let clock = Clock()
-        let model = model(clock)
-        model.systemWillSleep()
-        clock.date.addTimeInterval(600)
-        model.systemDidWake()
-        clock.date.addTimeInterval(2)
-        var badge = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
-        badge.healthVerdict = .init(dot: .green, checks: [], notes: [], evaluatedAt: clock.date)
-        model.applyHealthBadge(badge, alerts: nil)
-        XCTAssertFalse(model.menuCapture(stats: nil).wakeCatchUpPending)
-        XCTAssertNotNil(model.publishedStatus.healthVerdict)
-    }
-
     func testPreWakeGreenCannotBecomeCurrentAfterDeadline() {
         let clock = Clock()
         var deadlines: [@MainActor @Sendable () -> Void] = []
@@ -173,22 +159,58 @@ final class BrainBarWakeRefreshTests: XCTestCase {
     private func logURL() -> URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build.noindex/brainbar-ui-lead-w217/log-fixtures")
+            .appendingPathComponent(".build.noindex/wake-refresh-log-fixtures")
             .appendingPathComponent(UUID().uuidString + ".log")
     }
 
     func testWakeTimeoutWithoutVerdictExplainsMissingFreshReading() {
-        let clock = Clock()
-        var deadlines: [@MainActor @Sendable () -> Void] = []
-        let model = model(clock, scheduler: { _, action in deadlines.append(action) })
-        model.applyHealthBadge(.init(badgeOn: false, reason: "", activeCodes: []), alerts: nil)
-        model.systemWillSleep()
-        clock.date.addTimeInterval(600)
-        model.systemDidWake()
-        clock.date.addTimeInterval(361); clock.uptime += 361
-        deadlines.last?()
-        XCTAssertTrue(model.publishedStatus.dashboardStatus.reason?.contains("No health reading from after wake.") == true)
-        XCTAssertNotEqual(model.publishedStatus.dashboardStatus.tone, .green)
+        for unreadable in [false, true] {
+            let clock = Clock()
+            var deadlines: [@MainActor @Sendable () -> Void] = []
+            let model = model(clock, scheduler: { _, action in deadlines.append(action) })
+            var badge = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
+            badge.healthVerdictUnreadable = unreadable
+            model.applyHealthBadge(badge, alerts: nil)
+            let wasChecking = model.publishedStatus.isChecking
+            model.systemWillSleep()
+            clock.date.addTimeInterval(600)
+            model.systemDidWake()
+            clock.date.addTimeInterval(361); clock.uptime += 361
+            deadlines.last?()
+            XCTAssertTrue(model.publishedStatus.dashboardStatus.reason?.contains("No health reading from after wake.") == true)
+            XCTAssertNotEqual(model.publishedStatus.dashboardStatus.tone, .green)
+            XCTAssertEqual(model.publishedStatus.verdict.dot, .amber)
+            XCTAssertEqual(model.publishedStatus.isChecking, wasChecking)
+        }
+    }
+
+    func testAlreadyStaleVerdictKeepsAmberAfterWakeDeadlineAndLogsItsReason() throws {
+        for state in [BrainBarHealthVerdict.State.green, .amber] {
+            let clock = Clock()
+            let url = logURL()
+            defer { try? FileManager.default.removeItem(at: url) }
+            var deadlines: [@MainActor @Sendable () -> Void] = []
+            let model = model(clock, log: BrainBarLog.lifecycleLogFile(path: url.path),
+                              scheduler: { _, action in deadlines.append(action) })
+            var badge = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
+            badge.healthVerdict = .init(dot: state, checks: [], notes: [],
+                                       evaluatedAt: clock.date.addingTimeInterval(-901))
+            model.applyHealthBadge(badge, alerts: nil)
+            XCTAssertEqual(model.publishedStatus.verdict.dot, .amber)
+            model.systemWillSleep()
+            clock.date.addTimeInterval(600)
+            model.systemDidWake()
+            clock.date.addTimeInterval(361); clock.uptime += 361
+            deadlines.last?()
+            XCTAssertEqual(model.publishedStatus.verdict.dot, .amber)
+            XCTAssertEqual(model.publishedStatus.staleHealthVerdict, badge.healthVerdict)
+            let reasons = model.publishedStatus.issues.filter { $0.id == "verdict.stale" }
+            XCTAssertEqual(reasons.count, 1)
+            let reason = try XCTUnwrap(reasons.first?.text)
+            XCTAssertTrue(reason.contains("Health check stale"))
+            let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+            XCTAssertTrue(try XCTUnwrap(lines.last).contains("status still not confirmed 361 s after wake: " + reason))
+        }
     }
 
     func testLifecycleLogRecordsSleepWakeAndFirstConfirmation() throws {

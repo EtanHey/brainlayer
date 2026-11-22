@@ -561,16 +561,19 @@ final class BrainBarSettingsViewModel: ObservableObject {
             if let verdict = candidate.healthVerdict, verdict.evaluatedAt >= wakeStartedAt,
                verdict.evaluatedAt <= time {
                 wakeCatchUp.finished()
-                logWakeOutcome(confirmed: true, at: time, headline: candidate.dashboardStatus.headline)
+                logWakeOutcome(confirmed: true, at: time, detail: candidate.dashboardStatus.headline)
             } else {
-                let verdict = candidate.healthVerdict
-                let reason = BrainBarStatusIssue(id: "verdict.stale", component: .health, severity: .notice,
+                let verdict = candidate.healthVerdict ?? candidate.staleHealthVerdict
+                let reason = candidate.issues.first { $0.id == "verdict.stale" }
+                    ?? BrainBarStatusIssue(id: "verdict.stale", component: .health, severity: .notice,
                     text: verdict?.fallbackNotice(now: time, sleepHistory: sleepHistory)
                         ?? "No health reading from after wake.")
-                candidate = .init(issues: [reason] + candidate.issues, isChecking: false,
-                                  staleHealthVerdict: verdict)
+                let issues = candidate.issues.contains { $0.id == reason.id }
+                    ? candidate.issues : [reason] + candidate.issues
+                candidate = .init(issues: issues, isChecking: candidate.isChecking,
+                                  staleHealthVerdict: verdict, wakeStatusUnconfirmed: true)
                 if !wakeCatchUp.isPending(uptime: awakeUptime) {
-                    logWakeOutcome(confirmed: false, at: time)
+                    logWakeOutcome(confirmed: false, at: time, detail: reason.text)
                 }
             }
         }
@@ -587,12 +590,11 @@ final class BrainBarSettingsViewModel: ObservableObject {
         }
     }
 
-    private func logWakeOutcome(confirmed: Bool, at time: Date, headline: String? = nil) {
+    private func logWakeOutcome(confirmed: Bool, at time: Date, detail: String) {
         guard !wakeOutcomeLogged, let wakeStartedUptime else { return }
         wakeOutcomeLogged = true
         let seconds = max(0, Int(awakeUptime - wakeStartedUptime))
         let outcome = confirmed ? "status confirmed" : "status still not confirmed"
-        let detail = headline ?? "No health reading from after wake."
         lifecycleLog?.append("\(outcome) \(seconds) s after wake: \(detail)", now: time)
     }
 
