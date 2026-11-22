@@ -581,7 +581,8 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
                 return Set(regex.matches(in: disabledResult.output, range: NSRange(location: 0, length: text.length))
                     .map { text.substring(with: $0.range(at: 1)) })
             }()
-            let next = nextRun(components: calendarSchedule())
+            let calendarComponents = calendarSchedule()
+            let next = nextRun(components: calendarComponents)
             let problem = calendarScheduleProblem()
             return Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { job in
                 var result = job.isContinuous ? component(job)
@@ -601,6 +602,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
                     }
                 }
                 if !job.isContinuous {
+                    result.scheduleInterval = scheduleInterval(components: calendarComponents)
                     result.calendarHistoryDamaged = history.error != nil || history.truncated || history.skippedLineCount > 0
                 }
                 if !job.isContinuous, let note = history.uncertaintyNote {
@@ -694,6 +696,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
                 nextRunAt: nextRun(components: components),
                 isContinuous: components == nil && job.isContinuous
             )
+            observation.scheduleInterval = scheduleInterval(components: components)
             if job == .watch, let exit = uncleanLaunchdExit(result) {
                 observation.uncleanExit = "Watcher " + exit
                 observation.healthySince = launchdHealthySince(result)
@@ -727,6 +730,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
             isContinuous: runtime.next_run_at == nil
         )
         observation.pid = runtime.pid
+        observation.scheduleInterval = runtime.interval.flatMap { $0 > 0 ? $0 : nil }
         observation.ownerNote = "Supervisor component \(name)" + (runtime.pid.map { " · PID \($0)" } ?? "")
         if case .failed = state { observation.ownerNoteTone = .warning }
         return observation
@@ -873,6 +877,13 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         guard var components, components.hour != nil, components.minute != nil else { return nil }
         components.second = 0
         return calendar.nextDate(after: now(), matching: components, matchingPolicy: .nextTime)
+    }
+
+    private func scheduleInterval(components: DateComponents?) -> TimeInterval? {
+        guard var components, let first = nextRun(components: components) else { return nil }
+        components.second = 0
+        guard let following = calendar.nextDate(after: first, matching: components, matchingPolicy: .nextTime) else { return nil }
+        return following.timeIntervalSince(first)
     }
 
     static func readRunRecord(

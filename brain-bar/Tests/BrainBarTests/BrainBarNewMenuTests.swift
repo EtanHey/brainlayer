@@ -7,7 +7,9 @@ import XCTest
     private func defaults() -> UserDefaults {
         let name = "BrainBarNewMenuTests.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults(suiteName: name)?.removePersistentDomain(forName: name) }
-        return UserDefaults(suiteName: name)!
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.set(BrainBarDesign.classic.rawValue, forKey: BrainBarDesign.key)
+        return defaults
     }
 
     func testPreferenceIsOnAndReReadsChanges() {

@@ -193,15 +193,15 @@ import SwiftUI
                 items.filter { $0.view is NDMenuRowHost }.count)
     }
 
-    /// L6: with `classic` (absent or stored), the icon and the menu are main's, byte for byte and title for title.
-    func testClassicIsMainsIconAndMenuForBothMenuSettings() throws {
+    /// The default matches stored New; stored Classic keeps its existing menu and icon.
+    func testDefaultMatchesNewAndStoredClassicKeepsItsMenuAndIcon() throws {
         for newMenu in [nil, false, true] as [Bool?] {
             let absent = try shown(design: nil, newMenu: newMenu)
-            let stored = try shown(design: "classic", newMenu: newMenu)
+            let stored = try shown(design: "new", newMenu: newMenu)
             XCTAssertEqual(stored.titles, absent.titles, "menu titles, new menu \(String(describing: newMenu))")
             XCTAssertEqual(stored.actions, absent.actions)
             XCTAssertEqual(stored.image, absent.image, "icon pixels, new menu \(String(describing: newMenu))")
-            XCTAssertEqual(stored.hostedNew, 0, "classic never builds a new-design row")
+            XCTAssertGreaterThanOrEqual(stored.hostedNew, 5)
         }
         // Main's own expectations for the two menu settings (BrainBarBrainIconTests): charts and the legacy rows when off,
         // the 22 pt brain and the presenter's standing items when on.
@@ -213,14 +213,16 @@ import SwiftUI
         XCTAssertFalse(on.titles.contains("Open Dashboard"))
     }
 
-    func testAbsentDesignIsClassicAndReadingNeverWrites() {
+    func testAbsentDesignIsNewAndReadingNeverWrites() {
         let d = defaults()
-        XCTAssertEqual(BrainBarDesign.current(in: d), .classic)
+        XCTAssertEqual(BrainBarDesign.current(in: d), .new)
         XCTAssertNil(d.object(forKey: BrainBarDesign.key))
         d.set("new", forKey: BrainBarDesign.key)
         XCTAssertEqual(BrainBarDesign.current(in: d), .new)
         d.set("something else", forKey: BrainBarDesign.key)
-        XCTAssertEqual(BrainBarDesign.current(in: d), .classic, "an unknown value is classic")
+        XCTAssertEqual(BrainBarDesign.current(in: d), .new, "an unknown value uses the default")
+        d.set("classic", forKey: BrainBarDesign.key)
+        XCTAssertEqual(BrainBarDesign.current(in: d), .classic)
     }
 
     func testNewDesignDrawsItsOwnMenuAndIconAndSwitchesBackLive() throws {
@@ -335,7 +337,8 @@ import SwiftUI
     /// The window: classic keeps main's hosting controller and root type; new swaps in its own and swaps back.
     func testWindowRootIsMainsInClassicAndSwapsLive() throws {
         _ = defaults()
-        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
+        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
+                                                          designDefaults: brainBarLegacyMenuDefaults())
         let classic = controller.contentViewControllerForTesting
         XCTAssertTrue(controller.windowForTesting.contentViewController === classic)
         XCTAssertTrue(String(describing: type(of: classic)).contains("BrainBarWindowRootView"), String(describing: type(of: classic)))
@@ -830,8 +833,9 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
 
     func testClassicControllersCreateNoNewDesignStore() {
         let d = suite()
+        d.set("classic", forKey: BrainBarDesign.key)
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: d)
         panel.designDefaults = d
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
             dashboardPanelController: panel, statusBar: Host(), menuDefaults: d)
@@ -1208,7 +1212,7 @@ final class BrainBarNewDesignBackupHistoryTests: XCTestCase {
         XCTAssertEqual(golden["commit"] as? String, "84b0e7a58c034e46cb9080071557e0574db31f3c", "re-record when main's classic path moves")
         for expected in try XCTUnwrap(golden["cases"] as? [[String: Any]]) {
             let newMenu = try XCTUnwrap(expected["newMenu"] as? String)
-            for design in [nil, "classic"] as [String?] {
+            for design in ["classic"] as [String?] {
                 let name = "BrainBarClassicGoldenTests." + UUID().uuidString
                 let d = try XCTUnwrap(UserDefaults(suiteName: name))
                 defer { d.removePersistentDomain(forName: name) }
@@ -2197,7 +2201,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             XCTAssertFalse(drawing.contains(moved), "the chart draws \(moved) at rest")
         }
         let window = try String(contentsOf: dir.appendingPathComponent("NDWindow.swift"), encoding: .utf8)
-        XCTAssertFalse(window.contains("Say.upTo("), "the halves' maxima are in the readout, not on the chart")
+        XCTAssertTrue(window.contains("Say.upTo("), "Activity carries each half's scale at rest")
         for name in Fixture.Name.allCases {
             let texts = pipeline(name).status.values.map(\.text)
             XCTAssertFalse(texts.contains(Say.working), name.rawValue)  // R1.12 (F) brings "empty" back as Save queue's status

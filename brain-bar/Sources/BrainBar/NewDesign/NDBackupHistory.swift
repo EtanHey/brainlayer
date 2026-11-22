@@ -73,6 +73,7 @@ enum NDBackupHistoryReader {
         var order: [String] = []
         for (index, line) in log.lines.enumerated() {
             guard let row = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { skipped += 1; continue }
+            guard row["event"] == nil, row["attempted_at"] != nil else { continue }
             guard row["backup_log_provenance"] as? String == "real" else { continue }
             guard let at = BackupLogReader.isoDate(row["attempted_at"]) else { skipped += 1; continue }
             guard now.timeIntervalSince(at) <= windowS else { continue }
@@ -107,6 +108,7 @@ enum NDBackupHistoryReader {
         var attempts: [NDAttempt] = []
         for line in log.lines {
             guard let row = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { skipped += 1; continue }
+            guard row["event"] == nil, row["attempted_at"] != nil else { continue }
             guard let at = BackupLogReader.isoDate(row["attempted_at"]) else { skipped += 1; continue }
             guard now.timeIntervalSince(at) <= windowS else { continue }
             if row["status"] as? String == "pending" { continue }

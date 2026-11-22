@@ -117,7 +117,7 @@ struct NDWaveform: View {
     /// bucket counts, so no bar changes height as it leaves).
     static func savedHeight(_ wave: NDWave, saves: Int, size: Size) -> CGFloat {
         guard saves > 0 else { return 0 }
-        let maxSaves = CGFloat(max(wave.saves.max() ?? 0, wave.outgoing?.saves ?? 0, 1))
+        let maxSaves = CGFloat(max(wave.savesPeak, 1))
         return max(size == .hero ? 2 : 1.5, CGFloat(saves) / maxSaves * halves(size).up)
     }
 
@@ -221,7 +221,7 @@ struct NDWaveStrip: View, Animatable {
         let (bw, gap) = NDWaveform.layout(width: canvas.width, count: wave.count, size: size)
         let offset = NDWaveform.offset(target: target, phase: phase, pitch: bw + gap)
         // Each half to its own maximum; the scale includes the outgoing bucket, so no bar changes height as it leaves.
-        let maxReads = CGFloat(max(wave.reads.max() ?? 0, wave.outgoing?.reads ?? 0, 1))
+        let maxReads = CGFloat(max(wave.readsPeak, 1))
         let minBar: CGFloat = size == .hero ? 2 : 1.5
         let corner: CGFloat = size == .hero ? 2 : 1
         let first = offset > 0 && wave.outgoing != nil ? -1 : 0
@@ -483,6 +483,7 @@ struct NDRail: View {
         enum Kind: Equatable { case ok, fail, next, unknown, unconfirmed, retried }
         var hours: Double
         var kind: Kind
+        var help: String? = nil
     }
     @Environment(\.ndPalette) private var palette
     var past: Double
@@ -499,13 +500,29 @@ struct NDRail: View {
     /// Review N1: the row's newest copy is unknown, so the line from its first dot (hours, <= 0) to now is the unknown
     /// stroke (Ink 2, 1.5 pt, 3 / 3 dashes), as the Overview lane draws it.
     var unconfirmedFrom: Double? = nil
-    /// A run beyond the left end: "‹ 4 d".
+    /// A run beyond the left end: its age, with room before the rail.
     var olderLabel: String? = nil
     var nowLine = true
+
+    static func baselineFrame(width: CGFloat, olderLabelWidth: CGFloat) -> CGRect {
+        let start = olderLabelWidth > 0 ? min(width, olderLabelWidth + 8) : 0
+        return CGRect(x: start, y: 6.5, width: max(0, width - start), height: 1)
+    }
 
     var body: some View {
         Canvas { ctx, size in draw(ctx, size) }
             .frame(height: 14)
+            .overlay {
+                GeometryReader { geo in
+                    ForEach(Array(events.enumerated()), id: \.offset) { _, event in
+                        if event.kind == .next, event.hours >= -past, event.hours <= ahead, let help = event.help {
+                            Color.clear.frame(width: 12, height: 14).contentShape(Rectangle())
+                                .help(help)
+                                .position(x: x(event.hours, geo.size.width), y: 7)
+                        }
+                    }
+                }
+            }
             .accessibilityHidden(true)
     }
 
@@ -521,22 +538,32 @@ struct NDRail: View {
 
     private func draw(_ ctx: GraphicsContext, _ size: CGSize) {
         let w = size.width, mid: CGFloat = 7, nowX = x(0, w)
-        ctx.fill(Path(CGRect(x: 0, y: mid - 0.5, width: w, height: 1)), with: .color(ND.hair2))
+        let olderEvent = events.first { $0.hours < -past }
+        let label = olderEvent.flatMap { event in
+            olderLabel.map { words in
+                ctx.resolve(Text(words).font(event.kind == .fail ? NDType.captionStrong : NDType.caption)
+                    .foregroundColor(event.kind == .fail ? ND.redText : palette.ink2))
+            }
+        }
+        let line = Self.baselineFrame(width: w, olderLabelWidth: label?.measure(in: size).width ?? 0)
+        let start = line.minX
+        ctx.fill(Path(line), with: .color(ND.hair2))
+        if let label { ctx.draw(label, at: CGPoint(x: 0, y: mid), anchor: .leading) }
         if unknown {
-            var p = Path(); p.move(to: CGPoint(x: 0, y: mid)); p.addLine(to: CGPoint(x: nowX, y: mid))
+            var p = Path(); p.move(to: CGPoint(x: start, y: mid)); p.addLine(to: CGPoint(x: max(start, nowX), y: mid))
             ctx.stroke(p, with: .color(palette.ink2), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
         }
         if let from = unconfirmedFrom, stalledFrom == nil {
-            var p = Path(); p.move(to: CGPoint(x: max(0, x(from, w)), y: mid)); p.addLine(to: CGPoint(x: nowX, y: mid))
+            var p = Path(); p.move(to: CGPoint(x: max(start, x(from, w)), y: mid)); p.addLine(to: CGPoint(x: max(start, nowX), y: mid))
             ctx.stroke(p, with: .color(palette.ink2), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
         }
         if let from = stalledFrom {
-            var p = Path(); p.move(to: CGPoint(x: x(from, w) + 4, y: mid)); p.addLine(to: CGPoint(x: nowX, y: mid))
+            var p = Path(); p.move(to: CGPoint(x: max(start, x(from, w) + 4), y: mid)); p.addLine(to: CGPoint(x: max(start, nowX), y: mid))
             ctx.stroke(p, with: .color(palette.fault), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
         }
-        if band { ctx.fill(Path(roundedRect: CGRect(x: 0, y: mid - 1, width: nowX, height: 2), cornerRadius: 1), with: .color(palette.ink2)) }
+        if band { ctx.fill(Path(roundedRect: CGRect(x: start, y: mid - 1, width: max(0, nowX - start), height: 2), cornerRadius: 1), with: .color(palette.ink2)) }
         if dotted {
-            var x: CGFloat = 1
+            var x: CGFloat = start + 1
             while x < nowX - 2 {
                 ctx.fill(Path(ellipseIn: CGRect(x: x - 1, y: mid - 1, width: 2, height: 2)), with: .color(palette.ink2))
                 x += 4
@@ -554,13 +581,6 @@ struct NDRail: View {
         }
         for e in Self.shown(events, width: w, past: past, ahead: ahead) {
             if e.hours < -past {
-                chevron(left: true, color: e.kind == .fail ? palette.fault : palette.ink2)
-                if let olderLabel {
-                    let failed = e.kind == .fail
-                    ctx.draw(Text(olderLabel).font(failed ? NDType.captionStrong : NDType.caption)
-                        .foregroundColor(failed ? ND.redText : palette.ink2),
-                             at: CGPoint(x: 10, y: mid), anchor: .leading)
-                }
                 continue
             }
             if e.hours > ahead { chevron(left: false, color: palette.ink2); continue }

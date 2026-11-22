@@ -243,7 +243,8 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         runtime: BrainBarRuntime,
         activationPolicy: BrainBarWindowActivationPolicy? = nil,
         frameStore: BrainBarWindowFrameStore = BrainBarWindowFrameStore(key: frameDefaultsKey),
-        screenFrames: @escaping () -> [NSRect] = { NSScreen.screens.map(\.visibleFrame) }
+        screenFrames: @escaping () -> [NSRect] = { NSScreen.screens.map(\.visibleFrame) },
+        designDefaults: UserDefaults = .standard
     ) {
         let hostingController = NSHostingController(
             rootView: BrainBarWindowRootView(workspace: workspace, runtime: runtime, managesWindowFrame: false, panelState: panelState)
@@ -256,6 +257,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
         contentViewControllerForTesting = hostingController
 #if BRAINBAR_UI
+        self.designDefaults = designDefaults
         classicContent = hostingController
         runtimeForDesign = runtime
         workspaceForDesign = workspace

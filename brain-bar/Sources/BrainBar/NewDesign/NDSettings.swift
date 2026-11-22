@@ -89,12 +89,6 @@ struct NDSettingsView: View {
                 .overlay(alignment: .bottom) { ND.hair.frame(height: 0.5) }
             VStack(alignment: .leading, spacing: 0) {
                 VStack(spacing: 0) {
-                    row(Say.stageDrive) {
-                        Text(driveState).font(NDType.body).foregroundStyle(store.model.drive.action != nil ? ND.redText : ND.t2)
-                        Spacer()
-                        driveAction
-                    }
-                    ND.hair.frame(height: 0.5)
                     row(Say.design) {
                         Spacer()
                         NDSegments(titles: BrainBarDesign.allCases.map(\.title),
@@ -102,6 +96,12 @@ struct NDSettingsView: View {
                                                       set: { design = BrainBarDesign.allCases[$0].rawValue }),
                                    accessibilityLabel: Say.design, fontSize: 11, padding: 10, controlSize: .small)
                             .fixedSize()
+                    }
+                    ND.hair.frame(height: 0.5)
+                    row(Say.stageDrive) {
+                        Spacer()
+                        Text(driveState).font(NDType.body).foregroundStyle(store.model.drive.action != nil ? ND.redText : ND.t2)
+                        driveAction
                     }
                     ND.hair.frame(height: 0.5)
                     row(Say.settingsFile) {

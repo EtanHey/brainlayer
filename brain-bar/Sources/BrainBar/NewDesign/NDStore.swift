@@ -11,7 +11,7 @@ import SwiftUI
     /// What round 1 of the design draws (pipeline, headline items, dropdown rows, footer), from the same inputs.
     var r1: NDR1 { NDR1.make(inputs, model) }
     @Published var range: NDRange = .hour {
-        didSet { if range != oldValue { refreshWaves() } }
+        didSet { if range != oldValue { refreshWaves(force: true, applyWhileHeld: true) } }
     }
     /// The one "current page": the tabs read it, the window root draws it, the window's height follows it.
     /// D1 (real screen, round 1): the window resize used to run from `$page`, which publishes in willSet, so the resize's
@@ -39,6 +39,8 @@ import SwiftUI
     private var collectorCancellables: Set<AnyCancellable> = []
     private var modelCancellables: Set<AnyCancellable> = []
     private var lastWaveFetch: Date?
+    var waveNow: () -> Date = Date.init
+    var fetchWaveBuckets: (@Sendable (Int, Int) async -> BrainDatabase.PipelineWindowBuckets?)?
     private var lastHistoryRead: Date?
     private var waveGeneration = 0
     private var historyGeneration = 0
@@ -310,7 +312,8 @@ import SwiftUI
             return NDJobInput(job: job, enabled: model.configReadSucceeded ? model.config.launchdJobs[job]?.enabled : nil,
                               continuous: o?.isContinuous ?? false, lastRun: o?.lastRunAt, nextRun: o?.nextRunAt, loaded: loaded,
                               lastOutcome: o.map(outcome) ?? .unknown,
-                              failureStreak: o?.calendarHistoryDamaged == true ? nil : o?.calendarConsecutiveFailures)
+                              failureStreak: o?.calendarHistoryDamaged == true ? nil : o?.calendarConsecutiveFailures,
+                              scheduleInterval: o?.scheduleInterval)
         }
     }
 
@@ -334,30 +337,39 @@ import SwiftUI
 
     /// The waveforms: the dropdown's hour in 24 buckets and the hero's range in 60, read off the main thread at most every
     /// 15 s (and at once on a range switch).
-    func refreshWaves(force: Bool = false) {
-        guard !isFixture, iconActive || windowActive, let collector = runtime?.collector else { return }
-        let now = Date()
+    func refreshWaves(force: Bool = false, applyWhileHeld: Bool = false) {
+        guard iconActive || windowActive else { return }
+        let fetch: @Sendable (Int, Int) async -> BrainDatabase.PipelineWindowBuckets?
+        if let injected = fetchWaveBuckets { fetch = injected }
+        else {
+            guard !isFixture, let collector = runtime?.collector else { return }
+            let provider = collector.bucketsProvider
+            fetch = { minutes, count in await collector.fetchBuckets(windowMinutes: minutes, bucketCount: count, provider: provider) }
+        }
+        let now = waveNow()
         if !force, let last = lastWaveFetch, now.timeIntervalSince(last) < 15 { return }
         lastWaveFetch = now
         waveGeneration += 1
         waveTask?.cancel()
-        let generation = waveGeneration, range = range, provider = collector.bucketsProvider
+        let generation = waveGeneration, range = range
         let wantsHero = windowActive
         waveTask = Task { [weak self] in
-            async let menu = collector.fetchBuckets(windowMinutes: 60, bucketCount: 24, provider: provider)
-            async let hero = wantsHero ? collector.fetchBuckets(windowMinutes: range.minutes, bucketCount: 60, provider: provider) : nil
+            async let menu = fetch(60, 24)
+            async let hero = wantsHero ? fetch(range.minutes, 60) : nil
             let (m, h) = await (menu, hero)
             guard !Task.isCancelled, let self, generation == self.waveGeneration else { return }
             self.waveTask = nil
             var next = self.inputs
             next.menuWave = m.map { Self.wave($0, end: now) } ?? NDWave(saves: [], reads: [], readable: false)
             if wantsHero { next.heroWaves[range] = h.map { Self.wave($0, end: now) } ?? NDWave(saves: [], reads: [], readable: false) }
-            self.acceptWaves(next)
+            self.acceptWaves(next, applyWhileHeld: applyWhileHeld)
         }
     }
 
 #if DEBUG
     private(set) var fixtureTicks = 0
+
+    func waitForWaveFetchForTesting() async { await waveTask?.value }
 
     /// Capture mode's live waveform (fix 5): one invented bucket per tick, handed over exactly as a real wave sample is.
     func tickFixture() {
@@ -386,8 +398,9 @@ import SwiftUI
 
     /// The one way a wave sample reaches the surfaces, real or invented. Each wave is linked to the one on screen, so a
     /// one-bucket shift carries its outgoing bucket and starts its slide in the same transaction as the data (B1).
-    private func acceptWaves(_ sample: NDInputs) {
-        if chartHeld {
+    private func acceptWaves(_ sample: NDInputs, applyWhileHeld: Bool = false) {
+        if applyWhileHeld { heldHeroWaves.removeAll() }
+        if chartHeld && !applyWhileHeld {
             // The dropdown's hour keeps flowing; the chart's ranges wait for the pointer to leave.
             for (range, wave) in sample.heroWaves { heldHeroWaves[range] = wave }
             var next = inputs

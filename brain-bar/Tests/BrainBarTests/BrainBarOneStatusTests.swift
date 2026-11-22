@@ -176,7 +176,7 @@ final class BrainBarOneStatusTests: XCTestCase {
         runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: inputs.now.addingTimeInterval(30 * 86_400)))
         let workspace = BrainBarRecordingWorkspace()
         let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
-            dashboardPanelController: BrainBarDashboardPanelController(workspace: workspace, runtime: runtime),
+            dashboardPanelController: BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults()),
             statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         controller.menuNeedsUpdate(controller.contextMenuForTesting)
 

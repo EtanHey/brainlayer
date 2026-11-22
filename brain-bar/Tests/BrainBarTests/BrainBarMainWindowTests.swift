@@ -22,7 +22,7 @@ final class BrainBarMainWindowTests: XCTestCase {
     ) -> BrainBarDashboardPanelController {
         BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
             frameStore: BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey),
-            screenFrames: { screens }
+            screenFrames: { screens }, designDefaults: brainBarLegacyMenuDefaults()
         )
     }
 
@@ -205,7 +205,7 @@ final class BrainBarMainWindowTests: XCTestCase {
         let restored = BrainBarDashboardPanelController(
             workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
             activationPolicy: BrainBarWindowActivationPolicy(),
-            frameStore: BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey))
+            frameStore: BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey), designDefaults: brainBarLegacyMenuDefaults())
         defer {
             restored.dismiss()
             app.setActivationPolicy(previousPolicy)
@@ -242,7 +242,7 @@ final class BrainBarMainWindowTests: XCTestCase {
 
     func test_the_status_item_opens_a_small_menu_like_voicebar() throws {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let status = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { status.stop(); windowController.dismiss() }
 
