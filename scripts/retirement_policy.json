@@ -5718,6 +5718,16 @@
         "target": "subprocess.run"
       }
     },
+    "d259921d97f37cf003492e91801fcdab2cf0d5c7f22e09cdf40e5c2c20b33491": {
+      "non_cloud_purpose": "Explicit operator-selected local SQLite database for reversible historical T3 thinking reclassification: read-only census by default, existing-file read/write only for --apply or --undo; canonical database requires lead-only --live. No network or cloud/model sender.",
+      "site": {
+        "call_sha256": "e884cb654cdb86fc229c21f7920de92c05d28042d8c80b381e58da8fa1785b6f",
+        "kind": "generic_send",
+        "owner": "<module>.main",
+        "path": "scripts/reclassify_t3_thinking.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "d2e907c604fea6a6db78faf2f7774c5bc6910cf7f8b2f88d3c40fe34983a00bf": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
