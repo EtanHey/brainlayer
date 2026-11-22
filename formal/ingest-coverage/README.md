@@ -38,6 +38,7 @@ formal/ingest-coverage/check.sh --case finding   # cases whose name starts with 
 formal/ingest-coverage/check.sh --list           # the case table
 formal/ingest-coverage/check.sh --require-sync   # also fail when a covered source changed (CI runs this)
 python3 formal/ingest-coverage/check.py --write-configs   # after editing CASES
+python3 formal/ingest-coverage/check.py --pin-source src/brainlayer/watcher.py  # only after reviewing model conformance
 python3 formal/ingest-coverage/replay.py --generate       # after changing the spec or SCENARIOS
 pytest tests/test_ingest_coverage_replay.py               # the model against the real code
 ```
