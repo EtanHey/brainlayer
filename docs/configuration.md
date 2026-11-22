@@ -640,12 +640,20 @@ remaining checks. Reconciled receipts start their own full 14-day clock even
 when the archive itself is much older.
 
 One `local_retention_summary` log line totals `bytes_held` past the retention
-period, `bytes_eligible_next`, and `next_eligible_at`. Its message makes the
+period, `bytes_young` below it, `bytes_eligible_next`, and `next_eligible_at`.
+The next age gate includes young verified archives, even a currently protected
+newest archive; newest protection is still checked before any deletion. Its message makes the
 remaining receipt/Drive/hash checks explicit. These are forecasts from this
 run's inventory, not promises of reclaimed space. The reporting neither changes
 receipt dates nor performs any additional archive hashing or deletion.
-Disabled sweeps and a failed Drive inventory report `sweep_blocked` with a
-null date; failed inventory reporting never enters the deletion function.
+Disabled sweeps and any global retention error (unavailable Drive inventory,
+pending receipt revocation, or reconciliation failure) report `sweep_blocked`
+with a null date; global-error reporting never enters the deletion function.
+Reporting-only kept/summary writes are best-effort and warn on stderr if they
+fail; they cannot stop the sweep or hide its returned deleted list. The durable
+deletion intent and confirmation retain their existing strict write contract.
+These metadata events never carry `attempted_at`, `uploaded`, `verified`, or
+`status`; backup history continues to select the terminal run-result rows.
 
 Drive pruning revokes receipts durably before trashing and restores survivors
 afterward. An interrupted revoke is logged and raises a `jsonl-retention` job

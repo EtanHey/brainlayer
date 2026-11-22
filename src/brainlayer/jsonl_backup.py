@@ -507,17 +507,30 @@ def _retention_warning(log_path: Path, error: str) -> None:
         pass  # Logging failure must not stop the backup either.
 
 
+def _log_local_retention_report(log_path: Path, entry: dict[str, Any]) -> None:
+    """Visibility must never stop a sweep or hide its returned deletion list."""
+    try:
+        _append_json_log(log_path, entry)
+    except Exception as exc:
+        try:
+            print(f"JSONL local retention reporting unavailable: {exc}", file=sys.stderr, flush=True)
+        except Exception:
+            pass  # Even an unavailable stderr cannot turn reporting into a sweep failure.
+
+
 def _report_blocked_local_archives(staging_dir: Path, *, log_path: Path, now: float, reason: str) -> None:
     """Report a global veto without entering the deletion function or hashing files."""
     days = int(os.environ.get("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION_DAYS", "14"))
     held_bytes = 0
+    young_bytes = 0
     for path in _local_archive_paths(staging_dir):
         age = now - path.stat().st_mtime
         if age < days * 86400:
+            young_bytes += path.stat().st_size
             continue
         size = path.stat().st_size
         held_bytes += size
-        _append_json_log(
+        _log_local_retention_report(
             log_path,
             {
                 "event": "local_retention_kept",
@@ -530,11 +543,12 @@ def _report_blocked_local_archives(staging_dir: Path, *, log_path: Path, now: fl
                 "eligible_at": None,
             },
         )
-    _append_json_log(
+    _log_local_retention_report(
         log_path,
         {
             "event": "local_retention_summary",
             "bytes_held": held_bytes,
+            "bytes_young": young_bytes,
             "bytes_eligible_next": 0,
             "next_eligible_at": None,
             "message": f"JSONL local retention: {held_bytes / 1024**3:.2f} GiB ({held_bytes} bytes) held; "
@@ -564,13 +578,16 @@ def prune_local_archives(
 
     def keep(path: Path, reason: str, eligible_at: float | None = None) -> None:
         age = now - path.stat().st_mtime
-        if age < days * 86400:
-            return
-        if reason == "verification_age":
-            verified_at = receipt.get("verified_at")
-            if isinstance(verified_at, (int, float)) and math.isfinite(verified_at):
+        if reason in {"verification_age", "mtime_age"} or (reason == "newest_sibling" and age < days * 86400):
+            verified_at = receipt.get("verified_at") if isinstance(receipt, dict) else None
+            if (
+                isinstance(receipt, dict)
+                and receipt.get("verified") is True
+                and isinstance(verified_at, (int, float))
+                and math.isfinite(verified_at)
+            ):
                 eligible_at = max(path.stat().st_mtime, verified_at) + days * 86400
-            else:
+            elif reason == "verification_age":
                 reason = "verification_date_missing"
         elif reason == "md5_or_drive":
             if not receipt.get("archive_md5"):
@@ -599,7 +616,8 @@ def prune_local_archives(
         if blocked_reason:
             entry["blocking_error"] = blocked_reason
         held.append(entry)
-        _append_json_log(log_path, entry)
+        if age >= days * 86400:
+            _log_local_retention_report(log_path, entry)
 
     for path in archives:
         age = now - path.stat().st_mtime
@@ -663,19 +681,24 @@ def prune_local_archives(
         )
     next_date = min((row["eligible_at"] for row in held if row["eligible_at"] is not None), default=None)
     next_bytes = sum(row["bytes"] for row in held if next_date is not None and row["eligible_at"] == next_date)
-    held_bytes = sum(row["bytes"] for row in held)
-    message = f"JSONL local retention: {held_bytes / 1024**3:.2f} GiB ({held_bytes} bytes) held past {days} days; "
+    held_bytes = sum(row["bytes"] for row in held if row["age_days"] >= days)
+    young_bytes = sum(row["bytes"] for row in held if row["age_days"] < days)
+    message = (
+        f"JSONL local retention: {held_bytes / 1024**3:.2f} GiB ({held_bytes} bytes) held past {days} days; "
+        f"{young_bytes / 1024**3:.2f} GiB ({young_bytes} bytes) younger than {days} days; "
+    )
     message += (
         f"{next_bytes / 1024**3:.2f} GiB ({next_bytes} bytes) pass the age gate at {next_date}, "
-        "subject to exact receipt and live Drive/hash checks"
+        "subject to exact receipt, live Drive/hash and newest checks"
         if next_date is not None
         else "next eligibility unknown (no dated age hold)"
     )
-    _append_json_log(
+    _log_local_retention_report(
         log_path,
         {
             "event": "local_retention_summary",
             "bytes_held": held_bytes,
+            "bytes_young": young_bytes,
             "bytes_eligible_next": next_bytes,
             "next_eligible_at": next_date,
             "message": message,

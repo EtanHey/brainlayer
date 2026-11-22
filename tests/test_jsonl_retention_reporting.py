@@ -202,3 +202,93 @@ def test_empty_sweep_still_logs_one_summary(tmp_path):
     events = [json.loads(line) for line in log.read_text().splitlines()]
     assert len(events) == 1
     assert events[0]["bytes_held"] == 0
+
+
+@pytest.mark.parametrize("fault", ["local_retention_kept", "local_retention_summary", "both"])
+def test_reporting_failure_after_unlink_returns_deleted_list_and_finishes_sweep(tmp_path, monkeypatch, fault):
+    now = 2_000_000_000
+    paths = [tmp_path / f"claude-jsonl-2026-01-0{i}.tar.gz" for i in range(1, 5)]
+    for path in paths:
+        path.write_bytes(b"archive")
+        os.utime(path, (now - 30 * 86400, now - 30 * 86400))
+    os.utime(paths[-1], (now, now))
+    receipts = {
+        p.name: dict(
+            name=p.name,
+            size=7,
+            verified=True,
+            verified_at=now - 30 * 86400,
+            archive_id=p.name,
+            archive_md5=hashlib.md5(b"archive").hexdigest(),
+            sha256=hashlib.sha256(b"archive").hexdigest(),
+        )
+        for p in (paths[0], paths[2])
+    }
+    state = tmp_path / "state"
+    state.write_text(json.dumps({"drive_archives": receipts}))
+    monkeypatch.setattr(backup, "_local_archive_paths", lambda _: paths)
+    append = backup._append_json_log
+
+    def fail_reporting(log, entry):
+        if entry["event"] == fault or (
+            fault == "both" and entry["event"] in {"local_retention_kept", "local_retention_summary"}
+        ):
+            raise OSError("reporting-only write failed")
+        append(log, entry)
+
+    monkeypatch.setattr(backup, "_append_json_log", fail_reporting)
+    deleted = backup.prune_local_archives(
+        tmp_path,
+        state_path=state,
+        log_path=tmp_path / "log",
+        now=now,
+        surviving_archives={r["archive_id"]: r["archive_md5"] for r in receipts.values()},
+    )
+    assert deleted == [paths[0].name, paths[2].name]
+    assert not paths[0].exists() and not paths[2].exists()
+    assert paths[1].exists() and paths[3].exists()
+    rows = [json.loads(line) for line in (tmp_path / "log").read_text().splitlines()]
+    assert [r["name"] for r in rows if r["event"] == "local_retention_deleted"] == deleted
+
+
+@pytest.mark.parametrize("count", [1, 3])
+def test_young_verified_files_have_an_honest_next_age_gate(tmp_path, count):
+    now = 2_000_000_000
+    paths = [tmp_path / f"claude-jsonl-2026-01-0{i}.tar.gz" for i in range(1, count + 1)]
+    receipts = {}
+    for i, path in enumerate(paths):
+        path.write_bytes(b"new")
+        age = 2 if i == 2 else 10
+        os.utime(path, (now - age * 86400, now - age * 86400))
+        receipts[path.name] = dict(verified=True, verified_at=now - (8 + i) * 86400)
+    state = tmp_path / "state"
+    state.write_text(json.dumps({"drive_archives": receipts}))
+    log = tmp_path / "log"
+    assert backup.prune_local_archives(tmp_path, state_path=state, log_path=log, now=now, surviving_archives={}) == []
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(rows) == 1
+    summary = rows[0]
+    assert summary["bytes_held"] == 0
+    assert summary["bytes_young"] == 3 * count
+    assert summary["bytes_eligible_next"] == 3
+    assert (
+        summary["next_eligible_at"]
+        == dt.datetime.fromtimestamp(now + (6 if count == 1 else 5) * 86400, dt.UTC).isoformat()
+    )
+
+
+@pytest.mark.parametrize("receipt", [None, [], "invalid"])
+def test_young_file_with_malformed_receipt_reports_unknown_without_hashing(tmp_path, monkeypatch, receipt):
+    now = 2_000_000_000
+    path = tmp_path / "claude-jsonl-2026-01-01.tar.gz"
+    path.write_bytes(b"new")
+    os.utime(path, (now - 10 * 86400, now - 10 * 86400))
+    state = tmp_path / "state"
+    state.write_text(json.dumps({"drive_archives": {path.name: receipt}}))
+    monkeypatch.setattr(backup, "_md5_file", lambda *a: pytest.fail("young archive must not hash"))
+    log = tmp_path / "log"
+    assert backup.prune_local_archives(tmp_path, state_path=state, log_path=log, now=now, surviving_archives={}) == []
+    row = json.loads(log.read_text())
+    assert row["bytes_young"] == 3
+    assert row["next_eligible_at"] is None
+    assert path.exists()
