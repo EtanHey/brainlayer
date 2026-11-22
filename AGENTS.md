@@ -507,4 +507,5 @@ brainlayer search "how did I implement authentication"
   *(Etan's addition at ratification, 2026-08-02.)*
 
 ## Local JSONL retention
+- Sweeps log `local_retention_kept` for each archive held past the retention period (first reason, bytes, nullable `eligible_at`), plus `local_retention_summary` (bytes held, next age-eligible bytes/date). Dates forecast only the age gate; live Drive, hashes, exact receipt and newest protection still govern deletion. Reconciliation starts a new full 14-day verification clock; never backdate it.
 - Local deletion defaults on via `BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION`; `0`/`false` disables it. Require both mtime and verified-at ages >=14 days, exact verified receipt plus local/Drive MD5 match and live Drive presence; never newest across release siblings. Drive-only `BRAINLAYER_JSONL_BACKUP_RETENTION` remains opt-in, latest 30. Scratch proof: `formal/jsonl-retention/check.sh`, `tests/test_jsonl_local_retention.py`, `tests/test_jsonl_retention_r2.py`.

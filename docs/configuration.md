@@ -631,6 +631,22 @@ local archive MD5. Missing checksum, legacy receipts, missing live objects or
 listing failure authorize no deletion. Each unlink has a durable intent and
 a confirmation event; completed sweeps report `local_retention_deleted`.
 
+For each kept archive older than the configured retention period, the sweep logs
+`local_retention_kept` with its path, bytes, first failing gate (`reason`), and
+`eligible_at`. The date is null when eligibility depends on a missing receipt,
+checksum, Drive object, or newest-archive protection. A dated verification-age
+hold forecasts only when the age gate opens; deletion still requires all the
+remaining checks. Reconciled receipts start their own full 14-day clock even
+when the archive itself is much older.
+
+One `local_retention_summary` log line totals `bytes_held` past the retention
+period, `bytes_eligible_next`, and `next_eligible_at`. Its message makes the
+remaining receipt/Drive/hash checks explicit. These are forecasts from this
+run's inventory, not promises of reclaimed space. The reporting neither changes
+receipt dates nor performs any additional archive hashing or deletion.
+Disabled sweeps and a failed Drive inventory report `sweep_blocked` with a
+null date; failed inventory reporting never enters the deletion function.
+
 Drive pruning revokes receipts durably before trashing and restores survivors
 afterward. An interrupted revoke is logged and raises a `jsonl-retention` job
 note requiring reconciliation; while it is pending no receipt is built from a listing.
