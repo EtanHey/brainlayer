@@ -279,7 +279,7 @@ def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_removes_raw_snapsho
     assert not (staging_dir / "2026-06-05.db").exists()
 
 
-def test_run_backup_full_verify_downloads_drive_copy_and_md5_compares(tmp_path, monkeypatch):
+def test_run_backup_full_verify_streams_drive_copy_and_md5_compares(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
     source = tmp_path / "brainlayer.db"
@@ -302,13 +302,14 @@ def test_run_backup_full_verify_downloads_drive_copy_and_md5_compares(tmp_path, 
         uploaded_bytes["drive-file-id"] = Path(file_path).read_bytes()
         return {"id": "drive-file-id", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size)}
 
-    def fake_download(service, *, file_id: str, destination: Path) -> Path:  # noqa: ARG001
+    def fake_download(service, *, file_id: str, sink):  # noqa: ARG001
         downloads.append(file_id)
-        destination.write_bytes(uploaded_bytes[file_id])
-        return destination
+        sink.write(uploaded_bytes[file_id])
 
     monkeypatch.setattr(backup_daily, "upload_file_to_drive_raw", fake_upload)
-    monkeypatch.setattr(backup_daily, "download_drive_file_raw", fake_download)
+    monkeypatch.setattr(backup_daily, "_download_drive_to_stream", fake_download)
+    monkeypatch.setattr(backup_daily, "download_drive_file_raw", lambda *a, **kw: pytest.fail("download file"))
+    monkeypatch.setattr(backup_daily, "_decompress_archive_to", lambda *a, **kw: pytest.fail("restored DB file"))
 
     result = backup_daily.run_backup(
         db_path=source,
@@ -1522,13 +1523,12 @@ def test_backup_peak_is_the_largest_phase_not_a_sum():
     assert backup_daily._backup_phase_peaks(db, gz, full=True) == {
         "raw_copy": db,
         "gzip": db + gz,
-        "drive_download": 2 * gz,
-        "restore": db + 2 * gz,
+        "stream_verify": gz,
     }
     assert backup_daily._peak_backup_required_bytes(db, gz, full=False) == db + gz + margin
-    assert backup_daily._peak_backup_required_bytes(db, gz, full=True) == db + 2 * gz + margin
+    assert backup_daily._peak_backup_required_bytes(db, gz, full=True) == db + gz + margin
     # A gzip larger than the DB (no prior gzip estimates G=D) still takes the max phase.
-    assert backup_daily._peak_backup_required_bytes(db, 3 * db, full=True) == 7 * db + margin
+    assert backup_daily._peak_backup_required_bytes(db, 3 * db, full=True) == 4 * db + margin
 
 
 # 2026-10-19 03:22 MBP backup-daily: quick mode, D and G recovered exactly from the failure log,
@@ -1537,7 +1537,7 @@ INCIDENT_DB_BYTES = 20_636_520_448
 INCIDENT_GZIP_BYTES = 9_503_894_346
 INCIDENT_RAW_FREE = 48_296_591_360
 INCIDENT_QUICK_REQUIRED = 32_288_947_018  # D + G + 2 GiB floor + 1 MiB copy chunk
-INCIDENT_FULL_REQUIRED = 41_792_841_364  # D + 2G + 2 GiB floor + 1 MiB copy chunk
+INCIDENT_FULL_REQUIRED = 32_288_947_018  # Weekly verification now streams; same D + G peak.
 
 
 def _incident_capacity_gate(tmp_path, monkeypatch, *, free: int, date_stamp: str):
@@ -1783,15 +1783,15 @@ def test_admitted_terminal_response_releases_an_earlier_lost_request(tmp_path, m
     assert not any(path.exists() for path in calls)
 
 
-def test_2026_10_19_numbers_in_full_mode_budget_the_drive_download(tmp_path, monkeypatch):
-    # 2026-10-18 is a Sunday, so the restore verifies a downloaded Drive copy beside the local gzip.
+def test_2026_10_19_numbers_in_full_mode_budget_stream_verification(tmp_path, monkeypatch):
+    # Sunday verification streams the integrity-checked raw hash; no downloaded file or restore.
     with pytest.raises(RuntimeError, match="writer reached"):
         _incident_capacity_gate(tmp_path, monkeypatch, free=INCIDENT_FULL_REQUIRED, date_stamp="2026-10-18")
     with pytest.raises(
         RuntimeError,
         match=(
-            rf"Insufficient free space.*required={INCIDENT_FULL_REQUIRED} .*peak_phase=restore "
-            rf"peak={INCIDENT_DB_BYTES + 2 * INCIDENT_GZIP_BYTES} .*drive_download={2 * INCIDENT_GZIP_BYTES},"
+            rf"Insufficient free space.*required={INCIDENT_FULL_REQUIRED} .*peak_phase=gzip "
+            rf"peak={INCIDENT_DB_BYTES + INCIDENT_GZIP_BYTES} .*stream_verify={INCIDENT_GZIP_BYTES}"
         ),
     ):
         _incident_capacity_gate(tmp_path, monkeypatch, free=INCIDENT_FULL_REQUIRED - 1, date_stamp="2026-10-18")
@@ -3824,3 +3824,9 @@ def test_supervisor_timeout_receipt_survives_late_stop(monkeypatch, tmp_path, st
     receipt = json.loads(log.read_text())
     assert receipt["error_type"] == "BackupTimeoutError"
     assert receipt["timeout_enforced_by"] == "parent_process_supervisor"
+
+
+@pytest.fixture(autouse=True)
+def _vacuum_snapshot_backend_for_legacy_contracts(monkeypatch):
+    """These cases pin VACUUM/reclaim behavior; clone-specific races have their own suite."""
+    monkeypatch.setenv("BRAINLAYER_BACKUP_SNAPSHOT_METHOD", "vacuum")

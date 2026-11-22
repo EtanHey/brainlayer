@@ -255,12 +255,14 @@ def test_m4_disk_floor_defers_and_alerts_even_past_pressure_window(disk_admissio
     assert "running past window" not in (path / "heavy.log").read_text()
 
 
-def test_full_verify_peak_includes_second_compressed_copy(disk_admission, monkeypatch):
+def test_full_verify_peak_streams_without_second_compressed_copy(disk_admission, monkeypatch):
     _, _, free_gib = disk_admission
     free_gib[0] = 70
     assert REAL_DISK_REASON("m4") is None  # ordinary: 16 raw + 8 compressed + 2 floor + 40 reserve
     monkeypatch.setattr(backup, "_should_run_full_verify", lambda date: True)
-    assert "needs 74.001 GiB, has 70.000 GiB" in REAL_DISK_REASON("m4")
+    assert REAL_DISK_REASON("m4") is None
+    free_gib[0] = 66
+    assert "needs 66.001 GiB, has 66.000 GiB" in REAL_DISK_REASON("m4")
 
 
 def test_disk_floor_rechecks_under_lock(disk_admission, monkeypatch):
@@ -311,6 +313,15 @@ def test_disk_boundary_accepts_exact_peak_plus_reserve(disk_admission):
     assert REAL_DISK_REASON("m4") is None
     free_gib[0] -= 1 / 1024**3
     assert REAL_DISK_REASON("m4") is not None
+
+
+def test_apfs_clone_budget_admits_m4_without_lowering_its_host_floor(disk_admission, monkeypatch):
+    _, _, free_gib = disk_admission
+    free_gib[0] = 60
+    monkeypatch.setattr(backup.backup_clone, "supported", lambda *args: True)
+    assert REAL_DISK_REASON("m4") is None
+    free_gib[0] = 50
+    assert "host floor" in REAL_DISK_REASON("m4")
 
 
 def upload_receipt(path, *, streaming=False, name="2026-11-22.db.zst"):
