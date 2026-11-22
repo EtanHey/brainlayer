@@ -301,9 +301,12 @@ struct NDBackupsPage: View {
                 events.append(.init(hours: next.timeIntervalSince(now) / 3600, kind: .next,
                                     help: Say.nextRunAt(NDR1.hhmm(next, store.inputs.capture))))
             }
-            let count = attempts?.count ?? 0, failed = attempts?.filter { !$0.ok }.count ?? 0
+            let runs = attempts?.filter { !$0.isErrorEvent } ?? []
+            let count = runs.count, failed = runs.filter { !$0.ok }.count
+            let retentionErrors = attempts?.filter(\.isErrorEvent).count ?? 0
+            let errors = retentionErrors > 0 ? ", \(retentionErrors) retention \(retentionErrors == 1 ? "error" : "errors")" : ""
             let spoken = attempts == nil ? "\(name): the record could not be read"
-                : "\(name): \(count) \(count == 1 ? "attempt" : "attempts") this week, \(failed) failed"
+                : "\(name): \(count) \(count == 1 ? "attempt" : "attempts") this week, \(failed) failed" + errors
             let newest = row.map { ", newest " + ($0.number.value == "—" ? "not known" : $0.number.text) } ?? ""
             let number = (row?.strong ?? false) ? faultNumber(row?.number) : row?.number ?? .unknown
             // Review N1: when the newest cell is unknown, the attempts keep their places (the log is the app's own read,

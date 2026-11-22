@@ -21,13 +21,38 @@ import XCTest
         return NDBackupsPage(store: NDStore(fixture: inputs)).lanes(NDModel.make(inputs))
     }
 
-    func testRetentionErrorUsesNearestDatedNeighbourWithoutDashingLane() throws {
+    func testRetentionErrorUsesFollowingRunDateWithoutDashingLane() throws {
         let result = try parse([upload(6), retention, upload(3)])
         XCTAssertEqual(result.skipped, 0)
         XCTAssertEqual(result.attempts?.map(\.ok), [true, false, true])
-        XCTAssertEqual(result.attempts?[1].at, now.addingTimeInterval(-6 * 3600))
+        XCTAssertEqual(result.attempts?[1].at, now.addingTimeInterval(-3 * 3600))
         XCTAssertFalse(lanes(result.attempts).contains { $0.unknown })
         XCTAssertTrue(lanes(result.attempts).contains { $0.id == "transcripts" && $0.events.contains { $0.kind == .fail } })
+    }
+
+    func testRetentionErrorAtEndOfLogFallsBackToPrecedingRun() throws {
+        let result = try parse([upload(3), retention])
+        XCTAssertEqual(result.attempts?.map(\.ok), [true, false])
+        XCTAssertEqual(result.attempts?.last?.at, now.addingTimeInterval(-3 * 3600))
+        XCTAssertEqual(result.skipped, 0)
+    }
+
+    func testFutureDatedNeighbourCannotDateRetentionErrorIntoFuture() throws {
+        let result = try parse([retention, upload(-3)])
+        XCTAssertEqual(result.attempts?.filter { !$0.ok }, [])
+        XCTAssertEqual(result.skipped, 0)
+    }
+
+    func testRetentionErrorsAreNotSpokenAsUploadAttemptsOrFailures() throws {
+        let result = try parse([upload(6), retention, upload(3)])
+        let lane = try XCTUnwrap(lanes(result.attempts).first { $0.id == "transcripts" })
+        XCTAssertTrue(lane.accessibility.contains("2 attempts this week, 0 failed"), lane.accessibility)
+        XCTAssertTrue(lane.accessibility.contains(", 1 retention error"), lane.accessibility)
+        XCTAssertTrue(lane.events.contains { $0.kind == .fail })
+        let uploads = try parse([upload(6), upload(3)])
+        let normal = try XCTUnwrap(lanes(uploads.attempts).first { $0.id == "transcripts" })
+        XCTAssertTrue(normal.accessibility.contains("2 attempts this week, 0 failed"))
+        XCTAssertFalse(normal.accessibility.contains("retention"))
     }
 
     func testOldRetentionErrorFallsOutsideWindowAndUndatedOnlyLogIsNotDamage() throws {
@@ -60,9 +85,20 @@ import XCTest
         XCTAssertEqual(progress.accessibilityValue, try XCTUnwrap(progress.checkpointAt).formatted(date: .abbreviated, time: .shortened))
     }
 
-    func testStalledFixtureNamesTheStall() throws {
-        let progress = try XCTUnwrap(BrainBarDesignFixture.inputs(.uploadStalled).backupProgress)
+    func testStalledFixtureNamesTheStallAndKeepsLastGoodCaption() throws {
+        let inputs = BrainBarDesignFixture.inputs(.uploadStalled)
+        let progress = try XCTUnwrap(inputs.backupProgress)
         XCTAssertTrue(progress.isStalled)
         XCTAssertTrue(progress.title.contains(BrainBarMenuPresenter.SurfaceSay.notUploadingSince))
+        let compact = BrainBarBackupProgressView(progress: progress, compact: true)
+        let caption = try XCTUnwrap(compact.lastGoodText)
+        XCTAssertTrue(caption.contains(BrainBarMenuPresenter.SurfaceSay.backupLastGoodShort))
+        XCTAssertTrue(caption.contains(try XCTUnwrap(progress.lastGoodAt).formatted(date: .abbreviated, time: .shortened)))
+        XCTAssertNotNil(BrainBarBackupProgressView(progress: progress).lastGoodText)
+        XCTAssertNil(BrainBarBackupProgressView(progress: progress, compact: true, barOnly: true).lastGoodText)
+        let state = NDR1.make(inputs, NDModel.make(inputs)).pipeline
+        let stallWidth = NDPipelineLayout.textWidth(progress.title, size: 10)
+            + NDPipelineLayout.textWidth(try XCTUnwrap(progress.checkpointAt).formatted(date: .omitted, time: .shortened), size: 10) + 6
+        XCTAssertLessThanOrEqual(stallWidth, NDPipelineChart.progressFrame(state).width)
     }
 }

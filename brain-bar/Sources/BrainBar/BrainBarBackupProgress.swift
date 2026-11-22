@@ -59,27 +59,24 @@ struct BrainBarBackupProgressView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shown: BrainBarBackupProgress?
 
+    var lastGoodText: String? {
+        guard !barOnly, let at = progress.lastGoodAt else { return nil }
+        return (compact ? BrainBarMenuPresenter.SurfaceSay.backupLastGoodShort : BrainBarMenuPresenter.SurfaceSay.backupLastGood)
+            + " " + at.formatted(date: .abbreviated, time: .shortened)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             if !barOnly {
-                if compact && progress.isStalled {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(progress.title).lineLimit(1)
-                        if let at = progress.checkpointAt {
+                HStack(spacing: 6) {
+                    Text(compact && !progress.isStalled ? (progress.phase == .upload ? BrainBarMenuPresenter.SurfaceSay.backupUploadingShort
+                        : BrainBarMenuPresenter.SurfaceSay.backupVerifyingShort) : progress.title).lineLimit(1)
+                    Spacer(minLength: 0)
+                    if let at = progress.checkpointAt {
+                        if progress.isStalled {
                             Text(at.formatted(date: .omitted, time: .shortened)).monospacedDigit().lineLimit(1)
-                        }
-                    }
-                } else {
-                    HStack(spacing: 6) {
-                        Text(compact ? (progress.phase == .upload ? BrainBarMenuPresenter.SurfaceSay.backupUploadingShort
-                            : BrainBarMenuPresenter.SurfaceSay.backupVerifyingShort) : progress.title).lineLimit(1)
-                        Spacer(minLength: 0)
-                        if let at = progress.checkpointAt {
-                            if progress.isStalled {
-                                Text(at.formatted(date: .omitted, time: .shortened)).monospacedDigit().lineLimit(1)
-                            } else if let percent = progress.percentage {
-                                Text("\(percent)% · " + at.formatted(date: .omitted, time: .shortened)).monospacedDigit().lineLimit(1)
-                            }
+                        } else if let percent = progress.percentage {
+                            Text("\(percent)% · " + at.formatted(date: .omitted, time: .shortened)).monospacedDigit().lineLimit(1)
                         }
                     }
                 }
@@ -95,9 +92,8 @@ struct BrainBarBackupProgressView: View {
                 }
             }
             .frame(height: 3)
-            if !barOnly, !(compact && progress.isStalled), let at = progress.lastGoodAt {
-                Text((compact ? BrainBarMenuPresenter.SurfaceSay.backupLastGoodShort : BrainBarMenuPresenter.SurfaceSay.backupLastGood)
-                    + " " + at.formatted(date: .abbreviated, time: .shortened))
+            if let lastGoodText {
+                Text(lastGoodText)
                     .foregroundStyle(.secondary)
                     .lineLimit(1).minimumScaleFactor(0.8)
             }

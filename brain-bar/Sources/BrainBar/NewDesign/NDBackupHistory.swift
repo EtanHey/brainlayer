@@ -1,6 +1,6 @@
 import Foundation
 
-/// One attempt on a backup lane: a finished, verified run (ok) or a failed one.
+/// A dated backup-lane record: a completed run or a separate error event.
 struct NDAttempt: Equatable, Sendable {
     var at: Date
     var ok: Bool
@@ -143,12 +143,12 @@ enum NDBackupHistoryReader {
         for (index, value) in rows.enumerated() {
             guard let row = value else { skipped += 1; continue }
             if row["event"] as? String == "local_retention_error" {
-                // An append-only event is readable evidence, not log damage. Without a clock its nearest dated
-                // neighbour locates it; ties prefer the preceding row. Undatable events still use job-alerts.
-                let at = dated.first { $0.index == index }?.at ?? dated.min {
-                    abs($0.index - index) < abs($1.index - index)
-                }?.at
-                if let at, now.timeIntervalSince(at) <= windowS { attempts.append(.init(at: at, ok: false, isErrorEvent: true)) }
+                // The producer writes its retention warning before its dated result. Use that following run's
+                // clock, or the preceding row only at EOF. Undatable events still use job-alerts.
+                let at = dated.first { $0.index >= index }?.at ?? dated.last { $0.index < index }?.at
+                if let at, at <= now, now.timeIntervalSince(at) <= windowS {
+                    attempts.append(.init(at: at, ok: false, isErrorEvent: true))
+                }
                 continue
             }
             switch rowKind(row, now: now) {
