@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 
 from .alarm import raise_alarm
+from .pipeline.secret_scrub import scrub_for_storage
 
 DEFAULT_T3_STATE_DB = Path.home() / ".t3/userdata/state.sqlite"
 
@@ -56,9 +57,11 @@ def resolve_t3_sources(
     except sqlite3.Error as exc:
         if sources and tolerate_legacy_failure:
             return sources + [(legacy, projection_version or 1)]
+        # SQLite errors can echo SQL or URI text; scrub before the alarm boundary.
+        error, _ = scrub_for_storage(str(exc))
         raise_alarm(
             "t3_source_unavailable",
             "could not inspect T3 source read-only",
-            {"state_db_path": str(selected), "error": str(exc)},
+            {"state_db_path": str(selected), "error": error},
         )
     return sources or [(legacy, projection_version or 1)]
