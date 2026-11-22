@@ -4366,8 +4366,8 @@ def run_backup(
         if result.get("status") != "reused":
             try:
                 record_run_sleep()
-            except RuntimeError as exc:
-                result["sleep_observation_error"] = _redact_upload_secrets(str(exc))
+            except Exception as exc:
+                result["sleep_observation_error"] = f"{type(exc).__name__}: {_redact_upload_secrets(str(exc))}"
         result["retained_raw_snapshots"] = _retained_raw_snapshot_names(Path(staging_dir))
         raw = Path(staging_dir) / f"{resolved_date_stamp}.db"
         if (result.get("error") or result.get("verification_error")) and not (

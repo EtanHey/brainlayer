@@ -23,8 +23,9 @@ Supported clock pairs are required explicitly. Missing clocks or a failed clock 
 `RuntimeError` explaining that sleep observation is unavailable, rather than an attribute error or
 an invented zero. Darwin and Linux are supported; other platforms need a proven clock pair first.
 Uploads without telemetry (including the JSONL callers) construct no sleep observer.
-The final run sample is best-effort: a clock failure records `sleep_observation_error` and preserves
-the original outcome/error and terminal receipt, rather than letting observation prevent the receipt.
+The final run sample is best-effort: any ordinary observer exception records
+`sleep_observation_error` as `TypeName: redacted message` and preserves the original outcome/error
+and terminal receipt, rather than letting observation prevent the receipt.
 DarkWake time when the CPU is awake counts as awake time, so the observed suspended duration can
 be shorter than the span between closing the lid and full wake.
 

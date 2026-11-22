@@ -373,8 +373,17 @@ def test_observability_omits_unmeasurable_sleep_seconds(value):
     assert "upload_slept_seconds" not in _local_snapshot([row])
 
 
-@pytest.mark.parametrize("clock_fails", [False, True])
-def test_final_observation_records_sleep_or_clock_failure_without_losing_receipt(local_lane, monkeypatch, clock_fails):
+@pytest.mark.parametrize(
+    ("clock_error", "expected_observation_error"),
+    [
+        (None, None),
+        (RuntimeError("synthetic final sleep clock failure"), "RuntimeError: synthetic final sleep clock failure"),
+        (KeyError("synthetic final sleep clock failure"), "KeyError: 'synthetic final sleep clock failure'"),
+    ],
+)
+def test_final_observation_records_sleep_or_clock_failure_without_losing_receipt(
+    local_lane, monkeypatch, clock_error, expected_observation_error
+):
     from brainlayer import backup_sleep
 
     saved(local_lane)
@@ -384,13 +393,13 @@ def test_final_observation_records_sleep_or_clock_failure_without_losing_receipt
 
     def inclusive():
         if values["fail"]:
-            raise RuntimeError("synthetic final sleep clock failure")
+            raise clock_error
         return values["inclusive"]
 
     monkeypatch.setattr(backup_sleep, "SleepTracker", lambda: factory(inclusive=inclusive, awake=lambda: 0))
 
     def credentials():
-        values.update(inclusive=21600, fail=clock_fails)
+        values.update(inclusive=21600, fail=clock_error is not None)
         raise RuntimeError("synthetic credentials expired after sleep")
 
     monkeypatch.setattr(backup, "get_drive_credentials", credentials)
@@ -400,8 +409,8 @@ def test_final_observation_records_sleep_or_clock_failure_without_losing_receipt
     assert row["error"] == "synthetic credentials expired after sleep"
     assert row["upload_state"] == "failed"
     assert "retained_raw_snapshots" in row
-    if clock_fails:
-        assert row["sleep_observation_error"] == "synthetic final sleep clock failure"
+    if clock_error is not None:
+        assert row["sleep_observation_error"] == expected_observation_error
     else:
         assert row["run_slept_seconds"] == 21600
         assert len(row["sleep_intervals"]) == 1
