@@ -105,7 +105,9 @@ final class BrainBarAmberNoticeTests: XCTestCase {
         let p = BrainBarMenuPresenter.present(c)
         XCTAssertEqual(p.rows.filter { $0.kind == .needsYou }.count, 1)
         XCTAssertEqual(p.rows.first { $0.kind == .needsYou }?.strings.first, BrainBarMenuPresenter.Say.lagBehind.text)
-        XCTAssertNil(p.rows.first { $0.kind == .needsYou }?.action, "R1.11: the lag row itself carries no button")
+        // Gap 34/74/79 clarity follow-up R2-1 (L56): an escalated, non-draining lag has a report, not a dead-end row.
+        XCTAssertEqual(p.rows.first { $0.kind == .needsYou }?.action?.kind, .copyReport)
+        XCTAssertTrue(p.rows.first { $0.kind == .needsYou }?.strings.contains(BrainBarMenuPresenter.Say.agent.text) == true)
         XCTAssertEqual(p.count, 1)
         XCTAssertEqual(p.icon, .marked)
     }
