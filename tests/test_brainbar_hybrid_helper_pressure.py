@@ -8,6 +8,11 @@ import pytest
 from brainlayer.brainbar_hybrid_helper import HybridSearchHelper
 
 
+@pytest.fixture(autouse=True)
+def isolated_keep_warm_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+
 def test_keep_warm_repages_evicted_model_before_request(tmp_path, monkeypatch):
     import brainlayer.mcp._shared as shared
 
