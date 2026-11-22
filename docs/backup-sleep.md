@@ -4,7 +4,7 @@ Backup progress and terminal receipts keep the existing active-time measurements
 `upload_wall_seconds` (sleep-inclusive elapsed time), `upload_slept_seconds`, and `sleep_intervals`
 with `from`, `to`, and `seconds`. Snapshot receipts carry `snapshot_wall_seconds`,
 `snapshot_slept_seconds`, and `snapshot_sleep_intervals`; the terminal `sleep_intervals` list includes
-both phases. Failed snapshots retain observed sleep too. Verification-only recovery keeps the
+both phases. Failed snapshots and uploads retain observed sleep even without another progress tick. Verification-only recovery keeps the
 completed upload's measurements, and replacing an expired upload session preserves the observer.
 
 The observer compares deltas from two monotonic clocks. Darwin's `clock_gettime(3)` documents

@@ -257,6 +257,28 @@ def test_sleep_observation_survives_upload_session_replacement(local_lane, monke
     assert len(row["sleep_intervals"]) == 1
 
 
+def test_upload_failure_after_sleep_records_pause_without_another_progress_tick(local_lane, monkeypatch):
+    from brainlayer import backup_sleep
+
+    saved(local_lane)
+    network(monkeypatch)
+    values = {"inclusive": 0, "awake": 0}
+    tracker = backup_sleep.SleepTracker(inclusive=lambda: values["inclusive"], awake=lambda: values["awake"])
+    monkeypatch.setattr(backup_sleep, "SleepTracker", lambda: tracker)
+
+    def upload(*args, **kwargs):
+        values["inclusive"] = 21600
+        raise RuntimeError("synthetic permanent upload failure after wake")
+
+    monkeypatch.setattr(backup, "upload_file_to_drive_raw", upload)
+    with pytest.raises(RuntimeError, match="permanent upload failure"):
+        backup.run_backup(**local_lane, phase="upload")
+    row = latest(local_lane)
+    assert row["upload_wall_seconds"] == row["upload_slept_seconds"] == 21600
+    assert len(row["sleep_intervals"]) == 1
+    assert "uploaded the rest" not in row["sleep_note"]
+
+
 def test_verification_recovery_retains_completed_upload_sleep(local_lane, monkeypatch):
     prior = saved(local_lane, uploaded=True)
     prior.update(

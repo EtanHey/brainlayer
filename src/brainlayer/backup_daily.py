@@ -4195,6 +4195,8 @@ def run_backup(
                     raise
                 print("Saved Drive session expired; preparing a fresh snapshot", flush=True)
                 continue
+            finally:
+                record_upload_telemetry({})
             break
         if upload:
             file_id = uploaded.get("id")
