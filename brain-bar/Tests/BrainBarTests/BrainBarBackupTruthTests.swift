@@ -57,6 +57,7 @@ import XCTest
         XCTAssertFalse(progress.title.contains(BrainBarMenuPresenter.SurfaceSay.notUploadingSince))
         progress.isStalled = true
         XCTAssertTrue(progress.title.contains(BrainBarMenuPresenter.SurfaceSay.notUploadingSince))
+        XCTAssertEqual(progress.accessibilityValue, try XCTUnwrap(progress.checkpointAt).formatted(date: .abbreviated, time: .shortened))
     }
 
     func testStalledFixtureNamesTheStall() throws {

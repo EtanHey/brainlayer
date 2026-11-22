@@ -34,7 +34,10 @@ struct BrainBarBackupProgress: Equatable, Sendable {
         return Double(confirmed) / Double(total)
     }
     var percentage: Int? { fraction.map { Int(($0 * 100).rounded(.down)) } }
-    var accessibilityValue: String { percentage.map { "\($0) percent" } ?? BrainBarMenuPresenter.SurfaceSay.backupInProgress }
+    var accessibilityValue: String {
+        if isStalled, let checkpointAt { return checkpointAt.formatted(date: .abbreviated, time: .shortened) }
+        return percentage.map { "\($0) percent" } ?? BrainBarMenuPresenter.SurfaceSay.backupInProgress
+    }
     var title: String {
         if isStalled { return BrainBarMenuPresenter.SurfaceSay.notUploadingSince }
         return phase == .upload ? BrainBarMenuPresenter.SurfaceSay.backupUploading : BrainBarMenuPresenter.SurfaceSay.backupVerifying
