@@ -620,6 +620,16 @@ extension BrainBarMenuPresenter {
             ["\(namesModel ? name : "This model") turns memories into searchable meaning on this Mac.",
              "Search by meaning uses it. Keyword search does not need it."]
         }
+        static let backupUploading = "Uploading to Google Drive"
+        static let backupVerifying = ObservabilityPresentation.backupVerificationText
+        static let backupLastGood = "Last good copy"
+        static let backupUploadingShort = "Uploading"
+        static let backupVerifyingShort = "Checking copy"
+        static let backupLastGoodShort = "Last good"
+        static let backupInProgress = "In progress"
+        static func driveCopyUploading(_ age: String) -> String {
+            "Your database backup in Google Drive is \(age); an upload is running."
+        }
         /// R3: a reconnect in progress.
         static let waitingForBrowser = "Waiting for you to approve in your browser…"
         /// R12: a failed copy leaves the button as it was and says so under it.
@@ -674,6 +684,11 @@ extension BrainBarMenuPresenter {
         static let stageRead = "Read"
         static let stageQueue = "Save queue"
         static let stageMemory = "Memory"
+        // Gap clarity: at-rest payloads and job purposes, not additional status claims.
+        static let sessionBackups = "Session backups"
+        static let searchAnswers = "Search answers"
+        static let nightlyPurpose = "Checks saving, tidies the log"
+        static let weeklyPurpose = "Compacts the database"
         static let stageMac = "Local copy"  // R1.10.5 (L50): one name everywhere
         static let stageDrive = "Google Drive"
         static let stageMeaning = "By meaning"

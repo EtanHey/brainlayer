@@ -31,11 +31,18 @@ enum BrainBarDesignFixture {
         case lagStalled = "lag-stalled"
         /// R1.11 (B3): a failure only an agent can fix: search failed its last 3 checks.
         case searchFailing = "search-failing"
+        case uploadProgress = "upload-progress"
+        case uploadNoTotal = "upload-no-total"
+        case uploadStalled = "upload-stalled"
+        case verifying
+        case uploadSnapshotRed = "upload-snapshot-red"
+        case uploadDriveSignedOut = "upload-drive-signed-out"
+        case uploadDriveStalled = "upload-drive-stalled"
 
         /// The window page the fixture opens on.
         var page: NDPage {
             switch self {
-            case .backupsFailedUpload: .backups
+            case .backupsFailedUpload, .uploadNoTotal, .uploadStalled, .verifying, .uploadSnapshotRed, .uploadDriveStalled: .backups
             default: .overview
             }
         }
@@ -177,8 +184,49 @@ enum BrainBarDesignFixture {
                                       catchUp: WatcherCatchUp(state: "stalled", bytesBehind: 117 * 1_048_576))
         case .searchFailing:
             i.capture = capture(replacing(calmChecks(), check("search", .red, fails: 3)), dot: .red)
+        case .uploadProgress, .uploadNoTotal, .uploadStalled, .verifying, .uploadSnapshotRed, .uploadDriveSignedOut, .uploadDriveStalled:
+            let backups = backupFacts(name)
+            if name == .uploadSnapshotRed {
+                i.capture = capture(replacing(calmChecks(), check("backup_offsite", .red, age: 72 * 3600, limit: 54 * 3600)), dot: .red)
+                i.backupHistory = history(driveNewestHoursAgo: 72)
+                i.captureBackupChecks = BrainBarBackupChecks.derive(backups, now: now)
+            } else if name == .uploadDriveStalled {
+                i.capture = capture(replacing(calmChecks(), check("backup_offsite", .red, age: 72 * 3600, limit: 54 * 3600)), dot: .red)
+                i.capture.driveAuthModel = .valid
+                i.backupHistory = history(driveNewestHoursAgo: 72)
+            } else if name == .uploadDriveSignedOut {
+                i.capture = capture(replacing(calmChecks(), check("drive_auth", .red)), dot: .red)
+                i.capture.driveAuthModel = .invalid
+                i.capture = withDriveAge(i.capture, database: 27, conversations: 28)
+                i.backupHistory = history(driveStalledAfterDays: 1)
+            }
+            i.backupProgress = BrainBarBackupProgress.read(backups, now: now)
+            if name != .verifying { i.capture.upload = .init(startedAt: now.addingTimeInterval(-3600), live: true) }
         }
         return i
+    }
+
+    /// Synthetic receipts enter the same progress and Classic-check presenters as real observations.
+    static func backupFacts(_ name: Name) -> ObservabilityDocument.Backups {
+        let verifying = name == .verifying
+        let stale = name == .uploadSnapshotRed
+        let signedOut = name == .uploadDriveSignedOut
+        let driveHours: Double = stale || name == .uploadDriveStalled ? 72 : signedOut ? 27 : 3
+        let transcriptHours: Double = signedOut ? 28 : 4
+        let local = ObservabilityDocument.LocalSnapshot(
+            lastAt: now.addingTimeInterval(-4 * 3600), destination: "capture-copy.db.gz", localVerified: true,
+            uploaded: verifying, uploadState: verifying ? "pending" : "in_progress", uploadError: nil,
+            uploadProcessLive: true, uploadProcessStartedAt: now.addingTimeInterval(-3600),
+            localIntegrity: "ok", localIntegrityPragma: "integrity_check", bytesConfirmed: 25,
+            bytesTotal: name == .uploadNoTotal ? nil : 100, verificationPending: verifying,
+            bytesConfirmedAt: now.addingTimeInterval(name == .uploadDriveStalled ? -21 * 60 : name == .uploadStalled ? -15 * 60 : -60))
+        return ObservabilityDocument.Backups(
+            state: "measured", reason: "", inputs: [], freshness: stale ? "stale" : "fresh", thresholdHours: 36,
+            retentionInvariant: "PASS", survivingArchives30D: 7, errorType: nil,
+            lastVerifiedUpload: .init(at: now.addingTimeInterval(-transcriptHours * 3600), ageHours: transcriptHours, archiveId: "capture-archive", verified: true),
+            dbSnapshot: .init(lastAt: now.addingTimeInterval(-driveHours * 3600), destination: "capture-previous.db.gz", verified: true),
+            launchd: .init(label: "com.brainlayer.jsonl-backup", bootstrapped: true, disabledDirPresent: false),
+            localSnapshot: local)
     }
 
     private static func withDriveAge(_ c: BrainBarMenuCapture, database: Double, conversations: Double) -> BrainBarMenuCapture {

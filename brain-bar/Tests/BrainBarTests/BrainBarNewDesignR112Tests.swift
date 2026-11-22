@@ -46,7 +46,7 @@ final class BrainBarNewDesignR112Tests: XCTestCase {
         XCTAssertTrue(window.contains("Text(title).font(NDType.section).foregroundStyle(ND.t2)"), "Activity and Pipeline")
         XCTAssertEqual(NDGrid.headlineToRows, 14)
         XCTAssertEqual(NDGrid.toActivity, 24)
-        XCTAssertEqual(NDGrid.activityToPipeline, 32)
+        XCTAssertEqual(NDGrid.activityToPipeline, 0)  // Gap 79 M1 fit: chart spacing reclaimed.
     }
 
     // MARK: C. one wording per fault

@@ -1,6 +1,45 @@
 import AppKit
 import SwiftUI
 
+/// Visible native static text supplies the four labels Canvas cannot put in the accessibility tree.
+struct NDPipelineLabels: NSViewRepresentable {
+    func makeNSView(context: Context) -> NDPipelineLabelView { NDPipelineLabelView() }
+    func updateNSView(_ view: NDPipelineLabelView, context: Context) {}
+}
+
+final class NDPipelineLabelView: NSView {
+    override var isFlipped: Bool { true }
+
+    init() {
+        super.init(frame: NSRect(origin: .zero, size: NDPipelineLayout.size))
+        var labels: [NSTextField] = []
+        func add(_ words: String, rect: CGRect, caption: Bool) {
+            let field = NSTextField(labelWithString: words)
+            field.font = .systemFont(ofSize: 11, weight: caption ? .medium : .regular)
+            field.textColor = NDColor.t2
+            field.alignment = .center
+            field.frame = caption ? rect.insetBy(dx: -4, dy: -4) : rect
+            field.drawsBackground = caption
+            field.backgroundColor = NDColor.card
+            field.setAccessibilityElement(true)
+            field.setAccessibilityRole(.staticText)
+            field.setAccessibilityLabel(words)
+            addSubview(field)
+            labels.append(field)
+        }
+        for (words, rect) in NDPipelineLayout.laneLabelRects() { add(words, rect: rect, caption: true) }
+        for station: NDStation in [.jobs, .weekly] {
+            if let words = NDPipelineLayout.purpose(station), let rect = NDPipelineLayout.purposeRect(station) {
+                add(words, rect: rect, caption: false)
+            }
+        }
+        setAccessibilityElement(false)
+        setAccessibilityChildren(labels)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
 // MARK: - The chart
 
 /// The pipeline as a loop (R1.3): the agents' group, six stations and the Memory hub, every fault in one language, each
@@ -19,6 +58,7 @@ struct NDPipelineChart: View {
     var popover: (NDStation) -> AnyView? = { _ in nil }
     /// Render harness only: one station drawn hovered, its popover drawn where AppKit would open it.
     var previewHover: NDStation? = nil
+    var backupProgress: BrainBarBackupProgress? = nil
     @State private var hovered: NDStation?
     @StateObject private var panels = NDPanelPresenter()
 
@@ -80,8 +120,14 @@ struct NDPipelineChart: View {
     var body: some View {
         let shownHover = previewHover ?? hovered
         ZStack(alignment: .topLeading) {
-            Canvas { ctx, _ in Self.draw(ctx, state: state, memories: memories, hovered: shownHover, keptGrown: keptGrown) }
+            Canvas { ctx, _ in
+                let drawn = Self.drawingState(state, progress: backupProgress)
+                Self.draw(ctx, state: drawn, memories: memories, hovered: shownHover, keptGrown: keptGrown)
+            }
                 .frame(width: NDPipelineLayout.drawWidth, height: NDPipelineLayout.size.height)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            NDPipelineLabels().frame(width: NDPipelineLayout.size.width, height: NDPipelineLayout.size.height)
                 .allowsHitTesting(false)
             // R1.4 changes 5, 8 and 9: the words that left the chart, on the things they name.
             ForEach(Self.lineHovers, id: \.title) { hover in
@@ -92,6 +138,15 @@ struct NDPipelineChart: View {
                 }
             }
             ForEach(Self.controls(items)) { control in station(control.station) }
+            if let backupProgress, Self.showsProgress(state, progress: backupProgress) {
+                let frame = Self.progressFrame(state)
+                BrainBarBackupProgressView(progress: backupProgress, compact: true, barOnly: state.status[.drive]?.severity != nil)
+                    .frame(width: frame.width)
+                    .background(ND.card)
+                    .frame(height: 0, alignment: .top)
+                    .offset(x: frame.minX, y: frame.minY)
+                    .allowsHitTesting(false)
+            }
             // R1.4 change 2: each provider icon's hover and spoken name is its name. 1.5.1: a provider a check names opens the
             // agents' fault panel itself (the same panel, with Copy report), not only a tooltip.
             ForEach(NDPipelineLayout.agentRows, id: \.0.rawValue) { family, _ in
@@ -123,6 +178,26 @@ struct NDPipelineChart: View {
         .accessibilityLabel(Say.pipeline)
     }
 
+    static func showsProgress(_ state: NDPipelineState, progress: BrainBarBackupProgress?) -> Bool {
+        progress != nil
+    }
+
+    /// Gap 22/23: leave 5 pt below the station's measured name/status boxes as the Overview layout moves.
+    static func progressFrame(_ state: NDPipelineState) -> CGRect {
+        let p = NDPipelineLayout.point(.drive)
+        if state.status[.drive]?.severity != nil {
+            let wordsBottom = NDPipelineLayout.labelRects(.drive, state).map(\.maxY).max() ?? p.y
+            return CGRect(x: p.x - 48, y: wordsBottom + 5, width: 96, height: 3)
+        }
+        return CGRect(x: p.x - 76, y: p.y + 37, width: 152, height: 33)
+    }
+
+    static func drawingState(_ state: NDPipelineState, progress: BrainBarBackupProgress?) -> NDPipelineState {
+        var drawn = state
+        if progress != nil && state.status[.drive]?.severity == nil { drawn.status[.drive] = nil }
+        return drawn
+    }
+
     /// The station's panel at its content's measured height.
     func panel(_ s: NDStation, content: AnyView) -> NDPipelineLayout.Panel {
         let actions: Set<NDStation> = []  // R1.5: no action sits on the chart, so none for a panel to clear
@@ -130,7 +205,14 @@ struct NDPipelineChart: View {
         // The width first (a side panel narrows to stay inside the window), then the height the content needs at it.
         let width = NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: 100).body.width
         let height = NDStationPopover.measure(content, width: width).height
-        return NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: height)
+        let layout = NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: height)
+        if s == .drive, layout.outer.minY < NDPipelineLayout.activityLabelsBottom {
+            // Gap 22/23: a live-upload fault has more words. Use the room across the top lane, clear of Activity.
+            let wide: CGFloat = 600
+            let fittedHeight = NDStationPopover.measure(content, width: wide).height
+            return NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: fittedHeight, width: wide)
+        }
+        return layout
     }
 
     @ViewBuilder private func station(_ s: NDStation) -> some View {
@@ -243,6 +325,10 @@ struct NDPipelineChart: View {
         drawStations(ctx, state: state, hovered: hovered)
         if state.allUnconfirmed {
             let words = state.lastKnownAt.map(Say.valuesLastKnownAt) ?? Say.everyPipeNotConfirmed
+            // CodeRabbit: the last-known caption masks the rail just like the other on-line captions.
+            let width = ceil(NSAttributedString(string: words, attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).size().width)
+            ctx.fill(Path(CGRect(x: NDPipelineLayout.size.width - width - 6, y: -2, width: width + 12, height: 16)),
+                     with: .color(ND.card))
             put(ctx, text(words, size: 11, color: ND.t2, weight: .medium), x: NDPipelineLayout.size.width, baseline: 10, size: 11, anchor: .end)
         }
     }
@@ -307,17 +393,17 @@ struct NDPipelineChart: View {
         if hovered == .memory {
             ctx.stroke(Path(roundedRect: hub.insetBy(dx: -3.5, dy: -3.5), cornerRadius: 15, style: .continuous), with: .color(ND.t2), lineWidth: 1)
         }
-        symbol(ctx, "brain", at: CGPoint(x: hub.midX, y: hub.minY + 27), size: 18, color: ND.t2)
-        put(ctx, text(Say.stageMemory, size: 13, color: ND.t1, weight: .semibold), x: hub.midX, baseline: hub.minY + 57, size: 13, anchor: .middle)
+        symbol(ctx, "brain", at: CGPoint(x: hub.midX, y: hub.minY + 16), size: 16, color: ND.t2)
+        put(ctx, text(Say.stageMemory, size: 13, color: ND.t1, weight: .semibold), x: hub.midX, baseline: hub.minY + 39, size: 13, anchor: .middle)
         // R2A item 8: the count carries its unit ("297,412 memories"), on two lines when one would crowd the box.
         let count = memories ?? NDModel.Number.unknown.value
         let words = Say.memoriesCount(count)
         let tint = state.allUnconfirmed ? ND.t3 : ND.t2  // R1.12 (E2): the Memory count follows the last-known rule
         if NDPipelineLayout.textWidth(words, size: 11) <= hub.width - 16 {
-            put(ctx, text(words, size: 11, color: tint, mono: true), x: hub.midX, baseline: hub.minY + 72, size: 11, anchor: .middle)
+            put(ctx, text(words, size: 11, color: tint, mono: true), x: hub.midX, baseline: hub.minY + 60, size: 11, anchor: .middle)
         } else {
-            put(ctx, text(count, size: 11, color: tint, mono: true), x: hub.midX, baseline: hub.minY + 72, size: 11, anchor: .middle)
-            put(ctx, text(Say.memoriesWord, size: 11, color: tint), x: hub.midX, baseline: hub.minY + 86, size: 11, anchor: .middle)
+            put(ctx, text(count, size: 11, color: tint, mono: true), x: hub.midX, baseline: hub.minY + 54, size: 11, anchor: .middle)
+            put(ctx, text(Say.memoriesWord, size: 11, color: tint), x: hub.midX, baseline: hub.minY + 68, size: 11, anchor: .middle)
         }
     }
 
@@ -398,7 +484,7 @@ struct NDPipelineChart: View {
                 // R1.12 (E2): not confirmed, the stations keep their last-known values in `t3`, as clock times.
                 let color: Color = state.allUnconfirmed ? ND.t3 : tone == .fault ? ND.redText : tone == .warn ? ND.orangeText : ND.t2
                 put(ctx, text(status.text, size: 11, color: color, weight: tone == .fine ? .regular : .semibold, mono: true),
-                    x: p.x, baseline: p.y + 43, size: 11, anchor: .middle)
+                    x: p.x, baseline: L.statusTop(station) + 10, size: 11, anchor: .middle)
             }
         }
     }
@@ -768,7 +854,8 @@ struct NDStationPopover: View {
 
     var body: some View {
         NDStationPanelBody(model: Self.model(station, item: store.r1.stationItems[station], store.inputs, store.model, store.r1.pipeline),
-                           waiting: NDDriveWaiting.shows(store.inputs, for: store.r1.stationItems[station]?.action)) { store.perform($0) }
+                           waiting: NDDriveWaiting.shows(store.inputs, for: store.r1.stationItems[station]?.action),
+                           compactRows: station == .drive && store.inputs.backupProgress != nil) { store.perform($0) }
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 

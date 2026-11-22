@@ -265,6 +265,7 @@ import SwiftUI
         i.agents = agents(collector?.agentActivity, model?.dashboardObservabilityResult)
         if let model {
             i.jobs = jobs(model)
+            i.backupProgress = model.backupProgress
             i.nightlyLastRun = run(model, .maintenanceNightly)
             i.weeklyLastRun = run(model, .maintenanceWeekly)
             if case let .completed(at) = model.maintenanceEvidence.weeklyCompletion {
@@ -499,5 +500,30 @@ import SwiftUI
     func openWindow(_ page: NDPage) {
         self.page = page
         onOpenWindow?(page)
+    }
+}
+
+/// L57: one refit after a store transaction, including input-only Jobs and Backups changes.
+/// Listening to objectWillChange also covers content that changes without changing the health headline.
+@MainActor final class NDPageFitObserver {
+    private var subscription: AnyCancellable?
+    private var scheduled = false
+    private let fit: @MainActor () -> Void
+
+    init(store: NDStore, fit: @escaping @MainActor () -> Void) {
+        self.fit = fit
+        subscription = store.objectWillChange.sink { [weak self] in
+            MainActor.assumeIsolated { self?.schedule() }
+        }
+    }
+
+    func schedule() {
+        guard !scheduled else { return }
+        scheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.scheduled = false
+            self.fit()
+        }
     }
 }

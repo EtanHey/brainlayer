@@ -259,7 +259,7 @@ enum NDGrid {
     /// R1.12 (changes 4 and B): the Overview's vertical rhythm.
     static let headlineToRows: CGFloat = 14
     static let toActivity: CGFloat = 24
-    static let activityToPipeline: CGFloat = 32
+    static let activityToPipeline: CGFloat = 0  // Gap 79 M1 proof: reclaim chart spacing so calm fits 636 pt.
     static let footer: CGFloat = 28
     static let pageSide: CGFloat = 24
     static let pageTop: CGFloat = 20

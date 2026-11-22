@@ -304,7 +304,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             window.contentMinSize = Self.minSize
             window.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
             pageObserver = nil
-            headlineObserver = nil
+            pageFitObserver = nil
             fittedFrameSize = nil
             // F04 and N02: back on Classic, the new design's window work stops and its Settings window closes.
             if hasNewDesignStore { newDesignStore.setWindowActive(false) }
@@ -331,15 +331,11 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
                 pageObserver = AnyCancellable { [weak store = newDesignStore] in
                     MainActor.assumeIsolated { store?.pageDidChange = nil }
                 }
-                // A headline that gains or loses a fault line changes the page's height: refit when what it says changes.
-                headlineObserver = newDesignStore.$model.map { _ in () }.receive(on: RunLoop.main).sink { [weak self] in
-                    MainActor.assumeIsolated {
-                        guard let self else { return }
-                        let key = NDPageHeight.key(self.newDesignStore)
-                        guard key != self.lastHeadlineKey else { return }
-                        self.lastHeadlineKey = key
-                        self.fitPage(self.newDesignStore.page)
-                    }
+                // L57: inputs can change Jobs and Backups without changing the headline or model.
+                // Coalesce willSet publications; measure only after the complete store update.
+                pageFitObserver = NDPageFitObserver(store: newDesignStore) { [weak self] in
+                    guard let self, self.shownDesign == .new else { return }
+                    self.fitPage(self.newDesignStore.page)
                 }
             }
             if window.isVisible { newDesignStore.setWindowActive(true) }
@@ -354,16 +350,30 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     private var currentMinSize: NSSize { shownDesign == .new ? NDGrid.windowMinimum : Self.minSize }
 
     nonisolated(unsafe) private var pageObserver: AnyCancellable?
-    nonisolated(unsafe) private var headlineObserver: AnyCancellable?
+    private var pageFitObserver: NDPageFitObserver?
     /// The frame `fitPage` last chose; `windowWillResize` returns it in the new design.
     private(set) var fittedFrameSize: NSSize?
-    private var lastHeadlineKey: String?
+    private var pageResizeInFlight = false
+    private var pageFitPending = false
 
-    /// Tests set the screen's visible height, so the L25 cap never depends on the machine running them.
+    var visibleFrameOverride: NSRect?
+    private var fitVisibleFrame: NSRect? {
+        if let visibleFrameOverride { return visibleFrameOverride }
+        let frame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        guard let visibleHeightOverride else { return frame }
+        return NSRect(x: frame?.minX ?? 0, y: frame?.minY ?? 0,
+                      width: frame?.width ?? NDGrid.windowWidth, height: visibleHeightOverride)
+    }
+
+    var fitTitleBarHeight: CGFloat {
+        window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: NDGrid.windowWidth, height: 100)).height - 100
+    }
+
+    /// Tests set the screen's visible height, so the L57 cap never depends on the machine running them.
     var visibleHeightOverride: CGFloat?
-    /// The visible height the L25 cap is computed from: the window's screen, else the main screen.
+    /// The visible height the L57 cap is computed from: the window's screen, else the main screen.
     var fitScreenHeight: CGFloat? {
-        visibleHeightOverride ?? window.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height
+        fitVisibleFrame?.height
     }
 
     /// The page's size, exactly (min = max), keeping the window's top-left corner. R2 item 3: a shown window's height
@@ -389,13 +399,24 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     var pageFrameAnimatorForTesting: ((NSRect, Double, CAMediaTimingFunction, @escaping () -> Void) -> Void)?
 
     func fitPage(_ page: NDPage) {
-        // R1.2 change 22 and L25: the page's own height, from its laid-out content, capped at the screen's visible height
-        // minus 40 pt, past which the page scrolls under its fade and the footer stays.
-        let size = NSSize(width: NDGrid.windowWidth, height: NDPageHeight.window(newDesignStore, page: page, screen: fitScreenHeight))
+        guard shownDesign == .new else { return }
+        // Finish one frame animation before starting another; the newest content wins at its completion.
+        guard !pageResizeInFlight else {
+            pageFitPending = true
+            if newDesignStore.shownPage != page {
+                newDesignStore.shownPage = page
+                layOutShownPage(page)
+            }
+            return
+        }
+        let size = NSSize(width: NDGrid.windowWidth,
+                          height: NDPageHeight.window(newDesignStore, page: page, screen: fitScreenHeight,
+                                                      titleBarHeight: fitTitleBarHeight))
         let frameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
+        let target = NDPageHeight.frame(size: frameSize, keeping: window.frame, visibleFrame: fitVisibleFrame)
+        // A publication that changes only words or wave samples needs no window resize.
+        if fittedFrameSize == frameSize, window.frame == target, newDesignStore.shownPage == page { return }
         fittedFrameSize = frameSize
-        let top = window.frame.maxY
-        let target = NSRect(x: window.frame.minX, y: top - frameSize.height, width: frameSize.width, height: frameSize.height)
         let duration = NDMotion.pageResize(reduceMotion: reduceMotionForTesting ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         let order = NDPageSwitch.order(from: window.frame.height, to: target.height,
                                        animates: (animatesPageSwitchForTesting ?? window.isVisible) && duration != nil)
@@ -421,11 +442,18 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         window.contentMaxSize = NSSize(width: size.width, height: max(current.height, size.height))
         let c = NDPageSwitch.curve
         let curve = CAMediaTimingFunction(controlPoints: c.0, c.1, c.2, c.3)
+        pageResizeInFlight = true
         let finish: () -> Void = { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.fittedFrameSize == frameSize else { return }
+                guard let self else { return }
+                self.pageResizeInFlight = false
+                guard self.shownDesign == .new else { return }
                 self.window.contentMinSize = size
                 self.window.contentMaxSize = size
+                if self.pageFitPending {
+                    self.pageFitPending = false
+                    self.fitPage(self.newDesignStore.page)
+                }
             }
         }
         if let animator = pageFrameAnimatorForTesting { return animator(target, duration, curve, finish) }
@@ -468,6 +496,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             placeWindow(near: anchorView ?? statusItemButton)
             hasPlacedWindow = true
         }
+#if BRAINBAR_UI
+        if shownDesign == .new { fitPage(newDesignStore.page) }
+#endif
         activationPolicy?.windowOpened(window)
         if window.isMiniaturized { window.deminiaturize(nil) }
         NSApp.activate(ignoringOtherApps: true)
@@ -540,10 +571,13 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         if let saved = frameStore.persistedFrame(),
            let restored = Self.restoredFrame(saved, minSize: Self.minSize, visibleFrames: screenFrames()) {
             window.setFrame(restored, display: false)
+#if BRAINBAR_UI
+            if shownDesign == .new { fitPage(newDesignStore.page) }
+#endif
             return
         }
 #if BRAINBAR_UI
-        window.setContentSize(shownDesign == .new ? NDGrid.windowSize : Self.defaultSize)
+        if shownDesign == .classic { window.setContentSize(Self.defaultSize) }
 #else
         window.setContentSize(Self.defaultSize)
 #endif
@@ -576,6 +610,12 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         // Policy changes and teardown can move a closed window. Keep the last user frame.
         isClosingWindow = true
     }
+
+#if BRAINBAR_UI
+    func windowDidChangeScreen(_ notification: Notification) {
+        if shownDesign == .new { pageFitObserver?.schedule() }
+    }
+#endif
 
     /// A real window resizes on both axes, down to the size the dashboard needs.
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
