@@ -235,6 +235,8 @@ import XCTest
                 abandoned: false, consecutiveFailures: 3)
             let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(),
                 store: .init(loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) }),
+                launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+                embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
                 initialLaunchdObservations: [.backupDaily: BrainBarStatusSnapshotTests.step(consecutiveFailures: 2),
                     .jsonlBackup: BrainBarStatusSnapshotTests.step(), .maintenanceNightly: night],
                 refreshStatusOnLoad: false, now: { now },

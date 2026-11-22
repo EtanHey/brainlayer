@@ -666,8 +666,7 @@ enum BrainBarMenuPresenter {
 
     /// X01, X02, and in P1 every path without a readable, fresh verdict and no red: nothing is confirmed.
     private static func checkingState(_ c: Capture) -> P {
-        let launching = c.isChecking && c.verdict == nil
-        let headline = c.wakeCatchUpPending && !launching ? Say.checkingSleep.text : Say.checkingMemory.text
+        let headline = c.wakeCatchUpPending ? Say.checkingSleep.text : Say.checkingMemory.text
         let last = c.lastKnownBackupAt.flatMap { $0 <= c.now && sayable($0) && hasWords($0, c) ? " " + Say.lastBackup(at($0, c)) : nil } ?? ""
         return .init(form: .calm, headline: headline, count: 0, icon: .resting,
                      rows: [P.Row(kind: .headline, strings: [headline], mark: .wait),
