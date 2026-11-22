@@ -78,3 +78,24 @@ row counts for every table. A separate writer updates an owned synthetic table a
 2 MiB/s payload rate, including a five-second burst at the observed 18,175,039 B/s peak. Sequence and
 payload checks on the restored synthetic rows supplement full integrity and table counts. The
 restore is acceptance work, not part of the production peak.
+
+### M1 copy acceptance, 2026-11-22
+
+One run against source hashes from `056846f6` (the M1 checkout's base HEAD was `797ad572`;
+the three changed source-file hashes were asserted before and after the run).
+
+| Observation | Result |
+| --- | --- |
+| Owned source copy, including synthetic writer table | 4,738,621,440 bytes |
+| Compressed archive | 1,792,023,691 bytes |
+| Sampled volume-free delta peak during backup | 2,076,516,352 bytes |
+| Snapshot / restored full integrity | Both `ok` |
+| Per-table row counts | All 93 equal |
+| Restored writer sequence/payload invariant | Passed |
+| Concurrent writer | 17,559 commits, 287,686,656 payload bytes in 98.857 s |
+| Writer pacing | 2 MiB/s sustained; 18,175,039 B/s for the first five seconds |
+| Local archive proof | SHA-256 matches the integrity-checked snapshot |
+
+The sampled peak includes unrelated volume activity and excludes the separate restore check.
+This proves the copy path with an active writer on M1; it does not measure M4 production peak or
+Drive transport. The owned DB copies and archive were removed after recording the receipt.

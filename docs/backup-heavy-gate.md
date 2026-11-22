@@ -14,7 +14,7 @@ gate also requires raw free space for the backup's peak allocation plus a host
 reserve: **40 GiB on M4, zero extra on M1**. It calls the existing
 `_peak_backup_required_bytes` with the current DB size, estimated compressed
 size and full-verify schedule. On confirmed APFS source/staging volumes it uses
-the [bounded clone peak](backup-apfs-clone.md); otherwise it uses the conservative
+the [planned clone peak](backup-apfs-clone.md); otherwise it uses the conservative
 non-reclaiming VACUUM peak. A failed clone rechecks the larger fallback budget.
 That helper already includes the backup's 2 GiB raw floor. Raw
 `free_now_bytes` is measured on the staging volume before and under the lock;
