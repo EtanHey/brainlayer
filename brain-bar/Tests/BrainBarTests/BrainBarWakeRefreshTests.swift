@@ -13,22 +13,19 @@ final class BrainBarWakeRefreshTests: XCTestCase {
     final class Source: @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0
-        let read: XCTestExpectation
-        init(_ read: XCTestExpectation) { self.read = read }
         var reads: Int { lock.withLock { count } }
         func sample(_ url: URL) -> WatcherHealthFileRead {
             lock.withLock { count += 1 }
-            read.fulfill()
             return .unreadable(path: url.path, reason: "Fixture has no heartbeat.")
         }
     }
 
     actor Gate {
-        let initial: XCTestExpectation, held: XCTestExpectation, fresh: XCTestExpectation
+        let initial: XCTestExpectation, held: XCTestExpectation
         var reads = 0
         var continuation: CheckedContinuation<ObservabilityReadResult, Never>?
-        init(initial: XCTestExpectation, held: XCTestExpectation, fresh: XCTestExpectation) {
-            self.initial = initial; self.held = held; self.fresh = fresh
+        init(initial: XCTestExpectation, held: XCTestExpectation) {
+            self.initial = initial; self.held = held
         }
         func sample() async -> ObservabilityReadResult {
             reads += 1
@@ -38,7 +35,7 @@ final class BrainBarWakeRefreshTests: XCTestCase {
                     continuation = $0
                     held.fulfill()
                 }
-            } else { fresh.fulfill() }
+            }
             return .unreadable("Invented backup status unavailable.")
         }
         func release() {
@@ -66,9 +63,7 @@ final class BrainBarWakeRefreshTests: XCTestCase {
     }
 
     func testWakeImmediatelySamplesOnceForRepeatedNotices() async {
-        let read = expectation(description: "immediate shared status read")
-        read.assertForOverFulfill = true
-        let source = Source(read)
+        let source = Source()
         let clock = Clock()
         let model = model(clock, source: source)
         model.systemWillSleep()
@@ -76,15 +71,15 @@ final class BrainBarWakeRefreshTests: XCTestCase {
         model.systemDidWake()
         model.systemDidWake()
         model.systemDidWake()
-        await fulfillment(of: [read], timeout: 1)
+        XCTAssertNotNil(model.wakeRefreshTask)
+        await model.wakeRefreshTask?.value
         XCTAssertEqual(source.reads, 1)
     }
 
     func testWakeDoesNotWaitForAnOlderSuspendedTimerRead() async {
         let initial = expectation(description: "initial fixture read")
         let held = expectation(description: "old timer read suspended")
-        let fresh = expectation(description: "wake read starts before old read returns")
-        let gate = Gate(initial: initial, held: held, fresh: fresh)
+        let gate = Gate(initial: initial, held: held)
         let clock = Clock()
         let model = model(clock, gate: gate)
         await fulfillment(of: [initial], timeout: 1)
@@ -93,7 +88,10 @@ final class BrainBarWakeRefreshTests: XCTestCase {
         model.systemWillSleep()
         clock.date.addTimeInterval(600)
         model.systemDidWake()
-        await fulfillment(of: [fresh], timeout: 1)
+        XCTAssertNotNil(model.wakeRefreshTask)
+        await model.wakeRefreshTask?.value
+        let reads = await gate.reads
+        XCTAssertEqual(reads, 3, "Wake completes its fresh read while the older read is still held")
         await gate.release()
         await tick.value
     }
@@ -112,8 +110,7 @@ final class BrainBarWakeRefreshTests: XCTestCase {
     }
 
     func testActivationAfterSleepRecoversAMissedWakeNotice() async {
-        let read = expectation(description: "activation requests the wake read")
-        let source = Source(read)
+        let source = Source()
         let clock = Clock()
         let model = model(clock, source: source)
         model.systemWillSleep()
@@ -121,7 +118,8 @@ final class BrainBarWakeRefreshTests: XCTestCase {
         clock.date.addTimeInterval(600)
         model.applicationDidBecomeActive()
         model.applicationDidBecomeActive()
-        await fulfillment(of: [read], timeout: 1)
+        XCTAssertNotNil(model.wakeRefreshTask)
+        await model.wakeRefreshTask?.value
         XCTAssertNil(model.sleepStartedAt)
         XCTAssertEqual(source.reads, 1)
     }

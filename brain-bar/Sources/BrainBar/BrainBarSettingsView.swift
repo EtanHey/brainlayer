@@ -50,6 +50,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private var wakeStartedUptime: Double?
     private var wakeOutcomeLogged = false
     private let lifecycleLog: BrainBarLogFile?
+    private(set) var wakeRefreshTask: Task<Void, Never>?
     private var statusTickTask: Task<Void, Never>?
     private var statusTickGeneration = 0
     private var awakeUptime: Double { awakeClock() }
@@ -547,7 +548,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         observabilityUnreadableSince = nil
         scheduleWakeExpiry(after: grace)
         republishStatus()
-        Task { [weak self] in await self?.sampleStatusTick(includeLaunchd: true) }
+        wakeRefreshTask = Task { [weak self] in await self?.sampleStatusTick(includeLaunchd: true) }
     }
 
     private func scheduleWakeExpiry(after delay: TimeInterval) {
