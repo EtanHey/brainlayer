@@ -183,6 +183,9 @@ struct NDJobInput: Equatable, Sendable, Identifiable {
     var failureStreak: Int? = nil
     /// The sampled schedule's interval; nil when no cadence was confirmed.
     var scheduleInterval: TimeInterval? = nil
+    var scheduleCalendar: DateComponents? = nil
+
+    var runsFrequently: Bool { scheduleInterval.map { $0 > 0 && $0 < 3600 } ?? false }
 }
 
 /// A job's last run as its records show it.

@@ -1226,7 +1226,6 @@ struct BrainBarSettingsView: View {
                 }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
-                        designRow
                         header
                         if let errorMessage = viewModel.errorMessage { errorBanner(errorMessage) }
                         if let receipt = viewModel.lastSaveReceipt {
@@ -1348,6 +1347,7 @@ struct BrainBarSettingsView: View {
         switch navigation.selected {
         case .jobs:
             VStack(alignment: .leading, spacing: 16) {
+                designRow
                 BrainBarBackupFailureLogs(model: viewModel)
                 jobsGrid
             }

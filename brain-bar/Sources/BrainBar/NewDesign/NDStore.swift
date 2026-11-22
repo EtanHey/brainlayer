@@ -45,6 +45,8 @@ import SwiftUI
     private var waveGeneration = 0
     private var historyGeneration = 0
     private var waveTask: Task<Void, Never>?
+    private typealias WaveBuckets = BrainDatabase.PipelineWindowBuckets?
+    private var waveRead: (generation: Int, task: Task<(WaveBuckets, WaveBuckets), Never>)?
     private var historyTask: Task<Void, Never>?
     private var backupPaths: BrainBarBackupSources.Paths?
     /// The report the dropdown and the needs band copy: the shown words (runtime warnings included) and check
@@ -94,8 +96,8 @@ import SwiftUI
         if active { refresh(); refreshWaves(force: true); refreshBackupHistory(force: true) }
     }
 
-    /// Nothing runs unless a surface shows the new design: switching to Classic or closing everything stops every
-    /// subscription and cancels every task in flight.
+    /// Closing both surfaces stops subscriptions and cancels waiters. A read already inside SQLite keeps its slot
+    /// until it finishes, but its invalidated generation cannot publish.
     private func updateLifecycle() {
         let wanted = iconActive || windowActive
         if wanted, !bound { bind() }
@@ -313,7 +315,7 @@ import SwiftUI
                               continuous: o?.isContinuous ?? false, lastRun: o?.lastRunAt, nextRun: o?.nextRunAt, loaded: loaded,
                               lastOutcome: o.map(outcome) ?? .unknown,
                               failureStreak: o?.calendarHistoryDamaged == true ? nil : o?.calendarConsecutiveFailures,
-                              scheduleInterval: o?.scheduleInterval)
+                              scheduleInterval: o?.scheduleInterval, scheduleCalendar: o?.scheduleCalendar)
         }
     }
 
@@ -335,8 +337,8 @@ import SwiftUI
         return o.lastRunAt.map { .ran($0) } ?? .never
     }
 
-    /// The waveforms: the dropdown's hour in 24 buckets and the hero's range in 60, read off the main thread at most every
-    /// 15 s (and at once on a range switch).
+    /// Periodic reads use a 15 s throttle. Range changes bypass it; if a read is already running, only the newest
+    /// selection starts next. Periodic ticks cannot replace a pending user selection.
     func refreshWaves(force: Bool = false, applyWhileHeld: Bool = false) {
         guard iconActive || windowActive else { return }
         let fetch: @Sendable (Int, Int) async -> BrainDatabase.PipelineWindowBuckets?
@@ -347,6 +349,7 @@ import SwiftUI
             fetch = { minutes, count in await collector.fetchBuckets(windowMinutes: minutes, bucketCount: count, provider: provider) }
         }
         let now = waveNow()
+        if !force, waveTask != nil { return }
         if !force, let last = lastWaveFetch, now.timeIntervalSince(last) < 15 { return }
         lastWaveFetch = now
         waveGeneration += 1
@@ -354,14 +357,26 @@ import SwiftUI
         let generation = waveGeneration, range = range
         let wantsHero = windowActive
         waveTask = Task { [weak self] in
-            async let menu = fetch(60, 24)
-            async let hero = wantsHero ? fetch(range.minutes, 60) : nil
-            let (m, h) = await (menu, hero)
-            guard !Task.isCancelled, let self, generation == self.waveGeneration else { return }
+            guard let self else { return }
+            // Cancelling a waiter cannot stop SQLite already reading. Keep that read's slot until it finishes;
+            // only the newest generation may start the next one, including after a window closes and reopens.
+            if let previous = self.waveRead { _ = await previous.task.value }
+            guard !Task.isCancelled, generation == self.waveGeneration else { return }
+            let sampledAt = self.waveNow()
+            self.lastWaveFetch = sampledAt
+            let read = Task<(WaveBuckets, WaveBuckets), Never> {
+                async let menu = fetch(60, 24)
+                async let hero = wantsHero ? fetch(range.minutes, 60) : nil
+                return await (menu, hero)
+            }
+            self.waveRead = (generation, read)
+            let (m, h) = await read.value
+            if self.waveRead?.generation == generation { self.waveRead = nil }
+            guard !Task.isCancelled, generation == self.waveGeneration else { return }
             self.waveTask = nil
             var next = self.inputs
-            next.menuWave = m.map { Self.wave($0, end: now) } ?? NDWave(saves: [], reads: [], readable: false)
-            if wantsHero { next.heroWaves[range] = h.map { Self.wave($0, end: now) } ?? NDWave(saves: [], reads: [], readable: false) }
+            next.menuWave = m.map { Self.wave($0, end: sampledAt) } ?? NDWave(saves: [], reads: [], readable: false)
+            if wantsHero { next.heroWaves[range] = h.map { Self.wave($0, end: sampledAt) } ?? NDWave(saves: [], reads: [], readable: false) }
             self.acceptWaves(next, applyWhileHeld: applyWhileHeld)
         }
     }

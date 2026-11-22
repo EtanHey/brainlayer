@@ -41,6 +41,7 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
     /// S5: the installed calendar LaunchAgent exists but is not a usable schedule (malformed config).
     var calendarScheduleProblem: String? = nil
     var scheduleInterval: TimeInterval? = nil
+    var scheduleCalendar: DateComponents? = nil
 
     var backupScheduleLine: ObservabilityStatusLine? {
         guard ownership != .legacy else { return nil }

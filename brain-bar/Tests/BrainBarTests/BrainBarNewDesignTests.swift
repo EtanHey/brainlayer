@@ -206,9 +206,11 @@ import SwiftUI
         // Main's own expectations for the two menu settings (BrainBarBrainIconTests): charts and the legacy rows when off,
         // the 22 pt brain and the presenter's standing items when on.
         let off = try shown(design: "classic", newMenu: false)
+        XCTAssertEqual(off.hostedNew, 0)
         XCTAssertEqual(off.titles, ["Nothing needs attention", "Show log", "", "", "Open Dashboard", "Settings…", "", "Restart BrainBar", "", "Quit BrainBar"])
         XCTAssertEqual(off.size, NSSize(width: 26, height: 14))
         let on = try shown(design: "classic", newMenu: nil)
+        XCTAssertEqual(on.hostedNew, 0)
         XCTAssertEqual(on.size, NSSize(width: 22, height: 22))
         XCTAssertFalse(on.titles.contains("Open Dashboard"))
     }
@@ -1724,8 +1726,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         for bucket in [0, 30, 59] {
             XCTAssertEqual(try XCTUnwrap(plotFrame(hover: bucket)), rest, "bucket \(bucket)")
         }
-        XCTAssertEqual(Say.upTo("4", minutes: 1), "up to 4 / min", "R1.2 change 20")
-        XCTAssertEqual(Say.upTo("83", minutes: 3), "up to 83 / 3 min")
+        XCTAssertEqual(Say.upTo("4", minutes: 1), "up to 4 per min")
+        XCTAssertEqual(Say.upTo("83", minutes: 3), "up to 83 per 3 min")
     }
 
     /// Council r2a finding 4: the Reconnect hand-off never shows both: the line starts when the button's fade has ended,

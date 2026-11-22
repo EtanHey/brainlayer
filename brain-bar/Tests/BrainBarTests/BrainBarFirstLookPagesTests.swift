@@ -21,18 +21,22 @@ import XCTest
     }
 
     func testActivityScaleLabelsUseTheirOwnPeaks() {
+        XCTAssertEqual(NDActivitySection.headerHeight, 22, "scale captions must not increase the Activity header")
         let wave = NDWave(saves: [1, 7, 2], reads: [31, 4, 3])
         let labels = NDActivitySection.scaleLabels(wave, minutes: 3)
-        XCTAssertEqual(labels.saves, "up to 7 / min")
-        XCTAssertEqual(labels.reads, "up to 31 / min")
+        XCTAssertEqual(labels.saves, "up to 7 per min")
+        XCTAssertEqual(labels.reads, "up to 31 per min")
         XCTAssertNotEqual(labels.saves, labels.reads)
         var sliding = wave
         sliding.outgoing = .init(saves: 17, reads: 43)
-        XCTAssertEqual(NDActivitySection.scaleLabels(sliding, minutes: 3).saves, "up to 17 / min")
-        XCTAssertEqual(NDActivitySection.scaleLabels(sliding, minutes: 3).reads, "up to 43 / min")
+        XCTAssertEqual(NDActivitySection.scaleLabels(sliding, minutes: 3).saves, "up to 17 per min")
+        XCTAssertEqual(NDActivitySection.scaleLabels(sliding, minutes: 3).reads, "up to 43 per min")
         let wide = NDWave(saves: Array(repeating: 7, count: 60), reads: Array(repeating: 31, count: 60))
-        XCTAssertEqual(NDActivitySection.scaleLabels(wide, minutes: 180).saves, "up to 7 / 3 min")
-        XCTAssertEqual(NDActivitySection.scaleLabels(wide, minutes: 1440).reads, "up to 31 / 24 min")
+        XCTAssertEqual(NDActivitySection.scaleLabels(wide, minutes: 180).saves, "up to 7 per 3 min")
+        XCTAssertEqual(NDActivitySection.scaleLabels(wide, minutes: 1440).reads, "up to 31 per 24 min")
+        let zero = NDActivitySection.scaleLabels(NDWave(saves: [0], reads: [0]), minutes: 1)
+        XCTAssertNil(zero.saves)
+        XCTAssertNil(zero.reads)
     }
 
     private func find<T>(_ type: T.Type, in value: Any) -> T? {
@@ -81,7 +85,8 @@ import XCTest
     func testUndatedAndEventConversationRowsPreserveGoodDots() throws {
         let now = BrainBarDesignFixture.inputs(.calm).capture.now
         let at = ISO8601DateFormatter().string(from: now.addingTimeInterval(-3600))
-        let lines = ["{\"uploaded\":true}", "{\"event\":\"scan\",\"attempted_at\":\"\(at)\"}",
+        let old = ISO8601DateFormatter().string(from: now.addingTimeInterval(-NDBackupHistoryReader.windowS - 3600))
+        let lines = ["{\"uploaded\":true,\"ts\":\"\(old)\"}", "{\"event\":\"scan\",\"attempted_at\":\"\(at)\"}",
                      "{\"attempted_at\":\"\(at)\",\"uploaded\":true,\"verified\":true}"]
         let parsed = try XCTUnwrap(NDBackupHistoryReader.parseConversations(.init(lines: lines.map { Substring($0) }, unreadable: false), now: now))
         XCTAssertEqual(parsed.attempts?.map(\.ok), [true])
@@ -91,7 +96,8 @@ import XCTest
     func testUndatedAndEventDatabaseRowsPreserveGoodDots() throws {
         let now = BrainBarDesignFixture.inputs(.calm).capture.now
         let at = ISO8601DateFormatter().string(from: now.addingTimeInterval(-3600))
-        let lines = ["{\"backup_log_provenance\":\"real\"}",
+        let old = ISO8601DateFormatter().string(from: now.addingTimeInterval(-NDBackupHistoryReader.windowS - 3600))
+        let lines = ["{\"backup_log_provenance\":\"real\",\"ts\":\"\(old)\"}",
                      "{\"event\":\"scan\",\"attempted_at\":\"\(at)\",\"backup_log_provenance\":\"real\"}",
                      "{\"attempted_at\":\"\(at)\",\"backup_log_provenance\":\"real\",\"uploaded\":true,\"verified\":true}"]
         let parsed = try XCTUnwrap(NDBackupHistoryReader.parseDatabase(.init(lines: lines.map { Substring($0) }, unreadable: false), now: now))
@@ -159,5 +165,99 @@ import XCTest
         let observations = provider.sampleActivity()
         XCTAssertEqual(observations[.walCheckpoint]?.scheduleInterval, 86400)
         XCTAssertEqual(observations[.drain]?.scheduleInterval, 300)
+    }
+
+    func testBothJobHoversUseTheSameCadenceAsTheirRails() {
+        let at = ISO8601DateFormatter().date(from: "2026-11-23T04:00:00Z")!
+        let capture = BrainBarMenuCapture(now: at.addingTimeInterval(-3600), timeZone: TimeZone(secondsFromGMT: 0)!)
+        for job in [BrainLayerLaunchdJob.drain, .walCheckpoint] {
+            var input = NDJobInput(job: job, enabled: true, continuous: false, lastRun: nil, nextRun: at,
+                                   loaded: true, scheduleInterval: 300)
+            XCTAssertTrue(input.runsFrequently)
+            XCTAssertTrue(NDJobLaneView.jobHelp(input, job: job, capture: capture).hasSuffix("Every few minutes."))
+            input.scheduleInterval = 86400
+            input.scheduleCalendar = DateComponents(hour: 4, minute: 0)
+            XCTAssertFalse(input.runsFrequently)
+            let daily = NDJobLaneView.jobHelp(input, job: job, capture: capture)
+            XCTAssertTrue(daily.hasSuffix("Runs daily at 04:00."))
+            XCTAssertFalse(daily.contains("Every few minutes"))
+            input.scheduleInterval = 82800
+            XCTAssertTrue(NDJobLaneView.jobHelp(input, job: job, capture: capture).hasSuffix("Runs daily at 04:00."),
+                          "a daylight-saving transition does not turn a calendar job into a 23-hour timer")
+        }
+    }
+
+    func testRetentionErrorAndUnprovenUndatedRowsAreNotSkipped() throws {
+        let now = BrainBarDesignFixture.inputs(.calm).capture.now
+        let error = #"{"event":"local_retention_error","error":"invented inventory unavailable"}"#
+        let retention = NDBackupHistoryReader.Log(lines: [Substring(error)], unreadable: false)
+        let conversation = try XCTUnwrap(NDBackupHistoryReader.parseConversations(retention, now: now))
+        XCTAssertNil(conversation.attempts)
+        XCTAssertEqual(conversation.skipped, 1)
+        let database = try XCTUnwrap(NDBackupHistoryReader.parseDatabase(retention, now: now))
+        XCTAssertNil(database.local)
+        XCTAssertEqual(database.skipped, 1)
+        let undated = NDBackupHistoryReader.Log(lines: [Substring(#"{"uploaded":true,"verified":true}"#)], unreadable: false)
+        XCTAssertNil(NDBackupHistoryReader.parseConversations(undated, now: now)?.attempts)
+    }
+
+    @MainActor private final class RangeGate {
+        var heroRequests: [Int] = []
+        var active = 0
+        var maximumActive = 0
+        private var dayStarted = false
+        private var onStart: CheckedContinuation<Void, Never>?
+        private var onRelease: CheckedContinuation<Void, Never>?
+
+        func waitForDay() async {
+            if dayStarted { return }
+            await withCheckedContinuation { onStart = $0 }
+        }
+
+        func releaseDay() { onRelease?.resume(); onRelease = nil }
+
+        func fetch(_ minutes: Int, _ count: Int) async -> BrainDatabase.PipelineWindowBuckets? {
+            if count == 60 {
+                heroRequests.append(minutes)
+                active += 1
+                maximumActive = max(maximumActive, active)
+                if minutes == 1440, !dayStarted {
+                    dayStarted = true
+                    onStart?.resume(); onStart = nil
+                    await withCheckedContinuation { onRelease = $0 }
+                }
+                active -= 1
+            }
+            return .init(activityWindowMinutes: minutes, bucketCount: count, allWriteBuckets: [minutes],
+                         agentWriteBuckets: [minutes], watcherWriteBuckets: [count], enrichmentBuckets: [],
+                         watcherFlowReadability: .readable)
+        }
+    }
+
+    func testLatestRangeWaitsForTheActiveQueryAndDropsIntermediateQueries() async {
+        let gate = RangeGate()
+        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm))
+        let now = store.inputs.capture.now
+        store.waveNow = { now }
+        store.fetchWaveBuckets = { minutes, count in await gate.fetch(minutes, count) }
+        store.setWindowActive(true)
+        await store.waitForWaveFetchForTesting()
+        store.holdChart(true)
+        store.range = .day
+        await gate.waitForDay()
+        store.range = .hour
+        store.range = .day
+        store.range = .threeHours
+        store.waveNow = { now.addingTimeInterval(16) }
+        store.refreshWaves()
+        gate.releaseDay()
+        await store.waitForWaveFetchForTesting()
+        XCTAssertEqual(gate.heroRequests, [60, 1440, 180])
+        XCTAssertEqual(gate.maximumActive, 1)
+        XCTAssertEqual(store.inputs.heroWaves[.threeHours]?.saves, [180])
+        XCTAssertEqual(store.inputs.heroWaves[.threeHours]?.endsAt, now.addingTimeInterval(16))
+        XCTAssertNotEqual(store.inputs.heroWaves[.day]?.saves, [1440], "the superseded result is discarded")
+        store.holdChart(false)
+        store.setWindowActive(false)
     }
 }

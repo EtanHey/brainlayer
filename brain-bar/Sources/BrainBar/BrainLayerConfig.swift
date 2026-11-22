@@ -603,6 +603,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
                 }
                 if !job.isContinuous {
                     result.scheduleInterval = scheduleInterval(components: calendarComponents)
+                    result.scheduleCalendar = calendarComponents
                     result.calendarHistoryDamaged = history.error != nil || history.truncated || history.skippedLineCount > 0
                 }
                 if !job.isContinuous, let note = history.uncertaintyNote {
@@ -697,6 +698,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
                 isContinuous: components == nil && job.isContinuous
             )
             observation.scheduleInterval = scheduleInterval(components: components)
+            observation.scheduleCalendar = components
             if job == .watch, let exit = uncleanLaunchdExit(result) {
                 observation.uncleanExit = "Watcher " + exit
                 observation.healthySince = launchdHealthySince(result)

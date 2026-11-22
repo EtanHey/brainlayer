@@ -150,8 +150,8 @@ struct NDBackupsPage: View {
                         }
                     }
                     .frame(height: 18)
-                    if legend.contains(Self.unreadRecord) {
-                        NDLegendItem(words: Self.unreadRecord) {
+                    if legend.contains(Say.unreadRecord) {
+                        NDLegendItem(words: Say.unreadRecord) {
                             Canvas { ctx, size in
                                 var p = Path(); p.move(to: CGPoint(x: 0, y: size.height / 2)); p.addLine(to: CGPoint(x: size.width, y: size.height / 2))
                                 ctx.stroke(p, with: .color(ND.t2), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
@@ -193,11 +193,9 @@ struct NDBackupsPage: View {
         if lanes.contains(where: { $0.events.contains { $0.kind == .fail } }) { words.append(Say.failed) }
         if lanes.contains(where: { $0.events.contains { $0.kind == .retried } }) { words.append(Say.failedThenRetried) }
         if lanes.contains(where: { $0.stalledFrom != nil }) { words.append(Say.notUploadingSince) }
-        if lanes.contains(where: { $0.unknown || $0.unconfirmedFrom != nil }) { words.append(unreadRecord) }
+        if lanes.contains(where: { $0.unknown }) { words.append(Say.unreadRecord) }
         return words
     }
-
-    static let unreadRecord = "Record couldn't be read"
 
     /// "a copy older than this line is late": one line through every lane, at the amber threshold.
     private var limitLine: some View {
@@ -301,7 +299,7 @@ struct NDBackupsPage: View {
             let last = events.map(\.hours).max()
             if let next, !stalled {
                 events.append(.init(hours: next.timeIntervalSince(now) / 3600, kind: .next,
-                                    help: "Next run " + NDR1.hhmm(next, store.inputs.capture)))
+                                    help: Say.nextRunAt(NDR1.hhmm(next, store.inputs.capture))))
             }
             let count = attempts?.count ?? 0, failed = attempts?.filter { !$0.ok }.count ?? 0
             let spoken = attempts == nil ? "\(name): the record could not be read"
@@ -436,7 +434,7 @@ struct NDJobsPage: View {
                         }
                         NDLegendItem(words: Say.nextRun) { Circle().stroke(ND.t2, lineWidth: 1.5).frame(width: 6, height: 6) }
                         NDLegendItem(words: Say.outsideTimeline) {
-                            Text("…").font(NDType.caption).foregroundStyle(ND.t2)
+                            Text("6 d").font(NDType.caption).foregroundStyle(ND.t2)
                         }
                     }
                     .frame(height: 18)
@@ -509,7 +507,7 @@ struct NDJobsPage: View {
             }
             if !j.continuous, let next = j.nextRun, j.enabled != false {
                 events.append(.init(hours: next.timeIntervalSince(now) / 3600, kind: .next,
-                                    help: "Next run " + NDR1.hhmm(next, store.inputs.capture)))
+                                    help: Say.nextRunAt(NDR1.hhmm(next, store.inputs.capture))))
             }
             let number: NDModel.Number
             if let streak {
@@ -545,7 +543,7 @@ struct NDJobLaneView: View {
     var body: some View {
         let input = store.inputs.jobs?.first { $0.job == lane.job }
         let now = store.inputs.capture.now
-        let frequent = input?.scheduleInterval.map { $0 > 0 && $0 < 3600 } ?? false
+        let frequent = input?.runsFrequently ?? false
         let last: (String, NDModel.Tone) = {
             if lane.streak != nil { return (Say.failed, .fault) }
             if input?.continuous == true { return input?.loaded == false ? (NDModel.Number.unknown.value, .fine) : (Say.running, .fine) }
@@ -561,7 +559,7 @@ struct NDJobLaneView: View {
         HStack(spacing: 0) {
             Text(lane.name).font(lane.fault ? NDType.bodyStrong : NDType.body).foregroundStyle(ND.t1)
                 .frame(width: NDJobsPage.nameColumn, alignment: .leading)
-                .help(Say.jobHelp[lane.job.rawValue] ?? "")
+                .help(Self.jobHelp(input, job: lane.job, capture: store.inputs.capture))
             NDRail(past: NDJobsPage.past, ahead: NDJobsPage.ahead, events: frequent ? [] : lane.events, band: lane.band,
                    dotted: frequent && lane.enabled != false, unknown: lane.unknown, olderLabel: lane.olderLabel)
             Text(last.0).font(last.1 == .fault ? NDType.numberStrong : NDType.number)
@@ -573,6 +571,25 @@ struct NDJobLaneView: View {
         .frame(height: NDGrid.row)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(lane.accessibility)
+    }
+
+    static func jobHelp(_ input: NDJobInput?, job: BrainLayerLaunchdJob, capture: BrainBarMenuCapture) -> String {
+        let purpose = Say.jobHelp[job.rawValue] ?? ""
+        guard job == .drain || job == .walCheckpoint else { return purpose }
+        let cadence: String
+        if input?.runsFrequently == true {
+            cadence = Say.runsEveryFewMinutes
+        } else if let calendar = input?.scheduleCalendar, let next = input?.nextRun {
+            let clock = NDR1.hhmm(next, capture)
+            cadence = calendar.weekday == nil ? Say.runsDailyAt(clock) : Say.runsWeeklyAt(clock)
+        } else if let interval = input?.scheduleInterval, interval > 0 {
+            cadence = Say.runsEvery(NDFormat.ageText(interval))
+        } else if input?.continuous == true {
+            cadence = Say.runsContinuously
+        } else {
+            cadence = Say.scheduleNotKnown
+        }
+        return purpose + " " + cadence
     }
 
     /// The system switch, mini, in the system accent when on (R1.6 item 12); its help says what a click does.
