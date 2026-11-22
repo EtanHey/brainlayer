@@ -40,7 +40,7 @@ import XCTest
         let document = ObservabilityDocument(schemaVersion: base.schemaVersion, generatedAt: now, dbPath: "/synthetic/private.db",
             windowHours: base.windowHours, stores: base.stores, emitters: base.emitters, authorUnknown: base.authorUnknown,
             backups: try backups())
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("progress-clock-\(UUID().uuidString)")
+        let root = brainBarTestTemporaryDirectory().appendingPathComponent("progress-clock-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let config = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
         try config.save(.defaultConfig)

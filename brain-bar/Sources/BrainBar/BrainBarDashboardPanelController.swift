@@ -232,6 +232,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         let store = NDStore.shared(for: runtimeForDesign, workspace: workspaceForDesign)
         store.onOpenWindow = { [weak self] page in self?.showPage(page) }
         store.onOpenSettings = { [weak self] in self?.showSettings() }
+        store.windowActivationPolicy = activationPolicy
         return store
     }()
 #endif
