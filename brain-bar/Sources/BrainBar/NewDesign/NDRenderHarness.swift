@@ -111,7 +111,8 @@ import SwiftUI
     static func hover(_ store: NDStore, station: NDStation, name: String, appearance: NSAppearance.Name, in directory: URL) throws -> String {
         let r1 = store.r1
         let chart = NDPipelineChart(state: r1.pipeline, memories: store.model.memories, items: r1.stationItems, interactive: false,
-                                    popover: { s in AnyView(NDStationPopover(store: store, station: s)) }, previewHover: station)
+                                    popover: { s in AnyView(NDStationPopover(store: store, station: s)) }, previewHover: station,
+                                    backupProgress: store.inputs.backupProgress)
         // 260 pt of room on the left: the agents' panel opens past the window's left edge (L39).
         let margin: CGFloat = 260
         let size = NSSize(width: NDGrid.windowWidth + margin, height: 660)
