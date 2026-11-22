@@ -1098,7 +1098,9 @@ def test_verified_no_op_exposes_explicit_receipt_without_inventing_upload() -> N
     ],
 )
 def test_invalid_no_op_never_exposes_neutral_evidence(tmp_path, mutation) -> None:
-    latest = json.loads((FIXTURES / "logs/no-op-dev/jsonl-backup.log").read_text())
+    rows = [json.loads(line) for line in (FIXTURES / "logs/no-op-dev/jsonl-backup.log").read_text().splitlines()]
+    assert len(rows) == 1  # Frozen historical input, not a newly executed backup run.
+    latest = rows[-1]
     log = tmp_path / "jsonl-backup.log"
     log.write_text(json.dumps({**latest, **mutation}) + "\n")
     env = {**_env("no-op-dev"), "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG": str(log)}

@@ -287,7 +287,10 @@ def test_young_file_with_malformed_receipt_reports_unknown_without_hashing(tmp_p
     monkeypatch.setattr(backup, "_md5_file", lambda *a: pytest.fail("young archive must not hash"))
     log = tmp_path / "log"
     assert backup.prune_local_archives(tmp_path, state_path=state, log_path=log, now=now, surviving_archives={}) == []
-    row = json.loads(log.read_text())
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["event"] == "local_retention_summary"
     assert row["bytes_young"] == 3
     assert row["next_eligible_at"] is None
     assert path.exists()

@@ -3430,7 +3430,10 @@ def test_jsonl_backup_main_persists_terminal_failure_to_attempt_log(tmp_path, mo
     assert jsonl_backup.main() == 1
 
     stdout_payload = json.loads(capsys.readouterr().out)
-    logged_payload = json.loads(log_path.read_text(encoding="utf-8"))
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    # run_backup is mocked to raise: only main's fallback writer runs, without a sweep.
+    assert len(rows) == 1
+    logged_payload = rows[0]
     assert logged_payload == stdout_payload
     assert logged_payload["status"] == "failed"
     assert logged_payload["verified"] is False
