@@ -44,6 +44,8 @@ struct NDInputs: Sendable {
 #endif
     /// A copy of the report failed: the copy row says so until it goes (R12).
     var copyReportFailed = false
+    /// Invented settings-file evidence for no-IO captures; live Settings reads its config model instead.
+    var settingsBackups: BrainBarSettingsBackupSummary? = nil
 }
 
 /// R1.5 (L42, L45): what the backup does with the copies on this Mac, from `src/brainlayer/backup_daily.py`. It keeps the

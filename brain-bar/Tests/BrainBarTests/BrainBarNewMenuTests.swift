@@ -2,6 +2,24 @@ import AppKit
 import XCTest
 @testable import BrainBar
 
+/// Gap 26, lead ruling 21 Nov 2026: Classic keeps main's recorded menu plus this one unmarked item.
+@MainActor func brainBarItemsWithoutApprovedDiagnostics(_ menu: NSMenu, file: StaticString = #filePath,
+                                                       line: UInt = #line) throws -> [NSMenuItem] {
+    let matches = menu.items.indices.filter { menu.items[$0].title == BrainBarMenuPresenter.SurfaceSay.diagnostics }
+    XCTAssertEqual(matches.count, 1, file: file, line: line)
+    let index = try XCTUnwrap(matches.first, file: file, line: line)
+    let settings = try XCTUnwrap(menu.items.firstIndex { $0.title == BrainBarMenuPresenter.Say.settings.text }, file: file, line: line)
+    XCTAssertEqual(index, settings + 1, file: file, line: line)
+    let item = menu.items[index]
+    XCTAssertTrue(item.isEnabled, file: file, line: line)
+    XCTAssertFalse(item.isHidden, file: file, line: line)
+    XCTAssertEqual(item.keyEquivalent, "", file: file, line: line)
+    XCTAssertEqual(item.state, .off, file: file, line: line)
+    XCTAssertNil(item.image, file: file, line: line)
+    XCTAssertNil(item.view, file: file, line: line)
+    return menu.items.enumerated().filter { $0.offset != index }.map(\.element)
+}
+
 /// Never presents a menu, creates a system status item or activates a window.
 @MainActor final class BrainBarNewMenuTests: XCTestCase {
     private func defaults() -> UserDefaults {
@@ -54,6 +72,39 @@ import XCTest
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             DispatchQueue.main.async { continuation.resume() }
         }
+    }
+
+    func testAllThreeDropdownsReachTheInjectedDiagnosticsOpener() async throws {
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm))
+        let builder = NDMenuBuilder(store: store, perform: { _ in }, openWindow: { _ in })
+        let openedNew = expectation(description: "New Diagnostics")
+        builder.diagnosticsOpener = { openedNew.fulfill() }
+        let newMenu = builder.build()
+        _ = try brainBarItemsWithoutApprovedDiagnostics(newMenu)
+        newMenu.performActionForItem(at: try XCTUnwrap(newMenu.items.firstIndex { $0.title == "Diagnostics" }))
+        await fulfillment(of: [openedNew], timeout: 2)
+
+        let d = defaults()
+        d.set(false, forKey: BrainBarNewMenuPreference.key)
+        let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(),
+            runtime: BrainBarRuntime(launchMode: .menuItemDaemon), dashboardPanelController: nil,
+            statusBar: Host(), menuDefaults: d)
+        defer { controller.stop() }
+        controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []),
+            alertsURL: URL(fileURLWithPath: brainBarTestTemporaryPath()).appendingPathComponent("absent-diagnostics.json"))
+        let menu = controller.contextMenuForTesting
+        for legacy in [true, false] {
+            let opened = expectation(description: legacy ? "Classic legacy Diagnostics" : "Classic presenter Diagnostics")
+            controller.setDiagnosticsOpenerForTesting { opened.fulfill() }
+            if legacy { controller.menuNeedsUpdate(menu) }
+            else { controller.populateLiveMenuForTesting(BrainBarMenuPresenter.present(store.inputs.capture)) }
+            _ = try brainBarItemsWithoutApprovedDiagnostics(menu)
+            menu.performActionForItem(at: try XCTUnwrap(menu.items.firstIndex { $0.title == "Diagnostics" }))
+            await fulfillment(of: [opened], timeout: 2)
+        }
+        // None of the injected open actions construct a Diagnostics window or start New's store in Classic.
+        withExtendedLifetime(builder) {}
     }
 
     private final class Runner: BrainLayerCLIRunning, @unchecked Sendable {
@@ -128,14 +179,16 @@ import XCTest
             let p = BrainBarMenuPresenter.present(c)
             let builder = BrainBarMenuBuilder(accessibility: .init())
             let menu = builder.build(p)
-            assertMenu(menu, equals: p)
+            try assertMenu(menu, equals: p)
             XCTAssertTrue(menu.items.last?.isAlternate == true)
             XCTAssertEqual(menu.items.last?.representedObject as? BrainBarMenuAction, .restart)
         }
     }
 
-    private func assertMenu(_ menu: NSMenu, equals p: BrainBarMenuPresentation) {
-        let rows = menu.items.filter { !$0.isSeparatorItem && !$0.isAlternate }
+    private func assertMenu(_ menu: NSMenu, equals p: BrainBarMenuPresentation) throws {
+        let items = menu.items.contains { $0.title == BrainBarMenuPresenter.SurfaceSay.diagnostics }
+            ? try brainBarItemsWithoutApprovedDiagnostics(menu) : menu.items
+        let rows = items.filter { !$0.isSeparatorItem && !$0.isAlternate }
         let expected = p.rows.filter { $0.kind != .separator }
         XCTAssertEqual(rows.count, expected.count)
         for (item, row) in zip(rows, expected) {
@@ -213,7 +266,7 @@ import XCTest
             let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
                 dashboardPanelController: nil, statusBar: Host(), menuDefaults: d)
             controller.menuNeedsUpdate(controller.contextMenuForTesting)
-            assertMenu(controller.contextMenuForTesting, equals: BrainBarMenuPresenter.present(model.menuCapture(stats: nil)))
+            try assertMenu(controller.contextMenuForTesting, equals: BrainBarMenuPresenter.present(model.menuCapture(stats: nil)))
             controller.stop()
             model.systemDidWake()
             XCTAssertTrue(model.menuCapture(stats: nil).wakeCatchUpPending)
@@ -292,7 +345,7 @@ import XCTest
         func removeStatusItem(_ item: any BrainBarStatusItem) {}
     }
 
-    func testSwitchOffBuildsMainsItemsAndRestoresThemAfterOn() {
+    func testSwitchOffBuildsMainsItemsAndRestoresThemAfterOn() throws {
         let d = defaults(), host = Host(), workspace = BrainBarRecordingWorkspace()
         d.set(false, forKey: BrainBarNewMenuPreference.key)
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
@@ -305,11 +358,13 @@ import XCTest
         controller.menuNeedsUpdate(menu)
         // Item-by-item inventory from main 151a715d configureContextMenu + menuNeedsUpdate, without a model.
         let expected = ["Nothing needs attention", "Show log", "", "", "Open Dashboard", "Settings…", "", "Restart BrainBar", "", "Quit BrainBar"]
-        XCTAssertEqual(menu.items.map(\.title), expected)
-        XCTAssertEqual(menu.items.map { $0.action.map(NSStringFromSelector) },
+        // Gap 26, lead ruling 21 Nov: exactly one enabled, unmarked Diagnostics after Settings; golden stays main's.
+        let mainItems = try brainBarItemsWithoutApprovedDiagnostics(menu)
+        XCTAssertEqual(mainItems.map(\.title), expected)
+        XCTAssertEqual(mainItems.map { $0.action.map(NSStringFromSelector) },
             [nil, "showJobAlertLog:", nil, nil, "openDashboard:", "openSettings:", nil, "restartBrainBar:", nil, "quitBrainBar:"])
-        XCTAssertEqual(menu.items.map(\.isHidden), [false, true, true, false, false, false, false, false, false, false])
-        XCTAssertEqual(menu.items.map(\.isSeparatorItem), [false, false, false, true, false, false, true, false, true, false])
+        XCTAssertEqual(mainItems.map(\.isHidden), [false, true, true, false, false, false, false, false, false, false])
+        XCTAssertEqual(mainItems.map(\.isSeparatorItem), [false, false, false, true, false, false, true, false, true, false])
         XCTAssertTrue(menu.items.allSatisfy { $0.keyEquivalent.isEmpty })
         let originals = menu.items
         let shape: (NSMenuItem) -> String = { item in
@@ -318,7 +373,7 @@ import XCTest
         let before = originals.map(shape)
         d.set(true, forKey: BrainBarNewMenuPreference.key)
         controller.menuNeedsUpdate(menu)
-        XCTAssertNotEqual(menu.items.map(\.title), expected)
+        XCTAssertNotEqual(menu.items.map(\.title), originals.map(\.title))
         d.set(false, forKey: BrainBarNewMenuPreference.key)
         controller.menuNeedsUpdate(menu)
         XCTAssertEqual(menu.items.map(shape), before)

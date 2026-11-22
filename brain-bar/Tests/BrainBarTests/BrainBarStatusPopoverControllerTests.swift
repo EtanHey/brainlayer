@@ -107,7 +107,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         XCTAssertTrue(itemTitles.contains("Quit BrainBar"))
     }
 
-    func testStatusItemOwnsOneActionableSettingsMenu() {
+    func testStatusItemOwnsOneActionableSettingsMenu() throws {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
@@ -123,7 +123,10 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         XCTAssertTrue(controller.statusItemForTesting.menu === menu, "every click opens this one menu (#963)")
         XCTAssertFalse(menu === NSApp.mainMenu)
         XCTAssertEqual(actionableItems.filter { $0.title.hasPrefix("Settings") }.count, 1)
-        XCTAssertEqual(actionableItems.map(\.title), ["Open Dashboard", "Settings…", "Restart BrainBar", "Quit BrainBar"])
+        // Gap 26, lead ruling 21 Nov 2026: assert the one Diagnostics insertion, then retain main's expectation.
+        let mainItems = try brainBarItemsWithoutApprovedDiagnostics(menu)
+        XCTAssertEqual(mainItems.filter { !$0.isSeparatorItem && !$0.isHidden }.dropFirst().map(\.title),
+                       ["Open Dashboard", "Settings…", "Restart BrainBar", "Quit BrainBar"])
         for item in actionableItems {
             XCTAssertNotNil(item.action, "\(item.title) must have an action")
             XCTAssertTrue(item.target === controller, "\(item.title) must target the status controller")

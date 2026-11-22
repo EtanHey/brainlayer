@@ -248,7 +248,9 @@ final class BrainBarMainWindowTests: XCTestCase {
 
         XCTAssertTrue(status.statusItemForTesting.menu === status.contextMenuForTesting, "every click opens the menu")
         // Show log stays hidden while no job alert is active (lead ruling 2026-10-04).
-        let titles = status.contextMenuForTesting.items.filter { !$0.isSeparatorItem && !$0.isHidden }.map(\.title)
+        // Gap 26, lead ruling 21 Nov 2026: main's inventory plus one enabled, unmarked Diagnostics after Settings.
+        let mainItems = try brainBarItemsWithoutApprovedDiagnostics(status.contextMenuForTesting)
+        let titles = mainItems.filter { !$0.isSeparatorItem && !$0.isHidden }.map(\.title)
         XCTAssertEqual(Array(titles.dropFirst()), ["Open Dashboard", "Settings…", "Restart BrainBar", "Quit BrainBar"])
         XCTAssertFalse(status.contextMenuForTesting.items[0].isEnabled, "the first row is a status line")
 
