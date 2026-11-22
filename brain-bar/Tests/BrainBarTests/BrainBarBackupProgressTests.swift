@@ -155,7 +155,11 @@ import XCTest
             let p = try XCTUnwrap(BrainBarBackupProgress.read(backups(checkpointAge: age), now: now))
             XCTAssertNil(p.percentage)
             XCTAssertEqual(p.isStalled, age == .some(1201))
-            XCTAssertEqual(p.accessibilityValue, BrainBarMenuPresenter.SurfaceSay.backupInProgress)
+            if age == .some(1201) {
+                XCTAssertEqual(p.accessibilityValue, now.addingTimeInterval(-1201).formatted(date: .abbreviated, time: .shortened))
+            } else {
+                XCTAssertEqual(p.accessibilityValue, BrainBarMenuPresenter.SurfaceSay.backupInProgress)
+            }
         }
     }
 

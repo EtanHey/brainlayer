@@ -31,6 +31,14 @@ def relay(monkeypatch):
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     monkeypatch.setattr(module.os, "urandom", lambda n: b"\x01" * n)
+
+    # Isolate delivery/dedup mechanics from observation confirmation. The real gate
+    # is exercised across separate run() calls in test_health_relay_wake.py.
+    def confirmed(issues, state, measured):
+        state["warnings"] = []
+        return issues
+
+    monkeypatch.setattr(module, "_confirmed", confirmed)
     return module
 
 
@@ -448,6 +456,8 @@ def test_deep_source_is_corrupt_preserves_incidents_and_delivers_pending(relay, 
     assert len(deep.encode()) < relay.MAX_SOURCE_BYTES
     _alerts(env, deep)
     if python:
+        # A new corrupt-source episode needs two real process observations.
+        assert subprocess.run([python, "-I", str(SCRIPT), "--config", str(env["config"])]).returncode == 0
         result = subprocess.run(
             [python, "-I", str(SCRIPT), "--config", str(env["config"])], capture_output=True, text=True
         )
@@ -516,7 +526,13 @@ def test_state_loss_refuses_bootstrap_until_explicit_new_epoch(relay, env, monke
     _alerts(env, {"backup-daily": "x"})
     before = env["inbox"].read_bytes()
     assert relay.run(env["config"]) == 1
-    assert _status(env) == {"ts": _status(env)["ts"], "error": "state-missing", "pending": None, "hosts": {}}
+    assert _status(env) == {
+        "ts": _status(env)["ts"],
+        "error": "state-missing",
+        "pending": None,
+        "hosts": {},
+        "warnings": {},
+    }
     assert env["inbox"].read_bytes() == before and not state_path.exists()
     assert relay.main(["--config", str(env["config"]), "--accept-new-epoch"]) == 0
     second = _blocked(env)[1].split("event=")[1]

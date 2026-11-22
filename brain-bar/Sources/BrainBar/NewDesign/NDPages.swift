@@ -279,12 +279,14 @@ struct NDBackupsPage: View {
             // R1.2 change 13: a failed attempt followed by a success within the same night (12 h) is one hollow red
             // ring ("failed, then copied on retry"); a failure with no later success that night stays a filled red dot.
             let sorted = (attempts ?? []).sorted { $0.at < $1.at }
+            let lastRunHours = sorted.lazy.filter { !$0.isErrorEvent }
+                .map { $0.at.timeIntervalSince(now) / 3600 }.filter { $0 >= -Self.past }.max()
             var events: [NDRail.Event] = []
             var retryHelp: [String] = []
             var skip: Set<Int> = []
             for (index, attempt) in sorted.enumerated() where !skip.contains(index) {
                 let hours = attempt.at.timeIntervalSince(now) / 3600
-                if !attempt.ok, let retry = sorted.indices.first(where: { $0 > index && sorted[$0].ok
+                if !attempt.ok, !attempt.isErrorEvent, let retry = sorted.indices.first(where: { $0 > index && sorted[$0].ok
                         && sorted[$0].at.timeIntervalSince(attempt.at) <= 12 * 3600 }) {
                     skip.insert(retry)
                     events.append(.init(hours: hours, kind: .retried))
@@ -296,14 +298,16 @@ struct NDBackupsPage: View {
             }
             events = events.filter { $0.hours >= -Self.past }
             let stalled = stalls && (driveDown || (id == "backup_offsite" && row?.strong == true && store.inputs.backupProgress?.isStalled == true))
-            let last = events.map(\.hours).max()
             if let next, !stalled {
                 events.append(.init(hours: next.timeIntervalSince(now) / 3600, kind: .next,
                                     help: Say.nextRunAt(NDR1.hhmm(next, store.inputs.capture))))
             }
-            let count = attempts?.count ?? 0, failed = attempts?.filter { !$0.ok }.count ?? 0
+            let runs = attempts?.filter { !$0.isErrorEvent } ?? []
+            let count = runs.count, failed = runs.filter { !$0.ok }.count
+            let retentionErrors = attempts?.filter(\.isErrorEvent).count ?? 0
+            let errors = retentionErrors > 0 ? ", \(retentionErrors) retention \(retentionErrors == 1 ? "error" : "errors")" : ""
             let spoken = attempts == nil ? "\(name): the record could not be read"
-                : "\(name): \(count) \(count == 1 ? "attempt" : "attempts") this week, \(failed) failed"
+                : "\(name): \(count) \(count == 1 ? "attempt" : "attempts") this week, \(failed) failed" + errors
             let newest = row.map { ", newest " + ($0.number.value == "—" ? "not known" : $0.number.text) } ?? ""
             let number = (row?.strong ?? false) ? faultNumber(row?.number) : row?.number ?? .unknown
             // Review N1: when the newest cell is unknown, the attempts keep their places (the log is the app's own read,
@@ -315,7 +319,7 @@ struct NDBackupsPage: View {
                 unconfirmedFrom = events.filter { $0.kind != .next }.map(\.hours).min()
             }
             return Lane(id: id, name: name, events: events, unknown: attempts == nil,
-                        stalledFrom: stalled ? (last ?? -Self.past) : nil, unconfirmedFrom: unconfirmedFrom,
+                        stalledFrom: stalled ? (lastRunHours ?? -Self.past) : nil, unconfirmedFrom: unconfirmedFrom,
                         help: retryHelp.isEmpty ? nil : retryHelp.joined(separator: " "),
                         number: number, strong: row?.strong ?? false, accessibility: spoken + newest)
         }
