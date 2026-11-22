@@ -40,6 +40,28 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.10] - 2026-11-22
+
+### BrainBar's new design is now the default (Classic stays one click away in Settings), with the owner's first-look fixes and the last spec gaps
+
+- fix(t3-ingest): preserve each V2 source's held replay start (#1845)
+- fix(ci): raise unit-test deadline to 3000 seconds (#1848)
+- fix(dedupe): new session text never folds into a T3 mirror row (#1837)
+- fix(watcher): retain queued mid-turn user messages (#1847)
+- fix(brainbar): clarify pipeline work and fit New pages (#1838)
+- feat: reversibly hide historical T3 thinking (#1841)
+- feat(brainbar): backup work in progress (spec gaps 22, 23) (#1839)
+- feat(brainbar): explain the model, one Diagnostics place, the settings-file reveal (spec gaps 21, 26, 12) (#1840)
+- fix(brainbar): owner first-look fixes (bubbles, pages, New default, scale labels) (#1852)
+
+## [1.6.9] - 2026-11-21
+
+### BrainBar offers the new design behind a Classic/New switch; Classic remains the default
+
+- test(zst): prevent timed flushes from racing the checkpoint guard test (#1834)
+- test(brainbar): drive native menu work from tracking entry (#1832)
+- feat(brainbar): the new design behind a Classic/New switch (#1812)
+
 ## [1.6.8] - 2026-11-21
 
 ### A returned transcript is revived above its tombstone, so a checkpoint is never dropped in silence

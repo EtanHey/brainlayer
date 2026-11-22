@@ -265,10 +265,12 @@ struct NDOverviewPage: View {
             if !r1.problemRows.isEmpty { NDProblemRows(store: store, rows: r1.problemRows).padding(.top, NDGrid.headlineToRows) }
             NDActivitySection(store: store).padding(.top, NDGrid.toActivity)
             NDBlockHeading(title: Say.pipeline).padding(.top, NDGrid.activityToPipeline)
-            NDCard(padding: EdgeInsets(top: 16, leading: 16, bottom: 14, trailing: 16)) {
+            NDCard(padding: EdgeInsets(top: NDPipelineLayout.verticalPadding, leading: 16,
+                                      bottom: NDPipelineLayout.verticalPadding, trailing: 16)) {
                 NDPipelineChart(state: r1.pipeline, memories: store.model.memories, items: r1.stationItems,
                                 waiting: NDDriveWaiting.shows(store.inputs, for: nil), perform: { store.perform($0) },
-                                popover: { station in AnyView(NDStationPopover(store: store, station: station)) })
+                                popover: { station in AnyView(NDStationPopover(store: store, station: station)) },
+                                backupProgress: store.inputs.backupProgress)
             }
             .animation(reduceMotion ? nil : NDMotion.breakAppears, value: r1.pipeline)
         }
@@ -476,6 +478,7 @@ struct NDActivitySection: View {
     /// R1.2: the chart is 820 wide inside its surface: a 52 pt gutter and a 768 pt plot.
     static let plotWidth: CGFloat = 768
     static let plotHeight: CGFloat = 112
+    static let headerHeight: CGFloat = 22
 
     var body: some View {
         let wave = store.inputs.heroWaves[store.range]
@@ -508,16 +511,19 @@ struct NDActivitySection: View {
     static let canvas = CGSize(width: plotWidth, height: plotHeight + 8)
 
     @ViewBuilder private func chart(wave: NDWave?, known: Bool, cut: CGFloat?) -> some View {
+        let scales = wave.map { Self.scaleLabels($0, minutes: store.range.minutes) }
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 24) {
-                legend(color: ND.saved, value: known ? wave.map { NDFormat.integer($0.savesTotal) } : nil, words: Say.savedByAgents)
-                legend(color: ND.read, value: known ? wave.map { NDFormat.integer($0.readsTotal) } : nil, words: Say.readFromConversations)
+                legend(color: ND.saved, value: known ? wave.map { NDFormat.integer($0.savesTotal) } : nil,
+                       words: Say.savedByAgents, scale: known ? scales?.saves : nil)
+                legend(color: ND.read, value: known ? wave.map { NDFormat.integer($0.readsTotal) } : nil,
+                       words: Say.readFromConversations, scale: known ? scales?.reads : nil)
                 Spacer()
             }
-            .frame(height: 22)
+            .lineLimit(1)
+            .frame(height: Self.headerHeight)
             .accessibilityElement(children: .combine)
             ZStack(alignment: .topLeading) {
-                // R1.4 changes 11 and 12: the halves' maxima moved into the hover readout's first line.
                 // "saved" just above the baseline, "read" just below it, in the series' text colours (H1).
                 Text(Say.saved).font(NDType.captionMedium).foregroundStyle(ND.savedText)
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 53)
@@ -630,12 +636,23 @@ struct NDActivitySection: View {
         return min(count - 1, Int(x / (plotWidth / CGFloat(count))))
     }
 
-    private func legend(color: Color, value: String?, words: String) -> some View {
+    static func scaleLabels(_ wave: NDWave, minutes: Int) -> (saves: String?, reads: String?) {
+        let span = max(1, minutes / max(wave.count, 1))
+        return (wave.savesPeak > 0 ? Say.upTo(NDFormat.integer(wave.savesPeak), minutes: span) : nil,
+                wave.readsPeak > 0 ? Say.upTo(NDFormat.integer(wave.readsPeak), minutes: span) : nil)
+    }
+
+    private func legend(color: Color, value: String?, words: String, scale: String?) -> some View {
         // R1.2 change 19: the hour's totals are the calm page's hero numbers, at the title size.
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8).alignmentGuide(.firstTextBaseline) { d in d.height }
-            Text(value ?? NDModel.Number.unknown.value).font(NDType.total).foregroundStyle(ND.t1)  // R1.12 change 3
-            Text(words).font(NDType.body).foregroundStyle(ND.t2)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8).alignmentGuide(.firstTextBaseline) { d in d.height }
+                Text(value ?? NDModel.Number.unknown.value).font(NDType.total).foregroundStyle(ND.t1)  // R1.12 change 3
+                Text(words).font(NDType.body).foregroundStyle(ND.t2)
+            }
+            if let scale {
+                Text(scale).font(NDType.caption).foregroundStyle(ND.t3)
+            }
         }
     }
 }
@@ -809,9 +826,7 @@ struct NDButtonStyle: ButtonStyle {
 
 // MARK: - Page height (L17)
 
-/// The window's height for a page: the title bar, the page's laid-out content with its insets, and the footer; never
-/// below the spec's page height (Overview 716, Backups 480, Jobs 512), capped at the screen. A two-fault headline is
-/// two 24 pt rows taller than the calm one, so the Overview grows with it; past the screen the page scrolls (§ 2.3).
+/// L57: measure the current page and cap its content area at the visible screen minus AppKit chrome.
 @MainActor enum NDPageHeight {
     /// Title bar 52, page padding 20 top and 20 bottom (R1.2 change 2), footer 28.
     static let chrome: CGFloat = NDGrid.titleBar + NDGrid.pageTop + 20 + NDGrid.footer
@@ -828,12 +843,25 @@ struct NDButtonStyle: ButtonStyle {
         return ceil(hosting.sizeThatFits(in: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)).height)
     }
 
-    /// R1.2 change 22 and L25: the page's real height in every state (nothing reserved), up to the screen's visible
-    /// height minus 40 pt; past that the page scrolls inside the window and the footer stays.
-    static func window(_ store: NDStore, page: NDPage, screen: CGFloat?) -> CGFloat {
+    /// L57 replaces the fixed 40 pt allowance with the actual AppKit title-bar height.
+    static func window(_ store: NDStore, page: NDPage, screen: CGFloat?, titleBarHeight: CGFloat = 0) -> CGFloat {
         let needed = ceil(content(store, page: page) + chrome)
-        guard let screen, screen > 0 else { return needed }
-        return min(needed, screen - 40)
+        return fittedHeight(needed: needed, visibleHeight: screen, titleBarHeight: titleBarHeight)
+    }
+
+    static func fittedHeight(needed: CGFloat, visibleHeight: CGFloat?, titleBarHeight: CGFloat) -> CGFloat {
+        guard let visibleHeight, visibleHeight > 0 else { return needed }
+        return min(needed, max(1, visibleHeight - titleBarHeight))
+    }
+
+    /// Keep the top-left unless the new size would leave the visible screen; then move only enough to fit.
+    static func frame(size: NSSize, keeping current: NSRect, visibleFrame: NSRect?) -> NSRect {
+        var target = NSRect(x: current.minX, y: current.maxY - size.height, width: size.width, height: size.height)
+        if let visibleFrame {
+            target.origin.x = max(visibleFrame.minX, min(target.minX, visibleFrame.maxX - size.width))
+            target.origin.y = max(visibleFrame.minY, min(target.minY, visibleFrame.maxY - size.height))
+        }
+        return target
     }
 
     /// What decides the page's height: the page and the headline's lines.

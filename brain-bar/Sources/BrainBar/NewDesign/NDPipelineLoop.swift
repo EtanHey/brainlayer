@@ -6,13 +6,13 @@ import SwiftUI
 enum NDPipelineLayout {
     typealias Say = BrainBarMenuPresenter.SurfaceSay
 
-    /// 820 × 270 inside its surface (R1.4 change 19). The drawing may run 12 pt into the surface's right padding: the
-    /// Kept-safe frame keeps 12 pt between its edge and any text (lead, 1.3 build brief).
-    /// R1.5 change 23: 820 × 282; the answers lane at y 248 clears Jobs' longer name and its status.
-    /// R1.12 change 6: 820 × 296; Search sits at the loop's bottom-right corner with its status line under it.
-    static let size = CGSize(width: 820, height: 296)
+    /// R14: wider job panels need less wrapping; Search ends the loop 2 pt above the chart edge.
+    /// L57 lets the Overview grow with this space, capped by the visible screen.
+    static let jobPanelRoom: CGFloat = 75
+    static let size = CGSize(width: 820, height: 270 + jobPanelRoom)
+    static let verticalPadding: CGFloat = 4
     static let drawWidth: CGFloat = 832
-    static let yTop: CGFloat = 64, ySaves: CGFloat = 134, yAnswers: CGFloat = 248, yRail: CGFloat = 18
+    static let yTop: CGFloat = 44, ySaves: CGFloat = 114, yAnswers: CGFloat = 297, yRail: CGFloat = 8
     static let stationRadius: CGFloat = 13
     /// The fault ring's radius (R1.4 change 16).
     static let ringRadius: CGFloat = 15.5
@@ -21,18 +21,18 @@ enum NDPipelineLayout {
     static let lineEnd: CGFloat = 18.5
     static let edgeGap: CGFloat = 3
     /// The agents: four provider icons in one column (R1.4 change 1).
-    static let agentsFrame = CGRect(x: 16, y: 38, width: 44, height: 108)
-    static let agentRows: [(AgentFamily, CGFloat)] = AgentFamily.allCases.enumerated().map { ($0.element, 56 + 24 * CGFloat($0.offset)) }
+    static let agentsFrame = CGRect(x: 16, y: 18, width: 44, height: 108)
+    static let agentRows: [(AgentFamily, CGFloat)] = AgentFamily.allCases.enumerated().map { ($0.element, 36 + 24 * CGFloat($0.offset)) }
     static let iconSize: CGFloat = 16
     static func iconCentre(_ family: AgentFamily) -> CGPoint {
         CGPoint(x: agentsFrame.midX, y: agentRows.first { $0.0 == family }?.1 ?? agentsFrame.midY)
     }
-    /// Memory: an outline, 100 × 102 (L5).
+    /// R14: The lower Memory port sits 3 pt below the box, 8 pt below the Kept-safe frame.
     /// R2 item 8: the diagram sits centred in its card, 32 pt from each side: everything right of the agents moved 26 pt
     /// left (the long first-row lines are shorter).
     /// R1.10 (L49): 140 wide, so the two job stations hang under it with straight links. R1.10.4: everything right of the
     /// agents moved 15 pt left (the first-row lines are 15 pt shorter), so the diagram is 32 pt from each side again.
-    static let hub = CGRect(x: 365, y: 44, width: 140, height: 102)
+    static let hub = CGRect(x: 365, y: 24, width: 140, height: 83)
     /// "Kept safe" hugs its two stations (L5), widened by the lead so the two text blocks keep 16 pt between them and
     /// 12 pt to the frame at their widest statuses ("last backup 27 h ago" in Semibold): Copy on this Mac moves to x 630.
     /// R1.5: Copy on this Mac's status grew ("3 kept, newest 30 h ago"), so it moves to x 622 and the frame starts at x 544.
@@ -43,13 +43,13 @@ enum NDPipelineLayout {
     /// statuses ran into each other) and the frame 283 wide: the designer's 140 apart in a 262 frame, at 1.10.4's 32 pt
     /// insets, would leave the widest statuses ("3 kept, newest 30 h ago", "last upload 27 h ago", Semibold) 2.5 and
     /// −1.5 pt from the frame, against the lead's 12 pt rule (testKeptSafeTextKeepsItsSpacing).
-    static let keptSafe = CGRect(x: 521, y: 38, width: 283, height: 84)
+    static let keptSafe = CGRect(x: 521, y: 18, width: 283, height: 84)
 
     /// R1.12 change 6: Search moves under Google Drive, to the loop's bottom-right corner; Memory → Search runs right
-    /// along the saves lane and down, and the answers return straight along y 248.
+    /// along the copies' lower edge and down, and the answers return straight along yAnswers (gap 79 / L56).
     static let stations: [NDStation: CGPoint] = [
-        .read: CGPoint(x: 215, y: 64), .queue: CGPoint(x: 215, y: 134), .search: CGPoint(x: 736, y: 248),
-        .mac: CGPoint(x: 599, y: 64), .drive: CGPoint(x: 736, y: 64), .jobs: CGPoint(x: 377, y: 186), .weekly: CGPoint(x: 493, y: 186),
+        .read: CGPoint(x: 215, y: yTop), .queue: CGPoint(x: 215, y: ySaves), .search: CGPoint(x: 736, y: yAnswers),
+        .mac: CGPoint(x: 599, y: yTop), .drive: CGPoint(x: 736, y: yTop), .jobs: CGPoint(x: 342, y: 138), .weekly: CGPoint(x: 528, y: 138),
     ]
     static let symbols: [NDStation: String] = [
         .read: "text.bubble", .queue: "tray.full", .memory: "brain", .mac: "laptopcomputer.and.arrow.down", .drive: "icloud",
@@ -103,23 +103,24 @@ enum NDPipelineLayout {
         out.append(Connection(pipe: .sessions, line: NDPolyline(points: [CGPoint(x: agentsFrame.maxX + g, y: yTop), read]).trimmed(end: e)))
         out.append(Connection(pipe: .readMemory, line: NDPolyline(points: [read, CGPoint(x: hub.minX - g, y: yTop)]).trimmed(start: e)))
         out.append(Connection(pipe: .saves, line: NDPolyline(points: [CGPoint(x: agentsFrame.maxX + g, y: ySaves), queue]).trimmed(end: e)))
-        out.append(Connection(pipe: .queueMemory, line: NDPolyline(points: [queue, CGPoint(x: hub.minX - g, y: ySaves)]).trimmed(start: e)))
-        // R2A item 5: the Kept-safe frame grows under its actions, so the Memory-to-Search lane leaves the box's bottom
-        // edge and runs below the grown frame (route the lines around the button, never the button around the lines).
-        // R1.5: the Kept-safe frame no longer grows, so the line leaves the box's right edge at the saves lane and turns
-        // once, down into Search's top, at the lines' common 10 pt radius.
-        out.append(Connection(pipe: .memorySearch, line: NDPolyline(points: [CGPoint(x: hub.maxX + g, y: ySaves),
-                                                                              CGPoint(x: search.x, y: ySaves), search]).trimmed(end: e),
-                              corner: 10))
+        out.append(Connection(pipe: .queueMemory, line: NDPolyline(points: [queue, CGPoint(x: 280, y: ySaves),
+                    CGPoint(x: 280, y: 88), CGPoint(x: hub.minX - g, y: 88)]).trimmed(start: e)))
+        // R14: leave the lower Memory port 8 pt below Kept-safe, then turn once into Search.
+        // The hub ends 3 pt above the port, preserving the endpoint gap and its bottom text padding.
+        let searchLaneY = keptSafe.maxY + 8
+        out.append(Connection(pipe: .memorySearch, line: NDPolyline(points: [CGPoint(x: hub.maxX - 12, y: searchLaneY),
+                    CGPoint(x: search.x, y: searchLaneY), search]).trimmed(end: e), corner: 10))
         out.append(Connection(pipe: .answers, line: NDPolyline(points: [search, CGPoint(x: ax, y: yAnswers),
                                                                          CGPoint(x: ax, y: agentsFrame.maxY + g)]).trimmed(start: e), corner: 12))
         out.append(Connection(pipe: .memoryMac, line: NDPolyline(points: [CGPoint(x: hub.maxX + g, y: yTop), mac]).trimmed(end: e)))
         out.append(Connection(pipe: .macDrive, line: NDPolyline(points: [mac, drive]).trimmed(start: e, end: e)))
         out.append(Connection(pipe: .rail, line: NDPolyline(points: [CGPoint(x: ax, y: agentsFrame.minY - g), CGPoint(x: ax, y: yRail),
                                                                      CGPoint(x: drive.x, y: yRail), drive]).trimmed(end: e)))
-        out.append(Connection(pipe: .jobsMemory, line: NDPolyline(points: [jobs, CGPoint(x: jobs.x, y: hub.maxY + g)]).trimmed(start: e),
+        out.append(Connection(pipe: .jobsMemory, line: NDPolyline(points: [jobs, CGPoint(x: jobs.x, y: 114),
+                    CGPoint(x: hub.minX + 12, y: 114), CGPoint(x: hub.minX + 12, y: hub.maxY + g)]).trimmed(start: e),
                               bothWays: true))
-        out.append(Connection(pipe: .weeklyMemory, line: NDPolyline(points: [weekly, CGPoint(x: weekly.x, y: hub.maxY + g)]).trimmed(start: e),
+        out.append(Connection(pipe: .weeklyMemory, line: NDPolyline(points: [weekly, CGPoint(x: weekly.x, y: 114),
+                    CGPoint(x: hub.maxX - 12, y: 114), CGPoint(x: hub.maxX - 12, y: hub.maxY + g)]).trimmed(start: e),
                               bothWays: true))
         return out
     }()
@@ -232,22 +233,24 @@ enum NDPipelineLayout {
         var outer: CGRect
         /// R2 item 2: the body scrolls only when the screen made it shorter than its content.
         var scrolls = false
+        enum ClearanceException: Equatable { case topRowBelowBothSidesBlocked }
+        var clearanceException: ClearanceException? = nil
     }
 
     static let arrowLength: CGFloat = 10
     /// 1.5.1: what lies outside the chart's surface that no panel may cover: the "Pipeline" block heading above it and the
     /// footer's two lines below it, in chart coordinates (surface padding 16 / 12, heading row 22 + 8, page padding 20,
     /// footer 28, page sides 24).
-    static var footerTop: CGFloat { size.height + 12 + 20 }
+    static var footerTop: CGFloat { size.height + verticalPadding + 20 }
     /// R1.12 (§ B): the Activity card's bottom edge in chart coordinates (surface padding 16, heading row 22 + 8, the
     /// 32 pt gap): no panel reaches into the card, its bars or its axis labels.
-    static var activityBottom: CGFloat { -16 - 8 - 22 - NDGrid.activityToPipeline }
+    static var activityBottom: CGFloat { -verticalPadding - 8 - 22 - NDGrid.activityToPipeline }
     /// The Activity card's axis labels end its 16 pt bottom padding above its edge: a panel may cover that empty padding
     /// (the comps do), never the bars or the labels.
     static var activityLabelsBottom: CGFloat { activityBottom - 16 }
     static var pipelineHeading: CGRect {
         let w = textWidth(Say.pipeline, size: 13, weight: .semibold)
-        return CGRect(x: -16 + 2, y: -16 - 8 - 22, width: w, height: 22)
+        return CGRect(x: -16 + 2, y: -verticalPadding - 8 - 22, width: w, height: 22)
     }
     static var footerTexts: [CGRect] {
         let left = [Say.statusChecked("59 min"), Say.waitingForNextCheck].map { textWidth($0, size: 11) }.max() ?? 0
@@ -257,7 +260,7 @@ enum NDPipelineLayout {
     }
     /// R2A item 1: a panel keeps 12 pt inside the window's content edge. In chart coordinates the window runs 40 pt past
     /// each side of the chart (page side 24, surface padding 16) and 60 pt below it (surface 12, page 20, footer 28).
-    static let windowInside = (minX: CGFloat(-28), maxX: CGFloat(848), maxY: size.height + 60 - 12)
+    static let windowInside = (minX: CGFloat(-28), maxX: CGFloat(848), maxY: size.height + verticalPadding + 20 + 28 - 12)
     static let arrowHalfWidth: CGFloat = 9
     /// The arrow keeps at least this far from the body's ends (its corner radius plus the arrow's half width).
     static let arrowInset: CGFloat = 18
@@ -271,119 +274,179 @@ enum NDPipelineLayout {
         }
     }
 
-    /// Where each station's panel opens, its width, and how far the body slides along the edge from centred.
-    /// R1.12 (CHANGES-R1.12 § B, 9 of 9): every panel inside the window, covering no station's icon, name or status, no
-    /// Activity bar or axis label and no footer text. The five top-lane panels open above into the 136 pt the wider
-    /// Activity-to-Pipeline gap gives them; the three inside the loop open into it; Search's opens left under the jobs.
-    /// `slide` moves the body along its edge from centred on the arrow (the designer's x, relative to the station).
+    /// Preferred widths and initial edge; placement restores clearance without moving the notch.
     static func panelSide(_ s: NDStation, hasAction: Bool) -> (edge: Edge, width: CGFloat, slide: CGFloat) {
         switch s {
-        case .agents: (.top, 300, 0)  // 5a: right of the "Pipeline" heading (agentsPanelMinX), notch down at the agents
-        case .read: (.top, 300, 10)  // 5b: 140 left of the station, 160 right
-        case .memory: (.top, 300, 0)  // 5c
-        case .mac: (.top, 320, 0)  // 5d
-        case .drive: (.top, 320, -108)  // 5e: ends 52 right of the station, inside the window
-        case .queue: (.bottom, 262, -35)  // 5f: below-left inside the loop, its right edge clear of the nightly check-up's name
-        case .jobs: (.leading, 262, 0)  // 5g: left, inside the loop, under Save queue's status
-        case .weekly: (.trailing, 264, 0)  // 5h: up-right, between the Kept-safe frame and Search
-        // 5i, as built: the designer's place (left, under the job stations' words, 238 to the footer) holds 86 pt and the
-        // panel needs about 98, and its corner meets the footer's right line. One panel shows at a time, so Search's opens
-        // above it instead, in the weekly clean's room: right of the job stations' words, under the Kept-safe frame.
-        case .search: (.top, 264, searchPanelMinX + 132 - point(.search).x)
+        case .agents, .read, .memory: (.top, 300, 0)
+        case .mac, .drive: (.top, 320, 0)
+        case .queue: (.bottom, 262, 0)
+        case .jobs, .weekly: (.bottom, 400, 0)
+        case .search: (.top, searchPanelWidth, 0)
         }
     }
 
-    /// R1.13.1: the agents' panel's left edge, 2 pt right of the "Pipeline" heading's words, so it covers no heading.
-    static var agentsPanelMinX: CGFloat { pipelineHeading.maxX + 2 }
-
     /// 5i, as built: the Search panel's left edge, clear of the weekly clean's widest words ("failed 2 weeks").
-    static var searchPanelMinX: CGFloat { point(.weekly).x + 52 }
+    static var searchPanelMinX: CGFloat { max(point(.weekly).x + 52, (purposeRect(.weekly)?.maxX ?? 0) + 12) }
+    static var searchPanelWidth: CGFloat { min(264, windowInside.maxX - searchPanelMinX) }
 
-    /// R1.12 5g, 5h, 5i: the side panels' tops, and where their arrows meet the station (inside its ring, 18 pt below the
-    /// body's top so the arrow keeps off the rounded corner).
-    static func sideTop(_ s: NDStation) -> CGFloat? {
-        switch s {
-        case .jobs: point(.queue).y + 48  // 182: under Save queue's status line
-        case .weekly: keptSafe.maxY + 2  // 124: under the Kept-safe frame
-        default: nil
+    static let topRowPanels: Set<NDStation> = [.agents, .read, .memory, .mac, .drive]
+
+    static func panelWords(_ s: NDStation, state: NDPipelineState, displayedWords: [NDStation: [CGRect]]) -> [CGRect] {
+        displayedWords[s] ?? labelRects(s, state)
+    }
+
+    static func panelBodyObstacles(_ s: NDStation, interior: Bool) -> [CGRect] {
+        interior ? NDStation.allCases.filter { $0 != s }.map { circle($0) } : []
+    }
+
+    /// L58: body clearance can move the body, never the target-aligned notch.
+    static func panelObstacles(_ s: NDStation, state: NDPipelineState, actions: Set<NDStation>,
+                               actionWidths: [NDStation: CGFloat], interior: Bool, displayedWords: [NDStation: [CGRect]] = [:]) -> [CGRect] {
+        var obstacles = [pipelineHeading] + footerTexts + panelWords(s, state: state, displayedWords: displayedWords) + [circle(s).insetBy(dx: 1, dy: 1)]
+        if interior {
+            for other in NDStation.allCases where other != s {
+                obstacles += panelWords(other, state: state, displayedWords: displayedWords)
+            }
+            // R13: the two job panels clear the native caption fields, including their drawing insets.
+            if s == .jobs || s == .weekly {
+                obstacles += laneLabelRects().map { $0.1.insetBy(dx: -4, dy: -4) }
+            }
         }
+        for station in actions {
+            if let width = actionWidths[station], interior || station == s {
+                obstacles.append(actionFrame(station, width: width, hasStatus: state.status[station] != nil))
+            }
+        }
+        return obstacles
+    }
+
+    /// A full-height candidate at one edge. No narrowing: content is measured at this same width for every candidate.
+    static func panelCandidate(_ s: NDStation, edge: Edge, state: NDPipelineState, actions: Set<NDStation>,
+                               actionWidths: [NDStation: CGFloat] = [:], height: CGFloat,
+                               width overrideWidth: CGFloat? = nil, allowsInteriorOverlap: Bool = false,
+                               displayedWords: [NDStation: [CGRect]] = [:]) -> Panel? {
+        let own = circle(s), width = overrideWidth ?? panelSide(s, hasAction: actions.contains(s)).width
+        let words = panelWords(s, state: state, displayedWords: displayedWords)
+        let anchor = words.reduce(own) { $0.union($1) }
+        let horizontal = edge == .top || edge == .bottom
+        let tip: CGPoint
+        let body: CGRect
+        switch edge {
+        case .top:
+            tip = CGPoint(x: own.midX, y: own.minY)
+            body = CGRect(x: tip.x - width / 2, y: tip.y - arrowLength - height, width: width, height: height)
+        case .bottom:
+            tip = CGPoint(x: own.midX, y: anchor.maxY)
+            body = CGRect(x: tip.x - width / 2, y: tip.y + arrowLength, width: width, height: height)
+        case .trailing:
+            tip = CGPoint(x: anchor.maxX, y: own.midY)
+            body = CGRect(x: tip.x + arrowLength, y: tip.y - height / 2, width: width, height: height)
+        case .leading:
+            tip = CGPoint(x: anchor.minX, y: own.midY)
+            body = CGRect(x: tip.x - arrowLength - width, y: tip.y - height / 2, width: width, height: height)
+        }
+        let ceiling = s == .search ? keptSafe.maxY + 4 : activityLabelsBottom + 4
+        let low = horizontal ? max(windowInside.minX, tip.x - width + arrowInset) : max(ceiling, tip.y - height + arrowInset)
+        let high = horizontal ? min(windowInside.maxX - width, tip.x - arrowInset) : min(footerTop - 4 - height, tip.y - arrowInset)
+        guard low <= high else { return nil }
+        let arrowBox = horizontal
+            ? CGRect(x: tip.x - arrowHalfWidth, y: min(tip.y, edge == .top ? body.maxY : body.minY), width: 2 * arrowHalfWidth, height: arrowLength)
+            : CGRect(x: min(tip.x, edge == .leading ? body.maxX : body.minX), y: tip.y - arrowHalfWidth, width: arrowLength, height: 2 * arrowHalfWidth)
+        let obstacles = panelObstacles(s, state: state, actions: actions, actionWidths: actionWidths, interior: !allowsInteriorOverlap, displayedWords: displayedWords)
+        let bodyObstacles = panelBodyObstacles(s, interior: !allowsInteriorOverlap)
+        let desired = horizontal ? body.minX : body.minY
+        // The nearest legal point is either the centre, a window limit or an obstacle boundary.
+        var positions = [min(max(desired, low), high), low, high]
+        for rect in obstacles + bodyObstacles {
+            positions += horizontal ? [rect.minX - width, rect.maxX] : [rect.minY - height, rect.maxY]
+        }
+        for position in positions.sorted(by: { abs($0 - desired) < abs($1 - desired) }) where position >= low && position <= high {
+            var placed = body
+            if horizontal { placed.origin.x = position } else { placed.origin.y = position }
+            let outer = placed.union(arrowBox)
+            guard placed.minX >= windowInside.minX, placed.maxX <= windowInside.maxX,
+                  placed.minY >= ceiling, placed.maxY <= footerTop - 4,
+                  !obstacles.contains(where: { outer.intersects($0) }),
+                  !bodyObstacles.contains(where: { placed.intersects($0) }) else { continue }
+            return Panel(edge: edge, anchor: anchor, tip: tip, body: placed, outer: outer,
+                         clearanceException: allowsInteriorOverlap ? .topRowBelowBothSidesBlocked : nil)
+        }
+        return nil
+    }
+
+    /// L58b: progressively widen above, preserving content measurement and the same window margins.
+    static func widenedPanelWidths(_ s: NDStation) -> [CGFloat] {
+        let normal = panelSide(s, hasAction: false).width
+        let limit = windowInside.maxX - windowInside.minX
+        guard normal < limit else { return [] }
+        return stride(from: normal + 40, to: limit, by: 40).map { $0 } + [limit]
+    }
+
+    @MainActor static func measuredPanel(_ s: NDStation, state: NDPipelineState, displayedWords: [NDStation: [CGRect]] = [:],
+                              heightAtWidth: (CGFloat) -> CGFloat) -> Panel {
+        let normal = panelSide(s, hasAction: false).width
+        let height = heightAtWidth(normal)
+        if topRowPanels.contains(s) {
+            if let above = panelCandidate(s, edge: .top, state: state, actions: [], height: height,
+                                          width: normal, displayedWords: displayedWords) { return above }
+            for width in widenedPanelWidths(s) {
+                if let above = panelCandidate(s, edge: .top, state: state, actions: [], height: heightAtWidth(width),
+                                              width: width, displayedWords: displayedWords) { return above }
+            }
+        }
+        return panel(s, state: state, actions: [], height: height, width: normal, displayedWords: displayedWords)
     }
 
     static func panel(_ s: NDStation, state: NDPipelineState, actions: Set<NDStation>, actionWidths: [NDStation: CGFloat] = [:],
-                      height: CGFloat) -> Panel {
-        let side = panelSide(s, hasAction: actions.contains(s))
-        let own = circle(s)
-        var anchor = own
-        if side.edge == .trailing || side.edge == .leading {
-            // Beside the station's words as well as its circle, so the body never covers them.
-            for r in labelRects(s, state) { anchor = anchor.union(CGRect(x: r.minX, y: own.minY, width: r.width, height: own.height)) }
+                      height: CGFloat, width overrideWidth: CGFloat? = nil, displayedWords: [NDStation: [CGRect]] = [:]) -> Panel {
+        let preferred = panelSide(s, hasAction: actions.contains(s)).edge
+        if let panel = panelCandidate(s, edge: preferred, state: state, actions: actions, actionWidths: actionWidths, height: height, width: overrideWidth, displayedWords: displayedWords) {
+            return panel
         }
-        if side.edge == .bottom {
-            // Below the station's own words (and its action, when it sits under them), never over them.
-            for r in labelRects(s, state) { anchor = anchor.union(r) }
-            if actions.contains(s), let w = actionWidths[s] {
-                let f = actionFrame(s, width: w, hasStatus: state.status[s] != nil)
-                if f.minY >= own.maxY { anchor = anchor.union(f) }
+        if topRowPanels.contains(s) {
+            for side: Edge in [.trailing, .leading] {
+                if let panel = panelCandidate(s, edge: side, state: state, actions: actions, actionWidths: actionWidths, height: height, width: overrideWidth, displayedWords: displayedWords) {
+                    return panel
+                }
+            }
+            if let panel = panelCandidate(s, edge: .bottom, state: state, actions: actions, actionWidths: actionWidths,
+                                          height: height, width: overrideWidth, displayedWords: displayedWords) {
+                return panel
+            }
+            if let panel = panelCandidate(s, edge: .bottom, state: state, actions: actions, actionWidths: actionWidths,
+                                          height: height, width: overrideWidth, allowsInteriorOverlap: true, displayedWords: displayedWords) {
+                return panel
             }
         }
-        let a = arrowLength
-        var w = side.width
-        if side.edge == .trailing { w = min(w, windowInside.maxX - (anchor.maxX + a)) }
-        let tip: CGPoint
-        var body: CGRect
-        switch side.edge {
-        case .top where s == .agents:
-            // 5a: the notch points down at the agents' column's top edge; the body covers the rail line above it (a pipe).
-            // R1.13.1: the body starts 2 pt right of the "Pipeline" heading (from the chart's left edge it covered the
-            // heading's left), and the notch moves right along the column's top edge to stay under the body's straight
-            // edge, still on the column.
-            let minX = agentsPanelMinX
-            tip = CGPoint(x: min(max(own.midX, minX + arrowInset), own.maxX), y: own.minY)
-            body = CGRect(x: minX, y: tip.y - a - height, width: w, height: height)
-        case .top:
-            tip = CGPoint(x: own.midX, y: anchor.minY)
-            body = CGRect(x: tip.x - w / 2 + side.slide, y: tip.y - a - height, width: w, height: height)
-        case .leading where sideTop(s) != nil, .trailing where sideTop(s) != nil:
-            let top = sideTop(s) ?? 0
-            let y = s == .weekly ? own.midY : min(own.maxY, top + arrowInset)
-            tip = CGPoint(x: side.edge == .leading ? anchor.minX : anchor.maxX, y: y)
-            let x = side.edge == .leading ? tip.x - a - w : tip.x + a
-            body = CGRect(x: x, y: top, width: w, height: height)
-        case .bottom:
-            // The agents' arrow sits left of the answers line rising into the group's bottom edge at its centre.
-            tip = CGPoint(x: s == .agents ? own.minX + 10 : own.midX, y: anchor.maxY)
-            body = CGRect(x: tip.x - w / 2 + side.slide, y: tip.y + a, width: w, height: height)
-        case .trailing where s == .agents:
-            // The arrow at the column's first icon; the body ends 4 pt above Read's words and rises from there.
-            tip = CGPoint(x: anchor.maxX, y: point(.read).y - 8)
-            let ceiling = (labelRects(.read, state).first?.minY ?? (point(.read).y + ringRadius)) - 4
-            body = CGRect(x: tip.x + a, y: ceiling - height, width: w, height: height)
-        case .trailing:
-            tip = CGPoint(x: anchor.maxX, y: own.midY)
-            body = CGRect(x: tip.x + a, y: tip.y - height / 2 + side.slide, width: w, height: height)
-        case .leading:
-            tip = CGPoint(x: anchor.minX, y: own.midY)
-            body = CGRect(x: tip.x - a - w, y: tip.y - height / 2 + side.slide, width: w, height: height)
+        // Content beyond the window capacity retains the screen-fit scrolling behaviour.
+        let ownBottom = panelWords(s, state: state, displayedWords: displayedWords).reduce(circle(s).maxY) { max($0, $1.maxY) }
+        let bottomHeight = max(32, min(height, footerTop - 4 - ownBottom - arrowLength))
+        if topRowPanels.contains(s), var panel = panelCandidate(s, edge: .bottom, state: state, actions: actions,
+                                                                actionWidths: actionWidths, height: bottomHeight, width: overrideWidth,
+                                                                displayedWords: displayedWords) {
+            panel.scrolls = bottomHeight < height
+            return panel
         }
-        // Inside the window's sides (R2A item 1; the agents' panel passes the left edge, L39), above the footer for a side
-        // panel (1.5.1), then the arrow never leaves the body's straight edge.
-        switch side.edge {
-        case .top, .bottom:
-            if s != .agents { body.origin.x = min(max(body.minX, windowInside.minX), windowInside.maxX - w) }
-            body.origin.x = min(max(body.minX, tip.x - w + arrowInset), tip.x - arrowInset)
-        case .leading, .trailing:
-            // R1.12: a side panel may cover the footer's empty middle, never its texts, and stays inside the window.
-            let clearsFooter = !footerTexts.contains { $0.minX < body.maxX && body.minX < $0.maxX }
-            body.origin.y = min(body.minY, (clearsFooter ? windowInside.maxY : footerTop - 4) - height)
-            body.origin.y = min(max(body.minY, tip.y - height + arrowInset), tip.y - arrowInset)
+        if topRowPanels.contains(s), var panel = panelCandidate(s, edge: .bottom, state: state, actions: actions,
+                                                                actionWidths: actionWidths, height: bottomHeight, width: overrideWidth,
+                                                                allowsInteriorOverlap: true, displayedWords: displayedWords) {
+            panel.scrolls = bottomHeight < height
+            return panel
         }
-        let arrowBox: CGRect = switch side.edge {
-        case .top: CGRect(x: tip.x - arrowHalfWidth, y: tip.y - a, width: 2 * arrowHalfWidth, height: a)
-        case .bottom: CGRect(x: tip.x - arrowHalfWidth, y: tip.y, width: 2 * arrowHalfWidth, height: a)
-        case .trailing: CGRect(x: tip.x, y: tip.y - arrowHalfWidth, width: a, height: 2 * arrowHalfWidth)
-        case .leading: CGRect(x: tip.x - a, y: tip.y - arrowHalfWidth, width: a, height: 2 * arrowHalfWidth)
+        let room = preferred == .top ? circle(s).minY - arrowLength - (keptSafe.maxY + 4) : footerTop - 4 - ownBottom - arrowLength
+        let fittedHeight = max(32, min(height, room))
+        if var panel = panelCandidate(s, edge: preferred, state: state, actions: actions, actionWidths: actionWidths, height: fittedHeight, width: overrideWidth, displayedWords: displayedWords) {
+            panel.scrolls = fittedHeight < height
+            return panel
         }
-        return Panel(edge: side.edge, anchor: anchor, tip: tip, body: body, outer: body.union(arrowBox))
+        // Keep the remaining window-constrained body below its own words.
+        let tip = CGPoint(x: circle(s).midX, y: ownBottom)
+        let width = overrideWidth ?? panelSide(s, hasAction: actions.contains(s)).width
+        let body = CGRect(x: min(max(tip.x - width / 2, windowInside.minX), windowInside.maxX - width),
+                          y: tip.y + arrowLength, width: width, height: bottomHeight)
+        return Panel(edge: .bottom, anchor: circle(s), tip: tip, body: body,
+                     outer: body.union(CGRect(x: tip.x - arrowHalfWidth, y: tip.y, width: 2 * arrowHalfWidth, height: arrowLength)),
+                     scrolls: bottomHeight < height)
     }
 
     /// What a pointer lands on (the lead's 1.4 rule): the station's ring and its name, in the drawing's own coordinates.
@@ -402,6 +465,24 @@ enum NDPipelineLayout {
         ceil(NSAttributedString(string: s, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)]).size().width)
     }
 
+    static func purpose(_ s: NDStation) -> String? {
+        switch s {
+        case .jobs: Say.nightlyPurpose
+        case .weekly: Say.weeklyPurpose
+        default: nil
+        }
+    }
+
+    /// The job purposes occupy separate columns; timestamps remain on their own line, 4 pt below.
+    static func purposeRect(_ s: NDStation) -> CGRect? {
+        guard let words = purpose(s) else { return nil }
+        let p = point(s)
+        let w = textWidth(words, size: 11) + 8  // R13: NSTextField adds 4 pt of drawing inset on each side.
+        return CGRect(x: p.x - w / 2, y: p.y + 37, width: w, height: 16)
+    }
+
+    static func statusTop(_ s: NDStation) -> CGFloat { point(s).y + (purpose(s) == nil ? 33 : 57) }
+
     /// A station's name and status boxes as drawn for `state`.
     static func labelRects(_ s: NDStation, _ state: NDPipelineState) -> [CGRect] {
         guard stations[s] != nil else { return [] }
@@ -410,15 +491,21 @@ enum NDPipelineLayout {
         let nameW = textWidth(name(s), size: 13)  // R2 item 10: the name keeps its normal weight
         _ = t
         var out = [CGRect(x: p.x - nameW / 2, y: p.y + 17, width: nameW, height: 16)]
+        if let purpose = purposeRect(s) { out.append(purpose) }
         if let status = state.status[s] {
             let w = textWidth(status.text, size: 11, weight: t == .fault || t == .notice ? .semibold : .regular)
-            out.append(CGRect(x: p.x - w / 2, y: p.y + 33, width: w, height: 13))
+            out.append(CGRect(x: p.x - w / 2, y: statusTop(s), width: w, height: 13))
         }
         return out
     }
 
-    /// R1.4 change 5 to 10: no words are set in or beside lanes, and the two frames have no caption.
-    static func laneLabelRects() -> [(String, CGRect)] { [] }
+    /// Only the two otherwise ambiguous routes get a short payload caption at rest.
+    static func laneLabelRects() -> [(String, CGRect)] {
+        [(Say.sessionBackups, yRail), (Say.searchAnswers, yAnswers)].map { words, y in
+            let w = textWidth(words, size: 11, weight: .medium)  // Gap 74 captions keep L54's type scale.
+            return (words, CGRect(x: 215 - w / 2, y: y - 8, width: w, height: 16))
+        }
+    }
 }
 
 // MARK: - Strokes as tokens (change 9: one meaning per line style)

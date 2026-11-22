@@ -339,7 +339,7 @@ final class BrainBarJobAlertTests: XCTestCase {
         runtime.jobsModel = model
         runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: now.addingTimeInterval(30 * 86_400)))
         let workspace = BrainBarRecordingWorkspace()
-        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
             dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { controller.stop() }
@@ -734,7 +734,7 @@ final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
         let alertsURL = root.appendingPathComponent("job-alerts.json")
         try Data("{}".utf8).write(to: alertsURL)
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let status = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { status.stop(); windowController.dismiss() }
         status.setBadgeForTesting(

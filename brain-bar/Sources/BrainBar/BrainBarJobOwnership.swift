@@ -122,6 +122,7 @@ struct BrainBarSupervisorRuntime: Decodable, Sendable {
     let last_run_at: Double?
     let next_run_at: Double?
     let error: String?
+    let interval: Double?
 
     static let cli = "/opt/homebrew/opt/brainlayer/bin/brainlayer"
 
@@ -131,7 +132,8 @@ struct BrainBarSupervisorRuntime: Decodable, Sendable {
         let value = response.runtime
         guard response.source == "supervisor", value.starts >= 0, value.failures >= 0,
               value.pid == nil || value.pid! > 1,
-              [value.last_run_at, value.next_run_at].compactMap({ $0 }).allSatisfy({ $0.isFinite && $0 >= 0 })
+              [value.last_run_at, value.next_run_at].compactMap({ $0 }).allSatisfy({ $0.isFinite && $0 >= 0 }),
+              value.interval.map({ $0.isFinite && $0 >= 0 }) ?? true
         else { throw CocoaError(.fileReadCorruptFile) }
         return value
     }
