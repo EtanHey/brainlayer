@@ -302,9 +302,10 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
             window.toolbar = nil
             window.toolbarStyle = .automatic
             window.titlebarSeparatorStyle = .automatic
+            // AppKit shares frame/content limits: a later content limit clears minSize.
+            // Restore Classic's frame limits after removing the new design's fixed content size.
+            window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
             window.minSize = Self.minSize
-            window.contentMinSize = Self.minSize
-            window.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
             pageObserver = nil
             pageFitObserver = nil
             fittedFrameSize = nil
@@ -347,6 +348,15 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         let minimum = window.frameRect(forContentRect: NSRect(origin: .zero, size: currentMinSize)).size
         window.setFrame(NSRect(x: frame.minX, y: frame.maxY - max(frame.height, minimum.height),
                                width: max(frame.width, minimum.width), height: max(frame.height, minimum.height)), display: false)
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.minSize = Self.minSize
+        // Swapping the hosting controller queues AppKit's content-size update. Restore the
+        // Classic limits after that update too; a newer design switch owns its own limits.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.shownDesign == .classic else { return }
+            self.window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            self.window.minSize = Self.minSize
+        }
     }
 
     private var currentMinSize: NSSize { shownDesign == .new ? NDGrid.windowMinimum : Self.minSize }

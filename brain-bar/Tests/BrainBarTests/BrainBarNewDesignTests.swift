@@ -391,9 +391,12 @@ import SwiftUI
         NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: d)
         XCTAssertTrue(controller.windowForTesting.contentViewController === new, "the current mutation completes before swapping")
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            DispatchQueue.main.async { continuation.resume() }
+            // The observer swaps on the first hop; AppKit and the Classic size restoration
+            // finish on the next. Never call applyDesign synchronously from this test.
+            DispatchQueue.main.async { DispatchQueue.main.async { continuation.resume() } }
         }
         XCTAssertTrue(controller.windowForTesting.contentViewController === classic)
+        XCTAssertEqual(controller.shownDesign, .classic, "the deferred observer completed the Classic swap")
         XCTAssertEqual(controller.windowForTesting.minSize, BrainBarDashboardPanelController.minSize)
         XCTAssertNil(controller.windowForTesting.toolbar, "Classic's chrome is main's: no toolbar")
     }
@@ -1962,7 +1965,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDPipelineChart.swift"), encoding: .utf8)
         let a = try XCTUnwrap(source.range(of: "    var body: some View {\n        let shownHover"))
-        let b = try XCTUnwrap(source.range(of: "    /// The station's panel at its content's measured height."))
+        let b = try XCTUnwrap(source.range(of: "    static func showsProgress", range: a.upperBound..<source.endIndex))
         XCTAssertFalse(source[a.lowerBound..<b.lowerBound].contains("NDButton"), "no action button on the chart")
     }
 
