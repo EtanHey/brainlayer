@@ -54,6 +54,7 @@ READ_STATES = ("ok", "absent", "unreadable", "oversize", "corrupt")
 HEALTH_LABEL, WATCH_LABEL = "com.brainlayer.health-check", "com.brainlayer.watch"
 MAX_SOURCE_BYTES, MAX_OUTPUT_BYTES, MAX_DELIVER_PER_RUN, MAX_CLOSED = 262144, 2097152, 32, 128
 CLOCK_SKEW_SECONDS = 300
+WAKE_GAP_SECONDS = 900  # Three times the LaunchAgent's 300-second StartInterval.
 PRIMARY_INBOX_ERRORS = frozenset(("inbox-unavailable", "inbox-unreadable", "inbox-append-failed", "inbox-ack-missing"))
 # Real outages only; backup-protection alerts stay in the primary collab (orc, 2026-10-30).
 ESCALATION_ISSUES = (
@@ -397,9 +398,38 @@ def _source_of(issue: str):
     return {"job-alert": "job-alerts", "badge": "badge", "health-stale": "badge", "watcher-stale": "watcher"}.get(kind)
 
 
+def _confirmed(issues: set, hstate: dict, measured: set) -> set:
+    """Confirm two of three measured readings; unknown evidence never disproves a fault."""
+    history = hstate.setdefault("readings", {i: [True] for i in hstate.get("candidates", [])})
+    latched = set(hstate.get("confirmed_issues", []))
+    confirmed = set()
+    for issue in set(history) | issues:
+        if issue == "host-unreachable" and None in measured:
+            history.pop(issue, None)
+            continue
+        readings = history.get(issue, [])
+        if issue in issues or _source_of(issue) in measured:
+            readings = (readings + [issue in issues])[-3:]
+        if any(readings):
+            history[issue] = readings
+            if sum(readings) >= 2 or issue in latched:
+                confirmed.add(issue)
+        else:
+            history.pop(issue, None)
+    hstate["candidates"] = sorted(history)
+    hstate["confirmed_issues"] = sorted(confirmed)
+    unknown_open = {i for i, e in hstate.get("episodes", {}).items() if e["open"] and _source_of(i) not in measured}
+    hstate["warnings"] = sorted((issues | unknown_open) - confirmed)
+    return confirmed
+
+
 def _observe(host: dict, cfg: dict, hstate: dict, clock: float, epoch: str) -> list:
     """Advance one host's episodes; return newly opened events."""
     hstate.setdefault("first_seen", clock)
+    previous = hstate.get("last_observed")
+    if previous is None or not 0 <= clock - previous <= WAKE_GAP_SECONDS:
+        hstate.update(candidates=[], readings={}, confirmed_issues=[], unreach=0)
+    hstate["last_observed"] = clock
     snap = _snapshot(host, cfg)
     reached = snap is not None
     if reached:
@@ -410,8 +440,14 @@ def _observe(host: dict, cfg: dict, hstate: dict, clock: float, epoch: str) -> l
         hstate["seen"] = sorted(set(hstate["seen"]) | {n for n, r in snap["sources"].items() if r["s"] != "absent"})
     else:
         hstate["unreach"] = hstate.get("unreach", 0) + 1
-        issues = {"host-unreachable"} if hstate["unreach"] >= cfg["unreachable_after"] else set()
+        issues = {"host-unreachable"}
         measured, held = set(), set()
+    observed = issues
+    issues = _confirmed(observed, hstate, measured | ({None} if reached else set()))
+    if not reached and hstate["unreach"] < cfg["unreachable_after"]:
+        issues.discard("host-unreachable")
+        hstate["warnings"] = sorted(set(hstate["warnings"]) | {"host-unreachable"})
+    held |= observed - issues
     episodes, events = hstate.setdefault("episodes", {}), []
     for issue in sorted(issues):
         episode = episodes.setdefault(issue, {"open": False})
@@ -560,6 +596,16 @@ def _validate_state(state) -> None:
         first_seen = host.get("first_seen", 0.0)
         # An int beyond float range (10**400 is valid JSON) would overflow the clock arithmetic.
         require(type(first_seen) in (int, float) and abs(first_seen) < 1e15 and math.isfinite(first_seen))
+        last = host.get("last_observed", 0)
+        require(type(last) in (int, float) and abs(last) < 1e15 and math.isfinite(last))
+        for key in ("candidates", "warnings", "confirmed_issues"):
+            require(isinstance(host.get(key, []), list))
+            require(all(isinstance(i, str) and re.fullmatch(r"[a-z0-9._:-]+", i) for i in host.get(key, [])))
+        readings = host.get("readings", {})
+        require(isinstance(readings, dict))
+        for issue, samples in readings.items():
+            require(isinstance(issue, str) and re.fullmatch(r"[a-z0-9._:-]+", issue))
+            require(isinstance(samples, list) and 1 <= len(samples) <= 3 and all(type(s) is bool for s in samples))
         seen, episodes = host.get("seen", []), host.get("episodes", {})
         require(isinstance(seen, list) and all(isinstance(name, str) and name in SOURCES for name in seen))
         require(isinstance(episodes, dict))
@@ -741,6 +787,7 @@ def _escalate(cfg: dict, state: dict, path: Path, clock: float, primary_lines=No
             retained.add(event_id + ".esc")
             if (
                 not episode["escalated"]
+                and issue not in state["hosts"][host["id"]].get("warnings", [])
                 and clock - episode["opened_at"] >= escalation["after_seconds"]
                 and any(p.fullmatch(issue) for p in escalation["issues"])
             ):
@@ -767,7 +814,7 @@ def run(config_path: Path, *, clock=time.time, accept_new_epoch=False) -> int:
         state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError, RelayError):
         return 2
-    status, code, state = {"ts": clock(), "error": None, "pending": None, "hosts": {}}, 0, None
+    status, code, state = {"ts": clock(), "error": None, "pending": None, "hosts": {}, "warnings": {}}, 0, None
     try:
         lock = _Locked(state_dir / "relay.lock")
     except OSError:
@@ -784,6 +831,9 @@ def run(config_path: Path, *, clock=time.time, accept_new_epoch=False) -> int:
                 hstate = state["hosts"].setdefault(host["id"], {})
                 state["outbox"].extend(_observe(host, cfg, hstate, clock(), state["epoch"]))
                 status["hosts"][host["id"]] = "unreachable" if hstate.get("unreach") else "reached"
+                if hstate.get("warnings"):
+                    status["warnings"][host["id"]] = hstate["warnings"]
+                    print(f"WARNING: host={host['id']} unconfirmed={','.join(hstate['warnings'])}", file=sys.stderr)
             _save_state(state_dir / "state.json", state)
             primary_error, primary_lines = None, None
             try:
