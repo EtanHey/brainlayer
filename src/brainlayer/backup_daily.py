@@ -4584,8 +4584,15 @@ def main(argv: list[str] | None = None) -> int:
 
     key = "backup-snapshot" if snapshot_phase else "backup-daily"
     try:
-        admission_deadline = deadline - SNAPSHOT_RECEIPT_RESERVE_SECONDS - 1 if deadline is not None else None
-        with backup_heavy_gate(deadline=admission_deadline):
+        admission_started = time.monotonic()
+        minimum_work = min(timeout_seconds, 60)
+        admission_deadline = (
+            deadline - SNAPSHOT_RECEIPT_RESERVE_SECONDS - minimum_work
+            if deadline is not None
+            else admission_started + timeout_seconds - minimum_work
+        )
+        with backup_heavy_gate(deadline=admission_deadline, job_key=key):
+            timeout_seconds -= math.floor(time.monotonic() - admission_started)
             code = _supervise_backup_process(
                 timeout_seconds, **({"deadline": deadline} if deadline is not None else {})
             )

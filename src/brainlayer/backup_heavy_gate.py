@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 import os
 import re
-import shutil
 import signal
 import subprocess
 import sys
@@ -42,7 +41,7 @@ def _host() -> str:
     return "m1" if "Apple M1" in _sysctl("machdep.cpu.brand_string") else "m4"
 
 
-def _pressure_reason(host: str, swap_limit: float, load_limit: float, disk_floor: float) -> str | None:
+def _pressure_reason(swap_limit: float, load_limit: float) -> str | None:
     try:
         if sys.platform == "darwin":
             match = re.search(r"used\s*=\s*([\d.]+)([KMGT])", _sysctl("vm.swapusage"))
@@ -57,10 +56,6 @@ def _pressure_reason(host: str, swap_limit: float, load_limit: float, disk_floor
             return "non-finite swap/load measurement"
         if swap_gib >= swap_limit or load >= load_limit:
             return f"swap {swap_gib:.2f} GiB (under {swap_limit:g}), load {load:.2f} (under {load_limit:g})"
-        if host == "m1":
-            free_gib = shutil.disk_usage(Path.home()).free / 1024**3
-            if free_gib < disk_floor:
-                return f"free disk {free_gib:.2f} GiB (needs {disk_floor:g})"
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
         return f"resource probe unavailable: {type(exc).__name__}"
     return None
@@ -72,24 +67,31 @@ def _log(path: Path, action: str) -> None:
 
 
 @contextmanager
-def backup_heavy_gate(*, deadline: float | None = None):
+def backup_heavy_gate(*, deadline: float | None = None, job_key: str = "backup-daily"):
     """Wait before spawning the heavy child, retaining custody until it is reaped.
 
     A calendar snapshot's absolute deadline also bounds admission. SIGTERM/INT
     unwind the owned lock; the supervisor temporarily replaces these handlers
     and restores them only after its child has stopped.
     """
-    host = _host()
+    from .job_alerts import report
+
+    try:
+        host = _host()
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise BackupGateDeferred(f"backup heavy-work gate host detection failed: {type(exc).__name__}") from exc
     lock = Path(os.environ.get("BRAINLAYER_BACKUP_HEAVY_LOCK_PATH", str(Path.home() / f".{host}-heavy.lock")))
     log = Path(os.environ.get("BRAINLAYER_BACKUP_HEAVY_LOG_PATH", str(Path.home() / f".{host}-heavy.log")))
     window = _number("WINDOW_SECONDS", 6 * 3600)
     retry = _number("RETRY_SECONDS", 600)
     swap_limit = _number("SWAP_GIB", 9)
     load_limit = _number("LOAD", 12)
-    disk_floor = _number("FREE_GIB", 44)
     started = time.monotonic()
+    since = datetime.now().astimezone().isoformat(timespec="seconds")
     expires = min(started + window, deadline) if deadline is not None else started + window
     owned = False
+    admitted = False
+    alerted = False
     previous = {}
 
     def stopped(signum, _frame):
@@ -102,27 +104,27 @@ def backup_heavy_gate(*, deadline: float | None = None):
             if time.monotonic() >= expires:
                 hours = (time.monotonic() - started) / 3600
                 raise BackupGateDeferred(f"backup deferred {hours:g} h by the heavy-work gate")
-            reason = "heavy lock held by another lane (never cleared by backup)"
-            try:
-                lock.mkdir()
-            except FileExistsError:
-                pass
-            else:
-                owned = True
+            reason = _pressure_reason(swap_limit, load_limit)
+            if reason is None:
                 try:
-                    _log(log, "took")
-                    reason = _pressure_reason(host, swap_limit, load_limit, disk_floor)
+                    lock.mkdir()
+                except FileExistsError:
+                    reason = "heavy lock held by another lane (never cleared by backup)"
+                else:
+                    owned = True
+                    reason = _pressure_reason(swap_limit, load_limit)
                     if reason is None and time.monotonic() < expires:
+                        admitted = True
+                        _log(log, "took")
                         yield
                         return
                     if reason is None:
                         reason = "admission window elapsed during resource probe"
-                finally:
-                    try:
-                        _log(log, "released")
-                    finally:
-                        lock.rmdir()
-                        owned = False
+                    lock.rmdir()
+                    owned = False
+            if not alerted:
+                report(job_key, f"backup waiting behind the heavy-work gate since {since}: {reason}")
+                alerted = True
             _log(log, f"deferred: {reason}; retry in {retry:g}s")
             print(f"brainlayer backup deferred: {reason}", flush=True)
             time.sleep(min(retry, max(0, expires - time.monotonic())))
@@ -130,7 +132,8 @@ def backup_heavy_gate(*, deadline: float | None = None):
         try:
             if owned:
                 try:
-                    _log(log, "released")
+                    if admitted:
+                        _log(log, "released")
                 finally:
                     lock.rmdir()
         finally:

@@ -5548,6 +5548,16 @@
         "target": "subprocess.run"
       }
     },
+    "c98f29f793d01a0164f4089f416fa6d96e10df46b28f8226a6f8ce46006cdf95": {
+      "non_cloud_purpose": "Catch local CPU-brand sysctl failures and identify the backup heavy-work gate in its durable alert; exception metadata only, no network/model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.backup_heavy_gate",
+        "path": "src/brainlayer/backup_heavy_gate.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "c9be6ca583916b8f68108e8a702dcf053ed8e58484f9d3d9c55845080ff6a294": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/ci_ratchet_table.py <module>._git subprocess.SubprocessError.",
       "site": {
