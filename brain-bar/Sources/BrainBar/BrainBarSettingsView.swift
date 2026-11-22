@@ -629,6 +629,11 @@ final class BrainBarSettingsViewModel: ObservableObject {
         return ObservabilityPresentation.backupStatus(for: displayedBackups(document), jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine, now: observabilityNow)
     }
 
+    var backupProgress: BrainBarBackupProgress? {
+        guard backupTruth.statusNotice == nil, case let .readable(document) = observabilityResult else { return nil }
+        return BrainBarBackupProgress.read(document.backups, now: now())
+    }
+
     /// The Backups page's checks in plain words (E1), from the same document as `backupStatus`.
     var backupChecks: BrainBarBackupChecks? {
         guard case let .readable(document) = observabilityResult,
@@ -1526,7 +1531,8 @@ struct BrainBarSettingsView: View {
                 hiddenAlert: viewModel.jobAlert,
                 detailsExpanded: $viewModel.backupDetailsExpanded,
                 copiedDetailID: viewModel.copiedTechnicalDetailID,
-                copy: { viewModel.copyTechnicalDetail($0) }
+                copy: { viewModel.copyTechnicalDetail($0) },
+                progress: viewModel.backupProgress
             )
         } else if !viewModel.hasCompletedObservabilityRead {
             Label("Checking backup status…", systemImage: "clock")

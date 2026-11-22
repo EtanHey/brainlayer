@@ -302,7 +302,7 @@ enum NDPipelineLayout {
     static var searchPanelWidth: CGFloat { min(264, windowInside.maxX - searchPanelMinX) }
 
     static func panel(_ s: NDStation, state: NDPipelineState, actions: Set<NDStation>, actionWidths: [NDStation: CGFloat] = [:],
-                      height: CGFloat) -> Panel {
+                      height: CGFloat, width: CGFloat? = nil) -> Panel {
         let side = panelSide(s, hasAction: actions.contains(s))
         let own = circle(s)
         var anchor = own
@@ -319,7 +319,7 @@ enum NDPipelineLayout {
             }
         }
         let a = arrowLength
-        var w = side.width
+        var w = width ?? side.width
         if side.edge == .trailing { w = min(w, windowInside.maxX - (anchor.maxX + a)) }
         let tip: CGPoint
         var body: CGRect

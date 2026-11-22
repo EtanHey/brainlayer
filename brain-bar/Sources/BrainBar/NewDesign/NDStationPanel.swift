@@ -7,6 +7,7 @@ struct NDStationPanelBody: View {
     typealias Say = BrainBarMenuPresenter.SurfaceSay
     let model: NDStationPopover.Model
     var waiting = false
+    var compactRows = false
     var perform: (BrainBarMenuPresentation.ActionKind) -> Void = { _ in }
     @Environment(\.ndPanelFocusAction) private var focusAction
     @FocusState private var actionFocused: Bool
@@ -39,7 +40,7 @@ struct NDStationPanelBody: View {
                         .frame(minHeight: Self.rowHeight)
                     }
                 }
-                .padding(.top, 8)
+                .padding(.top, compactRows ? 2 : 8)
             }
             if let action = model.action {
                 // R1.12 (§ B): 10 and 8 pt around the hairline, so a fault panel fits the room above its station.

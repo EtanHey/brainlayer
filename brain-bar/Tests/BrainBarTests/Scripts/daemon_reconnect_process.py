@@ -188,15 +188,22 @@ try:
         assert final["reconnect"]["observed_seconds"] == 60 and final["reconnect"]["recovered_persistent"] == 0, final
     else:
         assert final["reconnect"] is None and all(p.poll() is None for p in bridges), final
-    consumer = """import json, os
+    consumer = """import json, os, time
 from pathlib import Path
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from brainlayer.observability_transport import build_transport_section, report_transport_alert
-s=build_transport_section(env=os.environ, now=datetime.now(UTC)+timedelta(seconds=float(os.environ['TEST_CLOCK_OFFSET'])), record_input=SimpleNamespace(file_snapshot=lambda path,**snapshot:{"path":str(path),"status":snapshot["status"]}))
+# The real producer can replace its receipt during secure FD validation. Keep the
+# reader fail-closed, but await a consumable snapshot instead of requiring the first read.
+deadline=time.monotonic()+5
+while True:
+    s=build_transport_section(env=os.environ, now=datetime.now(UTC)+timedelta(seconds=float(os.environ['TEST_CLOCK_OFFSET'])), record_input=SimpleNamespace(file_snapshot=lambda path,**snapshot:{"path":str(path),"status":snapshot["status"]}))
+    if s['state']=='measured' or time.monotonic()>=deadline:
+        break
+    time.sleep(0.02)
 report_transport_alert(s,env=os.environ)
 p=Path(os.environ['BRAINLAYER_JOB_ALERT_PATH'])
-print(json.dumps({'state':s['state'],'alerts':json.loads(p.read_text()) if p.exists() else {}}))
+print(json.dumps({'state':s['state'],'reason':s.get('reason',''),'alerts':json.loads(p.read_text()) if p.exists() else {}}))
 """
     alerts_env = {
         **base,

@@ -98,6 +98,20 @@ struct NDBackupsPage: View {
     static let pageChecks: Set<String> = ["drive_auth", "backup_local", "backup_offsite", "transcripts", "integrity", "disk"]
 
     var body: some View {
+#if DEBUG
+        if let checks = store.inputs.captureBackupChecks {
+            VStack(alignment: .leading, spacing: 20) {
+                NDPageTop(title: Say.backups, detail: nil)
+                BrainBarBackupChecksCard(checks: checks, hiddenAlert: nil, detailsExpanded: .constant(false),
+                                         copy: { _ in }, progress: store.inputs.backupProgress)
+            }
+        } else { pageBody }
+#else
+        pageBody
+#endif
+    }
+
+    @ViewBuilder private var pageBody: some View {
         let m = store.model
         let r1 = store.r1
         let lanes = lanes(m)
@@ -136,7 +150,17 @@ struct NDBackupsPage: View {
                                heads: [(Say.newest, Self.valueColumn), (Say.next, Self.valueColumn)])
                         .padding(.top, 12)
                     VStack(spacing: 0) {
-                        ForEach(lanes) { NDBackupLaneView(lane: $0) }
+                        ForEach(lanes) { lane in
+                            VStack(alignment: .leading, spacing: 0) {
+                                if let lane = Self.displayedLane(lane, progress: store.inputs.backupProgress) {
+                                    NDBackupLaneView(lane: lane)
+                                }
+                                if lane.id == "backup_offsite", let progress = store.inputs.backupProgress {
+                                    BrainBarBackupProgressView(progress: progress)
+                                        .padding(.leading, Self.symbolColumn + Self.nameColumn).padding(.vertical, 4)
+                                }
+                            }
+                        }
                     }
                     .padding(.top, 4)
                     .background(alignment: .topLeading) { limitLine }
@@ -222,6 +246,10 @@ struct NDBackupsPage: View {
         var accessibility: String
     }
 
+    static func displayedLane(_ lane: Lane, progress: BrainBarBackupProgress?) -> Lane? {
+        lane
+    }
+
     func lanes(_ m: NDModel) -> [Lane] {
         let now = store.inputs.capture.now
         let rows = m.areas.first { $0.thing == .safe }?.rows ?? []
@@ -251,7 +279,7 @@ struct NDBackupsPage: View {
                 }
             }
             events = events.filter { $0.hours >= -Self.past }
-            let stalled = stalls && driveDown
+            let stalled = stalls && (driveDown || (id == "backup_offsite" && row?.strong == true && store.inputs.backupProgress?.isStalled == true))
             let last = events.map(\.hours).max()
             if let next, !stalled { events.append(.init(hours: next.timeIntervalSince(now) / 3600, kind: .next)) }
             let count = attempts?.count ?? 0, failed = attempts?.filter { !$0.ok }.count ?? 0
