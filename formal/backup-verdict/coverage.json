@@ -5,6 +5,7 @@
   "backup_gate_n5_note": "2026-11-22 lead ruling: the six-hour pressure window is soft; after it, the job ignores swap/load but still acquires fleet custody. Calendar admission deadlines remain hard. The existing Run failed action sets/retains the first-deferral alert, and Run ok clears it after actual success. Forcing admission adds no receipt/verification fact, so no model transition change; real deterministic gate tests prove the threshold and lock behavior. Gate pin now points to committed N5 implementation b6048ecb.",
   "backup_host_floor_note": "2026-11-22 lead/orc floor ruling: gate checks the existing non-reclaiming peak plus host reserve against raw free_now_bytes before/under custody, including past the soft pressure window. Disk refusal maps to existing Run failed. job_alerts.report gains opt-in replace_reason: an already-present alert stays present with refreshed text and no repeated notification; the model tracks alert membership, so this is a stutter, not recovery. Default set/clear and success-only recovery unchanged. Both gate and job-alert source pins refer to committed implementation 40f6e6da; report line range re-read at that source. No model transition change; floor refusal/override/recovery tests use actual gate/alert code with synthetic metadata only.",
   "backup_gate_r2_note": "2026-11-22 final R2: phase-aware peak (snapshot, all, and metadata-selected upload verification), current-cause reason refresh, and phase-specific expected-time admission. No allocation/verification/receipt writer changed. Time/disk refusal, including an initially exhausted snapshot deadline, maps to existing Run failed; cause refresh preserves alert membership. Admission timing changes when work starts, never snapshot or verified facts. Source pins reference committed R2 implementation 9fd83723; lead verifies this final fix without a third review round. TLC remains CI proof.",
+  "backup_retention_note": "2026-11-22: approved local/Drive retention narrows existing removal transitions. The newest verified local cohort is kept and local-only verified days cannot be superseded by a newer day. Drive pruning accepts only latest receipt-MD5-proven objects in the exact machine folder, and a pruning failure emits a separate job alert while preserving the verified backup receipt. BackupVerdict intentionally over-approximates removal eligibility: RemoveAfterUpload still requires the SAME snapshot's OffOK, and Supersede allows more local removals than production now permits. Count, name, machine/folder, pin and current MD5 boundaries are checked by fail-first production-code tests and a read-only real Drive selection, not claimed as TLC properties. Re-read TakeSnapshot, Upload, RemoveAfterUpload, Supersede and Weekly; no model transition changes. Coverage now also pins the pure selector module. Rerun current-backup and current-vacuum at the committed source pins.",
   "sources": {
     "src/brainlayer/health_verdict.py": {
       "sha": "#1827 watcher-catchup round 1",
@@ -46,14 +47,15 @@
         "src/brainlayer/backup_daily.py:4202 (verified receipt appended before reclamation)"
       ],
       "RemoveAfterUpload": [
-        "src/brainlayer/backup_daily.py:4213-4219 (unlink, local_removed)",
-        "src/brainlayer/backup_daily.py:4288 (the final receipt carries local_removed)"
+        "src/brainlayer/backup_daily.py:3348-3451 (_sweep_verified_local_archives: per-copy Drive proof, verified local keep cohort and current MD5 before unlink; local_sweep is housekeeping only)",
+        "src/brainlayer/backup_daily.py:4245 (verified proof precedes cleanup; the newest archive is now kept)",
+        "src/brainlayer/backup_daily.py:4347 (terminal run receipt remains independent of retention failure)"
       ],
       "Abandon": [
         "src/brainlayer/backup_daily.py:3454-3504 (_local_upload_receipt, upload_state abandoned at 3491)"
       ],
       "Supersede": [
-        "src/brainlayer/backup_daily.py:3413-3451 (_reclaim_superseded_local; returns unless the newer result is uploaded and verified)"
+        "src/brainlayer/backup_daily.py:3454-3493 (_reclaim_superseded_local: newer verified result required; locally verified days are now protected)"
       ],
       "Revoke": [
         "src/brainlayer/health_verdict.py:702 (verification_error or drive_md5_match False)"

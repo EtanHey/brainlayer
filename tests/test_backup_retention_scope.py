@@ -103,13 +103,13 @@ def test_prior_conflict_preserves_confirmed_upload_and_recovery_receipt(tmp_path
         },
     )
     receipt_path = tmp_path / "receipt.jsonl"
-    with pytest.raises(b.DriveFolderOwnedByOtherMachineError):
-        b.run_backup(
-            db_path=tmp_path / "fixture.db",
-            staging_dir=tmp_path,
-            log_path=receipt_path,
-            machine_id="Locals-MacBook-Pro",
-        )
+    result = b.run_backup(
+        db_path=tmp_path / "fixture.db",
+        staging_dir=tmp_path,
+        log_path=receipt_path,
+        machine_id="Locals-MacBook-Pro",
+    )
+    assert result["verified"] and "retention_error" not in result
     receipts = [r for r in b._read_backup_receipts(receipt_path) if r.get("event") != "local_sweep"]
     assert all("snapshot" in r and "attempted_at" in r for r in receipts)
     assert len(receipts) == 4
@@ -120,10 +120,8 @@ def test_prior_conflict_preserves_confirmed_upload_and_recovery_receipt(tmp_path
     receipt = receipts[-1]
     assert receipt["uploaded"] and receipt["verified"]
     assert receipt["drive_file"]["id"] == "drive-file-id"
-    assert receipt["local_removed"] and not snapshot.exists()
-    assert receipt["retention_error_type"] == "DriveFolderOwnedByOtherMachineError"
-    assert receipt["retention_error"] == receipt["error"]
-    assert receipt["error_code"] == "drive_folder_owned_by_other_machine"
+    assert not receipt["local_removed"] and snapshot.exists()
+    assert "retention_error" not in receipt  # Foreign prior folders are never read for retention.
     assert observability_backup._daily_snapshot([receipt])[0]["verified"] is True
     service.files.return_value.update.assert_not_called()
     service.files.return_value.create.assert_not_called()
@@ -154,10 +152,12 @@ def test_foreign_owner_on_late_prior_page_prevents_all_trash():
         return listing(**kwargs)
 
     service.files.return_value.list.side_effect = paged
-    with pytest.raises(b.DriveFolderOwnedByOtherMachineError):
+    assert (
         b.prune_drive_backups(
             service, machine_id="Locals-MacBook-Pro", retention_policy=b.DriveRetentionPolicy(keep_latest=1)
         )
+        == []
+    )
     service.files.return_value.update.assert_not_called()
     service.files.return_value.create.assert_not_called()
 
@@ -174,18 +174,19 @@ def test_explicit_folder_does_not_expand_to_default_or_prior(monkeypatch):
     discovery = Mock(side_effect=AssertionError("must not discover other folders"))
     monkeypatch.setattr(b, "ensure_drive_folder_chain", ensure)
     monkeypatch.setattr(b, "list_machine_drive_backups", discovery)
-    assert b.prune_drive_backups(
-        service,
-        folder_parts=["custom", "only"],
-        machine_id="Locals-MacBook-Pro",
-        retention_policy=b.DriveRetentionPolicy(1),
-        verified_file_ids={"new"},
-    ) == ["2026-10-16.db.gz"]
-    ensure.assert_called_once_with(service, ["custom", "only"])
-    assert service.files.return_value.list.call_args.kwargs["q"] == "'custom-id' in parents and trashed = false"
-    service.files.return_value.update.assert_called_once_with(
-        fileId="old", body={"trashed": True}, supportsAllDrives=True
-    )
+    assert (
+        b.prune_drive_backups(
+            service,
+            folder_parts=["custom", "only"],
+            machine_id="Locals-MacBook-Pro",
+            retention_policy=b.DriveRetentionPolicy(1),
+            verified_file_ids={"new"},
+        )
+        == []
+    )  # ID-only evidence cannot authorize any deletion or folder discovery.
+    ensure.assert_not_called()
+    service.files.return_value.list.assert_not_called()
+    service.files.return_value.update.assert_not_called()
     discovery.assert_not_called()
 
 
@@ -210,8 +211,8 @@ def test_disabled_retention_does_not_read_foreign_prior(tmp_path, monkeypatch):
 def test_ambiguous_prior_parent_refuses_all_mutation(parents):
     service = _drive_fixture()
     service.files.return_value.get.return_value.execute.return_value = {"parents": parents}
-    with pytest.raises(ValueError, match="unambiguous"):
-        b.prune_drive_backups(service, machine_id="Locals-MacBook-Pro")
+    assert b.prune_drive_backups(service, machine_id="Locals-MacBook-Pro") == []
+    service.files.return_value.get.assert_not_called()
     service.files.return_value.update.assert_not_called()
     service.files.return_value.create.assert_not_called()
 
@@ -236,11 +237,14 @@ def test_retention_scopes_paginated_prior_siblings_and_deduplicates(missing_prio
         retention_policy=b.DriveRetentionPolicy(keep_latest=1),
         verified_file_ids={"new"},
     )
-    assert removed == ([] if missing_prior else ["2026-10-17.db.gz"])
-    assert service.files.return_value.update.call_count == int(not missing_prior)
+    assert removed == []
+    assert service.files.return_value.update.call_count == 0
     service.files.return_value.create.assert_not_called()
     service.files.return_value.delete.assert_not_called()
-    assert sum(
-        c.kwargs["q"] == "'prior' in parents and trashed = false"
-        for c in service.files.return_value.list.call_args_list
-    ) == int(not missing_prior)
+    assert (
+        sum(
+            c.kwargs["q"] == "'prior' in parents and trashed = false"
+            for c in service.files.return_value.list.call_args_list
+        )
+        == 0
+    )

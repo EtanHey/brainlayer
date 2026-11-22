@@ -20,7 +20,42 @@ Daily at 03:17 local time via `com.brainlayer.backup-daily`.
 
 Retention:
 
-Keep the latest 7 daily snapshots. Weekly maintenance uses the same Drive API path with a 4-snapshot retention policy.
+Keep the newest **3 verified compressed daily snapshots locally**, or **1 on the M4** once
+Drive has verified that copy or a newer one. A day's only verified local copy is never
+removed until that day's upload has verified. Unknown, changed, unverified or pinned
+files can therefore leave more than the target count. Cleanup hashes a local archive
+again before removing it; a new unverified day cannot displace older verified copies.
+The M4/M1 distinction uses `backup_heavy_gate`'s shared host detection.
+
+Drive keeps the newest **7 verified daily snapshots per machine**, across gzip and zstd.
+Weekly and daily runs share this count. Selection requires both the exact machine folder
+and `appProperties.brainlayer_machine`, plus a latest successful receipt whose stored-byte
+MD5, filename and size still match the current Drive object. Prior machine-ID folders are
+available for recovery, but retention does not cross into them. Files without this proof
+are kept and do not count toward the cap. An unverified newest upload never displaces the
+newest verified backup. Daily names must be exactly `YYYY-MM-DD.db.gz` or `YYYY-MM-DD.db.zst`.
+Named one-offs, other machines' objects and the file named by `.weekly-backup-pin.json`
+are protected. A pin remains protected until its owner replaces or removes it.
+
+Drive cleanup **trashes**, never permanently deletes; Drive normally retains trashed files
+for 30 days. A cleanup failure does not fail an already verified backup: its receipt
+records the error and any files already trashed, and `backup-retention` stays alerted until
+a later successful cleanup. An unreadable weekly pin refuses cleanup.
+
+Configuration (positive integer counts; invalid values refuse cleanup):
+
+| Environment variable | Meaning |
+| --- | --- |
+| `BRAINLAYER_BACKUP_LOCAL_KEEP` | Local count on the M1; default above |
+| `BRAINLAYER_BACKUP_LOCAL_KEEP_M4` | Local count on the M4; default above |
+| `BRAINLAYER_BACKUP_DRIVE_KEEP` | Drive count per machine; default above |
+| `BRAINLAYER_BACKUP_DRIVE_RETENTION` | Enabled by default; `0` disables Drive cleanup |
+
+Library callers can opt out of local cleanup with `remove_local_after_upload=False`.
+One-off `*-pre-*.db` migration copies are **never automatically deleted**. A verified
+newer snapshot reports older copies by path, byte size and `superseded_by` in
+`one_off_copies[]`. The timestamp comparison does not prove the migration's own
+verification; a person must rule on deletion.
 
 ## Why This Approach
 
@@ -36,7 +71,8 @@ That mount is not present after repair, and `/Applications/Google Drive.app` is 
 
 Repo files:
 
-- `src/brainlayer/backup_daily.py`: creates the SQLite backup, gzips it, uploads it to Drive, verifies the uploaded file, removes the local staging copy, and prunes retention.
+- `src/brainlayer/backup_daily.py`: creates and verifies the SQLite backup, compresses it, uploads it to Drive, and applies the retention rule above.
+- `src/brainlayer/backup_retention.py`: pure daily-name, receipt-MD5 and per-machine selection used by cleanup and read-only dry-runs.
 - `scripts/launchd/backup-daily.sh`: launchd wrapper installed to `~/.local/lib/brainlayer/backup-daily.sh`.
 - `scripts/launchd/com.brainlayer.backup-daily.plist`: LaunchAgent template.
 - `scripts/launchd/install.sh backup`: installs the wrapper and LaunchAgent.

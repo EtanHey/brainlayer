@@ -255,11 +255,11 @@ def test_superseded_pending_reclamation_preserves_weekly_pin_and_other_db(local_
     (local_lane["staging_dir"] / ".weekly-backup-pin.json").write_text(json.dumps(pin))
     verified = dict(receipt, uploaded=True, verified=True)
     backup._reclaim_superseded_local(local_lane["log_path"], verified, local_lane["staging_dir"])
-    assert not Path(older[0]["snapshot"]).exists()
+    assert Path(older[0]["snapshot"]).exists()  # A newer day is not offsite proof of this day.
     assert Path(older[1]["snapshot"]).exists()
     assert Path(older[2]["snapshot"]).exists()
     latest = {r["snapshot"]: r for r in backup._read_backup_receipts(local_lane["log_path"])}
-    assert latest[older[0]["snapshot"]]["upload_state"] == "superseded"
+    assert latest[older[0]["snapshot"]]["upload_state"] == "pending"
 
 
 def test_weekly_pin_holds_backup_lock_through_quiesce(local_lane, tmp_path, local_clock):
@@ -297,7 +297,7 @@ def test_local_midnight_expires_pin_and_gate_even_within_age_limit(local_lane, t
     with maintenance._pin_weekly_backup(config_for(local_lane, tmp_path), receipt):
         assert backup._protected_snapshot_names(local_lane["staging_dir"])
     now = local_clock(zone, dt.datetime(2026, 10, 19, 0, 30))
-    assert backup._protected_snapshot_names(local_lane["staging_dir"]) == set()
+    assert backup._protected_snapshot_names(local_lane["staging_dir"]) == {Path(receipt["snapshot"]).name}
     assert (
         backup._recent_local_verified_backup(local_lane["log_path"], local_lane["db_path"], now=now, max_age_hours=6)
         is None

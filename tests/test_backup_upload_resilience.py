@@ -190,9 +190,9 @@ def test_unusable_resume_starts_fresh_and_only_removes_proven_stale(lane, change
         result = lane.run("2026-10-18")
     assert result["uploaded"]
     assert len(lane.posts) == len(lane.creations) == 2
-    assert lane.snapshot.exists() is (change not in {"missing", "expired", "unsafe_url"})
+    assert lane.snapshot.exists() is (change != "missing")
     if change in {"expired", "unsafe_url"}:
-        assert result["superseded_stalled_deleted"] == [lane.snapshot.name]
+        assert not result.get("superseded_stalled_deleted")
 
 
 def test_verified_copy_and_unrecorded_artifact_survive_stale_cleanup(lane):
@@ -205,7 +205,7 @@ def test_verified_copy_and_unrecorded_artifact_survive_stale_cleanup(lane):
     lane.log.write_text(lane.log.read_text() + json.dumps(protected) + "\n")
     lane.outcomes.extend([_DriveResponse(410), _DriveResponse(200, payload={"id": "new"})])
     lane.run("2026-10-18")
-    assert not lane.snapshot.exists()
+    assert lane.snapshot.exists()  # Only verified copy of that day; not on Drive.
     assert verified.read_bytes() == b"verified"
     assert unknown.read_bytes() == b"unknown"
 
@@ -378,8 +378,8 @@ def test_r1_reclamation_follows_new_upload_and_verification(lane, monkeypatch, a
 
     monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", verify)
     result = lane.run("2026-10-18")
-    assert result["superseded_stalled_deleted"] == [lane.snapshot.name]
-    assert not lane.snapshot.exists()
+    assert not result.get("superseded_stalled_deleted")
+    assert lane.snapshot.exists()
 
 
 @pytest.mark.parametrize("hours", [36, 96])
@@ -994,7 +994,7 @@ def test_resumed_stall_is_hashed_once_and_replaced_same_size_inode_is_refused(la
     assert result["retained_stalled_unconfirmed"] == [lane.snapshot.name]
     # One read as the would-be resume candidate, one by the post-success superseded check; the
     # fresh snapshot's own identity reads are the rest.
-    assert hash_reads == [lane.snapshot.name, "2026-10-18.db.gz", "2026-10-18.db.gz", lane.snapshot.name]
+    assert hash_reads == [lane.snapshot.name, "2026-10-18.db.gz", "2026-10-18.db.gz"]
     assert lane.snapshot.read_bytes() == b"ghijkl"  # Unproven bytes are never reclaimed.
     assert lane.snapshot.name not in result.get("superseded_stalled_deleted", [])
 
@@ -1010,9 +1010,9 @@ def test_superseded_reclaim_still_hashes_and_keeps_changed_aged_stall(lane, hash
     lane.outcomes.append(_DriveResponse(200, payload={"id": "fresh"}))
     result = lane.run("2026-10-20")
     assert result["uploaded"] and result["verified"]
-    assert result["superseded_stalled_deleted"] == [good_path.name]
-    assert not good_path.exists()
+    assert not result.get("superseded_stalled_deleted")
+    assert good_path.exists()
     assert lane.snapshot.read_bytes() == b"ghijkl"
-    # Reads happen only in the two post-success reclaim checks, never in listing (pre-#1385: three each).
+    # Local-only verified days are preserved without extra destructive-reclaim hash reads.
     stall_reads = [n for n in hash_reads if n in {good_path.name, lane.snapshot.name}]
-    assert stall_reads.count(good_path.name) == stall_reads.count(lane.snapshot.name) == 2
+    assert stall_reads.count(good_path.name) == stall_reads.count(lane.snapshot.name) == 0

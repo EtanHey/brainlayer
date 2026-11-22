@@ -289,6 +289,7 @@ re-renders their plists; retain its configuration as described in [Configuration
 Run `brainlayer backup auth` once to authorize BrainLayer's Drive backups in your browser.
 The private token lives at `~/.config/brainlayer/drive-tokens.json`; `BRAINLAYER_DRIVE_TOKEN_PATH` overrides it.
 BrainBar uses `brainlayer backup auth --status --json` to check and `brainlayer backup auth --json` to authorize.
+See [backup retention and recovery](docs/backup-strategy.md) for the local/Drive policy and configuration.
 
 ```bash
 brainlayer setup              # Create ~/.config/brainlayer/brainlayer.env

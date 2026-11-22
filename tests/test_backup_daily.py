@@ -274,8 +274,8 @@ def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_removes_raw_snapsho
     assert result["sentinel_snapshot_chunks"] == 3
     assert result["sentinel_verified_chunks"] == 3
     assert result["pragma"] == "skipped"
-    assert result["local_removed"] is True
-    assert not (staging_dir / f"2026-06-05{suffix}").exists()
+    assert result["local_removed"] is False
+    assert (staging_dir / f"2026-06-05{suffix}").exists()
     assert not (staging_dir / "2026-06-05.db").exists()
 
 
@@ -390,8 +390,10 @@ def test_prune_local_gzip_snapshots_keeps_newest_three_and_requires_verified_cov
 
     # 06-03 is the newest Drive-verified gzip, so it survives the keep-3 cap (zstd PR):
     # the newest verified copy of each format is never pruned locally.
-    assert deleted == ["2026-06-02.db.gz", "2026-06-01.db.gz"]
+    assert deleted == []  # Unknown newer files do not displace the three verified copies.
     assert sorted(path.name for path in tmp_path.glob("*.db.gz")) == [
+        "2026-06-01.db.gz",
+        "2026-06-02.db.gz",
         "2026-06-03.db.gz",
         "2026-06-04.db.gz",
         "2026-06-05.db.gz",
@@ -410,12 +412,12 @@ def test_prune_local_gzip_snapshots_preserves_unverified_archive_without_three_n
         verified_drive_names={"2026-06-02.db.gz", "2026-06-03.db.gz"},
     )
 
-    assert deleted == ["2026-06-02.db.gz"]
+    assert deleted == []
     assert (tmp_path / "2026-06-01.db.gz").exists()
     assert (tmp_path / "2026-06-04.db.gz").exists()
 
 
-def test_prune_local_gzip_snapshots_reclaims_unverified_archive_with_three_newer_verified_copies(tmp_path):
+def test_prune_local_gzip_snapshots_keeps_day_without_own_verified_drive_copy(tmp_path):
     from brainlayer.backup_daily import prune_local_gzip_snapshots
 
     for day in range(1, 7):
@@ -430,8 +432,8 @@ def test_prune_local_gzip_snapshots_reclaims_unverified_archive_with_three_newer
         },
     )
 
-    assert deleted == ["2026-06-03.db.gz", "2026-06-02.db.gz", "2026-06-01.db.gz"]
-    assert len(list(tmp_path.glob("*.db.gz"))) == 3
+    assert deleted == []
+    assert len(list(tmp_path.glob("*.db.gz"))) == 6
 
 
 def test_run_backup_opt_out_keeps_older_archives_with_legacy_receipts(tmp_path, monkeypatch):
@@ -2361,6 +2363,9 @@ class _RetentionFiles:
                 "id": f"id-{day}",
                 "name": f"2026-05-{day:02d}.db.gz",
                 "appProperties": {"brainlayer_machine": "test-machine"},
+                "parents": ["folder-id"],
+                "size": "8",
+                "md5Checksum": f"{day:032x}",
             }
             for day in range(1, count + 1)
         ]
@@ -2441,10 +2446,10 @@ def test_run_backup_default_retention_leaves_eight_drive_snapshots_untouched(tmp
     after = snapshot_non_trashed_drive_ids(service, folder_id="folder-id")
 
     assert_non_trashed_drive_files_only_grow_or_are_trashed(before, after)
-    assert result["drive_retention"] == "disabled"
+    assert result["drive_retention"] == "enabled"
     assert result["retention_mode"] == "trash"
     assert result["retention_deleted"] == []
-    assert service.files().list_calls == 2
+    assert service.files().list_calls == 3
     assert service.files().trashed == []
     assert service.files().deleted == []
 
@@ -2457,9 +2462,21 @@ def test_run_backup_opted_in_retention_trashes_older_drive_snapshots(tmp_path, m
     service = _RetentionService(count=8)
     _stub_verified_backup_run(backup_daily, monkeypatch, snapshot, service)
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1")
-    # Drive retention trashes only behind receipt-verified evidence for an exact listed object.
+    # Every counted object needs its own matching MD5 receipt.
     (tmp_path / "backup-daily.log").write_text(
-        json.dumps({"drive_file": {"id": "id-8"}, "uploaded": True, "verified": True}) + "\n"
+        "".join(
+            json.dumps(
+                {
+                    "drive_file": item,
+                    "machine_id": "test-machine",
+                    "local_md5": item["md5Checksum"],
+                    "uploaded": True,
+                    "verified": True,
+                }
+            )
+            + "\n"
+            for item in service.files().items
+        )
     )
     before = snapshot_non_trashed_drive_ids(service, folder_id="folder-id")
 
@@ -2785,20 +2802,8 @@ def test_prune_drive_backups_trashes_older_snapshots_without_hard_delete():
         verified_file_ids={"id-9"},
     )
 
-    assert deleted == [
-        "2026-05-05.db.gz",
-        "2026-05-04.db.gz",
-        "2026-05-03.db.gz",
-        "2026-05-02.db.gz",
-        "2026-05-01.db.gz",
-    ]
-    assert service.files().trashed == [
-        ("id-5", {"trashed": True}),
-        ("id-4", {"trashed": True}),
-        ("id-3", {"trashed": True}),
-        ("id-2", {"trashed": True}),
-        ("id-1", {"trashed": True}),
-    ]
+    assert deleted == []  # ID-only historical evidence cannot authorize deletion.
+    assert service.files().trashed == []
     assert service.files().deleted == []
 
 
@@ -2848,8 +2853,8 @@ def test_weekly_shared_drive_pool_uses_the_nonshrinking_drive_cap():
         verified_file_ids={"id-8"},
     )
 
-    assert deleted == ["2026-05-01.db.gz"]
-    assert service.files().trashed == [("id-1", {"trashed": True})]
+    assert deleted == []  # Weekly shares the same receipt-MD5 requirement.
+    assert service.files().trashed == []
     assert service.files().deleted == []
 
 
