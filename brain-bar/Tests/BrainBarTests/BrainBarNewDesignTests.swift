@@ -1570,6 +1570,15 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
                 let own = L.circle(station)
                 let where_ = "\(name.rawValue) \(station)"
+                // L58: only these top-row panels, below after both full-height side candidates fail,
+                // may cover interior marks. Their own words, heading and footer remain protected.
+                let topRowBelowBothSidesBlocked = [NDStation.agents, .read, .memory, .mac, .drive].contains(station)
+                    && panel.edge == .bottom && panel.clearanceException == .topRowBelowBothSidesBlocked
+                if topRowBelowBothSidesBlocked {
+                    for side: Edge in [.top, .trailing, .leading] {
+                        XCTAssertNil(L.panelCandidate(station, edge: side, state: r1.pipeline, actions: [], height: panel.body.height), where_)
+                    }
+                }
                 switch panel.edge {
                 case .top, .bottom:
                     XCTAssertTrue((own.minX...own.maxX).contains(panel.tip.x), "\(where_): the arrow points at its station")
@@ -1584,14 +1593,15 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                     XCTAssertTrue((panel.body.minY + L.arrowInset - 0.01...panel.body.maxY - L.arrowInset + 0.01).contains(panel.tip.y), where_)
                 }
                 XCTAssertFalse(panel.outer.intersects(own.insetBy(dx: 1, dy: 1)), "\(where_) covers its own station")
-                // R1.12 (§ B, 9 of 9): no panel covers any other station's circle (the agents' panel opens above now, so
-                // the one trade-off of R1.7 item 2 is gone), name or status.
+                // L54 remains strict outside the named L58 fallback; own words are always protected.
                 for other in NDStation.allCases {
-                    if other != station {
+                    if other != station && !topRowBelowBothSidesBlocked {
                         XCTAssertFalse(panel.body.intersects(L.circle(other)), "\(where_) covers \(other)")
                     }
                     for rect in L.labelRects(other, r1.pipeline) {
-                        XCTAssertFalse(panel.outer.intersects(rect), "\(where_) covers \(other)'s words")
+                        if other == station || !topRowBelowBothSidesBlocked {
+                            XCTAssertFalse(panel.outer.intersects(rect), "\(where_) covers \(other)'s words")
+                        }
                     }
                 }
                 // R13: both job panels clear the visible caption fields, including their 4 pt native insets.
@@ -2704,8 +2714,8 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertNil(explain.action)
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrainBar/NewDesign/NDPipelineChart.swift"), encoding: .utf8)
-        XCTAssertTrue(source.contains("content: { popover(.agents) }, layout: { content in panel(.agents, content: content) })"),
-                      "the icon opens the same panel as the group")
+        XCTAssertTrue(source.contains("ForEach(Self.controls(items)) { control in station(control.station) }"),
+                      "provider icons share the agents station target and its fault panel")
     }
 
     /// 1.5.1 (2, 3), as R1.12 (§ B) has it: no panel covers the footer's lines, for every station in every fixture at the
@@ -3275,25 +3285,33 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         XCTAssertTrue(menu.items.filter { $0.view == nil && $0.title.isEmpty }.allSatisfy(\.isSeparatorItem), "system separators")
     }
 
-    /// R1.12 (5a): the agents' panel opens above the column, its notch down at the agents: inside the window, over no
-    /// station's words, the keyboard-opened panel (same layout, clamped to the screen) too. R1.13.1: it starts right of the
-    /// "Pipeline" heading, so it covers no heading (the notch stays on the column, under the body's straight edge).
+    /// First look, 22 Nov: the agents point at the column centre and retain full content below it.
     func testR17AgentsPanelOpensRightOfTheColumn() {
         let L = NDPipelineLayout.self
         for name in Fixture.Name.allCases {
             let store = NDStore(fixture: Fixture.inputs(name), page: .overview)
             let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
-            let panel = chart.panel(.agents, content: AnyView(NDStationPopover(store: store, station: .agents)))
-            XCTAssertEqual(panel.edge, .top, name.rawValue)
-            XCTAssertTrue((L.agentsFrame.minX...L.agentsFrame.maxX).contains(panel.tip.x), "\(name.rawValue): the notch at the column")
+            let content = AnyView(NDStationPopover(store: store, station: .agents))
+            let panel = chart.panel(.agents, content: content)
+            XCTAssertEqual(panel.edge, .bottom, name.rawValue)
+            XCTAssertEqual(panel.tip.x, L.agentsFrame.midX, accuracy: 0.5)
             XCTAssertGreaterThanOrEqual(panel.tip.x - panel.body.minX, L.arrowInset - 0.01, "\(name.rawValue): under the straight edge")
-            XCTAssertFalse(panel.outer.intersects(L.pipelineHeading), "\(name.rawValue): over the Pipeline heading \(panel.outer)")
-            XCTAssertEqual(panel.body.minX, L.agentsPanelMinX, accuracy: 0.5, "\(name.rawValue): right of the heading")
-            XCTAssertLessThan(panel.body.maxY, L.agentsFrame.minY, "\(name.rawValue): above the column")
-            XCTAssertGreaterThanOrEqual(panel.outer.minX, L.windowInside.minX, "\(name.rawValue): inside the window")
+            XCTAssertFalse(panel.outer.intersects(L.pipelineHeading))
+            XCTAssertGreaterThan(panel.body.minY, L.agentsFrame.maxY)
+            XCTAssertGreaterThanOrEqual(panel.outer.minX, L.windowInside.minX)
+            XCTAssertGreaterThanOrEqual(panel.body.height, NDStationPopover.measure(content, width: panel.body.width).height)
+            XCTAssertFalse(panel.scrolls)
+            let agentsBelowBothSidesBlocked = panel.edge == .bottom && panel.clearanceException == .topRowBelowBothSidesBlocked
+            if agentsBelowBothSidesBlocked {
+                for side: Edge in [.top, .trailing, .leading] {
+                    XCTAssertNil(L.panelCandidate(.agents, edge: side, state: store.r1.pipeline, actions: [], height: panel.body.height))
+                }
+            }
             for station in NDStation.allCases {
                 for rect in L.labelRects(station, store.r1.pipeline) {
-                    XCTAssertFalse(panel.body.intersects(rect), "\(name.rawValue): over \(station)'s words")
+                    if station == .agents || !agentsBelowBothSidesBlocked {
+                        XCTAssertFalse(panel.body.intersects(rect), "\(name.rawValue): over \(station)'s words")
+                    }
                 }
             }
             let screen = CGRect(x: L.windowInside.minX - 40, y: -400, width: 2000, height: 2000)

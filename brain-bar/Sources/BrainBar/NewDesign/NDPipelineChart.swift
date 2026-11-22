@@ -134,25 +134,14 @@ struct NDPipelineChart: View {
                 }
             }
             ForEach(Self.controls(items)) { control in station(control.station) }
-            // R1.4 change 2: each provider icon's hover and spoken name is its name. 1.5.1: a provider a check names opens the
-            // agents' fault panel itself (the same panel, with Copy report), not only a tooltip.
+            // One pointer target for the whole column; provider names remain available to VoiceOver.
             ForEach(NDPipelineLayout.agentRows, id: \.0.rawValue) { family, _ in
                 let c = NDPipelineLayout.iconCentre(family)
-                if Self.faultTriggers(state).contains(family) {
-                    let ring = CGRect(x: c.x - 12, y: c.y - 12, width: 24, height: 24)
-                    NDStationButton(station: .agents, interactive: interactive, hovered: $hovered, presenter: panels,
-                                    shape: NDStationHitShape(circle: CGRect(origin: .zero, size: ring.size), label: nil, round: true),
-                                    spoken: NDProvider.name(family),
-                                    content: { popover(.agents) }, layout: { content in panel(.agents, content: content) })
-                        .frame(width: ring.width, height: ring.height)
-                        .position(c)
-                } else {
-                    Color.clear.frame(width: 22, height: 22).contentShape(Rectangle())
-                        .help(NDProvider.name(family))
-                        .accessibilityElement()
-                        .accessibilityLabel(NDProvider.name(family))
-                        .position(c)
-                }
+                Color.clear.frame(width: 22, height: 22)
+                    .accessibilityElement()
+                    .accessibilityLabel(NDProvider.name(family))
+                    .allowsHitTesting(false)
+                    .position(c)
             }
             if let previewHover { preview(previewHover) }
         }
@@ -175,12 +164,18 @@ struct NDPipelineChart: View {
         return NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: height)
     }
 
+    static func stationTarget(_ s: NDStation, state: NDPipelineState) -> (frame: CGRect, shape: NDStationHitShape) {
+        let hit = NDPipelineLayout.hitShape(s, state)
+        let frame = hit.label.map { hit.circle.union($0) } ?? hit.circle
+        return (frame, NDStationHitShape(circle: hit.circle.offsetBy(dx: -frame.minX, dy: -frame.minY),
+                                        label: hit.label?.offsetBy(dx: -frame.minX, dy: -frame.minY), rectangular: s == .agents))
+    }
+
     @ViewBuilder private func station(_ s: NDStation) -> some View {
-        let shape = NDPipelineLayout.hitShape(s, state)
-        let frame = shape.label.map { shape.circle.union($0) } ?? shape.circle
+        let target = Self.stationTarget(s, state: state)
+        let frame = target.frame
         NDStationButton(station: s, interactive: interactive, hovered: $hovered, presenter: panels,
-                        shape: NDStationHitShape(circle: shape.circle.offsetBy(dx: -frame.minX, dy: -frame.minY),
-                                                 label: shape.label?.offsetBy(dx: -frame.minX, dy: -frame.minY)),
+                        shape: target.shape,
                         content: { popover(s) }, layout: { content in panel(s, content: content) })
             .frame(width: frame.width, height: frame.height)
             .position(x: frame.midX, y: frame.midY)
@@ -458,7 +453,9 @@ struct NDStationHitShape: Shape {
     let label: CGRect?
     /// A station's ring is a circle; the agents' group and the Memory box are rounded rectangles.
     var round: Bool? = nil
+    var rectangular = false
     func path(in rect: CGRect) -> Path {
+        if rectangular { return Path(circle) }
         var p = Path()
         if round ?? (label != nil) { p.addEllipse(in: circle) } else { p.addRoundedRect(in: circle, cornerSize: CGSize(width: 12, height: 12)) }
         if let label { p.addRect(label) }
@@ -731,21 +728,39 @@ struct NDPanelShape: Shape {
     let edge: Edge
 
     func path(in rect: CGRect) -> Path {
-        var p = Path(roundedRect: body, cornerRadius: 8, style: .continuous)  // R1.5 change 2: radius 8
+        var p = Path()
+        let r = min(8, body.width / 2, body.height / 2)
         let w = NDPipelineLayout.arrowHalfWidth
-        var arrow = Path()
-        switch edge {
-        case .top:
-            arrow.move(to: CGPoint(x: tip.x - w, y: body.maxY)); arrow.addLine(to: tip); arrow.addLine(to: CGPoint(x: tip.x + w, y: body.maxY))
-        case .bottom:
-            arrow.move(to: CGPoint(x: tip.x - w, y: body.minY)); arrow.addLine(to: tip); arrow.addLine(to: CGPoint(x: tip.x + w, y: body.minY))
-        case .trailing:
-            arrow.move(to: CGPoint(x: body.minX, y: tip.y - w)); arrow.addLine(to: tip); arrow.addLine(to: CGPoint(x: body.minX, y: tip.y + w))
-        case .leading:
-            arrow.move(to: CGPoint(x: body.maxX, y: tip.y - w)); arrow.addLine(to: tip); arrow.addLine(to: CGPoint(x: body.maxX, y: tip.y + w))
+        p.move(to: CGPoint(x: body.minX + r, y: body.minY))
+        if edge == .bottom {
+            p.addLine(to: CGPoint(x: tip.x - w, y: body.minY))
+            p.addLine(to: tip)
+            p.addLine(to: CGPoint(x: tip.x + w, y: body.minY))
         }
-        arrow.closeSubpath()
-        p.addPath(arrow)
+        p.addLine(to: CGPoint(x: body.maxX - r, y: body.minY))
+        p.addQuadCurve(to: CGPoint(x: body.maxX, y: body.minY + r), control: CGPoint(x: body.maxX, y: body.minY))
+        if edge == .leading {
+            p.addLine(to: CGPoint(x: body.maxX, y: tip.y - w))
+            p.addLine(to: tip)
+            p.addLine(to: CGPoint(x: body.maxX, y: tip.y + w))
+        }
+        p.addLine(to: CGPoint(x: body.maxX, y: body.maxY - r))
+        p.addQuadCurve(to: CGPoint(x: body.maxX - r, y: body.maxY), control: CGPoint(x: body.maxX, y: body.maxY))
+        if edge == .top {
+            p.addLine(to: CGPoint(x: tip.x + w, y: body.maxY))
+            p.addLine(to: tip)
+            p.addLine(to: CGPoint(x: tip.x - w, y: body.maxY))
+        }
+        p.addLine(to: CGPoint(x: body.minX + r, y: body.maxY))
+        p.addQuadCurve(to: CGPoint(x: body.minX, y: body.maxY - r), control: CGPoint(x: body.minX, y: body.maxY))
+        if edge == .trailing {
+            p.addLine(to: CGPoint(x: body.minX, y: tip.y + w))
+            p.addLine(to: tip)
+            p.addLine(to: CGPoint(x: body.minX, y: tip.y - w))
+        }
+        p.addLine(to: CGPoint(x: body.minX, y: body.minY + r))
+        p.addQuadCurve(to: CGPoint(x: body.minX + r, y: body.minY), control: CGPoint(x: body.minX, y: body.minY))
+        p.closeSubpath()
         return p
     }
 }
