@@ -6,8 +6,8 @@
       "sha256": "a10214bfcb11b57aa01041f22408ccabd56fa7ef89e1e233ffc9d4b595b872a6"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "cd850c2420ab41066cc870cd5067164ae83ac034 (sleep observations)",
-      "sha256": "ce535b9fc30721f0ba55f317de59aa6849ba6187230056a951a9f992d1779742"
+      "sha": "1eaf31a71fe63557ca65574775ec106ff2376114 (sleep observations on upload exit)",
+      "sha256": "2991d43d6a5f4692c9ff51245ccf3b2647b7fb0ac19a9ca5d42ba8e000cb566b"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "5882de81",
@@ -146,6 +146,7 @@
     "simulation": "Conformance cases run TLC -simulate with one worker (num is per worker), 3,000 traces, depth 60, seed 7.",
     "damage": "A damaged receipt is a durable line that no reader can parse (newline-terminated, not JSON, not progress noise). The world still changed; line-skipping readers miss it. At most one per log. A torn final record is not damage: _append_json_log truncates it before the next append, so it never happened."
   },
+  "sleep_exit_note": "2026-11-22: 1eaf31a7 samples the same additive observer in upload exit cleanup, including permanent failure before another progress tick. No uploaded/verified/local_removed fact, receipt time, retry or deadline changes; model unchanged. Fail-first missing upload_wall_seconds regression and 19 progress/recovery tests passed.",
   "bounds": {
     "BackupVerdict": {
       "snapshots": 2,
