@@ -40,6 +40,17 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.6.11] - 2026-11-22
+
+### BrainBar checks its status at once after the Mac wakes and says so while it checks, and its backup lanes stay truthful unattended (a retention error is a dated failure; a stalled upload says it stalled)
+
+- fix: keep BrainBar search warm and recycle only its helper (#1850)
+- fix(brainbar): backup lanes stay truthful unattended (dated retention errors, stalled uploads say so) (#1854)
+- fix: confirm health relay faults after wake before reporting blocked (#1844)
+- fix(formal): refresh watcher ingest coverage pin after queued input (#1849)
+- fix(backup): explain Mac sleep in backup progress and receipts (#1856)
+- fix(brainbar): check status at once after the Mac wakes, say so while checking, and log the wake (#1858)
+
 ## [1.6.10] - 2026-11-22
 
 ### BrainBar's new design is now the default (Classic stays one click away in Settings), with the owner's first-look fixes and the last spec gaps
