@@ -3,6 +3,7 @@
   "backup_gate_note": "2026-11-22: re-read backup_daily.main after fleet admission. Snapshot/upload/receipt readers and every mapped function are byte-identical to base 60bd3ea77; additions are below them in main. A gate expiry returns 75 but calls report(key, reason), so it maps to DotTable.Run failed (sets an alert), NOT deferred_other (leaves alerts alone). Admission itself emits no snapshot or verification facts. A completed admitted run retains existing success/failure mapping; no model transition change. Unit gate traces exercise lock contention, deterministic retry/open, expiry/alert and signal unwind. No live backup proof claimed.",
   "backup_gate_r1_note": "2026-11-22: gate source is now COVERED and pinned. First deferral, rather than only expiry, maps to the existing DotTable.Run failed action (durable job alert), and only an admitted successful backup maps to ok/clear. Gate waiting/termination adds no snapshot or verification facts. Useful-work reservation, elapsed child budget and probe-before-lock affect when work starts, not any receipt/verdict transition. Both source sha fields point to the committed R1 implementation; TLC remains the CI gate as ruled by the reviewer.",
   "backup_gate_n5_note": "2026-11-22 lead ruling: the six-hour pressure window is soft; after it, the job ignores swap/load but still acquires fleet custody. Calendar admission deadlines remain hard. The existing Run failed action sets/retains the first-deferral alert, and Run ok clears it after actual success. Forcing admission adds no receipt/verification fact, so no model transition change; real deterministic gate tests prove the threshold and lock behavior. Gate pin now points to committed N5 implementation b6048ecb.",
+  "backup_host_floor_note": "2026-11-22 lead/orc floor ruling: gate checks the existing non-reclaiming peak plus host reserve against raw free_now_bytes before/under custody, including past the soft pressure window. Disk refusal maps to existing Run failed. job_alerts.report gains opt-in replace_reason: an already-present alert stays present with refreshed text and no repeated notification; the model tracks alert membership, so this is a stutter, not recovery. Default set/clear and success-only recovery unchanged. Both gate and job-alert source pins refer to committed implementation 40f6e6da; report line range re-read at that source. No model transition change; floor refusal/override/recovery tests use actual gate/alert code with synthetic metadata only.",
   "sources": {
     "src/brainlayer/health_verdict.py": {
       "sha": "#1827 watcher-catchup round 1",
@@ -13,8 +14,8 @@
       "sha256": "cd14ee8b4efffb57422fc7b9ab482ac67be127f16841b1a487e78188b2ce3a5e"
     },
     "src/brainlayer/backup_heavy_gate.py": {
-      "sha": "b6048ecb (lead N5 pressure-window ruling)",
-      "sha256": "80a29d8536f2fcd94d59cc3a09adf1f8f8dd5c14c9b2dd8c7481764a3e1f1415"
+      "sha": "40f6e6da (peak plus host reserve)",
+      "sha256": "f5f093ad5722a67ad7fc9b08c6f59330794e3a91c671048fb60a5a9127675ad8"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "5882de81",
@@ -25,8 +26,8 @@
       "sha256": "9c7c86907bba533de38a4f213e2765c695a7fe125e0250beae91a27b61a5152b"
     },
     "src/brainlayer/job_alerts.py": {
-      "sha": "5882de81",
-      "sha256": "d97ec03134f1cfc4833c0e8336faca4739878510fa9b4884a4516c7c930100d6"
+      "sha": "40f6e6da (atomic opt-in reason refresh)",
+      "sha256": "04e9630b97221b4fe40725804465612496a8cb9552048d018379b209d72971c1"
     },
     "src/brainlayer/health_facts.py": {
       "sha": "#1827 watcher-catchup CodeRabbit round",
@@ -135,7 +136,7 @@
       ],
       "Run": [
         "src/brainlayer/maintenance.py:1678-1717 (_main: report on fail / clean / VACUUM-skipped deferral; deferred is exactly exit 75 since #1641)",
-        "src/brainlayer/job_alerts.py:102-143 (report: set or clear one episode)"
+        "src/brainlayer/job_alerts.py:105-154 (report: set/clear one episode; opt-in text refresh preserves membership)"
       ]
     }
   },
