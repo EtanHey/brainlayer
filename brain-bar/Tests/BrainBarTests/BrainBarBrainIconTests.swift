@@ -24,7 +24,9 @@ import XCTest
         NSApplication.shared.setActivationPolicy(.prohibited)
         let name = "BrainBarBrainIconTests." + UUID().uuidString
         addTeardownBlock { UserDefaults(suiteName: name)?.removePersistentDomain(forName: name) }
-        return UserDefaults(suiteName: name)!
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.set(BrainBarDesign.classic.rawValue, forKey: BrainBarDesign.key)
+        return defaults
     }
     private func stats(active: Bool = false) -> DashboardStats {
         let agent = active ? [0, 1, 0, 2, 1, 0, 1, 0, 2, 1, 0, 1] : Array(repeating: 0, count: 12)

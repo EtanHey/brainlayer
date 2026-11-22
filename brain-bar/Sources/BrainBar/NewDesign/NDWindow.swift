@@ -478,6 +478,7 @@ struct NDActivitySection: View {
     /// R1.2: the chart is 820 wide inside its surface: a 52 pt gutter and a 768 pt plot.
     static let plotWidth: CGFloat = 768
     static let plotHeight: CGFloat = 112
+    static let headerHeight: CGFloat = 22
 
     var body: some View {
         let wave = store.inputs.heroWaves[store.range]
@@ -510,16 +511,19 @@ struct NDActivitySection: View {
     static let canvas = CGSize(width: plotWidth, height: plotHeight + 8)
 
     @ViewBuilder private func chart(wave: NDWave?, known: Bool, cut: CGFloat?) -> some View {
+        let scales = wave.map { Self.scaleLabels($0, minutes: store.range.minutes) }
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 24) {
-                legend(color: ND.saved, value: known ? wave.map { NDFormat.integer($0.savesTotal) } : nil, words: Say.savedByAgents)
-                legend(color: ND.read, value: known ? wave.map { NDFormat.integer($0.readsTotal) } : nil, words: Say.readFromConversations)
+                legend(color: ND.saved, value: known ? wave.map { NDFormat.integer($0.savesTotal) } : nil,
+                       words: Say.savedByAgents, scale: known ? scales?.saves : nil)
+                legend(color: ND.read, value: known ? wave.map { NDFormat.integer($0.readsTotal) } : nil,
+                       words: Say.readFromConversations, scale: known ? scales?.reads : nil)
                 Spacer()
             }
-            .frame(height: 22)
+            .lineLimit(1)
+            .frame(height: Self.headerHeight)
             .accessibilityElement(children: .combine)
             ZStack(alignment: .topLeading) {
-                // R1.4 changes 11 and 12: the halves' maxima moved into the hover readout's first line.
                 // "saved" just above the baseline, "read" just below it, in the series' text colours (H1).
                 Text(Say.saved).font(NDType.captionMedium).foregroundStyle(ND.savedText)
                     .frame(width: Self.gutter, alignment: .leading).position(x: Self.gutter / 2, y: 53)
@@ -632,12 +636,23 @@ struct NDActivitySection: View {
         return min(count - 1, Int(x / (plotWidth / CGFloat(count))))
     }
 
-    private func legend(color: Color, value: String?, words: String) -> some View {
+    static func scaleLabels(_ wave: NDWave, minutes: Int) -> (saves: String?, reads: String?) {
+        let span = max(1, minutes / max(wave.count, 1))
+        return (wave.savesPeak > 0 ? Say.upTo(NDFormat.integer(wave.savesPeak), minutes: span) : nil,
+                wave.readsPeak > 0 ? Say.upTo(NDFormat.integer(wave.readsPeak), minutes: span) : nil)
+    }
+
+    private func legend(color: Color, value: String?, words: String, scale: String?) -> some View {
         // R1.2 change 19: the hour's totals are the calm page's hero numbers, at the title size.
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8).alignmentGuide(.firstTextBaseline) { d in d.height }
-            Text(value ?? NDModel.Number.unknown.value).font(NDType.total).foregroundStyle(ND.t1)  // R1.12 change 3
-            Text(words).font(NDType.body).foregroundStyle(ND.t2)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8).alignmentGuide(.firstTextBaseline) { d in d.height }
+                Text(value ?? NDModel.Number.unknown.value).font(NDType.total).foregroundStyle(ND.t1)  // R1.12 change 3
+                Text(words).font(NDType.body).foregroundStyle(ND.t2)
+            }
+            if let scale {
+                Text(scale).font(NDType.caption).foregroundStyle(ND.t3)
+            }
         }
     }
 }

@@ -139,7 +139,14 @@ enum BrainBarRenderHarness {
     /// Uses the same off-screen AppKit bitmap and Vision inspection as the dashboard harness.
     static func renderSettingsText(_ model: BrainBarSettingsViewModel, section: BrainBarSettingsSection,
                                    directory: URL) throws -> String {
-        let host = NSHostingView(rootView: BrainBarSettingsView(viewModel: model, initialSection: section))
+        try renderSettingsText(view: BrainBarSettingsView(viewModel: model, initialSection: section),
+                               section: section, directory: directory)
+    }
+
+    /// Also accepts the same Settings view with its title blanked for the guard's negative control.
+    static func renderSettingsText<V: View>(view: V, section: BrainBarSettingsSection,
+                                           directory: URL) throws -> String {
+        let host = NSHostingView(rootView: view)
         host.frame = NSRect(x: 0, y: 0, width: 1080, height: 1800)
         host.layoutSubtreeIfNeeded()
         guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
@@ -154,7 +161,20 @@ enum BrainBarRenderHarness {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         try VNImageRequestHandler(cgImage: image).perform([request])
-        let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+        var text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+        // Vision can omit the short title and Design label when segmenting the full tall
+        // page alongside its sidebar. Read those actual pixels separately; retain the full
+        // page's text above so no status/truth assertion loses its input.
+        let scaleX = CGFloat(image.width) / host.bounds.width
+        let scaleY = CGFloat(image.height) / host.bounds.height
+        let headerRect = CGRect(x: 214 * scaleX, y: 0,
+                                width: (host.bounds.width - 214) * scaleX, height: 120 * scaleY)
+        if let header = image.cropping(to: headerRect) {
+            let headerRequest = VNRecognizeTextRequest()
+            headerRequest.recognitionLevel = .accurate
+            try VNImageRequestHandler(cgImage: header).perform([headerRequest])
+            text += "\n" + (headerRequest.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+        }
         guard text.localizedCaseInsensitiveContains(section.title) else { throw Failure("Settings title did not render") }
         return text
     }
