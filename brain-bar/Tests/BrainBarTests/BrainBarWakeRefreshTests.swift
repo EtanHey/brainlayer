@@ -177,6 +177,20 @@ final class BrainBarWakeRefreshTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString + ".log")
     }
 
+    func testWakeTimeoutWithoutVerdictExplainsMissingFreshReading() {
+        let clock = Clock()
+        var deadlines: [@MainActor @Sendable () -> Void] = []
+        let model = model(clock, scheduler: { _, action in deadlines.append(action) })
+        model.applyHealthBadge(.init(badgeOn: false, reason: "", activeCodes: []), alerts: nil)
+        model.systemWillSleep()
+        clock.date.addTimeInterval(600)
+        model.systemDidWake()
+        clock.date.addTimeInterval(361); clock.uptime += 361
+        deadlines.last?()
+        XCTAssertTrue(model.publishedStatus.dashboardStatus.reason?.contains("No health reading from after wake.") == true)
+        XCTAssertNotEqual(model.publishedStatus.dashboardStatus.tone, .green)
+    }
+
     func testLifecycleLogRecordsSleepWakeAndFirstConfirmation() throws {
         let url = logURL()
         defer { try? FileManager.default.removeItem(at: url) }

@@ -563,12 +563,12 @@ final class BrainBarSettingsViewModel: ObservableObject {
                 wakeCatchUp.finished()
                 logWakeOutcome(confirmed: true, at: time, headline: candidate.dashboardStatus.headline)
             } else {
-                if let verdict = candidate.healthVerdict {
-                    let reason = BrainBarStatusIssue(id: "verdict.stale", component: .health, severity: .notice,
-                        text: verdict.fallbackNotice(now: time, sleepHistory: sleepHistory))
-                    candidate = .init(issues: [reason] + candidate.issues, isChecking: false,
-                                      staleHealthVerdict: verdict)
-                }
+                let verdict = candidate.healthVerdict
+                let reason = BrainBarStatusIssue(id: "verdict.stale", component: .health, severity: .notice,
+                    text: verdict?.fallbackNotice(now: time, sleepHistory: sleepHistory)
+                        ?? "No health reading from after wake.")
+                candidate = .init(issues: [reason] + candidate.issues, isChecking: false,
+                                  staleHealthVerdict: verdict)
                 if !wakeCatchUp.isPending(uptime: awakeUptime) {
                     logWakeOutcome(confirmed: false, at: time)
                 }
