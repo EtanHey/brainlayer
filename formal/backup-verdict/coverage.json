@@ -12,8 +12,12 @@
       "sha256": "a10214bfcb11b57aa01041f22408ccabd56fa7ef89e1e233ffc9d4b595b872a6"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "9fd83723 (final R2 phase/expected-time admission)",
-      "sha256": "8d13f718a96c421e8ef72fcc61a8dee6f728f4216fa5741e3050fa413cef416f"
+      "sha": "03d04bf922638d41faeeb2bdd3f90f8c26ddeeda (verified daily retention)",
+      "sha256": "667d2818f551a9ad56201df7a39ab671b58e3298c8fb2aeced92cd62e52906c9"
+    },
+    "src/brainlayer/backup_retention.py": {
+      "sha": "03d04bf922638d41faeeb2bdd3f90f8c26ddeeda (pure receipt-MD5/machine/folder selector)",
+      "sha256": "09e6140bb337a30e8a2521f208e1a3713148b09ca36a8b84ecd4c9ea06022def"
     },
     "src/brainlayer/backup_heavy_gate.py": {
       "sha": "9fd83723 (phase-aware peak/current cause/expected phase time)",
