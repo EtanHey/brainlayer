@@ -21,6 +21,43 @@ import XCTest
         return NDBackupsPage(store: NDStore(fixture: inputs)).lanes(NDModel.make(inputs))
     }
 
+    func testRailShowsRetentionFailureInsteadOfSameTimeSuccessInEitherInputOrder() throws {
+        let attempts = try XCTUnwrap(parse([upload(6), retention, upload(3)]).attempts)
+        for ordered in [attempts, Array(attempts.reversed())] {
+            let lane = try XCTUnwrap(lanes(ordered).first { $0.id == "transcripts" })
+            let shown = NDRail.shown(lane.events, width: 480, past: 144, ahead: 24)
+            XCTAssertEqual(shown.filter { $0.hours == -3 }.map(\.kind), [.fail])
+            XCTAssertEqual(shown.filter { $0.hours == -6 }.map(\.kind), [.ok])
+        }
+    }
+
+    func testNextRingNearNowCannotHideFailureAtSameTimeAsSuccess() {
+        let events: [NDRail.Event] = [.init(hours: 0, kind: .fail), .init(hours: 0, kind: .ok), .init(hours: 0.1, kind: .next)]
+        XCTAssertEqual(NDRail.shown(events, width: 480, past: 144, ahead: 24).map(\.kind), [.next, .fail])
+    }
+
+    func testRetentionWarningBeforePendingRunDoesNotMoveUploadStallClock() throws {
+        let at = ISO8601DateFormatter().string(from: now.addingTimeInterval(-3 * 3600))
+        let pending = "{\"attempted_at\":\"\(at)\",\"status\":\"pending\",\"uploaded\":false,\"verified\":false}"
+        let result = try parse([upload(6), retention, pending])
+        var inputs = BrainBarDesignFixture.inputs(.driveSignedOut)
+        inputs.backupHistory = .read(.init(local: [], drive: [], conversations: result.attempts, integrity: []))
+        let lane = try XCTUnwrap(NDBackupsPage(store: NDStore(fixture: inputs)).lanes(NDModel.make(inputs)).first { $0.id == "transcripts" })
+        XCTAssertEqual(lane.stalledFrom, -6)
+        XCTAssertTrue(lane.events.contains { $0.hours == -3 && $0.kind == .fail })
+        XCTAssertTrue(lane.events.contains { $0.hours == -6 && $0.kind == .ok })
+    }
+
+    func testSuccessfulRetryAdvancesStallClockWhileKeepingCombinedRetryMark() throws {
+        let result = try parse([upload(6, ok: false), upload(3)])
+        var inputs = BrainBarDesignFixture.inputs(.driveSignedOut)
+        inputs.backupHistory = .read(.init(local: [], drive: [], conversations: result.attempts, integrity: []))
+        let lane = try XCTUnwrap(NDBackupsPage(store: NDStore(fixture: inputs)).lanes(NDModel.make(inputs)).first { $0.id == "transcripts" })
+        XCTAssertEqual(lane.stalledFrom, -3)
+        XCTAssertTrue(lane.events.contains { $0.hours == -6 && $0.kind == .retried })
+        XCTAssertFalse(lane.events.contains { $0.hours == -3 && $0.kind == .ok })
+    }
+
     func testRetentionErrorUsesFollowingRunDateWithoutDashingLane() throws {
         let result = try parse([upload(6), retention, upload(3)])
         XCTAssertEqual(result.skipped, 0)

@@ -279,6 +279,8 @@ struct NDBackupsPage: View {
             // R1.2 change 13: a failed attempt followed by a success within the same night (12 h) is one hollow red
             // ring ("failed, then copied on retry"); a failure with no later success that night stays a filled red dot.
             let sorted = (attempts ?? []).sorted { $0.at < $1.at }
+            let lastRunHours = sorted.lazy.filter { !$0.isErrorEvent }
+                .map { $0.at.timeIntervalSince(now) / 3600 }.filter { $0 >= -Self.past }.max()
             var events: [NDRail.Event] = []
             var retryHelp: [String] = []
             var skip: Set<Int> = []
@@ -296,7 +298,6 @@ struct NDBackupsPage: View {
             }
             events = events.filter { $0.hours >= -Self.past }
             let stalled = stalls && (driveDown || (id == "backup_offsite" && row?.strong == true && store.inputs.backupProgress?.isStalled == true))
-            let last = events.map(\.hours).max()
             if let next, !stalled {
                 events.append(.init(hours: next.timeIntervalSince(now) / 3600, kind: .next,
                                     help: Say.nextRunAt(NDR1.hhmm(next, store.inputs.capture))))
@@ -318,7 +319,7 @@ struct NDBackupsPage: View {
                 unconfirmedFrom = events.filter { $0.kind != .next }.map(\.hours).min()
             }
             return Lane(id: id, name: name, events: events, unknown: attempts == nil,
-                        stalledFrom: stalled ? (last ?? -Self.past) : nil, unconfirmedFrom: unconfirmedFrom,
+                        stalledFrom: stalled ? (lastRunHours ?? -Self.past) : nil, unconfirmedFrom: unconfirmedFrom,
                         help: retryHelp.isEmpty ? nil : retryHelp.joined(separator: " "),
                         number: number, strong: row?.strong ?? false, accessibility: spoken + newest)
         }
