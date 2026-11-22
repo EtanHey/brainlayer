@@ -316,8 +316,8 @@ enum NDPipelineLayout {
     /// A full-height candidate at one edge. No narrowing: content is measured at this same width for every candidate.
     static func panelCandidate(_ s: NDStation, edge: Edge, state: NDPipelineState, actions: Set<NDStation>,
                                actionWidths: [NDStation: CGFloat] = [:], height: CGFloat,
-                               allowsInteriorOverlap: Bool = false) -> Panel? {
-        let own = circle(s), width = panelSide(s, hasAction: actions.contains(s)).width
+                               width overrideWidth: CGFloat? = nil, allowsInteriorOverlap: Bool = false) -> Panel? {
+        let own = circle(s), width = overrideWidth ?? panelSide(s, hasAction: actions.contains(s)).width
         let words = labelRects(s, state)
         let anchor = words.reduce(own) { $0.union($1) }
         let horizontal = edge == .top || edge == .bottom
@@ -365,19 +365,19 @@ enum NDPipelineLayout {
     }
 
     static func panel(_ s: NDStation, state: NDPipelineState, actions: Set<NDStation>, actionWidths: [NDStation: CGFloat] = [:],
-                      height: CGFloat) -> Panel {
+                      height: CGFloat, width overrideWidth: CGFloat? = nil) -> Panel {
         let preferred = panelSide(s, hasAction: actions.contains(s)).edge
-        if let panel = panelCandidate(s, edge: preferred, state: state, actions: actions, actionWidths: actionWidths, height: height) {
+        if let panel = panelCandidate(s, edge: preferred, state: state, actions: actions, actionWidths: actionWidths, height: height, width: overrideWidth) {
             return panel
         }
         if topRowPanels.contains(s) {
             for side: Edge in [.trailing, .leading] {
-                if let panel = panelCandidate(s, edge: side, state: state, actions: actions, actionWidths: actionWidths, height: height) {
+                if let panel = panelCandidate(s, edge: side, state: state, actions: actions, actionWidths: actionWidths, height: height, width: overrideWidth) {
                     return panel
                 }
             }
             if let panel = panelCandidate(s, edge: .bottom, state: state, actions: actions, actionWidths: actionWidths,
-                                          height: height, allowsInteriorOverlap: true) {
+                                          height: height, width: overrideWidth, allowsInteriorOverlap: true) {
                 return panel
             }
         }
@@ -385,20 +385,20 @@ enum NDPipelineLayout {
         let ownBottom = labelRects(s, state).reduce(circle(s).maxY) { max($0, $1.maxY) }
         let bottomHeight = max(32, min(height, footerTop - 4 - ownBottom - arrowLength))
         if topRowPanels.contains(s), var panel = panelCandidate(s, edge: .bottom, state: state, actions: actions,
-                                                                actionWidths: actionWidths, height: bottomHeight,
+                                                                actionWidths: actionWidths, height: bottomHeight, width: overrideWidth,
                                                                 allowsInteriorOverlap: true) {
             panel.scrolls = bottomHeight < height
             return panel
         }
         let room = preferred == .top ? circle(s).minY - arrowLength - (keptSafe.maxY + 4) : footerTop - 4 - ownBottom - arrowLength
         let fittedHeight = max(32, min(height, room))
-        if var panel = panelCandidate(s, edge: preferred, state: state, actions: actions, actionWidths: actionWidths, height: fittedHeight) {
+        if var panel = panelCandidate(s, edge: preferred, state: state, actions: actions, actionWidths: actionWidths, height: fittedHeight, width: overrideWidth) {
             panel.scrolls = fittedHeight < height
             return panel
         }
         // Keep the remaining window-constrained body below its own words.
         let tip = CGPoint(x: circle(s).midX, y: ownBottom)
-        let width = panelSide(s, hasAction: actions.contains(s)).width
+        let width = overrideWidth ?? panelSide(s, hasAction: actions.contains(s)).width
         let body = CGRect(x: min(max(tip.x - width / 2, windowInside.minX), windowInside.maxX - width),
                           y: tip.y + arrowLength, width: width, height: bottomHeight)
         return Panel(edge: .bottom, anchor: circle(s), tip: tip, body: body,

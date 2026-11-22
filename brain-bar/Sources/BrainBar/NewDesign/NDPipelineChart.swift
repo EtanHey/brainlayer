@@ -58,6 +58,7 @@ struct NDPipelineChart: View {
     var popover: (NDStation) -> AnyView? = { _ in nil }
     /// Render harness only: one station drawn hovered, its popover drawn where AppKit would open it.
     var previewHover: NDStation? = nil
+    var backupProgress: BrainBarBackupProgress? = nil
     @State private var hovered: NDStation?
     @StateObject private var panels = NDPanelPresenter()
 
@@ -119,7 +120,10 @@ struct NDPipelineChart: View {
     var body: some View {
         let shownHover = previewHover ?? hovered
         ZStack(alignment: .topLeading) {
-            Canvas { ctx, _ in Self.draw(ctx, state: state, memories: memories, hovered: shownHover, keptGrown: keptGrown) }
+            Canvas { ctx, _ in
+                let drawn = Self.drawingState(state, progress: backupProgress)
+                Self.draw(ctx, state: drawn, memories: memories, hovered: shownHover, keptGrown: keptGrown)
+            }
                 .frame(width: NDPipelineLayout.drawWidth, height: NDPipelineLayout.size.height)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
@@ -134,6 +138,15 @@ struct NDPipelineChart: View {
                 }
             }
             ForEach(Self.controls(items)) { control in station(control.station) }
+            if let backupProgress, Self.showsProgress(state, progress: backupProgress) {
+                let frame = Self.progressFrame(state)
+                BrainBarBackupProgressView(progress: backupProgress, compact: true, barOnly: state.status[.drive]?.severity != nil)
+                    .frame(width: frame.width)
+                    .background(ND.card)
+                    .frame(height: 0, alignment: .top)
+                    .offset(x: frame.minX, y: frame.minY)
+                    .allowsHitTesting(false)
+            }
             // One pointer target for the whole column; provider names remain available to VoiceOver.
             ForEach(NDPipelineLayout.agentRows, id: \.0.rawValue) { family, _ in
                 let c = NDPipelineLayout.iconCentre(family)
@@ -154,14 +167,41 @@ struct NDPipelineChart: View {
         .accessibilityLabel(Say.pipeline)
     }
 
+    static func showsProgress(_ state: NDPipelineState, progress: BrainBarBackupProgress?) -> Bool {
+        progress != nil
+    }
+
+    /// Gap 22/23: leave 5 pt below the station's measured name/status boxes as the Overview layout moves.
+    static func progressFrame(_ state: NDPipelineState) -> CGRect {
+        let p = NDPipelineLayout.point(.drive)
+        if state.status[.drive]?.severity != nil {
+            let wordsBottom = NDPipelineLayout.labelRects(.drive, state).map(\.maxY).max() ?? p.y
+            return CGRect(x: p.x - 48, y: wordsBottom + 5, width: 96, height: 3)
+        }
+        return CGRect(x: p.x - 76, y: p.y + 37, width: 152, height: 33)
+    }
+
+    static func drawingState(_ state: NDPipelineState, progress: BrainBarBackupProgress?) -> NDPipelineState {
+        var drawn = state
+        if progress != nil && state.status[.drive]?.severity == nil { drawn.status[.drive] = nil }
+        return drawn
+    }
+
     /// The station's panel at its content's measured height.
     func panel(_ s: NDStation, content: AnyView) -> NDPipelineLayout.Panel {
         let actions: Set<NDStation> = []  // R1.5: no action sits on the chart, so none for a panel to clear
         let widths: [NDStation: CGFloat] = [:]
-        // The width first (a side panel narrows to stay inside the window), then the height the content needs at it.
+        // Candidate edges share a width; measure the content at that width before placement.
         let width = NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: 100).body.width
         let height = NDStationPopover.measure(content, width: width).height
-        return NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: height)
+        let layout = NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: height)
+        if s == .drive, layout.scrolls || layout.outer.minY < NDPipelineLayout.activityLabelsBottom {
+            // Gap 22/23: a live-upload fault has more words. Use the room across the top lane, clear of Activity.
+            let wide: CGFloat = 600
+            let fittedHeight = NDStationPopover.measure(content, width: wide).height
+            return NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: fittedHeight, width: wide)
+        }
+        return layout
     }
 
     static func stationTarget(_ s: NDStation, state: NDPipelineState) -> (frame: CGRect, shape: NDStationHitShape) {
@@ -829,7 +869,8 @@ struct NDStationPopover: View {
 
     var body: some View {
         NDStationPanelBody(model: Self.model(station, item: store.r1.stationItems[station], store.inputs, store.model, store.r1.pipeline),
-                           waiting: NDDriveWaiting.shows(store.inputs, for: store.r1.stationItems[station]?.action)) { store.perform($0) }
+                           waiting: NDDriveWaiting.shows(store.inputs, for: store.r1.stationItems[station]?.action),
+                           compactRows: station == .drive && store.inputs.backupProgress != nil) { store.perform($0) }
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 

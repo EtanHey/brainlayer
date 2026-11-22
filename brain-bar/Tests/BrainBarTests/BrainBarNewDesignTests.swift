@@ -628,7 +628,8 @@ final class BrainBarNewDesignTruthTests: XCTestCase {
         XCTAssertEqual(BrainBarDesignFixture.Name.allCases.map(\.rawValue),
                        ["calm", "agent-not-read", "drive-signed-out", "saves-stuck", "meaning-behind", "nightly-failing",
                         "not-confirmed", "two-faults", "reconnect-waiting", "backups-failed-upload", "backup-late",
-                        "lag-behind", "lag-stalled", "search-failing"])  // R1.11, R1.13: the lag's states and agent-only
+                        "lag-behind", "lag-stalled", "search-failing", "upload-progress", "upload-no-total", "upload-stalled",
+                        "verifying", "upload-snapshot-red", "upload-drive-signed-out", "upload-drive-stalled"])
     }
 }
 
@@ -1576,7 +1577,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                     && panel.edge == .bottom && panel.clearanceException == .topRowBelowBothSidesBlocked
                 if topRowBelowBothSidesBlocked {
                     for side: Edge in [.top, .trailing, .leading] {
-                        XCTAssertNil(L.panelCandidate(station, edge: side, state: r1.pipeline, actions: [], height: panel.body.height), where_)
+                        XCTAssertNil(L.panelCandidate(station, edge: side, state: r1.pipeline, actions: [], height: panel.body.height, width: panel.body.width), where_)
                     }
                 }
                 switch panel.edge {
@@ -3304,7 +3305,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             let agentsBelowBothSidesBlocked = panel.edge == .bottom && panel.clearanceException == .topRowBelowBothSidesBlocked
             if agentsBelowBothSidesBlocked {
                 for side: Edge in [.top, .trailing, .leading] {
-                    XCTAssertNil(L.panelCandidate(.agents, edge: side, state: store.r1.pipeline, actions: [], height: panel.body.height))
+                    XCTAssertNil(L.panelCandidate(.agents, edge: side, state: store.r1.pipeline, actions: [], height: panel.body.height, width: panel.body.width))
                 }
             }
             for station in NDStation.allCases {

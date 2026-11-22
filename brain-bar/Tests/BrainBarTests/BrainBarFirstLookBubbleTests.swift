@@ -84,7 +84,7 @@ import XCTest
                     XCTAssertEqual(panel.edge, .bottom, context)
                     for side: Edge in [.top, .trailing, .leading] {
                         XCTAssertNil(NDPipelineLayout.panelCandidate(station, edge: side, state: store.r1.pipeline,
-                                                                     actions: [], height: measured), context)
+                                                                     actions: [], height: measured, width: panel.body.width), context)
                     }
                 }
                 if name == .calm { print("bubble \(station): edge=\(panel.edge) body=\(panel.body) tip=\(panel.tip) measured=\(measured) exception=\(String(describing: panel.clearanceException))") }
