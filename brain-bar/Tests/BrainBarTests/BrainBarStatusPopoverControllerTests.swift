@@ -43,7 +43,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
 
     func testStatusRowTooltipPreservesTheFullReasonAndClearsOnRecovery() throws {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: panelController, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { controller.stop() }
         let menu = controller.contextMenuForTesting
@@ -76,7 +76,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
 
     func testControllerWiresVariableLengthStatusItemToTheWindow() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
             dashboardPanelController: panelController,
             statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
@@ -91,7 +91,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
 
     func testStatusItemContextMenuContainsNoLaunchModeSwitchingChoices() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
             dashboardPanelController: windowController,
             statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
@@ -107,9 +107,9 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         XCTAssertTrue(itemTitles.contains("Quit BrainBar"))
     }
 
-    func testStatusItemOwnsOneActionableSettingsMenu() {
+    func testStatusItemOwnsOneActionableSettingsMenu() throws {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
             dashboardPanelController: windowController,
             statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
@@ -123,7 +123,10 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         XCTAssertTrue(controller.statusItemForTesting.menu === menu, "every click opens this one menu (#963)")
         XCTAssertFalse(menu === NSApp.mainMenu)
         XCTAssertEqual(actionableItems.filter { $0.title.hasPrefix("Settings") }.count, 1)
-        XCTAssertEqual(actionableItems.map(\.title), ["Open Dashboard", "Settings…", "Restart BrainBar", "Quit BrainBar"])
+        // Gap 26, lead ruling 21 Nov 2026: assert the one Diagnostics insertion, then retain main's expectation.
+        let mainItems = try brainBarItemsWithoutApprovedDiagnostics(menu)
+        XCTAssertEqual(mainItems.filter { !$0.isSeparatorItem && !$0.isHidden }.dropFirst().map(\.title),
+                       ["Open Dashboard", "Settings…", "Restart BrainBar", "Quit BrainBar"])
         for item in actionableItems {
             XCTAssertNotNil(item.action, "\(item.title) must have an action")
             XCTAssertTrue(item.target === controller, "\(item.title) must target the status controller")
@@ -135,7 +138,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
 
     func testContextMenuOpenDashboardUsesTheStatusPopoverController() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
             dashboardPanelController: windowController,
             statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
@@ -191,7 +194,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
 
     func testControllerStatusItemBelongsToTheInMemoryHostAndStopsOnThatHost() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let host = TestStatusItemHost()
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: panelController, statusBar: host, menuDefaults: brainBarLegacyMenuDefaults())
         defer { controller.stop() }
@@ -215,7 +218,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         weak var releasedButton: NSButton?
         autoreleasepool {
             let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-            let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+            let panelController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
             let host = TestStatusItemHost()
             let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: panelController, statusBar: host, menuDefaults: brainBarLegacyMenuDefaults())
             releasedController = controller
@@ -251,7 +254,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
             snapshotDirectory: root, archiveDirectory: root)
         let workspace = D1Workspace()
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
             dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         controller.setLogPathsForTesting(paths)
@@ -322,7 +325,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         runtime.jobsModel = BrainBarSettingsViewModel(workspace: workspace, store: store,
             initialLaunchdStates: [.backupDaily: .failed(reason)], refreshStatusOnLoad: false, now: { clock })
-        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
             dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { controller.stop() }
@@ -375,7 +378,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("fixture.env"))
         let workspace = D1Workspace()
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
             dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { controller.stop() }

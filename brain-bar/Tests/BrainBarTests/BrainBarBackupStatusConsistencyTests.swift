@@ -344,7 +344,7 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             runtime.jobsModel = model
             runtime.driveAuth.setForPreview(status: .init(state: auth, reason: nil, expiresAt: now.addingTimeInterval(48 * 3600)))
             let workspace = BrainBarRecordingWorkspace()
-            let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+            let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
             let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
                 dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
             defer { controller.stop() }
@@ -488,7 +488,7 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             runtime.jobsModel = model
             runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: now.addingTimeInterval(5 * 86400)))
             let workspace = BrainBarRecordingWorkspace()
-            let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+            let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
             let menu = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
                 dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
             defer { menu.stop() }

@@ -732,8 +732,15 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     /// The one Config file row (E5): the file this model reads and saves.
     var configFileURL: URL { store.configURL }
+    @Published private(set) var settingsBackupLine: String?
+    func refreshSettingsFileSummary() {
+        settingsBackupLine = BrainBarSettingsExplanation.backupLine(for: store.configURL)
+    }
     func copyConfigFilePath() { workspace.copy(store.configURL.path) }
-    func revealConfigFile() { workspace.reveal(store.configURL) }
+    func revealConfigFile() {
+        refreshSettingsFileSummary()
+        workspace.reveal(store.configURL)
+    }
     func copyText(_ text: String) { workspace.copy(text) }
 
     func copyTechnicalDetail(_ detail: BrainBarBackupChecks.Detail) {
@@ -764,6 +771,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 
     func refreshAllStatus() {
+        refreshSettingsFileSummary()
         _ = reloadConfigFromDisk()
         refreshLaunchdStatus()
         refreshObservabilityStatus()
@@ -1251,6 +1259,7 @@ struct BrainBarSettingsView: View {
         .environment(\.colorScheme, .dark)
         .task { await viewModel.monitorWatcherHealth() }
         .onChange(of: activationRevision, initial: true) { _, _ in
+            viewModel.refreshSettingsFileSummary()
             _ = viewModel.reloadConfigFromDisk(preservingDrafts: true)
             viewModel.refreshLaunchdStatus()
             viewModel.refreshObservabilityStatus()
@@ -1347,6 +1356,7 @@ struct BrainBarSettingsView: View {
         switch navigation.selected {
         case .jobs:
             VStack(alignment: .leading, spacing: 16) {
+                designRow
                 BrainBarBackupFailureLogs(model: viewModel)
                 jobsGrid
             }
@@ -1372,15 +1382,6 @@ struct BrainBarSettingsView: View {
         case .advanced:
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Text("Design").font(.system(size: 12, weight: .semibold))
-                    Spacer()
-                    Picker("Design", selection: $design) {
-                        ForEach(BrainBarDesign.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
-                    }
-                    .labelsHidden().pickerStyle(.segmented).fixedSize()
-                }.padding(.vertical, 7)
-                Divider()
-                HStack {
                     Text("Use the new menu").font(.system(size: 12, weight: .semibold))
                     Spacer()
                     Toggle("Use the new menu", isOn: $newMenuEnabled)
@@ -1389,6 +1390,10 @@ struct BrainBarSettingsView: View {
                 }.padding(.vertical, 7)
                 Divider()
                 sectionHeading("Embedding model")
+                ForEach(BrainBarSettingsExplanation.model(BrainBarEmbeddingModel.configuredName, namesModel: false), id: \.self) { line in
+                    Text(line).font(.system(size: 11)).foregroundStyle(Color.brainBarTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 ForEach(viewModel.modelResidencyPresentation.rows) { row in
                     settingsTruthRow(label: row.label, value: row.value)
                 }
@@ -1400,6 +1405,17 @@ struct BrainBarSettingsView: View {
                 configFileRow
             }
         }
+    }
+
+    private var designRow: some View {
+        HStack {
+            Text("Design").font(.system(size: 12, weight: .semibold))
+            Spacer()
+            Picker("Design", selection: $design) {
+                ForEach(BrainBarDesign.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+            }
+            .labelsHidden().pickerStyle(.segmented).fixedSize()
+        }.padding(.vertical, 7)
     }
 
     /// E5: the one place the config file appears, with what it is and Copy / Reveal.
@@ -1421,6 +1437,10 @@ struct BrainBarSettingsView: View {
                 Button("Reveal in Finder") { viewModel.revealConfigFile() }
             }
             .controlSize(.small)
+            if let line = viewModel.settingsBackupLine {
+                Text(line).font(.system(size: 11)).foregroundStyle(Color.brainBarTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("brainbar.settings.config-file")
