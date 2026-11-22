@@ -152,6 +152,7 @@ final class BrainBarWakeRefreshTests: XCTestCase {
         deadlines.last?()
         XCTAssertNil(model.publishedStatus.healthVerdict)
         XCTAssertNotEqual(model.publishedStatus.verdict.dot, .green)
+        XCTAssertTrue(model.publishedStatus.dashboardStatus.reason?.contains("Health check stale") == true)
     }
 
     func testFreshPostWakeVerdictEndsCheckingImmediately() {
