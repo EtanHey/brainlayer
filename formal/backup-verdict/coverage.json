@@ -4,18 +4,19 @@
   "backup_gate_r1_note": "2026-11-22: gate source is now COVERED and pinned. First deferral, rather than only expiry, maps to the existing DotTable.Run failed action (durable job alert), and only an admitted successful backup maps to ok/clear. Gate waiting/termination adds no snapshot or verification facts. Useful-work reservation, elapsed child budget and probe-before-lock affect when work starts, not any receipt/verdict transition. Both source sha fields point to the committed R1 implementation; TLC remains the CI gate as ruled by the reviewer.",
   "backup_gate_n5_note": "2026-11-22 lead ruling: the six-hour pressure window is soft; after it, the job ignores swap/load but still acquires fleet custody. Calendar admission deadlines remain hard. The existing Run failed action sets/retains the first-deferral alert, and Run ok clears it after actual success. Forcing admission adds no receipt/verification fact, so no model transition change; real deterministic gate tests prove the threshold and lock behavior. Gate pin now points to committed N5 implementation b6048ecb.",
   "backup_host_floor_note": "2026-11-22 lead/orc floor ruling: gate checks the existing non-reclaiming peak plus host reserve against raw free_now_bytes before/under custody, including past the soft pressure window. Disk refusal maps to existing Run failed. job_alerts.report gains opt-in replace_reason: an already-present alert stays present with refreshed text and no repeated notification; the model tracks alert membership, so this is a stutter, not recovery. Default set/clear and success-only recovery unchanged. Both gate and job-alert source pins refer to committed implementation 40f6e6da; report line range re-read at that source. No model transition change; floor refusal/override/recovery tests use actual gate/alert code with synthetic metadata only.",
+  "backup_gate_r2_note": "2026-11-22 final R2: phase-aware peak (snapshot, all, and metadata-selected upload verification), current-cause reason refresh, and phase-specific expected-time admission. No allocation/verification/receipt writer changed. Time/disk refusal, including an initially exhausted snapshot deadline, maps to existing Run failed; cause refresh preserves alert membership. Admission timing changes when work starts, never snapshot or verified facts. Source pins reference committed R2 implementation 9fd83723; lead verifies this final fix without a third review round. TLC remains CI proof.",
   "sources": {
     "src/brainlayer/health_verdict.py": {
       "sha": "#1827 watcher-catchup round 1",
       "sha256": "a10214bfcb11b57aa01041f22408ccabd56fa7ef89e1e233ffc9d4b595b872a6"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "d1d77bd4 (Claude R1 backup admission corrections)",
-      "sha256": "cd14ee8b4efffb57422fc7b9ab482ac67be127f16841b1a487e78188b2ce3a5e"
+      "sha": "9fd83723 (final R2 phase/expected-time admission)",
+      "sha256": "8d13f718a96c421e8ef72fcc61a8dee6f728f4216fa5741e3050fa413cef416f"
     },
     "src/brainlayer/backup_heavy_gate.py": {
-      "sha": "40f6e6da (peak plus host reserve)",
-      "sha256": "f5f093ad5722a67ad7fc9b08c6f59330794e3a91c671048fb60a5a9127675ad8"
+      "sha": "9fd83723 (phase-aware peak/current cause/expected phase time)",
+      "sha256": "d39464055c56e2e35f3dd3a82ce1a8fe240d6921aa470a3d98a77c8a345d7113"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "5882de81",
