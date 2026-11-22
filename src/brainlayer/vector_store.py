@@ -45,7 +45,7 @@ from ._helpers import (
 from ._helpers import (
     source_aware_min_chars as source_aware_min_chars,
 )
-from .agent_provenance import normalize_source_class
+from .agent_provenance import is_hidden_source_class, normalize_source_class
 from .chunk_origin import (
     CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,
     CHUNK_ORIGIN_UNKNOWN,
@@ -1026,6 +1026,11 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._has_source_class = "source_class" in existing_cols
         self._has_superseded_by = True
         ensure_dedupe_schema(self.conn)
+        # T3 PR 3.1 side tables. Fresh, bootstrapped and offline-migrated databases get them here;
+        # the live database gets them only from the reviewed `brainlayer.t3_thread_tables` migration.
+        from .t3_thread_tables import ensure_t3_thread_tables
+
+        ensure_t3_thread_tables(cursor)
 
         migration_name = "2026_05_16_fm6_chunk_origin"
         migration_done = cursor.execute(
@@ -2715,6 +2720,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 created_at=created_at,
                                 project=chunk.get("project"),
                                 content_type=chunk.get("content_type"),
+                                hidden=is_hidden_source_class(chunk.get("source_class")),
+                                exclude_sources=("t3",),
                             )
                         if duplicate is not None:
                             duplicate_row_exists = cursor.execute(
@@ -2733,6 +2740,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 mechanism=duplicate.mechanism,
                                 hamming_distance_value=duplicate.hamming_distance,
                                 archive_existing_duplicate=duplicate_row_exists is not None,
+                                preserve_existing_alias=True,
                             )
                             # The merge owns invalidation by embedding_input. An incoming
                             # vector describes the original, never a changed merged body.

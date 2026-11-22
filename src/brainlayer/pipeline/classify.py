@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from ..queued_messages import queued_user_text
 from ..system_prompt_guard import looks_like_system_prompt
 
 # =============================================================================
@@ -366,6 +367,40 @@ def transcript_author_model(raw: Any) -> str | None:
     return model
 
 
+def classify_thinking(entry: dict) -> ClassifiedContent | None:
+    """Classify an assistant entry's thinking (reasoning) blocks, or return None.
+
+    Kept apart from ``classify_content`` so the text path is unchanged. The result is
+    ordinary assistant text, marked ``thinking`` in its metadata so the writer can give
+    it the hidden ``agent-thinking`` class, and it meets the same filler and length
+    gates as assistant text. Redacted or signature-only blocks carry no plaintext and
+    are skipped.
+    """
+    if entry.get("type") != "assistant":
+        return None
+    message = entry.get("message")
+    blocks = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(blocks, list):
+        return None
+    parts = [
+        block["thinking"]
+        for block in blocks
+        if isinstance(block, dict)
+        and block.get("type") == "thinking"
+        and isinstance(block.get("thinking"), str)
+        and block["thinking"].strip()
+    ]
+    text = "\n\n".join(parts)
+    if not text or not _should_keep_assistant_text(text):
+        return None
+    return ClassifiedContent(
+        content=text,
+        content_type=ContentType.ASSISTANT_TEXT,
+        value=ContentValue.MEDIUM,
+        metadata={**_extract_entry_metadata(entry), "thinking": True},
+    )
+
+
 def classify_content(entry: dict) -> ClassifiedContent | None:
     """
     Classify a JSONL entry by content type and value.
@@ -380,8 +415,21 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
     """
     entry_type = entry.get("type", "")
 
+    if entry_type == "queue-operation":
+        text = queued_user_text(entry)
+        if text is None:
+            return None
+        # Background completion envelopes are machine events, not a person's
+        # words. A nonempty result still follows the existing assistant path.
+        if text.lstrip().startswith("<task-notification") and _extract_task_notification_result(text) is None:
+            return None
+        classified = classify_content({**entry, "type": "user", "message": {"role": "user", "content": text}})
+        if classified is not None:
+            classified.metadata.update(entry_type="queue-operation", queued=True)
+        return classified
+
     # Skip noise types entirely
-    if entry_type in ("progress", "queue-operation"):
+    if entry_type == "progress":
         return None
 
     # Extract conversation context metadata (session_id, timestamp, sender)

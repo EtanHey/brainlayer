@@ -217,7 +217,8 @@ import XCTest
                 }
             }
         }
-        XCTAssertEqual(seen, ["ok", "busy", "wait", "notice", "marked", "alert-circle", "checkmark", "ellipsis"])
+        // L53: no presentation marks a count headline any more, so the headline disc (`marked`) is drawn by no case.
+        XCTAssertEqual(seen, ["ok", "busy", "wait", "notice", "alert-circle", "checkmark", "ellipsis"])
     }
 
     /// Codex round 2 (R2-B2): the line-breaking transform keeps every character; it only turns a space into U+00A0.

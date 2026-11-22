@@ -44,6 +44,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+#if DEBUG && BRAINBAR_UI
+        // Capture mode (stage 2): the real status item, dropdown and window, driven by one invented state. It starts no
+        // server, sampler, watcher, hotkey or job, reads no file and writes none, and skips the one-instance check so it
+        // can be captured beside an installed BrainBar.
+        if let fixture = BrainBarDesignFixture.requested {
+            launchDesignFixture(fixture)
+            return
+        }
+#endif
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
@@ -152,6 +161,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dashboardPanel?.prepareForClose()
         return .terminateNow
     }
+
+#if DEBUG && BRAINBAR_UI
+    private func launchDesignFixture(_ fixture: BrainBarDesignFixture.Name) {
+        NSLog("[BrainBar] Design capture fixture: %@ (no services started)", fixture.rawValue)
+        NSApp.setActivationPolicy(.accessory)
+        let (dashboardPanel, status) = BrainBarDesignFixture.makeCaptureSurfaces(
+            runtime: runtime, activationPolicy: windowActivationPolicy, statusBar: SystemBrainBarStatusItemHost())
+        self.dashboardPanel = dashboardPanel
+        statusPopoverController = status
+        // Opens the fixture's page as before, or what BRAINBAR_DESIGN_OPEN / _TAB / _RANGE / _SCRIPT / _HOLD ask for.
+        NDCaptureDriver.start(status: status, panel: dashboardPanel, fixturePage: fixture.page)
+    }
+#endif
 
     func applicationWillTerminate(_ notification: Notification) {
         faultNotifications?.stopObserving()
@@ -342,8 +364,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct BrainBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    /// The app's one SwiftUI scene owns no window. It used to be `Settings { EmptyView() }`; under the App lifecycle
+    /// `NSApp.delegate` is SwiftUI's own app delegate (ours is only its adaptor), which itself answers AppKit's
+    /// `applicationShouldOpenUntitledFile:` / `applicationOpenUntitledFile:` (asked at launch for the open-application
+    /// event LaunchServices sends, e.g. `open`, Finder, Spotlight) and `showSettingsWindow:` by presenting a scene's
+    /// window; with Settings the only scene, that was an empty "<app> Settings" window. A menu-bar extra that is never
+    /// inserted has no window and no status item, so no route can present an empty window. Settings is reached only
+    /// through the commands below and the status menu, which open the active design's own Settings surface.
     var body: some Scene {
-        Settings {
+        MenuBarExtra("BrainBar", isInserted: .constant(false)) {
             EmptyView()
         }
         .commands {

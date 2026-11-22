@@ -210,6 +210,35 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         XCTAssertEqual(threeHour.enrichmentTotal, 0, "Retired metadata is not queried for UI windows")
     }
 
+    /// Review B2, on the real path the new design reads: the hero's three ranges (60 buckets each) and the dropdown's hour
+    /// (24 buckets), read at one `now`, nest: 1 h <= 3 h <= 24 h for saves by agents and for conversations read, and the
+    /// dropdown's hour holds exactly what the 1 h hero holds.
+    func testHeroRangeTotalsNestOnTheRealPath() throws {
+        let now = Date(timeIntervalSince1970: 1_784_031_600)
+        let sources = ["mcp", "manual", "digest", "brain_store", "realtime_watcher"]
+        // Deterministic ages spread over 30 h, denser in the last hour.
+        for k in 0..<240 {
+            let minutes = k < 60 ? Double(k) * 0.9 + 0.3 : Double(k * k % 1_800) + 0.5
+            let at = now.addingTimeInterval(-minutes * 60)
+            let source = sources[k % sources.count]
+            try insertWrite(id: "nest-\(k)", source: source, createdAt: at)
+            if source == "realtime_watcher" { try insertWatcherLiveness(chunkID: "nest-\(k)", ingestedAt: at) }
+        }
+        let hour = try db.pipelineWindowBuckets(activityWindowMinutes: 60, bucketCount: 60, now: now)
+        let three = try db.pipelineWindowBuckets(activityWindowMinutes: 180, bucketCount: 60, now: now)
+        let day = try db.pipelineWindowBuckets(activityWindowMinutes: 1_440, bucketCount: 60, now: now)
+        let menu = try db.pipelineWindowBuckets(activityWindowMinutes: 60, bucketCount: 24, now: now)
+        XCTAssertGreaterThan(hour.agentTotal, 0)
+        XCTAssertGreaterThan(hour.watcherTotal, 0)
+        XCTAssertLessThanOrEqual(hour.agentTotal, three.agentTotal)
+        XCTAssertLessThanOrEqual(three.agentTotal, day.agentTotal)
+        XCTAssertLessThan(hour.agentTotal, day.agentTotal, "the data reaches past the hour")
+        XCTAssertLessThanOrEqual(hour.watcherTotal, three.watcherTotal)
+        XCTAssertLessThanOrEqual(three.watcherTotal, day.watcherTotal)
+        XCTAssertEqual(menu.agentTotal, hour.agentTotal)
+        XCTAssertEqual(menu.watcherTotal, hour.watcherTotal)
+    }
+
     func testEmptyWindowAndZeroBucketsAreSafe() throws {
         let now = Date()
         let zeroBuckets = try db.pipelineWindowBuckets(activityWindowMinutes: 1_440, bucketCount: 0, now: now)

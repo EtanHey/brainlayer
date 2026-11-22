@@ -14,6 +14,9 @@ compress = _compress
 
 @pytest.mark.parametrize("budget,confirm_first", [(40, True), (40, False), (100000, False)])
 def test_stale_confirmation_keeps_proven_checkpoint(compress, tmp_path, monkeypatch, budget, confirm_first):
+    # Only explicit flushes may confirm batches in this interleaving: a slow poll
+    # must not trigger the indexer's default 100 ms timed flush.
+    monkeypatch.setattr("brainlayer.watcher.time.monotonic", lambda: 0.0)
     head = rollout().splitlines(keepends=True)[0]
     data = head + b"".join(rollout(f"record {n} long enough " * 10).splitlines(keepends=True)[1] for n in range(8))
     arch = compress("strand.jsonl.zst", data)

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 /// Installed by the UI shell only. Render harnesses keep their own activation policy.
 @MainActor
@@ -214,6 +215,26 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     private let driveAuth: BrainBarDriveAuthModel
     private var hasPlacedWindow = false
     private var isClosingWindow = false
+#if BRAINBAR_UI
+    /// L6: the content shown follows `BrainBarDesign`, read live. Classic keeps main's hosting controller untouched;
+    /// the new design swaps in its own and swaps back.
+    private let classicContent: NSViewController
+    private var newContent: NSHostingController<NDWindowRoot>?
+    private(set) var shownDesign: BrainBarDesign = .classic
+    private let runtimeForDesign: BrainBarRuntime
+    private let workspaceForDesign: any BrainBarWorkspaceActing
+    nonisolated(unsafe) private var designObserver: NSObjectProtocol?
+    var designDefaults: UserDefaults = .standard
+    private var hasNewDesignStore = false
+    private lazy var newDesignToolbar = NDToolbar(store: newDesignStore)
+    lazy var newDesignStore: NDStore = {
+        hasNewDesignStore = true
+        let store = NDStore.shared(for: runtimeForDesign, workspace: workspaceForDesign)
+        store.onOpenWindow = { [weak self] page in self?.showPage(page) }
+        store.onOpenSettings = { [weak self] in self?.showSettings() }
+        return store
+    }()
+#endif
     /// Only used to place the very first window below the menu-bar icon.
     weak var statusItemButton: NSView?
 
@@ -234,6 +255,11 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         hostingController.view.autoresizingMask = [.width, .height]
 
         contentViewControllerForTesting = hostingController
+#if BRAINBAR_UI
+        classicContent = hostingController
+        runtimeForDesign = runtime
+        workspaceForDesign = workspace
+#endif
         self.driveAuth = runtime.driveAuth
         self.frameStore = frameStore
         self.screenFrames = screenFrames
@@ -250,7 +276,205 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         BrainBarSettingsActions.installOpenHandler { [weak self] in
             self?.showSettings()
         }
+#if BRAINBAR_UI
+        applyDesign()
+        designObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil,
+                                                                queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyDesign() }
+        }
+#endif
     }
+
+#if BRAINBAR_UI
+    /// Swaps the window's content to the design `BrainBarDesign` names now. No animation: the switch is a setting.
+    func applyDesign() {
+        let design = BrainBarDesign.current(in: designDefaults)
+        guard design != shownDesign else { return }
+        shownDesign = design
+        let frame = window.frame
+        switch design {
+        case .classic:
+            window.contentViewController = classicContent
+            // Main's chrome: no toolbar, the default style.
+            window.toolbar = nil
+            window.toolbarStyle = .automatic
+            window.titlebarSeparatorStyle = .automatic
+            window.minSize = Self.minSize
+            window.contentMinSize = Self.minSize
+            window.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            pageObserver = nil
+            pageFitObserver = nil
+            fittedFrameSize = nil
+            // F04 and N02: back on Classic, the new design's window work stops and its Settings window closes.
+            if hasNewDesignStore { newDesignStore.setWindowActive(false) }
+            NDSettingsWindowController.closeIfOpen()
+        case .new:
+            let content = newContent ?? {
+                let hosting = NSHostingController(rootView: NDWindowRoot(store: newDesignStore))
+                hosting.sizingOptions = []
+                return hosting
+            }()
+            newContent = content
+            window.contentViewController = content
+            // One unified 52 pt row: traffic lights, the centred pages control and the count (review fix 1). The toolbar
+            // first, then the minimums. With the unified toolbar AppKit holds the frame minimum up to 20 pt above
+            // 560 pt (measured 780 × 580 in a headless test); the page scrolls under the toolbar below its content.
+            window.toolbar = newDesignToolbar.toolbar
+            window.toolbarStyle = .unified
+            window.titlebarSeparatorStyle = .none  // the root draws the one hairline at 52 pt
+            // L17: the window takes each page's own height, width 900, and snaps on a tab switch with the top edge fixed.
+            fitPage(newDesignStore.page)
+            if pageObserver == nil {
+                // D1: after the page is stored (didSet), never from `$page` (willSet).
+                newDesignStore.pageDidChange = { [weak self] page in self?.fitPage(page) }
+                pageObserver = AnyCancellable { [weak store = newDesignStore] in
+                    MainActor.assumeIsolated { store?.pageDidChange = nil }
+                }
+                // L57: inputs can change Jobs and Backups without changing the headline or model.
+                // Coalesce willSet publications; measure only after the complete store update.
+                pageFitObserver = NDPageFitObserver(store: newDesignStore) { [weak self] in
+                    guard let self, self.shownDesign == .new else { return }
+                    self.fitPage(self.newDesignStore.page)
+                }
+            }
+            if window.isVisible { newDesignStore.setWindowActive(true) }
+            return
+        }
+        // Keep the user's frame across the swap, never below the design's minimum.
+        let minimum = window.frameRect(forContentRect: NSRect(origin: .zero, size: currentMinSize)).size
+        window.setFrame(NSRect(x: frame.minX, y: frame.maxY - max(frame.height, minimum.height),
+                               width: max(frame.width, minimum.width), height: max(frame.height, minimum.height)), display: false)
+    }
+
+    private var currentMinSize: NSSize { shownDesign == .new ? NDGrid.windowMinimum : Self.minSize }
+
+    nonisolated(unsafe) private var pageObserver: AnyCancellable?
+    private var pageFitObserver: NDPageFitObserver?
+    /// The frame `fitPage` last chose; `windowWillResize` returns it in the new design.
+    private(set) var fittedFrameSize: NSSize?
+    private var pageResizeInFlight = false
+    private var pageFitPending = false
+
+    var visibleFrameOverride: NSRect?
+    private var fitVisibleFrame: NSRect? {
+        if let visibleFrameOverride { return visibleFrameOverride }
+        let frame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        guard let visibleHeightOverride else { return frame }
+        return NSRect(x: frame?.minX ?? 0, y: frame?.minY ?? 0,
+                      width: frame?.width ?? NDGrid.windowWidth, height: visibleHeightOverride)
+    }
+
+    var fitTitleBarHeight: CGFloat {
+        window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: NDGrid.windowWidth, height: 100)).height - 100
+    }
+
+    /// Tests set the screen's visible height, so the L57 cap never depends on the machine running them.
+    var visibleHeightOverride: CGFloat?
+    /// The visible height the L57 cap is computed from: the window's screen, else the main screen.
+    var fitScreenHeight: CGFloat? {
+        fitVisibleFrame?.height
+    }
+
+    /// The page's size, exactly (min = max), keeping the window's top-left corner. R2 item 3: a shown window's height
+    /// change animates over 200 ms ease-out, and the page is never drawn clipped: a taller page appears after the window
+    /// has grown, a shorter one before it shrinks; under Reduce Motion (or hidden) both change at once.
+    /// R1.10.2 and R1.10.3: the new page is laid out now, before the height moves, by construction: the page is handed to
+    /// the hosting controller as its root view's own value (applied on the layout that follows, with no wait for the store's
+    /// change to be observed), then the content is laid out. Before, the swap only marked the store, and SwiftUI applied it
+    /// on a later pass that a displayless machine could defer past the whole resize.
+    private func layOutShownPage(_ page: NDPage) {
+        newContent?.rootView = NDWindowRoot(store: newDesignStore, page: page)
+        guard let content = window.contentView else { return }
+        content.needsLayout = true
+        content.layoutSubtreeIfNeeded()
+    }
+
+    /// Tests only: run a page switch as a visible window would (the window itself is never shown).
+    var animatesPageSwitchForTesting: Bool?
+    /// Tests only: the Reduce Motion setting a page switch reads (a CI runner's session has it on).
+    var reduceMotionForTesting: Bool?
+    /// Tests only: the window-frame animation of a page switch (target, duration, curve, completion). A headless runner
+    /// never advances AppKit's animation, so a test steps the frames itself through this seam.
+    var pageFrameAnimatorForTesting: ((NSRect, Double, CAMediaTimingFunction, @escaping () -> Void) -> Void)?
+
+    func fitPage(_ page: NDPage) {
+        guard shownDesign == .new else { return }
+        // Finish one frame animation before starting another; the newest content wins at its completion.
+        guard !pageResizeInFlight else {
+            pageFitPending = true
+            if newDesignStore.shownPage != page {
+                newDesignStore.shownPage = page
+                layOutShownPage(page)
+            }
+            return
+        }
+        let size = NSSize(width: NDGrid.windowWidth,
+                          height: NDPageHeight.window(newDesignStore, page: page, screen: fitScreenHeight,
+                                                      titleBarHeight: fitTitleBarHeight))
+        let frameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
+        let target = NDPageHeight.frame(size: frameSize, keeping: window.frame, visibleFrame: fitVisibleFrame)
+        // A publication that changes only words or wave samples needs no window resize.
+        if fittedFrameSize == frameSize, window.frame == target, newDesignStore.shownPage == page { return }
+        fittedFrameSize = frameSize
+        let duration = NDMotion.pageResize(reduceMotion: reduceMotionForTesting ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        let order = NDPageSwitch.order(from: window.frame.height, to: target.height,
+                                       animates: (animatesPageSwitchForTesting ?? window.isVisible) && duration != nil)
+        guard order != .together, let duration else {
+            // Content limits only: AppKit keeps one pair of size limits, and setting `minSize`/`maxSize` clears these.
+            window.contentMinSize = size
+            window.contentMaxSize = size
+            window.setFrame(target, display: window.isVisible, animate: false)
+            newDesignStore.shownPage = page
+            layOutShownPage(page)
+            return
+        }
+        // R1.8 item 1: the new page first, in both directions; then the height. R1.10.1: at once, never animated: an
+        // animated swap is a transition, and the page's scroll view lays out both of a transition's pages stacked, the old
+        // on top, so the shrinking window showed the old page under the new tab.
+        var swap = Transaction()
+        swap.disablesAnimations = true
+        withTransaction(swap) { newDesignStore.shownPage = page }
+        layOutShownPage(page)
+        // While it moves, the limits span both heights; at the end they are the page's size exactly.
+        let current = window.contentRect(forFrameRect: window.frame).size
+        window.contentMinSize = NSSize(width: size.width, height: min(current.height, size.height))
+        window.contentMaxSize = NSSize(width: size.width, height: max(current.height, size.height))
+        let c = NDPageSwitch.curve
+        let curve = CAMediaTimingFunction(controlPoints: c.0, c.1, c.2, c.3)
+        pageResizeInFlight = true
+        let finish: () -> Void = { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.pageResizeInFlight = false
+                guard self.shownDesign == .new else { return }
+                self.window.contentMinSize = size
+                self.window.contentMaxSize = size
+                if self.pageFitPending {
+                    self.pageFitPending = false
+                    self.fitPage(self.newDesignStore.page)
+                }
+            }
+        }
+        if let animator = pageFrameAnimatorForTesting { return animator(target, duration, curve, finish) }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = duration
+            context.timingFunction = curve
+            window.animator().setFrame(target, display: true)
+        }, completionHandler: finish)
+    }
+
+    /// The new design's pages: open the window on one (motion 2: no window animation).
+    func showPage(_ page: NDPage) {
+        applyDesign()
+        guard shownDesign == .new else { return showDashboard() }
+        newDesignStore.page = page
+        show()
+    }
+
+    deinit {
+        if let designObserver { NotificationCenter.default.removeObserver(designObserver) }
+    }
+#endif
 
     /// The hotkey and `brainbar://toggle`: open the window, or close it when it is open.
     func toggle(anchoredTo anchorView: NSView? = nil) {
@@ -263,17 +487,36 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     func show(anchoredTo anchorView: NSView? = nil) {
         Task { [driveAuth] in await driveAuth.refreshIfStale() }
+#if BRAINBAR_UI
+        if shownDesign == .new { newDesignStore.setWindowActive(true) }
+#endif
         if panelState.selectedTab == .settings { panelState.settingsActivationRevision += 1 }
         if !hasPlacedWindow || isClosingWindow {
             placeWindow(near: anchorView ?? statusItemButton)
             hasPlacedWindow = true
         }
+#if BRAINBAR_UI
+        if shownDesign == .new { fitPage(newDesignStore.page) }
+#endif
         activationPolicy?.windowOpened(window)
         if window.isMiniaturized { window.deminiaturize(nil) }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
+#if BRAINBAR_UI
+        if shownDesign == .new {
+            Self.clearInitialFocus(window)
+            // SwiftUI may hand focus on after the window becomes key; clear it again on the next turn.
+            Task { @MainActor [weak window] in if let window { Self.clearInitialFocus(window) } }
+        }
+#endif
         isClosingWindow = false
+    }
+
+    /// R1.6 item 7: nothing holds focus when the window opens, so no focus ring shows until Tab. The window itself is
+    /// the first responder; Tab from it starts the key-view loop at the first control.
+    static func clearInitialFocus(_ window: NSWindow) {
+        window.makeFirstResponder(nil)
     }
 
     func dismiss() {
@@ -281,17 +524,33 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     }
 
     func showDashboard() {
+#if BRAINBAR_UI
+        if BrainBarDesign.current(in: designDefaults) == .new { return showPage(.overview) }
+#endif
         panelState.selectedTab = .dashboard
         show()
     }
 
     func showSettings() {
+#if BRAINBAR_UI
+        if BrainBarDesign.current(in: designDefaults) == .new {
+            NDSettingsWindowController.show(store: newDesignStore, activationPolicy: activationPolicy)
+            return
+        }
+#endif
         panelState.selectedTab = .settings
         show()
     }
 
 #if BRAINBAR_UI
     func showSettings(section: BrainBarSettingsSection) {
+        if BrainBarDesign.current(in: designDefaults) == .new {
+            switch section {
+            case .jobs: return showPage(.jobs)
+            case .backups: return showPage(.backups)
+            case .advanced: return showSettings()
+            }
+        }
         panelState.settingsNavigation.select(section)
         showSettings()
     }
@@ -311,9 +570,16 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         if let saved = frameStore.persistedFrame(),
            let restored = Self.restoredFrame(saved, minSize: Self.minSize, visibleFrames: screenFrames()) {
             window.setFrame(restored, display: false)
+#if BRAINBAR_UI
+            if shownDesign == .new { fitPage(newDesignStore.page) }
+#endif
             return
         }
+#if BRAINBAR_UI
+        if shownDesign == .classic { window.setContentSize(Self.defaultSize) }
+#else
         window.setContentSize(Self.defaultSize)
+#endif
         if let anchorView, let anchorWindow = anchorView.window,
            let screen = anchorWindow.screen ?? NSScreen.screens.first {
             let anchorRect = anchorWindow.convertToScreen(anchorView.convert(anchorView.bounds, to: nil))
@@ -335,14 +601,32 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) { prepareForClose() }
 
     func prepareForClose() {
+#if BRAINBAR_UI
+        // F04: closing the window stops the hero and backup-history reads and cancels one in flight.
+        if hasNewDesignStore { newDesignStore.setWindowActive(false) }
+#endif
         persistFrame()
         // Policy changes and teardown can move a closed window. Keep the last user frame.
         isClosingWindow = true
     }
 
+#if BRAINBAR_UI
+    func windowDidChangeScreen(_ notification: Notification) {
+        if shownDesign == .new { pageFitObserver?.schedule() }
+    }
+#endif
+
     /// A real window resizes on both axes, down to the size the dashboard needs.
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        NSSize(width: max(frameSize.width, Self.minSize.width), height: max(frameSize.height, Self.minSize.height))
+#if BRAINBAR_UI
+        // L17: the new design's window is the page's size; the delegate holds it even if AppKit's layout clears the
+        // content limits (it keeps one pair of size limits, and the toolbar's own layout can reset it).
+        if shownDesign == .new, let fitted = fittedFrameSize { return fitted }
+        let minimum = currentMinSize
+#else
+        let minimum = Self.minSize
+#endif
+        return NSSize(width: max(frameSize.width, minimum.width), height: max(frameSize.height, minimum.height))
     }
 
     /// Places the window as the first show would, without ordering it front (where AppKit would

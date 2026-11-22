@@ -309,6 +309,44 @@ def _scope_clause(project: Any, content_type: Any) -> tuple[str, list[Any]]:
     return " AND ".join(clauses), params
 
 
+def _visibility_clause(conn: Any, hidden: bool | None) -> str:
+    """Keep dedupe on one side of the default-search line (#1824).
+
+    ``hidden=None`` is the legacy, unscoped lookup. Otherwise a candidate must sit in
+    the same visibility tier as the incoming row: a reply never folds into a hidden
+    thinking row, and thinking is never appended into a visible one. A hidden write
+    (thinking, desktop) matches only the opt-in tier, never an always-hidden
+    brain-worker row, which the opt-in could not reach (#1824 re-check R2).
+    """
+    if hidden is None:
+        return "1=1"
+    if "source_class" not in {row[1] for row in conn.cursor().execute("PRAGMA table_info(chunks)")}:
+        return "1=1"
+    from .source_visibility import OPT_IN_HIDDEN_SOURCE_CLASSES, hidden_source_class_sql
+
+    if hidden:
+        return "source_class IN (" + ", ".join(f"'{value}'" for value in OPT_IN_HIDDEN_SOURCE_CLASSES) + ")"
+    return hidden_source_class_sql("source_class")
+
+
+def active_own_chunk_exists(conn: Any, chunk_id: str) -> bool:
+    """Read identity belongs to an existing lifecycle-active row, before any alias."""
+    active = _active_clause(conn)
+    if "invalid_at" in {row[1] for row in conn.cursor().execute("PRAGMA table_info(chunks)")}:
+        active += " AND invalid_at IS NULL"
+    return conn.cursor().execute(f"SELECT 1 FROM chunks WHERE id=? AND {active}", (chunk_id,)).fetchone() is not None
+
+
+def _existing_alias(conn: Any, chunk_id: str) -> tuple | None:
+    if not conn.cursor().execute("SELECT 1 FROM sqlite_master WHERE name='chunk_id_alias'").fetchone():
+        return None
+    return (
+        conn.cursor()
+        .execute("SELECT canonical_chunk_id,deprecated_at FROM chunk_id_alias WHERE old_chunk_id=?", (chunk_id,))
+        .fetchone()
+    )
+
+
 def find_duplicate(
     conn: Any,
     *,
@@ -317,10 +355,42 @@ def find_duplicate(
     created_at: str | None,
     project: Any = None,
     content_type: Any = None,
+    hidden: bool | None = None,
+    exclude_sources: tuple[str, ...] = (),
 ) -> tuple[DuplicateHit | None, DedupeFields]:
+    """Find the canonical row a new chunk folds into.
+
+    ``hidden`` is the incoming row's side of the default-search line
+    (``agent_provenance.is_hidden_source_class``); writers pass it so a fold never
+    crosses it. It composes with any other candidate filter.
+    ``exclude_sources`` removes mirror sources from both exact and near matches;
+    NULL sources remain eligible for ordinary legacy-session dedupe.
+    """
     fields = compute_dedupe_fields(content, created_at)
+    if "t3" in exclude_sources:
+        alias = _existing_alias(conn, chunk_id)
+        if alias is not None:
+            if active_own_chunk_exists(conn, chunk_id):
+                return None, fields
+            scope, params = _scope_clause(project, content_type)
+            hit = (
+                conn.cursor()
+                .execute(
+                    f"SELECT id FROM chunks WHERE id=? AND {_active_clause(conn)} AND {scope} "
+                    f"AND {_visibility_clause(conn, hidden)} AND (source IS NULL OR source != 't3')",
+                    (alias[0], *params),
+                )
+                .fetchone()
+            )
+            # Existing aliases are identity, not a reason to pick another text twin.
+            return (DuplicateHit(str(hit[0]), "alias", 0) if hit else None), fields
     cursor = conn.cursor()
     scope_sql, scope_params = _scope_clause(project, content_type)
+    scope_sql = f"{scope_sql} AND {_visibility_clause(conn, hidden)}"
+    if exclude_sources:
+        placeholders = ", ".join("?" for _ in exclude_sources)
+        scope_sql += f" AND (source IS NULL OR source NOT IN ({placeholders}))"
+        scope_params.extend(exclude_sources)
     exact = cursor.execute(
         f"""
         SELECT id FROM chunks
@@ -581,8 +651,17 @@ def record_dedupe_audit(
     )
 
 
-def write_alias(conn: Any, *, old_chunk_id: str, canonical_chunk_id: str, deprecated_at: str | None = None) -> None:
+def write_alias(
+    conn: Any,
+    *,
+    old_chunk_id: str,
+    canonical_chunk_id: str,
+    deprecated_at: str | None = None,
+    preserve_existing: bool = False,
+) -> None:
     if old_chunk_id == canonical_chunk_id:
+        return
+    if preserve_existing and _existing_alias(conn, old_chunk_id) is not None:
         return
     conn.cursor().execute(
         """
@@ -611,25 +690,23 @@ def retarget_aliases(conn: Any, *, old_canonical_chunk_id: str, new_canonical_ch
 
 
 def resolve_chunk_id(conn: Any, chunk_id: str) -> str:
-    try:
-        row = (
-            conn.cursor()
-            .execute(
-                "SELECT canonical_chunk_id, deprecated_at FROM chunk_id_alias WHERE old_chunk_id = ?",
-                (chunk_id,),
-            )
-            .fetchone()
-        )
-    except (apsw.SQLError, apsw.ReadOnlyError):
-        return chunk_id
-    if not row:
-        return chunk_id
-    deprecated_at = _parse_datetime(str(row[1]))
-    if deprecated_at is None:
-        return str(row[0])
-    if deprecated_at < datetime.now(timezone.utc) - timedelta(days=ALIAS_GRACE_DAYS):
-        return chunk_id
-    return str(row[0])
+    original = chunk_id
+    visited = set()
+    while chunk_id not in visited:
+        visited.add(chunk_id)
+        if active_own_chunk_exists(conn, chunk_id):
+            return chunk_id
+        try:
+            row = _existing_alias(conn, chunk_id)
+        except (apsw.SQLError, apsw.ReadOnlyError):
+            return chunk_id
+        if not row:
+            return chunk_id
+        deprecated_at = _parse_datetime(str(row[1]))
+        if deprecated_at is not None and deprecated_at < datetime.now(timezone.utc) - timedelta(days=ALIAS_GRACE_DAYS):
+            return chunk_id
+        chunk_id = str(row[0])
+    return original
 
 
 def _rollback_failed_merge(cursor: Any, savepoint: str, original: Exception) -> bool:
@@ -669,6 +746,7 @@ def merge_duplicate_chunk(
     hamming_distance_value: int | None,
     archive_existing_duplicate: bool = False,
     ensure_schema: bool = True,
+    preserve_existing_alias: bool = False,
 ) -> bool:
     if canonical_id == duplicate_id:
         return False
@@ -732,9 +810,14 @@ def merge_duplicate_chunk(
             cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), canonical_id])
             if embedding_changed:
                 _invalidate_merged_vectors(cursor, canonical_id)
-            if archive_existing_duplicate:
+            if archive_existing_duplicate and not preserve_existing_alias:
                 retarget_aliases(conn, old_canonical_chunk_id=duplicate_id, new_canonical_chunk_id=canonical_id)
-            write_alias(conn, old_chunk_id=duplicate_id, canonical_chunk_id=canonical_id)
+            write_alias(
+                conn,
+                old_chunk_id=duplicate_id,
+                canonical_chunk_id=canonical_id,
+                preserve_existing=preserve_existing_alias,
+            )
             record_dedupe_audit(
                 conn,
                 dropped_id=duplicate_id,
@@ -837,8 +920,14 @@ def merge_existing_chunk_seen(
     if merged_half_life is not None:
         updates["half_life_days"] = merged_half_life
     from .agent_provenance import normalize_source_class
+    from .source_visibility import THINKING_SOURCE_CLASS
 
     incoming_source_class = normalize_source_class(incoming.get("source_class"))
+    # A thinking write never relabels a row that already exists: on a same-id merge the
+    # existing row (a reply, or a user's message with the same words) keeps its class.
+    # Both writers meet here: the direct watcher path and the production drain.
+    if incoming_source_class == THINKING_SOURCE_CLASS:
+        incoming_source_class = None
     if incoming_source_class is not None and "source_class" in {
         row[1] for row in cursor.execute("PRAGMA table_info(chunks)")
     }:

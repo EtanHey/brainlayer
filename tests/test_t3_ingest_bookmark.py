@@ -191,11 +191,105 @@ def test_unresumable_pending_window_never_uses_bounded_read(run):
     event(run, text="pending before restore")
     state = json.loads(run.bookmark.read_text())
     next(iter(state["sources"].values())).update(last_sequence=1, pending_to=10_000, occurred_at="2026-11-17T23:59:00Z")
-    state["pending_chunks"] = []
+    state["pending_chunks"] = ["t3:v2-a:v2-streaming:0"]
     run.bookmark.write_text(json.dumps(state))
     with sqlite3.connect(run.source) as conn:
         conn.execute("UPDATE orchestration_v2_projection_metadata SET last_sequence=2")
     assert run().mode == "full"
+    assert run.indexed["t3:v2-a:v2-streaming:0"] == "pending before restore"
+
+
+@pytest.mark.parametrize("pending_to", [None, "missing"])
+def test_pending_list_without_ceiling_requires_full_read(run, pending_to):
+    run()
+    event(run, text="pending before prune")
+    state = json.loads(run.bookmark.read_text())
+    previous = next(iter(state["sources"].values()))
+    previous["occurred_at"] = "2026-11-17T23:59:00Z"
+    if pending_to is None:
+        previous["pending_to"] = None
+    state["pending_chunks"] = ["t3:v2-a:v2-streaming:0"]
+    run.bookmark.write_text(json.dumps(state))
+    with sqlite3.connect(run.source) as conn:
+        conn.execute("UPDATE orchestration_v2_projection_metadata SET last_sequence=2")
+    assert run().mode == "full"
+    assert run.indexed["t3:v2-a:v2-streaming:0"] == "pending before prune"
+
+
+@pytest.mark.parametrize("pending", [None, 5, [["nested"]], "abc", {"x": 1}, [], [5]])
+def test_malformed_pending_replays_full_window_once_logged(run, pending, caplog):
+    run()
+    event(run, text="recover invalid pending state")
+    state = json.loads(run.bookmark.read_text())
+    next(iter(state["sources"].values()))["pending_to"] = 2
+    state["pending_chunks"] = pending
+    run.bookmark.write_text(json.dumps(state))
+    assert run().mode == "full"
+    assert run.indexed["t3:v2-a:v2-streaming:0"] == "recover invalid pending state"
+    assert "pending_chunks" not in json.loads(run.bookmark.read_text())
+    run()
+    assert sum("Invalid T3 pending_chunks" in record.message for record in caplog.records) == 1
+
+
+@pytest.mark.parametrize("secondary_mode", ["incremental", "bounded", "full"])
+def test_each_v2_source_retains_its_own_held_start(run, tmp_path, monkeypatch, secondary_mode):
+    secondary = _create_v2_fixture(tmp_path / "state.sqlite")
+    with sqlite3.connect(run.source) as primary, sqlite3.connect(secondary) as conn:
+        for table in ("orchestration_events", "orchestration_v2_projection_metadata"):
+            conn.execute(primary.execute("SELECT sql FROM sqlite_master WHERE name=?", (table,)).fetchone()[0])
+        conn.execute("ALTER TABLE orchestration_v2_projection_messages ADD COLUMN updated_at TEXT")
+        conn.execute("INSERT INTO orchestration_v2_projection_metadata VALUES ('event-log-pruned-through',2,0,'')")
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET thread_id='secondary', message_id='s-'||message_id"
+        )
+        conn.execute("UPDATE orchestration_v2_projection_threads SET thread_id='secondary' WHERE thread_id='v2-a'")
+        conn.executemany(
+            "INSERT INTO orchestration_events(sequence,event_type,stream_id,occurred_at) VALUES (?,'changed','noise',?)",
+            [(i, "2026-11-17T00:00:00Z") for i in range(1, 11)],
+        )
+        primary.executemany(
+            "INSERT INTO orchestration_events(sequence,event_type,stream_id,occurred_at) VALUES (?,'changed','noise',?)",
+            [(i, "2026-11-17T02:00:00Z") for i in range(2, 13)],
+        )
+    resolve = t3.resolve_t3_sources
+    monkeypatch.setattr(
+        t3,
+        "resolve_t3_sources",
+        lambda path=None, version=None, **kw: (
+            [(run.source, 2), (secondary, 2)] if version is None else resolve(path, version, **kw)
+        ),
+    )
+    run()
+    state = json.loads(run.bookmark.read_text())
+    previous = state["sources"][str(secondary.resolve())]
+    if secondary_mode == "full":
+        previous["occurred_at"] = None
+    run.bookmark.write_text(json.dumps(state))
+    with sqlite3.connect(secondary) as conn:
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET payload_json=?, updated_at='2026-11-17T00:05:00Z' "
+            "WHERE message_id='s-v2-user'",
+            (json.dumps({"text": "secondary pending edit"}),),
+        )
+        conn.execute(
+            "INSERT INTO orchestration_events VALUES (11,NULL,NULL,'secondary',NULL,'changed',"
+            "'2026-11-17T03:00:00Z',NULL,NULL,NULL,NULL,NULL,NULL,1)"
+        )
+        conn.executemany(
+            "INSERT INTO orchestration_events(sequence,event_type,stream_id,occurred_at) VALUES (?,'changed','noise',?)",
+            [(i, "2026-11-17T03:00:00Z") for i in range(12, 21)],
+        )
+        if secondary_mode != "incremental":
+            conn.execute("UPDATE orchestration_v2_projection_metadata SET last_sequence=11")
+    event(run, message="v2-user", text="primary edit")
+    monkeypatch.setattr(t3, "DEFAULT_T3_MAX_CHANGED_CHUNKS", 1)
+    assert run().chunks_deferred == 1
+    held = json.loads(run.bookmark.read_text())["sources"][str(secondary.resolve())]
+    assert held["last_sequence"] == (10 if secondary_mode == "incremental" else None)
+    assert held["occurred_at"] == (previous["occurred_at"] if secondary_mode == "incremental" else None)
+    assert run().chunks_indexed == 1
+    assert run.indexed["t3:secondary:s-v2-user:0"] == "secondary pending edit"
+    assert run().messages_seen == 0
 
 
 def test_pruned_bookmark_without_updated_at_uses_full_read(run):
@@ -219,33 +313,32 @@ def test_phase_timings_present_in_result_and_health_for_full_and_idle(run):
 
 
 def test_phase_timings_measure_real_indexing_and_failure_health(run, tmp_path, monkeypatch):
-    from brainlayer.embeddings import EmbeddedChunk
     from brainlayer.vector_store import VectorStore
 
     destination = tmp_path / "dest.db"
     VectorStore(destination).close()
     monkeypatch.setattr(t3, "_index_chunks", run.real_index)
-    monkeypatch.setattr(
-        "brainlayer.index_new.embed_chunks",
-        lambda chunks: [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks],
-    )
     result = run()
     assert result.chunks_indexed == 2
-    for phase in ("read_ms", "chunk_ms", "change_check_ms", "embed_ms", "write_ms"):
+    for phase in ("read_ms", "chunk_ms", "change_check_ms", "write_ms"):
         assert getattr(result, phase) > 0
+    # Embedding is deferred to the hotlane: an honest 0 with its reason, never a made-up time.
+    assert result.embed_ms == 0 and result.embed_deferred_to == "hotlane"
+    health = json.loads(run.bookmark.with_name("health.json").read_text())
+    assert health["embed_ms"] == 0 and health["embed_deferred_to"] == "hotlane"
     event(run, text="updated")
 
-    def failed_embed(chunks):
-        raise RuntimeError("embedding failed")
+    def failed_write(self, chunks, vectors, **kwargs):
+        raise RuntimeError("write failed")
 
-    monkeypatch.setattr("brainlayer.index_new.embed_chunks", failed_embed)
-    with pytest.raises(RuntimeError, match="embedding failed"):
+    monkeypatch.setattr(VectorStore, "upsert_chunks", failed_write)
+    with pytest.raises(RuntimeError, match="write failed"):
         run()
     health = json.loads(run.bookmark.with_name("health.json").read_text())
     assert health["bookmark_held"] == "indexing_failure"
     assert health["read_ms"] > 0 and health["chunk_ms"] > 0
-    assert health["change_check_ms"] > 0 and health["embed_ms"] > 0
-    assert health["write_ms"] == 0
+    assert health["change_check_ms"] > 0 and health["write_ms"] > 0
+    assert health["embed_ms"] == 0
 
 
 def test_unchanged_legacy_does_not_read_v2_identity_set(run, tmp_path, monkeypatch):

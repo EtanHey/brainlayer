@@ -703,6 +703,37 @@ def test_changed_only_scope_maps_the_release_tag_gate_to_its_own_test(tmp_path: 
     assert f"{test_root}/ -v" not in logged
 
 
+@pytest.mark.parametrize("hook", ["hooks/brainlayer-prompt-search.py", "hooks/brainlayer-session-start.py"])
+def test_changed_only_scope_maps_the_injection_hooks_to_every_hook_suite(tmp_path: Path, hook: str) -> None:
+    """#1824 re-check R1: a hook change that skipped test_adaptive_injection.py passed pre-push and failed CI."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    suites = ("test_source_visibility.py", "test_conditional_hooks.py", "test_adaptive_injection.py")
+    for name in suites:
+        (test_root / name).write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = hook
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(  # noqa: S603 - returncode is asserted below
+        ["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False
+    )
+
+    assert result.returncode == 0, result.stdout
+    logged = pytest_log.read_text()
+    for name in suites:
+        assert str(test_root / name) in logged
+    assert f"{test_root}/ -v" not in logged
+
+
 def test_changed_only_scope_escalates_when_the_release_gate_test_is_missing(tmp_path: Path) -> None:
     """A missing test for the release gate must escalate, not silently map to nothing.
 
@@ -844,6 +875,7 @@ def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp
         "test_search_trigram_fts.py",
         "test_precompact_chunk_origin.py",
         "test_ingest_t3.py",
+        "test_t3_ingest_deferred_embedding.py",
         "test_context_pipeline.py",
         "test_index_empty_content.py",
         "test_index_checkpoint_boundary.py",
@@ -882,6 +914,67 @@ def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp
     assert f"{test_root}/ -v" not in logged
     for filename in expected:
         assert str(test_root / filename) in logged
+
+
+_VECTOR_PATH_OWNERS = {
+    "src/brainlayer/vector_store.py": (
+        "test_source_class.py",
+        "test_vector_store_schema_flags.py",
+        "test_vector_store_upsert_transactions.py",
+        "test_hybrid_search.py",
+        "test_vector_store_readonly.py",
+        "test_search_trigram_fts.py",
+        "test_precompact_chunk_origin.py",
+    ),
+    "scripts/hotlane_brainbar_daemon.py": (
+        "test_hotlane_brainbar_daemon.py",
+        "test_hotlane_backpressure.py",
+        "test_hotlane_busy_carryover.py",
+        "test_hotlane_embedding_floor.py",
+    ),
+}
+# t3-ingest's correctness rests on both files (#1826, red team b F5).
+_T3_DEFERRED_EMBEDDING_SUITES = ("test_t3_ingest_deferred_embedding.py", "test_store_vector_invalidation.py")
+
+
+@pytest.mark.parametrize("changed", sorted(_VECTOR_PATH_OWNERS))
+@pytest.mark.parametrize(
+    "missing", [None, "test_t3_ingest_deferred_embedding.py"], ids=["all suites", "deferred suite renamed"]
+)
+def test_changed_only_vector_paths_run_the_t3_deferred_embedding_suites(
+    tmp_path: Path, changed: str, missing: str | None
+) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    owners = (*_VECTOR_PATH_OWNERS[changed], *_T3_DEFERRED_EMBEDDING_SUITES)
+    for owner in owners:
+        if owner != missing:
+            (test_root / owner).write_text("test placeholder\n")
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = changed
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    args = [arg for call in _pytest_args(pytest_log) for arg in call]
+    if missing and changed == "scripts/hotlane_brainbar_daemon.py":
+        # The hotlane arm needs every suite; a renamed one escalates loudly, never narrows.
+        assert f"WARNING: unmapped: {changed}" in result.stdout
+        return
+    for owner in owners:
+        if owner != missing:
+            assert str(test_root / owner) in args  # a complete argument, not a prefix of `path::test`
+    assert not ({str(test_root), f"{test_root}/"} & set(args))
 
 
 def test_changed_only_tag_with_mapped_sources_runs_exact_targeted_set(tmp_path: Path) -> None:
@@ -2242,6 +2335,7 @@ def test_harness_runtime_mapping_escalates_when_companion_is_missing(tmp_path: P
 
 
 IDX_FOCUSED_MAPPINGS = (
+    ("ingest/t3_bookmark", ("test_t3_ingest_bookmark.py", "test_ingest_t3.py")),
     (
         "maintenance_calendar",
         (
@@ -2251,12 +2345,23 @@ IDX_FOCUSED_MAPPINGS = (
             "test_index_calendar_deferrals.py",
         ),
     ),
-    ("ingest/t3", ("test_ingest_t3.py", "test_health_check.py", "test_paths.py")),
+    (
+        "ingest/t3",
+        (
+            "test_ingest_t3.py",
+            "test_t3_ingest_deferred_embedding.py",
+            "test_t3_ingest_bookmark.py",
+            "test_health_check.py",
+            "test_paths.py",
+            "test_t3_thread_tables.py",
+        ),
+    ),
     (
         "index_new",
         (
             "test_source_class.py",
             "test_ingest_t3.py",
+            "test_t3_ingest_deferred_embedding.py",
             "test_context_pipeline.py",
             "test_index_empty_content.py",
             "test_index_checkpoint_boundary.py",
@@ -2287,6 +2392,41 @@ def test_changed_only_scope_maps_idx_cohort_modules(tmp_path: Path, module, expe
         assert str(test_root / name) in logged
     assert "falling back to full pytest unit suite" not in result.stdout
     assert f"{test_root}/ -v" not in logged
+
+
+T3_SIDE_TABLE_SUITES = (
+    "test_t3_thread_tables.py",
+    "test_runtime_store.py",
+    "test_runtime_ddl_ledger.py",
+    "test_index_first_calendar_bootstrap.py",
+    "test_ingest_t3.py",
+)
+
+
+@pytest.mark.parametrize("module", ["t3_thread_tables", "runtime_store"])
+def test_changed_only_side_table_modules_run_the_writer_contract_and_bootstrap(tmp_path: Path, module) -> None:
+    """T3 PR 3.1: the side-table DDL and its runtime pin must run all five suites, or escalate."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    for name in T3_SIDE_TABLE_SUITES:
+        (test_root / name).write_text("test placeholder\n")
+    env, pytest_log = _cli_root_env(tmp_path, test_root)
+    env["BRAINLAYER_CHANGED_FILES"] = f"src/brainlayer/{module}.py"
+    result = _run_cli_root_script(env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    logged = pytest_log.read_text()
+    for name in T3_SIDE_TABLE_SUITES:
+        assert str(test_root / name) in logged
+    assert f"{test_root}/ -v" not in logged
+
+    # A missing companion must not narrow the gate: the module is reported unmapped.
+    (test_root / "test_runtime_ddl_ledger.py").unlink()
+    (tmp_path / "missing").mkdir()
+    escalated, _escalated_log = _cli_root_env(tmp_path / "missing", test_root)
+    escalated["BRAINLAYER_CHANGED_FILES"] = f"src/brainlayer/{module}.py"
+    result = _run_cli_root_script(escalated)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"unmapped: src/brainlayer/{module}.py" in result.stdout
 
 
 @pytest.mark.parametrize(

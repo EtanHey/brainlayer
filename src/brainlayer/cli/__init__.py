@@ -1436,6 +1436,8 @@ def context(
         for chunk in result["context"]:
             marker = " [bold green]<< TARGET >>[/]" if chunk.get("is_target") else ""
             ctype = chunk.get("content_type", "unknown")
+            if chunk.get("thinking"):
+                ctype = f"{ctype}, agent thinking: not said aloud"
             pos = chunk.get("position", "?")
             rprint(f"\n[bold cyan]Position {pos}[/] [dim]({ctype})[/]{marker}")
             content = chunk.get("content", "")

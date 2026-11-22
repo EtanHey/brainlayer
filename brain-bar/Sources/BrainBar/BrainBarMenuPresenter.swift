@@ -30,11 +30,13 @@ enum BrainBarMenuPresenter {
         var rank = Rank.confirmed
         /// M2 inside a class, by severity (truth table erratum, 13 Nov): S19 0, S07 1, S32 2, S06 3, S13 4; generic 9.
         var priority = 9
-        var action = P.ActionKind.copyReport
-        var handoff = BrainBarMenuPresenter.handoff
+        /// R1.11: nil where nobody acts (A1: it catches up by itself).
+        var action: P.ActionKind? = .copyReport
+        /// R1.11: who acts, said once, after a Copy report row's words; empty where an agent need not act.
+        var handoff = [Say.agent.text]
         /// D13's line, drawn directly under this row (R22) and never counted.
         var fact: [String]? = nil
-        var mergeKey: String { [String(describing: thing), worded ? action.rawValue : "generic"].joined(separator: "-") }
+        var mergeKey: String { [String(describing: thing), worded ? (action?.rawValue ?? "none") : "generic"].joined(separator: "-") }
         var faultID: String { String(describing: thing) }
         var notificationCauses: Set<String> = []
     }
@@ -49,9 +51,26 @@ enum BrainBarMenuPresenter {
 
     private static func thing(of name: String) -> Thing { Thing.allCases.first { checksOf[$0]!.contains(name) } ?? .system }
 
-    /// R17's generic rows.
+    // MARK: R1.11: the lag's severity, decided in ONE place
+
+    /// How a lag past its limit that drains by itself is shown (L53; his answer is pending). `needsYouPastLimit` is today's
+    /// rule (R20, R31): past 30 minutes it needs him, red, in true words with no button. `noticeWhileDraining` is the
+    /// designer's: an amber notice while it drains, red only once it stops draining or the reader stops.
+    enum LagSeverity: Sendable { case needsYouPastLimit, noticeWhileDraining }
+    /// THE switch. L55 (his option A): a lag that drains by itself is a calm notice; it needs him only once it is not
+    /// draining (another watcher alert, past R20/R31's 30-minute clock) or the reader stops.
+    static let lagSeverity: LagSeverity = .noticeWhileDraining
+
+    /// The lag is shown as a notice: the switch says so and the lag drains by itself (A1's "catching up by itself").
+    static func lagIsNotice(_ c: Capture) -> Bool { c.lagSeverity == .noticeWhileDraining && Say.lagDraining(c) }
+    /// Under the notice side, a red `ingest` (or the dot it turns red) is the draining lag itself, not a separate fault.
+    static func lagExcusesRed(_ c: Capture) -> Bool {
+        lagIsNotice(c) && (c.verdict?.checks ?? []).filter { $0.state == .red }.allSatisfy { $0.name == "ingest" }
+    }
+
+    /// D5, the safety net (it replaces R17's generic rows): it says what it knows and what it doesn't.
     private static func needs(_ thing: Thing, cause: String? = nil) -> Line {
-        var line = Line(thing: thing, level: .needs, strings: [Say.generic.text], worded: false)
+        var line = Line(thing: thing, level: .needs, strings: [Say.d5.text, Say.d5Line.text], worded: false, handoff: [])
         if let cause { line.notificationCauses.insert(cause) }
         return line
     }
@@ -59,7 +78,121 @@ enum BrainBarMenuPresenter {
     private static func worded(_ thing: Thing, _ strings: [String], _ rank: Rank, priority: Int = 9) -> Line {
         Line(thing: thing, level: .needs, strings: strings, rank: rank, priority: priority)
     }
-    private static let handoff = [Say.cantFix.text, Say.giveReport.text]
+
+    /// A1 and A2: the reader is behind. Its line says only what the capture knows (the bytes left, how long), and that it
+    /// catches up by itself only while the lag is the watcher's one alert. Nobody acts: no button, no hand-off.
+    static func lagDetail(_ c: Capture) -> String? {
+        let size = Say.lagSize(c), span = Say.lagSpan(c)
+        var said: [String] = []
+        if let size, let span { said.append(Say.lagLeftFor(size, span)) } else if let size { said.append(Say.lagLeft(size)) } else if let span {
+            said.append(Say.lagFor(span))
+        }
+        // A2 (R1.13): with BrainLayer's estimate, how long it has to go.
+        if Say.lagDraining(c) { said.append(Say.lagEta(c).map { Say.byItselfEta($0) } ?? Say.byItself.text) }
+        return said.isEmpty ? nil : said.joined(separator: " ")
+    }
+
+    /// R1.13: A3's title when the producer says the lag stopped shrinking, else A1's.
+    static func lagTitle(_ c: Capture) -> String { Say.producerStalled(c) ? Say.notCatchingUp.text : Say.lagBehind.text }
+
+    /// The lag needs him when the one escalation decision says so (past R20/R31's clock and not draining), or the reader is
+    /// red and that red is not only the draining lag. Everything else is a notice (L55).
+    static func lagNeedsYou(_ c: Capture) -> Bool {
+        appEscalationCauses(c).contains(appNotificationCause("offset_lag"))
+            || ((c.verdict?.checks ?? []).contains { $0.name == "ingest" && $0.state == .red } && !lagExcusesRed(c))
+    }
+
+    /// R2-1: a red lag needs a handoff only when it is not draining. The legacy severity switch can mark a draining
+    /// lag red, but cannot turn "catching up by itself" into a request for an agent.
+    static func lagNeedsReport(_ c: Capture) -> Bool { lagNeedsYou(c) && !Say.lagDraining(c) }
+
+    private static func lagLine(_ c: Capture) -> Line {
+        let needsAgent = lagNeedsReport(c)
+        return Line(thing: .remembering, level: lagNeedsYou(c) ? .needs : .notice, strings: [lagTitle(c)] + (lagDetail(c).map { [$0] } ?? []),
+                    headline: lagTitle(c), action: needsAgent ? .copyReport : nil, handoff: needsAgent ? [Say.agent.text] : [])
+    }
+
+    /// A5 to A7: a watcher alert, named. Nil for an alert this BrainBar cannot name.
+    private static func reasonLine(_ reason: String, _ c: Capture) -> Line? {
+        switch reason {
+        case "coverage_drop" where Say.coverageDrop(c):
+            return worded(.remembering, [Say.coverage.text, Say.coverageLine.text], .confirmed)
+        case "file_ingestion_failure" where Say.fresh(c, reason):
+            return worded(.remembering, [Say.unreadFiles.text, Say.unreadFilesLine.text], .confirmed)
+        case _ where Say.provider(reason) != nil:
+            guard let name = Say.provider(reason), Say.providers(c).contains(name) else { return nil }
+            return worded(.remembering, [Say.providerUnread(name), Say.providerUnreadLine.text], .confirmed)
+        default:
+            return nil
+        }
+    }
+
+    /// `ingest` failing or late: the lag (A1), the reader stopped (A4), a named watcher alert (A5 to A7), else D5.
+    private static func ingestLine(_ c: Capture) -> Line {
+        if Say.lagShown(c), Say.lagDraining(c) || Say.producerStalled(c) { return lagLine(c) }
+        if Say.readerStopped(c) {
+            let last = c.watcher?.lastReadAt.flatMap { $0 <= c.now && sayable($0) && hasWords($0, c) ? Say.lastRead(at($0, c)) : nil }
+            return worded(.remembering, [Say.stopped.text] + (last.map { [$0] } ?? []), .confirmed)
+        }
+        if let name = Say.providers(c).first { return worded(.remembering, [Say.providerUnread(name), Say.providerUnreadLine.text], .confirmed) }
+        if let named = c.watcher?.alertReasons.lazy.compactMap({ reasonLine($0, c) }).first { return named }
+        return Say.lagShown(c) ? lagLine(c) : needs(.remembering)
+    }
+
+    /// R1.11: the row that names a failing or late check (CHANGES-R1.11 § 1). A name carried more than once is never read
+    /// for its fields, and a state the deck has no words for keeps D5.
+    private static func checkLine(_ name: String, _ c: Capture) -> Line {
+        let named = c.verdict?.checks.filter { $0.name == name } ?? []
+        guard named.count == 1, let k = named.first, [.red, .amber].contains(k.state) else { return needs(thing(of: name)) }
+        let red = k.state == .red
+        func line(_ thing: Thing, _ strings: [String?], action: P.ActionKind? = .copyReport, agent: Bool = true) -> Line {
+            var line = worded(thing, strings.compactMap { $0 }, .confirmed)
+            line.action = action
+            line.handoff = agent ? [Say.agent.text] : []
+            return line
+        }
+        let newest = c.verdict.flatMap { copyAge(k.ageS, c, $0) }.map { Say.newestIs($0) }
+        switch name {
+        case "ingest":
+            return ingestLine(c)
+        case "stores":
+            let wait = k.ageS.flatMap(span)
+            return red ? line(.remembering, [Say.savesStuck.text, wait.map { Say.savesStuckLine($0) }])
+                : line(.remembering, [Say.savesSlow.text, wait.map { Say.savesSlowLine($0) }])
+        case "search":
+            return red ? line(.finding, [Say.searchDown.text, k.fails.flatMap { $0 >= 2 ? Say.searchFails(String($0)) : nil }])
+                : line(.finding, [Say.searchCheck.text, Say.searchOneOff.text])
+        case "backup_local":
+            return line(.safe, [red ? Say.localLate.text : Say.localRunningLate.text, newest])
+        case "backup_offsite" where !red || Say.driveSignedIn(c):
+            return line(.safe, [red ? Say.driveLate.text : Say.driveRunningLate.text, newest])
+        case "transcripts" where !red || Say.driveSignedIn(c):
+            return line(.safe, [red ? Say.conversationsLate.text : Say.conversationsRunningLate.text, newest])
+        case "disk":
+            // C7: only he can free space on his Mac; an agent must not delete his files.
+            return red ? line(.safe, [Say.noRoom.text], action: .openStorageSettings, agent: false) : line(.safe, [Say.roomTight.text])
+        case "monitor":
+            let ran = c.verdict.flatMap { v in v.evaluatedAt <= c.now && sayable(v.evaluatedAt) && hasWords(v.evaluatedAt, c) ? Say.checksLastRan(at(v.evaluatedAt, c)) : nil }
+            return line(.system, [Say.checksStopped.text, ran])
+        case "drive_auth" where red:
+            let missing = c.driveAuthModel == .missing
+            var drive = line(.safe, [missing ? Say.s13Missing.text : Say.s13.text, missing ? Say.s13DetailMissing.text : Say.s13Detail.text],
+                             action: missing ? .connectDrive : .reconnectDrive, agent: false)
+            drive.priority = 4
+            return drive
+        case "integrity" where red:
+            var damaged = line(.safe, [Say.s19.text, Say.s19Memory.text])
+            (damaged.rank, damaged.priority) = (.custody, 0)
+            return damaged
+        case "embedding" where red:
+            return line(.finding, [Say.f07.text, Say.f07Since(k.ageS.flatMap(over).map { " " + $0 } ?? "")])
+        case _ where !known.contains(name):
+            // D3: him (an update names it), or an agent with the report; no hand-off sentence.
+            return line(.system, [Say.unknownCheck.text, Say.newerLayer.text + " " + Say.updateNames.text], agent: false)
+        default:
+            return needs(thing(of: name))
+        }
+    }
 
     /// One freshness boundary for presentation and notification suppression; stale amber is never current evidence.
     static func verdictIsFresh(_ c: Capture) -> Bool { c.verdict != nil && (0...900).contains(c.verdictAwakeAgeS) }
@@ -83,10 +216,19 @@ enum BrainBarMenuPresenter {
         return assemble(c, lines + four.filter { t in !lines.contains { $0.thing == t } }.map(checking), allGood: nil)
     }
 
+    /// D4: each red check of a verdict that is no longer fresh, in its own words, with when it was last true.
     private static func staleNeeds(_ c: Capture) -> [Line] {
-        var reds: Set<Thing> = Set((c.verdict?.checks ?? []).filter { $0.state == .red }.map { thing(of: $0.name) })
-        if c.verdict?.dot == .red { reds.insert(.system) }
-        return classify(Thing.allCases.filter(reds.contains).map { needs($0) } + appFacts(c), c)
+        var names: [String] = []
+        for k in c.verdict?.checks ?? [] where k.state == .red && !names.contains(k.name) { names.append(k.name) }
+        let asOf = c.verdict.flatMap { v in v.evaluatedAt <= c.now && sayable(v.evaluatedAt) && hasWords(v.evaluatedAt, c) ? Say.asOf(at(v.evaluatedAt, c)) : nil }
+        var lines = names.map { name -> Line in
+            var line = checkLine(name, c)
+            if let asOf { line.strings.append(asOf) }
+            line.notificationCauses = []
+            return line
+        }
+        if c.verdict?.dot == .red, lines.isEmpty, !lagExcusesRed(c) { lines.append(needs(.system)) }
+        return classify(lines + appFacts(c), c)
     }
 
     struct NotificationFault: Equatable, Sendable {
@@ -156,7 +298,7 @@ enum BrainBarMenuPresenter {
                 faults[index].causeTitles.merge(titles[line.thing] ?? [:]) { first, _ in first }
             } else {
                 faults.append(.init(id: line.faultID,
-                    title: sentence == Say.generic.text ? genericNotificationTitle(line.thing) : sentence, causes: causes,
+                    title: sentence == Say.d5.text ? genericNotificationTitle(line.thing) : sentence, causes: causes,
                     causeTitles: titles[line.thing] ?? [:], pairingCauses: Set(titles[line.thing]?.keys.map { $0 } ?? [])))
             }
         }
@@ -181,10 +323,19 @@ enum BrainBarMenuPresenter {
             lines.append(line)
         }
         guard let w = c.watcher, w.readable, w.fresh else { return lines }
-        if escalations.contains(appNotificationCause("offset_lag")) { lines.append(needs(.remembering, cause: appNotificationCause("offset_lag"))) }  // R02 escalated
+        // R02 past its limit, as the one escalation decision says it before the switch: A1, a Needs-you row or (the notice
+        // side) a notice; it notifies only when the decision after the switch still escalates it.
+        let lag = appNotificationCause("offset_lag")
+        if appEscalationCauses(c, beforeSwitch: true).contains(lag) {
+            var line = lagLine(c)
+            line.notificationCauses = escalations.intersection([lag])
+            lines.append(line)
+        }
         for reason in w.alertReasons where !["offset_lag", "quarantined_record"].contains(reason) {
             if reason == "coverage_drop", w.dbProbeFailed { continue }
-            lines.append(needs(["coverage_drop", "file_ingestion_failure"].contains(reason) ? .remembering : .system, cause: appNotificationCause(reason)))
+            var line = reasonLine(reason, c) ?? needs(.system)
+            line.notificationCauses = [appNotificationCause(reason)]
+            lines.append(line)
         }
         return lines
     }
@@ -198,6 +349,8 @@ enum BrainBarMenuPresenter {
     static func ingestLagDisposition(_ c: Capture) -> IngestLagDisposition {
         guard let w = c.watcher, w.readable, w.fresh, w.alertReasons.contains("offset_lag") else { return .unconfirmed }
         if lagPastLimit(c) { return .escalated }
+        // R1.13: the producer says it stopped shrinking; under the clock it is not "catching up" (R02), it is A3's notice.
+        if Say.producerStalled(c) { return .unconfirmed }
         let ingest = c.verdict?.checks.filter { $0.name == "ingest" } ?? []
         guard !w.dbProbeFailed, !ingest.isEmpty,
               ingest.allSatisfy({ $0.state == .green || $0.state == .amber }) else { return .unconfirmed }
@@ -205,10 +358,12 @@ enum BrainBarMenuPresenter {
     }
 
     /// R31 narrows R20 to these two app-owned clocks. Row severity, guard and sentence truth share this list.
-    static func appEscalationCauses(_ c: Capture) -> Set<String> {
+    /// R1.11: `beforeSwitch` gives the clocks' own decision; without it, the lag's severity switch (`lagSeverity`) then
+    /// leaves a lag that drains by itself out on its notice side. Both read the one threshold here.
+    static func appEscalationCauses(_ c: Capture, beforeSwitch: Bool = false) -> Set<String> {
         var causes: Set<String> = []
         if c.maintenanceNightFailures.map({ $0 >= 3 }) == true { causes.insert(appNotificationCause("maintenance")) }
-        if ingestLagDisposition(c) == .escalated { causes.insert(appNotificationCause("offset_lag")) }
+        if ingestLagDisposition(c) == .escalated, beforeSwitch || !lagIsNotice(c) { causes.insert(appNotificationCause("offset_lag")) }
         return causes
     }
 
@@ -218,12 +373,17 @@ enum BrainBarMenuPresenter {
         let (wordedLines, consumed) = needsRows(c, v)
         var lines: [Line] = appFacts(c) + wordedLines
         for name in known where name != "monitor" && !consumed.contains(name) {
+            func named() -> Line {
+                var line = checkLine(name, c)
+                line.notificationCauses.insert(checkNotificationCause(name))
+                return line
+            }
             switch worst(v, name) {
             case .green?: break
-            case .red?: lines.append(needs(thing(of: name), cause: checkNotificationCause(name)))
+            case .red?: lines.append(named())
             case .amber?:
                 if name == "ingest", ingestLagDisposition(c) == .catchingUp { break }
-                lines.append(calmAmber(name, c, v) ?? needs(thing(of: name), cause: checkNotificationCause(name)))
+                lines.append(calmAmber(name, c, v) ?? named())
             case .unknown?, nil: lines.append(checking(thing(of: name)))
             }
         }
@@ -231,11 +391,17 @@ enum BrainBarMenuPresenter {
         if c.backupDailyFailures == nil || c.jsonlBackupFailures == nil { lines.append(checking(.safe)) }
         // X05, X06: a monitor that is not green blinds every thing.
         if worst(v, "monitor") != .green {
-            if [.red, .amber].contains(worst(v, "monitor")) { lines.append(needs(.system, cause: checkNotificationCause("monitor"))) }
+            if [.red, .amber].contains(worst(v, "monitor")) {
+                var line = checkLine("monitor", c)
+                line.notificationCauses.insert(checkNotificationCause("monitor"))
+                lines.append(line)
+            }
             lines += four.map(checking)
         }
         for k in v.checks where !known.contains(k.name) && k.state != .green {
-            lines.append(k.state == .unknown ? checking(.system) : needs(.system, cause: checkNotificationCause(k.name)))
+            var line = k.state == .unknown ? checking(.system) : checkLine(k.name, c)
+            if k.state != .unknown { line.notificationCauses.insert(checkNotificationCause(k.name)) }
+            lines.append(line)
         }
         if !c.backupsMeasured || v.checks.contains(where: { copies.contains($0.name) && ($0.ageS ?? 0) < 0 }) {
             lines.append(checking(.safe))
@@ -247,7 +413,7 @@ enum BrainBarMenuPresenter {
         } else {
             lines.append(checking(.remembering))
         }
-        if v.dot == .red, !lines.contains(where: { $0.level == .needs }) { lines.append(needs(.system)) }
+        if v.dot == .red, !lagExcusesRed(c), !lines.contains(where: { $0.level == .needs }) { lines.append(needs(.system)) }
         if v.dot != .green, v.checks.allSatisfy({ $0.state == .green }) { lines += four.map(checking) }
         return classify(lines, c)
     }
@@ -354,7 +520,7 @@ enum BrainBarMenuPresenter {
                 let progress = start.today ? p.map { Say.s32Progress(hhmm(start.date, c), $0) } ?? Say.s32(hhmm(start.date, c))
                     : p.map { Say.s32ProgressOn(at(start.date, c), $0) } ?? Say.s32On(at(start.date, c))
                 db = worded(.safe, [(age ?? "") + progress], local.state == .red ? .custody : .confirmed, priority: 2)
-                db?.handoff = [Say.ifNotFinished.text, Say.giveReport.text]
+                db?.handoff = [Say.ifNotFinished.text]
                 dbNames = reds.map(\.name)
             } else if let failures = c.backupDailyFailures, failures >= 2, !faults.isEmpty, c.upload == nil, c.offsiteRecovering == nil,
                       faults.allSatisfy({ ($0.state == .red && valid($0.ageS)) || ($0.state == .amber && within($0)) }) {  // S06
@@ -430,7 +596,7 @@ enum BrainBarMenuPresenter {
         }
         if !needs.isEmpty {
             let rows = needs.flatMap { line in
-                [P.Row(kind: .needsYou, strings: line.strings + (line.action == .copyReport ? line.handoff : []), action: action(line.action))]
+                [P.Row(kind: .needsYou, strings: line.strings + (line.action == .copyReport ? line.handoff : []), action: line.action.map(action))]
                     + (line.fact.map { [P.Row(kind: .factLine, strings: $0)] } ?? [])
             }
             // "Everything else is fine." stands for the things no row speaks for, never beside a custody-critical or generic row.
@@ -442,7 +608,10 @@ enum BrainBarMenuPresenter {
         let headline: String
         let mark: P.Mark
         let folded = behind.count == 1 && behind[0].headline != nil ? behind[0] : nil
+        // L53: a lone notice with its own headline (A1 under the notice side) is the headline, with its one amber mark.
+        let lone = notices.count == 1 && behind.isEmpty && notices[0].headline != nil ? notices[0] : nil
         switch behind.count {
+        case _ where lone != nil: (headline, mark) = (lone?.headline ?? "", .notice)
         case _ where !notices.isEmpty: (headline, mark) = (Say.checkSoon.text, .notice)
         case 1 where folded != nil: (headline, mark) = (folded?.headline ?? "", .busy)
         case 2: (headline, mark) = (Say.catchingTwo(Say.joined(behind.compactMap { nouns[$0.thing] })), .busy)
@@ -459,8 +628,9 @@ enum BrainBarMenuPresenter {
         if let folded, notices.isEmpty, folded.strings.first?.dropLast() != headline[...] {  // R02 repeats its headline: no line (R16)
             rows.append(P.Row(kind: .headlineDetail, strings: folded.strings, state: .behind, progressPercent: folded.progress))
         }
+        if let lone, lone.strings.count > 1 { rows.append(P.Row(kind: .headlineDetail, strings: Array(lone.strings.dropFirst()), state: .notice)) }
         if headline == Say.allGood.text, let allGood { rows.append(P.Row(kind: .headlineDetail, strings: [allGood])) }
-        let listed = notices + (folded == nil || !notices.isEmpty ? behind : []) + cantTell
+        let listed = (lone == nil ? notices : []) + (folded == nil || !notices.isEmpty ? behind : []) + cantTell
         let fineList = Say.list(fine.compactMap { Say.fineNoun[$0] })
         let fineRow = P.Row(kind: .everythingElse, strings: [fine.count == 1 ? Say.fineIs(fineList) : Say.fineAre(fineList)], mark: listed.isEmpty ? nil : .ok)
         if !listed.isEmpty { rows.append(P.Row(kind: .separator)) }
@@ -483,7 +653,8 @@ enum BrainBarMenuPresenter {
     private static func needsForm(_ needsRows: [P.Row], statuses: [P.Row], everythingElse: Bool = false) -> P {
         let count = needsRows.filter { $0.kind == .needsYou }.count
         let headline = count == 1 ? Say.countOne.text : Say.countMany(String(count))
-        var rows = [P.Row(kind: .headline, strings: [headline], mark: .marked), P.Row(kind: .separator)]
+        // L53, one mark per problem: the count headline carries none; each Needs-you row carries its one.
+        var rows = [P.Row(kind: .headline, strings: [headline]), P.Row(kind: .separator)]
         for row in needsRows {  // a fact line rides directly under its Needs-you row (R22)
             let first = !rows.contains { $0.kind == .needsYou }
             rows.append(row.kind == .needsYou ? P.Row(kind: .needsYou, strings: row.strings, action: row.action, mark: .alertCircle, dividerBefore: !first) : row)
@@ -542,7 +713,7 @@ enum BrainBarMenuPresenter {
             row.strings = row.strings.map(words).filter { !$0.isEmpty }
             row.action = row.action.map { action($0.kind) }
             if row.kind == .separator || !row.strings.isEmpty { return row }
-            return row.kind == .needsYou ? P.Row(kind: .needsYou, strings: needs(.system).strings + handoff, action: copyReport) : nil
+            return row.kind == .needsYou ? P.Row(kind: .needsYou, strings: needs(.system).strings, action: copyReport) : nil
         }
         /// A sentence is registered and, when it is of one of `kinds`, its condition holds on `drawn`.
         func holds(_ sentence: String, on drawn: P, _ kinds: Set<Sentence.Kind> = [.claim, .reassurance]) -> Bool {
@@ -557,10 +728,11 @@ enum BrainBarMenuPresenter {
         // R31: red checks and the two app-owned clock escalations need attention; other app facts remain notices.
         // I1, I7 and I4: form, count, icon and count headline follow the Needs-you rows drawn.
         var needsRows = p.rows.filter { $0.kind == .needsYou }
-        let red = c.verdict.map { $0.dot == .red || $0.checks.contains { $0.state == .red } } ?? false
+        // R1.11: under the notice side of the one switch, a red that is only the draining lag is its notice, not a fault.
+        let red = !lagExcusesRed(c) && (c.verdict.map { $0.dot == .red || $0.checks.contains { $0.state == .red } } ?? false)
         let appFact = !appEscalationCauses(c).isEmpty
         if needsRows.isEmpty, red || appFact || p.form == .needs || p.count != 0 || p.icon == .marked {
-            needsRows = [P.Row(kind: .needsYou, strings: needs(.system).strings + handoff, action: copyReport)]
+            needsRows = [P.Row(kind: .needsYou, strings: needs(.system).strings, action: copyReport)]
         }
         // A needs form is headed, in its headline and its headline row, by the count sentence for the rows it returns, never by
         // another registered sentence (P2c, CodeRabbit on #1788).
@@ -581,12 +753,12 @@ enum BrainBarMenuPresenter {
                     let kept = sentences(string).compactMap { sentence in defer { title = false }; return keep(sentence, title) }
                     return kept.isEmpty ? nil : kept.joined(separator: " ")
                 }
-                if row.kind == .needsYou, row.strings.isEmpty { row.strings = needs(.system).strings + handoff }
+                if row.kind == .needsYou, row.strings.isEmpty { row.strings = needs(.system).strings }
                 return row.strings.isEmpty && row.kind != .separator ? nil : row
             }
         }
         let drawn = p
-        bySentence { holds($0, on: drawn, [.claim]) ? $0 : $1 ? Say.generic.text : nil }
+        bySentence { holds($0, on: drawn, [.claim]) ? $0 : $1 ? Say.d5.text : nil }
         let corrected = p
         bySentence { sentence, _ in holds(sentence, on: corrected, [.reassurance]) ? sentence : nil }
         // B5 (round 1), last since P2c (CodeRabbit on #1788): once both passes have dropped what they drop, the standing items

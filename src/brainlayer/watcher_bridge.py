@@ -8,6 +8,10 @@ Filtering layers:
   2. classify_content: existing pipeline (skip tool JSON, acknowledgments, etc.)
   3. chunk_content: min-length by content type (80 for assistant, 15 for user)
   4. Post-chunk: strip system-reminder injections from content, skip file deletion diffs
+
+Thinking (reasoning) blocks take a parallel path: classify_thinking applies the same
+assistant-text gates, layers 3-4 run unchanged, and the chunk is stored with the hidden
+``agent-thinking`` source class (Etan, 2026-11-17, choice A: stored, opt-in search only).
 """
 
 import hashlib
@@ -23,21 +27,33 @@ from typing import Any
 
 import apsw
 
-from .agent_provenance import ProvenanceDecision, classify_provenance, effective_visibility
+from .agent_provenance import (
+    THINKING_SOURCE_CLASS,
+    ProvenanceDecision,
+    classify_provenance,
+    effective_visibility,
+    is_hidden_source_class,
+)
 from .agy_attribution import STATE_FILE_NAME, AgyAttributionGate
 from .alarm import BrainLayerAlarm
 from .chunk_origin import detect_chunk_origin
 from .chunk_write import insert_canonical_chunk
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .content_class import classify_content_class
-from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_seen, normalized_exact_hash
+from .dedupe import (
+    find_duplicate,
+    merge_duplicate_chunk,
+    merge_existing_chunk_seen,
+    normalized_exact_hash,
+)
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
 from .pipeline.chunk import chunk_content
-from .pipeline.classify import classify_content
+from .pipeline.classify import classify_content, classify_thinking
 from .pipeline.correction_detection import build_correction_tags
 from .pipeline.secret_scrub import scrub_secrets
 from .queue_io import enqueue_watcher_chunk
+from .queued_messages import queued_user_text
 from .t3_provenance import (
     T3_LINKAGE_HOLD_KEY,
     T3_UNLINKED,
@@ -57,7 +73,6 @@ logger = logging.getLogger(__name__)
 SKIP_ENTRY_TYPES = frozenset(
     {
         "progress",
-        "queue-operation",
         "file-history-snapshot",
         "pr-link",
         "last-prompt",
@@ -71,6 +86,7 @@ ALLOWED_ENTRY_TYPES = frozenset(
         "user",
         "assistant",
         "whatsapp_message",
+        "queue-operation",
     }
 )
 
@@ -172,6 +188,8 @@ def _is_pure_deletion_diff(text: str) -> bool:
 def _extract_raw_text(entry: dict) -> str:
     """Extract the raw text content from any JSONL entry type."""
     entry_type = entry.get("type", "")
+    if entry_type == "queue-operation":
+        return queued_user_text(entry) or ""
     if entry_type == "user":
         msg = entry.get("message")
         raw = msg if isinstance(msg, str) else (msg.get("content", "") if isinstance(msg, dict) else "")
@@ -376,7 +394,7 @@ def _content_class_for_visibility(base_content_class: str, visibility: str) -> s
     return "cold"
 
 
-def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, project, content_type):
+def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, project, content_type, *, hidden=None):
     """A reread of acknowledged archive bytes is not another sighting."""
     import sqlite3
     from contextlib import closing
@@ -393,6 +411,8 @@ def _archive_reconciliation_stored(db_path, chunk_id, content, created_at, proje
                     created_at=created_at,
                     project=project,
                     content_type=content_type,
+                    hidden=hidden,
+                    exclude_sources=("t3",),
                 )[0]
                 is not None
             )
@@ -597,30 +617,37 @@ def create_flush_callback(
                         unresolved_source_versions[source_file] = source_version
             claude_conversation_id = metrics.run("provenance", _extract_claude_conversation_id, source_file)
 
+            # Thinking blocks: their own classifier, so layers 1-2 below stay text-only.
+            try:
+                thinking = metrics.run("classify", classify_thinking, entry)
+            except Exception:
+                logger.exception("Thinking classification failed for watcher entry from %s", source_file)
+                thinking = None
+
             # Layer 1: Pre-classify filter
             skip_reason = should_skip_entry(entry, source_file=source_file)
-            if skip_reason:
-                skipped += 1
-                confirm_entry(entry, source_file)
-                continue
 
             # Layer 2: Pipeline classify
-            try:
-                classified = metrics.run("classify", classify_content, entry)
-            except Exception:
-                logger.exception("Classification failed for watcher entry from %s", source_file)
-                skipped += 1
-                confirm_entry(entry, source_file)
-                continue
+            classified = None
+            if not skip_reason:
+                try:
+                    classified = metrics.run("classify", classify_content, entry)
+                except Exception:
+                    logger.exception("Classification failed for watcher entry from %s", source_file)
 
-            if classified is None:
+            if classified is None and thinking is None:
                 skipped += 1
                 confirm_entry(entry, source_file)
                 continue
 
             # Layer 3: Pipeline chunk
             try:
-                chunks = metrics.run("chunk", chunk_content, classified)
+                chunks = [
+                    chunk
+                    for item in (classified, thinking)
+                    if item is not None
+                    for chunk in metrics.run("chunk", chunk_content, item)
+                ]
             except Exception:
                 logger.exception("Chunking failed for watcher entry from %s", source_file)
                 skipped += 1
@@ -636,6 +663,13 @@ def create_flush_callback(
                 content_hash = normalized_exact_hash(clean_content)[:16]
                 file_stem = _session_file_stem(source_file)
                 chunk_id = _realtime_chunk_id(file_stem, project, content_hash)
+                # Distinct origin IDs let the existing exact dedupe retain an alias in
+                # either arrival order, while the canonical content stays a single row.
+                # queued=true means first seen in the queue, not never delivered:
+                # a later delivered user entry aliases to this canonical enqueue time.
+                # Withdrawn (popAll) drafts stay stored as the words typed at that time.
+                if chunk.metadata.get("queued"):
+                    chunk_id += "-queued"
 
                 # Layer 4: Post-chunk content filter
                 skip_reason = should_skip_chunk_content(clean_content, chunk_id=chunk_id, source_file=source_file)
@@ -689,6 +723,10 @@ def create_flush_callback(
                 if source_class == "brain-worker":
                     skipped += 1
                     continue
+                is_thinking = metadata.get("thinking") is True
+                if is_thinking:
+                    metadata["thinking_source_class"] = source_class
+                    source_class = THINKING_SOURCE_CLASS
                 metadata["provenance_tag"] = provenance_decision.provenance_tag
                 metadata["provenance_search_policy"] = provenance_decision.search_policy
                 metadata["provenance_effective_visibility"] = visibility
@@ -696,7 +734,13 @@ def create_flush_callback(
 
                 if entry.get("_archive_reconciliation") and preview_chunks is None:
                     if _archive_reconciliation_stored(
-                        db_path or get_db_path(), chunk_id, clean_content, created_at, project, chunk.content_type.value
+                        db_path or get_db_path(),
+                        chunk_id,
+                        clean_content,
+                        created_at,
+                        project,
+                        chunk.content_type.value,
+                        hidden=is_hidden_source_class(source_class),
                     ):
                         skipped += 1
                         continue
@@ -747,6 +791,8 @@ def create_flush_callback(
                                 created_at=created_at,
                                 project=project,
                                 content_type=chunk.content_type.value,
+                                hidden=is_hidden_source_class(source_class),
+                                exclude_sources=("t3",),
                             )
                             if duplicate is not None:
                                 merge_duplicate_chunk(
@@ -762,6 +808,7 @@ def create_flush_callback(
                                     },
                                     mechanism=duplicate.mechanism,
                                     hamming_distance_value=duplicate.hamming_distance,
+                                    preserve_existing_alias=True,
                                 )
                                 record_direct_liveness(duplicate.canonical_chunk_id, ingested_at)
                                 metrics.run("commit", cursor.execute, "COMMIT")
@@ -779,6 +826,7 @@ def create_flush_callback(
                                     "tags": tags,
                                     "created_at": created_at,
                                     "last_seen_at": created_at,
+                                    # merge_existing_chunk_seen never relabels an existing row as thinking.
                                     "source_class": source_class,
                                 },
                             ):

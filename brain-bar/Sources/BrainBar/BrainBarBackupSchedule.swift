@@ -270,6 +270,12 @@ enum BackupLocalFiles {
         latest(names, matching: #"^claude-jsonl-\d{4}-\d{2}-\d{2}\.tar\.gz$"#)
     }
 
+    /// The compressed database copies the backup keeps on this Mac (`.db.zst`, legacy `.db.gz`), by the same rule as
+    /// `backup_daily._parse_snapshot_date`: a name that starts with its ISO date and ends with a compressed suffix.
+    static func compressedSnapshots(in names: [String]) -> [String] {
+        names.filter { $0.range(of: #"^\d{4}-\d{2}-\d{2}.*\.db\.(zst|gz)$"#, options: .regularExpression) != nil }
+    }
+
     /// The names carry ISO dates, so the lexically greatest is the newest.
     private static func latest(_ names: [String], matching pattern: String) -> String? {
         names.filter { $0.range(of: pattern, options: .regularExpression) != nil }.max()

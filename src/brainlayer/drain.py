@@ -20,7 +20,7 @@ import apsw
 import sqlite_vec
 
 from ._helpers import _is_sqlite_busy_error, serialize_f32
-from .agent_provenance import normalize_provenance_class, normalize_source_class
+from .agent_provenance import is_hidden_source_class, normalize_provenance_class, normalize_source_class
 from .chunk_origin import detect_chunk_origin
 from .chunk_write import canonical_content_hash, insert_canonical_chunk
 from .content_class import classify_content_class
@@ -567,6 +567,8 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
         created_at=values.get("created_at"),
         project=values.get("project"),
         content_type=values.get("content_type"),
+        hidden=is_hidden_source_class(values.get("source_class")),
+        exclude_sources=("t3",),
     )
     if duplicate is not None:
         _merge_watcher_source_position(conn, chunk_id=duplicate.canonical_chunk_id, incoming=values)
@@ -578,6 +580,7 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
             mechanism=duplicate.mechanism,
             hamming_distance_value=duplicate.hamming_distance,
             ensure_schema=False,
+            preserve_existing_alias=True,
         )
         return duplicate.canonical_chunk_id
     _merge_watcher_source_position(conn, chunk_id=chunk_id, incoming=values, reactivate=True)

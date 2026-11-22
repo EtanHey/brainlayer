@@ -121,6 +121,25 @@ def test_hybrid_cache_rejects_result_after_cross_connection_source_class_change(
     assert "cache-source-class-row" not in second["ids"][0]
 
 
+def test_hybrid_search_hides_agent_thinking_by_default_and_opt_in_reveals_it(store):
+    embedding = _embed("hybrid agent thinking visibility")
+    _insert_chunk(store, chunk_id="hybrid-said", content="HybridThinkingNeedle said aloud", embedding=embedding)
+    _insert_chunk(store, chunk_id="hybrid-thought", content="HybridThinkingNeedle thought quietly", embedding=embedding)
+    store.conn.cursor().execute("UPDATE chunks SET source_class = 'agent-thinking' WHERE id = 'hybrid-thought'")
+
+    default = store.hybrid_search(query_embedding=embedding, query_text="HybridThinkingNeedle", n_results=5)
+    opt_in = store.hybrid_search(
+        query_embedding=embedding,
+        query_text="HybridThinkingNeedle",
+        n_results=5,
+        include_hidden_source_classes=True,
+    )
+
+    assert "hybrid-said" in default["ids"][0]
+    assert "hybrid-thought" not in default["ids"][0]
+    assert {"hybrid-said", "hybrid-thought"} <= set(opt_in["ids"][0])
+
+
 def test_hybrid_cache_rejects_result_on_new_reader_with_same_data_version(store):
     embedding = _embed("cross thread source class cache")
     _insert_chunk(

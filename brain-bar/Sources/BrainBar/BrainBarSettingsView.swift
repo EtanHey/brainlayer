@@ -1166,6 +1166,8 @@ final class BrainBarSettingsNavigation: ObservableObject {
 
 struct BrainBarSettingsView: View {
     @AppStorage(BrainBarNewMenuPreference.key) private var newMenuEnabled: Bool = BrainBarNewMenuPreference.defaultValue
+    /// L6: the whole UI's design, the same preference the new design's Settings window writes.
+    @AppStorage(BrainBarDesign.key) private var design: String = BrainBarDesign.defaultValue.rawValue
     @StateObject var viewModel: BrainBarSettingsViewModel
     @StateObject private var navigation = BrainBarSettingsNavigation()
     @Environment(\.brainBarDriveAuth) private var driveAuth
@@ -1364,6 +1366,15 @@ struct BrainBarSettingsView: View {
             }
         case .advanced:
             VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("Design").font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Picker("Design", selection: $design) {
+                        ForEach(BrainBarDesign.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .labelsHidden().pickerStyle(.segmented).fixedSize()
+                }.padding(.vertical, 7)
+                Divider()
                 HStack {
                     Text("Use the new menu").font(.system(size: 12, weight: .semibold))
                     Spacer()

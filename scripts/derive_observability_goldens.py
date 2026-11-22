@@ -136,7 +136,7 @@ def _db_sections(case: dict[str, Any], root: Path, template: dict[str, Any]) -> 
             "by_emitter": [{"count_in_window": count, "derived_from": source, "emitter": emitter} for (emitter, source), count in sorted(by_emitter.items())],
             "by_source_class": [{"count": row["count"], "in_window": row["in_window"], "source_class": row["source_class"]} for row in by_source_class],
             "derivation_note": "metadata.attributionAgent is absent in the 2026-09-13 census; emitter derives from source, then sender, then source_file, or the section is unmeasurable",
-            "hidden_from_default_search": connection.execute("SELECT COUNT(*) FROM chunks WHERE source_class IN ('desktop', 'brain-worker')").fetchone()[0],
+            "hidden_from_default_search": connection.execute("SELECT COUNT(*) FROM chunks WHERE source_class IN ('desktop', 'agent-thinking', 'brain-worker')").fetchone()[0],
             "inputs": inputs,
             "reason": "",
             "state": "measured",

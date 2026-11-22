@@ -7,8 +7,16 @@ import stat
 from contextlib import closing, contextmanager, nullcontext
 from pathlib import Path
 
-from ..dedupe import _active_clause, _scope_clause, find_duplicate, normalized_exact_hash
+from ..dedupe import (
+    _active_clause,
+    _existing_alias,
+    _scope_clause,
+    _visibility_clause,
+    find_duplicate,
+    normalized_exact_hash,
+)
 from ..ingest_denylist import is_denylisted
+from ..source_visibility import is_hidden_source_class
 from ..t3_provenance import compact_codex_header
 from ..watcher import CodexTurnContext, OffsetRegistry, fold_codex_turn_context, normalize_provider_entry
 from ..watcher_bridge import create_flush_callback
@@ -118,10 +126,15 @@ def _resolved_candidate(db, row):
     """Resolve read-only in the writer's duplicate-before-reactivation order."""
     if db is None:
         return None
+    visibility = _visibility_clause(db, is_hidden_source_class(row.get("source_class")))
     own = db.execute(
-        "SELECT id, source_file, source, archived_at FROM chunks WHERE id = ? AND length(trim(content)) > 0",
+        f"SELECT id, source_file, source, archived_at, ({visibility}) FROM chunks "
+        "WHERE id = ? AND (source IS NULL OR source != 't3') AND length(trim(content)) > 0",
         (row["chunk_id"],),
     ).fetchone()
+    if own and not own[4]:
+        # Same-id class changes belong to the writer (including visible promotion).
+        return None
     reactivate = own and (
         own[2] == "realtime_watcher"
         and own[1] == row.get("source_file")
@@ -130,10 +143,14 @@ def _resolved_candidate(db, row):
     )
     if own and not reactivate:
         return (*own[:2], "own_id")
+    alias = _existing_alias(db, row["chunk_id"])
+    if alias and db.execute("SELECT 1 FROM chunks WHERE id=? AND source='t3'", (alias[0],)).fetchone():
+        return None
     if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunk_id_alias'").fetchone():
         alias = db.execute(
             f"SELECT c.id, c.source_file FROM chunk_id_alias a JOIN "
-            f"(SELECT id, source_file FROM chunks WHERE {_active_clause(db)} AND length(trim(content)) > 0) c "
+            f"(SELECT id, source_file FROM chunks WHERE {_active_clause(db)} "
+            f"AND {visibility} AND (source IS NULL OR source != 't3') AND length(trim(content)) > 0) c "
             "ON c.id = a.canonical_chunk_id WHERE a.old_chunk_id = ?",
             (row["chunk_id"],),
         ).fetchone()
@@ -148,6 +165,8 @@ def _resolved_candidate(db, row):
             created_at=row.get("created_at"),
             project=row.get("project"),
             content_type=row.get("content_type"),
+            hidden=is_hidden_source_class(row.get("source_class")),
+            exclude_sources=("t3",),
         )
         match = (
             db.execute("SELECT id, source_file FROM chunks WHERE id = ?", (hit.canonical_chunk_id,)).fetchone()
@@ -158,7 +177,7 @@ def _resolved_candidate(db, row):
     scope, params = _scope_clause(row.get("project"), row.get("content_type") or "assistant_text")
     exact = db.execute(
         f"SELECT id, source_file FROM chunks WHERE dedupe_hash = ? AND {_active_clause(db)} "
-        f"AND {scope} ORDER BY created_at ASC, id ASC LIMIT 1",
+        f"AND {scope} AND {visibility} AND (source IS NULL OR source != 't3') ORDER BY created_at ASC, id ASC LIMIT 1",
         (normalized_exact_hash(str(row["content"]).strip()), *params),
     ).fetchone()
     return (*exact, "exact_hash") if exact else None
