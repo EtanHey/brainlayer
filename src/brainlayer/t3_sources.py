@@ -56,9 +56,12 @@ def resolve_t3_sources(
     except sqlite3.Error as exc:
         if sources and tolerate_legacy_failure:
             return sources + [(legacy, projection_version or 1)]
+        # SQLite error text can echo secrets; scrub it before it leaves in the alarm.
+        from .pipeline.secret_scrub import scrub_for_storage
+
         raise_alarm(
             "t3_source_unavailable",
             "could not inspect T3 source read-only",
-            {"state_db_path": str(selected), "error": str(exc)},
+            {"state_db_path": str(selected), "error": scrub_for_storage(str(exc))[0]},
         )
     return sources or [(legacy, projection_version or 1)]

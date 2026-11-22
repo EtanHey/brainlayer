@@ -744,6 +744,75 @@ def test_unreadable_default_legacy_source_records_alerting_health(tmp_path, monk
     assert json.loads(health.read_text())["alert_reasons"] == ["source_selection_failure"]
 
 
+_SYNTHETIC_SECRET = "sk-ant-" + "A1b2C3d4" * 5
+
+
+def _capture_source_alarms(monkeypatch, error: str) -> None:
+    """Fail every T3 table probe with ``error``; raise the alarm without emitting it."""
+    from brainlayer import t3_sources
+
+    def fail_probe(_path):
+        raise sqlite3.OperationalError(error)
+
+    def capture(code, message, context):
+        raise BrainLayerAlarm(code, message, context)
+
+    monkeypatch.setattr(t3_sources, "_tables", fail_probe)
+    monkeypatch.setattr(t3_sources, "raise_alarm", capture)
+
+
+@pytest.mark.parametrize("explicit", [True, False])
+def test_source_alarm_scrubs_secret_from_sqlite_error(tmp_path, monkeypatch, explicit):
+    from brainlayer.t3_sources import resolve_t3_sources
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / ".t3/userdata"
+    root.mkdir(parents=True)
+    legacy = root / "state.sqlite"
+    legacy.write_bytes(b"")
+    _capture_source_alarms(monkeypatch, f"unable to open {_SYNTHETIC_SECRET} near line 7")
+
+    with pytest.raises(BrainLayerAlarm) as raised:
+        resolve_t3_sources(legacy if explicit else None)
+
+    alarm = raised.value
+    assert alarm.code == "t3_source_unavailable"
+    assert alarm.context["state_db_path"] == str(legacy)
+    assert _SYNTHETIC_SECRET not in json.dumps(alarm.context)
+    assert "REDACTED" in alarm.context["error"]
+    assert alarm.context["error"].startswith("unable to open ")
+    assert alarm.context["error"].endswith(" near line 7")
+
+
+def test_source_alarm_keeps_secret_free_sqlite_error_verbatim(tmp_path, monkeypatch):
+    from brainlayer.t3_sources import resolve_t3_sources
+
+    source = tmp_path / "state.sqlite"
+    source.write_bytes(b"")
+    _capture_source_alarms(monkeypatch, "file is not a database")
+
+    with pytest.raises(BrainLayerAlarm) as raised:
+        resolve_t3_sources(source)
+
+    assert raised.value.context == {"state_db_path": str(source), "error": "file is not a database"}
+
+
+def test_tolerated_legacy_failure_still_returns_both_sources(tmp_path, monkeypatch):
+    from brainlayer.t3_sources import resolve_t3_sources
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / ".t3/userdata"
+    root.mkdir(parents=True)
+    modern, legacy = root / "statev2.sqlite", root / "state.sqlite"
+    modern.write_bytes(b"")
+    legacy.write_bytes(b"")
+    _capture_source_alarms(monkeypatch, f"locked {_SYNTHETIC_SECRET}")
+
+    assert resolve_t3_sources(tolerate_legacy_failure=True) == [(modern, 2), (legacy, 1)]
+    with pytest.raises(BrainLayerAlarm, match="t3_source_unavailable"):
+        resolve_t3_sources()
+
+
 def test_unchanged_second_ingest_embeds_and_upserts_zero(tmp_path, monkeypatch):
     from brainlayer import index_new
     from brainlayer.ingest.t3 import ingest_t3
