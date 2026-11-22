@@ -65,8 +65,9 @@ import SwiftUI
     func testUploadStalled() throws {
         let i = try inputs("upload-stalled")
         let p = try XCTUnwrap(i.backupProgress)
-        XCTAssertEqual(p.percentage, 25)
-        XCTAssertEqual(i.capture.now.timeIntervalSince(try XCTUnwrap(p.checkpointAt)), 15 * 60)
+        XCTAssertNil(p.percentage)
+        XCTAssertTrue(p.isStalled)
+        XCTAssertEqual(i.capture.now.timeIntervalSince(try XCTUnwrap(p.checkpointAt)), 21 * 60)
         XCTAssertFalse(p.animates(after: p, reduceMotion: false))
     }
 

@@ -698,6 +698,13 @@
             "bytes_total": {"type": ["integer", "null"], "minimum": 1},
             "verification_pending": {"type": "boolean"},
             "bytes_confirmed_at": {"type": ["string", "null"], "format": "date-time"},
+            "sleep_note": {"type": "string", "minLength": 1},
+            "snapshot_slept_seconds": {"type": "number", "minimum": 0},
+            "snapshot_wall_seconds": {"type": "number", "minimum": 0},
+            "upload_slept_seconds": {"type": "number", "minimum": 0},
+            "upload_wall_seconds": {"type": "number", "minimum": 0},
+            "run_slept_seconds": {"type": "number", "minimum": 0},
+            "run_wall_seconds": {"type": "number", "minimum": 0},
             "local_integrity": {
               "type": [
                 "string",

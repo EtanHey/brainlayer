@@ -1,9 +1,10 @@
 import Foundation
 
-/// One attempt on a backup lane: a finished, verified run (ok) or a failed one.
+/// A dated backup-lane record: a completed run or a separate error event.
 struct NDAttempt: Equatable, Sendable {
     var at: Date
     var ok: Bool
+    var isErrorEvent = false
 }
 
 /// A week of backup attempts (L2). A lane whose log could not be read, or held a damaged line inside the window, is
@@ -134,8 +135,22 @@ enum NDBackupHistoryReader {
         guard !log.unreadable else { return nil }
         var skipped = 0
         var attempts: [NDAttempt] = []
-        for line in log.lines {
-            guard let row = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { skipped += 1; continue }
+        let rows = log.lines.map { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
+        let dated = rows.enumerated().compactMap { index, row -> (index: Int, at: Date)? in
+            guard let row, let at = BackupLogReader.isoDate(row["attempted_at"] ?? row["at"] ?? row["ts"] ?? row["created_at"]) else { return nil }
+            return (index, at)
+        }
+        for (index, value) in rows.enumerated() {
+            guard let row = value else { skipped += 1; continue }
+            if row["event"] as? String == "local_retention_error" {
+                // The producer writes its retention warning before its dated result. Use that following run's
+                // clock, or the preceding row only at EOF. Undatable events still use job-alerts.
+                let at = dated.first { $0.index >= index }?.at ?? dated.last { $0.index < index }?.at
+                if let at, at <= now, now.timeIntervalSince(at) <= windowS {
+                    attempts.append(.init(at: at, ok: false, isErrorEvent: true))
+                }
+                continue
+            }
             switch rowKind(row, now: now) {
             case .skip: continue
             case .damage: skipped += 1; continue
