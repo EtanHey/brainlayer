@@ -91,11 +91,6 @@ struct NDPipelineChart: View {
         LineHover(title: Say.keptSafe, line: Say.keptSafeLine, rects: [NDPipelineLayout.keptSafe], edge: .top),
     ]
 
-    /// 1.5.1: the providers whose icon opens the agents' fault panel: exactly the ones a check names.
-    static func faultTriggers(_ state: NDPipelineState) -> [AgentFamily] {
-        state.allUnconfirmed ? [] : NDPipelineLayout.agentRows.map(\.0).filter { state.agentFaults[$0] != nil }
-    }
-
     /// R1.5: the Kept-safe frame no longer grows (no actions on the chart).
     var keptGrown: Bool { false }
 
@@ -147,25 +142,14 @@ struct NDPipelineChart: View {
                     .offset(x: frame.minX, y: frame.minY)
                     .allowsHitTesting(false)
             }
-            // R1.4 change 2: each provider icon's hover and spoken name is its name. 1.5.1: a provider a check names opens the
-            // agents' fault panel itself (the same panel, with Copy report), not only a tooltip.
+            // One pointer target for the whole column; provider names remain available to VoiceOver.
             ForEach(NDPipelineLayout.agentRows, id: \.0.rawValue) { family, _ in
                 let c = NDPipelineLayout.iconCentre(family)
-                if Self.faultTriggers(state).contains(family) {
-                    let ring = CGRect(x: c.x - 12, y: c.y - 12, width: 24, height: 24)
-                    NDStationButton(station: .agents, interactive: interactive, hovered: $hovered, presenter: panels,
-                                    shape: NDStationHitShape(circle: CGRect(origin: .zero, size: ring.size), label: nil, round: true),
-                                    spoken: NDProvider.name(family),
-                                    content: { popover(.agents) }, layout: { content in panel(.agents, content: content) })
-                        .frame(width: ring.width, height: ring.height)
-                        .position(c)
-                } else {
-                    Color.clear.frame(width: 22, height: 22).contentShape(Rectangle())
-                        .help(NDProvider.name(family))
-                        .accessibilityElement()
-                        .accessibilityLabel(NDProvider.name(family))
-                        .position(c)
-                }
+                Color.clear.frame(width: 22, height: 22)
+                    .accessibilityElement()
+                    .accessibilityLabel(NDProvider.name(family))
+                    .allowsHitTesting(false)
+                    .position(c)
             }
             if let previewHover { preview(previewHover) }
         }
@@ -198,29 +182,39 @@ struct NDPipelineChart: View {
         return drawn
     }
 
-    /// The station's panel at its content's measured height.
+    /// Words currently drawn on the chart, including the progress row that replaces a healthy Drive status.
+    var displayedPanelWords: [NDStation: [CGRect]] {
+        guard Self.showsProgress(state, progress: backupProgress) else { return [:] }
+        let drawn = Self.drawingState(state, progress: backupProgress)
+        return [.drive: NDPipelineLayout.labelRects(.drive, drawn) + [Self.progressFrame(state)]]
+    }
+
+    /// Measure each candidate at its own width before choosing an edge (L58b).
     func panel(_ s: NDStation, content: AnyView) -> NDPipelineLayout.Panel {
-        let actions: Set<NDStation> = []  // R1.5: no action sits on the chart, so none for a panel to clear
-        let widths: [NDStation: CGFloat] = [:]
-        // The width first (a side panel narrows to stay inside the window), then the height the content needs at it.
-        let width = NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: 100).body.width
-        let height = NDStationPopover.measure(content, width: width).height
-        let layout = NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: height)
-        if s == .drive, layout.outer.minY < NDPipelineLayout.activityLabelsBottom {
-            // Gap 22/23: a live-upload fault has more words. Use the room across the top lane, clear of Activity.
+        let drawn = Self.drawingState(state, progress: backupProgress)
+        let measure: (CGFloat) -> CGFloat = { NDStationPopover.measure(content, width: $0).height }
+        let layout = NDPipelineLayout.measuredPanel(s, state: drawn, displayedWords: displayedPanelWords,
+                                                   heightAtWidth: measure)
+        if s == .drive, layout.scrolls {
             let wide: CGFloat = 600
-            let fittedHeight = NDStationPopover.measure(content, width: wide).height
-            return NDPipelineLayout.panel(s, state: state, actions: actions, actionWidths: widths, height: fittedHeight, width: wide)
+            return NDPipelineLayout.panel(s, state: drawn, actions: [], height: measure(wide), width: wide,
+                                          displayedWords: displayedPanelWords)
         }
         return layout
     }
 
+    static func stationTarget(_ s: NDStation, state: NDPipelineState) -> (frame: CGRect, shape: NDStationHitShape) {
+        let hit = NDPipelineLayout.hitShape(s, state)
+        let frame = hit.label.map { hit.circle.union($0) } ?? hit.circle
+        return (frame, NDStationHitShape(circle: hit.circle.offsetBy(dx: -frame.minX, dy: -frame.minY),
+                                        label: hit.label?.offsetBy(dx: -frame.minX, dy: -frame.minY), rectangular: s == .agents))
+    }
+
     @ViewBuilder private func station(_ s: NDStation) -> some View {
-        let shape = NDPipelineLayout.hitShape(s, state)
-        let frame = shape.label.map { shape.circle.union($0) } ?? shape.circle
+        let target = Self.stationTarget(s, state: state)
+        let frame = target.frame
         NDStationButton(station: s, interactive: interactive, hovered: $hovered, presenter: panels,
-                        shape: NDStationHitShape(circle: shape.circle.offsetBy(dx: -frame.minX, dy: -frame.minY),
-                                                 label: shape.label?.offsetBy(dx: -frame.minX, dy: -frame.minY)),
+                        shape: target.shape,
                         content: { popover(s) }, layout: { content in panel(s, content: content) })
             .frame(width: frame.width, height: frame.height)
             .position(x: frame.midX, y: frame.midY)
@@ -498,7 +492,9 @@ struct NDStationHitShape: Shape {
     let label: CGRect?
     /// A station's ring is a circle; the agents' group and the Memory box are rounded rectangles.
     var round: Bool? = nil
+    var rectangular = false
     func path(in rect: CGRect) -> Path {
+        if rectangular { return Path(circle) }
         var p = Path()
         if round ?? (label != nil) { p.addEllipse(in: circle) } else { p.addRoundedRect(in: circle, cornerSize: CGSize(width: 12, height: 12)) }
         if let label { p.addRect(label) }
@@ -758,7 +754,7 @@ struct NDPanelChrome: View {
                 }
             }
             .frame(width: body.width, height: body.height, alignment: .topLeading)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .circular))
             .offset(x: body.minX, y: body.minY)
         }
         .frame(width: o.width, height: o.height, alignment: .topLeading)
@@ -771,21 +767,39 @@ struct NDPanelShape: Shape {
     let edge: Edge
 
     func path(in rect: CGRect) -> Path {
-        var p = Path(roundedRect: body, cornerRadius: 8, style: .continuous)  // R1.5 change 2: radius 8
+        var p = Path()
+        let r = min(8, body.width / 2, body.height / 2)
         let w = NDPipelineLayout.arrowHalfWidth
-        var arrow = Path()
-        switch edge {
-        case .top:
-            arrow.move(to: CGPoint(x: tip.x - w, y: body.maxY)); arrow.addLine(to: tip); arrow.addLine(to: CGPoint(x: tip.x + w, y: body.maxY))
-        case .bottom:
-            arrow.move(to: CGPoint(x: tip.x - w, y: body.minY)); arrow.addLine(to: tip); arrow.addLine(to: CGPoint(x: tip.x + w, y: body.minY))
-        case .trailing:
-            arrow.move(to: CGPoint(x: body.minX, y: tip.y - w)); arrow.addLine(to: tip); arrow.addLine(to: CGPoint(x: body.minX, y: tip.y + w))
-        case .leading:
-            arrow.move(to: CGPoint(x: body.maxX, y: tip.y - w)); arrow.addLine(to: tip); arrow.addLine(to: CGPoint(x: body.maxX, y: tip.y + w))
+        p.move(to: CGPoint(x: body.minX + r, y: body.minY))
+        if edge == .bottom {
+            p.addLine(to: CGPoint(x: tip.x - w, y: body.minY))
+            p.addLine(to: tip)
+            p.addLine(to: CGPoint(x: tip.x + w, y: body.minY))
         }
-        arrow.closeSubpath()
-        p.addPath(arrow)
+        p.addLine(to: CGPoint(x: body.maxX - r, y: body.minY))
+        p.addArc(tangent1End: CGPoint(x: body.maxX, y: body.minY), tangent2End: CGPoint(x: body.maxX, y: body.minY + r), radius: r)
+        if edge == .leading {
+            p.addLine(to: CGPoint(x: body.maxX, y: tip.y - w))
+            p.addLine(to: tip)
+            p.addLine(to: CGPoint(x: body.maxX, y: tip.y + w))
+        }
+        p.addLine(to: CGPoint(x: body.maxX, y: body.maxY - r))
+        p.addArc(tangent1End: CGPoint(x: body.maxX, y: body.maxY), tangent2End: CGPoint(x: body.maxX - r, y: body.maxY), radius: r)
+        if edge == .top {
+            p.addLine(to: CGPoint(x: tip.x + w, y: body.maxY))
+            p.addLine(to: tip)
+            p.addLine(to: CGPoint(x: tip.x - w, y: body.maxY))
+        }
+        p.addLine(to: CGPoint(x: body.minX + r, y: body.maxY))
+        p.addArc(tangent1End: CGPoint(x: body.minX, y: body.maxY), tangent2End: CGPoint(x: body.minX, y: body.maxY - r), radius: r)
+        if edge == .trailing {
+            p.addLine(to: CGPoint(x: body.minX, y: tip.y + w))
+            p.addLine(to: tip)
+            p.addLine(to: CGPoint(x: body.minX, y: tip.y - w))
+        }
+        p.addLine(to: CGPoint(x: body.minX, y: body.minY + r))
+        p.addArc(tangent1End: CGPoint(x: body.minX, y: body.minY), tangent2End: CGPoint(x: body.minX + r, y: body.minY), radius: r)
+        p.closeSubpath()
         return p
     }
 }
