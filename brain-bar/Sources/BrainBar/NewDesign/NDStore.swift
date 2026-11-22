@@ -50,6 +50,8 @@ import SwiftUI
     private(set) var report = ""
     var onOpenWindow: ((NDPage) -> Void)?
     var onOpenSettings: (() -> Void)?
+    weak var windowActivationPolicy: BrainBarWindowActivationPolicy?
+    @Published private(set) var settingsBackupLine: String?
     var pasteboard: () -> NSPasteboard = { .general }
     /// Where the new design's own preferences (the Design choice in its Settings) are read and written. A capture
     /// fixture gives it a separate suite, so a capture never writes the installed app's preferences (F06).
@@ -67,6 +69,7 @@ import SwiftUI
     private(set) var iconActive = false
     /// The new window is open: the hero waveform and the backup history are read too.
     private(set) var windowActive = false
+    private var diagnosticsActive = false
     private var bound = false
     /// Work that is running or subscribed now; zero when neither surface is shown (tests read it).
     var liveWorkCount: Int {
@@ -92,10 +95,16 @@ import SwiftUI
         if active { refresh(); refreshWaves(force: true); refreshBackupHistory(force: true) }
     }
 
+    func setDiagnosticsActive(_ active: Bool) {
+        diagnosticsActive = active
+        updateLifecycle()
+        if active { refresh() }
+    }
+
     /// Nothing runs unless a surface shows the new design: switching to Classic or closing everything stops every
     /// subscription and cancels every task in flight.
     private func updateLifecycle() {
-        let wanted = iconActive || windowActive
+        let wanted = iconActive || windowActive || diagnosticsActive
         if wanted, !bound { bind() }
         if !wanted {
             cancellables.removeAll(); collectorCancellables.removeAll(); modelCancellables.removeAll()
@@ -217,7 +226,7 @@ import SwiftUI
 
     /// Re-sample the cached inputs (no IO).
     func refresh() {
-        guard !isFixture, let runtime, iconActive || windowActive else { return }
+        guard !isFixture, let runtime, iconActive || windowActive || diagnosticsActive else { return }
         let next = Self.sample(runtime: runtime, previous: inputs, now: Date())
         inputs = next
         let model = NDModel.make(next)
@@ -472,7 +481,21 @@ import SwiftUI
     func revealSettingsFile() {
         guard !isFixture, let model = runtime?.jobsModel else { return }
         model.revealConfigFile()
+        settingsBackupLine = model.settingsBackupLine
     }
+
+    var settingsFileURL: URL? { isFixture ? inputs.settingsBackups?.file : runtime?.jobsModel?.configFileURL }
+    func refreshSettingsFileSummary() {
+        if isFixture {
+            settingsBackupLine = inputs.settingsBackups?.line
+            return
+        }
+        guard let model = runtime?.jobsModel else { return }
+        model.refreshSettingsFileSummary()
+        settingsBackupLine = model.settingsBackupLine
+    }
+
+    func showDiagnostics() { NDDiagnosticsWindowController.show(store: self, activationPolicy: windowActivationPolicy) }
 
     func openWindow(_ page: NDPage) {
         self.page = page
