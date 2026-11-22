@@ -13,6 +13,8 @@ The observer compares deltas from two monotonic clocks. Darwin's `clock_gettime(
 `mach/mach_time.h` also documents that `mach_continuous_time` advances during sleep. Linux uses
 `CLOCK_BOOTTIME` with `CLOCK_MONOTONIC`. Adjustable wall timestamps only label the inferred bounds;
 an NTP/manual jump cannot trigger detection. A difference of at least 60 seconds records a pause.
+DarkWake time when the CPU is awake counts as awake time, so the observed suspended duration can
+be shorter than the span between closing the lid and full wake.
 
 Bounds are estimates between observation ticks, not exact kernel sleep events: awake time after
 wake can shift an inferred boundary by up to the surrounding progress tick. `sleep_note` is absent
