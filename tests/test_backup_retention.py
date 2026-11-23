@@ -292,6 +292,8 @@ def test_live_inventory_failure_is_logged_and_alerted_without_failing_backup(tmp
         old_rows.append(dict(receipt(item), db=str(db), snapshot=str(path)))
     (tmp_path / "log.jsonl").write_text("".join(json.dumps(r) + "\n" for r in old_rows))
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1")
+    # Pin the host: on a Linux runner the strict host check would raise first and hide the listing failure under test.
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m4")
     monkeypatch.setattr(b, "_find_drive_folder_ids", lambda *a, **kw: ["folder"])
     monkeypatch.setattr(b, "_list_drive_backup_files", Mock(side_effect=OSError("listing unavailable")))
     alert = tmp_path / "alerts.json"
