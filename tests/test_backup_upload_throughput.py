@@ -129,6 +129,52 @@ def test_upload_throughput_with_300ms_rtt(tmp_path, upload_server, capsys):
     assert len(upload_server.peers) == 1, "successful chunks/probes must reuse the TCP connection"
 
 
+def test_sleep_is_observed_in_upload_telemetry_without_changing_transfer(tmp_path, upload_server, monkeypatch):
+    import datetime as dt
+
+    from brainlayer import backup_sleep
+
+    values = {"inclusive": 0, "awake": 0, "wall": dt.datetime.fromisoformat("2026-11-22T07:09:00+02:00")}
+    tracker = backup_sleep.SleepTracker(
+        inclusive=lambda: values["inclusive"], awake=lambda: values["awake"], wall=lambda: values["wall"]
+    )
+    monkeypatch.setattr(backup_sleep, "SleepTracker", lambda: tracker)
+    real_put = backup._drive_put_with_deadline
+
+    def slept(*args, **kwargs):
+        response = real_put(*args, **kwargs)
+        if values["inclusive"] == 0:
+            values.update(inclusive=21600, wall=values["wall"] + dt.timedelta(hours=6))
+        return response
+
+    monkeypatch.setattr(backup, "_drive_put_with_deadline", slept)
+    upload_server.rtt = 0.001
+    snapshot = tmp_path / "fixture.zst"
+    snapshot.write_bytes(b"fixture")
+    telemetry = []
+    result = _upload(snapshot, upload_server, telemetry_callback=telemetry.append)
+    assert result["id"] == "loopback-file"
+    assert upload_server.confirmed == 7
+    assert telemetry[-1]["upload_wall_seconds"] == 21600
+    assert telemetry[-1]["upload_slept_seconds"] == 21600
+    assert len(telemetry[-1]["sleep_intervals"]) == 1
+    assert "07:09-13:09" in telemetry[-1]["sleep_note"]
+
+
+def test_upload_without_sleep_telemetry_needs_no_observer(tmp_path, upload_server, monkeypatch):
+    from brainlayer import backup_sleep
+
+    def unavailable():
+        raise RuntimeError("observer must not be constructed")
+
+    monkeypatch.setattr(backup_sleep, "SleepTracker", unavailable)
+    upload_server.rtt = 0.001
+    snapshot = tmp_path / "fixture.zst"
+    snapshot.write_bytes(b"fixture")
+    assert _upload(snapshot, upload_server)["id"] == "loopback-file"
+    assert upload_server.confirmed == 7
+
+
 def test_slow_link_completes_without_deadline_probe_loop(tmp_path, upload_server, monkeypatch):
     # Accelerate both link and deadline 100x: an 8 MiB PUT at 45 KiB/s takes
     # ~182s, above the old 120s watchdog, below the fixed 256s byte budget.

@@ -769,6 +769,10 @@ def send_brainbar_search_canary(socket_path: Path, query: str, timeout_seconds: 
             "arguments": {"query": query, "num_results": 1},
         },
     }
+    return _brainbar_request(socket_path, request, timeout_seconds)
+
+
+def _brainbar_request(socket_path: Path, request: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
     payload = json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout_seconds)
@@ -784,6 +788,63 @@ def send_brainbar_search_canary(socket_path: Path, query: str, timeout_seconds: 
     if not data:
         raise RuntimeError(f"BrainBar socket closed without response: {socket_path}")
     return json.loads(data.decode("utf-8"))
+
+
+def _brainbar_answers_ping(socket_path: Path, timeout_seconds: float) -> bool:
+    try:
+        response = _brainbar_request(socket_path, {"jsonrpc": "2.0", "id": 2, "method": "ping"}, timeout_seconds)
+        return (
+            isinstance(response, dict)
+            and response.get("id") == 2
+            and isinstance(response.get("result"), dict)
+            and "error" not in response
+        )
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
+def _recycle_hybrid_helper(label: str, command_runner: CommandRunner) -> str:
+    """Fail closed unless exactly one matching child belongs to the current daemon."""
+    daemon = _launchd_process_state(label, command_runner)
+    if daemon is None:
+        return "recycle_helper_skipped:daemon_pid_unknown"
+    daemon_pid = daemon[0]
+    expected_socket = f"/tmp/brainbar-hybrid-{daemon_pid}.sock"
+
+    def matches(line: str) -> int | None:
+        try:
+            pid, ppid, command = line.strip().split(None, 2)
+            args = shlex.split(command)
+            module = args.index("-m")
+            socket_arg = args.index("--socket-path")
+            if (
+                int(ppid) == daemon_pid
+                and args[module + 1] == "brainlayer.brainbar_hybrid_helper"
+                and args[socket_arg + 1] == expected_socket
+                and int(pid) > 1
+            ):
+                return int(pid)
+        except (ValueError, IndexError):
+            pass
+        return None
+
+    processes = command_runner(["ps", "-axo", "pid=,ppid=,command="])
+    if _command_returncode(processes):
+        return "recycle_helper_skipped:process_list_failed"
+    candidates = [pid for line in _command_stdout(processes).splitlines() if (pid := matches(line))]
+    if len(candidates) != 1:
+        return "recycle_helper_skipped:child_not_unique"
+    pid = candidates[0]
+    # Revalidate immediately before signalling; never fall back to a daemon restart
+    # when a responsive daemon's child has already exited or changed ownership.
+    current = command_runner(["ps", "-p", str(pid), "-o", "pid=,ppid=,command="])
+    if _command_returncode(current) or matches(_command_stdout(current)) != pid:
+        return "recycle_helper_skipped:child_changed"
+    current_daemon = _launchd_process_state(label, command_runner)
+    if current_daemon is None or current_daemon[0] != daemon_pid:
+        return "recycle_helper_skipped:daemon_changed"
+    outcome = command_runner(["kill", "-TERM", str(pid)])
+    return f"recycle_helper{'_failed' if _command_returncode(outcome) else ''}:{pid}"
 
 
 def _canary_text(response: Any) -> tuple[bool, str]:
@@ -926,6 +987,12 @@ def _apply_heals(
         if consecutive_failures >= threshold:
             if issue_code in bootstrap_issue_codes:
                 action = _bootstrap_if_absent(label, plist_path, command_runner)
+            elif (
+                issue_code == "brain_search_canary_failed"
+                and details.get("timeout")
+                and _brainbar_answers_ping(config.socket_path, config.socket_timeout_seconds)
+            ):
+                action = _recycle_hybrid_helper(label, command_runner)
             else:
                 process = _launchd_process_state(label, command_runner)
                 if process is not None and _state_is_uninterruptible(process[1]):
@@ -1626,8 +1693,8 @@ def _run_health_check_locked(
             page_size=config.missing_embedding_page_size,
             max_pages=config.missing_embedding_max_pages,
             instruction_limit=config.missing_embedding_instruction_limit,
-            # Leave the canary its timeout plus finalization headroom.
-            deadline_at=deadline_at - config.socket_timeout_seconds - 1,
+            # Reserve a canary plus an equally budgeted recovery ping and finalization.
+            deadline_at=deadline_at - 2 * config.socket_timeout_seconds - 1,
             monotonic_fn=monotonic_fn,
         )
         if result.missing_embedding_scan.completeness == "complete":
@@ -1751,6 +1818,8 @@ def _run_health_check_locked(
             config.brainbar_daemon_label,
             _plist_for_label(config, config.brainbar_daemon_label),
         )
+        if isinstance(exc, TimeoutError):
+            heal_issue_details["brain_search_canary_failed"] = {"timeout": True}
     if slow_result := deadline_reached("brain_search_canary"):
         return slow_result
 
