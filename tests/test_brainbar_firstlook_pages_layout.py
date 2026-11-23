@@ -136,7 +136,9 @@ def test_invented_retention_error_stays_in_log_and_active_job_alert(tmp_path):
     log = tmp_path / "invented-backup.log"
     alerts = tmp_path / "invented-alerts.json"
     jsonl_backup._retention_warning(log, message)
-    row = json.loads(log.read_text())
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(rows) == 1
+    row = rows[0]
     assert row == {"event": "local_retention_error", "error": message}
     assert job_alerts.report("jsonl-retention", row["error"], path=alerts, notify=lambda _: None)
     assert job_alerts.active_alerts(alerts)["jsonl-retention"] == message
