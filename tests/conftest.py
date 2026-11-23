@@ -130,7 +130,7 @@ def _shared_git_snapshot(common_dir: Path) -> dict[str, str]:
 
 @pytest.fixture(scope="session", autouse=True)
 def guard_shared_git_state():
-    """Fail the session if any test rewrites checkout-global Git state."""
+    """Reject shared config/ref rewrites, allowing concurrent fetch fast-forwards."""
     repo_root = Path(__file__).resolve().parents[1]
     common_result = _git_probe("rev-parse", "--git-common-dir", cwd=repo_root)
     if common_result.returncode != 0:
@@ -153,6 +153,16 @@ def guard_shared_git_state():
     yield
     final = _shared_git_snapshot(common_dir)
     changed = [label for label in initial if initial[label] != final[label]]
+    if "origin/main" in changed and "<absent>" not in (initial["origin/main"], final["origin/main"]):
+        ancestry = _git_probe(
+            f"--git-dir={common_dir}",
+            "merge-base",
+            "--is-ancestor",
+            initial["origin/main"].strip(),
+            final["origin/main"].strip(),
+        )
+        if ancestry.returncode == 0:
+            changed.remove("origin/main")
     if changed:
         pytest.fail("shared Git state changed during pytest: " + ", ".join(changed))
 

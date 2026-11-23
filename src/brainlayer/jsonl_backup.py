@@ -507,39 +507,133 @@ def _retention_warning(log_path: Path, error: str) -> None:
         pass  # Logging failure must not stop the backup either.
 
 
+def _log_local_retention_report(log_path: Path, entry: dict[str, Any]) -> None:
+    """Visibility must never stop a sweep or hide its returned deletion list."""
+    try:
+        _append_json_log(log_path, entry)
+    except Exception as exc:
+        try:
+            print(f"JSONL local retention reporting unavailable: {exc}", file=sys.stderr, flush=True)
+        except Exception:
+            pass  # Even an unavailable stderr cannot turn reporting into a sweep failure.
+
+
+def _report_blocked_local_archives(staging_dir: Path, *, log_path: Path, now: float, reason: str) -> None:
+    """Report a global veto without entering the deletion function or hashing files."""
+    days = int(os.environ.get("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION_DAYS", "14"))
+    held_bytes = 0
+    young_bytes = 0
+    kept = []
+    for path in _local_archive_paths(staging_dir):
+        age = now - path.stat().st_mtime
+        if age < days * 86400:
+            young_bytes += path.stat().st_size
+            continue
+        size = path.stat().st_size
+        held_bytes += size
+        kept.append({"name": path.name, "bytes": size, "first_reason": "sweep_blocked", "eligible_at": None})
+    _log_local_retention_report(
+        log_path,
+        {
+            "event": "local_retention_summary",
+            "kept": kept,
+            "blocking_error": reason,
+            "bytes_held": held_bytes,
+            "bytes_young": young_bytes,
+            "bytes_eligible_next": 0,
+            "next_eligible_at": None,
+            "message": f"JSONL local retention: {held_bytes / 1024**3:.2f} GiB ({held_bytes} bytes) held; "
+            f"next eligibility unknown: {reason}",
+        },
+    )
+
+
 def prune_local_archives(
-    staging_dir: Path, *, state_path: Path, log_path: Path, now: float, surviving_archives: dict[str, str | None]
+    staging_dir: Path,
+    *,
+    state_path: Path,
+    log_path: Path,
+    now: float,
+    surviving_archives: dict[str, str | None],
 ) -> list[str]:
     """Caller holds the staging lock; only durable exact-archive receipts authorize unlink."""
-    if not _local_retention_enabled():
-        return []
+    blocked_reason = None if _local_retention_enabled() else "local_retention_disabled"
     days = int(os.environ.get("BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION_DAYS", "14"))
     if days < 14:
         raise ValueError("local JSONL retention must be at least 14 days")
     receipts = _load_state(state_path).get("drive_archives", {})
     archives = _local_archive_paths(staging_dir)
-    if not archives:
-        return []
-    newest = max(archives, key=lambda p: (p.stat().st_mtime, p.as_posix()))
+    newest = max(archives, key=lambda p: (p.stat().st_mtime, p.as_posix()), default=None)
     deleted = []
+    held: list[dict[str, Any]] = []
+
+    def keep(path: Path, reason: str, eligible_at: float | None = None) -> None:
+        age = now - path.stat().st_mtime
+        if reason in {"verification_age", "mtime_age"} or (reason == "newest_sibling" and age < days * 86400):
+            verified_at = receipt.get("verified_at") if isinstance(receipt, dict) else None
+            if (
+                isinstance(receipt, dict)
+                and receipt.get("verified") is True
+                and isinstance(verified_at, (int, float))
+                and math.isfinite(verified_at)
+            ):
+                eligible_at = max(path.stat().st_mtime, verified_at) + days * 86400
+            elif reason == "verification_age":
+                reason = "verification_date_missing"
+        elif reason == "md5_or_drive":
+            if not receipt.get("archive_md5"):
+                reason = "receipt_md5_missing"
+            elif receipt.get("archive_id") not in surviving_archives:
+                reason = "drive_absent"
+            elif surviving_archives.get(receipt.get("archive_id")) != receipt["archive_md5"]:
+                reason = "drive_md5_mismatch"
+            else:
+                reason = "local_md5_mismatch"
+        eligible_date = None
+        if eligible_at is not None:
+            try:
+                eligible_date = dt.datetime.fromtimestamp(eligible_at, dt.UTC).isoformat()
+            except (OverflowError, OSError, ValueError):
+                reason = "verification_date_out_of_range"
+        entry = {
+            "name": path.name,
+            "bytes": path.stat().st_size,
+            "age_days": age / 86400,
+            "reason": reason,
+            "eligible_at": eligible_date,
+        }
+        if blocked_reason:
+            entry["blocking_error"] = blocked_reason
+        held.append(entry)
+
     for path in archives:
         age = now - path.stat().st_mtime
         receipt = receipts.get(path.name, {}) if isinstance(receipts, dict) else {}
+        if blocked_reason:
+            keep(path, "sweep_blocked")
+            continue
         if path == newest or age < days * 86400:
+            keep(path, "newest_sibling" if path == newest else "mtime_age")
             continue
         if not isinstance(receipt, dict) or receipt.get("verified") is not True:
+            keep(
+                path,
+                "no_receipt" if not isinstance(receipts, dict) or path.name not in receipts else "unverified_receipt",
+            )
             continue
         if (
             not isinstance(receipt.get("verified_at"), (int, float))
             or not math.isfinite(receipt["verified_at"])
             or now - receipt["verified_at"] < days * 86400
         ):
+            keep(path, "verification_age")
             continue
         if (
             not receipt.get("archive_md5")
             or surviving_archives.get(receipt.get("archive_id")) != receipt["archive_md5"]
             or _md5_file(path) != receipt["archive_md5"]
         ):
+            keep(path, "md5_or_drive")
             continue
         if (
             receipt.get("name") != path.name
@@ -547,6 +641,7 @@ def prune_local_archives(
             or not receipt.get("archive_id")
             or receipt.get("sha256") != _sha256_file(path)
         ):
+            keep(path, "exact_receipt_mismatch")
             continue
         # A durable intent makes every unlink auditable even if the process dies immediately after it.
         _append_json_log(
@@ -571,6 +666,41 @@ def prune_local_archives(
                 "verified_receipt_id": receipt["archive_id"],
             },
         )
+    next_date = min((row["eligible_at"] for row in held if row["eligible_at"] is not None), default=None)
+    next_bytes = sum(row["bytes"] for row in held if next_date is not None and row["eligible_at"] == next_date)
+    held_bytes = sum(row["bytes"] for row in held if row["age_days"] >= days)
+    young_bytes = sum(row["bytes"] for row in held if row["age_days"] < days)
+    message = (
+        f"JSONL local retention: {held_bytes / 1024**3:.2f} GiB ({held_bytes} bytes) held past {days} days; "
+        f"{young_bytes / 1024**3:.2f} GiB ({young_bytes} bytes) younger than {days} days; "
+    )
+    message += (
+        f"{next_bytes / 1024**3:.2f} GiB ({next_bytes} bytes) pass the age gate at {next_date}, "
+        "subject to exact receipt, live Drive/hash and newest checks"
+        if next_date is not None
+        else "next eligibility unknown (no dated age hold)"
+    )
+    _log_local_retention_report(
+        log_path,
+        {
+            "event": "local_retention_summary",
+            "kept": [
+                {
+                    "name": row["name"],
+                    "bytes": row["bytes"],
+                    "first_reason": row["reason"],
+                    "eligible_at": row["eligible_at"],
+                }
+                for row in held
+                if row["age_days"] >= days
+            ],
+            "bytes_held": held_bytes,
+            "bytes_young": young_bytes,
+            "bytes_eligible_next": next_bytes,
+            "next_eligible_at": next_date,
+            "message": message,
+        },
+    )
     return deleted
 
 
@@ -1843,6 +1973,16 @@ def run_backup(
         except Exception as exc:
             retention_receipt["local_retention_error"] = str(exc)
             _retention_warning(log_path, str(exc))
+    elif upload:
+        try:
+            _report_blocked_local_archives(
+                Path(staging_dir).expanduser(),
+                log_path=log_path,
+                now=now,
+                reason=retention_receipt["local_retention_error"],
+            )
+        except Exception as exc:
+            _retention_warning(log_path, f"Blocked sweep reporting failed: {exc}")
     changed, active, covered, vanished = _select_backup_candidates(
         candidates,
         state=selection_state,
