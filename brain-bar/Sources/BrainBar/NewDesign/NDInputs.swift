@@ -38,6 +38,7 @@ struct NDInputs: Sendable {
     var localCopiesKept: Int? = nil
     var canRevealLocalCopy = false
     var backupProgress: BrainBarBackupProgress? = nil
+    var driveRetention: BrainBarDriveRetention? = nil
 #if DEBUG
     /// The real Classic card, fed invented facts for the capture of its red upload row.
     var captureBackupChecks: BrainBarBackupChecks? = nil

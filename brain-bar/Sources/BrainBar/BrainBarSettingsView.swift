@@ -1725,7 +1725,7 @@ private struct BrainBarDriveAwareBackupsGroup: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            BrainBarDriveAuthCard(model: driveAuth)
+            BrainBarDriveAuthCard(model: driveAuth, retention: BrainBarDriveRetention.from(viewModel.dashboardObservabilityResult))
             Divider()
             let drive = driveAuth.presentation(formatDate: BrainBarDriveAuthFormat.date)
             BrainBarJobGroupCard(
