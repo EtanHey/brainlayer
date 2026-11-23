@@ -2041,7 +2041,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         let expected: [NDStation: CGPoint] = [
             // L63: derive the return lane from the job words, and spread the job stations.
             // Keep a literal pin, independent of the production layout tokens, in every state.
-            .read: CGPoint(x: 215, y: 60), .queue: CGPoint(x: 215, y: 150), .search: CGPoint(x: 736, y: 277),
+            .read: CGPoint(x: 215, y: 80), .queue: CGPoint(x: 215, y: 150), .search: CGPoint(x: 736, y: 277),
             .mac: CGPoint(x: 599, y: 80), .drive: CGPoint(x: 736, y: 80), .jobs: CGPoint(x: 313, y: 167), .weekly: CGPoint(x: 650, y: 167),
         ]
         XCTAssertEqual(NDPipelineLayout.stations, expected)

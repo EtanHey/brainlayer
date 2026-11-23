@@ -14,7 +14,7 @@ enum NDPipelineLayout {
     static let size = CGSize(width: 820, height: yAnswers + statusOffset + statusHeight + 2)
     static let verticalPadding: CGFloat = 4
     static let drawWidth: CGFloat = 832
-    static let yTop: CGFloat = 60, ySaves: CGFloat = 150, yRail: CGFloat = 8
+    static let yTop: CGFloat = 80, ySaves: CGFloat = 150, yRail: CGFloat = 8
     static let stationRadius: CGFloat = 13
     /// The fault ring's radius (R1.4 change 16).
     static let ringRadius: CGFloat = 15.5
@@ -51,7 +51,7 @@ enum NDPipelineLayout {
     /// along the copies' lower edge and down, and the answers return straight along yAnswers (gap 79 / L56).
     static let stations: [NDStation: CGPoint] = [
         .read: CGPoint(x: 215, y: yTop), .queue: CGPoint(x: 215, y: ySaves), .search: CGPoint(x: 736, y: yAnswers),
-        .mac: CGPoint(x: 599, y: yTop + 20), .drive: CGPoint(x: 736, y: yTop + 20), .jobs: CGPoint(x: 313, y: yJobs), .weekly: CGPoint(x: 650, y: yJobs),
+        .mac: CGPoint(x: 599, y: yTop), .drive: CGPoint(x: 736, y: yTop), .jobs: CGPoint(x: 313, y: yJobs), .weekly: CGPoint(x: 650, y: yJobs),
     ]
     static let symbols: [NDStation: String] = [
         .read: "text.bubble", .queue: "tray.full", .memory: "brain", .mac: "laptopcomputer.and.arrow.down", .drive: "icloud",
