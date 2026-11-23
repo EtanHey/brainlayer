@@ -2039,13 +2039,13 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     /// No station moves between states; the Kept-safe frame never grows (R1.5: no actions on the chart).
     func testStationsDoNotMoveBetweenStates() {
         let expected: [NDStation: CGPoint] = [
-            // R14 deliberately moved Search to y297 to remove the unused lower band.
+            // L63: derive the return lane from the job words, and spread the job stations.
             // Keep a literal pin, independent of the production layout tokens, in every state.
-            .read: CGPoint(x: 215, y: 44), .queue: CGPoint(x: 215, y: 114), .search: CGPoint(x: 736, y: 297),
-            .mac: CGPoint(x: 599, y: 44), .drive: CGPoint(x: 736, y: 44), .jobs: CGPoint(x: 342, y: 138), .weekly: CGPoint(x: 528, y: 138),
+            .read: CGPoint(x: 215, y: 60), .queue: CGPoint(x: 215, y: 150), .search: CGPoint(x: 736, y: 277),
+            .mac: CGPoint(x: 599, y: 80), .drive: CGPoint(x: 736, y: 80), .jobs: CGPoint(x: 313, y: 167), .weekly: CGPoint(x: 650, y: 167),
         ]
         XCTAssertEqual(NDPipelineLayout.stations, expected)
-        let centers = expected.merging([.agents: CGPoint(x: 38, y: 72), .memory: CGPoint(x: 435, y: 65.5)]) { fixed, _ in fixed }
+        let centers = expected.merging([.agents: CGPoint(x: 38, y: 72), .memory: CGPoint(x: 435, y: 101.5)]) { fixed, _ in fixed }
         for name in Fixture.Name.allCases {
             let p = pipeline(name)
             // Check both axes of every actual station hit area, including Memory and the agents.
@@ -2067,7 +2067,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             }
         }
         XCTAssertEqual(NDPipelineLayout.keptFrame(grown: true), NDPipelineLayout.keptSafe)
-        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 521, y: 18, width: 283, height: 84), "R1.10.4: 32 pt from the right; R1.12: 84 tall")
+        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 521, y: 54, width: 283, height: 84), "R1.10.4: 32 pt from the right; R1.12: 84 tall")
     }
 
     /// Lead (1.3 brief): inside Kept safe, 16 pt between the two stations' text blocks and 12 pt from any text to the frame,
@@ -3366,10 +3366,12 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 let content = AnyView(NDStationPopover(store: store, station: station))
                 let panel = chart.panel(station, content: content)
                 let where_ = "\(name.rawValue) \(station)"
-                XCTAssertEqual(panel.edge, .bottom, where_)
-                XCTAssertTrue((L.circle(station).minX...L.circle(station).maxX).contains(panel.tip.x), where_)
-                let wordsBottom = L.labelRects(station, store.r1.pipeline).map(\.maxY).max() ?? 0
-                XCTAssertGreaterThan(panel.body.minY, wordsBottom, where_)
+                let horizontal = panel.edge == .top || panel.edge == .bottom
+                XCTAssertEqual(horizontal ? panel.tip.x : panel.tip.y,
+                               horizontal ? L.point(station).x : L.point(station).y, accuracy: 1, where_)
+                for words in L.labelRects(station, store.r1.pipeline) {
+                    XCTAssertFalse(panel.outer.intersects(words), where_)
+                }
                 XCTAssertLessThanOrEqual(panel.body.maxY, L.size.height, where_)
                 XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, NDStationPopover.measure(content, width: panel.body.width).height, where_)
                 for other in NDStation.allCases where other != station {

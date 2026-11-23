@@ -16,14 +16,15 @@ final class BrainBarGapClarityTests: XCTestCase {
             let link = try XCTUnwrap(L.connections.first { $0.pipe == pipe })
             let anchorX = station == .jobs ? L.hub.minX + 12 : L.hub.maxX - 12
             XCTAssertTrue(link.bothWays)
-            XCTAssertEqual(link.line.points.first?.x, L.point(station).x)
+            let first = try XCTUnwrap(link.line.points.first)
+            XCTAssertEqual(hypot(first.x - L.point(station).x, first.y - L.point(station).y), L.lineEnd, accuracy: 0.01)
             XCTAssertEqual(link.line.points.last, CGPoint(x: anchorX, y: L.hub.maxY + L.edgeGap))
             for (a, b) in zip(link.line.points, link.line.points.dropFirst()) {
                 XCTAssertTrue(a.x == b.x || a.y == b.y, "orthogonal elbow")
             }
         }
         // The compact M1 layout still fits the lowest station's complete status line.
-        XCTAssertEqual(L.size.height, 345) // R14: wider full-text panels reclaim 9 pt; L57 fits the page.
+        XCTAssertEqual(L.size.height, 325) // L63: Search follows the drawn job statuses with 32 pt clearance.
         for fixture in BrainBarDesignFixture.Name.allCases {
             let p = NDPipelineState.make(BrainBarDesignFixture.inputs(fixture))
             for station in NDStation.allCases {

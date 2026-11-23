@@ -193,14 +193,8 @@ struct NDPipelineChart: View {
     func panel(_ s: NDStation, content: AnyView) -> NDPipelineLayout.Panel {
         let drawn = Self.drawingState(state, progress: backupProgress)
         let measure: (CGFloat) -> CGFloat = { NDStationPopover.measure(content, width: $0).height }
-        let layout = NDPipelineLayout.measuredPanel(s, state: drawn, displayedWords: displayedPanelWords,
-                                                   heightAtWidth: measure)
-        if s == .drive, layout.scrolls {
-            let wide: CGFloat = 600
-            return NDPipelineLayout.panel(s, state: drawn, actions: [], height: measure(wide), width: wide,
-                                          displayedWords: displayedPanelWords)
-        }
-        return layout
+        return NDPipelineLayout.measuredPanel(s, state: drawn, displayedWords: displayedPanelWords,
+                                              heightAtWidth: measure)
     }
 
     static func stationTarget(_ s: NDStation, state: NDPipelineState) -> (frame: CGRect, shape: NDStationHitShape) {
@@ -869,7 +863,7 @@ struct NDStationPopover: View {
     var body: some View {
         NDStationPanelBody(model: Self.model(station, item: store.r1.stationItems[station], store.inputs, store.model, store.r1.pipeline),
                            waiting: NDDriveWaiting.shows(store.inputs, for: store.r1.stationItems[station]?.action),
-                           compactRows: station == .drive && store.inputs.backupProgress != nil) { store.perform($0) }
+                           compactRows: station == .search || (station == .drive && store.inputs.backupProgress != nil)) { store.perform($0) }
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
