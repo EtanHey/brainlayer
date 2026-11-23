@@ -1,22 +1,26 @@
-# Compact Pipeline: offscreen before and after
+# Compact Pipeline and station clearance
 
-Invented design fixtures rendered through NDRenderHarness at 2x, in dark and light appearances. Static offscreen proof only; native interaction and installed acceptance remain separate. No installed application, production database, production socket, or personal screenshot was used.
+The Pipeline card shrinks from 353 to 304 pt, the calm window from 791 to 742 pt, and the Drive-fault window from 841 to 792 pt. Every bubble keeps 4 pt from other station icons and words.
 
-Before source: `ce9086e9bcf7cee722be6dbf6fb7bd1ec240f516`. After source: `bfb05d571bf2b8f31c0db81f773b38356f8a2a03`.
+Invented fixtures rendered offscreen through NDRenderHarness at 2x in dark and light appearances. No installed application, production database, production socket, real logs or personal screenshot was used.
 
-`before/` and `after/` contain the same ten states: whole calm Overview, Memory/Nightly/Weekly hovers, and whole Drive-fault Overview, each in both themes. `wide/` adds six after-only views of Local copy, Drive fault, and Read lag to show the widened column layout. All 26 images were opened for inspection and are fully opaque; no transparent margins needed cropping.
+Before source: `ce9086e9bcf7cee722be6dbf6fb7bd1ec240f516`. After source: `62976c7f8750067b1b17de5d219d089351ade17f`.
 
-| Measurement (pt) | Before | After |
+`before/` retains the original ten pictures. `after/` refreshes those ten and adds Agents, Save queue, Read, Search calm and Search fault bubbles in both themes. `wide/` refreshes Local copy, Drive fault and Read lag in both themes. All 36 opaque PNGs were opened for inspection; no transparent margin needed cropping.
+
+| Measurement (pt) | Original main | After |
 | --- | ---: | ---: |
-| Whole calm Overview | 791 | 742 |
-| Whole Drive-fault Overview | 841 | 792 |
+| Calm Overview window | 791 | 742 |
+| Drive-fault Overview window | 841 | 792 |
 | Pipeline chart | 345 | 296 |
-| Pipeline card, including 4 pt padding on each side | 353 | 304 |
+| Pipeline card | 353 | 304 |
+| Job horizontal distance | 186 | 337 |
 | Lowest job words to return caption | 81 | 32 |
-| Job station horizontal distance | 186 | 337 |
-| Upper station row y | 44 | 44 |
-| Activity-to-Pipeline gap token | 0 | 0 |
+| Station row y | 44 | 44 |
+| Activity gap token | 0 | 0 |
 
-The card and both measured windows shrink by 49 pt. Memory opens below at the measured gap between the job words, with 4 pt clearance. The widened Local copy, Drive and Read bodies arrange the same title, explanation, facts and action in columns. Normal-width bodies keep the existing stack and 14/10 pt padding. The wide variant uses 14/8 pt padding; fonts and 18 pt rows stay the same. Kept-safe dimensions and text spacing, diagram side insets, purpose lines, notch targets and connector endpoint gaps remain checked.
+Memory remains below between the spread jobs. Every bubble clears other station icons and drawn words by 4 pt; bodies also clear the Kept-safe one-point outline by 4 pt, including half its stroke width. Agents also clears the return caption. The Weekly port into Memory is 16 pt inward from the Memory-to-Search port. Both jobs move 4 pt right to clear the Save queue notch, preserving their 337 pt separation. Search uses a 5 pt compact action gap instead of 8 pt. The three-column wide layout remains; the wide vertical inset is 5.5 pt instead of 8 pt so the longest 59 pt body fits above the frame without adding height. Fonts, 18 pt fact rows, normal stacked bodies, text and action labels remain unchanged.
 
-The original three behavior guards failed on the before source (351 assertions). Three further guards for the original positions/gap, smaller windows and below-Memory pocket failed on the first PR head c419e273 (93 assertions). The final source passes 53 focused Swift tests, 17 Python checks including R31, and 13 private heartbeat cases. Both products built. Claude review, CI and installed proof remain pending; local CodeRabbit produced no completed verdict within its bounded runs.
+Five round-two guards failed at bfb05d57 with 608 assertions, covering measured station margins, screen-fit margins, oversized margins, frame clearance and separate ports. Existing Agents-caption and trimmed-link guards also ran red at 916257ce (23 assertions) before correction. The final verification uses 57 explicit safe method selectors. Final source: 57 focused Swift tests, 17 Python checks including R31, 13/13 private producer-to-queue-to-production-Swift-reader cases pass. Both products built.
+
+The local Claude review at bfb05d57 found one blocking margin defect; these are the round-two corrections. Final lead verification, CI and installed acceptance remain separate and pending.
