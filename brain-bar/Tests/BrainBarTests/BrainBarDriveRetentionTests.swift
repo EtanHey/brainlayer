@@ -18,14 +18,14 @@ import XCTest
     }
 
     func testRoundTwoTimestampUsesLocalDay() {
-        let previous = NSTimeZone.default
-        NSTimeZone.default = TimeZone(secondsFromGMT: 7200)!
-        defer { NSTimeZone.default = previous }
-        XCTAssertEqual(BrainBarDriveRetentionPresentation.date("2026-11-22T23:30:00Z", relativeTo: referenceDate), "Nov 23")
-        XCTAssertEqual(BrainBarDriveRetentionPresentation.date("2026-11-22T23:30:00.123Z", relativeTo: referenceDate), "Nov 23")
+        // An explicit zone: the result must not depend on the machine running the test (CI is UTC).
+        let plusTwo = TimeZone(secondsFromGMT: 7200)!
+        XCTAssertEqual(BrainBarDriveRetentionPresentation.date("2026-11-22T23:30:00Z", relativeTo: referenceDate, timeZone: plusTwo), "Nov 23")
+        XCTAssertEqual(BrainBarDriveRetentionPresentation.date("2026-11-22T23:30:00.123Z", relativeTo: referenceDate, timeZone: plusTwo), "Nov 23")
         // The producer writes datetime.isoformat(): six fractional digits and a +00:00 offset.
-        XCTAssertEqual(BrainBarDriveRetentionPresentation.date("2026-11-22T23:30:00.123456+00:00", relativeTo: referenceDate), "Nov 23")
-        XCTAssertEqual(BrainBarDriveRetentionPresentation.date("2024-08-31", relativeTo: referenceDate), "Aug 31, 2024")
+        XCTAssertEqual(BrainBarDriveRetentionPresentation.date("2026-11-22T23:30:00.123456+00:00", relativeTo: referenceDate, timeZone: plusTwo), "Nov 23")
+        XCTAssertEqual(BrainBarDriveRetentionPresentation.date("2026-11-22T23:30:00Z", relativeTo: referenceDate, timeZone: TimeZone(secondsFromGMT: 0)!), "Nov 22")
+        XCTAssertEqual(BrainBarDriveRetentionPresentation.date("2024-08-31", relativeTo: referenceDate, timeZone: plusTwo), "Aug 31, 2024")
     }
 
     func testRoundTwoDrawnKeepsAndUnverified() throws {

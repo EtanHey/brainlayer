@@ -72,10 +72,11 @@ struct BrainBarDriveRetentionPresentation {
     static func size(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .decimal)
     }
-    static func date(_ value: String, relativeTo now: Date = Date()) -> String {
+    /// `timeZone` defaults to this Mac's; tests pass one explicitly, because CI runners are in UTC.
+    static func date(_ value: String, relativeTo now: Date = Date(), timeZone: TimeZone = .current) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
+        formatter.timeZone = timeZone
         let parsed: Date?
         if value.contains("T") {
             let iso = ISO8601DateFormatter()
