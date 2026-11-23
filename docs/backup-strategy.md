@@ -100,7 +100,7 @@ backup health is unmeasurable.
 `drive_retention.rule` contains `daily_keep`, `monthly_keep`, `per_machine: true`
 and `description`; `writes_enabled` is false and `config_error` is null or an
 explanation. `machines[]` contains `machine_id`, `state`, `selected_at`, `error`,
-`on_drive`, `named_one_offs_count`, `kept`, `kept_by_rule`, `unverified`, `would_remove` and
+`on_drive`, `named_one_offs_count`, `kept`, `kept_by_rule`, `unverified`, `pinned`, `would_remove` and
 `monthly_representatives`. Each summary contains `count`, `bytes`, `oldest` and
 `newest`; dates are ISO dates, and `selected_at` is the last selection attempt's
 ISO timestamp. `on_drive` describes dated daily `.db`, `.db.gz` and `.db.zst`
@@ -121,7 +121,11 @@ receipt eligibility and ordering as the deletion selector. An unverified newest 
 month-end object cannot displace the Mac's verified copy. `kept` is total retained,
 including pins and unverified files; `kept_by_rule` is only the verified daily/monthly
 cohort, and `unverified` separately describes the unverified dated objects. These two
-summaries are subsets of `kept`, not additional files in the total. Old cached reports
+summaries and `pinned` are disjoint buckets of `kept`, not additional files in the total.
+`pinned` counts only verified weekly-pin files outside the rule cohort. If a verified
+pin is also selected daily/monthly, `kept_by_rule` wins; an unverified pin stays only
+in `unverified`. For both counts and bytes, `kept = kept_by_rule + unverified + pinned`
+and `on_drive = kept + would_remove`. Old cached reports
 without these summaries are unmeasurable until inventory refreshes. The unused legacy
 `keep_7` comparison was removed; configured selection is the preview consumers use.
 A missing monthly cohort is skipped, never backfilled from an older month.

@@ -61,6 +61,7 @@ def empty_drive_selection(machine_id: str, *, state: str = "not_run", selected_a
         "kept": None,
         "kept_by_rule": None,
         "unverified": None,
+        "pinned": None,
         "would_remove": None,
         "monthly_representatives": [],
     }
@@ -241,6 +242,8 @@ def drive_retention_report(
 
     months, _, monthly, kept, removed, _ = select(DriveRetentionRule())
     _, representatives, _, configured_kept, configured_removed, kept_by_rule = select(rule)
+    rule_ids = {item["id"] for item in kept_by_rule}
+    pinned = [item for item in verified if item["name"] in protected_names and item["id"] not in rule_ids]
     return {
         "mode": "report-only",
         "machine": machine_id,
@@ -260,6 +263,7 @@ def drive_retention_report(
             "kept": summary(configured_kept),
             "kept_by_rule": summary(kept_by_rule),
             "unverified": summary(unverified),
+            "pinned": summary(pinned),
             "would_remove": summary(configured_removed),
             "monthly_representatives": [
                 {key: item[key] for key in ("name", "date", "bytes")} for item in representatives

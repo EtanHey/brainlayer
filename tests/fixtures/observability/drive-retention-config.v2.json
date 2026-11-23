@@ -50,6 +50,12 @@
         "bytes": 0,
         "oldest": null,
         "newest": null
+      },
+      "pinned": {
+        "count": 0,
+        "bytes": 0,
+        "oldest": null,
+        "newest": null
       }
     },
     {
@@ -100,6 +106,12 @@
         "newest": "2026-11-14"
       },
       "unverified": {
+        "count": 0,
+        "bytes": 0,
+        "oldest": null,
+        "newest": null
+      },
+      "pinned": {
         "count": 0,
         "bytes": 0,
         "oldest": null,

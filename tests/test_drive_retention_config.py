@@ -174,6 +174,34 @@ def test_gap_month_does_not_backfill_an_older_month():
     assert selected["kept"]["count"] == 9
 
 
+@pytest.mark.parametrize("pin_case", ["outside", "daily", "monthly", "unverified"])
+def test_pending_pin_has_one_bucket_and_exact_totals(pin_case):
+    files = [item(day) for day in ("2026-11-22", "2026-11-21", "2026-10-15")]
+    pin = files[0 if pin_case == "daily" else 2 if pin_case == "monthly" else 1]["name"]
+    receipts = proofs([row for row in files if not (pin_case == "unverified" and row["name"] == pin)])
+    rule = policy.DriveRetentionRule(1, int(pin_case == "monthly"))
+    selected = policy.drive_retention_report(
+        files,
+        receipts=receipts,
+        machine_id="m4",
+        folder_id="folder",
+        as_of=NOW.date(),
+        rule=rule,
+        protected_names={pin},
+    )["configured"]
+    for metric in ("count", "bytes"):
+        assert selected["kept"][metric] == sum(
+            selected.get(key, {"count": 0, "bytes": 0})[metric] for key in ("kept_by_rule", "unverified", "pinned")
+        )
+        assert selected["on_drive"][metric] == selected["kept"][metric] + selected["would_remove"][metric]
+    assert selected["pinned"]["count"] == int(pin_case == "outside")
+    if pin_case == "outside":
+        assert selected["pinned"] == {"count": 1, "bytes": 10, "oldest": "2026-11-21", "newest": "2026-11-21"}
+    wire = {"machine_id": "m4", "state": "measured", "selected_at": NOW.isoformat(), "error": None, **selected}
+    env = {"BRAINLAYER_BACKUP_DRIVE_DAILY_KEEP": "1", "BRAINLAYER_BACKUP_DRIVE_MONTHLY_KEEP": str(rule.monthly_keep)}
+    assert projected([record(wire)], env)["machines"][0]["pinned"] == selected["pinned"]
+
+
 def test_bad_drive_config_does_not_pause_local_cleanup(removal_lane, monkeypatch):
     target = _old_receipt(removal_lane)
     _write(removal_lane, [target])
@@ -297,7 +325,7 @@ def test_invalid_receipt_never_becomes_measured(key, value):
     assert selected["kept"] is None
 
 
-@pytest.mark.parametrize("summary", ["would_remove", "kept_by_rule", "unverified"])
+@pytest.mark.parametrize("summary", ["would_remove", "kept_by_rule", "unverified", "pinned"])
 def test_inconsistent_recorded_totals_are_unmeasurable(summary):
     row = observation()
     row[summary]["count"] += 1
@@ -313,6 +341,33 @@ def test_old_selection_without_verified_cohorts_withholds_unsafe_preview():
     selected = projected([record(row)])["machines"][0]
     assert selected["state"] == "unmeasurable" and "refresh inventory" in selected["error"]
     assert selected["would_remove"] is None and selected["unverified"] is None
+
+
+def test_cached_pin_summary_cannot_leave_an_unexplained_remainder():
+    files = [item("2026-11-22"), item("2026-11-21")]
+    selected = policy.drive_retention_report(
+        files,
+        receipts=proofs(files),
+        machine_id="m4",
+        folder_id="folder",
+        as_of=NOW.date(),
+        rule=policy.DriveRetentionRule(1, 0),
+        protected_names={files[-1]["name"]},
+    )["configured"]
+    selected["pinned"] = {"count": 0, "bytes": 0, "oldest": None, "newest": None}
+    wire = {"machine_id": "m4", "state": "measured", "selected_at": NOW.isoformat(), "error": None, **selected}
+    env = {"BRAINLAYER_BACKUP_DRIVE_DAILY_KEEP": "1", "BRAINLAYER_BACKUP_DRIVE_MONTHLY_KEEP": "0"}
+    result = projected([record(wire)], env)["machines"][0]
+    assert result["state"] == "unmeasurable" and "subsets" in result["error"]
+    assert result["kept"] is None and result["pinned"] is None
+
+
+def test_old_cached_selection_without_pin_summary_requests_refresh():
+    row = observation()
+    del row["pinned"]
+    result = projected([record(row)])["machines"][0]
+    assert result["state"] == "unmeasurable" and "refresh inventory" in result["error"]
+    assert result["pinned"] is None and result["would_remove"] is None
 
 
 @pytest.mark.parametrize("keep", [1, 2, 7])

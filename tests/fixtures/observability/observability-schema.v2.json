@@ -917,7 +917,8 @@
               "would_remove",
               "monthly_representatives",
               "kept_by_rule",
-              "unverified"
+              "unverified",
+              "pinned"
             ],
             "properties": {
               "machine_id": {
@@ -1151,6 +1152,41 @@
                     ]
                   }
                 }
+              },
+              "pinned": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "count",
+                  "bytes",
+                  "oldest",
+                  "newest"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "oldest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "newest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
               }
             },
             "allOf": [
@@ -1187,6 +1223,9 @@
                     },
                     "unverified": {
                       "type": "object"
+                    },
+                    "pinned": {
+                      "type": "object"
                     }
                   }
                 },
@@ -1211,6 +1250,9 @@
                       "type": "null"
                     },
                     "unverified": {
+                      "type": "null"
+                    },
+                    "pinned": {
                       "type": "null"
                     }
                   }
