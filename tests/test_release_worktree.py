@@ -15,12 +15,18 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/release_worktree.py"
 
 
+def _clean_git_env() -> dict[str, str]:
+    """Drop inherited GIT_* (the pre-push hook exports GIT_DIR/GIT_INDEX_FILE) and ignore system/global git config."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    return env
+
+
 @pytest.fixture
 def scratch(tmp_path):
     repo = tmp_path / "scratch repo"
     repo.mkdir()
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    env = _clean_git_env()
 
     def git(*args):
         return subprocess.run(
@@ -59,7 +65,7 @@ def invoke(scratch, *command, ref="v-test", extra_env=None):
 def test_detached_shared_objects_hook_runs_and_clean_worktree_is_removed(scratch, tmp_path):
     repo, env, git, hook_log = scratch
     sink = tmp_path / "sink.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(sink)], env=env, check=True)
+    subprocess.run(["git", "init", "-q", "--bare", str(sink)], env=_clean_git_env(), check=True)
     before = git("config", "--local", "--list")
     code = (
         "import json,os,pathlib,subprocess; "
@@ -152,7 +158,7 @@ def test_refusing_pre_push_hook_propagates_and_cleans_worktree(scratch, tmp_path
     hook = repo / "boundary hooks/pre-push"
     hook.write_text('#!/bin/sh\nprintf "refused\\n" >> "$HOOK_LOG"\nexit 42\n')
     sink = tmp_path / "refused.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(sink)], env=env, check=True)
+    subprocess.run(["git", "init", "-q", "--bare", str(sink)], env=_clean_git_env(), check=True)
     result = invoke(scratch, "git", "push", str(sink), "refs/tags/v-test")
     assert result.returncode == 1, result.stderr
     assert hook_log.read_text() == "refused\n"
