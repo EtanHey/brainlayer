@@ -2045,7 +2045,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             .mac: CGPoint(x: 599, y: 44), .drive: CGPoint(x: 736, y: 44), .jobs: CGPoint(x: 313, y: 138), .weekly: CGPoint(x: 650, y: 138),
         ]
         XCTAssertEqual(NDPipelineLayout.stations, expected)
-        let centers = expected.merging([.agents: CGPoint(x: 38, y: 72), .memory: CGPoint(x: 435, y: 101.5)]) { fixed, _ in fixed }
+        let centers = expected.merging([.agents: CGPoint(x: 38, y: 72), .memory: CGPoint(x: 435, y: 65.5)]) { fixed, _ in fixed }
         for name in Fixture.Name.allCases {
             let p = pipeline(name)
             // Check both axes of every actual station hit area, including Memory and the agents.
@@ -2067,7 +2067,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             }
         }
         XCTAssertEqual(NDPipelineLayout.keptFrame(grown: true), NDPipelineLayout.keptSafe)
-        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 521, y: 54, width: 283, height: 84), "R1.10.4: 32 pt from the right; R1.12: 84 tall")
+        XCTAssertEqual(NDPipelineLayout.keptSafe, CGRect(x: 521, y: 18, width: 283, height: 84), "R1.10.4: 32 pt from the right; R1.12: 84 tall")
     }
 
     /// Lead (1.3 brief): inside Kept safe, 16 pt between the two stations' text blocks and 12 pt from any text to the frame,

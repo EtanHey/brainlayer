@@ -51,7 +51,7 @@ struct NDStationPanelBody: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
         .frame(minWidth: 760, idealWidth: 760, maxWidth: .infinity)
     }
 
