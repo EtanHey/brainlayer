@@ -31,7 +31,7 @@ struct NDStationPanelBody: View {
 
     /// Widening also reflows the readouts; a vertical stack has a minimum height even at the widest width.
     private var wideBody: some View {
-        HStack(alignment: .top, spacing: 16) {
+        HStack(alignment: .top, spacing: 12) {
             heading.frame(width: 220, alignment: .topLeading)
             if !model.lines.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
@@ -44,10 +44,10 @@ struct NDStationPanelBody: View {
             } else {
                 Spacer(minLength: 0)
             }
-            if !model.rows.isEmpty { readoutRows.frame(width: 180) }
+            if !model.rows.isEmpty { readoutRows.frame(width: model.action == nil ? 180 : 140) }
             if let action = model.action {
                 ND.hair2.frame(width: 0.5, height: 36)
-                actionButton(action).frame(width: action.kind == .copyReport ? 190 : 220)
+                actionButton(action).frame(width: max(220, NDPipelineChart.actionWidth(action)))
             }
         }
         .padding(.horizontal, 14)

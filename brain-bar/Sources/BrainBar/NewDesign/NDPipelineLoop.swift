@@ -392,7 +392,8 @@ enum NDPipelineLayout {
         let limit = windowInside.maxX - windowInside.minX
         guard normal < limit else { return [] }
         let widths = stride(from: normal + 40, to: limit, by: 40).map { $0 }
-        return Array(Set(widths + [800, limit])).filter { $0 > normal && $0 <= limit }.sorted()
+        let besideAgents = windowInside.maxX - agentsFrame.maxX - 4
+        return Array(Set(widths + [besideAgents, 800, limit])).filter { $0 > normal && $0 <= limit }.sorted()
     }
 
     @MainActor static func measuredPanel(_ s: NDStation, state: NDPipelineState, displayedWords: [NDStation: [CGRect]] = [:],

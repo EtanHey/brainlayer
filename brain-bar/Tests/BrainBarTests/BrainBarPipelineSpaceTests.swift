@@ -88,6 +88,10 @@ import XCTest
             for station in NDStation.allCases {
                 let content = AnyView(NDStationPopover(store: store, station: station))
                 let panel = chart.panel(station, content: content)
+                if panel.scrolls {
+                    let model = NDStationPopover.model(station, item: store.r1.stationItems[station], store.inputs, store.model, store.r1.pipeline)
+                    print("CLIPPED \(name.rawValue) \(station): title=\(model.title); lines=\(model.lines); rows=\(model.rows); action=\(model.action?.label ?? "none"); wide=\(NDStationPopover.measure(content, width: 800).height)")
+                }
                 XCTAssertFalse(panel.scrolls, "\(name.rawValue) \(station): full content must fit")
                 XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, NDStationPopover.measure(content, width: panel.body.width).height)
                 for other in NDStation.allCases where other != station {
