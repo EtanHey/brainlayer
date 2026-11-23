@@ -108,6 +108,7 @@ def report(
     *,
     path: Path | None = None,
     notify: Callable[[str], None] = _notify,
+    replace_reason: bool = False,
 ) -> bool:
     """Set or clear one episode. Return true only when the visible state changes.
 
@@ -115,6 +116,7 @@ def report(
     other active key carries the identical message. Only brainbar-activation uses
     the production OS hook; BrainBar delivers every other job notification from
     the alert records. Recovery only updates the alert file and health log.
+    replace_reason refreshes an active episode without clearing it or re-notifying.
     """
     destination = path or alert_path()
     with _locked(destination):
@@ -131,9 +133,11 @@ def report(
                 records[key]["reported_at"] = datetime.now(UTC).isoformat(timespec="microseconds")
                 _write_records(destination, records)
                 return False
-            if before is not None and key != "drive-consent":
+            if before is not None and key != "drive-consent" and not replace_reason:
                 return False
-            post = reason not in (record["reason"] for other, record in records.items() if other != key)
+            post = not (before is not None and replace_reason) and reason not in (
+                record["reason"] for other, record in records.items() if other != key
+            )
             records[key] = {"reason": reason, "reported_at": datetime.now(UTC).isoformat(timespec="microseconds")}
             message = reason
         _write_records(destination, records)
