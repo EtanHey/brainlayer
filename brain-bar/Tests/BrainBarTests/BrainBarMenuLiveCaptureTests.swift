@@ -12,6 +12,8 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
         "verdictAwakeAgeS": "mapped from caller sleepHistory.elapsed; unavailable -> infinity",
         "isChecking": "mapped from publishedStatus.isChecking",
         "wakeCatchUpPending": "mapped from caller wakeCatchUp.isPending(uptime: awakeUptime)",
+        "wakeStatusUnconfirmed": "mapped from publishedStatus.wakeStatusUnconfirmed (the sampler's own wake deadline)",
+        "wakeStatusReason": "mapped from the verdict.stale issue text while wakeStatusUnconfirmed; otherwise nil",
         "backupsMeasured": "mapped from measured section only with no backupTruth.statusNotice",
         "lastKnownBackupAt": "not carried by the app yet",
         "watcher": "mapped from watcherHealth readable file; otherwise nil",

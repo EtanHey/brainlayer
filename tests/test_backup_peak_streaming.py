@@ -314,8 +314,6 @@ def test_reclaiming_phase_budget(full, phase):
         "gzip": db + expansion + backup.RECLAIM_CHUNK_BYTES,
         "restore": compressed,
     }
-    if full:
-        expected["drive_download"] = compressed
     assert phases.get(phase) == expected.get(phase)
     assert backup._peak_backup_required_bytes(db, compressed, full=full, reclaim_raw=True) == (
         expected["gzip"] + backup.MIN_RAW_FREE_BYTES + backup.COPY_CHUNK_BYTES
@@ -324,10 +322,10 @@ def test_reclaiming_phase_budget(full, phase):
 
 
 @pytest.mark.parametrize("full", [False, True])
-def test_unavailable_reclamation_keeps_old_budget(full):
+def test_unavailable_reclamation_keeps_vacuum_and_compressed_peak(full):
     db, compressed = 22_000_000_000, 9_600_000_000
     assert backup._peak_backup_required_bytes(db, compressed, full=full, reclaim_raw=False) == (
-        db + compressed * (2 if full else 1) + backup.MIN_RAW_FREE_BYTES + backup.COPY_CHUNK_BYTES
+        db + compressed + backup.MIN_RAW_FREE_BYTES + backup.COPY_CHUNK_BYTES
     )
 
 
@@ -825,3 +823,9 @@ def test_decoder_closing_early_does_not_retry_drive_download(monkeypatch):
     assert len(download_errors) == 1
     assert type(download_errors[0]).__name__ == "_DriveStreamReaderClosed"
     assert isinstance(download_errors[0].__cause__, BrokenPipeError)
+
+
+@pytest.fixture(autouse=True)
+def _vacuum_snapshot_backend_for_legacy_contracts(monkeypatch):
+    """These cases pin VACUUM/reclaim behavior; clone-specific races have their own suite."""
+    monkeypatch.setenv("BRAINLAYER_BACKUP_SNAPSHOT_METHOD", "vacuum")

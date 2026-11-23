@@ -2039,10 +2039,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
     /// No station moves between states; the Kept-safe frame never grows (R1.5: no actions on the chart).
     func testStationsDoNotMoveBetweenStates() {
         let expected: [NDStation: CGPoint] = [
-            // R14 deliberately moved Search to y297 to remove the unused lower band.
+            // L63: derive the return lane from the job words, and spread the job stations.
             // Keep a literal pin, independent of the production layout tokens, in every state.
-            .read: CGPoint(x: 215, y: 44), .queue: CGPoint(x: 215, y: 114), .search: CGPoint(x: 736, y: 297),
-            .mac: CGPoint(x: 599, y: 44), .drive: CGPoint(x: 736, y: 44), .jobs: CGPoint(x: 342, y: 138), .weekly: CGPoint(x: 528, y: 138),
+            .read: CGPoint(x: 215, y: 44), .queue: CGPoint(x: 215, y: 114), .search: CGPoint(x: 736, y: 248),
+            .mac: CGPoint(x: 599, y: 44), .drive: CGPoint(x: 736, y: 44), .jobs: CGPoint(x: 317, y: 138), .weekly: CGPoint(x: 654, y: 138),
         ]
         XCTAssertEqual(NDPipelineLayout.stations, expected)
         let centers = expected.merging([.agents: CGPoint(x: 38, y: 72), .memory: CGPoint(x: 435, y: 65.5)]) { fixed, _ in fixed }
@@ -3122,8 +3122,10 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
         for (pipe, station) in [(NDPipe.jobsMemory, NDStation.jobs), (.weeklyMemory, .weekly)] {
             let link = try XCTUnwrap(L.connections.first { $0.pipe == pipe })
             XCTAssertTrue(link.bothWays, "\(station): both ways")
-            XCTAssertEqual(link.line.points.first?.x, L.point(station).x)
-            let anchorX = station == .jobs ? L.hub.minX + 12 : L.hub.maxX - 12
+            let first = try XCTUnwrap(link.line.points.first)
+            XCTAssertEqual(abs(first.x - L.point(station).x), L.lineEnd)
+            XCTAssertEqual(first.y, L.point(station).y)
+            let anchorX = station == .jobs ? L.hub.minX + 12 : L.hub.maxX - 28
             XCTAssertEqual(link.line.points.last, CGPoint(x: anchorX, y: L.hub.maxY + L.edgeGap))
             XCTAssertTrue((L.hub.minX...L.hub.maxX).contains(anchorX), "\(station) connects to Memory")
         }
@@ -3366,11 +3368,13 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 let content = AnyView(NDStationPopover(store: store, station: station))
                 let panel = chart.panel(station, content: content)
                 let where_ = "\(name.rawValue) \(station)"
-                XCTAssertEqual(panel.edge, .bottom, where_)
-                XCTAssertTrue((L.circle(station).minX...L.circle(station).maxX).contains(panel.tip.x), where_)
-                let wordsBottom = L.labelRects(station, store.r1.pipeline).map(\.maxY).max() ?? 0
-                XCTAssertGreaterThan(panel.body.minY, wordsBottom, where_)
-                XCTAssertLessThanOrEqual(panel.body.maxY, L.size.height, where_)
+                let horizontal = panel.edge == .top || panel.edge == .bottom
+                XCTAssertEqual(horizontal ? panel.tip.x : panel.tip.y,
+                               horizontal ? L.point(station).x : L.point(station).y, accuracy: 1, where_)
+                for words in L.labelRects(station, store.r1.pipeline) {
+                    XCTAssertFalse(panel.outer.intersects(words), where_)
+                }
+                XCTAssertLessThanOrEqual(panel.body.maxY, L.footerTop - 4, where_)
                 XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, NDStationPopover.measure(content, width: panel.body.width).height, where_)
                 for other in NDStation.allCases where other != station {
                     XCTAssertFalse(panel.body.intersects(L.circle(other)), where_)

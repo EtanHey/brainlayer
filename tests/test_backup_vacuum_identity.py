@@ -619,3 +619,9 @@ def test_identity_failures_send_exactly_one_backup_request(tmp_path, dbs, monkey
         )
     assert len(requests) == 1
     assert list(out.iterdir()) == []
+
+
+@pytest.fixture(autouse=True)
+def _vacuum_snapshot_backend_for_legacy_contracts(monkeypatch):
+    """These cases pin VACUUM/reclaim behavior; clone-specific races have their own suite."""
+    monkeypatch.setenv("BRAINLAYER_BACKUP_SNAPSHOT_METHOD", "vacuum")

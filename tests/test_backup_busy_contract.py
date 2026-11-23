@@ -248,3 +248,9 @@ def test_create_snapshot_wires_the_epoch_status_into_the_sweep(tmp_path, monkeyp
         bar.close()
     assert not aged.exists()
     assert [r["method"] for r in bar.requests][:2] == ["initialize", "initialize"]
+
+
+@pytest.fixture(autouse=True)
+def _vacuum_snapshot_backend_for_legacy_contracts(monkeypatch):
+    """These cases pin VACUUM/reclaim behavior; clone-specific races have their own suite."""
+    monkeypatch.setenv("BRAINLAYER_BACKUP_SNAPSHOT_METHOD", "vacuum")
