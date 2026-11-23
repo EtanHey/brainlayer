@@ -210,7 +210,9 @@ import XCTest
     func settings(_ store: NDStore) -> some View {
         store.refreshSettingsFileSummary()
         let defaults = UserDefaults(suiteName: "brainbar.retention-test.\(UUID().uuidString)")!
-        defaults.register(defaults: [BrainBarDesign.key: BrainBarDesign.new.rawValue])
+        // `set`, never `register(defaults:)`: registered defaults are process-wide, so a registration here leaked
+        // design="new" into UserDefaults.standard and broke the design tests that run after this suite.
+        defaults.set(BrainBarDesign.new.rawValue, forKey: BrainBarDesign.key)
         return NDSettingsView(store: store).defaultAppStorage(defaults)
             .overlay(alignment: .top) {
                 Text(BrainBarMenuPresenter.SurfaceSay.settingsTitle).font(NDType.section).foregroundStyle(ND.t2)
