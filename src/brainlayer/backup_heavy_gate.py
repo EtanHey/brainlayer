@@ -69,6 +69,7 @@ def _disk_reason(host: str) -> str | None:
         raise ValueError("BRAINLAYER_BACKUP_HEAVY_HOST_FREE_GIB must be finite and nonnegative")
     try:
         staging = Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(backup.DEFAULT_STAGING_DIR))).expanduser()
+        backup._sweep_clones_before_admission(staging)
         phase = os.environ.get("BRAINLAYER_BACKUP_PHASE", "all")
         full = backup._should_run_full_verify(None)
         if phase == "upload":
@@ -76,9 +77,16 @@ def _disk_reason(host: str) -> str | None:
         else:
             db_size = backup._database_logical_size_bytes(backup.get_db_path())
             compressed = backup._estimated_gzip_bytes(staging, db_size) if staging.exists() else db_size
+            clone_mode = backup.backup_clone.supported(backup.get_db_path(), staging)
             # Snapshot-only has no Drive download/restore phase.
-            peak = backup._peak_backup_required_bytes(db_size, compressed, full=full and phase != "snapshot")
-        required = peak + math.ceil(floor_gib * 1024**3)
+            peak = backup._peak_backup_required_bytes(
+                db_size,
+                compressed,
+                full=full and phase != "snapshot",
+                clone_mode=clone_mode,
+                **(backup.backup_clone.budget(backup.get_db_path()) if clone_mode else {}),
+            )
+        required = peak + backup._clone_growth_reserve_bytes(staging, 0) + math.ceil(floor_gib * 1024**3)
         volume_path = staging
         while not volume_path.exists():
             volume_path = volume_path.parent
