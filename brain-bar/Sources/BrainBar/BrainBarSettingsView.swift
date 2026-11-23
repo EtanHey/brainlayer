@@ -1,4 +1,5 @@
 import AppKit
+import BrainBarLifecycle
 import Combine
 import SwiftUI
 
@@ -44,6 +45,14 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private let sleepHistory: BrainBarSleepHistory
     private let statusDeadlineScheduler: @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void
     private var wakeGeneration = 0
+    private(set) var sleepStartedAt: Date?
+    private var wakeStartedAt: Date?
+    private var wakeStartedUptime: Double?
+    private var wakeOutcomeLogged = false
+    private let lifecycleLog: BrainBarLogFile?
+    private(set) var wakeRefreshTask: Task<Void, Never>?
+    private var statusTickTask: Task<Void, Never>?
+    private var statusTickGeneration = 0
     private var awakeUptime: Double { awakeClock() }
 
     private let healthBadgeURL: URL?
@@ -143,11 +152,14 @@ final class BrainBarSettingsViewModel: ObservableObject {
         sleepHistory: BrainBarSleepHistory = .shared,
         statusDeadlineScheduler: @escaping @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void = { delay, action in
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
-        }
+        },
+        lifecycleLog: BrainBarLogFile? = nil,
+        observeSystemLifecycle: Bool = true
     ) {
         self.awakeClock = awakeClock
         self.sleepHistory = sleepHistory
         self.statusDeadlineScheduler = statusDeadlineScheduler
+        self.lifecycleLog = lifecycleLog
         self.healthBadgeURL = healthBadgeURL
         self.jobAlertsURL = jobAlertsURL
         self.statusSamplingPeriod = statusSamplingPeriod
@@ -192,26 +204,33 @@ final class BrainBarSettingsViewModel: ObservableObject {
                 ? initialLaunchdStates
                 : initialLaunchdObservations.mapValues(\.loadState)
         )
-        let notifications = NSWorkspace.shared.notificationCenter
-        notifications.publisher(for: NSWorkspace.willSleepNotification)
-            .handleEvents(receiveOutput: { _ in sleepHistory.sleeping(at: Date()) })
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.systemWillSleep()
-                }
-            }.store(in: &sleepSubscriptions)
-        notifications.publisher(for: NSWorkspace.didWakeNotification)
-            .handleEvents(receiveOutput: { _ in sleepHistory.woke(at: Date()) })
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.systemDidWake()
-                    self.refreshObservabilityStatus()
-                    self.refreshLaunchdStatus()
-                }
-            }.store(in: &sleepSubscriptions)
+        if observeSystemLifecycle {
+            let notifications = NSWorkspace.shared.notificationCenter
+            notifications.publisher(for: NSWorkspace.willSleepNotification)
+                .handleEvents(receiveOutput: { _ in sleepHistory.sleeping(at: Date()) })
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.systemWillSleep()
+                    }
+                }.store(in: &sleepSubscriptions)
+            notifications.publisher(for: NSWorkspace.didWakeNotification)
+                .handleEvents(receiveOutput: { _ in sleepHistory.woke(at: Date()) })
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        self.systemDidWake()
+                    }
+                }.store(in: &sleepSubscriptions)
+            NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.applicationDidBecomeActive()
+                    }
+                }.store(in: &sleepSubscriptions)
+        }
         refreshObservabilityStatus()
         if refreshStatusOnLoad {
             refreshLaunchdStatus()
@@ -435,11 +454,34 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     /// One sampler tick; publishes one snapshot when every read it started has landed.
     func sampleStatusTick(includeLaunchd: Bool) async {
+        let generation = wakeGeneration
+        if let task = statusTickTask {
+            if statusTickGeneration == generation {
+                await task.value
+                return
+            }
+            task.cancel()
+        }
+        statusTickGeneration = generation
+        let full = includeLaunchd || (wakeStartedAt != nil && wakeCatchUp.isPending(uptime: awakeUptime))
+        let task = Task {
+            await self.performStatusTick(includeLaunchd: full)
+            if self.statusTickGeneration == generation { self.statusTickTask = nil }
+        }
+        statusTickTask = task
+        await task.value
+    }
+
+    private func performStatusTick(includeLaunchd: Bool) async {
         refreshObservabilityStatus()
         await observabilityTask?.value
+        guard !Task.isCancelled else { return }
         await sampleWatcherHealth()
+        guard !Task.isCancelled else { return }
         await sampleHealthBadge()
+        guard !Task.isCancelled else { return }
         if includeLaunchd { await refreshLaunchdStatus(includeWatcher: false).value }
+        guard !Task.isCancelled else { return }
         republishStatus()
     }
 
@@ -474,19 +516,39 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 
     func systemWillSleep() {
-        sleepHistory.sleeping(at: now())
+        guard sleepStartedAt == nil else { return }
+        let time = now()
+        sleepStartedAt = time
+        lifecycleLog?.append("sleep at \(ISO8601DateFormatter().string(from: time))", now: time)
+        sleepHistory.sleeping(at: time)
         wakeCatchUp.sleeping(uptime: awakeUptime)
         scheduleWakeExpiry(after: 180)
         republishStatus()
     }
 
+    func applicationDidBecomeActive() {
+        guard sleepStartedAt != nil else { return }
+        systemDidWake()
+    }
+
     func systemDidWake() {
-        sleepHistory.woke(at: now())
+        let time = now()
         let grace = max(180, observabilityCadence.interval + 60)
-        wakeCatchUp.woke(uptime: awakeUptime, grace: grace)
+        guard sleepStartedAt != nil || (wakeStartedAt.map({ time.timeIntervalSince($0) > grace }) ?? true) else { return }
+        let duration = sleepStartedAt.map { max(0, Int(time.timeIntervalSince($0))) }
+        let uptime = awakeUptime
+        sleepStartedAt = nil
+        wakeStartedAt = time
+        wakeStartedUptime = uptime
+        wakeOutcomeLogged = false
+        let slept = duration.map { "\($0) s" } ?? "unknown duration"
+        lifecycleLog?.append("woke at \(ISO8601DateFormatter().string(from: time)), slept \(slept), status refresh asked", now: time)
+        sleepHistory.woke(at: time)
+        wakeCatchUp.woke(uptime: uptime, grace: grace)
         observabilityUnreadableSince = nil
         scheduleWakeExpiry(after: grace)
         republishStatus()
+        wakeRefreshTask = Task { [weak self] in await self?.sampleStatusTick(includeLaunchd: true) }
     }
 
     private func scheduleWakeExpiry(after delay: TimeInterval) {
@@ -502,16 +564,46 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func republishStatus() {
         let time = now()
         _ = sleepHistory.elapsed(since: time, now: time)
-        let candidate = deriveStatus(at: time)
+        var candidate = deriveStatus(at: time)
+        if let wakeStartedAt, sleepStartedAt == nil {
+            if let verdict = candidate.healthVerdict, verdict.evaluatedAt >= wakeStartedAt,
+               verdict.evaluatedAt <= time {
+                wakeCatchUp.finished()
+                logWakeOutcome(confirmed: true, at: time, detail: candidate.dashboardStatus.headline)
+            } else {
+                let verdict = candidate.healthVerdict ?? candidate.staleHealthVerdict
+                let reason = candidate.issues.first { $0.id == "verdict.stale" }
+                    ?? BrainBarStatusIssue(id: "verdict.stale", component: .health, severity: .notice,
+                    text: verdict?.fallbackNotice(now: time, sleepHistory: sleepHistory)
+                        ?? "No health reading from after wake.")
+                let issues = candidate.issues.contains { $0.id == reason.id }
+                    ? candidate.issues : [reason] + candidate.issues
+                candidate = .init(issues: issues, isChecking: candidate.isChecking,
+                                  staleHealthVerdict: verdict, wakeStatusUnconfirmed: true)
+                if !wakeCatchUp.isPending(uptime: awakeUptime) {
+                    logWakeOutcome(confirmed: false, at: time, detail: reason.text)
+                }
+            }
+        }
         let confirmedFailure = candidate.healthVerdict?.checks.contains {
             $0.state == .red && !["ingest", "stores", "embedding"].contains($0.name)
         } == true
-        let snapshot = wakeCatchUp.isPending(uptime: awakeUptime) && !confirmedFailure
+        var snapshot = wakeCatchUp.isPending(uptime: awakeUptime) && !confirmedFailure
             ? (publishedStatus.verdict.dot == .red ? publishedStatus : .checking)
             : candidate
+        snapshot.wakeCatchUpPending = wakeStartedAt != nil && sleepStartedAt == nil
+            && wakeCatchUp.isPending(uptime: awakeUptime)
         if snapshot != publishedStatus {
             publishedStatus = snapshot
         }
+    }
+
+    private func logWakeOutcome(confirmed: Bool, at time: Date, detail: String) {
+        guard !wakeOutcomeLogged, let wakeStartedUptime else { return }
+        wakeOutcomeLogged = true
+        let seconds = max(0, Int(awakeUptime - wakeStartedUptime))
+        let outcome = confirmed ? "status confirmed" : "status still not confirmed"
+        lifecycleLog?.append("\(outcome) \(seconds) s after wake: \(detail)", now: time)
     }
 
     private var menuBackups: BrainBarStatusInputs.Backups {
@@ -534,7 +626,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
         let observations = hasCompletedLaunchdSample ? launchdObservations : nil
         return BrainBarMenuLiveCapture.capture(
             status: publishedStatus,
-            verdictAwakeAgeS: verdict.map { sleepHistory.elapsed(since: $0.evaluatedAt, now: time) },
+            verdictAwakeAgeS: verdict.map {
+                if let wakeStartedAt, $0.evaluatedAt < wakeStartedAt { return .infinity }
+                return sleepHistory.elapsed(since: $0.evaluatedAt, now: time)
+            },
             wakeCatchUpPending: wakeCatchUp.isPending(uptime: awakeUptime),
             driveAuth: driveAuthSource?.status, backups: menuBackups,
             backupsNotice: hasCompletedObservabilityRead ? backupTruth.statusNotice : nil,
@@ -627,6 +722,11 @@ final class BrainBarSettingsViewModel: ObservableObject {
         guard case let .readable(document) = observabilityResult,
               document.backups.state == "measured" else { return nil }
         return ObservabilityPresentation.backupStatus(for: displayedBackups(document), jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine, now: observabilityNow)
+    }
+
+    var backupProgress: BrainBarBackupProgress? {
+        guard backupTruth.statusNotice == nil, case let .readable(document) = observabilityResult else { return nil }
+        return BrainBarBackupProgress.read(document.backups, now: now())
     }
 
     /// The Backups page's checks in plain words (E1), from the same document as `backupStatus`.
@@ -727,8 +827,15 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     /// The one Config file row (E5): the file this model reads and saves.
     var configFileURL: URL { store.configURL }
+    @Published private(set) var settingsBackupLine: String?
+    func refreshSettingsFileSummary() {
+        settingsBackupLine = BrainBarSettingsExplanation.backupLine(for: store.configURL)
+    }
     func copyConfigFilePath() { workspace.copy(store.configURL.path) }
-    func revealConfigFile() { workspace.reveal(store.configURL) }
+    func revealConfigFile() {
+        refreshSettingsFileSummary()
+        workspace.reveal(store.configURL)
+    }
     func copyText(_ text: String) { workspace.copy(text) }
 
     func copyTechnicalDetail(_ detail: BrainBarBackupChecks.Detail) {
@@ -759,6 +866,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 
     func refreshAllStatus() {
+        refreshSettingsFileSummary()
         _ = reloadConfigFromDisk()
         refreshLaunchdStatus()
         refreshObservabilityStatus()
@@ -1246,6 +1354,7 @@ struct BrainBarSettingsView: View {
         .environment(\.colorScheme, .dark)
         .task { await viewModel.monitorWatcherHealth() }
         .onChange(of: activationRevision, initial: true) { _, _ in
+            viewModel.refreshSettingsFileSummary()
             _ = viewModel.reloadConfigFromDisk(preservingDrafts: true)
             viewModel.refreshLaunchdStatus()
             viewModel.refreshObservabilityStatus()
@@ -1342,6 +1451,7 @@ struct BrainBarSettingsView: View {
         switch navigation.selected {
         case .jobs:
             VStack(alignment: .leading, spacing: 16) {
+                designRow
                 BrainBarBackupFailureLogs(model: viewModel)
                 jobsGrid
             }
@@ -1367,15 +1477,6 @@ struct BrainBarSettingsView: View {
         case .advanced:
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Text("Design").font(.system(size: 12, weight: .semibold))
-                    Spacer()
-                    Picker("Design", selection: $design) {
-                        ForEach(BrainBarDesign.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
-                    }
-                    .labelsHidden().pickerStyle(.segmented).fixedSize()
-                }.padding(.vertical, 7)
-                Divider()
-                HStack {
                     Text("Use the new menu").font(.system(size: 12, weight: .semibold))
                     Spacer()
                     Toggle("Use the new menu", isOn: $newMenuEnabled)
@@ -1384,6 +1485,10 @@ struct BrainBarSettingsView: View {
                 }.padding(.vertical, 7)
                 Divider()
                 sectionHeading("Embedding model")
+                ForEach(BrainBarSettingsExplanation.model(BrainBarEmbeddingModel.configuredName, namesModel: false), id: \.self) { line in
+                    Text(line).font(.system(size: 11)).foregroundStyle(Color.brainBarTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 ForEach(viewModel.modelResidencyPresentation.rows) { row in
                     settingsTruthRow(label: row.label, value: row.value)
                 }
@@ -1395,6 +1500,17 @@ struct BrainBarSettingsView: View {
                 configFileRow
             }
         }
+    }
+
+    private var designRow: some View {
+        HStack {
+            Text("Design").font(.system(size: 12, weight: .semibold))
+            Spacer()
+            Picker("Design", selection: $design) {
+                ForEach(BrainBarDesign.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+            }
+            .labelsHidden().pickerStyle(.segmented).fixedSize()
+        }.padding(.vertical, 7)
     }
 
     /// E5: the one place the config file appears, with what it is and Copy / Reveal.
@@ -1416,6 +1532,10 @@ struct BrainBarSettingsView: View {
                 Button("Reveal in Finder") { viewModel.revealConfigFile() }
             }
             .controlSize(.small)
+            if let line = viewModel.settingsBackupLine {
+                Text(line).font(.system(size: 11)).foregroundStyle(Color.brainBarTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("brainbar.settings.config-file")
@@ -1526,7 +1646,8 @@ struct BrainBarSettingsView: View {
                 hiddenAlert: viewModel.jobAlert,
                 detailsExpanded: $viewModel.backupDetailsExpanded,
                 copiedDetailID: viewModel.copiedTechnicalDetailID,
-                copy: { viewModel.copyTechnicalDetail($0) }
+                copy: { viewModel.copyTechnicalDetail($0) },
+                progress: viewModel.backupProgress
             )
         } else if !viewModel.hasCompletedObservabilityRead {
             Label("Checking backup status…", systemImage: "clock")

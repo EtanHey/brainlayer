@@ -451,6 +451,7 @@ brainlayer search "how did I implement authentication"
   still requires measured free-now bytes and preserves the 2 GiB raw floor. Probe fallback is
   explicit in `source`; non-macOS reports Available = free now and purgeable = 0.
 - Backups use the BrainLayer-owned `~/.config/brainlayer/drive-tokens.json` (0600); the Google Drive MCP token is a one-time copy source only.
+- Database backup retention and its configuration are defined in [Backup Strategy](docs/backup-strategy.md); keep the policy numbers there.
 - Run `brainlayer backup auth` to authorize in the browser; BrainBar uses `brainlayer backup auth --status --json` and `brainlayer backup auth --json`.
 - `BRAINLAYER_DRIVE_TOKEN_PATH` and `BRAINLAYER_DRIVE_CLIENT_PATH` override the token and read-only OAuth client paths; never delete a token after refresh failure.
 - Backup log: real runs append JSONL to `~/.local/share/brainlayer/logs/backup-daily.log` with
@@ -507,4 +508,5 @@ brainlayer search "how did I implement authentication"
   *(Etan's addition at ratification, 2026-08-02.)*
 
 ## Local JSONL retention
+- Each sweep adds at most one reporting row: `local_retention_summary`, with a `kept` list of archives held past the retention period (`name`, `bytes`, `first_reason`, nullable `eligible_at`) and totals for held/young bytes and the next age-eligible bytes/date. Reporting rows have no run-result fields or `error`, preserving BrainBar's 200-line history and last-run selection. Dates forecast only the age gate; live Drive, hashes, exact receipt and newest protection still govern deletion. Reconciliation starts a new full 14-day verification clock; never backdate it.
 - Local deletion defaults on via `BRAINLAYER_JSONL_BACKUP_LOCAL_RETENTION`; `0`/`false` disables it. Require both mtime and verified-at ages >=14 days, exact verified receipt plus local/Drive MD5 match and live Drive presence; never newest across release siblings. Drive-only `BRAINLAYER_JSONL_BACKUP_RETENTION` remains opt-in, latest 30. Scratch proof: `formal/jsonl-retention/check.sh`, `tests/test_jsonl_local_retention.py`, `tests/test_jsonl_retention_r2.py`.

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import SwiftUI
 import XCTest
 @testable import BrainBar
 
@@ -479,6 +480,32 @@ final class BrainBarDBCopyAgeTests: XCTestCase {
 /// Before/after evidence: the Jobs and Backups pages rendered from the MBP's 10-21 calendar run.
 @MainActor
 final class BrainBarZeroWarningsRenderTests: XCTestCase {
+    func testSettingsTitleGuardReadsVisibleTitleAndRejectsBlankTitle() throws {
+        let root = try canonicalTemporaryDirectory("settings-title-guard", self)
+        let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("fixture.env"))
+        try store.save(.defaultConfig)
+        let observations = BrainBarSupervisorStatusTests.supervised().sampleActivity()
+        let fixture = try XCTUnwrap(Bundle.module.url(forResource: "observability-main-58849a70",
+            withExtension: "json", subdirectory: "Fixtures"))
+        let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
+            launchdStatusProvider: FixedActivity(observations: observations),
+            initialLaunchdObservations: observations, refreshStatusOnLoad: false,
+            initialObservabilityResult: ObservabilityReader.read(url: fixture),
+            initialWatcherHealth: .readable(.init(updatedAt: Date(), pollCount: 50)))
+        // Blank the actual title and the sidebar's duplicate label in the same rendered view.
+        // Design and every Jobs card remain below this band, so neither can stand in for the title.
+        let blank = BrainBarSettingsView(viewModel: model, initialSection: .jobs)
+            .overlay(alignment: .topLeading) {
+                Color.brainBarBackgroundBase.frame(height: 70)
+            }
+        XCTAssertThrowsError(try BrainBarRenderHarness.renderSettingsText(view: blank, section: .jobs, directory: root)) {
+            XCTAssertEqual($0.localizedDescription, "Settings title did not render")
+        }
+        let text = try BrainBarRenderHarness.renderSettingsText(model, section: .jobs, directory: root)
+        XCTAssertTrue(text.contains("Jobs"), text)
+        XCTAssertTrue(text.contains("Design"), text)
+    }
+
     func testBackupIdentityFailurePanelsRenderPlainExplanation() throws {
         guard let path = ProcessInfo.processInfo.environment["BRAINBAR_SNAPSHOT_DIR"] else {
             throw XCTSkip("Set BRAINBAR_SNAPSHOT_DIR to render backup failures")

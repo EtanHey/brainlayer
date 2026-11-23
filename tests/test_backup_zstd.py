@@ -26,6 +26,50 @@ from brainlayer import disk_space, maintenance
 from tests.test_backup_daily import _create_source_db
 from tests.test_weekly_local_gate import config_for, local_lane  # noqa: F401
 
+
+def test_snapshot_sleep_reaches_final_local_receipt(lane, monkeypatch):
+    from brainlayer import backup_sleep
+
+    source, output = lane
+    values = {"inclusive": 0, "awake": 0}
+    tracker = backup_sleep.SleepTracker(inclusive=lambda: values["inclusive"], awake=lambda: values["awake"])
+    monkeypatch.setattr(backup_sleep, "SleepTracker", lambda: tracker)
+    vacuum = backup.request_brainbar_vacuum_into
+
+    def slept(*args, **kwargs):
+        result = vacuum(*args, **kwargs)
+        values["inclusive"] = 21600
+        return result
+
+    monkeypatch.setattr(backup, "request_brainbar_vacuum_into", slept)
+    result = backup.run_backup(source, staging_dir=output, upload=False, date_stamp="2026-11-22")
+    assert result["snapshot_slept_seconds"] == 21600
+    assert result["snapshot_wall_seconds"] == 21600
+    assert len(result["sleep_intervals"]) == 1
+    assert "while the Mac slept" in result["sleep_note"]
+
+
+def test_failed_snapshot_also_records_the_sleep(lane, monkeypatch):
+    from brainlayer import backup_sleep
+
+    source, output = lane
+    values = {"inclusive": 0}
+    tracker = backup_sleep.SleepTracker(inclusive=lambda: values["inclusive"], awake=lambda: 0)
+    monkeypatch.setattr(backup_sleep, "SleepTracker", lambda: tracker)
+
+    def failed(*args, **kwargs):
+        values["inclusive"] = 21600
+        raise RuntimeError("synthetic snapshot failure after sleep")
+
+    monkeypatch.setattr(backup, "request_brainbar_vacuum_into", failed)
+    log = output / "failure.log"
+    with pytest.raises(RuntimeError, match="failure after sleep"):
+        backup.run_backup(source, staging_dir=output, upload=False, log_path=log)
+    row = json.loads(log.read_text().splitlines()[-1])
+    assert row["snapshot_slept_seconds"] == 21600
+    assert "while the Mac slept" in row["sleep_note"]
+
+
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 
@@ -113,16 +157,17 @@ def test_zstd_is_the_default_and_round_trips_create_verify_restore(lane, tmp_pat
     _restore_and_check(artifact.archive_path, tmp_path, 4)
 
 
-def test_full_verify_of_zstd_compares_drive_copy(lane, monkeypatch):
+def test_full_verify_of_zstd_compares_streamed_drive_copy(lane, monkeypatch):
     source, output = lane
     artifact = backup.create_sqlite_backup_artifact(source, output, date_stamp="2026-10-18")
     uploaded = artifact.archive_path.read_bytes()
 
-    def download(service, *, file_id, destination):  # noqa: ARG001
-        destination.write_bytes(uploaded)
-        return destination
+    def download(service, *, file_id, sink):  # noqa: ARG001
+        sink.write(uploaded)
 
-    monkeypatch.setattr(backup, "download_drive_file_raw", download)
+    monkeypatch.setattr(backup, "_download_drive_to_stream", download)
+    monkeypatch.setattr(backup, "download_drive_file_raw", lambda *a, **kw: pytest.fail("download file"))
+    monkeypatch.setattr(backup, "_decompress_archive_to", lambda *a, **kw: pytest.fail("restored DB file"))
     result = backup.verify_sqlite_backup_artifact(artifact, full=True, service=object(), file_id="f")
     assert result["verified"] is True and result["drive_md5_match"] is True
 
@@ -245,14 +290,17 @@ def test_raw_with_only_legacy_gzip_sibling_still_cleans_up(lane):
 # --- retention ------------------------------------------------------------------------------
 
 
-def test_local_retention_keeps_newest_verified_copy_of_each_kind(tmp_path):
+def test_local_retention_counts_verified_dailies_across_formats(tmp_path):
     names = [f"2026-10-0{d}.db.gz" for d in (1, 2, 3)] + [f"2026-10-0{d}.db.zst" for d in (4, 5, 6, 7)]
     for name in names:
         (tmp_path / name).write_bytes(name.encode())
     deleted = backup.prune_local_compressed_snapshots(tmp_path, verified_drive_names=set(names))
-    assert deleted == ["2026-10-04.db.zst", "2026-10-02.db.gz", "2026-10-01.db.gz"]
+    assert deleted == []  # The legacy filename-only API cannot authorize removal.
     assert sorted(p.name for p in tmp_path.iterdir()) == [
-        "2026-10-03.db.gz",  # newest verified gzip: the rollback format's last verified copy
+        "2026-10-01.db.gz",
+        "2026-10-02.db.gz",
+        "2026-10-03.db.gz",
+        "2026-10-04.db.zst",
         "2026-10-05.db.zst",
         "2026-10-06.db.zst",
         "2026-10-07.db.zst",
@@ -288,15 +336,30 @@ class _DriveFiles:
 
 
 def _prune(monkeypatch, files, *, keep, verified):
+    from brainlayer.backup_retention import select_drive_dailies
+    from tests.test_backup_retention import receipt
+
+    files = [
+        dict(
+            item,
+            size="8",
+            md5Checksum=f"{index:032x}",
+            parents=["folder"],
+            appProperties={"brainlayer_machine": "MacBook-Pro"},
+        )
+        for index, item in enumerate(files)
+    ]
     drive = _DriveFiles(files)
     monkeypatch.setattr(backup, "ensure_drive_folder_chain", lambda service, parts: "folder")
-    trashed = backup.prune_drive_backups(
-        SimpleNamespace(files=lambda: drive),
-        folder_parts=["x"],
-        retention_policy=backup.DriveRetentionPolicy(keep_latest=keep),
-        **({} if verified is ... else {"verified_file_ids": verified}),
+    selected = select_drive_dailies(
+        files,
+        [receipt(item) for item in files if verified is not ... and verified and item["id"] in verified],
+        machine_id="MacBook-Pro",
+        folder_id="folder",
+        keep_latest=keep,
     )
-    return sorted(drive.trashed), sorted(trashed)
+    assert drive.trashed == []
+    return sorted(item["id"] for item in selected), sorted(item["name"] for item in selected)
 
 
 def test_drive_retention_counts_both_formats_and_keeps_newest_verified_of_each(monkeypatch):
@@ -304,8 +367,8 @@ def test_drive_retention_counts_both_formats_and_keeps_newest_verified_of_each(m
         {"id": f"zst{d}", "name": f"2026-10-0{d}.db.zst"} for d in (4, 5, 6)
     ]
     ids, names = _prune(monkeypatch, files, keep=2, verified={item["id"] for item in files})
-    assert ids == ["gz1", "gz2", "zst4"]
-    assert names == ["2026-10-01.db.gz", "2026-10-02.db.gz", "2026-10-04.db.zst"]
+    assert ids == ["gz1", "gz2", "gz3", "zst4"]
+    assert names == ["2026-10-01.db.gz", "2026-10-02.db.gz", "2026-10-03.db.gz", "2026-10-04.db.zst"]
 
 
 def _transition(new_suffix, old_suffix):
@@ -326,13 +389,13 @@ def _transition(new_suffix, old_suffix):
     [(".db.zst", ".db.gz"), (".db.gz", ".db.zst")],
     ids=["zstd-after-gzip", "gzip-rollback-after-zstd"],
 )
-def test_drive_retention_never_trashes_last_verified_copy_behind_a_failed_newer_one(
+def test_drive_retention_preserves_unverified_and_keeps_seven_verified_across_formats(
     monkeypatch, new_suffix, old_suffix
 ):
     files, verified = _transition(new_suffix, old_suffix)
     ids, _ = _prune(monkeypatch, files, keep=backup.DEFAULT_DRIVE_KEEP, verified=verified)
-    assert "old-last-verified" not in ids, "the last verified copy of the old format was trashed"
-    assert ids == ["old-failed", "old-older-verified"]
+    assert "old-failed" not in ids
+    assert ids == ["old-last-verified", "old-older-verified"]
 
 
 @pytest.mark.parametrize("verified", [..., None, set()], ids=["omitted", "unknown", "empty"])
@@ -402,7 +465,7 @@ def test_uncertain_line_after_a_verified_receipt_yields_no_evidence_and_trashes_
     assert _prune(monkeypatch, files, keep=2, verified=evidence) == ([], [])
 
 
-def test_run_backup_feeds_receipt_verified_ids_to_drive_retention(tmp_path, monkeypatch):
+def test_run_backup_never_routes_to_drive_pruning_even_with_legacy_opt_in(tmp_path, monkeypatch):
     from tests.test_backup_daily import _stub_verified_backup_run
 
     snapshot = tmp_path / "2026-10-20.db.zst"
@@ -415,7 +478,8 @@ def test_run_backup_feeds_receipt_verified_ids_to_drive_retention(tmp_path, monk
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1")
     result = backup.run_backup(db_path=tmp_path / "fixture.db", staging_dir=tmp_path, log_path=log)
     assert result["verified"] is True
-    assert {"old-last-verified", result["drive_file"]["id"]} <= seen["verified_file_ids"]
+    assert seen == {}
+    assert result["drive_retention"] == "disabled" and result["retention_deleted"] == []
 
 
 # --- receipt readers ------------------------------------------------------------------------
@@ -566,3 +630,9 @@ def test_calendar_process_group_stop_leaves_no_orphan_compressor(tmp_path, monke
             child.kill()
             child.wait()
     assert _gone(compressor), "compressor orphaned after the process-group stop"
+
+
+@pytest.fixture(autouse=True)
+def _vacuum_snapshot_backend_for_legacy_contracts(monkeypatch):
+    """These cases pin VACUUM/reclaim behavior; clone-specific races have their own suite."""
+    monkeypatch.setenv("BRAINLAYER_BACKUP_SNAPSHOT_METHOD", "vacuum")

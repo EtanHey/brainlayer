@@ -1,5 +1,11 @@
 # Ingest coverage verification (TLA+)
 
+T3 PR 3.3 changes the T3 projection writer, not this model's watcher health
+transition system. None of the four pinned source files changes. Session ownership
+and its bounded hold are outside this model; `tests/test_t3_ownership.py` forces
+watcher-first, watcher-late and watcher-never orderings on private SQLite stores.
+The read-only daily `t3-audit` checks the separate text coverage invariant.
+
 Status: **with the stall-code fix (INGEST-FIX, stacked on #1780) the property holds for each of the
 8 failure shapes on its own**: a dead or stuck watcher, lag (an unreadable transcript), coverage (writes
 that never reach the DB the watcher probes), DB write failure, a blind monitor (stale or unreadable
@@ -32,6 +38,7 @@ formal/ingest-coverage/check.sh --case finding   # cases whose name starts with 
 formal/ingest-coverage/check.sh --list           # the case table
 formal/ingest-coverage/check.sh --require-sync   # also fail when a covered source changed (CI runs this)
 python3 formal/ingest-coverage/check.py --write-configs   # after editing CASES
+python3 formal/ingest-coverage/check.py --pin-source src/brainlayer/watcher.py  # only after reviewing model conformance
 python3 formal/ingest-coverage/replay.py --generate       # after changing the spec or SCENARIOS
 pytest tests/test_ingest_coverage_replay.py               # the model against the real code
 ```

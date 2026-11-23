@@ -108,12 +108,12 @@ def test_raw_removed_before_any_upload_exit(raw_lane, monkeypatch, exit_path, co
     args = dict(db_path=source, staging_dir=output, date_stamp="2026-10-17", log_path=output / "receipt.jsonl")
     if success:
         result = backup.run_backup(**args)
-        assert result["local_removed_skip_reason"] == (None if drive_md5 else "md5_unverified")
+        assert result["local_removed_skip_reason"] == ("retention_keep" if drive_md5 else "md5_unverified")
     else:
         with pytest.raises(type(errors[exit_path])):
             backup.run_backup(**args)
     assert not raw.exists()
-    assert compressed.exists() is (not success or not drive_md5)
+    assert compressed.exists()  # The newest local archive stays under the host retention rule.
 
 
 @pytest.mark.parametrize("compressor", ["zstd", "gzip"])
@@ -314,3 +314,9 @@ def test_hashing_reads_in_bounded_chunks():
             return b"block" if self.remaining >= 0 else b""
 
     assert backup._stream_sha256(GuardedStream()) == hashlib.sha256(b"block" * 3).digest()
+
+
+@pytest.fixture(autouse=True)
+def _vacuum_snapshot_backend_for_legacy_contracts(monkeypatch):
+    """These cases pin VACUUM/reclaim behavior; clone-specific races have their own suite."""
+    monkeypatch.setenv("BRAINLAYER_BACKUP_SNAPSHOT_METHOD", "vacuum")

@@ -433,7 +433,7 @@ final class BrainBarStatusMenuTrackingTests: XCTestCase {
                 databaseOpenConfiguration: .init(readOnly: true))
             let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
             controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
-                dashboardPanelController: BrainBarDashboardPanelController(workspace: workspace, runtime: runtime),
+                dashboardPanelController: BrainBarDashboardPanelController(workspace: workspace, runtime: runtime, designDefaults: brainBarLegacyMenuDefaults()),
                 statusBar: host, menuDefaults: brainBarLegacyMenuDefaults())
             runtime.install(collector: collector, database: nil, databasePath: root.appendingPathComponent("unused.db").path)
         }

@@ -14,6 +14,7 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
     private var rowStates: [ObjectIdentifier: NDMenuRowState] = [:]
     /// Ends the menu's tracking before a row's click opens the window.
     var menuDismiss: (@MainActor () -> Void)?
+    var diagnosticsOpener: (@MainActor () -> Void)?
 
     init(store: NDStore, perform: @escaping @MainActor (BrainBarMenuAction) -> Void,
          openWindow: @escaping @MainActor (NDPage) -> Void) {
@@ -85,11 +86,14 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
         open.image = Self.symbol("macwindow")
         open.isEnabled = true
         let settings = standard(BrainBarMenuPresenter.Say.settings.text, key: ",", action: .settings, symbol: "gearshape")
+        let diagnostics = NSMenuItem(title: Say.diagnostics, action: #selector(openDiagnostics), keyEquivalent: "")
+        diagnostics.target = self
+        diagnostics.isEnabled = true
         let quit = standard(BrainBarMenuPresenter.Say.quit.text, key: "q", action: .quit, symbol: "power")
         let restart = standard(BrainBarMenuPresenter.Say.restart.text, key: "q", action: .restart, symbol: "arrow.clockwise")
         restart.keyEquivalentModifierMask = [.command, .option]
         restart.isAlternate = true
-        [open, settings, quit, restart].forEach(menu.addItem)
+        [open, settings, diagnostics, quit, restart].forEach(menu.addItem)
     }
 
     static func symbol(_ name: String) -> NSImage? {
@@ -119,6 +123,13 @@ private typealias Say = BrainBarMenuPresenter.SurfaceSay
     }
 
     @objc private func openOverview() { open(.activity) }
+
+    @objc private func openDiagnostics() {
+        menuDismiss?()
+        Task { @MainActor in
+            if let diagnosticsOpener { diagnosticsOpener() } else { store.showDiagnostics() }
+        }
+    }
 
     /// Each row opens the window at its page (Activity and Search at the Overview).
     private func open(_ kind: NDR1.MenuRow.Kind) {
@@ -190,6 +201,8 @@ struct NDMenuHeadline: View {
     /// The one line under a headline: an amber state's own line; not confirmed, "Nothing is known to be broken." only when
     /// the last confirmed verdict had no red check (L26).
     static func detail(_ r1: NDR1, lastVerdictHadRed: Bool) -> String? {
+        if r1.headline == BrainBarMenuPresenter.Say.checkingSleep.text { return nil }
+        if r1.wakeStatusUnconfirmed, r1.redCount == 0 { return r1.headlineDetail }
         if r1.pipeline.allUnconfirmed { return lastVerdictHadRed ? nil : Say.nothingKnownBrokenShort }
         return r1.redCount == 0 ? r1.headlineDetail : nil
     }
@@ -203,7 +216,8 @@ struct NDMenuHeadline: View {
             } else if !r1.items.isEmpty {
                 Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 15)).foregroundStyle(ND.orange)
             } else if let symbol = r1.headlineSymbol {
-                Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(ND.menuText2)
+                Image(systemName: symbol).font(.system(size: 15))
+                    .foregroundStyle(r1.headlineTone == .warn ? ND.orange : ND.menuText2)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(Self.text(r1)).font(NDType.title).tracking(-0.25).foregroundStyle(ND.menuText1)

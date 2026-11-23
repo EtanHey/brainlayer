@@ -27,7 +27,7 @@ import XCTest
         XCTAssertLessThanOrEqual(L.size.height - bottom, 8, "no empty strip below Search")
     }
 
-    func testJobPanelsOpenBelowWordsClearCaptionsAndFitAllTheirText() throws {
+    func testJobPanelsClearWordsAndCaptionsAndFitAllTheirText() throws {
         typealias L = NDPipelineLayout
         for name in BrainBarDesignFixture.Name.allCases {
             let store = NDStore(fixture: BrainBarDesignFixture.inputs(name))
@@ -37,11 +37,9 @@ import XCTest
                 let panel = chart.panel(station, content: content)
                 let measured = NDStationPopover.measure(content, width: panel.body.width)
                 let context = "\(name.rawValue) \(station) measured=\(measured) panel=\(panel.body)"
-                XCTAssertEqual(panel.edge, .bottom, context)
                 XCTAssertFalse(panel.scrolls, context)
                 XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, measured.height, context)
-                XCTAssertLessThanOrEqual(panel.body.maxY, L.size.height, context)
-                XCTAssertGreaterThan(panel.body.minY, L.labelRects(station, store.r1.pipeline).map(\.maxY).max() ?? 0, context)
+                XCTAssertLessThanOrEqual(panel.body.maxY, L.footerTop - 4, context)
                 for other in NDStation.allCases {
                     for rect in L.labelRects(other, store.r1.pipeline) { XCTAssertFalse(panel.outer.intersects(rect), context) }
                     XCTAssertFalse(panel.body.intersects(L.circle(other)), context)

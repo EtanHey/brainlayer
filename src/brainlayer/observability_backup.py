@@ -299,6 +299,24 @@ def _local_snapshot(records: list[dict[str, Any]], *, calendar: Sequence[dict[st
         "upload_error": terminal_error or local.get("error") or local.get("verification_error"),
         "local_integrity": local.get("local_integrity"),
         "local_integrity_pragma": local.get("local_integrity_pragma"),
+        # Existing backup-daily checkpoints, never elapsed-time estimates.
+        **({"bytes_confirmed": value} if type(value := local.get("bytes_confirmed")) is int and value >= 0 else {}),
+        **({"bytes_total": value} if type(value := local.get("bytes")) is int and value > 0 else {}),
+        **({"verification_pending": True} if local.get("verification_pending") is True else {}),
+        **({"bytes_confirmed_at": value} if isinstance(value := local.get("bytes_confirmed_at"), str) else {}),
+        **({"sleep_note": value} if isinstance(value := local.get("sleep_note"), str) and value else {}),
+        **{
+            key: value
+            for key in (
+                "snapshot_slept_seconds",
+                "snapshot_wall_seconds",
+                "upload_slept_seconds",
+                "upload_wall_seconds",
+                "run_slept_seconds",
+                "run_wall_seconds",
+            )
+            if type(value := local.get(key)) in (int, float) and math.isfinite(value) and value >= 0
+        },
     }
 
 

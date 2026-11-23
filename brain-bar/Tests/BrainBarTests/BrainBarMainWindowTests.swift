@@ -22,7 +22,7 @@ final class BrainBarMainWindowTests: XCTestCase {
     ) -> BrainBarDashboardPanelController {
         BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
             frameStore: BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey),
-            screenFrames: { screens }
+            screenFrames: { screens }, designDefaults: brainBarLegacyMenuDefaults()
         )
     }
 
@@ -205,7 +205,7 @@ final class BrainBarMainWindowTests: XCTestCase {
         let restored = BrainBarDashboardPanelController(
             workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
             activationPolicy: BrainBarWindowActivationPolicy(),
-            frameStore: BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey))
+            frameStore: BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey), designDefaults: brainBarLegacyMenuDefaults())
         defer {
             restored.dismiss()
             app.setActivationPolicy(previousPolicy)
@@ -242,13 +242,15 @@ final class BrainBarMainWindowTests: XCTestCase {
 
     func test_the_status_item_opens_a_small_menu_like_voicebar() throws {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let status = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { status.stop(); windowController.dismiss() }
 
         XCTAssertTrue(status.statusItemForTesting.menu === status.contextMenuForTesting, "every click opens the menu")
         // Show log stays hidden while no job alert is active (lead ruling 2026-10-04).
-        let titles = status.contextMenuForTesting.items.filter { !$0.isSeparatorItem && !$0.isHidden }.map(\.title)
+        // Gap 26, lead ruling 21 Nov 2026: main's inventory plus one enabled, unmarked Diagnostics after Settings.
+        let mainItems = try brainBarItemsWithoutApprovedDiagnostics(status.contextMenuForTesting)
+        let titles = mainItems.filter { !$0.isSeparatorItem && !$0.isHidden }.map(\.title)
         XCTAssertEqual(Array(titles.dropFirst()), ["Open Dashboard", "Settings…", "Restart BrainBar", "Quit BrainBar"])
         XCTAssertFalse(status.contextMenuForTesting.items[0].isEnabled, "the first row is a status line")
 

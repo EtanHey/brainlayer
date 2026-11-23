@@ -6,11 +6,29 @@ import signal
 import socket
 import subprocess
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from brainlayer import supervisor_guard as guard
 from brainlayer.supervisor_guard import Custody, group_exists, peer_uid, start_time
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError, ProcessLookupError, PermissionError])
+def test_linux_birth_identity_when_process_exits_during_stat_read(monkeypatch, error):
+    monkeypatch.setattr(guard, "sys", SimpleNamespace(platform="linux"))
+
+    def vanished(path):
+        assert path == Path("/proc/12345/stat")
+        raise error()
+
+    monkeypatch.setattr(Path, "read_text", vanished)
+    if error is PermissionError:
+        with pytest.raises(PermissionError):
+            start_time(12345)
+    else:
+        assert start_time(12345) is None
 
 
 def test_lock_journal_and_birth_identity_recovery(tmp_path):

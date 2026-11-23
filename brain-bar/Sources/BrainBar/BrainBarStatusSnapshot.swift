@@ -91,6 +91,8 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
     let isChecking: Bool
     var healthVerdict: BrainBarHealthVerdict? = nil
     var staleHealthVerdict: BrainBarHealthVerdict? = nil
+    var wakeCatchUpPending = false
+    var wakeStatusUnconfirmed = false
 
     var attention: [BrainBarStatusIssue] { issues.filter { $0.severity == .attention } }
     var notices: [BrainBarStatusIssue] { issues.filter { $0.severity == .notice } }
@@ -109,8 +111,9 @@ struct BrainBarStatusSnapshot: Equatable, Sendable {
     var verdict: BrainBarStatusVerdict {
         .init(attention: attention.filter { !$0.isOld }.map(\.text),
               notices: notices.filter { !$0.isOld }.map(\.text), oldNotices: issues.filter(\.isOld).map(\.text), isChecking: isChecking,
-              dotOverride: healthVerdict?.renderedDot ?? staleHealthVerdict?.staleRenderedDot,
-              healthVerdictIsStale: staleHealthVerdict != nil, backupRunFailures: issues.flatMap { issue in
+              dotOverride: healthVerdict?.renderedDot ?? staleHealthVerdict?.staleRenderedDot
+                ?? (wakeStatusUnconfirmed ? (attention.contains { !$0.isOld } ? .red : .amber) : nil),
+              healthVerdictIsStale: staleHealthVerdict != nil, wakeCatchUpPending: wakeCatchUpPending, backupRunFailures: issues.flatMap { issue in
                   issue.backupRunDetails.sorted { $0.key.rawValue < $1.key.rawValue }.map { .init(target: $0.key, text: $0.value) }
               })
     }

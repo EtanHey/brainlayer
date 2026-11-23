@@ -35,6 +35,7 @@ private final class BrainBarLegacyMenuDefaults: UserDefaults, @unchecked Sendabl
         self.domainName = domainName
         super.init(suiteName: domainName)!
         set(false, forKey: BrainBarNewMenuPreference.key)
+        set(BrainBarDesign.classic.rawValue, forKey: BrainBarDesign.key)
     }
 
     deinit { removePersistentDomain(forName: domainName) }

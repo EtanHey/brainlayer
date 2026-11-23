@@ -323,7 +323,8 @@ def test_cli_check_ignores_a_preexisting_orphan(tmp_path):
     code = (
         "import os, sys, time\n"
         "if os.fork(): sys.exit(0)\nos.setsid()\nif os.fork():\n time.sleep(.3)\n os._exit(0)\n"
-        "open(sys.argv[1], 'w').write(str(os.getpid()))\ntime.sleep(5)\n"
+        "with open(sys.argv[1] + '.tmp', 'w') as f: f.write(str(os.getpid()))\n"
+        "os.replace(sys.argv[1] + '.tmp', sys.argv[1])\ntime.sleep(5)\n"
     )
     identity = None
     try:
@@ -334,9 +335,17 @@ def test_cli_check_ignores_a_preexisting_orphan(tmp_path):
             check=True,
         )
         deadline = time.monotonic() + 2
-        while not pid_file.exists() and time.monotonic() < deadline:
+        pid_text = ""
+        while time.monotonic() < deadline:
+            try:
+                pid_text = pid_file.read_text().strip()
+            except FileNotFoundError:
+                pass
+            if pid_text:
+                break
             time.sleep(0.01)
-        pid = int(pid_file.read_text())
+        assert pid_text, "orphan did not publish its PID before the deadline"
+        pid = int(pid_text)
         while True:
             process = _process_snapshot()[pid]
             if process.ppid == 1 or time.monotonic() >= deadline:

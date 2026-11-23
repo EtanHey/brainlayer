@@ -7,17 +7,57 @@ struct NDStationPanelBody: View {
     typealias Say = BrainBarMenuPresenter.SurfaceSay
     let model: NDStationPopover.Model
     var waiting = false
+    var compactRows = false
+    var compactAction = false
+    var allowsWideLayout = false
     var perform: (BrainBarMenuPresentation.ActionKind) -> Void = { _ in }
     @Environment(\.ndPanelFocusAction) private var focusAction
     @FocusState private var actionFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                mark
-                Text(model.title).font(NDType.bodyStrong).foregroundStyle(ND.t1).fixedSize(horizontal: false, vertical: true)
+        ViewThatFits(in: .horizontal) {
+            if allowsWideLayout { wideBody }
+            stackedBody
+        }
+        .onAppear { if focusAction, model.action != nil { actionFocused = true } }
+    }
+
+    private var heading: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            mark
+            Text(model.title).font(NDType.bodyStrong).foregroundStyle(ND.t1).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Widening also reflows the readouts; a vertical stack has a minimum height even at the widest width.
+    private var wideBody: some View {
+        HStack(alignment: .top, spacing: 12) {
+            heading.frame(width: 220, alignment: .topLeading)
+            if !model.lines.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(Self.paragraphs(model.lines).enumerated()), id: \.offset) { _, line in
+                        Text(keepingUnits(line)).font(NDType.panelBody).foregroundStyle(ND.t2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            } else {
+                Spacer(minLength: 0)
             }
-            .padding(.bottom, 6)
+            if !model.rows.isEmpty { readoutRows.frame(width: model.action == nil ? 180 : 140) }
+            if let action = model.action {
+                ND.hair2.frame(width: 0.5, height: 36)
+                actionButton(action).frame(width: max(220, NDPipelineChart.actionWidth(action)))
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 5.5)
+        .frame(minWidth: 760, idealWidth: 760, maxWidth: .infinity)
+    }
+
+    private var stackedBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            heading.padding(.bottom, 6)
             ForEach(Array(Self.paragraphs(model.lines).enumerated()), id: \.offset) { index, line in
                 // R1.7 item 10: body 12 pt in the secondary colour, at most two lines a paragraph.
                 // R1.12 (§ B): 2 pt between paragraphs, so the top-lane panels fit the room above their stations.
@@ -25,32 +65,34 @@ struct NDStationPanelBody: View {
                     .fixedSize(horizontal: false, vertical: true).padding(.top, index == 0 ? 0 : 2)
             }
             if !model.rows.isEmpty {
-                VStack(spacing: 0) {
-                    ForEach(model.rows) { line in
-                        HStack {
-                            Text(line.label).font(NDType.panelBody).foregroundStyle(ND.t2).fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: line.value.isEmpty ? 0 : 12)
-                            if !line.value.isEmpty {
-                                // R1.7 item 10: the value in primary semibold (a fault or a notice keeps its colour).
-                                Text(line.value).font(NDType.panelValue)
-                                    .foregroundStyle(line.tone == .fault ? ND.redText : line.tone == .warn ? ND.orangeText : ND.t1)
-                            }
-                        }
-                        .frame(minHeight: Self.rowHeight)
-                    }
-                }
-                .padding(.top, 8)
+                readoutRows
+                .padding(.top, compactRows ? 2 : 8)
             }
             if let action = model.action {
                 // R1.12 (§ B): 10 and 8 pt around the hairline, so a fault panel fits the room above its station.
-                ND.hair2.frame(height: 0.5).padding(.horizontal, -14).padding(.top, 10)
+                ND.hair2.frame(height: 0.5).padding(.horizontal, -14).padding(.top, compactAction ? 4 : 10)
                 actionButton(action)
-                    .padding(.top, 8)
+                    .padding(.top, compactAction ? 5 : 8)
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)  // R1.12 (§ B)
-        .onAppear { if focusAction, model.action != nil { actionFocused = true } }
+    }
+
+    private var readoutRows: some View {
+        VStack(spacing: 0) {
+            ForEach(model.rows) { line in
+                HStack {
+                    Text(line.label).font(NDType.panelBody).foregroundStyle(ND.t2).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: line.value.isEmpty ? 0 : 12)
+                    if !line.value.isEmpty {
+                        Text(line.value).font(NDType.panelValue)
+                            .foregroundStyle(line.tone == .fault ? ND.redText : line.tone == .warn ? ND.orangeText : ND.t1)
+                    }
+                }
+                .frame(minHeight: Self.rowHeight)
+            }
+        }
     }
 
     /// R1.7 item 10: a row at 12 pt is 18 pt high.
