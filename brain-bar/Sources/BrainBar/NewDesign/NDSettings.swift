@@ -116,6 +116,10 @@ struct NDSettingsView: View {
                         Text(driveState).font(NDType.body).foregroundStyle(store.model.drive.action != nil ? ND.redText : ND.t2)
                         driveAction
                     }
+                    if Self.driveAction(store.r1) == nil {
+                        BrainBarDriveRetentionLink(evidence: store.inputs.driveRetention)
+                            .padding(.horizontal, 12).padding(.bottom, 10)
+                    }
                     ND.hair.frame(height: 0.5)
                     row(Say.settingsFile) {
                         Spacer()

@@ -270,6 +270,7 @@ import SwiftUI
         if let model {
             i.jobs = jobs(model)
             i.backupProgress = model.backupProgress
+            i.driveRetention = BrainBarDriveRetention.from(model.dashboardObservabilityResult)
             i.nightlyLastRun = run(model, .maintenanceNightly)
             i.weeklyLastRun = run(model, .maintenanceWeekly)
             if case let .completed(at) = model.maintenanceEvidence.weeklyCompletion {

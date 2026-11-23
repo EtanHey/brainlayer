@@ -37,6 +37,7 @@ enum BrainBarDriveAuthFormat {
 /// The Backups page's Google Drive block: state, what to do, and the one Reconnect button.
 struct BrainBarDriveAuthCard: View {
     @ObservedObject var model: BrainBarDriveAuthModel
+    var retention: BrainBarDriveRetention? = nil
 
     var body: some View {
         let presentation = model.presentation(formatDate: BrainBarDriveAuthFormat.date)
@@ -58,6 +59,11 @@ struct BrainBarDriveAuthCard: View {
                     .foregroundStyle(Color.brainBarTextMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            #if BRAINBAR_UI
+            if !presentation.showsReconnect {
+                BrainBarDriveRetentionLink(evidence: retention, classic: true)
+            }
+            #endif
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("brainbar.backups.google-drive")
