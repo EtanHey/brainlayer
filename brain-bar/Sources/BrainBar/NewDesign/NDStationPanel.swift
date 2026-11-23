@@ -51,7 +51,7 @@ struct NDStationPanelBody: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.vertical, 5.5)
         .frame(minWidth: 760, idealWidth: 760, maxWidth: .infinity)
     }
 
@@ -72,7 +72,7 @@ struct NDStationPanelBody: View {
                 // R1.12 (§ B): 10 and 8 pt around the hairline, so a fault panel fits the room above its station.
                 ND.hair2.frame(height: 0.5).padding(.horizontal, -14).padding(.top, compactAction ? 4 : 10)
                 actionButton(action)
-                    .padding(.top, 8)
+                    .padding(.top, compactAction ? 5 : 8)
             }
         }
         .padding(.horizontal, 14)

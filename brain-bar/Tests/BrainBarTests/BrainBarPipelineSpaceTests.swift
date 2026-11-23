@@ -74,7 +74,6 @@ import XCTest
     func testJobStationsSpreadBeyondTheMemoryBox() {
         let L = NDPipelineLayout.self
         let distance = L.point(.weekly).x - L.point(.jobs).x
-        print("PIPELINE card=\(L.size.height) jobs=\(distance)")
         XCTAssertGreaterThan(distance, 186)
         XCTAssertLessThan(L.point(.jobs).x, L.hub.minX)
         XCTAssertGreaterThan(L.point(.weekly).x, L.hub.maxX)
@@ -88,17 +87,13 @@ import XCTest
             for station in NDStation.allCases {
                 let content = AnyView(NDStationPopover(store: store, station: station))
                 let panel = chart.panel(station, content: content)
-                if panel.scrolls {
-                    let model = NDStationPopover.model(station, item: store.r1.stationItems[station], store.inputs, store.model, store.r1.pipeline)
-                    print("CLIPPED \(name.rawValue) \(station): title=\(model.title); lines=\(model.lines); rows=\(model.rows); action=\(model.action?.label ?? "none"); wide=\(NDStationPopover.measure(content, width: 800).height)")
-                }
                 XCTAssertFalse(panel.scrolls, "\(name.rawValue) \(station): full content must fit")
                 XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, NDStationPopover.measure(content, width: panel.body.width).height)
                 for other in NDStation.allCases where other != station {
                     let context = "\(name.rawValue) \(station) covering \(other)"
-                    XCTAssertFalse(panel.body.intersects(NDPipelineLayout.circle(other)), context)
+                    XCTAssertFalse(panel.body.intersects(NDPipelineLayout.circle(other).insetBy(dx: -4, dy: -4)), context)
                     for words in chart.displayedPanelWords[other] ?? NDPipelineLayout.labelRects(other, store.r1.pipeline) {
-                        XCTAssertFalse(panel.outer.intersects(words), context)
+                        XCTAssertFalse(panel.outer.intersects(words.insetBy(dx: -4, dy: -4)), context)
                     }
                 }
             }
@@ -114,9 +109,10 @@ import XCTest
                 XCTAssertTrue(panel.scrolls)
                 XCTAssertFalse(panel.outer.intersects(L.pipelineHeading))
                 for other in NDStation.allCases {
-                    XCTAssertFalse(panel.body.intersects(L.circle(other)), "\(station) over \(other)")
+                    let icon = other == station ? L.circle(other) : L.circle(other).insetBy(dx: -4, dy: -4)
+                    XCTAssertFalse(panel.body.intersects(icon), "\(station) over \(other)")
                     for words in L.labelRects(other, state) {
-                        XCTAssertFalse(panel.outer.intersects(words), "\(station) over \(other)")
+                        XCTAssertFalse(panel.outer.intersects(other == station ? words : words.insetBy(dx: -4, dy: -4)), "\(station) over \(other)")
                     }
                 }
             }
@@ -136,13 +132,36 @@ import XCTest
                 XCTAssertTrue(natural.body.insetBy(dx: -0.01, dy: -0.01).contains(fitted.body), "\(name.rawValue) \(station)")
                 XCTAssertEqual(fitted.tip, natural.tip)
                 for other in NDStation.allCases where other != station {
-                    XCTAssertFalse(fitted.body.intersects(L.circle(other)), "\(station) over \(other)")
+                    XCTAssertFalse(fitted.body.intersects(L.circle(other).insetBy(dx: -4, dy: -4)), "\(station) over \(other)")
                     for words in chart.displayedPanelWords[other] ?? L.labelRects(other, store.r1.pipeline) {
-                        XCTAssertFalse(fitted.outer.intersects(words), "\(station) over \(other)")
+                        XCTAssertFalse(fitted.outer.intersects(words.insetBy(dx: -4, dy: -4)), "\(station) over \(other)")
                     }
                 }
             }
         }
+    }
+
+    func testBodiesClearTheKeptSafeOutline() {
+        let L = NDPipelineLayout.self
+        // The one-point outline extends half a point beyond its frame.
+        let outline = L.keptSafe.insetBy(dx: -4.5, dy: -4.5)
+        for name in BrainBarDesignFixture.Name.allCases {
+            let store = NDStore(fixture: BrainBarDesignFixture.inputs(name), page: .overview)
+            let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories,
+                items: store.r1.stationItems, backupProgress: store.inputs.backupProgress)
+            for station in NDStation.allCases {
+                let panel = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
+                XCTAssertFalse(panel.body.intersects(outline), "\(name.rawValue) \(station): 4 pt from the outline")
+            }
+        }
+    }
+
+    func testWeeklyAndSearchUseSeparateMemoryPorts() throws {
+        let L = NDPipelineLayout.self
+        let weekly = try XCTUnwrap(L.connections.first { $0.pipe == .weeklyMemory }?.line.points.last)
+        let search = try XCTUnwrap(L.connections.first { $0.pipe == .memorySearch }?.line.points.first)
+        XCTAssertGreaterThanOrEqual(abs(weekly.x - search.x), 16)
+        XCTAssertEqual(weekly.y, L.hub.maxY + L.edgeGap)
     }
 
     func testRenderRequestedProof() throws {
@@ -152,11 +171,13 @@ import XCTest
         for (suffix, appearance) in NDRenderHarness.appearances {
             let calm = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .overview)
             _ = try NDRenderHarness.window(calm, name: "overview-\(suffix)", appearance: appearance, in: directory)
-            for station: NDStation in [.memory, .jobs, .weekly] {
+            for station: NDStation in [.memory, .jobs, .weekly, .queue, .read, .search] {
                 _ = try NDRenderHarness.hover(calm, station: station, name: "hover-\(station.rawValue)-\(suffix)", appearance: appearance, in: directory)
             }
             let faulty = NDStore(fixture: BrainBarDesignFixture.inputs(.driveSignedOut), page: .overview)
             _ = try NDRenderHarness.window(faulty, name: "faulty-\(suffix)", appearance: appearance, in: directory)
+            let searchFault = NDStore(fixture: BrainBarDesignFixture.inputs(.searchFailing), page: .overview)
+            _ = try NDRenderHarness.hover(searchFault, station: .search, name: "hover-search-fault-\(suffix)", appearance: appearance, in: directory)
             if let widePath = ProcessInfo.processInfo.environment["PIPELINE_SPACE_WIDE_PROOF"] {
                 let wide = URL(fileURLWithPath: widePath, isDirectory: true)
                 try FileManager.default.createDirectory(at: wide, withIntermediateDirectories: true)

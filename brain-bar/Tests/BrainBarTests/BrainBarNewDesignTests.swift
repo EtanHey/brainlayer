@@ -2042,7 +2042,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             // L63: derive the return lane from the job words, and spread the job stations.
             // Keep a literal pin, independent of the production layout tokens, in every state.
             .read: CGPoint(x: 215, y: 44), .queue: CGPoint(x: 215, y: 114), .search: CGPoint(x: 736, y: 248),
-            .mac: CGPoint(x: 599, y: 44), .drive: CGPoint(x: 736, y: 44), .jobs: CGPoint(x: 313, y: 138), .weekly: CGPoint(x: 650, y: 138),
+            .mac: CGPoint(x: 599, y: 44), .drive: CGPoint(x: 736, y: 44), .jobs: CGPoint(x: 317, y: 138), .weekly: CGPoint(x: 654, y: 138),
         ]
         XCTAssertEqual(NDPipelineLayout.stations, expected)
         let centers = expected.merging([.agents: CGPoint(x: 38, y: 72), .memory: CGPoint(x: 435, y: 65.5)]) { fixed, _ in fixed }
@@ -3123,7 +3123,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
             let link = try XCTUnwrap(L.connections.first { $0.pipe == pipe })
             XCTAssertTrue(link.bothWays, "\(station): both ways")
             XCTAssertEqual(link.line.points.first?.x, L.point(station).x)
-            let anchorX = station == .jobs ? L.hub.minX + 12 : L.hub.maxX - 12
+            let anchorX = station == .jobs ? L.hub.minX + 12 : L.hub.maxX - 28
             XCTAssertEqual(link.line.points.last, CGPoint(x: anchorX, y: L.hub.maxY + L.edgeGap))
             XCTAssertTrue((L.hub.minX...L.hub.maxX).contains(anchorX), "\(station) connects to Memory")
         }

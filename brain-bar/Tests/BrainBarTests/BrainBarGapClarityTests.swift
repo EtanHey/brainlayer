@@ -14,7 +14,7 @@ final class BrainBarGapClarityTests: XCTestCase {
         typealias L = NDPipelineLayout
         for (pipe, station) in [(NDPipe.jobsMemory, NDStation.jobs), (.weeklyMemory, .weekly)] {
             let link = try XCTUnwrap(L.connections.first { $0.pipe == pipe })
-            let anchorX = station == .jobs ? L.hub.minX + 12 : L.hub.maxX - 12
+            let anchorX = station == .jobs ? L.hub.minX + 12 : L.hub.maxX - 28
             XCTAssertTrue(link.bothWays)
             let first = try XCTUnwrap(link.line.points.first)
             XCTAssertEqual(hypot(first.x - L.point(station).x, first.y - L.point(station).y), L.lineEnd, accuracy: 0.01)

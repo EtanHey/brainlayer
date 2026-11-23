@@ -51,7 +51,7 @@ enum NDPipelineLayout {
     /// along the copies' lower edge and down, and the answers return straight along yAnswers (gap 79 / L56).
     static let stations: [NDStation: CGPoint] = [
         .read: CGPoint(x: 215, y: yTop), .queue: CGPoint(x: 215, y: ySaves), .search: CGPoint(x: 736, y: yAnswers),
-        .mac: CGPoint(x: 599, y: yTop), .drive: CGPoint(x: 736, y: yTop), .jobs: CGPoint(x: 313, y: yJobs), .weekly: CGPoint(x: 650, y: yJobs),
+        .mac: CGPoint(x: 599, y: yTop), .drive: CGPoint(x: 736, y: yTop), .jobs: CGPoint(x: 317, y: yJobs), .weekly: CGPoint(x: 654, y: yJobs),
     ]
     static let symbols: [NDStation: String] = [
         .read: "text.bubble", .queue: "tray.full", .memory: "brain", .mac: "laptopcomputer.and.arrow.down", .drive: "icloud",
@@ -122,7 +122,7 @@ enum NDPipelineLayout {
                     CGPoint(x: hub.minX + 12, y: jobs.y), CGPoint(x: hub.minX + 12, y: hub.maxY + g)]).trimmed(start: e),
                               bothWays: true))
         out.append(Connection(pipe: .weeklyMemory, line: NDPolyline(points: [weekly,
-                    CGPoint(x: hub.maxX - 12, y: weekly.y), CGPoint(x: hub.maxX - 12, y: hub.maxY + g)]).trimmed(start: e),
+                    CGPoint(x: hub.maxX - 28, y: weekly.y), CGPoint(x: hub.maxX - 28, y: hub.maxY + g)]).trimmed(start: e),
                               bothWays: true))
         return out
     }()
@@ -305,7 +305,9 @@ enum NDPipelineLayout {
     }
 
     static func panelBodyObstacles(_ s: NDStation, interior: Bool) -> [CGRect] {
-        interior ? NDStation.allCases.filter { $0 != s }.map { circle($0) } : []
+        guard interior else { return [] }
+        return NDStation.allCases.filter { $0 != s }.map { circle($0).insetBy(dx: -4, dy: -4) }
+            + [keptSafe.insetBy(dx: -4.5, dy: -4.5)]
     }
 
     /// L58: body clearance can move the body, never the target-aligned notch.
@@ -315,9 +317,7 @@ enum NDPipelineLayout {
         if interior {
             for other in NDStation.allCases where other != s {
                 let words = panelWords(other, state: state, displayedWords: displayedWords)
-                // L63b: Memory uses the pocket between the jobs, with 4 pt clear of their words.
-                obstacles += s == .memory && (other == .jobs || other == .weekly || other == .queue)
-                    ? words.map { $0.insetBy(dx: -4, dy: -4) } : words
+                obstacles += words.map { $0.insetBy(dx: -4, dy: -4) }
             }
             // R13: the two job panels clear the native caption fields, including their drawing insets.
             if s == .jobs || s == .weekly {
@@ -346,7 +346,9 @@ enum NDPipelineLayout {
         switch edge {
         case .top:
             tip = CGPoint(x: own.midX, y: own.minY)
-            body = CGRect(x: tip.x - width / 2, y: tip.y - arrowLength - height, width: width, height: height)
+            // Top-row bodies clear the copies' one-point outline; the notch still targets its own station.
+            let bottom = topRowPanels.contains(s) ? min(tip.y - arrowLength, keptSafe.minY - 4.5) : tip.y - arrowLength
+            body = CGRect(x: tip.x - width / 2, y: bottom - height, width: width, height: height)
         case .bottom:
             tip = CGPoint(x: own.midX, y: anchor.maxY)
             body = CGRect(x: tip.x - width / 2, y: tip.y + arrowLength, width: width, height: height)
@@ -362,7 +364,8 @@ enum NDPipelineLayout {
         let high = horizontal ? min(windowInside.maxX - width, tip.x - arrowInset) : min(footerTop - 4 - height, tip.y - arrowInset)
         guard low <= high else { return nil }
         let arrowBox = horizontal
-            ? CGRect(x: tip.x - arrowHalfWidth, y: min(tip.y, edge == .top ? body.maxY : body.minY), width: 2 * arrowHalfWidth, height: arrowLength)
+            ? CGRect(x: tip.x - arrowHalfWidth, y: min(tip.y, edge == .top ? body.maxY : body.minY), width: 2 * arrowHalfWidth,
+                     height: abs(tip.y - (edge == .top ? body.maxY : body.minY)))
             : CGRect(x: min(tip.x, edge == .leading ? body.maxX : body.minX), y: tip.y - arrowHalfWidth, width: arrowLength, height: 2 * arrowHalfWidth)
         let obstacles = panelObstacles(s, state: state, actions: actions, actionWidths: actionWidths, interior: true, displayedWords: displayedWords)
         let bodyObstacles = panelBodyObstacles(s, interior: true)
