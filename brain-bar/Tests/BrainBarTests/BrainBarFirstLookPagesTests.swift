@@ -243,16 +243,33 @@ import XCTest
         }
     }
 
-    func testRetentionErrorAndUnprovenUndatedRowsAreNotSkipped() throws {
+    func testRetentionErrorIsADatedFailureWithoutMakingConversationHistoryUnknown() throws {
+        let now = BrainBarDesignFixture.inputs(.calm).capture.now
+        let at = now.addingTimeInterval(-3600)
+        let date = ISO8601DateFormatter().string(from: at)
+        let error = #"{"event":"local_retention_error","error":"invented inventory unavailable"}"#
+        let upload = "{\"attempted_at\":\"\(date)\",\"uploaded\":true,\"verified\":true}"
+        let retention = NDBackupHistoryReader.Log(lines: [Substring(error), Substring(upload)], unreadable: false)
+        let conversation = try XCTUnwrap(NDBackupHistoryReader.parseConversations(retention, now: now))
+        let attempts = try XCTUnwrap(conversation.attempts)
+        XCTAssertEqual(attempts.count, 2)
+        XCTAssertEqual(attempts.filter { !$0.ok }.count, 1)
+        XCTAssertEqual(attempts.first?.at, at)
+        XCTAssertEqual(attempts.first?.isErrorEvent, true)
+        XCTAssertEqual(conversation.skipped, 0)
+    }
+
+    func testDatabaseRetentionErrorIsNotSkipped() throws {
         let now = BrainBarDesignFixture.inputs(.calm).capture.now
         let error = #"{"event":"local_retention_error","error":"invented inventory unavailable"}"#
         let retention = NDBackupHistoryReader.Log(lines: [Substring(error)], unreadable: false)
-        let conversation = try XCTUnwrap(NDBackupHistoryReader.parseConversations(retention, now: now))
-        XCTAssertNil(conversation.attempts)
-        XCTAssertEqual(conversation.skipped, 1)
         let database = try XCTUnwrap(NDBackupHistoryReader.parseDatabase(retention, now: now))
         XCTAssertNil(database.local)
         XCTAssertEqual(database.skipped, 1)
+    }
+
+    func testUnprovenUndatedRowsAreNotSkipped() {
+        let now = BrainBarDesignFixture.inputs(.calm).capture.now
         let undated = NDBackupHistoryReader.Log(lines: [Substring(#"{"uploaded":true,"verified":true}"#)], unreadable: false)
         XCTAssertNil(NDBackupHistoryReader.parseConversations(undated, now: now)?.attempts)
     }

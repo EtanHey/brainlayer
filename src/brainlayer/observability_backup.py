@@ -304,6 +304,19 @@ def _local_snapshot(records: list[dict[str, Any]], *, calendar: Sequence[dict[st
         **({"bytes_total": value} if type(value := local.get("bytes")) is int and value > 0 else {}),
         **({"verification_pending": True} if local.get("verification_pending") is True else {}),
         **({"bytes_confirmed_at": value} if isinstance(value := local.get("bytes_confirmed_at"), str) else {}),
+        **({"sleep_note": value} if isinstance(value := local.get("sleep_note"), str) and value else {}),
+        **{
+            key: value
+            for key in (
+                "snapshot_slept_seconds",
+                "snapshot_wall_seconds",
+                "upload_slept_seconds",
+                "upload_wall_seconds",
+                "run_slept_seconds",
+                "run_wall_seconds",
+            )
+            if type(value := local.get(key)) in (int, float) and math.isfinite(value) and value >= 0
+        },
     }
 
 

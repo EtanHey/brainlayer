@@ -108,12 +108,12 @@ def test_raw_removed_before_any_upload_exit(raw_lane, monkeypatch, exit_path, co
     args = dict(db_path=source, staging_dir=output, date_stamp="2026-10-17", log_path=output / "receipt.jsonl")
     if success:
         result = backup.run_backup(**args)
-        assert result["local_removed_skip_reason"] == (None if drive_md5 else "md5_unverified")
+        assert result["local_removed_skip_reason"] == ("retention_keep" if drive_md5 else "md5_unverified")
     else:
         with pytest.raises(type(errors[exit_path])):
             backup.run_backup(**args)
     assert not raw.exists()
-    assert compressed.exists() is (not success or not drive_md5)
+    assert compressed.exists()  # The newest local archive stays under the host retention rule.
 
 
 @pytest.mark.parametrize("compressor", ["zstd", "gzip"])

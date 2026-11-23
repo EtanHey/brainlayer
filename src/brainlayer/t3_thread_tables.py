@@ -10,7 +10,8 @@ project and link. No chunk is rewritten.
 
 t3-ingest is the only writer (``write_t3_thread_rows``). BrainBar only reads.
 ``text_owner``, ``owner_reason`` and ``session_high_water`` are computed and
-stored for measurement; nothing reads them to decide a write yet (T3 PR 3.3).
+stored for measurement. T3 ingestion recomputes ownership from the fresh catalog
+and session rows every run; it never trusts the stored ownership decision.
 
 The tables are OPTIONAL in the runtime schema contract (``runtime_store``): a
 database without them keeps every writer working, and t3-ingest reports
@@ -85,7 +86,8 @@ REASON_SESSION_CHUNKS = "session_chunks"
 
 
 def driver_for(provider: str, driver: str | None) -> str:
-    return driver or _PROVIDER_DRIVER_ALIASES.get(provider, provider)
+    selected = driver or provider
+    return _PROVIDER_DRIVER_ALIASES.get(selected, selected)
 
 
 @dataclass(frozen=True)
