@@ -157,16 +157,17 @@ def test_zstd_is_the_default_and_round_trips_create_verify_restore(lane, tmp_pat
     _restore_and_check(artifact.archive_path, tmp_path, 4)
 
 
-def test_full_verify_of_zstd_compares_drive_copy(lane, monkeypatch):
+def test_full_verify_of_zstd_compares_streamed_drive_copy(lane, monkeypatch):
     source, output = lane
     artifact = backup.create_sqlite_backup_artifact(source, output, date_stamp="2026-10-18")
     uploaded = artifact.archive_path.read_bytes()
 
-    def download(service, *, file_id, destination):  # noqa: ARG001
-        destination.write_bytes(uploaded)
-        return destination
+    def download(service, *, file_id, sink):  # noqa: ARG001
+        sink.write(uploaded)
 
-    monkeypatch.setattr(backup, "download_drive_file_raw", download)
+    monkeypatch.setattr(backup, "_download_drive_to_stream", download)
+    monkeypatch.setattr(backup, "download_drive_file_raw", lambda *a, **kw: pytest.fail("download file"))
+    monkeypatch.setattr(backup, "_decompress_archive_to", lambda *a, **kw: pytest.fail("restored DB file"))
     result = backup.verify_sqlite_backup_artifact(artifact, full=True, service=object(), file_id="f")
     assert result["verified"] is True and result["drive_md5_match"] is True
 
@@ -629,3 +630,9 @@ def test_calendar_process_group_stop_leaves_no_orphan_compressor(tmp_path, monke
             child.kill()
             child.wait()
     assert _gone(compressor), "compressor orphaned after the process-group stop"
+
+
+@pytest.fixture(autouse=True)
+def _vacuum_snapshot_backend_for_legacy_contracts(monkeypatch):
+    """These cases pin VACUUM/reclaim behavior; clone-specific races have their own suite."""
+    monkeypatch.setenv("BRAINLAYER_BACKUP_SNAPSHOT_METHOD", "vacuum")

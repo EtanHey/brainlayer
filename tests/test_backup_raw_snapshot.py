@@ -314,3 +314,9 @@ def test_hashing_reads_in_bounded_chunks():
             return b"block" if self.remaining >= 0 else b""
 
     assert backup._stream_sha256(GuardedStream()) == hashlib.sha256(b"block" * 3).digest()
+
+
+@pytest.fixture(autouse=True)
+def _vacuum_snapshot_backend_for_legacy_contracts(monkeypatch):
+    """These cases pin VACUUM/reclaim behavior; clone-specific races have their own suite."""
+    monkeypatch.setenv("BRAINLAYER_BACKUP_SNAPSHOT_METHOD", "vacuum")
