@@ -631,6 +631,33 @@ local archive MD5. Missing checksum, legacy receipts, missing live objects or
 listing failure authorize no deletion. Each unlink has a durable intent and
 a confirmation event; completed sweeps report `local_retention_deleted`.
 
+Each sweep adds at most one reporting line, `local_retention_summary`. Its `kept`
+list describes every kept archive older than the configured retention period
+with `name`, `bytes`, `first_reason`, and `eligible_at`. Keeping these details in
+one row preserves BrainBar's transcript history, which reads the last 200 lines.
+The date is null when eligibility depends on a missing receipt,
+checksum, Drive object, or newest-archive protection. A dated verification-age
+hold forecasts only when the age gate opens; deletion still requires all the
+remaining checks. Reconciled receipts start their own full 14-day clock even
+when the archive itself is much older.
+
+The summary totals `bytes_held` past the retention
+period, `bytes_young` below it, `bytes_eligible_next`, and `next_eligible_at`.
+The next age gate includes young verified archives, even a currently protected
+newest archive; newest protection is still checked before any deletion. Its message makes the
+remaining receipt/Drive/hash checks explicit. These are forecasts from this
+run's inventory, not promises of reclaimed space. The reporting neither changes
+receipt dates nor performs any additional archive hashing or deletion.
+Disabled sweeps and any global retention error (unavailable Drive inventory,
+pending receipt revocation, or reconciliation failure) report `sweep_blocked`
+with a null date; global-error reporting never enters the deletion function.
+Reporting-only summary writes are best-effort and warn on stderr if they
+fail; they cannot stop the sweep or hide its returned deleted list. The durable
+deletion intent and confirmation retain their existing strict write contract.
+The summary never carries `attempted_at`, `uploaded`, `verified`, `status`, or
+`error`; backup history continues to select the terminal run-result rows without
+treating reporting metadata as a lane error.
+
 Drive pruning revokes receipts durably before trashing and restores survivors
 afterward. An interrupted revoke is logged and raises a `jsonl-retention` job
 note requiring reconciliation; while it is pending no receipt is built from a listing.
@@ -646,3 +673,23 @@ one only when the listing holds exactly one untrashed object of the same name, s
 reconciliation and it cannot delete anything in the run that writes it. An existing
 receipt, including a legacy one, is never replaced. Runs report the names written in
 `local_retention_reconciled`.
+
+### Hybrid helper keep-warm
+
+`BRAINLAYER_HYBRID_KEEP_WARM_S` sets the idle keep-warm interval (default 60 seconds,
+jittered by 10%). The serial helper embeds a tiny query and reads one vector by cached primary key
+between client connections. It never runs a tick concurrently with a request.
+`BRAINLAYER_HYBRID_KEEP_WARM_DEADLINE_S` bounds each tick (default 10 seconds);
+a wedged tick exits with code 75 so BrainBar can respawn the helper. Tick failures are
+logged; successful ticks record CPU and wall time in memory without logging.
+After two consecutive tick overruns, helper respawns defer keep-warm for 5 minutes,
+doubling on further overruns up to 15 minutes. A successful tick resets the streak.
+Real requests keep their normal deadline during this cooldown. The small counter and
+retry time persist per daemon socket under `$XDG_CACHE_HOME/brainlayer/` (default
+`~/.cache/brainlayer/`), so a helper respawn cannot reset the backoff. Persistence failures
+are logged. The vector read warms a bounded sample, not the whole binary KNN index;
+the first tick selects its sample, subsequent ticks use a direct primary-key lookup.
+Both settings require finite positive seconds; invalid values use the defaults.
+On a search-canary timeout, health-check healing pings the daemon with the same configured
+socket timeout as the canary, allowing for a busy serial request queue. A responsive daemon
+keeps its connections while only its identified hybrid-helper child is recycled.

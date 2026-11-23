@@ -479,15 +479,15 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
-      src/brainlayer/embeddings.py|src/brainlayer/index_budget.py|src/brainlayer/index_new.py|src/brainlayer/ingest/t3.py|src/brainlayer/ingest/t3_bookmark.py|src/brainlayer/maintenance_calendar.py)
+      src/brainlayer/embeddings.py|src/brainlayer/index_budget.py|src/brainlayer/index_new.py|src/brainlayer/ingest/t3.py|src/brainlayer/ingest/t3_ownership.py|src/brainlayer/ingest/t3_audit.py|src/brainlayer/ingest/t3_bookmark.py|src/brainlayer/maintenance_calendar.py)
         # These modules have split test owners. Require every companion before narrowing;
         # a missing suite must retain the existing full-suite escalation.
         if [ "$changed" = "src/brainlayer/embeddings.py" ]; then
           idx_tests=(test_embedding_truncation.py test_embedding_device.py test_index_completion.py)
         elif [ "$changed" = "src/brainlayer/index_budget.py" ]; then
           idx_tests=(test_index_calendar_custody.py test_cli_index_calendar.py)
-        elif [ "$changed" = "src/brainlayer/ingest/t3.py" ]; then
-          idx_tests=(test_ingest_t3.py test_t3_ingest_deferred_embedding.py test_t3_ingest_bookmark.py test_health_check.py test_paths.py test_t3_thread_tables.py)
+        elif [ "$changed" = "src/brainlayer/ingest/t3.py" ] || [ "$changed" = "src/brainlayer/ingest/t3_ownership.py" ] || [ "$changed" = "src/brainlayer/ingest/t3_audit.py" ]; then
+          idx_tests=(test_ingest_t3.py test_t3_ingest_deferred_embedding.py test_t3_ingest_bookmark.py test_health_check.py test_paths.py test_t3_thread_tables.py test_t3_ownership.py test_t3_session_coverage.py)
         elif [ "$changed" = "src/brainlayer/ingest/t3_bookmark.py" ]; then
           idx_tests=(test_t3_ingest_bookmark.py test_ingest_t3.py)
         elif [ "$changed" = "src/brainlayer/maintenance_calendar.py" ]; then

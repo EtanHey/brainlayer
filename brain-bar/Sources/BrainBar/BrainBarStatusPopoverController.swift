@@ -71,6 +71,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private var menuRestart: () -> Void = { BrainBarProcessControl.restart() }
     private var menuPasteboard: () -> NSPasteboard = { .general }
     private var menuStorage: ((BrainBarSettingsSection) -> Void)?
+    private var diagnosticsOpener: (() -> Void)?
 
     private lazy var liveMenuActions = BrainBarLiveMenuActions(
         settings: { [weak self] in self?.openSettings(nil) },
@@ -83,7 +84,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         },
         copy: { [weak self] in self?.copyMenuReport() },
         dismiss: { [weak self] in self?.contextMenuForTesting.cancelTracking() })
-    private lazy var liveMenuBuilder = BrainBarMenuBuilder(actions: liveMenuActions)
+    private lazy var liveMenuBuilder: BrainBarMenuBuilder = {
+        let builder = BrainBarMenuBuilder(actions: liveMenuActions)
+        builder.openDiagnostics = { [weak self] in self?.openDiagnostics(nil) }
+        return builder
+    }()
     /// L6: the new design, behind `BrainBarDesign`. Built on first use, so the classic path never creates it.
     private var shownDesign: BrainBarDesign = .classic
     private var newDesignCancellables: Set<AnyCancellable> = []
@@ -105,6 +110,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
                                         Task { @MainActor [weak self] in self?.dashboardPanelController?.showPage(page) }
                                     })
         builder.menuDismiss = { [weak self] in self?.contextMenuForTesting.cancelTracking() }
+        builder.diagnosticsOpener = { [weak self] in self?.openDiagnostics(nil) }
         return builder
     }()
     private var design: BrainBarDesign { BrainBarDesign.current(in: menuDefaults) }
@@ -133,7 +139,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         guard !isMenuTracking, let button = statusItemForTesting.button else { return }
         let model = newDesignStore.model
         let r1 = newDesignStore.r1
-        button.image = NDIcon.image(for: model, r1)
+        button.image = NDIcon.image(for: model, r1, appearance: button.effectiveAppearance)
         button.alphaValue = 1  // R1.2: the dimmed, badged and dotted states are drawn in the image itself
         button.setAccessibilityLabel("BrainBar — " + r1.headline)
         button.toolTip = r1.headline
@@ -237,6 +243,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     /// The menu's first row from the shared snapshot (S5).
     nonisolated static func statusLineTitle(for verdict: BrainBarStatusVerdict) -> String {
+        if verdict.wakeCatchUpPending, !verdict.needsAttention { return "Checking after sleep…" }
         if let dot = verdict.dotOverride { return verdict.overrideHeadline(dot) }
         if verdict.needsAttention {
             let reason = verdict.attention.joined(separator: "; ")
@@ -703,6 +710,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     func populateLiveMenuForTesting(_ presentation: BrainBarMenuPresentation) {
         liveMenuBuilder.populate(contextMenuForTesting, with: presentation)
     }
+    func setDiagnosticsOpenerForTesting(_ opener: @escaping () -> Void) { diagnosticsOpener = opener }
     func setLogPathsForTesting(_ paths: BrainBarBackupSources.Paths) { logPathsOverride = paths }
 #endif
     func setMenuTrackingForTesting(_ tracking: Bool) { isMenuTracking = tracking }
@@ -896,6 +904,14 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         copyReportFailed = !pasteboard.setString(newMenuReport, forType: .string)
     }
 
+    @objc private func openDiagnostics(_ sender: Any?) {
+        contextMenuForTesting.cancelTracking()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if let diagnosticsOpener { diagnosticsOpener() } else { newDesignStore.showDiagnostics() }
+        }
+    }
+
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
         if design == .new { return newMenuBuilder.menu(menu, willHighlight: item) }
         if legacyMenuItems != nil { liveMenuBuilder.menu(menu, willHighlight: item) }
@@ -943,6 +959,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
                 keyEquivalent: ""
             )
         )
+#if BRAINBAR_UI
+        contextMenuForTesting.addItem(NSMenuItem(
+            title: BrainBarMenuPresenter.SurfaceSay.diagnostics,
+            action: #selector(openDiagnostics(_:)), keyEquivalent: ""))
+#endif
         contextMenuForTesting.addItem(NSMenuItem.separator())
         contextMenuForTesting.addItem(
             NSMenuItem(

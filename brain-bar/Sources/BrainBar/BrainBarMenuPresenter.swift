@@ -102,11 +102,14 @@ enum BrainBarMenuPresenter {
             || ((c.verdict?.checks ?? []).contains { $0.name == "ingest" && $0.state == .red } && !lagExcusesRed(c))
     }
 
+    /// R2-1: a red lag needs a handoff only when it is not draining. The legacy severity switch can mark a draining
+    /// lag red, but cannot turn "catching up by itself" into a request for an agent.
+    static func lagNeedsReport(_ c: Capture) -> Bool { lagNeedsYou(c) && !Say.lagDraining(c) }
+
     private static func lagLine(_ c: Capture) -> Line {
-        // A3 (stalled): an agent needs to look, with the report; A1 and A2: nobody acts.
-        let stalled = Say.producerStalled(c)
+        let needsAgent = lagNeedsReport(c)
         return Line(thing: .remembering, level: lagNeedsYou(c) ? .needs : .notice, strings: [lagTitle(c)] + (lagDetail(c).map { [$0] } ?? []),
-                    headline: lagTitle(c), action: stalled ? .copyReport : nil, handoff: stalled ? [Say.agent.text] : [])
+                    headline: lagTitle(c), action: needsAgent ? .copyReport : nil, handoff: needsAgent ? [Say.agent.text] : [])
     }
 
     /// A5 to A7: a watcher alert, named. Nil for an alert this BrainBar cannot name.
@@ -663,8 +666,7 @@ enum BrainBarMenuPresenter {
 
     /// X01, X02, and in P1 every path without a readable, fresh verdict and no red: nothing is confirmed.
     private static func checkingState(_ c: Capture) -> P {
-        let launching = c.isChecking && c.verdict == nil
-        let headline = c.wakeCatchUpPending && !launching ? Say.checkingSleep.text : Say.checkingMemory.text
+        let headline = c.wakeCatchUpPending ? Say.checkingSleep.text : Say.checkingMemory.text
         let last = c.lastKnownBackupAt.flatMap { $0 <= c.now && sayable($0) && hasWords($0, c) ? " " + Say.lastBackup(at($0, c)) : nil } ?? ""
         return .init(form: .calm, headline: headline, count: 0, icon: .resting,
                      rows: [P.Row(kind: .headline, strings: [headline], mark: .wait),

@@ -26,6 +26,50 @@ from brainlayer import disk_space, maintenance
 from tests.test_backup_daily import _create_source_db
 from tests.test_weekly_local_gate import config_for, local_lane  # noqa: F401
 
+
+def test_snapshot_sleep_reaches_final_local_receipt(lane, monkeypatch):
+    from brainlayer import backup_sleep
+
+    source, output = lane
+    values = {"inclusive": 0, "awake": 0}
+    tracker = backup_sleep.SleepTracker(inclusive=lambda: values["inclusive"], awake=lambda: values["awake"])
+    monkeypatch.setattr(backup_sleep, "SleepTracker", lambda: tracker)
+    vacuum = backup.request_brainbar_vacuum_into
+
+    def slept(*args, **kwargs):
+        result = vacuum(*args, **kwargs)
+        values["inclusive"] = 21600
+        return result
+
+    monkeypatch.setattr(backup, "request_brainbar_vacuum_into", slept)
+    result = backup.run_backup(source, staging_dir=output, upload=False, date_stamp="2026-11-22")
+    assert result["snapshot_slept_seconds"] == 21600
+    assert result["snapshot_wall_seconds"] == 21600
+    assert len(result["sleep_intervals"]) == 1
+    assert "while the Mac slept" in result["sleep_note"]
+
+
+def test_failed_snapshot_also_records_the_sleep(lane, monkeypatch):
+    from brainlayer import backup_sleep
+
+    source, output = lane
+    values = {"inclusive": 0}
+    tracker = backup_sleep.SleepTracker(inclusive=lambda: values["inclusive"], awake=lambda: 0)
+    monkeypatch.setattr(backup_sleep, "SleepTracker", lambda: tracker)
+
+    def failed(*args, **kwargs):
+        values["inclusive"] = 21600
+        raise RuntimeError("synthetic snapshot failure after sleep")
+
+    monkeypatch.setattr(backup, "request_brainbar_vacuum_into", failed)
+    log = output / "failure.log"
+    with pytest.raises(RuntimeError, match="failure after sleep"):
+        backup.run_backup(source, staging_dir=output, upload=False, log_path=log)
+    row = json.loads(log.read_text().splitlines()[-1])
+    assert row["snapshot_slept_seconds"] == 21600
+    assert "while the Mac slept" in row["sleep_note"]
+
+
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 
@@ -113,16 +157,17 @@ def test_zstd_is_the_default_and_round_trips_create_verify_restore(lane, tmp_pat
     _restore_and_check(artifact.archive_path, tmp_path, 4)
 
 
-def test_full_verify_of_zstd_compares_drive_copy(lane, monkeypatch):
+def test_full_verify_of_zstd_compares_streamed_drive_copy(lane, monkeypatch):
     source, output = lane
     artifact = backup.create_sqlite_backup_artifact(source, output, date_stamp="2026-10-18")
     uploaded = artifact.archive_path.read_bytes()
 
-    def download(service, *, file_id, destination):  # noqa: ARG001
-        destination.write_bytes(uploaded)
-        return destination
+    def download(service, *, file_id, sink):  # noqa: ARG001
+        sink.write(uploaded)
 
-    monkeypatch.setattr(backup, "download_drive_file_raw", download)
+    monkeypatch.setattr(backup, "_download_drive_to_stream", download)
+    monkeypatch.setattr(backup, "download_drive_file_raw", lambda *a, **kw: pytest.fail("download file"))
+    monkeypatch.setattr(backup, "_decompress_archive_to", lambda *a, **kw: pytest.fail("restored DB file"))
     result = backup.verify_sqlite_backup_artifact(artifact, full=True, service=object(), file_id="f")
     assert result["verified"] is True and result["drive_md5_match"] is True
 
@@ -566,3 +611,9 @@ def test_calendar_process_group_stop_leaves_no_orphan_compressor(tmp_path, monke
             child.kill()
             child.wait()
     assert _gone(compressor), "compressor orphaned after the process-group stop"
+
+
+@pytest.fixture(autouse=True)
+def _vacuum_snapshot_backend_for_legacy_contracts(monkeypatch):
+    """These cases pin VACUUM/reclaim behavior; clone-specific races have their own suite."""
+    monkeypatch.setenv("BRAINLAYER_BACKUP_SNAPSHOT_METHOD", "vacuum")

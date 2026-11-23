@@ -1098,7 +1098,9 @@ def test_verified_no_op_exposes_explicit_receipt_without_inventing_upload() -> N
     ],
 )
 def test_invalid_no_op_never_exposes_neutral_evidence(tmp_path, mutation) -> None:
-    latest = json.loads((FIXTURES / "logs/no-op-dev/jsonl-backup.log").read_text())
+    rows = [json.loads(line) for line in (FIXTURES / "logs/no-op-dev/jsonl-backup.log").read_text().splitlines()]
+    assert len(rows) == 1  # Frozen historical input, not a newly executed backup run.
+    latest = rows[-1]
     log = tmp_path / "jsonl-backup.log"
     log.write_text(json.dumps({**latest, **mutation}) + "\n")
     env = {**_env("no-op-dev"), "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG": str(log)}
@@ -1343,3 +1345,24 @@ def test_failed_identity_attempt_stays_separate_from_older_verified_snapshot():
     snapshot, error, _ = observability_backup._daily_snapshot([verified, failed])
     assert snapshot["destination"] == "2026-10-28.db.zst"
     assert error == f"BrainBarDatabaseIdentityUnavailableError: {reason}"
+
+
+@pytest.mark.parametrize("confirmed,total", [(25, 100), (0, None), (-1, 0), (True, "100")])
+def test_local_snapshot_carries_only_measured_progress(confirmed, total):
+    row = {
+        "backup_log_provenance": "real",
+        "attempted_at": "2026-11-21T00:00:00Z",
+        "snapshot": "/synthetic/2026-11-21.db.gz",
+        "local_verified": True,
+        "uploaded": False,
+        "upload_state": "in_progress",
+        "bytes_confirmed": confirmed,
+        "bytes_confirmed_at": "2026-11-21T00:01:00Z",
+        "bytes": total,
+        "verification_pending": True,
+    }
+    local = observability_backup._local_snapshot([row])
+    assert local.get("bytes_confirmed") == (confirmed if type(confirmed) is int and confirmed >= 0 else None)
+    assert local.get("bytes_total") == (total if type(total) is int and total > 0 else None)
+    assert local["verification_pending"] is True
+    assert local["bytes_confirmed_at"] == "2026-11-21T00:01:00Z"

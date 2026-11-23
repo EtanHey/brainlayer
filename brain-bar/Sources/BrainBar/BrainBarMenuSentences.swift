@@ -604,6 +604,32 @@ extension BrainBarMenuPresenter {
 // labels and state words are the spec's copy deck). `BrainBarNewDesignWordsTests` keeps sentences out of NewDesign/.
 extension BrainBarMenuPresenter {
     enum SurfaceSay {
+        static let diagnostics = "Diagnostics"
+        static let openDiagnostics = "Open"
+        static func diagnosticState(_ state: BrainBarHealthVerdict.State) -> String {
+            switch state { case .green: "OK"; case .amber: "Warning"; case .red: "Problem"; case .unknown: "Not read" }
+        }
+        static let copyFullReport = "Copy a full report for your agent"
+        static let checksUnreadable = "Checks have not been read yet."
+        static let settingsBackupsUnreadable = "Settings backups could not be counted."
+        static func settingsBackups(_ count: Int, path: String) -> String {
+            "\(count) settings \(count == 1 ? "backup" : "backups") in \(path)."
+        }
+        static let meaningModel = "Search by meaning"
+        static func modelExplanation(_ name: String, namesModel: Bool = true) -> [String] {
+            ["\(namesModel ? name : "This model") turns memories into searchable meaning on this Mac.",
+             "Search by meaning uses it. Keyword search does not need it."]
+        }
+        static let backupUploading = "Uploading to Google Drive"
+        static let backupVerifying = ObservabilityPresentation.backupVerificationText
+        static let backupLastGood = "Last good copy"
+        static let backupUploadingShort = "Uploading"
+        static let backupVerifyingShort = "Checking copy"
+        static let backupLastGoodShort = "Last good"
+        static let backupInProgress = "In progress"
+        static func driveCopyUploading(_ age: String) -> String {
+            "Your database backup in Google Drive is \(age); an upload is running."
+        }
         /// R3: a reconnect in progress.
         static let waitingForBrowser = "Waiting for you to approve in your browser…"
         /// R12: a failed copy leaves the button as it was and says so under it.
@@ -658,6 +684,11 @@ extension BrainBarMenuPresenter {
         static let stageRead = "Read"
         static let stageQueue = "Save queue"
         static let stageMemory = "Memory"
+        // Gap clarity: at-rest payloads and job purposes, not additional status claims.
+        static let sessionBackups = "Session backups"
+        static let searchAnswers = "Search answers"
+        static let nightlyPurpose = "Checks saving, tidies the log"
+        static let weeklyPurpose = "Compacts the database"
         static let stageMac = "Local copy"  // R1.10.5 (L50): one name everywhere
         static let stageDrive = "Google Drive"
         static let stageMeaning = "By meaning"
@@ -731,6 +762,14 @@ extension BrainBarMenuPresenter {
         static let outsideTimeline = "outside the timeline"
         static let lastRun = "Last run"
         static let nextRunHead = "Next run"
+        static let unreadRecord = "Record couldn't be read"
+        static func nextRunAt(_ clock: String) -> String { "Next run " + clock }
+        static let runsEveryFewMinutes = "Every few minutes."
+        static let runsContinuously = "Runs continuously."
+        static let scheduleNotKnown = "Schedule not known."
+        static func runsDailyAt(_ clock: String) -> String { "Runs daily at \(clock)." }
+        static func runsWeeklyAt(_ clock: String) -> String { "Runs weekly at \(clock)." }
+        static func runsEvery(_ age: String) -> String { "Runs every \(age)." }
         static func inAge(_ age: String) -> String { "in \(age)" }
         /// Keyed by the job's launchd raw value, so the copy deck stays free of the settings types.
         static let jobNames: [String: String] = [
@@ -743,8 +782,8 @@ extension BrainBarMenuPresenter {
         static let jobHelp: [String: String] = [
             "watch": "Reads what your agents write, as they write it.",
             "hotlane": "Keeps search by meaning loaded.",
-            "drain": "Writes saves that had to wait. Every few minutes.",
-            "walCheckpoint": "Folds the write log into the database. Every few minutes.",
+            "drain": "Writes saves that had to wait.",
+            "walCheckpoint": "Folds the write log into the database.",
             "backupDaily": "Copies memory to this Mac, then to Google Drive. Nightly at 03:15.",
             "jsonlBackup": "Copies your agents\u{2019} conversations to Google Drive. Nightly.",
             "maintenanceNightly": "Checks memory can still save, and tidies the log. Nightly at 04:00.",
@@ -786,8 +825,8 @@ extension BrainBarMenuPresenter {
         static func driveAgo(_ age: String) -> String { "Drive \(age) ago" }
         static func macAgo(_ age: String) -> String { "Local copy \(age) ago" }  // R1.12 (§ C): the dropdown's Backups value
         static let lastKnown = "last known"
-        /// D8.3: each half's scale, said as a scale ("up to 4/min"), not a bare number that reads like an axis floor.
-        static func upTo(_ value: String, minutes: Int) -> String { minutes == 1 ? "up to \(value) / min" : "up to \(value) / \(minutes) min" }
+        /// Each half's scale names the real bucket span, not a bare number that reads like an axis floor.
+        static func upTo(_ value: String, minutes: Int) -> String { minutes == 1 ? "up to \(value) per min" : "up to \(value) per \(minutes) min" }
         // Revision 1.2 (L23, L24, L26).
         static let checkSoon = "Check soon"
         static func lastDriveUpload(_ age: String) -> String { "Last Drive upload \(age) ago." }

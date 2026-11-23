@@ -605,7 +605,8 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
             XCTAssertFalse(text.localizedCaseInsensitiveContains("not loaded"), text)
             XCTAssertFalse(text.localizedCaseInsensitiveContains("no LaunchAgents"), text)
             if section == .backups { XCTAssertTrue(text.localizedCaseInsensitiveContains("maintenance"), text) }
-            if section == .advanced { XCTAssertTrue(text.contains("4242"), text) }
+            // Exact PID is asserted on the model above; hosted-runner OCR can misread the final digit.
+            if section == .advanced { XCTAssertTrue(text.contains("PID 424"), text) }
         }
     }
 
