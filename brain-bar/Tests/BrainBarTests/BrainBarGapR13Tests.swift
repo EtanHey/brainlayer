@@ -39,7 +39,7 @@ import XCTest
                 let context = "\(name.rawValue) \(station) measured=\(measured) panel=\(panel.body)"
                 XCTAssertFalse(panel.scrolls, context)
                 XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, measured.height, context)
-                XCTAssertLessThanOrEqual(panel.body.maxY, L.size.height, context)
+                XCTAssertLessThanOrEqual(panel.body.maxY, L.footerTop - 4, context)
                 for other in NDStation.allCases {
                     for rect in L.labelRects(other, store.r1.pipeline) { XCTAssertFalse(panel.outer.intersects(rect), context) }
                     XCTAssertFalse(panel.body.intersects(L.circle(other)), context)

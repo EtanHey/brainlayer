@@ -3372,7 +3372,7 @@ final class BrainBarNewDesignWordsTests: XCTestCase {
                 for words in L.labelRects(station, store.r1.pipeline) {
                     XCTAssertFalse(panel.outer.intersects(words), where_)
                 }
-                XCTAssertLessThanOrEqual(panel.body.maxY, L.size.height, where_)
+                XCTAssertLessThanOrEqual(panel.body.maxY, L.footerTop - 4, where_)
                 XCTAssertGreaterThanOrEqual(panel.body.height + 0.01, NDStationPopover.measure(content, width: panel.body.width).height, where_)
                 for other in NDStation.allCases where other != station {
                     XCTAssertFalse(panel.body.intersects(L.circle(other)), where_)
