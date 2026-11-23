@@ -163,6 +163,16 @@ final class BrainBarWakeRefreshTests: XCTestCase {
                 }
             }
             if let mark {
+                // The drawn state first: a retained red fault must keep the red icon, never the wake-timeout amber one.
+                if mark == .red {
+                    XCTAssertGreaterThan(store.r1.redCount, 0, "\(state) \(name) has a red mark without a red item",
+                                         file: file, line: line)
+                    XCTAssertEqual(NDIcon.state(store.model, store.r1), .red(store.r1.redCount),
+                                   "\(state) \(name) icon state", file: file, line: line)
+                } else {
+                    XCTAssertEqual(NDIcon.state(store.model, store.r1), .amber, "\(state) \(name) icon state",
+                                   file: file, line: line)
+                }
                 let icon = try NDRenderHarness.bitmap(NSSize(width: 22, height: 22))
                 NSGraphicsContext.saveGraphicsState()
                 NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: icon)
