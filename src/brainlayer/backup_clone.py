@@ -108,6 +108,8 @@ def supported(source: Path, directory: Path) -> bool:
         )
         metadata = plistlib.loads(result.stdout)
         return isinstance(metadata, dict) and metadata.get("FilesystemType") == "apfs"
+    except TimeoutError:
+        raise
     except (OSError, ValueError, subprocess.SubprocessError, plistlib.InvalidFileException):
         return False
 
@@ -140,6 +142,7 @@ def snapshot(source: Path, target: Path, *, validate=None, max_recovery_bytes: i
     try:
         with tempfile.TemporaryDirectory(prefix=".brainlayer-clone-", dir=target.parent) as temporary:
             private = Path(temporary) / "snapshot.db"
+            (Path(temporary) / ".owner").write_text(str(os.getpid()), encoding="ascii")
             # mode=rw refuses a missing source instead of creating an empty database.
             connection = sqlite3.connect(f"{source.as_uri()}?mode=rw", uri=True, timeout=0.25, isolation_level=None)
             try:
@@ -187,6 +190,8 @@ def snapshot(source: Path, target: Path, *, validate=None, max_recovery_bytes: i
                     target.unlink()
                 raise
     except FileExistsError:
+        raise
+    except TimeoutError:
         raise
     except (OSError, sqlite3.Error, subprocess.SubprocessError) as exc:
         raise CloneUnavailable(f"APFS clone unavailable: {type(exc).__name__}: {exc}") from exc

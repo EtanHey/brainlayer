@@ -1,8 +1,10 @@
 """Real SQLite writer/checkpoint interleavings; source payload reads use a separate process."""
 
 import json
+import os
 import plistlib
 import select
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -241,6 +243,7 @@ def artifact_lane(source_actor, monkeypatch):
     source, _, actor = source_actor
     output = source.parent / "backups"
     output.mkdir()
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(output / "alerts.json"))
     monkeypatch.setenv("BRAINLAYER_BACKUP_COMPRESSOR", "gzip")
     monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m1")
     monkeypatch.setattr(clone, "_copy", external_copy)
@@ -353,13 +356,16 @@ def test_non_apfs_uses_vacuum_and_logs_reason(artifact_lane, monkeypatch, capsys
 
 
 @needs_clone_control
-def test_clone_integrity_failure_is_not_published_and_uses_fallback(artifact_lane, monkeypatch):
+@pytest.mark.parametrize("raises_error", [False, True])
+def test_clone_integrity_failure_is_not_published_and_uses_fallback(artifact_lane, monkeypatch, raises_error):
     backup, source, output, _ = artifact_lane
     check = backup._sqlite_pragma_check
     seen = []
 
     def corrupt_clone(path, pragma, **kwargs):
         seen.append(path)
+        if path.name == "snapshot.db" and raises_error:
+            raise sqlite3.DatabaseError("synthetic corrupt clone")
         return "synthetic corrupt clone" if path.name == "snapshot.db" else check(path, pragma, **kwargs)
 
     monkeypatch.setattr(backup, "_sqlite_pragma_check", corrupt_clone)
@@ -368,6 +374,14 @@ def test_clone_integrity_failure_is_not_published_and_uses_fallback(artifact_lan
     assert "integrity_check failed" in artifact.clone_fallback
     assert artifact.local_integrity == "ok"
     assert not list(output.glob(".brainlayer-clone-*"))
+    from brainlayer import job_alerts
+
+    assert "integrity_check failed" in job_alerts.active_alerts()["backup-clone-integrity"]
+    monkeypatch.setattr(backup, "_sqlite_pragma_check", check)
+    backup.create_sqlite_backup_artifact(
+        source, output, date_stamp="2026-11-24", socket_path=source.parent / "unused.sock"
+    )
+    assert "backup-clone-integrity" not in job_alerts.active_alerts()
 
 
 def test_fallback_rechecks_legacy_peak_plus_host_floor_before_vacuum(artifact_lane, monkeypatch):
@@ -549,3 +563,112 @@ def test_missing_checkpoint_control_uses_vacuum_without_cloning(artifact_lane, m
     assert "cannot disable source checkpoint on close" in artifact.clone_fallback
     assert artifact.local_integrity == "ok"
     assert backup.verify_sqlite_backup_artifact(artifact)["verified"] is True
+
+
+@needs_clone_control
+@pytest.mark.parametrize("sig", [signal.SIGALRM, signal.SIGTERM, signal.SIGINT])
+def test_signal_at_integrity_callback_entry_stops_without_fallback(artifact_lane, monkeypatch, sig):
+    backup, source, output, _ = artifact_lane
+    with sqlite3.connect(source) as connection:
+        connection.executemany("INSERT INTO chunks VALUES(?,1)", ((i,) for i in range(2, 20002)))
+    monkeypatch.setattr(backup, "_backup_interrupt", None, raising=False)
+    monkeypatch.setattr(backup, "request_brainbar_vacuum_into", lambda *a, **k: pytest.fail("fallback after stop"))
+    fired = []
+
+    def trace(frame, event, arg):
+        if (
+            event == "call"
+            and frame.f_code.co_name == "progress"
+            and frame.f_code.co_filename == backup.__file__
+            and not fired
+        ):
+            fired.append(True)
+            signal.raise_signal(sig)
+        return trace
+
+    previous_handler = signal.signal(
+        sig, backup._raise_backup_timeout if sig == signal.SIGALRM else backup._raise_backup_stopped
+    )
+    previous_trace = sys.gettrace()
+    try:
+        sys.settrace(trace)
+        expected = backup.BackupTimeoutError if sig == signal.SIGALRM else backup.BackupStoppedError
+        with pytest.raises(expected):
+            backup.create_sqlite_backup_artifact(source, output, socket_path=source.parent / "unused.sock")
+    finally:
+        sys.settrace(previous_trace)
+        signal.signal(sig, previous_handler)
+    assert fired
+    assert not list(output.glob(".brainlayer-clone-*"))
+
+
+@needs_clone_control
+def test_direct_clone_timeout_is_not_wrapped(source_actor, monkeypatch):
+    from brainlayer import backup_daily as backup
+
+    source, target, _ = source_actor
+    monkeypatch.setattr(clone, "_copy", external_copy)
+
+    def timeout(path):
+        raise backup.BackupTimeoutError("deadline")
+
+    with pytest.raises(backup.BackupTimeoutError):
+        clone.snapshot(source, target, validate=timeout)
+
+
+def test_stale_clone_sweep_retains_live_recent_linked_and_unknown(tmp_path, monkeypatch):
+    import time
+
+    from brainlayer import backup_daily as backup
+
+    old = time.time() - backup._configured_backup_attempt_max_age_seconds() - 100
+    for name in ("dead", "live", "recent", "unknown", "linked"):
+        directory = tmp_path / (".brainlayer-clone-" + name)
+        directory.mkdir()
+        raw = directory / "snapshot.db"
+        raw.write_bytes(b"owned")
+        if name == "live":
+            (directory / ".owner").write_text(str(os.getpid()))
+        if name == "unknown":
+            (directory / "personal.txt").write_text("keep")
+        if name == "linked":
+            os.link(raw, tmp_path / "peer")
+        if name != "recent":
+            for p in directory.iterdir():
+                os.utime(p, (old, old))
+            os.utime(directory, (old, old))
+    link = tmp_path / ".brainlayer-clone-symlink"
+    link.symlink_to(tmp_path / ".brainlayer-clone-dead", target_is_directory=True)
+    uid = os.getuid()
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "getuid", lambda: uid + 1)
+        assert backup._sweep_stale_clones(tmp_path) == []
+    with (tmp_path / ".backup.lock").open("a+b") as lock:
+        backup.fcntl.flock(lock, backup.fcntl.LOCK_EX | backup.fcntl.LOCK_NB)
+        backup._sweep_clones_before_admission(tmp_path)
+        assert (tmp_path / ".brainlayer-clone-dead").exists()
+    assert backup._sweep_stale_clones(tmp_path) == [".brainlayer-clone-dead"]
+    assert link.is_symlink()
+    assert all((tmp_path / (".brainlayer-clone-" + n)).exists() for n in ("live", "recent", "unknown", "linked"))
+
+
+def test_surviving_clone_growth_is_in_gate_admission(artifact_lane, monkeypatch):
+    from types import SimpleNamespace
+
+    from brainlayer import backup_heavy_gate as gate
+
+    backup, source, output, _ = artifact_lane
+    monkeypatch.setenv("BRAINLAYER_BACKUP_STAGING_DIR", str(output))
+    monkeypatch.setattr(backup, "get_db_path", lambda: source)
+    monkeypatch.setattr(backup, "_database_logical_size_bytes", lambda path: 1000)
+    monkeypatch.setattr(backup, "_peak_backup_required_bytes", lambda *a, **k: 200)
+    monkeypatch.setattr(backup.disk_space, "measure_disk_space", lambda *a, **k: SimpleNamespace(free_now_bytes=500))
+    assert gate._disk_reason("m1") is None
+    directory = output / ".brainlayer-clone-recent"
+    directory.mkdir()
+    (directory / "snapshot.db").write_bytes(b"x" * 1000)
+    assert backup._owned_temp_inventory(output) == [(directory.name, 1000)]
+    assert backup._clone_growth_reserve_bytes(output, 1000) == 1000
+    assert "needs" in gate._disk_reason("m1")
+    (output / "2026-11-23.db").write_bytes(b"raw")
+    assert backup._clone_growth_reserve_bytes(output, 1000) == 2000

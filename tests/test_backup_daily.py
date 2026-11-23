@@ -1832,6 +1832,7 @@ def test_preflight_never_credits_raw_copy_without_valid_gzip(tmp_path, monkeypat
         backup_daily.create_sqlite_backup_artifact(source, symlink_prior, date_stamp="2026-05-14")
     free["bytes"] = budget
     for folder in (with_prior, without_prior, symlink_prior):
+        free["bytes"] = budget + backup_daily._clone_growth_reserve_bytes(folder, db_size)
         with pytest.raises(RuntimeError, match="writer reached"):
             backup_daily.create_sqlite_backup_artifact(source, folder, date_stamp="2026-05-14")
 

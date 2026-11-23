@@ -18,6 +18,17 @@ release its POSIX locks. Source checkpoint-on-close is disabled with
 `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`; an older Python/SQLite runtime without that control falls back.
 The source transaction rolls back and closes before integrity checking or compression.
 
+Run-deadline and stop signals propagate through integrity checking, including SQLite's
+exception-clearing callback boundary; they never select a VACUUM fallback. A failed clone
+integrity check raises the `backup-clone-integrity` job alert even if VACUUM succeeds. Only a
+later healthy clone integrity check clears that diagnostic.
+
+Under the staging lock, admission sweeps aged, same-user private clone directories whose
+contents are recognized regular files with one hardlink and whose recorded process is gone. Recent,
+live, linked, foreign and unknown entries remain. Their full possible COW divergence is
+reserved before admission, including retained dated raw snapshots, without crediting any
+existing bytes as free space.
+
 The private clone rebuilds its own SHM, replays its private WAL, and becomes a standalone DELETE-mode
 DB. Only that owned clone is checkpointed. Full `integrity_check` must pass before create-exclusive
 publication. Raw SHA-256 and the decompressed archive SHA-256 must match before the raw clone is

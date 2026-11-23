@@ -722,15 +722,28 @@ def _drive_put_with_deadline(
     raise value
 
 
+_backup_interrupt: BaseException | None = None
+
+
+def _check_backup_interrupt() -> None:
+    if _backup_interrupt is not None:
+        raise _backup_interrupt
+
+
 def _raise_backup_timeout(signum, frame) -> None:  # noqa: ARG001
-    raise BackupTimeoutError("backup exceeded configured wall-clock timeout")
+    global _backup_interrupt
+    _backup_interrupt = BackupTimeoutError("backup exceeded configured wall-clock timeout")
+    raise _backup_interrupt
 
 
 def _raise_backup_stopped(signum, frame) -> None:  # noqa: ARG001
-    raise BackupStoppedError(signum)
+    global _backup_interrupt
+    _backup_interrupt = BackupStoppedError(signum)
+    raise _backup_interrupt
 
 
 def _sqlite_pragma_check(db_path: Path, pragma_name: str, *, capacity_check=None) -> str:
+    _check_backup_interrupt()
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         # Bound integrity-check memory while avoiding tiny-cache index thrashing.
@@ -741,7 +754,7 @@ def _sqlite_pragma_check(db_path: Path, pragma_name: str, *, capacity_check=None
             try:
                 capacity_check()
                 return 0
-            except Exception as exc:
+            except BaseException as exc:
                 failure.append(exc)
                 return 1
 
@@ -750,9 +763,11 @@ def _sqlite_pragma_check(db_path: Path, pragma_name: str, *, capacity_check=None
         try:
             rows = conn.execute(f"PRAGMA {pragma_name}").fetchall()
         except sqlite3.Error:
+            _check_backup_interrupt()
             if failure:
                 raise failure[0]
             raise
+        _check_backup_interrupt()
         row = rows[0] if len(rows) == 1 else None
     finally:
         conn.close()
@@ -916,7 +931,80 @@ def _sweep_stale_backup_attempts(
     return deleted, surviving
 
 
-_OWNED_TEMP_PREFIXES = ("brainlayer-backup-", "brainlayer-restore-verify-")
+_OWNED_TEMP_PREFIXES = ("brainlayer-backup-", "brainlayer-restore-verify-", ".brainlayer-clone-")
+
+
+def _sweep_stale_clones(output_dir: Path) -> list[str]:
+    """Caller holds the staging lock; retain recent, live, linked or foreign entries."""
+    directories = sorted(output_dir.glob(".brainlayer-clone-*"))
+    if not directories:
+        return []
+    cutoff = time.time() - _configured_backup_attempt_max_age_seconds()
+    removed = []
+    for directory in directories:
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mtime > cutoff:
+            continue
+        entries = list(directory.iterdir())
+        if any(
+            p.name not in {"snapshot.db", "snapshot.db-wal", "snapshot.db-shm", "snapshot.db-journal", ".owner"}
+            or not stat.S_ISREG(p.lstat().st_mode)
+            or p.lstat().st_uid != os.getuid()
+            or p.lstat().st_nlink != 1
+            or p.stat().st_mtime > cutoff
+            for p in entries
+        ):
+            continue
+        owner = directory / ".owner"
+        if owner.exists():
+            try:
+                pid = int(owner.read_text()[:64])
+                if pid <= 0:
+                    continue
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pass
+            except (ValueError, OverflowError, OSError):
+                continue
+            else:
+                continue
+        for entry in entries:
+            entry.unlink()
+        directory.rmdir()
+        removed.append(directory.name)
+    return removed
+
+
+def _sweep_clones_before_admission(output_dir: Path) -> None:
+    if not output_dir.exists() or output_dir.is_symlink():
+        return
+    fd = os.open(output_dir / ".backup.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        _sweep_stale_clones(output_dir)
+    finally:
+        os.close(fd)
+
+
+def _clone_growth_reserve_bytes(output_dir: Path, db_size: int) -> int:
+    """Existing blocks are in free_now; reserve the full possible COW divergence."""
+    paths = list(output_dir.glob(".brainlayer-clone-*/snapshot.db"))
+    paths += [p for p in output_dir.glob("*.db") if _parse_uncompressed_snapshot_date(p.name)]
+    total = 0
+    for path in paths:
+        parent = path.parent.lstat()
+        info = path.lstat()
+        if (
+            stat.S_ISDIR(parent.st_mode)
+            and parent.st_uid == os.getuid()
+            and stat.S_ISREG(info.st_mode)
+            and info.st_uid == os.getuid()
+        ):
+            total += max(db_size, info.st_size)
+    return total
 
 
 def _owned_temp_inventory(output_dir: Path) -> list[tuple[str, int]]:
@@ -1929,6 +2017,7 @@ def create_sqlite_backup_artifact(
     if _parse_uncompressed_snapshot_date(f"{date_stamp}.db") is None or output_dir.is_symlink():
         raise ValueError("Backup requires a dated snapshot in a non-symlink backup directory")
     _cleanup_consumed_raw_remnants(output_dir)
+    stale_clones_deleted = _sweep_stale_clones(output_dir)
     compressor, zstd_binary, compressor_fallback = _selected_compressor()
     clone_mode = _vacuum_fallback_reason is None and backup_clone.supported(db_path, output_dir)
     clone_budget = backup_clone.budget(db_path) if clone_mode else {}
@@ -1969,8 +2058,10 @@ def create_sqlite_backup_artifact(
         writer_snapshot_idle=lambda: _brainbar_snapshot_idle_in_epoch(socket_path, writer_started_at),
     )
     db_size = _database_logical_size_bytes(db_path)
+    clone_growth_reserve = _clone_growth_reserve_bytes(output_dir, db_size)
+    stale_attempts_deleted.extend(stale_clones_deleted)
     surviving_attempt_bytes = 0
-    surviving_attempt_growth_reserve_bytes = 0
+    surviving_attempt_growth_reserve_bytes = clone_growth_reserve
     for attempt_path in surviving_attempt_paths:
         try:
             attempt_size = attempt_path.stat().st_size
@@ -2105,10 +2196,21 @@ def create_sqlite_backup_artifact(
 
                 def validate_clone(path):
                     started = time.monotonic()
-                    check = _sqlite_pragma_check(path, "integrity_check", capacity_check=clone_guard)
+                    try:
+                        check = _sqlite_pragma_check(path, "integrity_check", capacity_check=clone_guard)
+                    except sqlite3.Error as exc:
+                        check = f"{type(exc).__name__}: {exc}"
                     if check != "ok":
+                        from .job_alerts import report
+
+                        report(
+                            "backup-clone-integrity", f"APFS clone integrity_check failed: {check}", replace_reason=True
+                        )
                         raise backup_clone.CloneUnavailable(f"clone integrity_check failed: {check}")
                     clone_validation.update(integrity=check, seconds=time.monotonic() - started)
+                    from .job_alerts import report
+
+                    report("backup-clone-integrity", None)
 
                 try:
                     promoted = backup_clone.snapshot(
@@ -2119,6 +2221,7 @@ def create_sqlite_backup_artifact(
                     )
                     clone_guard(force=True)
                 except backup_clone.CloneUnavailable as exc:
+                    _check_backup_interrupt()
                     clone_fallback = str(exc)
                     print(f"Backup snapshot fallback: {clone_fallback}; using VACUUM INTO", flush=True)
                     if raw_snapshot.exists():
@@ -2260,6 +2363,7 @@ def create_sqlite_backup_artifact(
         if clone_mode and (
             isinstance(exc, backup_clone.CloneUnavailable) or "raw free space floor breached" in str(exc)
         ):
+            _check_backup_interrupt()
             print(f"Backup clone stopped: {exc}; checking VACUUM fallback capacity", flush=True)
             return create_sqlite_backup_artifact(
                 db_path,
@@ -3732,6 +3836,8 @@ def _local_upload_receipt(
 def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
     @functools.wraps(func)
     def wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        global _backup_interrupt
+        _backup_interrupt = None
         bound = inspect.signature(func).bind_partial(*args, **kwargs)
         staging_dir = Path(bound.arguments.get("staging_dir", DEFAULT_STAGING_DIR)).expanduser()
         staging_dir.mkdir(parents=True, exist_ok=True)
@@ -4603,6 +4709,8 @@ def run_backup(
 
 
 def _run_backup_process(timeout_seconds: int) -> int:
+    global _backup_interrupt
+    _backup_interrupt = None
     from brainlayer.supervisor_child import backup_io_policy
 
     from .backup_heavy_gate import BackupGateDeferred
@@ -4689,6 +4797,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
     finally:
         if not supervised:
             signal.setitimer(signal.ITIMER_REAL, 0)
+        _backup_interrupt = None
         signal.signal(signal.SIGALRM, previous_alarm_handler)
         signal.signal(signal.SIGTERM, previous_term_handler)
         signal.signal(signal.SIGINT, previous_int_handler)
