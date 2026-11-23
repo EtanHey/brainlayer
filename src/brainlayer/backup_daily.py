@@ -3844,8 +3844,13 @@ def run_backup(
             inventory = _list_drive_backup_files(inventory_service, folders[0])
             try:
                 result["drive_retention_report"] = drive_retention_report(
-                    inventory, machine_id=result["machine_id"], folder_id=folders[0], as_of=local_backup_date(),
-                    rule=configured_drive_rule(), receipts=receipts, protected_names=protected_names,
+                    inventory,
+                    machine_id=result["machine_id"],
+                    folder_id=folders[0],
+                    as_of=local_backup_date(),
+                    rule=configured_drive_rule(),
+                    receipts=receipts,
+                    protected_names=protected_names,
                 )
                 result["drive_retention_selection"] = {
                     "machine_id": result["machine_id"],
@@ -3859,7 +3864,9 @@ def run_backup(
             except Exception as exc:
                 result.pop("drive_retention_report", None)
                 result["drive_retention_selection"] = empty_drive_selection(
-                    result["machine_id"], state="unmeasurable", selected_at=selected_at,
+                    result["machine_id"],
+                    state="unmeasurable",
+                    selected_at=selected_at,
                     error=_redact_upload_secrets(f"{type(exc).__name__}: {exc}"),
                 )
             result["local_retention_inventory"] = "measured"

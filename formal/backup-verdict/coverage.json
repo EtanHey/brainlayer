@@ -14,7 +14,7 @@
     },
     "src/brainlayer/backup_daily.py": {
       "sha": "drive-retention config (advisory selection values/time/error; backup receipt facts unchanged)",
-      "sha256": "aa904d7b12681312973d7de50499622f8c4978a63c667587e3f7ae19daeae0f2"
+      "sha256": "aee8bfa5eaf35940aac314ae46fae54476323eedee39c879e598b1ec64cb0b43"
     },
     "src/brainlayer/backup_retention.py": {
       "sha": "drive-retention config (runtime daily/monthly read-only selection; local deletion proof unchanged)",

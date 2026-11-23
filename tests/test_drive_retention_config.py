@@ -62,8 +62,13 @@ def listing():
 
 def proofs(files):
     return [
-        {"uploaded": True, "verified": True, "machine_id": row["appProperties"]["brainlayer_machine"],
-         "local_md5": row.get("md5Checksum"), "drive_file": dict(row)}
+        {
+            "uploaded": True,
+            "verified": True,
+            "machine_id": row["appProperties"]["brainlayer_machine"],
+            "local_md5": row.get("md5Checksum"),
+            "drive_file": dict(row),
+        }
         for row in files
     ]
 
@@ -124,12 +129,13 @@ def test_runtime_config_drives_actual_selection(monkeypatch):
 
 def test_real_dated_pin_and_unverified_daily_are_never_candidates():
     files = [item(f"2026-11-{day:02}") for day in range(1, 11)]
-    selected = policy.drive_retention_report(
-        files, machine_id="m4", folder_id="folder", as_of=NOW.date()
-    )["configured"]
+    selected = policy.drive_retention_report(files, machine_id="m4", folder_id="folder", as_of=NOW.date())["configured"]
     assert selected["would_remove"]["count"] == 0
     selected = policy.drive_retention_report(
-        files, machine_id="m4", folder_id="folder", as_of=NOW.date(),
+        files,
+        machine_id="m4",
+        folder_id="folder",
+        as_of=NOW.date(),
         receipts=proofs([row for row in files if row["name"] != "2026-11-02.db.zst"]),
         protected_names={"2026-11-01.db.zst"},
     )["configured"]
@@ -257,7 +263,8 @@ def test_month_window_uses_same_local_calendar_as_backup_selection(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "key,value", [("selected_at", "2999-01-01T00:00:00Z"), ("selected_at", None), ("on_drive", {}), ("named_one_offs_count", -1)]
+    "key,value",
+    [("selected_at", "2999-01-01T00:00:00Z"), ("selected_at", None), ("on_drive", {}), ("named_one_offs_count", -1)],
 )
 def test_invalid_receipt_never_becomes_measured(key, value):
     row = observation()
