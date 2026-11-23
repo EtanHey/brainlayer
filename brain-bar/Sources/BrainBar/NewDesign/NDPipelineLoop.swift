@@ -319,8 +319,8 @@ enum NDPipelineLayout {
                 let words = panelWords(other, state: state, displayedWords: displayedWords)
                 obstacles += words.map { $0.insetBy(dx: -4, dy: -4) }
             }
-            // R13: the two job panels clear the native caption fields, including their drawing insets.
-            if s == .jobs || s == .weekly {
+            // The agents and job panels clear the native caption fields, including their drawing insets.
+            if s == .agents || s == .jobs || s == .weekly {
                 obstacles += laneLabelRects().map { $0.1.insetBy(dx: -4, dy: -4) }
             }
         }

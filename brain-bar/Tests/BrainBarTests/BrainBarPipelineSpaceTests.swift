@@ -171,7 +171,7 @@ import XCTest
         for (suffix, appearance) in NDRenderHarness.appearances {
             let calm = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .overview)
             _ = try NDRenderHarness.window(calm, name: "overview-\(suffix)", appearance: appearance, in: directory)
-            for station: NDStation in [.memory, .jobs, .weekly, .queue, .read, .search] {
+            for station: NDStation in [.memory, .jobs, .weekly, .agents, .queue, .read, .search] {
                 _ = try NDRenderHarness.hover(calm, station: station, name: "hover-\(station.rawValue)-\(suffix)", appearance: appearance, in: directory)
             }
             let faulty = NDStore(fixture: BrainBarDesignFixture.inputs(.driveSignedOut), page: .overview)
