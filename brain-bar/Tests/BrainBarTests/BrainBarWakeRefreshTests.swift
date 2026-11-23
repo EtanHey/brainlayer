@@ -119,20 +119,23 @@ final class BrainBarWakeRefreshTests: XCTestCase {
         let store = NDStore(fixture: NDInputs(capture: capture), page: .overview)
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build.noindex/brainbar-ui-lead-w226/renders")
-            .appendingPathComponent(ProcessInfo.processInfo.environment["BRAINBAR_WAKE_PROOF_ARM"] ?? "test")
+            .appendingPathComponent(".build.noindex/wake-render-tests")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for (name, appearance) in NDRenderHarness.appearances {
             let overview = try NDRenderHarness.host(
-                NDHeadline(store: store, r1: store.r1).padding(16).background(ND.bg),
+                VStack(alignment: .leading, spacing: 0) {
+                    NDHeadline(store: store, r1: store.r1)
+                    if !store.r1.problemRows.isEmpty {
+                        NDProblemRows(store: store, rows: store.r1.problemRows).padding(.top, NDGrid.headlineToRows)
+                    }
+                }.padding(16).background(ND.bg),
                 size: NSSize(width: NDGrid.windowWidth, height: 180), appearance: appearance)
             try NDRenderHarness.write(overview, name: "\(state)-headline-\(name)", in: directory)
-            try NDRenderHarness.window(store, name: "\(state)-overview-\(name)", appearance: appearance, in: directory)
             let menuName = "\(state)-menu-\(name)"
-            try NDRenderHarness.menu(store, name: menuName, appearance: appearance, in: directory)
+            _ = try NDRenderHarness.menu(store, name: menuName, appearance: appearance, in: directory)
             let menu = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: directory.appendingPathComponent(menuName + ".png"))))
-            let window = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: directory.appendingPathComponent("\(state)-overview-\(name).png"))))
-            for (surface, bitmap) in [("Overview", mark == .red ? window : overview), ("menu", menu)] {
+            // The count headline is unmarked; its real problem rows carry red. This band has no window traffic lights.
+            for (surface, bitmap) in [("Overview", overview), ("menu", menu)] {
                 let request = VNRecognizeTextRequest()
                 request.recognitionLevel = .accurate
                 request.usesLanguageCorrection = false
@@ -201,21 +204,28 @@ final class BrainBarWakeRefreshTests: XCTestCase {
 
     func testNewDesignDrawsFreshReadingAfterWake() throws {
         let clock = Clock()
-        let model = model(clock)
+        var deadlines: [@MainActor @Sendable () -> Void] = []
+        let model = model(clock, scheduler: { _, action in deadlines.append(action) })
         model.systemWillSleep()
         clock.date.addTimeInterval(600)
         model.systemDidWake()
+        clock.date.addTimeInterval(361); clock.uptime += 361
+        deadlines.last?()
+        let timedOut = model.menuCapture(stats: nil)
+        XCTAssertTrue(timedOut.wakeStatusUnconfirmed)
+        let timedOutStore = NDStore(fixture: NDInputs(capture: timedOut), page: .overview)
+        XCTAssertEqual(NDIcon.state(timedOutStore.model, timedOutStore.r1), .amber)
         clock.date.addTimeInterval(2); clock.uptime += 2
         var badge = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
         badge.healthVerdict = .init(dot: .green, checks: BrainBarDesignFixture.calmChecks(), notes: [], evaluatedAt: clock.date)
         model.applyHealthBadge(badge, alerts: nil)
         let fresh = model.menuCapture(stats: nil)
         XCTAssertFalse(fresh.wakeCatchUpPending)
-        var capture = BrainBarDesignFixture.capture(BrainBarDesignFixture.calmChecks(), age: 0)
-        capture.now = fresh.now
-        capture.verdict = fresh.verdict
-        capture.wakeCatchUpPending = fresh.wakeCatchUpPending
-        try assertNewDesignDraws(capture, state: "fresh-after-wake", containing: "All good")
+        XCTAssertFalse(fresh.wakeStatusUnconfirmed)
+        XCTAssertNil(fresh.wakeStatusReason)
+        let freshStore = NDStore(fixture: NDInputs(capture: fresh), page: .overview)
+        XCTAssertEqual(NDIcon.state(freshStore.model, freshStore.r1), .rest)
+        try assertNewDesignDraws(fresh, state: "fresh-after-wake", containing: "All good")
     }
 
     func testNewDesignKeepsPreSleepFaultRedDuringWakeAndTimeout() throws {
