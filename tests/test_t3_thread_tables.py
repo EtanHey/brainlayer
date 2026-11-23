@@ -275,13 +275,13 @@ def test_every_thread_gets_one_row_and_every_provider_thread_one_session_row(env
     assert json.loads(forked) == {"type": "node", "nodeId": "node:th-claude"}
 
 
-def test_side_tables_change_no_chunk_alias_or_audit_row(env):
-    """The same T3 input writes the same chunks whether or not the side tables exist."""
+def test_ownership_changes_only_new_t3_text_not_session_alias_or_audit_rows(env):
+    """PR 3.3 skips covered text; existing session rows stay byte-identical."""
     bare = _brainlayer_db(env.tmp / "bare.db", side_tables=False)
     assert env().side_tables["threads_written"] == len(THREADS)
     assert env(bare).side_tables == {"state": "absent"}
     snapshot = (
-        "SELECT id, content, conversation_id, source, metadata FROM chunks ORDER BY id",
+        "SELECT id, content, conversation_id, source, metadata FROM chunks WHERE source != 't3' ORDER BY id",
         "SELECT * FROM chunk_id_alias ORDER BY 1",
         "SELECT count(*) FROM dedupe_audit",
     )
