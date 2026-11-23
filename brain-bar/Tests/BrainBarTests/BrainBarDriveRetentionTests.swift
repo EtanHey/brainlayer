@@ -23,6 +23,8 @@ import XCTest
         defer { NSTimeZone.default = previous }
         XCTAssertEqual(BrainBarDriveRetentionPresentation.date("2026-11-22T23:30:00Z", relativeTo: referenceDate), "Nov 23")
         XCTAssertEqual(BrainBarDriveRetentionPresentation.date("2026-11-22T23:30:00.123Z", relativeTo: referenceDate), "Nov 23")
+        // The producer writes datetime.isoformat(): six fractional digits and a +00:00 offset.
+        XCTAssertEqual(BrainBarDriveRetentionPresentation.date("2026-11-22T23:30:00.123456+00:00", relativeTo: referenceDate), "Nov 23")
         XCTAssertEqual(BrainBarDriveRetentionPresentation.date("2024-08-31", relativeTo: referenceDate), "Aug 31, 2024")
     }
 
@@ -35,8 +37,13 @@ import XCTest
         }
         let rep = try NDRenderHarness.host(BrainBarDriveRetentionSheet(evidence: evidence, referenceDate: referenceDate), size: NSSize(width: 452, height: 720), appearance: .darkAqua)
         let text = try words(rep)
-        XCTAssertTrue(text.contains("Keeps 8, 8 GB, newest Nov 23"), text)
-        XCTAssertTrue(text.contains("Not verified, kept for now: 2, 2 GB"), text)
+        XCTAssertTrue(text.contains("Keeps 8 copies, 8 GB, newest Nov 23"), text)
+        XCTAssertTrue(text.contains("Not verified, kept for now: 2 copies, 2 GB"), text)
+        // Kept lines first, the decision line last (round-2 review R2-1).
+        let keeps = try XCTUnwrap(text.range(of: "Keeps 8 copies")), monthly = try XCTUnwrap(text.range(of: "Monthly:"))
+        let unverified = try XCTUnwrap(text.range(of: "Not verified")), remove = try XCTUnwrap(text.range(of: "Would remove"))
+        XCTAssertTrue(keeps.lowerBound < monthly.lowerBound && monthly.lowerBound < unverified.lowerBound
+                      && unverified.lowerBound < remove.lowerBound, text)
         XCTAssertFalse(text.contains("2026"), text)
         XCTAssertFalse(text.contains("Keeps: 10 copies, 10 GB;"), text)
         XCTAssertEqual(text.components(separatedBy: "Not verified, kept for now:").count - 1, 1)
@@ -51,12 +58,29 @@ import XCTest
             }
             json["machines"] = machines
         }
-        XCTAssertEqual(BrainBarDriveRetentionPresentation.keeps(evidence.machines[0]), "Keeps 10, 10 GB")
+        XCTAssertEqual(BrainBarDriveRetentionPresentation.keeps(evidence.machines[0]), "Keeps 10 copies, 10 GB")
         let rep = try NDRenderHarness.host(BrainBarDriveRetentionSheet(evidence: evidence, referenceDate: referenceDate), size: NSSize(width: 452, height: 670), appearance: .darkAqua)
         let text = try words(rep)
-        XCTAssertTrue(text.contains("Keeps 10, 10 GB"), text)
+        XCTAssertTrue(text.contains("Keeps 10 copies, 10 GB"), text)
         XCTAssertFalse(text.contains(", newest"), text)
         XCTAssertFalse(text.contains("Not verified, kept for now"), text)
+    }
+
+    /// Without kept_by_rule, Keeps falls back to `kept`, which already includes the unverified copies; drawing the
+    /// unverified line beside it would count them twice (round-2 review R2-4).
+    func testUnverifiedAndPinnedLinesNeedKeptByRule() throws {
+        let evidence = try fixture { json in
+            var machines = json["machines"] as! [[String: Any]]
+            machines[0].removeValue(forKey: "kept_by_rule")
+            machines[0]["unverified"] = ["count": 2, "bytes": 2_000_000_000, "oldest": "2026-06-01", "newest": "2026-11-22"]
+            machines[0]["pinned"] = ["count": 1, "bytes": 1_000_000_000, "oldest": "2026-11-15", "newest": "2026-11-15"]
+            json["machines"] = machines
+        }
+        let rep = try NDRenderHarness.host(BrainBarDriveRetentionSheet(evidence: evidence, referenceDate: referenceDate), size: NSSize(width: 452, height: 720), appearance: .darkAqua)
+        let text = try words(rep)
+        XCTAssertTrue(text.contains("Keeps 10 copies, 10 GB"), text)
+        XCTAssertFalse(text.contains("Not verified, kept for now"), text)
+        XCTAssertFalse(text.contains("Pinned, kept for now"), text)
     }
 
     func testLongWrappedErrorAndMissingCaptionDrawCompletely() throws {
@@ -281,5 +305,28 @@ import XCTest
         let directory = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try NDRenderHarness.write(rep, name: name, in: directory)
+    }
+}
+
+extension BrainBarDriveRetentionTests {
+    /// A weekly-pinned copy is part of `kept`; with the producer's `pinned` summary it gets its own line, between the
+    /// other kept lines and Would remove, and zero pinned copies draw nothing.
+    func testPinnedLineDrawnOnlyWhenCountAboveZero() throws {
+        let evidence = try fixture { json in
+            var machines = json["machines"] as! [[String: Any]]
+            machines[0]["kept_by_rule"] = ["count": 7, "bytes": 7_000_000_000, "oldest": "2026-08-31", "newest": "2026-11-23"]
+            machines[0]["unverified"] = ["count": 2, "bytes": 2_000_000_000, "oldest": "2026-06-01", "newest": "2026-11-22"]
+            machines[0]["pinned"] = ["count": 1, "bytes": 1_000_000_000, "oldest": "2026-11-15", "newest": "2026-11-15"]
+            machines[1]["kept_by_rule"] = ["count": 10, "bytes": 10_000_000_000, "oldest": "2026-08-31", "newest": "2026-11-23"]
+            machines[1]["pinned"] = ["count": 0, "bytes": 0, "oldest": NSNull(), "newest": NSNull()]
+            json["machines"] = machines
+        }
+        let rep = try NDRenderHarness.host(BrainBarDriveRetentionSheet(evidence: evidence, referenceDate: referenceDate), size: NSSize(width: 452, height: 760), appearance: .darkAqua)
+        let text = try words(rep)
+        XCTAssertTrue(text.contains("Pinned, kept for now: 1 copy, 1 GB"), text)
+        XCTAssertEqual(text.components(separatedBy: "Pinned, kept for now:").count - 1, 1, text)
+        let pinned = try XCTUnwrap(text.range(of: "Pinned")), remove = try XCTUnwrap(text.range(of: "Would remove"))
+        XCTAssertTrue(pinned.lowerBound < remove.lowerBound, text)
+        try save(rep, "sheet-pinned-dark")
     }
 }

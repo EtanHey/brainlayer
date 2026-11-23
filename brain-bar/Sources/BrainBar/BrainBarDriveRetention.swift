@@ -22,7 +22,8 @@ struct BrainBarDriveRetention: Codable, Sendable {
         let machineId, state: String
         let selectedAt, error: String?
         let onDrive, kept, wouldRemove: Summary?
-        let keptByRule, unverified: Summary?
+        /// Optional cohorts inside `kept` (kept = kept_by_rule + unverified + pinned); none is ever added on top.
+        let keptByRule, unverified, pinned: Summary?
         let namedOneOffsCount: Int?
         let monthlyRepresentatives: [Representative]?
         var measured: Bool { state == "measured" && error == nil }
@@ -228,16 +229,23 @@ struct BrainBarDriveRetentionSheet: View {
                 if machine.measured { Text(BrainBarDriveRetentionPresentation.summary(machine.onDrive, relativeTo: referenceDate)).font(NDType.caption) }
             }
             if machine.measured {
+                // Everything kept first (Keeps, which monthly dates, the unverified and pinned copies held for now), then the
+                // decision line last. Unverified copies are drawn only beside kept_by_rule: without it, Keeps falls
+                // back to `kept`, which already counts them.
                 Text(BrainBarDriveRetentionPresentation.keeps(machine, relativeTo: referenceDate)).foregroundStyle(ND.t2)
-                Text(Say.wouldRemove(BrainBarDriveRetentionPresentation.summary(machine.wouldRemove, includingRange: true, relativeTo: referenceDate)))
                 if let representatives = machine.monthlyRepresentatives, !representatives.isEmpty {
                     Text(Say.monthlyDates(representatives.map { BrainBarDriveRetentionPresentation.date($0.date, relativeTo: referenceDate) }.joined(separator: ", ")))
                         .foregroundStyle(ND.t3)
                 }
-                if let unverified = machine.unverified, unverified.isValid, unverified.count > 0 {
+                if machine.keptByRule != nil, let unverified = machine.unverified, unverified.isValid, unverified.count > 0 {
                     Text(Say.unverified(unverified.count, BrainBarDriveRetentionPresentation.size(unverified.bytes)))
                         .foregroundStyle(ND.t2)
                 }
+                if machine.keptByRule != nil, let pinned = machine.pinned, pinned.isValid, pinned.count > 0 {
+                    Text(Say.pinned(pinned.count, BrainBarDriveRetentionPresentation.size(pinned.bytes)))
+                        .foregroundStyle(ND.t2)
+                }
+                Text(Say.wouldRemove(BrainBarDriveRetentionPresentation.summary(machine.wouldRemove, includingRange: true, relativeTo: referenceDate)))
             } else {
                 Text(BrainBarDriveRetentionPresentation.status(machine, relativeTo: referenceDate)).foregroundStyle(ND.t2)
             }

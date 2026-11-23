@@ -1009,13 +1009,16 @@ extension BrainBarMenuPresenter {
         }
         static func dateRange(_ oldest: String, _ newest: String) -> String { "\(oldest) to \(newest)" } // DR31
         static func keeps(_ count: Int, _ size: String, _ newest: String?) -> String { // DR16
-            "Keeps \(count), \(size)" + (newest.map { ", newest " + $0 } ?? "")
+            "Keeps " + summary(count, size) + (newest.map { ", newest " + $0 } ?? "")
         }
         static let keepsNotMeasured = "Keeps: Not measured yet" // DR36
         static func unverified(_ count: Int, _ size: String) -> String { // DR37
-            "Not verified, kept for now: \(count), \(size)"
+            "Not verified, kept for now: " + summary(count, size)
         }
         static func couldNotMeasure(_ reason: String) -> String { "Couldn't measure: \(reason)" } // DR38
+        static func pinned(_ count: Int, _ size: String) -> String { // DR39
+            "Pinned, kept for now: " + summary(count, size)
+        }
         static func wouldRemove(_ summary: String) -> String { "Would remove: \(summary)" } // DR18
         static func monthlyDates(_ dates: String) -> String { "Monthly: \(dates)" } // DR32
         static func firstCleanup(_ count: Int, _ size: String) -> String { // DR20
