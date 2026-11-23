@@ -45,3 +45,7 @@ The first five round-2 regressions failed on 696316c1: 14 assertions, including 
 - [before-classic-settings-missing-dark.png](before-classic-settings-missing-dark.png)
 - [before-new-settings-missing-dark.png](before-new-settings-missing-dark.png)
 - [before-new-settings-missing-light.png](before-new-settings-missing-light.png)
+
+## Lead follow-up at 6eecfda98
+
+After source for every after-sheet-* picture: 6eecfda98 (round-2 review items R2-1, R2-2, R2-4 and the producer's pinned cohort). `after-sheet-measured-dark/light` re-rendered: kept lines first (Keeps, Monthly, Not verified), Would remove last, every count reads "N copies". `after-sheet-pinned-dark` is new: Mac A keeps 7 by rule, 2 not verified, 1 pinned, would remove 10 (7+2+1+10 = 20, the header). The other sheet pictures were re-rendered from the same head; the Settings and confirmation pictures are unchanged from 44f69350 (this change touches only the sheet). Cropped to the drawn bounds like the rest.
