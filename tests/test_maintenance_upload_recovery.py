@@ -19,6 +19,7 @@ runner = completion.runner
 
 NOW = dt.datetime(2026, 11, 10, 12)
 CHILD = """
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -35,7 +36,14 @@ b.assert_drive_folder_owned_by_machine = lambda *a, **k: None
 path = Path(os.environ['BRAINLAYER_BACKUP_STAGING_DIR']) / os.environ['BRAINLAYER_BACKUP_UPLOAD_SNAPSHOT']
 metadata = dict(id='remote', name=path.name, size=str(path.stat().st_size),
                 appProperties={b.DRIVE_MACHINE_PROPERTY: 'test-machine'}, md5Checksum=b._md5_file(path))
-service = SimpleNamespace(files=lambda: SimpleNamespace(get=lambda **k: SimpleNamespace(execute=lambda **k: metadata)))
+def listing(**kwargs):
+    assert os.environ.get('UPLOAD_TEST_RETENTION') == '1', 'opt-out must not list Drive'
+    assert kwargs['q'] == "'folder' in parents and trashed = false"
+    inventory = json.loads((path.parent / 'inventory.json').read_text())
+    return SimpleNamespace(execute=lambda: dict(files=inventory + [dict(metadata, parents=['folder'])]))
+service = SimpleNamespace(files=lambda: SimpleNamespace(
+    get=lambda **k: SimpleNamespace(execute=lambda **k: metadata), list=listing))
+b._find_drive_folder_ids = lambda *a: ['folder']
 b.build_drive_service = lambda *a: service
 b.verify_sqlite_backup_artifact = lambda *a, **k: dict(verified=True, verification_mode='quick', local_md5=b._md5_file(path))
 prior = [r for r in b._read_backup_receipts(Path(os.environ['BRAINLAYER_BACKUP_LOG_PATH'])) if r.get('snapshot') == str(path)][-1]
@@ -51,7 +59,8 @@ def upload(*a, **k):
         raise RuntimeError('isolated upload failure')
     return metadata
 b.upload_file_to_drive_raw = upload
-result = b.run_backup(staging_dir=path.parent, phase='upload', remove_local_after_upload=False)
+result = b.run_backup(staging_dir=path.parent, phase='upload',
+                      remove_local_after_upload=os.environ.get('UPLOAD_TEST_RETENTION') == '1')
 assert result['verified'] and result['uploaded']
 """
 
@@ -132,12 +141,72 @@ def test_pending_upload_is_retried_and_verified(upload_lane, previous, local_dat
     latest = {r["snapshot"]: r for r in receipts if "snapshot" in r}
     assert latest[str(snapshot)]["uploaded"] is True and latest[str(snapshot)]["verified"] is True
     sweeps = [r for r in receipts if r.get("event") == "local_sweep"]
-    assert bool(sweeps) == (local_date > "2026-11-10")
+    # Opting out skips the live inventory required by the local-only retention contract.
+    assert sweeps == []
+    assert latest[str(snapshot)]["local_retention_inventory"] == "opt_out"
+    assert latest[str(snapshot)]["local_removed_skip_reason"] == "opt_out"
     assert snapshot.exists()
     assert "backup-daily" not in job_alerts.active_alerts(runner.alerts)
     assert runner.rows()[-1]["failed"] == 0
     assert runner.rows()[-1]["scheduled_date"] == "2026-11-09"
     assert len([r for r in runner.rows() if r["event"] == "upload-recovery-attempt"]) == 1
+
+
+def test_recovery_child_sweeps_live_verified_copies_and_preserves_protected_files(upload_lane, monkeypatch):
+    _, _, snapshot, log = upload_lane
+    monkeypatch.setenv("UPLOAD_TEST_LOCAL_DATE", "2026-11-11")
+    monkeypatch.setenv("UPLOAD_TEST_RETENTION", "1")
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m4")
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOCAL_KEEP_M4", "1")
+    # Even legacy opt-in cannot grant Drive mutation authority. The child service only has reads.
+    monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1")
+    pending = json.loads(log.read_text())
+    inventory = []
+    for day in (7, 8):
+        archive = snapshot.with_name(f"2026-11-{day:02}.db.zst")
+        archive.write_bytes(b"verified older archive")
+        md5 = backup._md5_file(archive)
+        remote = dict(
+            id=f"remote-{day}",
+            name=archive.name,
+            size=str(archive.stat().st_size),
+            md5Checksum=md5,
+            parents=["folder"],
+            appProperties={backup.DRIVE_MACHINE_PROPERTY: "test-machine"},
+        )
+        inventory.append(remote)
+        backup._append_json_log(
+            log,
+            dict(
+                pending,
+                snapshot=str(archive),
+                local_artifact=backup._upload_identity(archive),
+                uploaded=True,
+                verified=True,
+                local_md5=md5,
+                drive_file=remote,
+            ),
+        )
+    pinned = snapshot.with_name("2026-11-07.db.zst")
+    (snapshot.parent / ".weekly-backup-pin.json").write_text(json.dumps(dict(date="2026-11-07", snapshot=str(pinned))))
+    unknown = snapshot.with_name("2026-11-09.db.zst")
+    unknown.write_bytes(b"unverified archive")
+    (snapshot.parent / "inventory.json").write_text(json.dumps(inventory))
+
+    assert run(upload_lane) == 0
+    receipts = backup._read_backup_receipts(log)
+    sweeps = {r["archive"]: r for r in receipts if r.get("event") == "local_sweep"}
+    removed = snapshot.with_name("2026-11-08.db.zst")
+    assert sweeps[str(removed)]["local_removed"] is True
+    assert not removed.exists()
+    assert sweeps[str(pinned)]["local_removed_skip_reason"] == "weekly_pin_pending"
+    assert sweeps[str(snapshot)]["local_removed_skip_reason"] == "retention_keep"
+    assert pinned.exists() and snapshot.exists() and unknown.exists()
+    latest = {r["snapshot"]: r for r in receipts if "snapshot" in r}[str(snapshot)]
+    assert latest["uploaded"] and latest["verified"]
+    assert latest["local_retention_inventory"] == "measured"
+    assert latest["drive_retention"] == "disabled"
+    assert latest["retention_deleted"] == []
 
 
 @pytest.mark.parametrize("reason", ["no-snapshot", "exhausted", "nightly", "custody", "paused", "interrupted"])
