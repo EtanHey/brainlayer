@@ -962,6 +962,16 @@
         "target": "import subprocess"
       }
     },
+    "290c844ca911a685ef80706ad599431b609b0807aba9824fce6dd8c592a0d6ca": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/release_worktree.py <module>.group_running subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.group_running",
+        "path": "scripts/release_worktree.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "29a4557405fe2d0b206f1b8c0f51a2fb440705353263a5dad4847ecf8f9288e3": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp/search_handler.py <module>",
       "site": {
@@ -1594,6 +1604,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/brainbar_auto_activation.py",
         "target": "import subprocess"
+      }
+    },
+    "3ce9c587fb983221952f2159538438512e1a1f50b1fd82678b8d13ea58f59c57": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/release_worktree.py <module>.wait_for_group subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.wait_for_group",
+        "path": "scripts/release_worktree.py",
+        "target": "subprocess.TimeoutExpired"
       }
     },
     "3cfa1e9476fcb597dff155aae72aa5662a1b221eef3cbcaa264b2e0f43a570a8": {
@@ -3222,6 +3242,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "77497e1635f6598c29797740d6b918d3c4db0f4122c1e65d1b2cbb6376e8c62c": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/release_worktree.py <module>.git subprocess.run.",
+      "site": {
+        "call_sha256": "51ee06ccce73393c714ebf997fa0e6e7f99c74d2ff3b80e15004d1147d5dc445",
+        "kind": "child_process",
+        "owner": "<module>.git",
+        "path": "scripts/release_worktree.py",
+        "target": "subprocess.run"
+      }
+    },
     "77938f041d921232f6d3bd8d370804fe14ffa1e8835f5e685b6b4bb9cd3496da": {
       "non_cloud_purpose": "Local subprocess metadata-check error reference; a failed or timed-out macOS keyring presence check refuses the operator agy probe before CLI spawn.",
       "site": {
@@ -3918,6 +3948,16 @@
         "owner": "<module>.hooks",
         "path": "src/brainlayer/cli/__init__.py",
         "target": "subprocess.check_output"
+      }
+    },
+    "92c6b59aebac17ccea3e63eda3f034232227bdba0923952063f08ae6d5c3a984": {
+      "non_cloud_purpose": "Retained module dependency binding: scripts/release_worktree.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/release_worktree.py",
+        "target": "import subprocess"
       }
     },
     "92d8d95007a245b5fdea6cf96761943c2731b8b03b79524ddb444fd6b1d7c73d": {
@@ -5858,6 +5898,16 @@
         "target": "subprocess.check_output"
       }
     },
+    "d31fc603e39c7597443a3ebd4b59b682c4c2d119b38b129fe1c9120595d53823": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/release_worktree.py <module>.wait_for_group subprocess.Popen.",
+      "site": {
+        "call_sha256": "e34047003ef4212d0b68bca70fc10ff282ffd063f4594d751e9e2aa595785904",
+        "kind": "callable_reference",
+        "owner": "<module>.wait_for_group",
+        "path": "scripts/release_worktree.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "d32838d57b6036343c1b6d487ac4b43cbe60ce9d8aeda07fbdb0d31b269d0532": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ci_ratchet_table.py <module>._git",
       "site": {
@@ -5875,6 +5925,16 @@
         "kind": "callable_reference",
         "owner": "<module>.verify_mcp_transport.receive",
         "path": "src/brainlayer/setup.py",
+        "target": "subprocess.Popen"
+      }
+    },
+    "d53bc221a736144cdb83f24e4a115107b847b65a2297278185f21459ae1f94d6": {
+      "non_cloud_purpose": "Local release launcher: runs the operator's own foreground release command (argv given on the command line) inside a disposable detached git worktree in a new session, forwarding SIGINT/SIGTERM; it adds no network or model call of its own. Site: scripts/release_worktree.py <module>.run subprocess.Popen.",
+      "site": {
+        "call_sha256": "8a5458d39657ccc11558db21b099a8dde46438318849fa97c33b4494eeba71c1",
+        "kind": "child_process",
+        "owner": "<module>.run",
+        "path": "scripts/release_worktree.py",
         "target": "subprocess.Popen"
       }
     },
@@ -6196,6 +6256,16 @@
         "owner": "<module>.run_bridge.start_connect",
         "path": "src/brainlayer/mcp_stdio_bridge.py",
         "target": "socket.socket().setblocking"
+      }
+    },
+    "e3c6d88f831422421bb65a3244a2e0e783d659ea95f73cbee466ee58410d1e14": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/release_worktree.py <module>.group_running subprocess.run.",
+      "site": {
+        "call_sha256": "e0db2e13052b2be370387079ab8a3d6c37e024eb5192d2950a1a4e5b19d5ccee",
+        "kind": "child_process",
+        "owner": "<module>.group_running",
+        "path": "scripts/release_worktree.py",
+        "target": "subprocess.run"
       }
     },
     "e408258b6be34298ce703eefdebf67358b2ed103e20cc2fc75a726d235053440": {
