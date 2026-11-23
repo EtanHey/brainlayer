@@ -64,17 +64,22 @@ struct BadgeStatePresentation: Equatable, Sendable {
 }
 
 final class BadgeReadHistory: @unchecked Sendable {
+    private let lock = NSLock()
     private var previousReadAt: Date?
     private var gracedDocumentAt: Date?
     private var graceUntil: Date?
 
     func missedPreviousRead(now: Date, cadence: ObservabilityCadence) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
         defer { previousReadAt = now }
         guard let previousReadAt else { return false }
         return now < previousReadAt || now.timeIntervalSince(previousReadAt) >= cadence.interval * 2
     }
 
     func sleepGrace(now: Date, cadence: ObservabilityCadence, documentGeneratedAt: Date, missedPreviousRead: Bool) -> Date? {
+        lock.lock()
+        defer { lock.unlock() }
         if missedPreviousRead, gracedDocumentAt != documentGeneratedAt {
             gracedDocumentAt = documentGeneratedAt
             graceUntil = now.addingTimeInterval(cadence.interval)
