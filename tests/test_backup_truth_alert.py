@@ -23,5 +23,6 @@ def test_undated_retention_event_still_reaches_job_alert_input(tmp_path, monkeyp
     report = job_alerts.report
     monkeypatch.setattr(job_alerts, "report", lambda key, reason: report(key, reason, path=alerts))
     assert jsonl_backup.main() == 0
-    assert json.loads(log.read_text()) == {"event": "local_retention_error", "error": error}
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert rows == [{"event": "local_retention_error", "error": error}]
     assert job_alerts.active_alerts(alerts) == {"jsonl-retention": error}

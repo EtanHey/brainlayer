@@ -115,7 +115,11 @@ def test_one_of_many_vanishes_without_coverage_and_retries(tmp_path, monkeypatch
         assert bundle.extractfile("source-0/z-keeper.jsonl").read() == keeper.read_bytes()
     state = json.loads(kwargs["state_path"].read_text())
     assert set(state["files"]) == {keeper.as_posix()}
-    receipt = json.loads(kwargs["log_path"].read_text())
+    rows = [json.loads(line) for line in kwargs["log_path"].read_text().splitlines()]
+    assert sum(row.get("event") == "local_retention_summary" for row in rows) == 1
+    receipts = [row for row in rows if "attempted_at" in row]
+    assert receipts == [result]
+    receipt = receipts[-1]
     assert receipt["vanished_source_count"] == 1
     assert doomed.as_posix() not in json.dumps(receipt)
     assert not list(kwargs["staging_dir"].glob(".*.tmp"))
@@ -128,6 +132,9 @@ def test_one_of_many_vanishes_without_coverage_and_retries(tmp_path, monkeypatch
         keeper.as_posix(),
         doomed.as_posix(),
     }
+    rows = [json.loads(line) for line in kwargs["log_path"].read_text().splitlines()]
+    assert sum(row.get("event") == "local_retention_summary" for row in rows) == 2
+    assert [row for row in rows if "attempted_at" in row] == [result, retried]
 
 
 def test_all_vanish_returns_noop_without_upload_or_state(tmp_path, monkeypatch):
@@ -154,7 +161,11 @@ def test_all_vanish_returns_noop_without_upload_or_state(tmp_path, monkeypatch):
     assert result["verified"] is True
     assert result["uploaded"] is False
     assert result["vanished_source_count"] == 1
-    assert json.loads(kwargs["log_path"].read_text())["vanished_source_count"] == 1
+    rows = [json.loads(line) for line in kwargs["log_path"].read_text().splitlines()]
+    assert sum(row.get("event") == "local_retention_summary" for row in rows) == 1
+    receipts = [row for row in rows if "attempted_at" in row]
+    assert receipts == [result]
+    assert receipts[-1]["vanished_source_count"] == 1
     assert not kwargs["state_path"].exists()
     assert {path.name for path in kwargs["staging_dir"].iterdir()} == {".jsonl-backup.lock"}
 
