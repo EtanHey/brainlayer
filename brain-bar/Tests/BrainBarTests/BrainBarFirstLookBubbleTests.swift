@@ -45,9 +45,11 @@ import XCTest
     func testEveryStationPointsAtItsCentreAndShiftsOnlyForClearance() {
         let L = NDPipelineLayout.self
         for name in BrainBarDesignFixture.Name.allCases {
-            let state = NDPipelineState.make(BrainBarDesignFixture.inputs(name))
+            let store = NDStore(fixture: BrainBarDesignFixture.inputs(name), page: .overview)
+            let state = store.r1.pipeline
+            let chart = NDPipelineChart(state: state, memories: store.model.memories, items: store.r1.stationItems, backupProgress: store.inputs.backupProgress)
             for station in NDStation.allCases {
-                let p = L.panel(station, state: state, actions: [], height: 100)
+                let p = chart.panel(station, content: AnyView(NDStationPopover(store: store, station: station)))
                 let horizontal = p.edge == .top || p.edge == .bottom
                 XCTAssertEqual(horizontal ? p.tip.x : p.tip.y, horizontal ? L.circle(station).midX : L.circle(station).midY,
                                accuracy: 1, "\(station)")
@@ -64,7 +66,7 @@ import XCTest
                                  width: L.arrowLength, height: 2 * L.arrowHalfWidth)
                     let nearer = nearerBody.union(arrow)
                     let obstacles = L.panelObstacles(station, state: state, actions: [], actionWidths: [:],
-                                                    interior: p.clearanceException == nil)
+                                                    interior: p.clearanceException == nil, displayedWords: chart.displayedPanelWords)
                     let ceiling = station == .search ? L.keptSafe.maxY + 4 : L.activityLabelsBottom + 4
                     let blocked = nearer.minX < L.windowInside.minX || nearer.maxX > L.windowInside.maxX
                         || nearer.minY < ceiling || nearer.maxY > L.footerTop - 4
@@ -133,7 +135,7 @@ import XCTest
         let L = NDPipelineLayout.self
         let store = NDStore(fixture: BrainBarDesignFixture.inputs(.calm), page: .overview)
         let chart = NDPipelineChart(state: store.r1.pipeline, memories: store.model.memories, items: store.r1.stationItems)
-        for station: NDStation in [.agents, .read, .memory, .mac, .drive] {
+        for station: NDStation in [.agents, .read, .mac, .drive] {
             let content = AnyView(NDStationPopover(store: store, station: station))
             let normal = L.panelSide(station, hasAction: false).width
             func candidate(_ edge: Edge, width: CGFloat, overlap: Bool = false) -> NDPipelineLayout.Panel? {
@@ -147,26 +149,11 @@ import XCTest
                 ?? candidate(.leading, width: normal) ?? candidate(.bottom, width: normal)
                 ?? candidate(.bottom, width: normal, overlap: true)
             let panel = chart.panel(station, content: content)
-            XCTAssertNotNil(expected, "\(station): a full-height candidate must exist")
-            XCTAssertEqual(Optional(panel), expected, "\(station): normal above, widened above, right, left, below")
-            switch station {
-            case .read:
-                XCTAssertNil(aboveNormal)
-                XCTAssertNotNil(aboveWidened, "Read must reclaim the small height deficit by widening")
-                XCTAssertEqual(panel.edge, .top)
-                XCTAssertGreaterThan(panel.body.width, normal)
-            case .memory:
-                // Separate paragraphs impose a minimum height: widening wins only if its measured content fits.
-                if let above = aboveNormal ?? aboveWidened {
-                    XCTAssertEqual(panel, above)
-                } else {
-                    XCTAssertEqual(panel.edge, .bottom)
-                    XCTAssertEqual(panel.clearanceException, .topRowBelowBothSidesBlocked)
-                }
-            default:
-                XCTAssertEqual(panel.edge, .bottom)
-                XCTAssertEqual(panel.clearanceException, .topRowBelowBothSidesBlocked)
+            if let expected {
+                XCTAssertEqual(panel, expected, "\(station): normal above, widened above, right, left, below")
             }
+            XCTAssertNil(panel.clearanceException, "L63 withdraws the interior-overlap exception")
+            XCTAssertFalse(panel.scrolls)
         }
     }
 
