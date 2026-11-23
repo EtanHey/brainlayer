@@ -243,7 +243,9 @@ def test_recon_log_and_launchd_shapes_are_frozen() -> None:
     assert {"archive_id", "md5Checksum"} <= receipts[2].keys()
     assert sum(not line.startswith("{") for line in daily) == 2
     assert all(json.loads(line)["error_type"] == "FileNotFoundError" for line in errors)
-    assert json.loads((root / "logs/no-op-dev/jsonl-backup.log").read_text())["status"] == "no-op"
+    no_op_rows = [json.loads(line) for line in (root / "logs/no-op-dev/jsonl-backup.log").read_text().splitlines()]
+    assert len(no_op_rows) == 1  # Frozen historical input, not a newly executed backup run.
+    assert no_op_rows[0]["status"] == "no-op"
     assert "Could not find service" in (root / "launchd/no-op-dev.txt").read_text()
     assert (root / "launchd/missing-launchd-dev.txt").read_text() == ""
     assert all(case["inputs"]["disabled_dir"] in case["declared_inputs"] for case in cases)
