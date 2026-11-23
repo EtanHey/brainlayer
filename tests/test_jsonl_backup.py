@@ -1066,6 +1066,7 @@ def test_run_jsonl_backup_uploads_incremental_bundle_verifies_and_enqueues_summa
         "bytes",
         "content_verified_file_count",
         "drive_file",
+        "encryption",
         "forever_files",
         "forever_uploaded_file_count",
         "gzip_test",
