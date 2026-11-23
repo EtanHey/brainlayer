@@ -139,6 +139,8 @@ final class BrainBarMenuLiveCaptureTests: XCTestCase {
             if id == "S4" {
                 let launch = try BrainBarMenuPresentationTests.loadCases().first { $0["id"] as? String == "S8" }!
                 expected = BrainBarMenuPresentationTests.expected(launch)
+                expected.headline = "Checking after sleep…"
+                expected.rows[0].strings = ["Checking after sleep…"]
             }
             let actual = BrainBarMenuPresenter.present(c)
             XCTAssertEqual(actual, expected, id)

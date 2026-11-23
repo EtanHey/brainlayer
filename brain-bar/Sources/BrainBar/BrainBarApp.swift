@@ -110,7 +110,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             watcherHealthURL: WatcherHealthReader.resolvedURL(),
             backupSources: .live(databasePath: dbPath),
             healthBadgeURL: BadgeStateReader.url(dbPath: dbPath),
-            jobAlertsURL: BrainBarJobAlerts.producerURL(dbPath: dbPath, producerLabel: BrainBarJobAlerts.badgeProducerLabel))
+            jobAlertsURL: BrainBarJobAlerts.producerURL(dbPath: dbPath, producerLabel: BrainBarJobAlerts.badgeProducerLabel),
+            lifecycleLog: BrainBarLog.lifecycleLogFile())
         runtime.jobsModel = jobsModel
         let notifications = BrainBarFaultNotifications(center: BrainBarSystemNotificationCenter { [weak self] in
             self?.statusPopoverController?.openNotificationDestination()

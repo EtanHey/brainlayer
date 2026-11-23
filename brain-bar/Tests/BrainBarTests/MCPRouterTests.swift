@@ -3073,6 +3073,10 @@ No results found.
         let dbPath = tempDir.appendingPathComponent("brainbar.db").path
         let db = BrainDatabase(path: dbPath)
         defer { db.close() }
+        db.commitDurabilityBarrierWillSyncForTesting = {
+            // Force the visible-row / still-durable-queue window the waiter must tolerate.
+            Thread.sleep(forTimeInterval: 0.2)
+        }
 
         var lockDB: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
@@ -3088,6 +3092,7 @@ No results found.
         }
 
         let router = MCPRouter(profile: "full")
+        defer { XCTAssertEqual(router.finishOwnedWorkForTesting(deadline: .now() + 5), .finished) }
         router.setDatabase(db)
 
         let queuedContent = "Queued current write should drain after the writer lock clears"
@@ -3118,7 +3123,9 @@ No results found.
         var storedContents: [String] = []
         while Date() < deadline {
             storedContents = (try? chunkContents(path: dbPath)) ?? []
-            if storedContents.contains(queuedContent) {
+            // A committed row is visible before its durability sync and queue rewrite finish.
+            if storedContents.contains(queuedContent),
+               !FileManager.default.fileExists(atPath: queuePath.path) {
                 break
             }
             Thread.sleep(forTimeInterval: 0.05)
@@ -3290,12 +3297,19 @@ No results found.
 
         let startupDrainQueue = DispatchQueue(label: "test.pending-store-startup-retry")
         let router = MCPRouter(profile: "full", pendingStoreDrainQueue: startupDrainQueue)
-        defer { withExtendedLifetime(router) {} }
+        defer { XCTAssertEqual(router.finishOwnedWorkForTesting(deadline: .now() + 5), .finished) }
         router.setDatabase(db)
         startupDrainQueue.sync {}
 
-        try FileManager.default.removeItem(at: queuePath)
-        try queuedText.write(to: queuePath, atomically: true, encoding: .utf8)
+        // A retry must see either the unreadable fault or the restored queue, never the
+        // absent-file window between removal and replacement (which means "empty").
+        try startupDrainQueue.sync {
+            try FileManager.default.removeItem(at: queuePath)
+            // Let the 250 ms retry become eligible while the replacement is in progress.
+            // Serialization must keep that retry from observing an absent queue.
+            Thread.sleep(forTimeInterval: 0.4)
+            try queuedText.write(to: queuePath, atomically: true, encoding: .utf8)
+        }
 
         let deadline = Date().addingTimeInterval(2.0)
         var storedContents: [String] = []
