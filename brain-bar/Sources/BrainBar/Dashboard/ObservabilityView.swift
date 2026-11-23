@@ -277,6 +277,7 @@ struct ObservabilityDocument: Codable, Sendable {
         let launchd: Launchd?
         var transcriptAttempt: TranscriptAttempt? = nil
         var localSnapshot: LocalSnapshot? = nil
+        var driveRetention: BrainBarDriveRetention? = nil
 
         func isRecent(_ date: Date, now: Date) -> Bool {
             guard let thresholdHours, thresholdHours > 0 else { return false }
