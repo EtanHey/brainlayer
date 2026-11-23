@@ -583,8 +583,18 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
                 break
             if (
                 isinstance(statement, ast.If)
-                and len(statement.body) == 1
-                and isinstance(statement.body[0], ast.Continue)
+                and isinstance(statement.body[-1], ast.Continue)
+                and (
+                    len(statement.body) == 1
+                    or (
+                        len(statement.body) == 2
+                        and isinstance(statement.body[0], ast.Expr)
+                        and isinstance(statement.body[0].value, ast.Call)
+                        and isinstance(statement.body[0].value.func, ast.Name)
+                        and statement.body[0].value.func.id == "keep"
+                        and not _calls(statement.body[0], "unlink")
+                    )
+                )
             ):
                 guards.update(ast.dump(n) for n in ast.walk(statement.test))
     if (

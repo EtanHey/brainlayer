@@ -631,6 +631,33 @@ local archive MD5. Missing checksum, legacy receipts, missing live objects or
 listing failure authorize no deletion. Each unlink has a durable intent and
 a confirmation event; completed sweeps report `local_retention_deleted`.
 
+Each sweep adds at most one reporting line, `local_retention_summary`. Its `kept`
+list describes every kept archive older than the configured retention period
+with `name`, `bytes`, `first_reason`, and `eligible_at`. Keeping these details in
+one row preserves BrainBar's transcript history, which reads the last 200 lines.
+The date is null when eligibility depends on a missing receipt,
+checksum, Drive object, or newest-archive protection. A dated verification-age
+hold forecasts only when the age gate opens; deletion still requires all the
+remaining checks. Reconciled receipts start their own full 14-day clock even
+when the archive itself is much older.
+
+The summary totals `bytes_held` past the retention
+period, `bytes_young` below it, `bytes_eligible_next`, and `next_eligible_at`.
+The next age gate includes young verified archives, even a currently protected
+newest archive; newest protection is still checked before any deletion. Its message makes the
+remaining receipt/Drive/hash checks explicit. These are forecasts from this
+run's inventory, not promises of reclaimed space. The reporting neither changes
+receipt dates nor performs any additional archive hashing or deletion.
+Disabled sweeps and any global retention error (unavailable Drive inventory,
+pending receipt revocation, or reconciliation failure) report `sweep_blocked`
+with a null date; global-error reporting never enters the deletion function.
+Reporting-only summary writes are best-effort and warn on stderr if they
+fail; they cannot stop the sweep or hide its returned deleted list. The durable
+deletion intent and confirmation retain their existing strict write contract.
+The summary never carries `attempted_at`, `uploaded`, `verified`, `status`, or
+`error`; backup history continues to select the terminal run-result rows without
+treating reporting metadata as a lane error.
+
 Drive pruning revokes receipts durably before trashing and restores survivors
 afterward. An interrupted revoke is logged and raises a `jsonl-retention` job
 note requiring reconciliation; while it is pending no receipt is built from a listing.

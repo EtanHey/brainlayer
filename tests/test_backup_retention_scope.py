@@ -90,6 +90,8 @@ def test_prior_conflict_preserves_confirmed_upload_and_recovery_receipt(tmp_path
     monkeypatch.setattr(b, "assert_drive_folder_owned_by_machine", check_owner)
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1")
     monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PROVENANCE", "real")
+    # Pin the host: on a Linux runner the strict retention host check would otherwise add a retention_error.
+    monkeypatch.setenv("BRAINLAYER_BACKUP_HEAVY_HOST", "m4")
     md5 = b._md5_file(snapshot)
     monkeypatch.setattr(b, "verify_sqlite_backup_artifact", lambda *a, **kw: {"verified": True, "local_md5": md5})
     monkeypatch.setattr(
