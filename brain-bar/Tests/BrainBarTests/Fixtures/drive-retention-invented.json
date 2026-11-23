@@ -7,6 +7,8 @@
       "machine_id": "Fixture Mac A", "state": "measured", "selected_at": "2026-11-23T01:00:00Z", "error": null,
       "on_drive": {"count": 20, "bytes": 20000000000, "oldest": "2026-06-01", "newest": "2026-11-23"},
       "kept": {"count": 10, "bytes": 10000000000, "oldest": "2026-08-31", "newest": "2026-11-23"},
+      "kept_by_rule": {"count": 8, "bytes": 8000000000, "oldest": "2026-08-31", "newest": "2026-11-23"},
+      "unverified": {"count": 2, "bytes": 2000000000, "oldest": "2026-06-01", "newest": "2026-11-22"},
       "would_remove": {"count": 10, "bytes": 10000000000, "oldest": "2026-06-01", "newest": "2026-11-16"},
       "named_one_offs_count": 0,
       "monthly_representatives": [
@@ -19,6 +21,8 @@
       "machine_id": "Fixture Mac B", "state": "measured", "selected_at": "2026-11-23T01:00:00Z", "error": null,
       "on_drive": {"count": 30, "bytes": 30000000000, "oldest": "2026-05-01", "newest": "2026-11-23"},
       "kept": {"count": 10, "bytes": 10000000000, "oldest": "2026-08-31", "newest": "2026-11-23"},
+      "kept_by_rule": {"count": 10, "bytes": 10000000000, "oldest": "2026-08-31", "newest": "2026-11-23"},
+      "unverified": {"count": 0, "bytes": 0, "oldest": null, "newest": null},
       "would_remove": {"count": 20, "bytes": 20000000000, "oldest": "2026-05-01", "newest": "2026-11-16"},
       "named_one_offs_count": 0,
       "monthly_representatives": []

@@ -6,7 +6,7 @@ struct BrainBarDriveRetention: Codable, Sendable {
         let dailyKeep, monthlyKeep: Int
         let perMachine: Bool
         let description: String?
-        var isSupported: Bool { perMachine && (0...30).contains(dailyKeep) && (0...24).contains(monthlyKeep) }
+        var isSupported: Bool { perMachine && dailyKeep >= 1 && monthlyKeep >= 0 }
     }
     struct Summary: Codable, Sendable {
         let count: Int
@@ -22,6 +22,7 @@ struct BrainBarDriveRetention: Codable, Sendable {
         let machineId, state: String
         let selectedAt, error: String?
         let onDrive, kept, wouldRemove: Summary?
+        let keptByRule, unverified: Summary?
         let namedOneOffsCount: Int?
         let monthlyRepresentatives: [Representative]?
         var measured: Bool { state == "measured" && error == nil }
@@ -46,6 +47,7 @@ struct BrainBarDriveRetentionPresentation {
         return rule
     }
     var atRest: String {
+        if let error = evidence?.configError { return Say.configError(error) }
         guard let rule else { return Say.notReported }
         return Say.atRest(rule.dailyKeep, rule.monthlyKeep)
     }
@@ -69,25 +71,37 @@ struct BrainBarDriveRetentionPresentation {
     static func size(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .decimal)
     }
-    static func date(_ value: String) -> String {
-        let parser = DateFormatter()
-        parser.locale = Locale(identifier: "en_US_POSIX")
-        parser.timeZone = TimeZone(secondsFromGMT: 0)
-        parser.dateFormat = "yyyy-MM-dd"
-        guard let date = parser.date(from: String(value.prefix(10))) else { return value }
-        parser.dateFormat = "MMM d, yyyy"
-        return parser.string(from: date)
+    static func date(_ value: String, relativeTo now: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        let parsed: Date?
+        if value.contains("T") {
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            parsed = iso.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        } else {
+            formatter.dateFormat = "yyyy-MM-dd"
+            parsed = formatter.date(from: value)
+        }
+        guard let date = parsed else { return value }
+        let cutoff = Calendar.current.date(byAdding: .month, value: -12, to: now) ?? now
+        formatter.dateFormat = date >= cutoff && date <= now ? "MMM d" : "MMM d, yyyy"
+        return formatter.string(from: date)
     }
-    static func summary(_ value: BrainBarDriveRetention.Summary?) -> String {
+    static func summary(_ value: BrainBarDriveRetention.Summary?, includingRange: Bool = false, relativeTo now: Date = Date()) -> String {
         guard let value, value.isValid else { return Say.notMeasured }
-        let range = value.oldest.flatMap { oldest in value.newest.map { Say.dateRange(date(oldest), date($0)) } }
+        let range = includingRange ? value.oldest.flatMap { oldest in value.newest.map { Say.dateRange(date(oldest, relativeTo: now), date($0, relativeTo: now)) } } : nil
         return Say.summary(value.count, size(value.bytes)) + (range.map { "; " + $0 } ?? "")
     }
-    static func status(_ machine: BrainBarDriveRetention.Machine) -> String {
+    static func keeps(_ machine: BrainBarDriveRetention.Machine, relativeTo now: Date = Date()) -> String {
+        guard let value = machine.keptByRule ?? machine.kept, value.isValid else { return Say.keepsNotMeasured }
+        return Say.keeps(value.count, size(value.bytes), machine.keptByRule == nil ? nil : value.newest.map { date($0, relativeTo: now) })
+    }
+    static func status(_ machine: BrainBarDriveRetention.Machine, relativeTo now: Date = Date()) -> String {
         switch machine.state {
-        case "stale": return Say.stale(machine.selectedAt.map(date) ?? Say.notMeasured, machine.error)
-        case "not_run": return machine.error ?? Say.notMeasured
-        default: return machine.error ?? Say.notMeasured
+        case "stale": return Say.stale(machine.selectedAt.map { date($0, relativeTo: now) } ?? Say.notMeasured, machine.error)
+        default: return machine.error.map(Say.couldNotMeasure) ?? Say.notMeasured
         }
     }
 }
@@ -105,7 +119,10 @@ struct BrainBarDriveRetentionLink: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Image(systemName: "info.circle")
             }
-            .font(NDType.caption).foregroundStyle(classic ? Color.brainBarTextSecondary : ND.t2)
+            .font(NDType.caption)
+            .foregroundStyle(evidence?.configError != nil
+                ? (classic ? Color(nsColor: BrainBarDesignTokens.Colors.statusAttention) : ND.orangeText)
+                : (classic ? Color.brainBarTextSecondary : ND.t2))
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
@@ -120,6 +137,7 @@ struct BrainBarDriveRetentionLink: View {
 
 struct BrainBarDriveRetentionSheet: View {
     let evidence: BrainBarDriveRetention?
+    var referenceDate = Date()
     var done: () -> Void = {}
     @State private var confirming = false
     private typealias Say = BrainBarMenuPresenter.DriveRetentionSay
@@ -147,18 +165,17 @@ struct BrainBarDriveRetentionSheet: View {
             }
             section(Say.onDrive) {
                 if let machines = evidence?.machines, !machines.isEmpty {
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            ForEach(Array(machines.enumerated()), id: \.offset) { index, machine in
-                                if index > 0 { ND.hair.frame(height: 0.5) }
-                                machineBlock(machine)
-                            }
-                        }
+                    ViewThatFits(in: .vertical) {
+                        machineList(machines).fixedSize(horizontal: false, vertical: true)
+                        ScrollView { machineList(machines) }
                     }
-                    .frame(height: min(CGFloat(machines.count) * 108, 280))
+                    .frame(maxHeight: 280)
+                    .fixedSize(horizontal: false, vertical: true)
                 } else { caption(Say.notMeasured) }
             }
-            Text(presentation.firstCleanup).font(NDType.caption).foregroundStyle(ND.t3).padding(.horizontal, 12)
+            if evidence?.machines.isEmpty == false {
+                Text(presentation.firstCleanup).font(NDType.caption).foregroundStyle(ND.t3).padding(.horizontal, 12)
+            }
             section(Say.cleanup) {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle(isOn: Binding(get: { false }, set: { requested in
@@ -195,22 +212,34 @@ struct BrainBarDriveRetentionSheet: View {
     private func caption(_ text: String) -> some View {
         Text(text).font(NDType.caption).foregroundStyle(ND.t2).padding(12)
     }
+    private func machineList(_ machines: [BrainBarDriveRetention.Machine]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(machines.enumerated()), id: \.offset) { index, machine in
+                if index > 0 { ND.hair.frame(height: 0.5) }
+                machineBlock(machine)
+            }
+        }
+    }
     private func machineBlock(_ machine: BrainBarDriveRetention.Machine) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
                 Text(machine.machineId).font(NDType.bodyStrong)
                 Spacer()
-                if machine.measured { Text(BrainBarDriveRetentionPresentation.summary(machine.onDrive)).font(NDType.caption) }
+                if machine.measured { Text(BrainBarDriveRetentionPresentation.summary(machine.onDrive, relativeTo: referenceDate)).font(NDType.caption) }
             }
             if machine.measured {
-                Text(Say.keeps(BrainBarDriveRetentionPresentation.summary(machine.kept))).foregroundStyle(ND.t2)
-                Text(Say.wouldRemove(BrainBarDriveRetentionPresentation.summary(machine.wouldRemove)))
+                Text(BrainBarDriveRetentionPresentation.keeps(machine, relativeTo: referenceDate)).foregroundStyle(ND.t2)
+                Text(Say.wouldRemove(BrainBarDriveRetentionPresentation.summary(machine.wouldRemove, includingRange: true, relativeTo: referenceDate)))
                 if let representatives = machine.monthlyRepresentatives, !representatives.isEmpty {
-                    Text(Say.monthlyDates(representatives.map { BrainBarDriveRetentionPresentation.date($0.date) }.joined(separator: ", ")))
+                    Text(Say.monthlyDates(representatives.map { BrainBarDriveRetentionPresentation.date($0.date, relativeTo: referenceDate) }.joined(separator: ", ")))
                         .foregroundStyle(ND.t3)
                 }
+                if let unverified = machine.unverified, unverified.isValid, unverified.count > 0 {
+                    Text(Say.unverified(unverified.count, BrainBarDriveRetentionPresentation.size(unverified.bytes)))
+                        .foregroundStyle(ND.t2)
+                }
             } else {
-                Text(BrainBarDriveRetentionPresentation.status(machine)).foregroundStyle(ND.t2)
+                Text(BrainBarDriveRetentionPresentation.status(machine, relativeTo: referenceDate)).foregroundStyle(ND.t2)
             }
         }
         .font(NDType.caption).fixedSize(horizontal: false, vertical: true)
