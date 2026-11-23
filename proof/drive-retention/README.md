@@ -1,7 +1,7 @@
 # Drive retention Settings proof
 
 Before source: ee75fad98c621ad743b279e78ecc1acd9a8396ed (origin/main source bytes in the assigned worktree).
-After source: e84f4b2dd3e93268942ca64890b65ff391f10ef9.
+After source: 696316c161681ade4643e98bc41cc56d5811798b.
 
 All inputs are invented. Real New Settings and Classic Settings' Google Drive section,
 and the shared SwiftUI sheet, rendered off screen with NDRenderHarness. No application,
