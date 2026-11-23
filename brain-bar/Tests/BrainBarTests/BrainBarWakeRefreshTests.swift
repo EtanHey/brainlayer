@@ -1,5 +1,7 @@
 import XCTest
 import AppKit
+import SwiftUI
+import Vision
 import BrainBarLifecycle
 @testable import BrainBar
 
@@ -96,7 +98,7 @@ final class BrainBarWakeRefreshTests: XCTestCase {
         await tick.value
     }
 
-    func testWakeWithoutVerdictShowsSleepSentenceInBothDesigns() {
+    func testWakeWithoutVerdictShowsSleepSentenceInBothDesigns() throws {
         let clock = Clock()
         let model = model(clock)
         model.systemWillSleep()
@@ -106,7 +108,131 @@ final class BrainBarWakeRefreshTests: XCTestCase {
         XCTAssertEqual(model.publishedStatus.dashboardStatus.headline, "Checking after sleep…")
         XCTAssertEqual(BrainBarStatusPopoverController.statusLineTitle(for: model.publishedStatus.verdict), "Checking after sleep…")
         XCTAssertEqual(BrainBarMenuPresenter.present(capture).headline, "Checking after sleep…")
-        XCTAssertEqual(NDModel.make(NDInputs(capture: capture)).shownPresentation.headline, "Checking after sleep…")
+        try assertNewDesignDraws(capture, state: "after-wake", containing: "Checking after sleep")
+    }
+
+    /// Read the raster produced by the actual Overview headline and menu rows, rather than the shared presenter.
+    private func assertNewDesignDraws(_ capture: BrainBarMenuCapture, state: String, containing text: String,
+                                     mark: BrainBarHealthVerdict.State? = nil,
+                                     file: StaticString = #filePath, line: UInt = #line) throws {
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        let store = NDStore(fixture: NDInputs(capture: capture), page: .overview)
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build.noindex/brainbar-ui-lead-w226/renders")
+            .appendingPathComponent(ProcessInfo.processInfo.environment["BRAINBAR_WAKE_PROOF_ARM"] ?? "test")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for (name, appearance) in NDRenderHarness.appearances {
+            let overview = try NDRenderHarness.host(
+                NDHeadline(store: store, r1: store.r1).padding(16).background(ND.bg),
+                size: NSSize(width: NDGrid.windowWidth, height: 180), appearance: appearance)
+            try NDRenderHarness.write(overview, name: "\(state)-headline-\(name)", in: directory)
+            try NDRenderHarness.window(store, name: "\(state)-overview-\(name)", appearance: appearance, in: directory)
+            let menuName = "\(state)-menu-\(name)"
+            try NDRenderHarness.menu(store, name: menuName, appearance: appearance, in: directory)
+            let menu = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: directory.appendingPathComponent(menuName + ".png"))))
+            let window = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: directory.appendingPathComponent("\(state)-overview-\(name).png"))))
+            for (surface, bitmap) in [("Overview", mark == .red ? window : overview), ("menu", menu)] {
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.usesLanguageCorrection = false
+                try VNImageRequestHandler(cgImage: XCTUnwrap(bitmap.cgImage)).perform([request])
+                let drawn = request.results?.compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ") ?? ""
+                XCTAssertTrue(drawn.contains(text), "\(state) \(surface) \(name): \(drawn)", file: file, line: line)
+                if state == "after-wake" || state == "wake-timeout" {
+                    XCTAssertFalse(drawn.contains("All good"), "\(state) \(surface) \(name): \(drawn)", file: file, line: line)
+                } else if state == "fresh-after-wake" {
+                    XCTAssertFalse(drawn.contains("Checking after sleep"), file: file, line: line)
+                }
+                if let mark {
+                    var coloredPixels = 0
+                    for y in 0..<bitmap.pixelsHigh {
+                        for x in 0..<bitmap.pixelsWide {
+                            guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                            let red = color.redComponent, green = color.greenComponent, blue = color.blueComponent
+                            if mark == .red ? (red > 0.6 && red > green * 1.5 && red > blue * 1.5)
+                                : (red > 0.6 && green > 0.25 && green < red * 0.85 && blue < green * 0.8) {
+                                coloredPixels += 1
+                            }
+                        }
+                    }
+                    XCTAssertGreaterThan(coloredPixels, 8, "\(state) \(surface) \(name) must draw its \(mark) mark", file: file, line: line)
+                }
+            }
+            if let mark {
+                let icon = try NDRenderHarness.bitmap(NSSize(width: 22, height: 22))
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: icon)
+                NSAppearance(named: appearance)!.performAsCurrentDrawingAppearance {
+                    NDIcon.image(for: store.model, store.r1, appearance: NSAppearance(named: appearance)!)
+                        .draw(in: NSRect(x: 0, y: 0, width: 22, height: 22))
+                }
+                NSGraphicsContext.restoreGraphicsState()
+                try XCTUnwrap(icon.representation(using: .png, properties: [:]))
+                    .write(to: directory.appendingPathComponent("\(state)-icon-\(name).png"))
+                var markedPixels = 0
+                for y in 0..<icon.pixelsHigh {
+                    for x in 0..<icon.pixelsWide {
+                        guard let color = icon.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                        if color.alphaComponent > 0.5, color.redComponent > 0.6,
+                           color.redComponent > color.greenComponent * 1.2,
+                           color.greenComponent > color.blueComponent * 1.2 {
+                            markedPixels += 1
+                        }
+                    }
+                }
+                XCTAssertGreaterThan(markedPixels, 8, "\(state) \(name) must draw the non-green menu-bar mark (\(mark))", file: file, line: line)
+            }
+        }
+    }
+
+    func testNewDesignDrawsWakeTimeoutReasonAndAmberMark() throws {
+        let clock = Clock()
+        var deadlines: [@MainActor @Sendable () -> Void] = []
+        let model = model(clock, scheduler: { _, action in deadlines.append(action) })
+        model.systemWillSleep()
+        clock.date.addTimeInterval(600)
+        model.systemDidWake()
+        clock.date.addTimeInterval(361); clock.uptime += 361
+        deadlines.last?()
+        try assertNewDesignDraws(model.menuCapture(stats: nil), state: "wake-timeout",
+                                containing: "No health reading from after wake", mark: .amber)
+    }
+
+    func testNewDesignDrawsFreshReadingAfterWake() throws {
+        let clock = Clock()
+        let model = model(clock)
+        model.systemWillSleep()
+        clock.date.addTimeInterval(600)
+        model.systemDidWake()
+        clock.date.addTimeInterval(2); clock.uptime += 2
+        var badge = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
+        badge.healthVerdict = .init(dot: .green, checks: BrainBarDesignFixture.calmChecks(), notes: [], evaluatedAt: clock.date)
+        model.applyHealthBadge(badge, alerts: nil)
+        let fresh = model.menuCapture(stats: nil)
+        XCTAssertFalse(fresh.wakeCatchUpPending)
+        var capture = BrainBarDesignFixture.capture(BrainBarDesignFixture.calmChecks(), age: 0)
+        capture.now = fresh.now
+        capture.verdict = fresh.verdict
+        capture.wakeCatchUpPending = fresh.wakeCatchUpPending
+        try assertNewDesignDraws(capture, state: "fresh-after-wake", containing: "All good")
+    }
+
+    func testNewDesignKeepsPreSleepFaultRedDuringWakeAndTimeout() throws {
+        let clock = Clock()
+        var deadlines: [@MainActor @Sendable () -> Void] = []
+        let model = model(clock, scheduler: { _, action in deadlines.append(action) })
+        var badge = BadgeStatePresentation(badgeOn: true, reason: "Fixture fault", activeCodes: [])
+        badge.healthVerdict = .init(dot: .red, checks: BrainBarDesignFixture.inputs(.driveSignedOut).capture.verdict!.checks,
+                                    notes: [], evaluatedAt: clock.date)
+        model.applyHealthBadge(badge, alerts: nil)
+        model.systemWillSleep()
+        clock.date.addTimeInterval(600)
+        model.systemDidWake()
+        try assertNewDesignDraws(model.menuCapture(stats: nil), state: "red-after-wake", containing: "needs you", mark: .red)
+        clock.date.addTimeInterval(361); clock.uptime += 361
+        deadlines.last?()
+        try assertNewDesignDraws(model.menuCapture(stats: nil), state: "red-wake-timeout", containing: "needs you", mark: .red)
     }
 
     func testActivationAfterSleepRecoversAMissedWakeNotice() async {
