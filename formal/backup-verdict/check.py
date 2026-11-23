@@ -405,6 +405,7 @@ COVERED = (
     "src/brainlayer/backup_daily.py",
     "src/brainlayer/backup_clone.py",
     "src/brainlayer/backup_heavy_gate.py",
+    "src/brainlayer/backup_sleep.py",
     "src/brainlayer/maintenance.py",
     "src/brainlayer/maintenance_calendar.py",
     "src/brainlayer/job_alerts.py",

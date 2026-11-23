@@ -26,6 +26,50 @@ from brainlayer import disk_space, maintenance
 from tests.test_backup_daily import _create_source_db
 from tests.test_weekly_local_gate import config_for, local_lane  # noqa: F401
 
+
+def test_snapshot_sleep_reaches_final_local_receipt(lane, monkeypatch):
+    from brainlayer import backup_sleep
+
+    source, output = lane
+    values = {"inclusive": 0, "awake": 0}
+    tracker = backup_sleep.SleepTracker(inclusive=lambda: values["inclusive"], awake=lambda: values["awake"])
+    monkeypatch.setattr(backup_sleep, "SleepTracker", lambda: tracker)
+    vacuum = backup.request_brainbar_vacuum_into
+
+    def slept(*args, **kwargs):
+        result = vacuum(*args, **kwargs)
+        values["inclusive"] = 21600
+        return result
+
+    monkeypatch.setattr(backup, "request_brainbar_vacuum_into", slept)
+    result = backup.run_backup(source, staging_dir=output, upload=False, date_stamp="2026-11-22")
+    assert result["snapshot_slept_seconds"] == 21600
+    assert result["snapshot_wall_seconds"] == 21600
+    assert len(result["sleep_intervals"]) == 1
+    assert "while the Mac slept" in result["sleep_note"]
+
+
+def test_failed_snapshot_also_records_the_sleep(lane, monkeypatch):
+    from brainlayer import backup_sleep
+
+    source, output = lane
+    values = {"inclusive": 0}
+    tracker = backup_sleep.SleepTracker(inclusive=lambda: values["inclusive"], awake=lambda: 0)
+    monkeypatch.setattr(backup_sleep, "SleepTracker", lambda: tracker)
+
+    def failed(*args, **kwargs):
+        values["inclusive"] = 21600
+        raise RuntimeError("synthetic snapshot failure after sleep")
+
+    monkeypatch.setattr(backup, "request_brainbar_vacuum_into", failed)
+    log = output / "failure.log"
+    with pytest.raises(RuntimeError, match="failure after sleep"):
+        backup.run_backup(source, staging_dir=output, upload=False, log_path=log)
+    row = json.loads(log.read_text().splitlines()[-1])
+    assert row["snapshot_slept_seconds"] == 21600
+    assert "while the Mac slept" in row["sleep_note"]
+
+
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 

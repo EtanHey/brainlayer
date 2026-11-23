@@ -40,7 +40,7 @@ import XCTest
         let document = ObservabilityDocument(schemaVersion: base.schemaVersion, generatedAt: now, dbPath: "/synthetic/private.db",
             windowHours: base.windowHours, stores: base.stores, emitters: base.emitters, authorUnknown: base.authorUnknown,
             backups: try backups())
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("progress-clock-\(UUID().uuidString)")
+        let root = brainBarTestTemporaryDirectory().appendingPathComponent("progress-clock-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let config = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
         try config.save(.defaultConfig)
@@ -155,7 +155,11 @@ import XCTest
             let p = try XCTUnwrap(BrainBarBackupProgress.read(backups(checkpointAge: age), now: now))
             XCTAssertNil(p.percentage)
             XCTAssertEqual(p.isStalled, age == .some(1201))
-            XCTAssertEqual(p.accessibilityValue, BrainBarMenuPresenter.SurfaceSay.backupInProgress)
+            if age == .some(1201) {
+                XCTAssertEqual(p.accessibilityValue, now.addingTimeInterval(-1201).formatted(date: .abbreviated, time: .shortened))
+            } else {
+                XCTAssertEqual(p.accessibilityValue, BrainBarMenuPresenter.SurfaceSay.backupInProgress)
+            }
         }
     }
 

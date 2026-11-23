@@ -15,13 +15,20 @@ struct NDRailAxis: View {
             Spacer().frame(width: leading)
             GeometryReader { geo in
                 let width = geo.size.width
-                ForEach(Array(ticks.enumerated()), id: \.offset) { _, tick in
-                    let x = CGFloat((tick.hours + past) / (past + ahead)) * width
-                    Text(tick.label).font(NDType.captionNumber).foregroundStyle(ND.t3).fixedSize()
-                        .alignmentGuide(.leading) { d in
-                            let left = min(max(x - d.width / 2, 0), width - d.width)
-                            return -left
-                        }
+                ZStack(alignment: .bottomLeading) {
+                    ForEach(Array(ticks.enumerated()), id: \.offset) { _, tick in
+                        let x = CGFloat((tick.hours + past) / (past + ahead)) * width
+                        Text(tick.label).font(NDType.captionNumber).foregroundStyle(ND.t3).fixedSize()
+                            .alignmentGuide(.leading) { d in
+                                let left = min(max(x - d.width / 2, 0), width - d.width)
+                                return -left
+                            }
+                    }
+                    if ticks.contains(where: { tick in tick.hours == 0 }) {
+                        let x = CGFloat(past / (past + ahead)) * width
+                        ND.t3.opacity(0.55).frame(width: 1, height: 4)
+                            .offset(x: x - 0.5, y: 4)
+                    }
                 }
                 .frame(width: width, height: 18, alignment: .bottomLeading)
             }
@@ -143,6 +150,14 @@ struct NDBackupsPage: View {
                         }
                     }
                     .frame(height: 18)
+                    if legend.contains(Say.unreadRecord) {
+                        NDLegendItem(words: Say.unreadRecord) {
+                            Canvas { ctx, size in
+                                var p = Path(); p.move(to: CGPoint(x: 0, y: size.height / 2)); p.addLine(to: CGPoint(x: size.width, y: size.height / 2))
+                                ctx.stroke(p, with: .color(ND.t2), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+                            }.frame(width: 14, height: 6)
+                        }.padding(.top, 6)
+                    }
                     
                     NDRailAxis(ticks: [(Say.daysAgoAxis(6), -144), (Say.daysAgoAxis(3), -72), (Say.lateAfter(NDFormat.ageText(NDBackupFacts.lateAfterHours * 3600)), Self.limit), (Say.now, 0),
                                        (Say.inHoursAxis(24), 24)],
@@ -178,6 +193,7 @@ struct NDBackupsPage: View {
         if lanes.contains(where: { $0.events.contains { $0.kind == .fail } }) { words.append(Say.failed) }
         if lanes.contains(where: { $0.events.contains { $0.kind == .retried } }) { words.append(Say.failedThenRetried) }
         if lanes.contains(where: { $0.stalledFrom != nil }) { words.append(Say.notUploadingSince) }
+        if lanes.contains(where: { $0.unknown }) { words.append(Say.unreadRecord) }
         return words
     }
 
@@ -263,12 +279,14 @@ struct NDBackupsPage: View {
             // R1.2 change 13: a failed attempt followed by a success within the same night (12 h) is one hollow red
             // ring ("failed, then copied on retry"); a failure with no later success that night stays a filled red dot.
             let sorted = (attempts ?? []).sorted { $0.at < $1.at }
+            let lastRunHours = sorted.lazy.filter { !$0.isErrorEvent }
+                .map { $0.at.timeIntervalSince(now) / 3600 }.filter { $0 >= -Self.past }.max()
             var events: [NDRail.Event] = []
             var retryHelp: [String] = []
             var skip: Set<Int> = []
             for (index, attempt) in sorted.enumerated() where !skip.contains(index) {
                 let hours = attempt.at.timeIntervalSince(now) / 3600
-                if !attempt.ok, let retry = sorted.indices.first(where: { $0 > index && sorted[$0].ok
+                if !attempt.ok, !attempt.isErrorEvent, let retry = sorted.indices.first(where: { $0 > index && sorted[$0].ok
                         && sorted[$0].at.timeIntervalSince(attempt.at) <= 12 * 3600 }) {
                     skip.insert(retry)
                     events.append(.init(hours: hours, kind: .retried))
@@ -280,11 +298,16 @@ struct NDBackupsPage: View {
             }
             events = events.filter { $0.hours >= -Self.past }
             let stalled = stalls && (driveDown || (id == "backup_offsite" && row?.strong == true && store.inputs.backupProgress?.isStalled == true))
-            let last = events.map(\.hours).max()
-            if let next, !stalled { events.append(.init(hours: next.timeIntervalSince(now) / 3600, kind: .next)) }
-            let count = attempts?.count ?? 0, failed = attempts?.filter { !$0.ok }.count ?? 0
+            if let next, !stalled {
+                events.append(.init(hours: next.timeIntervalSince(now) / 3600, kind: .next,
+                                    help: Say.nextRunAt(NDR1.hhmm(next, store.inputs.capture))))
+            }
+            let runs = attempts?.filter { !$0.isErrorEvent } ?? []
+            let count = runs.count, failed = runs.filter { !$0.ok }.count
+            let retentionErrors = attempts?.filter(\.isErrorEvent).count ?? 0
+            let errors = retentionErrors > 0 ? ", \(retentionErrors) retention \(retentionErrors == 1 ? "error" : "errors")" : ""
             let spoken = attempts == nil ? "\(name): the record could not be read"
-                : "\(name): \(count) \(count == 1 ? "attempt" : "attempts") this week, \(failed) failed"
+                : "\(name): \(count) \(count == 1 ? "attempt" : "attempts") this week, \(failed) failed" + errors
             let newest = row.map { ", newest " + ($0.number.value == "—" ? "not known" : $0.number.text) } ?? ""
             let number = (row?.strong ?? false) ? faultNumber(row?.number) : row?.number ?? .unknown
             // Review N1: when the newest cell is unknown, the attempts keep their places (the log is the app's own read,
@@ -296,7 +319,7 @@ struct NDBackupsPage: View {
                 unconfirmedFrom = events.filter { $0.kind != .next }.map(\.hours).min()
             }
             return Lane(id: id, name: name, events: events, unknown: attempts == nil,
-                        stalledFrom: stalled ? (last ?? -Self.past) : nil, unconfirmedFrom: unconfirmedFrom,
+                        stalledFrom: stalled ? (lastRunHours ?? -Self.past) : nil, unconfirmedFrom: unconfirmedFrom,
                         help: retryHelp.isEmpty ? nil : retryHelp.joined(separator: " "),
                         number: number, strong: row?.strong ?? false, accessibility: spoken + newest)
         }
@@ -398,9 +421,6 @@ struct NDJobsPage: View {
     static let nameColumn: CGFloat = 220
     static let valueColumn: CGFloat = 84
     static let switchColumn: CGFloat = 44
-    /// Jobs that run every few minutes: a dotted band to now, no dots (no log records each run).
-    static let frequent: Set<BrainLayerLaunchdJob> = [.drain, .walCheckpoint]
-
     var body: some View {
         let r1 = store.r1
         let fault = r1.items.first { item in ["nightly", "weekly"].contains { item.id == $0 || item.concerns.contains($0) } }
@@ -418,7 +438,7 @@ struct NDJobsPage: View {
                         }
                         NDLegendItem(words: Say.nextRun) { Circle().stroke(ND.t2, lineWidth: 1.5).frame(width: 6, height: 6) }
                         NDLegendItem(words: Say.outsideTimeline) {
-                            Image(systemName: "chevron.left").font(.system(size: 9, weight: .semibold)).foregroundStyle(ND.t2)
+                            Text("6 d").font(NDType.caption).foregroundStyle(ND.t2)
                         }
                     }
                     .frame(height: 18)
@@ -489,7 +509,10 @@ struct NDJobsPage: View {
                     }
                 }
             }
-            if !j.continuous, let next = j.nextRun, j.enabled != false { events.append(.init(hours: next.timeIntervalSince(now) / 3600, kind: .next)) }
+            if !j.continuous, let next = j.nextRun, j.enabled != false {
+                events.append(.init(hours: next.timeIntervalSince(now) / 3600, kind: .next,
+                                    help: Say.nextRunAt(NDR1.hhmm(next, store.inputs.capture))))
+            }
             let number: NDModel.Number
             if let streak {
                 number = NDModel.Number(value: String(streak), unit: "nights", tone: .fault, strong: true)  // comp 13
@@ -524,7 +547,7 @@ struct NDJobLaneView: View {
     var body: some View {
         let input = store.inputs.jobs?.first { $0.job == lane.job }
         let now = store.inputs.capture.now
-        let frequent = NDJobsPage.frequent.contains(lane.job)
+        let frequent = input?.runsFrequently ?? false
         let last: (String, NDModel.Tone) = {
             if lane.streak != nil { return (Say.failed, .fault) }
             if input?.continuous == true { return input?.loaded == false ? (NDModel.Number.unknown.value, .fine) : (Say.running, .fine) }
@@ -540,7 +563,7 @@ struct NDJobLaneView: View {
         HStack(spacing: 0) {
             Text(lane.name).font(lane.fault ? NDType.bodyStrong : NDType.body).foregroundStyle(ND.t1)
                 .frame(width: NDJobsPage.nameColumn, alignment: .leading)
-                .help(Say.jobHelp[lane.job.rawValue] ?? "")
+                .help(Self.jobHelp(input, job: lane.job, capture: store.inputs.capture))
             NDRail(past: NDJobsPage.past, ahead: NDJobsPage.ahead, events: frequent ? [] : lane.events, band: lane.band,
                    dotted: frequent && lane.enabled != false, unknown: lane.unknown, olderLabel: lane.olderLabel)
             Text(last.0).font(last.1 == .fault ? NDType.numberStrong : NDType.number)
@@ -552,6 +575,26 @@ struct NDJobLaneView: View {
         .frame(height: NDGrid.row)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(lane.accessibility)
+    }
+
+    static func jobHelp(_ input: NDJobInput?, job: BrainLayerLaunchdJob, capture: BrainBarMenuCapture) -> String {
+        let purpose = Say.jobHelp[job.rawValue] ?? ""
+        guard job == .drain || job == .walCheckpoint else { return purpose }
+        let cadence: String
+        if input?.runsFrequently == true {
+            cadence = Say.runsEveryFewMinutes
+        } else if let calendar = input?.scheduleCalendar, calendar.hour != nil, calendar.month == nil, calendar.day == nil,
+                  calendar.weekday == nil, let next = input?.nextRun {
+            let clock = NDR1.hhmm(next, capture)
+            cadence = Say.runsDailyAt(clock)
+        } else if let interval = input?.scheduleInterval, interval > 0 {
+            cadence = Say.runsEvery(NDFormat.ageText(interval))
+        } else if input?.continuous == true {
+            cadence = Say.runsContinuously
+        } else {
+            cadence = Say.scheduleNotKnown
+        }
+        return purpose + " " + cadence
     }
 
     /// The system switch, mini, in the system accent when on (R1.6 item 12); its help says what a click does.

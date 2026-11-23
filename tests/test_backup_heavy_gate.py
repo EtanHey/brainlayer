@@ -6,7 +6,10 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,8 +38,14 @@ def admission(monkeypatch):
         monkeypatch.delenv("BRAINLAYER_BACKUP_UPLOAD_SNAPSHOT", raising=False)
         monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(path / "journal.log"))
         clock = [0.0]
-        monkeypatch.setattr(gate.time, "monotonic", lambda: clock[0])
-        monkeypatch.setattr(gate.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+        # Keep simulated lane time out of stdlib time: background uploader/library
+        # threads may sleep while this fixture is active (including Linux CI).
+        lane_time = SimpleNamespace(
+            monotonic=lambda: clock[0],
+            sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+        )
+        monkeypatch.setattr(gate, "time", lane_time)
+        monkeypatch.setattr(backup, "time", lane_time)
         monkeypatch.setattr(gate, "_pressure_reason", lambda *args: None)
         monkeypatch.setattr(gate, "_disk_reason", lambda host: None)
         monkeypatch.setattr(gate, "expected_phase_seconds", lambda: 60)
@@ -432,6 +441,15 @@ def test_late_lock_release_cannot_start_a_phase_without_its_expected_budget(admi
     assert clock[0] == 200  # Reserve 1800 seconds for upload, never the old 60-second tail.
     assert "phase window exhausted" in job_alerts.active_alerts()["backup-daily"]
     assert lock.is_dir()
+
+
+def test_admission_clock_does_not_advance_when_a_background_thread_sleeps(admission):
+    _, clock = admission
+    sleeper = threading.Thread(target=lambda: time.sleep(0.001))
+    sleeper.start()
+    sleeper.join(timeout=1)
+    assert not sleeper.is_alive()
+    assert clock == [0.0]  # Other threads must never run this test's simulated lane callback.
 
 
 def test_initial_budget_shorter_than_expected_phase_defers_and_alerts(admission, monkeypatch):

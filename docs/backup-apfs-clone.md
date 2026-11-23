@@ -71,6 +71,10 @@ than published. Other cases cover clone failure, corrupt clone rejection, stop c
 source connection that must not checkpoint, non-APFS fallback, and the fallback capacity check.
 `tests/test_backup_heavy_gate.py` proves clone admission keeps the M4 reserve.
 
+Snapshot sleep observations span a capacity-checked VACUUM fallback, including sleep during the
+discarded clone attempt. The clone's owned identity is recorded before the post-publication observer,
+so an observer failure still removes that attempt's clone. Regression tests cover both boundaries.
+
 The M1 copy-only acceptance check bootstraps an APFS copy through a read-only canonical connection,
 rejecting changed DB/WAL identities or data versions. Snapshotting, private checkpointing, full
 integrity and compression run only against that copy. A separate restore checks full integrity and

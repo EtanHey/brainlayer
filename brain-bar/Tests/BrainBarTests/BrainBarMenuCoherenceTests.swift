@@ -189,7 +189,7 @@ final class BrainBarMenuCoherenceTests: XCTestCase {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil,
             databasePath: directory.appendingPathComponent("fixture.db").path)
-        let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let panel = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, designDefaults: brainBarLegacyMenuDefaults())
         let controller = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
             dashboardPanelController: panel, statusBar: TestStatusItemHost(), menuDefaults: brainBarLegacyMenuDefaults())
         defer { controller.stop() }

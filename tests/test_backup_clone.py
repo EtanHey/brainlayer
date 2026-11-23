@@ -449,6 +449,60 @@ def test_floor_trip_without_fallback_capacity_defers(artifact_lane, monkeypatch)
     assert not list(output.glob("*.db"))
 
 
+def test_clone_floor_fallback_keeps_cumulative_sleep_and_observer(artifact_lane, monkeypatch):
+    backup, source, output, _ = artifact_lane
+    clocks = {"inclusive": 0, "awake": 0}
+    tracker_type = backup.backup_sleep.SleepTracker
+    monkeypatch.setattr(
+        backup.backup_sleep,
+        "SleepTracker",
+        lambda: tracker_type(inclusive=lambda: clocks["inclusive"], awake=lambda: clocks["awake"]),
+    )
+    copy = backup._copy_with_raw_floor
+    vacuum = backup.request_brainbar_vacuum_into
+    copies = []
+    observations = []
+
+    def copy_with_sleep(*args, **kwargs):
+        copy(*args, **kwargs)
+        copies.append(True)
+        if len(copies) == 1:
+            clocks["inclusive"] += 3600
+            raise clone.CloneUnavailable("absolute free-space reserve breached")
+
+    def vacuum_with_sleep(*args, **kwargs):
+        result = vacuum(*args, **kwargs)
+        clocks["inclusive"] += 120
+        return result
+
+    monkeypatch.setattr(backup, "_copy_with_raw_floor", copy_with_sleep)
+    monkeypatch.setattr(backup, "request_brainbar_vacuum_into", vacuum_with_sleep)
+    artifact = backup.create_sqlite_backup_artifact(
+        source, output, socket_path=source.parent / "unused.sock", snapshot_telemetry_callback=observations.append
+    )
+    assert artifact.snapshot_method == "vacuum"
+    assert artifact.snapshot_wall_seconds == artifact.snapshot_slept_seconds == 3720
+    assert [span["seconds"] for span in artifact.snapshot_sleep_intervals] == [3600, 120]
+    assert observations[-1]["snapshot_slept_seconds"] == 3720
+
+
+def test_clone_observer_failure_after_publication_still_cleans_owned_raw(artifact_lane):
+    backup, source, output, _ = artifact_lane
+
+    def failed_observer(metrics):
+        raise ValueError("synthetic observation failure")
+
+    with pytest.raises(ValueError, match="synthetic observation failure"):
+        backup.create_sqlite_backup_artifact(
+            source,
+            output,
+            socket_path=source.parent / "unused.sock",
+            snapshot_telemetry_callback=failed_observer,
+        )
+    assert not list(output.glob("*.db"))
+    assert not list(output.glob("*.db.gz"))
+
+
 def test_supervised_capacity_deferral_keeps_durable_job_alert(artifact_lane, monkeypatch):
     from brainlayer import job_alerts
     from brainlayer.backup_heavy_gate import BackupGateDeferred

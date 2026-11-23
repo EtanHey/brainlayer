@@ -22,6 +22,16 @@
         "target": "ctypes.c_int"
       }
     },
+    "006c5487a5c37ff7176bb0e58dce0bab1b3c11e48f5866a903a24a8bd74844f4": {
+      "non_cloud_purpose": "Local SQLite read-only connection (mode=ro and query_only) for T3 session ownership or text coverage; no network or model sender.",
+      "site": {
+        "call_sha256": "b62be6aff7f5df3cc93f9b1e146eda88037ef0c05fd9abc73d09ee2a18edaa07",
+        "kind": "generic_send",
+        "owner": "<module>.audit_t3",
+        "path": "src/brainlayer/ingest/t3_audit.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "00db5ec85f9abd52c6d5d9ff6ed45c08d7a6b8cc3151b4371a1965a59c0c6dc3": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls socket.socket.",
       "site": {
@@ -140,16 +150,6 @@
         "owner": "<module>.resolve_machine_id",
         "path": "src/brainlayer/backup_daily.py",
         "target": "subprocess.run"
-      }
-    },
-    "0ab7f79347ca25c3b4dba2b5e569eb33f51ac2b6cd02f060dc1761724f78eb1b": {
-      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/health_check.py <module>.send_brainbar_search_canary socket.socket.",
-      "site": {
-        "call_sha256": "30305b95b691736882fade0c8f51cbfc591af0793d1a915d2582c4cc3234ab5a",
-        "kind": "transport_call",
-        "owner": "<module>.send_brainbar_search_canary",
-        "path": "src/brainlayer/health_check.py",
-        "target": "socket.socket"
       }
     },
     "0ad54d5618bb7e08a643fd888f526d43a46f6135d905928dade354e4fbda0d02": {
@@ -560,6 +560,16 @@
         "owner": "<module>.main",
         "path": "scripts/ci/crash_sweep_gate.py",
         "target": "subprocess.check_output"
+      }
+    },
+    "1a40b1463feba507e12eb5e47a4c09144eb92d46b69af2f0343bccb8cca3ec33": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/health_check.py <module>._brainbar_request socket.socket.",
+      "site": {
+        "call_sha256": "30305b95b691736882fade0c8f51cbfc591af0793d1a915d2582c4cc3234ab5a",
+        "kind": "transport_call",
+        "owner": "<module>._brainbar_request",
+        "path": "src/brainlayer/health_check.py",
+        "target": "socket.socket"
       }
     },
     "1a5301f219bb9cd40dea485d1b3cb7ddb83c801a5c5615d9cb7a06b49db8bb03": {
@@ -1178,16 +1188,6 @@
         "target": "subprocess.check_output"
       }
     },
-    "2fe5979937b5065a836430b205b2756767f2c90ee0da167f49759cd58fbfd1f8": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>.send_brainbar_search_canary",
-      "site": {
-        "call_sha256": "376f80442594e8524cbfa22e160cafb6ecd60687503f971cf503081dce36cb42",
-        "kind": "generic_send",
-        "owner": "<module>.send_brainbar_search_canary",
-        "path": "src/brainlayer/health_check.py",
-        "target": "client.sendall"
-      }
-    },
     "30ac96d42bb27eb338d14a8cd3dd08306576ac820ff4e5928159708f1c961e3a": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jsonl_backup.py <module>.copy_archive_to_icloud subprocess.TimeoutExpired.",
       "site": {
@@ -1466,6 +1466,16 @@
         "owner": "<module>.peer_uid",
         "path": "src/brainlayer/supervisor_guard.py",
         "target": "ctypes.c_uint"
+      }
+    },
+    "3978338979427d9022da1e8794e49ebdd9efbf228825b00dcdda9eff63b13475": {
+      "non_cloud_purpose": "Local SQLite read-only connection (mode=ro and query_only) for T3 session ownership or text coverage; no network or model sender.",
+      "site": {
+        "call_sha256": "c7f7d622519aeae7f00c7607a3cc72b12f1fe9c0bf93f69de48a49f61f190957",
+        "kind": "generic_send",
+        "owner": "<module>.ingest_t3",
+        "path": "src/brainlayer/ingest/t3.py",
+        "target": "sqlite3.connect"
       }
     },
     "39a53c940c32fe39a821bee7ddcf5a7e8c61ce296ce2e6300e2bd4887c304fa3": {
@@ -3442,16 +3452,6 @@
         "target": "subprocess.TimeoutExpired"
       }
     },
-    "82bc6bba3e265d016166f33ed43cce08dd2c340fe04ca0c0a95abfb7a1ff5006": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>.send_brainbar_search_canary",
-      "site": {
-        "call_sha256": "68175084ac5364b03c4a4b2cd860cc4fcc5c8542060f34e26339c1ce11ffc217",
-        "kind": "generic_send",
-        "owner": "<module>.send_brainbar_search_canary",
-        "path": "src/brainlayer/health_check.py",
-        "target": "client.connect"
-      }
-    },
     "837ee23c48881860478e8eba3c32f0d355e453611a742f9b559903f3d3eefa58": {
       "non_cloud_purpose": "Stdlib-only best-effort Darwin current-process thread scheduling observation: resolve symbols from the current process with ctypes.CDLL(None), read QoS, thread ID and curpri via libSystem APIs, and build ctypes structs and pointers; no library path, model, cloud or network sender.",
       "site": {
@@ -4328,6 +4328,16 @@
         "owner": "<module>.run_guard",
         "path": "src/brainlayer/supervisor_guard.py",
         "target": "socket.socket"
+      }
+    },
+    "a215ba911720cbc15b8673d52018b43f7e9a7940c009bbba53530f634c34024a": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>._brainbar_request",
+      "site": {
+        "call_sha256": "68175084ac5364b03c4a4b2cd860cc4fcc5c8542060f34e26339c1ce11ffc217",
+        "kind": "generic_send",
+        "owner": "<module>._brainbar_request",
+        "path": "src/brainlayer/health_check.py",
+        "target": "client.connect"
       }
     },
     "a307dcc8458988ecf547cc5fa24f62df86734596ba3ca9d14896ea2dddbf4df1": {
@@ -5786,6 +5796,16 @@
         "owner": "<module>.MaintenanceHold._restore",
         "path": "src/brainlayer/maintenance_control.py",
         "target": "self.client.request"
+      }
+    },
+    "d0a0faf117ea1c5e7002b75b3295c942aa892164c483198c93b78f85d604b8b0": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>._brainbar_request",
+      "site": {
+        "call_sha256": "376f80442594e8524cbfa22e160cafb6ecd60687503f971cf503081dce36cb42",
+        "kind": "generic_send",
+        "owner": "<module>._brainbar_request",
+        "path": "src/brainlayer/health_check.py",
+        "target": "client.sendall"
       }
     },
     "d1360496ed5dbe116f92b78f65693d01c4bba6419f45df01e9b9b8c5c6ed01ca": {
