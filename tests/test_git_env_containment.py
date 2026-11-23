@@ -106,9 +106,13 @@ def test_probe(tmp_path):
     assert _git(linked, "rev-parse", "--is-bare-repository") == "false"
 
 
-def test_session_guard_fails_loudly_when_shared_git_state_changes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fast_forward", [False, True])
+def test_session_guard_fails_loudly_when_shared_git_state_changes(tmp_path: Path, fast_forward: bool) -> None:
     repo, linked, git_dir = _linked_repo(tmp_path)
-    first = _git(repo, "rev-parse", "HEAD^")
+    target = _git(repo, "rev-parse", "HEAD^")
+    if fast_forward:
+        _git(repo, "update-ref", "refs/remotes/origin/main", target)
+        target = _git(repo, "rev-parse", "HEAD")
     (linked / "tests" / "test_probe.py").write_text(
         """
 import os
@@ -128,7 +132,7 @@ def test_probe():
     )
     env = _hook_env(repo, linked, git_dir)
     env["TEST_SHARED_GIT_DIR"] = str(repo / ".git")
-    env["TEST_OLD_HEAD"] = first
+    env["TEST_OLD_HEAD"] = target
 
     result = _run_nested_pytest(linked, env)
     output = result.stdout + result.stderr
@@ -137,7 +141,38 @@ def test_probe():
     assert "shared Git state changed during pytest" in output
     assert "core.bare" in output
     assert "user.*" in output
-    assert "origin/main" in output
+    if not fast_forward:
+        assert "origin/main" in output
+
+
+@pytest.mark.parametrize("movement", ["fast-forward", "rewind", "unrelated", "deleted"])
+def test_session_guard_checks_origin_main_ancestry(tmp_path: Path, movement: str) -> None:
+    repo, linked, git_dir = _linked_repo(tmp_path)
+    target = _git(repo, "rev-parse", "HEAD^")
+    if movement == "fast-forward":
+        _git(repo, "update-ref", "refs/remotes/origin/main", target)
+        target = _git(repo, "rev-parse", "HEAD")
+    elif movement == "unrelated":
+        target = _git(repo, "commit-tree", "HEAD^{tree}", "-m", "unrelated root")
+    ref_args = ["refs/remotes/origin/main", target]
+    if movement == "deleted":
+        ref_args = ["-d", "refs/remotes/origin/main"]
+    (linked / "tests" / "test_probe.py").write_text(
+        f"""
+import subprocess
+
+def test_probe():
+    subprocess.run(["git", "--git-dir", {str(repo / ".git")!r}, "update-ref", *{ref_args!r}], check=True)
+""".lstrip(),
+        encoding="utf-8",
+    )
+    result = _run_nested_pytest(linked, _hook_env(repo, linked, git_dir))
+    output = result.stdout + result.stderr
+    if movement == "fast-forward":
+        assert result.returncode == 0, output
+    else:
+        assert result.returncode != 0, output
+        assert "shared Git state changed during pytest: origin/main" in output
 
 
 def test_session_guard_accepts_detached_checkout_without_origin_main(tmp_path: Path) -> None:
