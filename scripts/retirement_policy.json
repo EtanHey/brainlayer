@@ -6988,6 +6988,16 @@
         "target": "import subprocess"
       }
     },
+    "fda2fd7c0cebff1d1198621fcfa2494a6cf7b53bc4553e3a08de9f365257d5bb": {
+      "non_cloud_purpose": "Catch local sysctl host-probe subprocess errors during local-only retention; keep every archive and raise the existing job alert. Exception type reference only, no subprocess launch or network/model sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>._sweep_verified_local_archives",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "fe052773b013154e0b265f48da94b8e33bab53d829cd32606b221a09616a42fb": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/archive_collapse.py <module>",
       "site": {

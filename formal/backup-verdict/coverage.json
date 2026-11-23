@@ -12,12 +12,12 @@
       "sha256": "a10214bfcb11b57aa01041f22408ccabd56fa7ef89e1e233ffc9d4b595b872a6"
     },
     "src/brainlayer/backup_daily.py": {
-      "sha": "APFS R1: propagate run interrupts; sweep/account owned clone remnants; alert integrity failure",
-      "sha256": "f7885a5eeadc81e15bdf4bcf5ba2324519965b979e95fef36f47045252f18999"
+      "sha": "merge #1859 c3db0a18 with main 89eb7417 (#1867 APFS clone R1): both sides pinned with no model change; source hunks merged without conflict",
+      "sha256": "f0d3bc65301687a4f1eef7a24bde290680f8b80a15f118073acbebf30bbfa603"
     },
     "src/brainlayer/backup_heavy_gate.py": {
-      "sha": "APFS R1: propagate run interrupts; sweep/account owned clone remnants; alert integrity failure",
-      "sha256": "102bc09588465d088f97a82772727f6ee0e715f2496cb213db16225ab21e512c"
+      "sha": "merge #1859 c3db0a18 with main 89eb7417 (#1867 APFS clone R1): both sides pinned with no model change; source hunks merged without conflict",
+      "sha256": "a9b5a9bb373d01ad2bc65519a0f09eeb5891c11aff3abe8d96896e9ae24c88ba"
     },
     "src/brainlayer/maintenance.py": {
       "sha": "5882de81",
@@ -39,6 +39,10 @@
       "sha": "887b6fd4932ac8d863fa997479e7bc25fd79bf31 (clock routing and note coalescing R1)",
       "sha256": "6a1856dfe522f05bc9f8f41e82d6a0ed174363577f9a16a880f7e96ded766d1d"
     },
+    "src/brainlayer/backup_retention.py": {
+      "sha": "ed6c0d5ec9fd2444ae9b4118b9af1b9a30062f58 (live same-copy proof and report-only policy comparisons)",
+      "sha256": "179c14e88b007dcf5deccceb0a185569f2f1db2d53f55ad7c7019759491f35b8"
+    },
     "src/brainlayer/backup_clone.py": {
       "sha": "APFS R1: propagate run interrupts; sweep/account owned clone remnants; alert integrity failure",
       "sha256": "92b11329af3112eb021806f79e50cd645a3dc42c30dae5968bc806b057193d41"
@@ -55,14 +59,15 @@
         "src/brainlayer/backup_daily.py:4202 (verified receipt appended before reclamation)"
       ],
       "RemoveAfterUpload": [
-        "src/brainlayer/backup_daily.py:4213-4219 (unlink, local_removed)",
-        "src/brainlayer/backup_daily.py:4288 (the final receipt carries local_removed)"
+        "src/brainlayer/backup_daily.py:3291-3419 (_sweep_verified_local_archives: current exact Drive copy, verified local cohort, current MD5 and identity across hashing before unlink; local_sweep is housekeeping only)",
+        "src/brainlayer/backup_daily.py:4269 (verified proof precedes cleanup; newest archive kept)",
+        "src/brainlayer/backup_daily.py:4333-4356 (core terminal receipt precedes optional observations; changed observation is appended even without deletion)"
       ],
       "Abandon": [
         "src/brainlayer/backup_daily.py:3454-3504 (_local_upload_receipt, upload_state abandoned at 3491)"
       ],
       "Supersede": [
-        "src/brainlayer/backup_daily.py:3413-3451 (_reclaim_superseded_local; returns unless the newer result is uploaded and verified)"
+        "src/brainlayer/backup_daily.py:3422-3462 (_reclaim_superseded_local: close abandoned receipt episodes after newer verified result, retain local bytes; no unlink)"
       ],
       "Revoke": [
         "src/brainlayer/health_verdict.py:702 (verification_error or drive_md5_match False)"
@@ -194,7 +199,10 @@
   },
   "merged_main": "5882de81 (#1686 embedding progress vs load pause, #1688 parent-enforced backup timeout, #1685 strict weekly receipts, #1693, #1671, #1668, #1666, #1654, #1650, #1641)",
   "backup_sleep_note": "2026-11-22: committed implementation cd850c24 adds observer-only sleep-inclusive/awake clock pairs and additive snapshot/upload timing, intervals and human notes. Existing deadlines, retry budgets, rate calculations, receipt times and all verified/uploaded/local_removed facts remain unchanged. Terminal snapshot failures retain observations and verification-only recovery retains the original completed upload's observations; neither changes receipt truth. BackupVerdict and DotTable transitions remain unchanged. New sleep observer source is pinned; injected-clock and real-loopback tests, not source hashes, prove wall adjustments are not counted as sleep.",
+  "backup_retention_note": "2026-11-22 19:32 owner ruling supersedes Drive cleanup: Drive pruning is a no-op even under legacy env opt-in, and the shared database inspector rejects Drive update/trash/delete/patch references. Local cleanup requires the SAME snapshot's latest MD5 receipt AND a fresh exact-folder/machine listing, preserves the local verified cohort/pins/unknowns, and rechecks local identity across hashing. An unverified older stall is never unlinked; abandoned receipt episodes may close after a newer verified backup while retaining their bytes explicitly. Optional local-retention observations are appended after the core verified/failure receipt, so inventory failure cannot erase it. Read-only report options do not authorize mutations. BackupVerdict over-approximates removal eligibility; production narrows RemoveAfterUpload to stronger same-copy proof, and Supersede no longer unlinks locally verified/unverified archives. Numeric counts, current-listing bounds, no-Drive-write shape and the forced hash-window race are proved by fail-first production-code tests, not claimed as TLC properties. Re-read receipt, same-copy removal, abandoned/superseded and weekly gates. Both covered changed modules must be pinned to the committed local-only source, then current-backup/current-vacuum rerun.",
+  "retention_main_merge_note": "2026-11-23: merge main fe4931a2 (#1851 merged with #1856 sleep) into local-retention e9cefc28. Snapshot/upload sleep callbacks and broad best-effort final reading retained; core receipt precedes optional local inventory. Retain both covered policy and sleep modules and both provenance notes. No local proof/write authority change. Pin composed daily source and rerun coupled tests/current-backup/current-vacuum require-sync.",
   "backup_apfs_clone_note": "2026-11-22: APFS DB/WAL writer-barrier clones and streaming full-integrity SHA proof, committed implementation 056846f6. After lead's 06:38 steer, whole-volume growth is observation only: plan divergence from measured write rate times expected snapshot duration and observed WAL recovery size, and enforce absolute host/raw reserves during clone work. Floor failures retry only a capacity-checked VACUUM or propagate BackupGateDeferred through run_backup to the supervised child's durable alert/exit 75. The child's activating report maps to existing Run failed (adds the alert); its subsequent exit-75 deferred_other outcome is an alert-membership stutter. Only an actual successful backup clears this backup job's alert. Snapshot publication still requires local integrity and archive proof; failures emit no successful snapshot/verified fact. Weekly VACUUM artifacts enter the existing SHA stream proof after full integrity_check. New snapshot_method/clone_fallback/peak metadata do not alter strict receipt folding, upload ordering or retention. BackupVerdict TakeSnapshot/Upload abstractions remain unchanged; real multi-process races and writer-backed M1 copy acceptance supply physical consistency evidence outside the model. Pin backup_clone.py too: source hashes synchronize the model boundary, never prove clone correctness.",
   "backup_clone_main_merge_note": "2026-11-23: merge main fe4931a2 (#1851 admission/private-clock fix and #1856 sleep) into APFS db074a00. Retain writer-barrier clone, divergence budget, absolute reserve, capacity-checked fallback and streaming proof. Snapshot observations include clone integrity and fallback; callback and same tracker propagate into VACUUM recursion, preserving cumulative snapshot sleep. All run/upload observations and best-effort final reading retained. Union clone/sleep covered modules and source pins; no modeled receipt/verdict transition changes. Rerun coupled tests/current cases and renewed M1 COPY acceptance when its 36 GiB admission floor permits. Establish owned clone identity before invoking the post-publication observer, so an observer failure cannot bypass cleanup; fail-first owned-raw test covers that ordering.",
-  "backup_clone_r1_note": "R1: pending run-stop/deadline flags survive SQLite callback exception clearing; TimeoutError propagates, never selects fallback. This is existing failed/stopped outcome, no successful snapshot/upload fact. Staging-flock/uid/age/shape/PID guarded private-clone sweep removes only abandoned unverified temporary copies; surviving COW growth adds conservative admission reservation (including retained dated raws), with no removal of verified archive facts. Integrity failure raises a diagnostic job key even if VACUUM succeeds, cleared only by a later healthy clone check. Diagnostic per-key lifecycle and filesystem/PID safety are code-tested, not additional modeled properties. No receipt reader/verdict transition change. Re-pin three sources and run current-backup/current-vacuum require-sync."
+  "backup_clone_r1_note": "R1: pending run-stop/deadline flags survive SQLite callback exception clearing; TimeoutError propagates, never selects fallback. This is existing failed/stopped outcome, no successful snapshot/upload fact. Staging-flock/uid/age/shape/PID guarded private-clone sweep removes only abandoned unverified temporary copies; surviving COW growth adds conservative admission reservation (including retained dated raws), with no removal of verified archive facts. Integrity failure raises a diagnostic job key even if VACUUM succeeds, cleared only by a later healthy clone check. Diagnostic per-key lifecycle and filesystem/PID safety are code-tested, not additional modeled properties. No receipt reader/verdict transition change. Re-pin three sources and run current-backup/current-vacuum require-sync.",
+  "retention_apfs_merge_note": "2026-11-23 (lead): merge main 89eb7417 (#1867 APFS clone R1, plus #1865/#1868/#1855) into local-retention c3db0a18. Only this pin file conflicted: backup_daily.py and backup_heavy_gate.py merged without conflict and are re-pinned to the merged bytes; backup_retention.py (#1859) and backup_clone.py (#1867) keep their own pins; every provenance note from both sides is kept. No model change on either side; the clone sweep touches only owned .brainlayer-clone-* staging copies and the retention cohort only verified daily snapshots."
 }

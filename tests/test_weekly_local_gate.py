@@ -122,7 +122,7 @@ def test_retention_reclaims_old_pending_after_three_newer_offsite_verified(tmp_p
         (tmp_path / f"2026-10-{day:02}.db.gz").write_bytes(b"gzip")
     names = {f"2026-10-{day:02}.db.gz" for day in range(2, 6)}
     backup.prune_local_gzip_snapshots(tmp_path, keep_latest=3, verified_drive_names=names)
-    assert not (tmp_path / "2026-10-01.db.gz").exists()
+    assert (tmp_path / "2026-10-01.db.gz").exists()  # No verified Drive copy of this day.
 
 
 def test_weekly_calendar_upload_runs_last(tmp_path):

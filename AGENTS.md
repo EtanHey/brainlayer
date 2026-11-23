@@ -451,6 +451,7 @@ brainlayer search "how did I implement authentication"
   still requires measured free-now bytes and preserves the 2 GiB raw floor. Probe fallback is
   explicit in `source`; non-macOS reports Available = free now and purgeable = 0.
 - Backups use the BrainLayer-owned `~/.config/brainlayer/drive-tokens.json` (0600); the Google Drive MCP token is a one-time copy source only.
+- Database backup retention and its configuration are defined in [Backup Strategy](docs/backup-strategy.md); keep the policy numbers there.
 - Run `brainlayer backup auth` to authorize in the browser; BrainBar uses `brainlayer backup auth --status --json` and `brainlayer backup auth --json`.
 - `BRAINLAYER_DRIVE_TOKEN_PATH` and `BRAINLAYER_DRIVE_CLIENT_PATH` override the token and read-only OAuth client paths; never delete a token after refresh failure.
 - Backup log: real runs append JSONL to `~/.local/share/brainlayer/logs/backup-daily.log` with
