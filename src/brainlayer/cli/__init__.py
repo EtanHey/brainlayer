@@ -4701,6 +4701,31 @@ def ingest_t3_command(
     )
 
 
+@app.command("t3-audit")
+def t3_audit_command(
+    state_db: Optional[Path] = typer.Option(None, "--state-db"),
+    db: Optional[Path] = typer.Option(None, "--db"),
+    health_path: Optional[Path] = typer.Option(None, "--health-path"),
+    projection_version: Optional[int] = typer.Option(None, "--projection-version", min=1, max=2),
+) -> None:
+    """Read-only daily check that old T3 messages have stored text coverage."""
+    from ..ingest.t3_audit import audit_t3
+    from ..paths import get_db_path, resolve_t3_health_path
+
+    resolved = db.expanduser() if db else get_db_path()
+    result = audit_t3(
+        state_db,
+        db_path=resolved,
+        health_path=resolve_t3_health_path(resolved, health_path),
+        projection_version=projection_version,
+    )
+    rprint(
+        f"uncovered_new = {result['uncovered_new']} uncovered_known = {result['uncovered_known']} checked = {result['checked']}"
+    )
+    if result["uncovered_new"]:
+        raise typer.Exit(1)
+
+
 @app.command("ingest-codex")
 def ingest_codex(
     path: Optional[Path] = typer.Argument(

@@ -73,6 +73,7 @@ struct NDR1: Equatable, Sendable {
     var footerRight: String?
     /// L47: a check in the verdict is amber.
     var amberCheck = false
+    var wakeStatusUnconfirmed = false
     var calm: Bool { items.isEmpty && unconfirmedSince == nil }
     var redCount: Int { items.filter { $0.severity == .red }.count }
     /// R1.3: each station's item (red before amber), for its action at rest and its popover.
@@ -296,7 +297,15 @@ struct NDR1: Equatable, Sendable {
         var tone: NDModel.Tone = .fine
         var rows = false
         let red = items.filter { $0.severity == .red }.count
-        if pipeline.allUnconfirmed, items.isEmpty {
+        if red == 0, c.wakeCatchUpPending {
+            headline = BrainBarMenuPresenter.Say.checkingSleep.text
+            symbol = nil
+        } else if red == 0, c.wakeStatusUnconfirmed {
+            headline = Say.notConfirmed
+            symbol = "exclamationmark.triangle.fill"
+            tone = .warn
+            detail = c.wakeStatusReason
+        } else if pipeline.allUnconfirmed, items.isEmpty {
             headline = Say.notConfirmed
             symbol = "questionmark.circle"
             if let at = verdict?.evaluatedAt {
@@ -356,7 +365,8 @@ struct NDR1: Equatable, Sendable {
         return NDR1(pipeline: pipeline, headline: headline, headlineSymbol: symbol, headlineTone: tone, headlineDetail: detail,
                     showsProblemRows: rows, items: items, unconfirmedSince: unconfirmedSince, unconfirmedDetail: unconfirmedDetail,
                     menuRows: menuRows(i, m, items: items, pipeline: pipeline), footerLeft: left, footerRight: right,
-                    amberCheck: verdict?.checks.contains { $0.state == .amber } == true)
+                    amberCheck: verdict?.checks.contains { $0.state == .amber } == true,
+                    wakeStatusUnconfirmed: c.wakeStatusUnconfirmed && !c.wakeCatchUpPending)
     }
 
     /// A destination's last backup: Drive's is its newest copy of either kind (measured ones only).

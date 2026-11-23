@@ -231,7 +231,12 @@ def test_same_date_verified_archive_reused(tmp_path, monkeypatch, capsys, phase,
     monkeypatch.setattr(backup, "create_sqlite_backup_artifact", lambda *a, **kw: pytest.fail("new snapshot"))
     if not present:
         archive.unlink()  # Drive proof also works after normal local reclamation.
-    from brainlayer import job_alerts
+    from contextlib import nullcontext
+
+    from brainlayer import backup_heavy_gate, job_alerts
+
+    monkeypatch.setattr(backup_heavy_gate, "backup_heavy_gate", lambda **kw: nullcontext())
+    monkeypatch.setattr(backup_heavy_gate, "expected_phase_seconds", lambda: 1)
 
     alerts = []
     monkeypatch.delenv(backup.BACKUP_SUPERVISED_CHILD_ENV, raising=False)

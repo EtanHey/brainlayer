@@ -661,11 +661,11 @@ def test_launchd_installer_wires_t3_ingest_target():
 
     assert "./scripts/launchd/install.sh t3-ingest" in install_source
     assert "t3-ingest)" in install_source
-    assert "install_plist t3-ingest" in install_source
+    assert "install_many t3-ingest t3-audit" in install_source
     assert "remove_plist t3-ingest" in install_source
 
 
-def _render_t3_selection(tmp_path, settings):
+def _render_t3_selection(tmp_path, settings, service="t3-ingest"):
     source = (REPO_ROOT / "scripts/launchd/install.sh").read_text()
     head = "render_t3_ingest_selection() {"
     helper = head + source.split("\n" + head, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
@@ -673,7 +673,7 @@ def _render_t3_selection(tmp_path, settings):
     env_file.write_text("\n".join(f'{key}="{value}"' for key, value in settings.items()) + "\n")
     env_file.chmod(0o600)
     rendered = tmp_path / "rendered.plist"
-    original = (REPO_ROOT / "scripts/launchd/com.brainlayer.t3-ingest.plist").read_bytes()
+    original = (REPO_ROOT / f"scripts/launchd/com.brainlayer.{service}.plist").read_bytes()
     rendered.write_bytes(original)
     harness = tmp_path / "render.sh"
     harness.write_text(helper + '\nrender_t3_ingest_selection "$1"\n')
@@ -694,6 +694,18 @@ def _render_t3_selection(tmp_path, settings):
         ["/bin/bash", str(harness), str(rendered)], env=env, capture_output=True, text=True, timeout=20
     )
     return result, rendered, original
+
+
+def test_t3_audit_keeps_daily_interval_and_same_destination(tmp_path):
+    result, rendered, _ = _render_t3_selection(
+        tmp_path, {"BRAINLAYER_T3_INGEST_INTERVAL_SECONDS": "300"}, service="t3-audit"
+    )
+    assert result.returncode == 0, result.stderr
+    plist = plistlib.loads(rendered.read_bytes())
+    assert plist["StartInterval"] == 86400
+    assert plist["Nice"] == 15
+    assert "--db" in plist["ProgramArguments"]
+    assert "--health-path" in plist["ProgramArguments"]
 
 
 def test_t3_selection_default_resolves_sources_each_run(tmp_path):
