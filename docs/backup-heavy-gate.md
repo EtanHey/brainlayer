@@ -13,12 +13,14 @@ Swap must be **under 9 GiB**, one-minute load **under 12** on both hosts. The
 gate also requires raw free space for the backup's peak allocation plus a host
 reserve: **40 GiB on M4, zero extra on M1**. It calls the existing
 `_peak_backup_required_bytes` with the current DB size, estimated compressed
-size and full-verify schedule, using the conservative non-reclaiming peak.
+size and full-verify schedule. On confirmed APFS source/staging volumes it uses
+the [planned clone peak](backup-apfs-clone.md); otherwise it uses the conservative
+non-reclaiming VACUUM peak. A failed clone rechecks the larger fallback budget.
 That helper already includes the backup's 2 GiB raw floor. Raw
 `free_now_bytes` is measured on the staging volume before and under the lock;
 purgeable capacity, future pruning and streaming reclamation do not count.
-Peak allocation is phase-aware. Snapshot-only reserves raw plus compressed
-space, with no Drive download/restore. Upload-only creates neither file: the
+Peak allocation is phase-aware. Snapshot-only reserves the clone or VACUUM
+snapshot/compression peak, with no Drive download/restore. Upload-only creates neither file: the
 existing archive is already counted in measured free space. Pending receipt
 metadata selects its verification budget without hashing payloads or changing
 the journal. Streaming hash verification allocates no local payload; legacy
