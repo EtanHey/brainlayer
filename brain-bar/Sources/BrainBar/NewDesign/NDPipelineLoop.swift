@@ -468,7 +468,9 @@ enum NDPipelineLayout {
         }
         // Even oversized content must use a checked body, never the old unchecked overlap fallback.
         // 40 pt keeps the notch clear of both rounded corners on either axis (2 * arrowInset).
-        for candidateWidth in [overrideWidth ?? panelSide(s, hasAction: actions.contains(s)).width, 264, 220, 180, 160, 120, 80, 40] {
+        // Typed explicitly: the release compiler infers [Any] for `optional ?? x` mixed with literals.
+        let candidateWidths: [CGFloat] = [overrideWidth ?? panelSide(s, hasAction: actions.contains(s)).width, 264, 220, 180, 160, 120, 80, 40]
+        for candidateWidth in candidateWidths {
             for edge: Edge in [preferred, .top, .trailing, .leading, .bottom] {
                 if var candidate = panelCandidate(s, edge: edge, state: state, actions: actions,
                     actionWidths: actionWidths, height: 40, width: candidateWidth, displayedWords: displayedWords) {
